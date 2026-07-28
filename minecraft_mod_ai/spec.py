@@ -235,8 +235,6 @@ class ModSpec:
             )
         if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?", self.version):
             raise SpecValidationError(f"Invalid semantic version {self.version!r}.")
-        if not self.contents:
-            raise SpecValidationError("At least one supported item or block is required.")
         if len(self.contents) > 24:
             raise SpecValidationError("The MVP supports at most 24 content entries per release.")
         seen: set[str] = set()
@@ -265,8 +263,6 @@ class ModSpec:
             seen.update((self.boss.entity_id, spawn_egg_id))
         if self.arena is not None:
             self.arena.validate()
-            if self.boss is None:
-                raise SpecValidationError("An arena requires a boss in the first playable archetype.")
             if self.arena.arena_id in seen:
                 raise SpecValidationError(
                     f"Arena ID collides with another generated ID: {self.arena.arena_id}"

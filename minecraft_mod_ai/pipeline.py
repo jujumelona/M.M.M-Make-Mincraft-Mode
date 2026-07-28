@@ -16,6 +16,11 @@ from .broker import LocalPolicyBroker, ToolAction, approved_request
 from .capabilities import capability_manifest
 from .generator import FabricProjectGenerator
 from .importer import ExistingProjectReport, inspect_existing_project_archive
+from .orchestration import (
+    make_worker_receipt,
+    project_ir,
+    receipt_json_line,
+)
 from .planner import HeuristicPlanner, Planner
 from .runner import BuildReport, GradleRunner
 from .spec import DeferredRequest, Proposal, ProposalStatus, SpecValidationError
@@ -85,6 +90,14 @@ class MinecraftModPipeline:
             approved,
             existing_input=existing_input,
         )
+        if (
+            not approved.spec.contents
+            and approved.spec.boss is None
+            and approved.spec.arena is None
+        ):
+            raise SpecValidationError(
+                "아직 만들기로 확정된 기능이 없습니다. 대화에서 필요한 기능을 더 정해 주세요."
+            )
 
         output_root = output_root.resolve()
         resolved_gradle_cache = (
@@ -117,7 +130,10 @@ class MinecraftModPipeline:
         try:
             generated = self.generator.generate(approved.spec, staging)
             self._write_json(staging / ".minecraft_ai" / "proposal.approved.json", approved.to_dict())
-            self._write_json(staging / ".minecraft_ai" / "project-ir.json", self._project_ir(approved))
+            self._write_json(
+                staging / ".minecraft_ai" / "project-ir.json",
+                self._project_ir(approved),
+            )
             self._audit(
                 staging,
                 "fabric.scaffold",
@@ -411,26 +427,7 @@ class MinecraftModPipeline:
 
     @staticmethod
     def _project_ir(proposal: Proposal) -> dict[str, object]:
-        spec = proposal.spec
-        tasks = ["scaffold", "schema_validate", "gradle_build", "gametest", "jar_verify", "package"]
-        return {
-            "schema_version": "minecraft-mod-ai/project-ir-v1",
-            "project_id": spec.mod_id,
-            "spec_hash": proposal.calculate_hash(),
-            "platform_lock": asdict(spec.platform),
-            "evidence_snapshot_hash": proposal.evidence_snapshot_hash,
-            "capability_manifest_hash": proposal.capability_manifest_hash,
-            "imported_source_snapshot_hash": (
-                proposal.imported_source_snapshot_hash or None
-            ),
-            "content_ids": [content.content_id for content in spec.contents],
-            "boss_id": spec.boss.entity_id if spec.boss else None,
-            "arena_id": spec.arena.arena_id if spec.arena else None,
-            "task_dag": [
-                {"task": task, "depends_on": tasks[index - 1 : index]}
-                for index, task in enumerate(tasks)
-            ],
-        }
+        return project_ir(proposal)
 
     def _package_release(
         self,
@@ -547,6 +544,10 @@ class MinecraftModPipeline:
             release_dir / "evidence" / "jar-validation.json",
             jar_report.to_dict(),
         )
+        for filename in ("project-ir.json", "receipts.jsonl", "audit.jsonl"):
+            source = project_root / ".minecraft_ai" / filename
+            if source.is_file():
+                shutil.copy2(source, release_dir / "evidence" / filename)
         self._copy_logs(project_root, release_dir / "evidence")
         self._write_json(
             release_dir / "supply_chain" / "sbom.cdx.json",
@@ -586,6 +587,31 @@ class MinecraftModPipeline:
             encoding="utf-8",
         )
         self._write_docs(release_dir / "docs", proposal, gates_pass)
+
+        package_result = {
+            "status": "succeeded",
+            "release_name": release_name,
+            "source_sha256": _sha256(source_zip),
+            "binary_sha256": (
+                _sha256(released_jar) if released_jar is not None else None
+            ),
+            "release_ready": gates_pass,
+        }
+        package_receipt = make_worker_receipt(
+            node_id="release.package",
+            worker="release-packager",
+            proposal=proposal,
+            result=package_result,
+            evidence=(
+                f"source_sha256:{package_result['source_sha256']}",
+                f"release_ready:{str(gates_pass).lower()}",
+            ),
+            status="succeeded",
+        )
+        self._write_json(
+            release_dir / "evidence" / "release-package-receipt.json",
+            package_receipt.to_dict(),
+        )
 
         manifest_entries = []
         for path in sorted(release_dir.rglob("*")):
@@ -780,14 +806,58 @@ class MinecraftModPipeline:
     def _audit(project_root: Path, action: str, proposal: Proposal, result: dict[str, object]) -> None:
         path = project_root / ".minecraft_ai" / "audit.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        node_by_action = {
+            "fabric.scaffold": "fabric.scaffold",
+            "quality.validate": "quality.source.validate",
+            "build.gradle": "build.gradle",
+            "test.gametest": "test.gametest",
+            "release.package": "release.package",
+        }
+        worker_by_action = {
+            "fabric.scaffold": "fabric-generator",
+            "quality.validate": "independent-source-validator",
+            "build.gradle": "gradle-runner",
+            "test.gametest": "gametest-runner",
+            "release.package": "release-packager",
+        }
+        raw_status = str(result.get("status", "failed"))
+        status = "succeeded" if raw_status == "succeeded" else "failed"
+        evidence = tuple(
+            f"{key}:{value}"
+            for key, value in sorted(result.items())
+            if key not in {"status", "error"}
+            and value is not None
+            and value != ""
+            and value != ()
+            and value != []
+        )
+        if not evidence:
+            evidence = (f"action:{action}",)
+        error = None
+        if status == "failed":
+            error = str(result.get("error") or f"{action} gate failed")
+        receipt = make_worker_receipt(
+            node_id=node_by_action[action],
+            worker=worker_by_action[action],
+            proposal=proposal,
+            result=result,
+            evidence=evidence,
+            status=status,
+            error=error,
+        )
         event = {
+            "schema_version": "minecraft-mod-ai/audit-event-v2",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "action": action,
             "proposal_hash": proposal.calculate_hash(),
+            "receipt_id": receipt.receipt_id,
             "result": result,
         }
         with path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        receipt_path = project_root / ".minecraft_ai" / "receipts.jsonl"
+        with receipt_path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(receipt_json_line(receipt) + "\n")
 
 
 def _sha256(path: Path) -> str:

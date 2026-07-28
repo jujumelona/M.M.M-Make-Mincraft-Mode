@@ -543,6 +543,19 @@ final class GeneratedContractTest {{
             )
         arena_check = ""
         if spec.arena is not None:
+            arena_entity_check = ""
+            if spec.boss is not None:
+                arena_entity_check = f"""
+        var arenaBosses = context.getWorld().getEntitiesByType(
+            {main_class}.{spec.boss.entity_id.upper()},
+            new net.minecraft.util.math.Box(origin).expand(2.0),
+            entity -> entity.isAlive()
+                && !entity.isRemoved()
+                && !entity.getUuid().equals(probeBossUuid)
+        );
+        require(!arenaBosses.isEmpty(), "arena did not summon the approved boss");
+        arenaBosses.forEach(entity -> entity.discard());
+"""
             arena_check = f"""
         require(Registries.BLOCK.containsId(new Identifier("{spec.arena.floor_block}")),
             "arena floor palette block is not registered");
@@ -562,15 +575,7 @@ final class GeneratedContractTest {{
             "arena floor was not placed");
         require(context.getWorld().getBlockState(origin.add({spec.arena.radius}, 0, 0)).isOf(accent),
             "arena wall was not placed");
-        var arenaBosses = context.getWorld().getEntitiesByType(
-            {main_class}.{spec.boss.entity_id.upper()},
-            new net.minecraft.util.math.Box(origin).expand(2.0),
-            entity -> entity.isAlive()
-                && !entity.isRemoved()
-                && !entity.getUuid().equals(probeBossUuid)
-        );
-        require(!arenaBosses.isEmpty(), "arena did not summon the approved boss");
-        arenaBosses.forEach(entity -> entity.discard());
+{arena_entity_check}
 """
         checks = "\n".join((*registry_checks, *recipe_checks))
         return f"""package {spec.package_name};
@@ -987,14 +992,17 @@ public final class {renderer_class}
         )
 
     def _write_arena(self, root: Path, spec: ModSpec, arena: ArenaSpec) -> None:
-        if spec.boss is None:
-            raise GenerationError("The playable arena archetype requires a boss.")
         radius = arena.radius
         inner = radius - 1
         height = arena.wall_height
         verified_path_length = _arena_path_length(radius)
         if verified_path_length is None:
-            raise GenerationError("Arena entry-to-boss path proof failed.")
+            raise GenerationError("Arena entry-to-center path proof failed.")
+        summon_command = (
+            f"summon {spec.mod_id}:{spec.boss.entity_id} ~ ~ ~\n"
+            if spec.boss is not None
+            else ""
+        )
         function_text = f"""# Generated arena: {arena.arena_id}
 # Explicit server-side action only: /function {spec.mod_id}:build_{arena.arena_id}
 fill ~-{radius} ~-1 ~-{radius} ~{radius} ~-1 ~{radius} {arena.floor_block}
@@ -1007,7 +1015,7 @@ setblock ~-{inner} ~ ~-{inner} minecraft:sea_lantern
 setblock ~{inner} ~ ~-{inner} minecraft:sea_lantern
 setblock ~-{inner} ~ ~{inner} minecraft:sea_lantern
 setblock ~{inner} ~ ~{inner} minecraft:sea_lantern
-summon {spec.mod_id}:{spec.boss.entity_id} ~ ~ ~
+{summon_command}\
 tellraw @a {{"translate":"message.{spec.mod_id}.arena_built","color":"aqua"}}
 """
         function_path = (
@@ -1018,6 +1026,7 @@ tellraw @a {{"translate":"message.{spec.mod_id}.arena_built","color":"aqua"}}
         )
         self._write_text(root, function_path, function_text, raw=True)
 
+        center_zone = "boss_area" if spec.boss is not None else "map_center"
         world_ir = {
             "schema_version": "minecraft-mod-ai/world-design-v1",
             "arena_id": arena.arena_id,
@@ -1032,10 +1041,10 @@ tellraw @a {{"translate":"message.{spec.mod_id}.arena_built","color":"aqua"}}
             },
             "zones": [
                 {"id": "entry", "position": [0, 0, -radius]},
-                {"id": "boss_arena", "position": [0, 0, 0]},
+                {"id": center_zone, "position": [0, 0, 0]},
             ],
             "navigation": {
-                "required_paths": [["entry", "boss_arena"]],
+                "required_paths": [["entry", center_zone]],
                 "minimum_door_width": 5,
                 "critical_path_verified": True,
                 "verification": {
@@ -1045,10 +1054,14 @@ tellraw @a {{"translate":"message.{spec.mod_id}.arena_built","color":"aqua"}}
                     "result": True,
                 },
             },
-            "spawn": {
-                "entity": f"{spec.mod_id}:{spec.boss.entity_id}",
-                "position": [0, 0, 0],
-            },
+            "spawn": (
+                {
+                    "entity": f"{spec.mod_id}:{spec.boss.entity_id}",
+                    "position": [0, 0, 0],
+                }
+                if spec.boss is not None
+                else None
+            ),
             "safety": {
                 "writes_user_world_automatically": False,
                 "activation": f"/function {spec.mod_id}:build_{arena.arena_id}",

@@ -295,17 +295,33 @@ class ProjectValidator:
                 if function_path.is_file()
                 else ""
             )
-            checks += 2
-            expected_summon = f"summon {spec.mod_id}:{spec.boss.entity_id}" if spec.boss else ""
-            if expected_summon not in function_text:
-                findings.append(
-                    Finding(
-                        "ARENA_NO_BOSS",
-                        "error",
-                        self._rel(root, function_path),
-                        "Arena function does not summon the approved boss.",
+            checks += 1
+            if spec.boss is not None:
+                checks += 1
+                expected_summon = f"summon {spec.mod_id}:{spec.boss.entity_id}"
+                if expected_summon not in function_text:
+                    findings.append(
+                        Finding(
+                            "ARENA_BOSS_MISSING",
+                            "error",
+                            self._rel(root, function_path),
+                            "Arena function does not summon the explicitly requested boss.",
+                        )
                     )
-                )
+            else:
+                checks += 1
+                if any(
+                    line.strip().startswith("summon ")
+                    for line in function_text.splitlines()
+                ):
+                    findings.append(
+                        Finding(
+                            "ARENA_UNAPPROVED_SUMMON",
+                            "error",
+                            self._rel(root, function_path),
+                            "A boss-free arena may not contain a summon command.",
+                        )
+                    )
             if len(function_text.splitlines()) > 64:
                 findings.append(
                     Finding(
@@ -358,6 +374,7 @@ class ProjectValidator:
             checks += 1
             navigation = world_ir.get("navigation", {})
             expected_path_length = _arena_path_length(arena.radius)
+            center_zone = "boss_area" if spec.boss is not None else "map_center"
             verification = (
                 navigation.get("verification", {})
                 if isinstance(navigation, dict)
@@ -366,7 +383,7 @@ class ProjectValidator:
             if (
                 not isinstance(navigation, dict)
                 or navigation.get("critical_path_verified") is not True
-                or ["entry", "boss_arena"] not in navigation.get("required_paths", [])
+                or ["entry", center_zone] not in navigation.get("required_paths", [])
                 or navigation.get("minimum_door_width") != 5
                 or not isinstance(verification, dict)
                 or verification.get("method") != "deterministic_grid_bfs"
@@ -379,7 +396,11 @@ class ProjectValidator:
                         "ARENA_PATH_INVALID",
                         "error",
                         self._rel(root, world_ir_path),
-                        "WorldDesignIR does not prove the entry-to-boss critical path.",
+                        (
+                            "WorldDesignIR does not prove the entry-to-boss critical path."
+                            if spec.boss is not None
+                            else "WorldDesignIR does not prove the entry-to-center critical path."
+                        ),
                     )
                 )
             self._validate_png(root, preview_path, findings)
@@ -400,6 +421,53 @@ class ProjectValidator:
                     "fabric.mod.json must use the Gradle-expanded version.",
                 )
             )
+        if spec.boss is None:
+            entrypoints = fabric.get("entrypoints")
+            checks += 1
+            if isinstance(entrypoints, dict) and "client" in entrypoints:
+                findings.append(
+                    Finding(
+                        "UNAPPROVED_BOSS_ARTIFACT",
+                        "error",
+                        self._rel(root, fabric_path),
+                        "A boss-free project may not declare the generated client entrypoint.",
+                    )
+                )
+            forbidden_roots = (
+                root / f"src/main/java/{spec.package_name.replace('.', '/')}/entity",
+                root / f"src/main/java/{spec.package_name.replace('.', '/')}/client",
+                root / f"src/main/resources/assets/{spec.mod_id}/textures/entity",
+                root / f"src/main/resources/data/{spec.mod_id}/loot_tables/entities",
+            )
+            for forbidden_root in forbidden_roots:
+                checks += 1
+                if forbidden_root.exists() and any(
+                    path.is_file() for path in forbidden_root.rglob("*")
+                ):
+                    findings.append(
+                        Finding(
+                            "UNAPPROVED_BOSS_ARTIFACT",
+                            "error",
+                            self._rel(root, forbidden_root),
+                            "Boss/entity runtime artifacts exist without an approved boss.",
+                        )
+                    )
+            spawn_egg_root = (
+                root
+                / f"src/main/resources/assets/{spec.mod_id}/models/item"
+            )
+            checks += 1
+            if spawn_egg_root.is_dir() and any(
+                spawn_egg_root.glob("*_spawn_egg.json")
+            ):
+                findings.append(
+                    Finding(
+                        "UNAPPROVED_BOSS_ARTIFACT",
+                        "error",
+                        self._rel(root, spawn_egg_root),
+                        "A spawn-egg model exists without an approved boss.",
+                    )
+                )
 
         status = "PASS" if not any(item.severity == "error" for item in findings) else "FAIL"
         return ValidationReport(status=status, checks_run=checks, findings=tuple(findings))
@@ -612,6 +680,58 @@ def validate_jar(jar_path: Path, spec: ModSpec) -> ValidationReport:
                             "error",
                             "fabric.mod.json",
                             f"{group} must include {expected_class}.",
+                        )
+                    )
+        if spec.boss is None:
+            checks += 1
+            if isinstance(entrypoints, dict) and "client" in entrypoints:
+                findings.append(
+                    Finding(
+                        "JAR_UNAPPROVED_BOSS_ARTIFACT",
+                        "error",
+                        "fabric.mod.json",
+                        "A boss-free JAR may not declare the generated client entrypoint.",
+                    )
+                )
+            forbidden_names = {
+                name
+                for name in names
+                if (
+                    name.startswith(f"{java_root}/entity/")
+                    or name.startswith(f"{java_root}/client/")
+                    or name.startswith(f"assets/{spec.mod_id}/textures/entity/")
+                    or name.startswith(f"data/{spec.mod_id}/loot_tables/entities/")
+                    or name.endswith("_spawn_egg.json")
+                )
+            }
+            checks += 1
+            for forbidden_name in sorted(forbidden_names):
+                findings.append(
+                    Finding(
+                        "JAR_UNAPPROVED_BOSS_ARTIFACT",
+                        "error",
+                        forbidden_name,
+                        "Boss/entity runtime artifact exists without an approved boss.",
+                    )
+                )
+            for function_name in sorted(
+                name for name in names if name.endswith(".mcfunction")
+            ):
+                checks += 1
+                try:
+                    function_text = archive.read(function_name).decode("utf-8")
+                except (KeyError, UnicodeDecodeError):
+                    continue
+                if any(
+                    line.strip().startswith("summon ")
+                    for line in function_text.splitlines()
+                ):
+                    findings.append(
+                        Finding(
+                            "JAR_UNAPPROVED_SUMMON",
+                            "error",
+                            function_name,
+                            "A boss-free JAR may not contain a summon command.",
                         )
                     )
 

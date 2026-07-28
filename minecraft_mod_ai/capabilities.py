@@ -9,61 +9,112 @@ from .spec import canonical_json
 
 @dataclass(frozen=True)
 class CapabilityRecord:
-    """Code-owned description of one broker capability.
+    """Code-owned description shared by the broker and MCP adapter.
 
-    The four ``*Hint`` fields use the MCP 2025-11-25 tool-annotation vocabulary
-    so that a future adapter can expose equivalent metadata.  This module is a
-    local policy manifest; it does not implement or claim to be an MCP server.
+    MCP annotations are discovery hints, never authorization.  The local broker
+    independently checks proposal state, manifest hash and workspace scope.
     """
 
     name: str
+    group: str
     readOnlyHint: bool
     destructiveHint: bool
     idempotentHint: bool
     openWorldHint: bool
     approval_required: bool
+    evidence_required: bool
 
 
 CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     CapabilityRecord(
+        name="plan.mod",
+        group="planning",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+        approval_required=False,
+        evidence_required=True,
+    ),
+    CapabilityRecord(
+        name="evidence.search",
+        group="research",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+        approval_required=False,
+        evidence_required=True,
+    ),
+    CapabilityRecord(
+        name="project.inspect",
+        group="existing-project",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+        approval_required=False,
+        evidence_required=True,
+    ),
+    CapabilityRecord(
+        name="workflow.compile",
+        group="planning",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+        approval_required=False,
+        evidence_required=True,
+    ),
+    CapabilityRecord(
         name="fabric.scaffold",
+        group="generation",
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=False,
         openWorldHint=False,
         approval_required=True,
+        evidence_required=True,
     ),
     CapabilityRecord(
         name="quality.validate",
+        group="quality",
         readOnlyHint=True,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,
         approval_required=True,
+        evidence_required=True,
     ),
     CapabilityRecord(
         name="build.gradle",
+        group="build",
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=True,
         approval_required=True,
+        evidence_required=True,
     ),
     CapabilityRecord(
         name="test.gametest",
+        group="quality",
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,
         approval_required=True,
+        evidence_required=True,
     ),
     CapabilityRecord(
         name="release.package",
+        group="release",
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,
         approval_required=True,
+        evidence_required=True,
     ),
 )
 
@@ -72,11 +123,22 @@ def capability_manifest() -> dict[str, Any]:
     """Return a fresh, deterministic manifest for the local policy broker."""
 
     return {
-        "schema_version": "minecraft-mod-ai/capabilities-v1",
-        "protocol_alignment": "MCP-2025-11-25 tool risk annotations",
+        "schema_version": "minecraft-mod-ai/capabilities-v2",
+        "protocol_alignment": "MCP Python SDK 2.0.0; compatible protocol negotiation",
         "implementation_kind": "local-policy-manifest-not-mcp-server",
         "authorization_source": "approved-proposal-hash-only",
         "retrieved_context_can_authorize": False,
+        "tool_annotations_can_authorize": False,
+        "staged_discovery": {
+            "planning": ["plan.mod", "evidence.search", "project.inspect", "workflow.compile"],
+            "execution_after_approval": [
+                "fabric.scaffold",
+                "quality.validate",
+                "build.gradle",
+                "test.gametest",
+                "release.package",
+            ],
+        },
         "tools": [asdict(record) for record in CAPABILITY_RECORDS],
     }
 
