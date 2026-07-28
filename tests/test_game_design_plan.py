@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from minecraft_mod_ai import ModAISession
+from minecraft_mod_ai import HeuristicPlanner, ModAISession
 
 
 LARGE_PLAN_SECTIONS = (
@@ -14,6 +14,15 @@ LARGE_PLAN_SECTIONS = (
     "제작 마일스톤",
     "검증/릴리스",
 )
+
+
+def _session(tmp_path: Path) -> ModAISession:
+    """Reader-facing formatter tests use the explicitly requested diagnostic planner."""
+
+    return ModAISession(
+        output_root=tmp_path / "output",
+        planner=HeuristicPlanner(),
+    )
 
 
 def _markdown_section(text: str, title: str) -> str:
@@ -43,7 +52,7 @@ def _assert_reader_facing_plan(text: str) -> None:
 def test_one_item_request_gets_a_concise_small_scope_game_plan(
     tmp_path: Path,
 ) -> None:
-    reply = ModAISession(output_root=tmp_path / "output").plan(
+    reply = _session(tmp_path).plan(
         "Create exactly one frost item and no other content."
     )
 
@@ -68,7 +77,7 @@ def test_one_item_request_gets_a_concise_small_scope_game_plan(
 def test_explicit_large_request_gets_full_game_development_sections(
     tmp_path: Path,
 ) -> None:
-    reply = ModAISession(output_root=tmp_path / "output").plan(
+    reply = _session(tmp_path).plan(
         "대규모 RPG 모드를 계획해줘. "
         "256x256 마을, 1024x1024 필드, 128x128 던전, 65x65 아레나를 모두 넣고, "
         "근접 공격·원거리 투사체·회복 스킬 시스템을 넣어줘."
@@ -98,7 +107,7 @@ def test_explicit_large_request_gets_full_game_development_sections(
 def test_ambiguous_multi_system_request_asks_for_scale_and_first_playable_scope(
     tmp_path: Path,
 ) -> None:
-    reply = ModAISession(output_root=tmp_path / "output").plan(
+    reply = _session(tmp_path).plan(
         "마을, 필드, 던전, 아레나, 스킬, 퀘스트와 직업이 있는 RPG 모드를 만들어줘."
     )
 
@@ -107,8 +116,6 @@ def test_ambiguous_multi_system_request_asks_for_scale_and_first_playable_scope(
     assert "프로젝트 규모" in questions
     assert "첫 플레이 가능 범위" in questions
 
-    # An omitted size must stay undecided instead of exposing the planner's
-    # internal 25x25 arena default as if the user selected it.
     assert "25×25" not in reply.message
     assert "25x25" not in reply.message.lower()
     _assert_reader_facing_plan(reply.message)
@@ -117,7 +124,7 @@ def test_ambiguous_multi_system_request_asks_for_scale_and_first_playable_scope(
 def test_explicit_boss_exclusion_removes_boss_from_the_plan(
     tmp_path: Path,
 ) -> None:
-    reply = ModAISession(output_root=tmp_path / "output").plan(
+    reply = _session(tmp_path).plan(
         "Create one frost item and a 41x41 arena. Do not add a boss."
     )
 

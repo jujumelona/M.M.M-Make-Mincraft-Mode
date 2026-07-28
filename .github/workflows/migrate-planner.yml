@@ -1,0 +1,35 @@
+name: Migrate legacy planner
+
+on:
+  push:
+    branches: [feat/real-multimodal-mcp-router]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: ${{ !contains(github.event.head_commit.message, '[planner-migrated]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/real-multimodal-mcp-router
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Replace invalid local loader and silent fallback
+        run: python tools/migrate_planner_router.py
+      - name: Commit migration when needed
+        shell: bash
+        run: |
+          if git diff --quiet -- minecraft_mod_ai/planner.py; then
+            echo "Planner already migrated."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/planner.py
+          git commit -m "Remove legacy planner loader and fallback [planner-migrated]"
+          git push origin HEAD:feat/real-multimodal-mcp-router
