@@ -7,12 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .pipeline import MinecraftModPipeline, PipelineResult
-from .planner import (
-    HeuristicPlanner,
-    LocalTransformersPlanner,
-    OpenAICompatiblePlanner,
-    Planner,
-)
+from .planner import OpenAICompatiblePlanner, Planner
+from .routed_planner import RoutedPlanner
 from .spec import Proposal, SpecValidationError
 from .webui import (
     _buildable,
@@ -28,19 +24,11 @@ SUPPORTED_MINECRAFT_VERSIONS = ("1.20.1",)
 
 
 def supported_minecraft_versions() -> tuple[str, ...]:
-    """Return the exact Minecraft versions backed by a validated build profile."""
-
     return SUPPORTED_MINECRAFT_VERSIONS
 
 
 @dataclass(frozen=True)
 class ChatReply:
-    """One natural-language planning turn.
-
-    ``proposal`` is available for programmatic inspection, but callers never
-    need to display or manually approve its internal JSON/hash.
-    """
-
     message: str
     ready_to_build: bool
     questions: tuple[str, ...]
@@ -48,18 +36,11 @@ class ChatReply:
 
     @property
     def buildable(self) -> bool:
-        """Compatibility alias for code that prefers the shorter name."""
-
         return self.ready_to_build
 
 
 class ModAISession:
-    """Stateful plan -> revise -> build interface.
-
-    The notebook UI is only one client of the same package. This class can be
-    imported from any Colab, Python process, or service without importing
-    Gradio at module import time.
-    """
+    """Stateful plan -> revise -> build API with an explicit model profile."""
 
     def __init__(
         self,
@@ -67,6 +48,7 @@ class ModAISession:
         output_root: str | Path = "mmm-output",
         minecraft_version: str = "1.20.1",
         planner: Planner | None = None,
+        model_profile: str = "t4_local",
         existing_input: str | Path | None = None,
     ) -> None:
         requested_version = minecraft_version.strip()
@@ -78,10 +60,10 @@ class ModAISession:
             )
         self.minecraft_version = requested_version
         self.output_root = Path(output_root)
-        self.existing_input = (
-            Path(existing_input) if existing_input is not None else None
+        self.existing_input = Path(existing_input) if existing_input is not None else None
+        self.pipeline = MinecraftModPipeline(
+            planner=planner or RoutedPlanner(profile=model_profile)
         )
-        self.pipeline = MinecraftModPipeline(planner=planner or HeuristicPlanner())
         self.brief = ""
         self.proposal: Proposal | None = None
 
@@ -92,13 +74,19 @@ class ModAISession:
         output_root: str | Path = "mmm-output",
         minecraft_version: str = "1.20.1",
         existing_input: str | Path | None = None,
-        model_id: str = "Qwen/Qwen3-4B-Instruct-2507",
+        profile: str = "t4_local",
+        model_id: str | None = None,
     ) -> "ModAISession":
+        if model_id is not None:
+            raise SpecValidationError(
+                "Direct model_id overrides are disabled. Add the model to "
+                "config/model_registry.yaml and select its profile."
+            )
         return cls(
             output_root=output_root,
             minecraft_version=minecraft_version,
             existing_input=existing_input,
-            planner=LocalTransformersPlanner(model_id=model_id),
+            model_profile=profile,
         )
 
     @classmethod
@@ -113,8 +101,6 @@ class ModAISession:
         existing_input: str | Path | None = None,
         timeout_seconds: int = 90,
     ) -> "ModAISession":
-        """Create a session backed by an explicitly configured HTTPS API."""
-
         return cls(
             output_root=output_root,
             minecraft_version=minecraft_version,
@@ -139,8 +125,6 @@ class ModAISession:
         existing_input: str | Path | None = None,
         timeout_seconds: int = 90,
     ) -> "ModAISession":
-        """Read an API key at runtime without putting it in source code."""
-
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise SpecValidationError(
@@ -157,25 +141,18 @@ class ModAISession:
         )
 
     def plan(self, prompt: str) -> ChatReply:
-        """Start a new plan from a natural-language request."""
-
         self.reset()
         return self.chat(prompt)
 
     def revise(self, message: str) -> ChatReply:
-        """Add a natural-language correction or missing requirement."""
-
         return self.chat(message)
 
     def chat(self, message: str) -> ChatReply:
-        """Continue the requirements conversation without writing files."""
-
         message = message.strip()
         if not message:
             raise SpecValidationError("대화 내용을 입력해 주세요.")
         if _is_approval_message(message) and self.proposal is not None:
             return self._reply(self.proposal)
-
         updated_brief = _merge_brief(self.brief, message)
         proposal = self.pipeline.plan(
             updated_brief,
@@ -192,8 +169,6 @@ class ModAISession:
         source_only: bool = False,
         output_root: str | Path | None = None,
     ) -> PipelineResult:
-        """Build the current reviewed plan in a collision-free run directory."""
-
         if isinstance(candidate, ChatReply):
             proposal = candidate.proposal
         elif isinstance(candidate, Proposal):
@@ -202,7 +177,6 @@ class ModAISession:
             proposal = self.proposal
         else:
             raise TypeError("candidate must be ChatReply, Proposal, or None.")
-
         if proposal is None:
             raise SpecValidationError("먼저 대화로 계획을 만들어 주세요.")
         questions = _clarification_questions(proposal.requested_prompt, proposal)
@@ -211,7 +185,6 @@ class ModAISession:
                 "아직 정하지 않았거나 구현과 연결되지 않은 내용이 있습니다. "
                 "대화에서 필요한 내용을 더 정해 주세요."
             )
-
         base_output = Path(output_root) if output_root is not None else self.output_root
         return self.pipeline.execute(
             proposal,
@@ -223,8 +196,6 @@ class ModAISession:
         )
 
     def reset(self) -> None:
-        """Clear only the conversation state; generated runs remain untouched."""
-
         self.brief = ""
         self.proposal = None
 

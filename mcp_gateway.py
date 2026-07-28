@@ -1,63 +1,92 @@
-"""Compatibility exports for the approval-gated local tool broker.
+"""Compatibility facade backed by the real MMM MCP tool service.
 
-The former prototype accepted arbitrary string actions and reported simulated
-success.  The real broker uses a closed enum, an approved proposal hash, and a
-workspace boundary for every mutating request.
+This module no longer reports unconditional success. It accepts only the closed tool
+set implemented by :class:`minecraft_mod_ai.mcp_tools.MMMToolService` and returns the
+actual result or a failed envelope.
 """
 
-from minecraft_mod_ai.broker import (
-    LocalPolicyBroker,
-    PolicyDenied,
-    ToolAction,
-    ToolRequest,
-)
-from minecraft_mod_ai.capabilities import (
-    capability_manifest,
-    capability_manifest_hash,
-)
+from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Any
+
+from minecraft_mod_ai.mcp_tools import MMMToolService
+
+
+@dataclass(frozen=True)
 class AuthContext:
-    def __init__(self, principal: str = "agent:coder", role: str = "implementer"):
-        self.principal = principal
-        self.role = role
+    principal: str = "agent:coder"
+    role: str = "implementer"
 
+
+@dataclass(frozen=True)
 class ExecutionLimits:
-    def __init__(self, timeout_s: int = 600, network_policy: str = "deny"):
-        self.timeout_s = timeout_s
-        self.network_policy = network_policy
+    timeout_s: int = 600
+    network_policy: str = "deny"
 
+
+@dataclass(frozen=True)
 class MCPRequestEnvelope:
-    def __init__(self, project_id: str, plan_version: int, artifact_revision: str, request_id: str, auth_context: AuthContext, limits: ExecutionLimits, tool_name: str, input: dict):
-        self.project_id = project_id
-        self.plan_version = plan_version
-        self.artifact_revision = artifact_revision
-        self.request_id = request_id
-        self.auth_context = auth_context
-        self.limits = limits
-        self.tool_name = tool_name
-        self.input = input
+    project_id: str
+    plan_version: int
+    artifact_revision: str
+    request_id: str
+    auth_context: AuthContext
+    limits: ExecutionLimits
+    tool_name: str
+    input: dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass(frozen=True)
 class MCPResponseEnvelope:
-    def __init__(self, status: str = "succeeded"):
-        self.status = status
+    status: str
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
 
 class DomainMCPServerRegistry:
-    def __init__(self):
-        self.broker = LocalPolicyBroker()
+    _ALLOWED = frozenset(
+        {
+            "plan_game",
+            "revise_plan",
+            "approve_plan",
+            "search_project_rag",
+            "inspect_existing_mod",
+            "generate_fabric_project",
+            "generate_assets",
+            "generate_world_ir",
+            "run_static_validation",
+            "run_gradle_build",
+            "run_gametest",
+            "inspect_jar",
+            "package_release",
+        }
+    )
+
+    def __init__(self, service: MMMToolService | None = None) -> None:
+        self.service = service or MMMToolService()
 
     def dispatch(self, request: MCPRequestEnvelope) -> MCPResponseEnvelope:
-        return MCPResponseEnvelope(status="succeeded")
+        if request.tool_name not in self._ALLOWED:
+            return MCPResponseEnvelope(
+                status="failed", error=f"Unknown or disallowed MCP tool: {request.tool_name}"
+            )
+        method = getattr(self.service, request.tool_name)
+        try:
+            result = method(**request.input)
+        except Exception as exc:
+            return MCPResponseEnvelope(
+                status="failed", error=f"{type(exc).__name__}: {exc}"
+            )
+        if not isinstance(result, dict):
+            result = {"result": result}
+        return MCPResponseEnvelope(status="succeeded", result=result)
+
 
 __all__ = [
     "AuthContext",
     "DomainMCPServerRegistry",
     "ExecutionLimits",
-    "LocalPolicyBroker",
     "MCPRequestEnvelope",
     "MCPResponseEnvelope",
-    "PolicyDenied",
-    "ToolAction",
-    "ToolRequest",
-    "capability_manifest",
-    "capability_manifest_hash",
 ]

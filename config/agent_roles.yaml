@@ -1,0 +1,47 @@
+schema_version: mmm/agent-roles-v1
+agents:
+  GameDesignPlanner:
+    model_role: planner
+    purpose: gameplay loop, progression, combat, quests, map and acceptance criteria
+    mcp_servers: [mmm-local, minecraft-dev]
+    allowed_local_tools: [plan_game, revise_plan, approve_plan, search_project_rag, generate_world_ir]
+  ResearchAgent:
+    model_role: researcher
+    purpose: version-pinned Fabric and Minecraft API evidence collection
+    mcp_servers: [minecraft-dev, mmm-local]
+    allowed_local_tools: [search_project_rag, inspect_existing_mod]
+  MinecraftCoder:
+    model_role: coder
+    purpose: Fabric Java, datagen, GameTest and build-error repair
+    mcp_servers: [minecraft-dev, mmm-local]
+    allowed_local_tools: [inspect_existing_mod, generate_fabric_project, run_static_validation, run_gradle_build, run_gametest, inspect_jar]
+  VisualCritic:
+    model_role: visual_critic
+    purpose: screenshot, GUI, texture and model consistency review
+    mcp_servers: [mmm-local]
+    allowed_local_tools: [generate_assets]
+  AssetGenerator:
+    model_role: image_generator
+    purpose: texture concepts and source artwork; never shares a T4 with a resident LLM
+    mcp_servers: [mmm-local]
+    allowed_local_tools: [generate_assets]
+  WorldPlanner:
+    model_role: world_planner
+    purpose: region graph, travel loop, dungeon and structure placement IR
+    mcp_servers: [minecraft-dev, mmm-local]
+    allowed_local_tools: [generate_world_ir, search_project_rag]
+  SpeechAgent:
+    model_role: speech_recognition
+    purpose: optional local voice transcription only
+    mcp_servers: [mmm-local]
+    allowed_local_tools: []
+runtime_mcp_policy:
+  minecraft-dev:
+    status: enabled
+    reason: source, mappings, decompilation and JAR inspection are version-compatible with 1.20.1
+  minecraft-runtime:
+    status: disabled
+    reason: upstream Fabric runtime target does not match this repository's pinned 1.20.1 profile
+  mineflayer-runtime:
+    status: disabled
+    reason: must pass an explicit 1.20.1 compatibility test or use a maintained fork

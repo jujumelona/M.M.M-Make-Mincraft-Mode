@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+
+from .model_adapters import AdapterConfig, ModelConfigurationError
+
+
+REQUIRED_ROLES = frozenset(
+    {
+        "planner",
+        "researcher",
+        "coder",
+        "visual_critic",
+        "world_planner",
+        "image_generator",
+        "speech_recognition",
+    }
+)
+ALLOWED_ADAPTERS = frozenset(
+    {
+        "transformers_text",
+        "transformers_multimodal",
+        "openai_compatible",
+        "image_diffusion",
+        "speech",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ModelProfile:
+    name: str
+    description: str
+    roles: Mapping[str, AdapterConfig]
+
+
+class ModelRegistry:
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = (
+            Path(path).expanduser().resolve()
+            if path is not None
+            else Path(__file__).resolve().parents[1] / "config" / "model_registry.yaml"
+        )
+        if not self.path.is_file():
+            raise ModelConfigurationError(f"Model registry not found: {self.path}")
+        raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != "mmm/model-registry-v1":
+            raise ModelConfigurationError("Unsupported or malformed model registry.")
+        profiles = raw.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            raise ModelConfigurationError("Model registry contains no profiles.")
+        self._raw_profiles = profiles
+
+    def profile_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._raw_profiles))
+
+    def load_profile(self, name: str) -> ModelProfile:
+        raw_profile = self._raw_profiles.get(name)
+        if not isinstance(raw_profile, dict):
+            raise ModelConfigurationError(
+                f"Unknown model profile {name!r}; available: {', '.join(self.profile_names())}"
+            )
+        raw_roles = raw_profile.get("roles")
+        if not isinstance(raw_roles, dict):
+            raise ModelConfigurationError(f"Profile {name!r} has no roles mapping.")
+        missing = REQUIRED_ROLES - set(raw_roles)
+        if missing:
+            raise ModelConfigurationError(
+                f"Profile {name!r} is missing roles: {sorted(missing)}"
+            )
+        roles = {
+            role: self._resolve_role(role, config)
+            for role, config in raw_roles.items()
+        }
+        return ModelProfile(
+            name=name,
+            description=str(raw_profile.get("description", "")),
+            roles=roles,
+        )
+
+    def role(self, profile: str, role: str) -> AdapterConfig:
+        loaded = self.load_profile(profile)
+        try:
+            return loaded.roles[role]
+        except KeyError as exc:
+            raise ModelConfigurationError(
+                f"Profile {profile!r} has no role {role!r}."
+            ) from exc
+
+    @staticmethod
+    def _resolve_role(role: str, raw: Any) -> AdapterConfig:
+        if not isinstance(raw, dict):
+            raise ModelConfigurationError(f"Role {role!r} must be a mapping.")
+        adapter = str(raw.get("adapter", "")).strip()
+        if adapter not in ALLOWED_ADAPTERS:
+            raise ModelConfigurationError(
+                f"Role {role!r} uses unsupported adapter {adapter!r}."
+            )
+        provider = str(raw.get("provider", "local")).strip() or "local"
+        model_id = str(raw.get("model_id", "")).strip()
+        base_url = ""
+        api_key = ""
+        if provider == "openai_compatible":
+            model_id = _required_env(raw, "model_env", role)
+            base_url = _required_env(raw, "base_url_env", role)
+            api_key = _required_env(raw, "api_key_env", role)
+        elif not model_id:
+            raise ModelConfigurationError(f"Local role {role!r} has no model_id.")
+        if model_id.startswith("Qwen/Qwen3.5-") and model_id.endswith("-Instruct"):
+            raise ModelConfigurationError(
+                f"Invalid Qwen3.5 repository ID for role {role!r}: {model_id!r}"
+            )
+        known = {
+            "model_id",
+            "provider",
+            "adapter",
+            "quantization",
+            "torch_dtype",
+            "max_context",
+            "max_new_tokens",
+            "min_free_vram_mb",
+            "exclusive_gpu",
+            "cpu_offload",
+            "model_env",
+            "base_url_env",
+            "api_key_env",
+        }
+        return AdapterConfig(
+            role=role,
+            adapter=adapter,
+            model_id=model_id,
+            provider=provider,
+            quantization=(str(raw["quantization"]) if raw.get("quantization") else None),
+            torch_dtype=str(raw.get("torch_dtype", "auto")),
+            max_context=_positive_int(raw.get("max_context", 8192), f"{role}.max_context"),
+            max_new_tokens=_positive_int(
+                raw.get("max_new_tokens", 1200), f"{role}.max_new_tokens"
+            ),
+            min_free_vram_mb=_nonnegative_int(
+                raw.get("min_free_vram_mb", 0), f"{role}.min_free_vram_mb"
+            ),
+            exclusive_gpu=bool(raw.get("exclusive_gpu", False)),
+            cpu_offload=bool(raw.get("cpu_offload", False)),
+            base_url=base_url,
+            api_key=api_key,
+            extra={key: value for key, value in raw.items() if key not in known},
+        )
+
+    def to_public_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "schema_version": "mmm/model-registry-public-v1",
+            "profiles": {},
+        }
+        for name in self.profile_names():
+            raw = self._raw_profiles[name]
+            roles: dict[str, Any] = {}
+            for role, config in raw["roles"].items():
+                roles[role] = {
+                    key: value
+                    for key, value in config.items()
+                    if key not in {"api_key_env"}
+                }
+            result["profiles"][name] = {
+                "description": raw.get("description", ""),
+                "roles": roles,
+            }
+        return result
+
+
+def _required_env(raw: Mapping[str, Any], key: str, role: str) -> str:
+    env_name = str(raw.get(key, "")).strip()
+    if not env_name:
+        raise ModelConfigurationError(f"Remote role {role!r} has no {key}.")
+    value = os.environ.get(env_name, "").strip()
+    if not value:
+        raise ModelConfigurationError(
+            f"Environment variable {env_name} is required for role {role!r}."
+        )
+    return value
+
+
+def _positive_int(value: Any, field: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ModelConfigurationError(f"{field} must be a positive integer.")
+    return value
+
+
+def _nonnegative_int(value: Any, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ModelConfigurationError(f"{field} must be a non-negative integer.")
+    return value

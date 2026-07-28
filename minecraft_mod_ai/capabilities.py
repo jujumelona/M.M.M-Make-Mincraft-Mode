@@ -9,12 +9,6 @@ from .spec import canonical_json
 
 @dataclass(frozen=True)
 class CapabilityRecord:
-    """Code-owned description shared by the broker and MCP adapter.
-
-    MCP annotations are discovery hints, never authorization.  The local broker
-    independently checks proposal state, manifest hash and workspace scope.
-    """
-
     name: str
     group: str
     readOnlyHint: bool
@@ -26,116 +20,50 @@ class CapabilityRecord:
 
 
 CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
-    CapabilityRecord(
-        name="plan.mod",
-        group="planning",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="evidence.search",
-        group="research",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="project.inspect",
-        group="existing-project",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="workflow.compile",
-        group="planning",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="fabric.scaffold",
-        group="generation",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="quality.validate",
-        group="quality",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="build.gradle",
-        group="build",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=True,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="test.gametest",
-        group="quality",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="release.package",
-        group="release",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
+    CapabilityRecord("plan.mod", "planning", True, False, True, False, False, True),
+    CapabilityRecord("plan.revise", "planning", True, False, True, False, False, True),
+    CapabilityRecord("plan.approve", "planning", True, False, True, False, False, True),
+    CapabilityRecord("evidence.search", "research", True, False, True, False, False, True),
+    CapabilityRecord("project.inspect", "existing-project", True, False, True, False, False, True),
+    CapabilityRecord("workflow.compile", "planning", True, False, True, False, False, True),
+    CapabilityRecord("fabric.scaffold", "generation", False, False, False, False, True, True),
+    CapabilityRecord("asset.generate", "generation", False, False, False, True, True, True),
+    CapabilityRecord("world.ir.generate", "planning", False, False, False, False, False, True),
+    CapabilityRecord("quality.validate", "quality", True, False, True, False, True, True),
+    CapabilityRecord("build.gradle", "build", False, False, True, True, True, True),
+    CapabilityRecord("test.gametest", "quality", False, False, True, False, True, True),
+    CapabilityRecord("jar.inspect", "quality", True, False, True, False, False, True),
+    CapabilityRecord("release.package", "release", False, False, True, False, True, True),
 )
 
 
 def capability_manifest() -> dict[str, Any]:
-    """Return a fresh, deterministic manifest for the local policy broker."""
-
     return {
-        "schema_version": "minecraft-mod-ai/capabilities-v2",
-        "protocol_alignment": "MCP Python SDK 2.0.0; compatible protocol negotiation",
-        "implementation_kind": "local-policy-manifest-not-mcp-server",
+        "schema_version": "minecraft-mod-ai/capabilities-v3",
+        "protocol_alignment": "Model Context Protocol; Python SDK FastMCP stdio server",
+        "implementation_kind": "mcp-fastmcp-server-with-local-policy-broker",
+        "server_entrypoint": "python -m minecraft_mod_ai.mcp_server",
         "authorization_source": "approved-proposal-hash-only",
         "retrieved_context_can_authorize": False,
         "tool_annotations_can_authorize": False,
+        "runtime_mcp_1201": "disabled-until-version-compatible-fork-is-validated",
         "staged_discovery": {
-            "planning": ["plan.mod", "evidence.search", "project.inspect", "workflow.compile"],
+            "planning": [
+                "plan.mod",
+                "plan.revise",
+                "plan.approve",
+                "evidence.search",
+                "project.inspect",
+                "workflow.compile",
+                "world.ir.generate",
+            ],
             "execution_after_approval": [
                 "fabric.scaffold",
+                "asset.generate",
                 "quality.validate",
                 "build.gradle",
                 "test.gametest",
+                "jar.inspect",
                 "release.package",
             ],
         },

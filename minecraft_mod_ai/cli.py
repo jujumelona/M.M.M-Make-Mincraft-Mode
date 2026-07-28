@@ -7,7 +7,8 @@ from pathlib import Path
 
 from .importer import inspect_existing_project_archive
 from .pipeline import MinecraftModPipeline
-from .planner import HeuristicPlanner, LocalTransformersPlanner
+from .planner import HeuristicPlanner
+from .routed_planner import RoutedPlanner
 from .spec import Proposal
 
 
@@ -18,58 +19,35 @@ def _json_dump(value: object) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mmm",
-        description="승인 해시 뒤에만 Fabric 1.20.1 프로젝트를 생성·검증합니다.",
+        description="역할별 AI와 승인 해시 뒤에만 Fabric 1.20.1 프로젝트를 생성·검증합니다.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan = subparsers.add_parser("plan", help="쓰기 없이 제안서 JSON을 생성합니다.")
     plan.add_argument("prompt", help="만들고 싶은 모드 설명")
-    plan.add_argument("--local-model", action="store_true")
     plan.add_argument(
-        "--existing-zip",
-        type=Path,
-        help=(
-            "선택적 기존 source/release ZIP. 실행하지 않고 inventory와 "
-            "snapshot hash를 제안서에 결합합니다."
-        ),
+        "--backend",
+        choices=("local", "heuristic-dev"),
+        default="local",
+        help="heuristic-dev is an explicit non-AI diagnostic backend.",
     )
-    plan.add_argument(
-        "--save",
-        type=Path,
-        help="선택한 경우에만 제안서 JSON을 이 경로에 저장합니다.",
-    )
+    plan.add_argument("--profile", default="t4_local")
+    plan.add_argument("--existing-zip", type=Path)
+    plan.add_argument("--save", type=Path)
 
     execute = subparsers.add_parser(
-        "execute",
-        help="저장한 제안서와 정확한 승인 해시로 생성·빌드·검증합니다.",
+        "execute", help="저장한 제안서와 정확한 승인 해시로 생성·빌드·검증합니다."
     )
     execute.add_argument("proposal", type=Path)
     execute.add_argument("--approve", required=True)
-    execute.add_argument(
-        "--output",
-        type=Path,
-        default=Path("mmm-output"),
-    )
-    execute.add_argument(
-        "--source-only",
-        action="store_true",
-        help="Gradle 빌드를 생략하며 설치용 JAR를 발행하지 않습니다.",
-    )
-    execute.add_argument(
-        "--skip-gametest",
-        action="store_true",
-        help="개발 진단용. 생략하면 VERIFIED 및 설치용 JAR 릴리스가 차단됩니다.",
-    )
+    execute.add_argument("--output", type=Path, default=Path("mmm-output"))
+    execute.add_argument("--source-only", action="store_true")
+    execute.add_argument("--skip-gametest", action="store_true")
     execute.add_argument("--gradle-cache", type=Path)
-    execute.add_argument(
-        "--existing-zip",
-        type=Path,
-        help="계획 때 승인한 것과 같은 기존 source/release ZIP",
-    )
+    execute.add_argument("--existing-zip", type=Path)
 
     inspect_existing = subparsers.add_parser(
-        "inspect-existing",
-        help="기존 모드 ZIP을 압축 해제·실행 없이 inventory합니다.",
+        "inspect-existing", help="기존 모드 ZIP을 실행 없이 inventory합니다."
     )
     inspect_existing.add_argument("archive", type=Path)
 
@@ -78,20 +56,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("proposal", type=Path)
 
-    ui = subparsers.add_parser("ui", help="로컬 Gradio 승인 UI를 실행합니다.")
-    ui.add_argument(
-        "--output",
-        type=Path,
-        default=Path("mmm-output"),
-    )
-    ui.add_argument("--local-model", action="store_true")
+    ui = subparsers.add_parser("ui", help="역할 라우터 기반 Gradio 승인 UI를 실행합니다.")
+    ui.add_argument("--output", type=Path, default=Path("mmm-output"))
+    ui.add_argument("--profile", default="t4_local")
     ui.add_argument("--share", action="store_true")
     ui.add_argument("--server-name", default="127.0.0.1")
-    ui.add_argument(
-        "--existing-zip",
-        type=Path,
-        help="기존 모드 수정 준비에만 사용하는 선택적 source/release ZIP",
-    )
     return parser
 
 
@@ -107,10 +76,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            planner = LocalTransformersPlanner() if args.local_model else HeuristicPlanner()
+            planner = (
+                RoutedPlanner(profile=args.profile)
+                if args.backend == "local"
+                else HeuristicPlanner()
+            )
             proposal = MinecraftModPipeline(planner=planner).plan(
-                args.prompt,
-                existing_input=args.existing_zip,
+                args.prompt, existing_input=args.existing_zip
             )
             rendered = _json_dump(proposal.to_dict()) + "\n"
             if args.save:
@@ -132,9 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                         "status": "PASS",
                         "mod_id": proposal.spec.mod_id,
                         "approval_hash": proposal.calculate_hash(),
-                        "stored_hash_matches": (
-                            proposal.approval_hash == proposal.calculate_hash()
-                        ),
+                        "stored_hash_matches": proposal.approval_hash == proposal.calculate_hash(),
                     }
                 )
                 + "\n"
@@ -156,20 +126,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.status in {"VERIFIED", "SOURCE_READY"} else 1
 
         if args.command == "ui":
-            from .webui import launch
+            from .ai_webui import launch
 
             launch(
                 output_root=args.output,
-                local_model=args.local_model,
+                profile=args.profile,
                 share=args.share,
                 server_name=args.server_name,
-                existing_input=args.existing_zip,
             )
             return 0
     except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write(f"ERROR: {exc}\n")
         return 2
-
     parser.error(f"Unknown command: {args.command}")
     return 2
 
