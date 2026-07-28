@@ -14,7 +14,7 @@ authors = [{ name = "M.M.M Make Mincraft Mode contributors" }]
 dependencies = []
 
 [project.optional-dependencies]
-ui = ["gradio>=5.0,<7"]
+ui = ["gradio>=6.0,<7"]
 local-model = [
   "accelerate>=1.0,<2",
   "transformers>=4.57,<6",

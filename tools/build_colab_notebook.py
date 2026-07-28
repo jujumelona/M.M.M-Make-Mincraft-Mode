@@ -28,42 +28,65 @@ def _code(cell_id: str, value: str) -> NotebookNode:
     cell["id"] = cell_id
     cell["execution_count"] = None
     cell["outputs"] = []
+    cell["metadata"]["cellView"] = "form"
     return cell
 
 
 def build_notebook() -> NotebookNode:
     cells = [
         _markdown(
-            "title-and-goal",
+            "title",
             """
-            # M.M.M Make Mincraft Mode — Google Colab
+            # M.M.M Make Mincraft Mode
 
-            자연어로 Fabric 모드를 만들고 release ZIP으로 내려받습니다.
+            `런타임 → 모두 실행`을 누른 뒤 마지막에 열리는 화면에서 AI와 대화하세요.
 
-            - 새 모드: 업로드 없이 그대로 실행합니다.
-            - 기존 모드 수정: `PATCH_EXISTING = True`로 바꾸고 ZIP 하나를 올립니다.
+            - 새 모드: 아무 파일도 올리지 않습니다.
+            - 기존 모드 수정: 두 번째 칸의 체크박스만 켜고 ZIP 하나를 올립니다.
             """,
         ),
         _markdown(
-            "sync-heading",
+            "setup-heading",
             """
-            ## Setup
+            ## 1. 준비
 
-            ### 1. 최신 버전 준비
+            AI 방식을 고른 뒤 실행하세요.
 
-            GitHub `main`의 최신 버전을 자동으로 설치합니다.
+            - `built-in`: 추가 모델 없이 바로 사용
+            - `local`: Colab에서 로컬 AI 모델 사용
+            - `api`: OpenAI 호환 API 사용. Colab의 열쇠 아이콘에서
+              `MMM_API_KEY` Secret을 먼저 등록하고 노트북 접근을 허용하세요.
+
+            API 주소와 모델 이름은 `api`를 고를 때만 입력합니다. API 키는 입력칸,
+            노트북 파일, 출력에 저장하지 않습니다.
             """,
         ),
         _code(
-            "sync-repository",
-            """
+            "setup",
+            r'''
+            # @title 최신 버전 준비 및 설치
             from pathlib import Path
+            import importlib
+            import os
             import subprocess
-            import tomllib
+            import sys
 
+            from IPython.display import clear_output
+
+            AI_BACKEND = "built-in"  # @param ["built-in", "local", "api"]
+            API_BASE_URL = ""  # @param {type:"string"}
+            API_MODEL = ""  # @param {type:"string"}
             REPO_URL = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode.git"
             REPO_BRANCH = "main"
             PROJECT_ROOT = Path("/content/mmm-make-mincraft-mode")
+
+            AI_BACKEND = AI_BACKEND.strip().lower()
+            if AI_BACKEND not in {"built-in", "local", "api"}:
+                raise ValueError("AI 방식은 built-in, local, api 중 하나여야 합니다.")
+            if AI_BACKEND == "api" and (
+                not API_BASE_URL.strip() or not API_MODEL.strip()
+            ):
+                raise ValueError("API 방식은 API 주소와 모델 이름을 입력해야 합니다.")
 
 
             def run_git(*args: str) -> str:
@@ -73,8 +96,6 @@ def build_notebook() -> NotebookNode:
                     text=True,
                     capture_output=True,
                 )
-                if completed.stderr.strip():
-                    print(completed.stderr.strip())
                 return completed.stdout.strip()
 
 
@@ -84,39 +105,16 @@ def build_notebook() -> NotebookNode:
 
             if PROJECT_ROOT.exists():
                 if not (PROJECT_ROOT / ".git").is_dir():
-                    raise RuntimeError(
-                        f"{PROJECT_ROOT}가 존재하지만 Git 저장소가 아닙니다. "
-                        "내용을 확인한 뒤 다른 런타임에서 다시 실행하세요."
-                    )
+                    raise RuntimeError("기존 작업 폴더가 Git 저장소가 아닙니다.")
                 existing_origin = run_git(
                     "-C", str(PROJECT_ROOT), "config", "--get", "remote.origin.url"
                 )
                 if normalized_repo_url(existing_origin) != normalized_repo_url(REPO_URL):
-                    raise RuntimeError(
-                        "기존 디렉터리의 origin이 예상 저장소와 다릅니다: "
-                        f"{existing_origin!r}"
-                    )
-                run_git(
-                    "-C",
-                    str(PROJECT_ROOT),
-                    "fetch",
-                    "--prune",
-                    "origin",
-                    REPO_BRANCH,
-                )
-                current_branch = run_git(
-                    "-C", str(PROJECT_ROOT), "branch", "--show-current"
-                )
-                if current_branch != REPO_BRANCH:
+                    raise RuntimeError("기존 작업 폴더가 다른 프로젝트입니다.")
+                run_git("-C", str(PROJECT_ROOT), "fetch", "--prune", "origin", REPO_BRANCH)
+                if run_git("-C", str(PROJECT_ROOT), "branch", "--show-current") != REPO_BRANCH:
                     run_git("-C", str(PROJECT_ROOT), "checkout", REPO_BRANCH)
-                run_git(
-                    "-C",
-                    str(PROJECT_ROOT),
-                    "pull",
-                    "--ff-only",
-                    "origin",
-                    REPO_BRANCH,
-                )
+                run_git("-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", REPO_BRANCH)
             else:
                 run_git(
                     "clone",
@@ -127,205 +125,170 @@ def build_notebook() -> NotebookNode:
                     str(PROJECT_ROOT),
                 )
 
-            required_markers = [
+            required = (
                 PROJECT_ROOT / ".git",
                 PROJECT_ROOT / "pyproject.toml",
                 PROJECT_ROOT / "minecraft_mod_ai" / "__init__.py",
                 PROJECT_ROOT / "colab_app.py",
-            ]
-            missing_markers = [str(path) for path in required_markers if not path.exists()]
-            if missing_markers:
-                raise RuntimeError(
-                    "필수 저장소 marker가 없습니다: " + ", ".join(missing_markers)
-                )
-
-            with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
-                project_metadata = tomllib.load(pyproject_file)
-            project_name = project_metadata.get("project", {}).get("name")
-            if project_name != "mmm-make-mincraft-mode":
-                raise RuntimeError(
-                    f"예상하지 않은 pyproject project.name: {project_name!r}"
-                )
-
-            commit_sha = run_git(
-                "-C", str(PROJECT_ROOT), "rev-parse", "--verify", "HEAD"
             )
-            origin_main_sha = run_git(
-                "-C",
-                str(PROJECT_ROOT),
-                "rev-parse",
-                "--verify",
-                f"origin/{REPO_BRANCH}",
+            if any(not path.exists() for path in required):
+                raise RuntimeError("프로젝트 파일을 완전히 받지 못했습니다.")
+
+            pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(
+                encoding="utf-8"
             )
-            if commit_sha != origin_main_sha:
-                raise RuntimeError(
-                    f"현재 HEAD({commit_sha})가 origin/{REPO_BRANCH}"
-                    f"({origin_main_sha})와 다릅니다."
-                )
+            if 'name = "mmm-make-mincraft-mode"' not in pyproject_text:
+                raise RuntimeError("받은 프로젝트 이름이 올바르지 않습니다.")
 
-            print(f"Repository: {REPO_URL}")
-            print(f"Branch: {REPO_BRANCH}")
-            print(f"Exact commit SHA: {commit_sha}")
-            """,
-        ),
-        _markdown(
-            "install-heading",
-            """
-            ### 2. 실행 화면 설치
+            commit_sha = run_git("-C", str(PROJECT_ROOT), "rev-parse", "HEAD")
+            remote_sha = run_git(
+                "-C", str(PROJECT_ROOT), "rev-parse", f"origin/{REPO_BRANCH}"
+            )
+            if commit_sha != remote_sha:
+                raise RuntimeError("최신 GitHub 버전과 현재 실행 버전이 다릅니다.")
 
-            기본값 그대로 실행하면 됩니다.
-            """,
-        ),
-        _code(
-            "install-project",
-            """
-            import importlib
-            import os
-            import subprocess
-            import sys
-
-            INSTALL_LOCAL_MODEL = False
             os.chdir(PROJECT_ROOT)
             install_target = (
-                ".[ui,local-model]" if INSTALL_LOCAL_MODEL else ".[ui]"
+                ".[ui,local-model]" if AI_BACKEND == "local" else ".[ui]"
             )
-            subprocess.run(
+            installed = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-e", install_target],
-                check=True,
+                text=True,
+                capture_output=True,
             )
+            if installed.returncode != 0:
+                diagnostics = (installed.stderr or installed.stdout).strip()[-3000:]
+                raise RuntimeError(
+                    "실행 화면 설치에 실패했습니다.\n" + diagnostics
+                )
 
-            minecraft_mod_ai = importlib.import_module("minecraft_mod_ai")
-            print(f"Installed M.M.M Make Mincraft Mode {minecraft_mod_ai.__version__}")
-            print(f"Running commit: {commit_sha}")
-            """,
+            importlib.invalidate_caches()
+            stale_modules = [
+                module_name
+                for module_name in tuple(sys.modules)
+                if module_name == "minecraft_mod_ai"
+                or module_name.startswith("minecraft_mod_ai.")
+                or module_name == "colab_app"
+            ]
+            if stale_modules:
+                try:
+                    import gradio
+
+                    gradio.close_all()
+                except Exception:
+                    pass
+                for module_name in sorted(
+                    stale_modules,
+                    key=lambda value: value.count("."),
+                    reverse=True,
+                ):
+                    sys.modules.pop(module_name, None)
+            importlib.import_module("minecraft_mod_ai")
+            clear_output(wait=True)
+            print("✅ 준비 완료")
+            ''',
         ),
         _markdown(
-            "existing-input-heading",
+            "existing-heading",
             """
-            ### 3. 기존 모드 ZIP (선택)
+            ## 2. 기존 모드 ZIP (선택)
 
-            새 모드는 `PATCH_EXISTING = False`로 실행합니다. 기존 모드를 수정할 때만
-            `True`로 바꾸고 source/release ZIP 하나를 올립니다.
+            새 모드라면 기본값 그대로 실행합니다.
             """,
         ),
         _code(
-            "optional-existing-input",
-            """
+            "existing-input",
+            r'''
+            # @title 기존 모드 수정일 때만 체크
             from pathlib import Path, PurePath
             import io
             import zipfile
 
-            PATCH_EXISTING = False
+            from IPython.display import clear_output
+
+            PATCH_EXISTING = False  # @param {type:"boolean"}
             existing_input = None
 
             if PATCH_EXISTING:
                 from google.colab import files
+                from minecraft_mod_ai.importer import inspect_existing_project_archive
 
                 uploaded = files.upload()
                 if len(uploaded) != 1:
-                    raise ValueError(
-                        f"기존 모드 ZIP 하나만 업로드하세요. 받은 파일 수: {len(uploaded)}"
-                    )
-
+                    raise ValueError("기존 모드 ZIP 하나만 올려 주세요.")
                 uploaded_name, uploaded_bytes = next(iter(uploaded.items()))
-                safe_name = PurePath(uploaded_name.replace("\\\\", "/")).name
+                safe_name = PurePath(uploaded_name.replace("\\", "/")).name
                 if not safe_name.lower().endswith(".zip"):
-                    raise ValueError("기존 모드 입력은 source/release ZIP이어야 합니다.")
+                    raise ValueError("ZIP 파일만 올릴 수 있습니다.")
                 if len(uploaded_bytes) > 512 * 1024 * 1024:
-                    raise ValueError("기존 모드 ZIP은 512 MiB 이하여야 합니다.")
+                    raise ValueError("ZIP은 512 MiB 이하여야 합니다.")
                 if not zipfile.is_zipfile(io.BytesIO(uploaded_bytes)):
-                    raise ValueError("업로드한 파일이 유효한 ZIP이 아닙니다.")
-
-                with zipfile.ZipFile(io.BytesIO(uploaded_bytes)) as archive:
-                    file_infos = [item for item in archive.infolist() if not item.is_dir()]
-                    if len(file_infos) > 10_000:
-                        raise ValueError("ZIP 항목 수가 10,000개를 초과합니다.")
-                    archive_names = [item.filename.replace("\\\\", "/") for item in file_infos]
-                    has_editable_source = any(
-                        name.lower().endswith((".java", ".kt"))
-                        for name in archive_names
-                    )
-                    jar_count = sum(
-                        name.lower().endswith(".jar") for name in archive_names
-                    )
+                    raise ValueError("올바른 ZIP 파일이 아닙니다.")
 
                 input_root = Path("/content/mmm-existing-input")
                 input_root.mkdir(parents=True, exist_ok=True)
                 input_path = input_root / safe_name
                 input_path.write_bytes(uploaded_bytes)
-                existing_input = str(input_path)
-
-                from minecraft_mod_ai.importer import inspect_existing_project_archive
-
                 inspect_existing_project_archive(input_path)
-                print(f"기존 모드 ZIP 준비 완료: {safe_name}")
-                print(f"파일 수: {len(file_infos)}")
-                if jar_count and not has_editable_source:
-                    print("소스가 없는 JAR ZIP입니다.")
+                existing_input = str(input_path)
+                clear_output(wait=True)
+                print(f"✅ 기존 모드 준비 완료: {safe_name}")
             else:
-                print("PATCH_EXISTING=False — 새 모드 생성 모드입니다.")
-            """,
-        ),
-        _markdown(
-            "environment-heading",
-            """
-            ### 4. 실행 환경 확인
-            """,
-        ),
-        _code(
-            "environment-check",
-            """
-            import platform
-            import shutil
-            import subprocess
-
-            print(f"Python: {platform.python_version()}")
-            print(f"Project: {PROJECT_ROOT}")
-            print(f"Commit: {commit_sha}")
-
-            nvidia_smi = shutil.which("nvidia-smi")
-            if nvidia_smi:
-                subprocess.run(
-                    [
-                        nvidia_smi,
-                        "--query-gpu=name,memory.total,memory.free",
-                        "--format=csv,noheader",
-                    ],
-                    check=False,
-                )
-            else:
-                print("GPU가 없어도 기본 모드로 실행할 수 있습니다.")
-            """,
+                clear_output(wait=True)
+                print("✅ 새 모드 만들기")
+            ''',
         ),
         _markdown(
             "launch-heading",
             """
-            ### 5. 모드 만들기
+            ## 3. AI와 대화하기
 
-            열린 화면에서 요청을 입력하고 `계획 생성 → 승인 후 실행`을 누릅니다.
-            완료되면 **release ZIP**을 내려받습니다.
+            아래 칸을 실행하면 모드 제작 화면이 열립니다.
             """,
         ),
         _code(
-            "launch-ui",
+            "launch",
             """
+            # @title 모드 제작 화면 열기
             from colab_app import launch
+            import secrets
+
+            api_base_url = API_BASE_URL.strip() if AI_BACKEND == "api" else None
+            api_model = API_MODEL.strip() if AI_BACKEND == "api" else None
+            runtime_api_key = None
+
+            if AI_BACKEND == "api":
+                from google.colab import userdata
+
+                try:
+                    runtime_api_key = userdata.get("MMM_API_KEY")
+                except Exception:
+                    raise RuntimeError(
+                        "Colab Secret MMM_API_KEY를 등록하고 노트북 접근을 허용해 주세요."
+                    ) from None
+                if not runtime_api_key:
+                    raise RuntimeError(
+                        "Colab Secret MMM_API_KEY가 비어 있거나 접근할 수 없습니다."
+                    )
 
             OUTPUT_ROOT = "/content/mmm-output"
-            demo = launch(
-                output_root=OUTPUT_ROOT,
-                local_model=INSTALL_LOCAL_MODEL,
-                share=True,
-                existing_input=existing_input,
-            )
-            """,
-        ),
-        _markdown(
-            "next-steps",
-            """
-            ## 완료
-
-            화면 아래에서 release ZIP을 내려받으세요.
+            ui_username = "mmm"
+            ui_password = secrets.token_urlsafe(12)
+            print(f"공유 화면 로그인: {ui_username} / {ui_password}")
+            try:
+                demo = launch(
+                    output_root=OUTPUT_ROOT,
+                    local_model=AI_BACKEND == "local",
+                    api_base_url=api_base_url,
+                    api_model=api_model,
+                    api_key=runtime_api_key,
+                    share=True,
+                    existing_input=existing_input,
+                    auth=(ui_username, ui_password),
+                )
+            finally:
+                runtime_api_key = None
+                ui_password = None
             """,
         ),
     ]
