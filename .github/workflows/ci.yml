@@ -28,5 +28,6 @@ jobs:
           name: pytest-log
           path: |
             pytest.log
+            tests/
             minecraft_mod_ai/planner.py
           if-no-files-found: error
