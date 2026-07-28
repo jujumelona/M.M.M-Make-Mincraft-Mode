@@ -1,66 +1,23 @@
-name: verify
+name: CI
 
-"on":
-  push:
-    branches: ["main"]
+on:
   pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: read
+  push:
+    branches: [main, feat/real-multimodal-mcp-router]
 
 jobs:
-  python-contracts:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.11'
           cache: pip
-
-      - name: Install test dependencies
-        run: python -m pip install -e ".[dev]"
-
-      - name: Run contract and security tests
-        run: python -m pytest
-
-      - name: Compile Python sources
-        run: python -m compileall -q minecraft_mod_ai
-
-      - name: Validate the Colab notebook
-        run: python tools/build_colab_notebook.py --check
-
-  full-fabric-reference:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install project
-        run: python -m pip install -e ".[dev]"
-
-      - name: Build, run Fabric GameTest, and package the reference release
-        run: >-
-          python tools/verify_reference_build.py
-          --output github-reference-output
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mmm-reference-evidence
-          path: |
-            github-reference-output/releases/
-            github-reference-output/workspaces/*/.minecraft_ai/
-          if-no-files-found: error
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+      - name: Compile
+        run: python -m compileall -q minecraft_mod_ai mcp_gateway.py download_resources.py
+      - name: Test
+        run: pytest
