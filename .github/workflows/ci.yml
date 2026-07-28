@@ -20,4 +20,11 @@ jobs:
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai mcp_gateway.py download_resources.py
       - name: Test
-        run: pytest
+        run: pytest -x --tb=short > pytest.log 2>&1
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: pytest.log
+          if-no-files-found: error
