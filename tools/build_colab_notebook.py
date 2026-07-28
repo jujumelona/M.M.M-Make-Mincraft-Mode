@@ -62,7 +62,7 @@ def build_notebook() -> NotebookNode:
             # @title 모드 요구사항 입력 및 AI 백엔드 설정
             PROMPT = "\ub2e8\ud48d\ub2d8 \uc544\uc774\ud15c 2\uac1c, \ube14\ub85d 3\uac1c, \uadf8\ub9ac\uace0 \uc544\ub808\ub098\ub97c \ud3ec\ud568\ud55c Fabric \ubaa8\ub4dc\ub97c \ub9cc\ub4e4\uc5b4\uc11c \ub9f5\uacfc \ud568\uaed8 \uc81c\uacf5\ud574\uc6e4" # @param {type:"string"}
             AI_BACKEND = "built-in" # @param ["built-in", "local", "api"]
-            LOCAL_MODEL_ID = "Qwen/Qwen2.5-Coder-7B-Instruct" # @param {type:"string"}
+            LOCAL_MODEL_ID = "Qwen/Qwen3.5-9B-Instruct" # @param ["Qwen/Qwen3.5-9B-Instruct", "google/gemma-4-12B-it", "Qwen/Qwen3.5-4B-Instruct"]
             API_BASE_URL = "" # @param {type:"string"}
             API_MODEL = "" # @param {type:"string"}
 

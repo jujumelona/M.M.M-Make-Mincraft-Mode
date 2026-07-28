@@ -38,5 +38,21 @@ def resource_manifest() -> dict[str, object]:
     }
 
 
+def print_model_catalog() -> None:
+    manifest = resource_manifest()
+    print("=== PDF v6 Model & Resource Catalog ===")
+    print(f"• Optional LLM Model : Qwen/Qwen3.5-9B-Instruct / google/gemma-4-12B-it")
+    print(f"• Build Tool         : {manifest['build_tool']['name']} {manifest['build_tool']['version']}")
+    print(f"• Target Platform    : Minecraft {manifest['minecraft_target']['minecraft']} (Fabric Loader {manifest['minecraft_target']['loader']})")
+
+
+def generate_download_script(output_path: str = "download_models.sh") -> str:
+    script_content = "#!/usr/bin/env bash\n# PDF v6 Resource Download Helper\necho 'Downloading PDF v6 models...'\n"
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(script_content)
+    return output_path
+
+
 if __name__ == "__main__":
     print(json.dumps(resource_manifest(), ensure_ascii=False, indent=2))
+

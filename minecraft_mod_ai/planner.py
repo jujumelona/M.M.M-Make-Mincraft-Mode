@@ -551,7 +551,7 @@ class LocalTransformersPlanner:
 
     def __init__(
         self,
-        model_id: str = "Qwen/Qwen3-4B-Instruct-2507",
+        model_id: str = "Qwen/Qwen3.5-9B-Instruct",
         *,
         fallback: Planner | None = None,
         max_new_tokens: int = 1400,
