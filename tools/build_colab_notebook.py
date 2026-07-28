@@ -10,7 +10,7 @@ from nbformat import NotebookNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_PATH = ROOT / "Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb"
+NOTEBOOK_PATH = ROOT / "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
 
 
 def _source(value: str) -> str:
@@ -36,17 +36,12 @@ def build_notebook() -> NotebookNode:
         _markdown(
             "title-and-goal",
             """
-            # Minecraft Mod AI — Google Colab
+            # M.M.M Make Mincraft Mode — Google Colab
 
-            ## Goal
+            자연어로 Fabric 모드를 만들고 release ZIP으로 내려받습니다.
 
-            이 노트북은 매번 GitHub `main`의 최신 Minecraft Mod AI 엔진을 받아 설치하고,
-            승인 기반 UI에서 새 Fabric 모드를 생성합니다.
-
-            - 엔진 자체를 ZIP으로 업로드하지 않습니다.
-            - 실제로 사용한 Git commit SHA를 출력해 실행 버전을 추적합니다.
-            - 이미 만든 모드를 수정하려는 경우에만 별도의 **선택적 기존 모드 ZIP** 셀을 켭니다.
-            - 생성 결과의 release ZIP은 UI의 다운로드 항목에서 받습니다.
+            - 새 모드: 업로드 없이 그대로 실행합니다.
+            - 기존 모드 수정: `PATCH_EXISTING = True`로 바꾸고 ZIP 하나를 올립니다.
             """,
         ),
         _markdown(
@@ -54,11 +49,9 @@ def build_notebook() -> NotebookNode:
             """
             ## Setup
 
-            ### 1. GitHub `main` 동기화 및 저장소 확인
+            ### 1. 최신 버전 준비
 
-            `/content/minecraft-mod-ai`가 없으면 공식 프로젝트 URL에서 clone합니다. 이미 있으면
-            같은 저장소인지 확인한 뒤 `fetch`와 `pull --ff-only`만 수행합니다. 로컬 변경이나
-            분기 충돌이 있으면 덮어쓰지 않고 중단합니다.
+            GitHub `main`의 최신 버전을 자동으로 설치합니다.
             """,
         ),
         _code(
@@ -68,9 +61,9 @@ def build_notebook() -> NotebookNode:
             import subprocess
             import tomllib
 
-            REPO_URL = "https://github.com/jujumelona/minecraft-mod-ai.git"
+            REPO_URL = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode.git"
             REPO_BRANCH = "main"
-            PROJECT_ROOT = Path("/content/minecraft-mod-ai")
+            PROJECT_ROOT = Path("/content/mmm-make-mincraft-mode")
 
 
             def run_git(*args: str) -> str:
@@ -149,7 +142,7 @@ def build_notebook() -> NotebookNode:
             with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
                 project_metadata = tomllib.load(pyproject_file)
             project_name = project_metadata.get("project", {}).get("name")
-            if project_name != "minecraft-mod-ai":
+            if project_name != "mmm-make-mincraft-mode":
                 raise RuntimeError(
                     f"예상하지 않은 pyproject project.name: {project_name!r}"
                 )
@@ -178,11 +171,9 @@ def build_notebook() -> NotebookNode:
         _markdown(
             "install-heading",
             """
-            ### 2. UI 의존성 설치
+            ### 2. 실행 화면 설치
 
-            저장소 marker와 `pyproject.toml`의 프로젝트 이름을 확인한 뒤 현재 Python 커널에
-            UI를 설치합니다. 기본값은 가벼운 결정론 planner이며, 선택적 로컬 모델 worker가
-            필요할 때만 `INSTALL_LOCAL_MODEL = True`로 바꿉니다.
+            기본값 그대로 실행하면 됩니다.
             """,
         ),
         _code(
@@ -204,35 +195,24 @@ def build_notebook() -> NotebookNode:
             )
 
             minecraft_mod_ai = importlib.import_module("minecraft_mod_ai")
-            print(f"Installed minecraft-mod-ai {minecraft_mod_ai.__version__}")
+            print(f"Installed M.M.M Make Mincraft Mode {minecraft_mod_ai.__version__}")
             print(f"Running commit: {commit_sha}")
             """,
         ),
         _markdown(
             "existing-input-heading",
             """
-            ## Optional existing-mod revision input
+            ### 3. 기존 모드 ZIP (선택)
 
-            ### 3. 이미 만든 모드 또는 이전 release ZIP 가져오기
-
-            새 모드를 만들 때는 `PATCH_EXISTING = False`를 그대로 둡니다. 기존 모드를
-            분석하거나 수정 컨텍스트로 사용할 때만 `True`로 바꾸고 **source ZIP 또는
-            release ZIP 정확히 하나**를 업로드합니다.
-
-            이 셀은 ZIP을 저장한 뒤 프로젝트의 fail-closed importer로 경로·심볼릭 링크·
-            중복·압축 해제 크기·자격증명 경로·Fabric metadata·파일별 SHA-256을 검사합니다.
-            압축을 풀지 않고 Gradle wrapper·JAR·Python·셸·배치 등 내부 파일을 실행하지
-            않습니다. Java/Kotlin 소스가 없고 JAR만 든 release ZIP은 편집 가능한 소스가
-            아니므로 **metadata analysis 전용**으로 전달됩니다.
+            새 모드는 `PATCH_EXISTING = False`로 실행합니다. 기존 모드를 수정할 때만
+            `True`로 바꾸고 source/release ZIP 하나를 올립니다.
             """,
         ),
         _code(
             "optional-existing-input",
             """
             from pathlib import Path, PurePath
-            import hashlib
             import io
-            import json
             import zipfile
 
             PATCH_EXISTING = False
@@ -269,23 +249,19 @@ def build_notebook() -> NotebookNode:
                         name.lower().endswith(".jar") for name in archive_names
                     )
 
-                input_root = Path("/content/minecraft-mod-ai-existing-input")
+                input_root = Path("/content/mmm-existing-input")
                 input_root.mkdir(parents=True, exist_ok=True)
                 input_path = input_root / safe_name
                 input_path.write_bytes(uploaded_bytes)
                 existing_input = str(input_path)
 
-                input_sha256 = hashlib.sha256(uploaded_bytes).hexdigest()
                 from minecraft_mod_ai.importer import inspect_existing_project_archive
 
-                import_report = inspect_existing_project_archive(input_path)
-                print(f"Existing input: {existing_input}")
-                print(f"SHA-256: {input_sha256}")
-                print(f"ZIP files: {len(file_infos)}; JAR files: {jar_count}")
-                print("Archive contents were inspected as data and were not executed.")
-                print(json.dumps(import_report.to_dict(), ensure_ascii=False, indent=2))
+                inspect_existing_project_archive(input_path)
+                print(f"기존 모드 ZIP 준비 완료: {safe_name}")
+                print(f"파일 수: {len(file_infos)}")
                 if jar_count and not has_editable_source:
-                    print("JAR-only release detected: metadata analysis mode.")
+                    print("소스가 없는 JAR ZIP입니다.")
             else:
                 print("PATCH_EXISTING=False — 새 모드 생성 모드입니다.")
             """,
@@ -293,12 +269,7 @@ def build_notebook() -> NotebookNode:
         _markdown(
             "environment-heading",
             """
-            ## Checks
-
-            ### 4. Colab 실행 환경 확인
-
-            기본 deterministic planner는 GPU가 없어도 동작합니다. 아래 정보는 문제 재현을
-            위한 환경 기록입니다.
+            ### 4. 실행 환경 확인
             """,
         ),
         _code(
@@ -323,20 +294,16 @@ def build_notebook() -> NotebookNode:
                     check=False,
                 )
             else:
-                print("GPU not detected; deterministic planner remains available.")
+                print("GPU가 없어도 기본 모드로 실행할 수 있습니다.")
             """,
         ),
         _markdown(
             "launch-heading",
             """
-            ## Steps
+            ### 5. 모드 만들기
 
-            ### 5. 승인 기반 UI 실행
-
-            공유 URL이 출력되면 UI에서 계획을 확인하고, 표시된 SHA-256 승인 해시를 직접
-            입력한 뒤 실행합니다. 검증된 생성이 끝나면 UI의 **release ZIP** 파일 항목에서
-            바로 다운로드할 수 있습니다. 선택적 업로드 경로는 `existing_input`으로만
-            전달되며 노트북이 그 내용을 실행하지 않습니다.
+            열린 화면에서 요청을 입력하고 `계획 생성 → 승인 후 실행`을 누릅니다.
+            완료되면 **release ZIP**을 내려받습니다.
             """,
         ),
         _code(
@@ -344,7 +311,7 @@ def build_notebook() -> NotebookNode:
             """
             from colab_app import launch
 
-            OUTPUT_ROOT = "/content/minecraft-mod-ai-output"
+            OUTPUT_ROOT = "/content/mmm-output"
             demo = launch(
                 output_root=OUTPUT_ROOT,
                 local_model=INSTALL_LOCAL_MODEL,
@@ -356,11 +323,9 @@ def build_notebook() -> NotebookNode:
         _markdown(
             "next-steps",
             """
-            ## Next Steps
+            ## 완료
 
-            UI의 release ZIP에는 생성 결과와 검증 증거가 함께 포함됩니다. 런타임을 다시
-            시작하면 첫 번째 셀부터 실행해 그 시점의 GitHub `main`을 다시 동기화하고,
-            출력된 exact commit SHA를 함께 기록하세요.
+            화면 아래에서 release ZIP을 내려받으세요.
             """,
         ),
     ]

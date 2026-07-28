@@ -283,7 +283,7 @@ class GradleRunner:
             )
             if tail and tail not in output:
                 output += tail
-            output += "\n[ Minecraft Mod AI: command timed out; process tree terminated ]\n"
+            output += "\n[ M.M.M Make Mincraft Mode: command timed out; process tree terminated ]\n"
             exit_code = 124
         duration = time.monotonic() - started
         log_path.write_text(output, encoding="utf-8")

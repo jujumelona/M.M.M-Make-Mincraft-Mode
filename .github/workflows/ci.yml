@@ -59,7 +59,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: minecraft-mod-ai-reference-evidence
+          name: mmm-reference-evidence
           path: |
             github-reference-output/releases/
             github-reference-output/workspaces/*/.minecraft_ai/

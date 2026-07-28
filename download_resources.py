@@ -1,7 +1,7 @@
 """Show the optional local-model and verified build resources.
 
 Core generation and deterministic validation have no model dependency.
-`minecraft-mod-ai-ui --local-model` downloads the optional Hugging Face model
+`mmm ui --local-model` downloads the optional Hugging Face model
 through Transformers on first use.  Gradle is fetched by the build runner and
 checked against the published SHA-256 before execution.
 """

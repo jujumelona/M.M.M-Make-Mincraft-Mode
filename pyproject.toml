@@ -1,15 +1,16 @@
 [build-system]
-requires = ["setuptools>=70"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "minecraft-mod-ai"
+name = "mmm-make-mincraft-mode"
 version = "0.1.0"
-description = "Approval-gated Minecraft Fabric mod compiler for local and Colab use"
+description = "M.M.M Make Mincraft Mode - Minecraft Fabric mod builder for local and Colab use"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "Minecraft Mod AI contributors" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "M.M.M Make Mincraft Mode contributors" }]
 dependencies = []
 
 [project.optional-dependencies]
@@ -24,7 +25,13 @@ dev = [
 ]
 
 [project.scripts]
+mmm = "minecraft_mod_ai.cli:main"
 minecraft-mod-ai = "minecraft_mod_ai.cli:main"
+
+[project.urls]
+Repository = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode"
+Colab = "https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft-Mode/blob/main/M.M.M_Make_Mincraft_Mode_Colab.ipynb"
+Issues = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/issues"
 
 [tool.setuptools.packages.find]
 include = ["minecraft_mod_ai*"]

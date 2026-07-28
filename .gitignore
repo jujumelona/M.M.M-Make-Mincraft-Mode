@@ -6,6 +6,7 @@ __pycache__/
 dist/
 models/
 minecraft-mod-ai-output/
+mmm-output/
 verification-output/
 final-verification-output/
 verified-release-output/

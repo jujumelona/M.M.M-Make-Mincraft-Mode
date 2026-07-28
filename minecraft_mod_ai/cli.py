@@ -17,7 +17,7 @@ def _json_dump(value: object) -> str:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="minecraft-mod-ai",
+        prog="mmm",
         description="승인 해시 뒤에만 Fabric 1.20.1 프로젝트를 생성·검증합니다.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -48,7 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument(
         "--output",
         type=Path,
-        default=Path("minecraft-mod-ai-output"),
+        default=Path("mmm-output"),
     )
     execute.add_argument(
         "--source-only",
@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ui.add_argument(
         "--output",
         type=Path,
-        default=Path("minecraft-mod-ai-output"),
+        default=Path("mmm-output"),
     )
     ui.add_argument("--local-model", action="store_true")
     ui.add_argument("--share", action="store_true")

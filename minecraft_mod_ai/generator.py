@@ -610,7 +610,9 @@ public final class {main_class}GameTests {{
             "version": "${version}",
             "name": spec.mod_name,
             "description": spec.summary,
-            "authors": ["Generated with Minecraft Mod AI; review before redistribution"],
+            "authors": [
+                "Generated with M.M.M Make Mincraft Mode; review before redistribution"
+            ],
             "license": "MIT",
             "environment": "*",
             "entrypoints": entrypoints,
@@ -1223,7 +1225,7 @@ public final class GeneratedContent {{
             )
         return f"""# {spec.mod_name}
 
-Minecraft Mod AI가 승인된 구조화 사양에서 생성한 Fabric 프로젝트입니다.
+M.M.M Make Mincraft Mode가 생성한 Fabric 프로젝트입니다.
 
 - Minecraft: {spec.platform.minecraft_version}
 - Java: {spec.platform.java_version}
@@ -1238,7 +1240,7 @@ Minecraft Mod AI가 승인된 구조화 사양에서 생성한 Fabric 프로젝�
 
 Gradle Wrapper가 있으면 Linux/macOS에서 `./gradlew clean build`, Windows에서
 `gradlew.bat clean build`를 실행하세요. Wrapper가 아직 없다면 상위
-Minecraft Mod AI 파이프라인의 `build` 명령이 검증된 Gradle 배포본을 받아
+M.M.M Make Mincraft Mode의 `build` 과정이 검증된 Gradle 배포본을 받아
 wrapper를 만든 뒤 실제 빌드를 수행합니다.
 
 성공한 JAR는 `build/libs/{spec.mod_id}-{spec.version}.jar`입니다.
@@ -1479,7 +1481,7 @@ run/
 
 _MIT_LICENSE = """MIT License
 
-Copyright (c) 2026 Minecraft Mod AI user
+Copyright (c) 2026 M.M.M Make Mincraft Mode user
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

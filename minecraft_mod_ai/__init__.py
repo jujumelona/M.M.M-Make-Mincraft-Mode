@@ -1,4 +1,4 @@
-"""Minecraft Mod AI: an approval-gated, deterministic Fabric mod compiler."""
+"""M.M.M Make Mincraft Mode: a deterministic Fabric mod builder."""
 
 from .importer import (
     ExistingProjectImportError,

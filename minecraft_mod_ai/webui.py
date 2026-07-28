@@ -12,25 +12,19 @@ from .spec import Proposal
 
 def _existing_input_markdown(report: ExistingProjectReport | None) -> str:
     if report is None:
-        return (
-            "### 입력 모드: 새 모드\n\n"
-            "기존 프로젝트 업로드 없이 새 revision workspace를 생성합니다."
-        )
+        return "### 새 모드 만들기"
     source_note = (
-        "편집 가능한 source가 발견되었습니다."
+        "소스가 포함된 ZIP입니다."
         if report.has_sources
-        else "편집 가능한 source가 없습니다. metadata/inventory 분석만 가능합니다."
+        else "소스가 없는 ZIP입니다."
     )
     return (
-        "### 입력 모드: 기존 모드 수정 준비\n\n"
-        f"- archive: `{report.archive_name}`\n"
-        f"- kind: `{report.input_kind}`\n"
-        f"- mod: `{report.mod_id or 'unknown'}` / `{report.mod_version or 'unknown'}`\n"
-        f"- snapshot: `{report.source_snapshot_hash}`\n"
-        f"- files: `{report.file_count}`\n\n"
-        f"{source_note} ZIP 내용은 실행하거나 원본에 덮어쓰지 않습니다. "
-        "현재 수직 슬라이스는 snapshot을 승인에 묶은 별도 candidate를 만들며, "
-        "임의 기존 소스에 최소 diff를 자동 적용했다고 주장하지 않습니다."
+        "### 기존 모드 수정\n\n"
+        f"- 파일: `{report.archive_name}`\n"
+        f"- 모드: `{report.mod_id or '확인 불가'}` / "
+        f"`{report.mod_version or '버전 확인 불가'}`\n"
+        f"- 파일 수: `{report.file_count}`\n\n"
+        f"{source_note}"
     )
 
 
@@ -71,16 +65,11 @@ def create_demo(
         coverage.append("실제 Gradle/JAR 검증")
         if existing_report is not None:
             coverage.append("기존 입력 inventory·snapshot 재검사")
-        mode = (
-            "기존 입력에 결합된 revision candidate"
-            if existing_report is not None
-            else "새 모드"
-        )
+        mode = "기존 모드 수정" if existing_report is not None else "새 모드"
         status = (
-            f"**{mode} 계획만 생성했습니다. 아직 파일을 쓰거나 빌드하지 않았습니다.**\n\n"
+            f"**{mode} 계획을 만들었습니다.**\n\n"
             f"범위: {' · '.join(coverage)}\n\n"
-            "아래 JSON과 제외·유예 항목을 검토한 뒤 표시된 해시를 그대로 입력해야 "
-            "실행할 수 있습니다."
+            "내용을 확인하고 표시된 승인 해시를 아래 칸에 붙여 넣으세요."
         )
         return proposal.to_dict(), proposal.approval_hash, proposal_json, status
 
@@ -117,21 +106,20 @@ def create_demo(
         except Exception as exc:
             return f"실행 실패: {type(exc).__name__}: {exc}", None
 
-    with gr.Blocks(title="Minecraft Mod AI") as demo:
+    with gr.Blocks(title="M.M.M Make Mincraft Mode") as demo:
         gr.Markdown(
             """
-# Minecraft Mod AI — Fabric 1.20.1
+# M.M.M Make Mincraft Mode — Fabric 1.20.1
 
-현재 검증된 수직 슬라이스는 아이템·블록과 제한된 보스·아레나 맵·3D 원본을
-생성합니다. 계획은 읽기 전용이며, 표시된 SHA-256을 직접 재입력한 뒤에만
-파일 생성과 빌드가 시작됩니다.
+원하는 모드를 적고 `계획 생성 → 승인 후 실행` 순서로 누르세요.
+완료되면 아래에서 release ZIP을 내려받을 수 있습니다.
 """
         )
         gr.Markdown(_existing_input_markdown(existing_report))
         if existing_report is not None:
             gr.JSON(
                 value=existing_report.to_dict(),
-                label="기존 입력 inventory (읽기 전용)",
+                label="업로드한 모드 정보",
             )
 
         state = gr.Textbox(visible=False)
@@ -171,7 +159,7 @@ def create_demo(
 
 def launch(
     *,
-    output_root: str | Path = "minecraft-mod-ai-output",
+    output_root: str | Path = "mmm-output",
     local_model: bool = False,
     share: bool = False,
     server_name: str = "127.0.0.1",
