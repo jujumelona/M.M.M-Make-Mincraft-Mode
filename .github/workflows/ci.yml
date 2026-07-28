@@ -1,0 +1,66 @@
+name: verify
+
+"on":
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run contract and security tests
+        run: python -m pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q minecraft_mod_ai
+
+      - name: Validate the Colab notebook
+        run: python tools/build_colab_notebook.py --check
+
+  full-fabric-reference:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install project
+        run: python -m pip install -e ".[dev]"
+
+      - name: Build, run Fabric GameTest, and package the reference release
+        run: >-
+          python tools/verify_reference_build.py
+          --output github-reference-output
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minecraft-mod-ai-reference-evidence
+          path: |
+            github-reference-output/releases/
+            github-reference-output/workspaces/*/.minecraft_ai/
+          if-no-files-found: error

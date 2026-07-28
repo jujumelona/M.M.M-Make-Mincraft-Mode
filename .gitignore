@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+dist/
+models/
+minecraft-mod-ai-output/
+verification-output/
+final-verification-output/
+verified-release-output/
+release/
+reference-build*.log
+pdf_full_text.txt
+.ipynb_checkpoints/

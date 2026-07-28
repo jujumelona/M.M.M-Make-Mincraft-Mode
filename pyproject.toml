@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minecraft-mod-ai"
+version = "0.1.0"
+description = "Approval-gated Minecraft Fabric mod compiler for local and Colab use"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Minecraft Mod AI contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+ui = ["gradio>=5.0,<7"]
+local-model = [
+  "accelerate>=1.0,<2",
+  "transformers>=4.57,<6",
+]
+dev = [
+  "nbformat>=5.10,<6",
+  "pytest>=8,<10",
+]
+
+[project.scripts]
+minecraft-mod-ai = "minecraft_mod_ai.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["minecraft_mod_ai*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
