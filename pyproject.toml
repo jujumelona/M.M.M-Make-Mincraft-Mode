@@ -52,6 +52,9 @@ Repository = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode"
 Colab = "https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft-Mode/blob/main/M.M.M_Make_Mincraft_Mode_Colab.ipynb"
 Issues = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/issues"
 
+[tool.setuptools]
+py-modules = ["mcp_gateway", "download_resources"]
+
 [tool.setuptools.packages.find]
 include = ["minecraft_mod_ai*"]
 
