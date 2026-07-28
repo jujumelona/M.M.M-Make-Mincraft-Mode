@@ -541,92 +541,42 @@ class HeuristicPlanner:
 
 
 class LocalTransformersPlanner:
-    """Lazy, constrained proposal worker for a Colab T4.
+    """Compatibility wrapper around the role-based model registry.
 
-    This optional general instruction model is not a central game-design
-    authority. It is loaded only to draft a small ModSpec candidate, constrained
-    to the schema, then fully released. The deterministic fallback is always
-    disclosed by the ``last_backend`` attribute.
+    Direct model identifiers and fallback planners are intentionally rejected so
+    every local backend uses ``config/model_registry.yaml`` and failures remain
+    visible to the caller.
     """
 
     def __init__(
         self,
-        model_id: str = "Qwen/Qwen3.5-9B-Instruct",
+        model_id: str | None = None,
         *,
         fallback: Planner | None = None,
-        max_new_tokens: int = 1400,
+        max_new_tokens: int | None = None,
+        profile: str = "t4_local",
     ) -> None:
-        self.model_id = model_id
-        self.fallback = fallback or HeuristicPlanner()
-        self.max_new_tokens = max_new_tokens
-        self.last_backend = ""
+        if model_id is not None:
+            raise SpecValidationError(
+                "Direct model_id overrides are disabled. Configure the model in "
+                "config/model_registry.yaml and select a profile."
+            )
+        if fallback is not None:
+            raise SpecValidationError(
+                "Silent or automatic planner fallback is disabled."
+            )
+        if max_new_tokens is not None:
+            raise SpecValidationError(
+                "Per-call max_new_tokens overrides are disabled. Configure the role "
+                "limit in config/model_registry.yaml."
+            )
+        self.profile = profile
+        self.last_backend = f"role-router:{profile}"
 
     def plan(self, prompt: str) -> Proposal:
-        try:
-            proposal = self._plan_with_model(prompt)
-            self.last_backend = f"local-transformers:{self.model_id}"
-            return proposal
-        except Exception:
-            self.last_backend = "deterministic-fallback"
-            return self.fallback.plan(prompt)
+        from .routed_planner import RoutedPlanner
 
-    def _plan_with_model(self, prompt: str) -> Proposal:
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-        except ImportError as exc:
-            raise RuntimeError(
-                "Local model extras are not installed. Install .[local-model]."
-            ) from exc
-
-        tokenizer = None
-        model = None
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                torch_dtype="auto",
-                device_map="auto",
-                low_cpu_mem_usage=True,
-            )
-            schema_prompt = _planner_system_prompt()
-            messages = [
-                {"role": "system", "content": schema_prompt},
-                {"role": "user", "content": prompt},
-            ]
-            rendered = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            inputs = tokenizer(rendered, return_tensors="pt")
-            model_device = next(model.parameters()).device
-            inputs = {name: tensor.to(model_device) for name, tensor in inputs.items()}
-            with torch.inference_mode():
-                output = model.generate(
-                    **inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=tokenizer.eos_token_id,
-                )
-            generated = output[0][inputs["input_ids"].shape[1] :]
-            text = tokenizer.decode(generated, skip_special_tokens=True)
-            model_data = _extract_json_object(text)
-            proposal = _proposal_from_model_data(prompt, model_data)
-            proposal.validate()
-            return proposal
-        finally:
-            if model is not None:
-                del model
-            if tokenizer is not None:
-                del tokenizer
-            gc.collect()
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.ipc_collect()
-            except Exception:
-                pass
+        return RoutedPlanner(profile=self.profile).plan(prompt)
 
 
 class OpenAICompatiblePlanner:
