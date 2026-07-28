@@ -21,10 +21,12 @@ jobs:
         run: python -m compileall -q minecraft_mod_ai mcp_gateway.py download_resources.py
       - name: Test
         run: pytest -x --tb=short > pytest.log 2>&1
-      - name: Upload pytest log
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-log
-          path: pytest.log
+          path: |
+            pytest.log
+            minecraft_mod_ai/planner.py
           if-no-files-found: error
