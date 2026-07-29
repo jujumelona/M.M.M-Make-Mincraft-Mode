@@ -1,0 +1,67 @@
+schema_version: mmm/external-mcp-registry-v1
+servers:
+  mmm-local:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    target_versions: ["1.20.1"]
+    trust: first_party
+  minecraft-dev:
+    status: enabled
+    transport: stdio
+    command: [npx, -y, "@mcdxai/minecraft-dev-mcp"]
+    target_versions: ["1.20.1"]
+    trust: reviewed_open_source
+    purpose: source decompilation, mappings, symbol search and JAR inspection
+  playwright:
+    status: enabled
+    transport: stdio
+    command: [npx, -y, "@playwright/mcp@latest", "--headless"]
+    trust: official_open_source
+    purpose: documentation and web UI research
+  github:
+    status: optional
+    transport: stdio
+    command: [docker, run, -i, --rm, -e, GITHUB_PERSONAL_ACCESS_TOKEN, ghcr.io/github/github-mcp-server]
+    required_env: [GITHUB_PERSONAL_ACCESS_TOKEN]
+    trust: official_open_source
+    purpose: repository, issue, pull request, Actions and release operations
+  blockbench:
+    status: configuration_required
+    transport: streamable_http
+    url_env: MMM_BLOCKBENCH_MCP_URL
+    default_url: http://127.0.0.1:3000/bb-mcp
+    trust: restricted_gpl_process
+    allowed_tools:
+      - open_project
+      - create_cube
+      - set_texture
+      - set_uv
+      - create_animation
+      - render_preview
+      - validate_uv
+      - export_bbmodel
+      - export_geckolib
+      - close_project
+  jdtls:
+    status: configuration_required
+    transport: stdio_lsp
+    command_env: MMM_JDTLS_CMD
+    trust: official_eclipse
+    required_runtime: Java 21 for the language server; generated project remains Java 17
+  minecraft-runtime-1201:
+    status: configuration_required
+    transport: first_party_process
+    trust: first_party
+    target_versions: ["1.20.1"]
+    purpose: disposable server/client lifecycle, logs, commands and screenshots
+  mineflayer-1201:
+    status: configuration_required
+    transport: first_party_jsonl
+    command: [node, integrations/mineflayer-1201/bridge.mjs]
+    target_versions: ["1.20.1"]
+    trust: first_party_wrapper_over_mineflayer
+  gdmc:
+    status: incompatible_by_default
+    target_versions: ["1.20.2"]
+    reason: upstream target does not match the pinned 1.20.1 release

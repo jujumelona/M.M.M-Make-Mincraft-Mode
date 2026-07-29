@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "mmm-local": {
+      "command": "python",
+      "args": ["-m", "minecraft_mod_ai.mcp_server"],
+      "env": {
+        "MMM_MODEL_PROFILE": "t4_local",
+        "MMM_WORKSPACE": "mmm-output"
+      }
+    },
+    "minecraft-dev": {
+      "command": "npx",
+      "args": ["-y", "@mcdxai/minecraft-dev-mcp"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+    }
+  }
+}

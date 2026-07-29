@@ -18,6 +18,13 @@ def _capabilities(prompt: str) -> set[str]:
     return {request.capability for request in proposal.deferred_requests}
 
 
+def _diagnostic_session(tmp_path, name: str) -> ModAISession:
+    return ModAISession(
+        output_root=tmp_path / name,
+        planner=HeuristicPlanner(),
+    )
+
+
 def test_ascii_terms_require_token_or_phrase_boundaries() -> None:
     prompt = (
         "Use a maple palette for a core exploration mechanic in a classic "
@@ -150,7 +157,7 @@ def test_item_count_ignores_arena_dimensions() -> None:
 def test_count_overflow_is_deferred_instead_of_clamped_to_eight(
     tmp_path,
 ) -> None:
-    reply = ModAISession(output_root=tmp_path / "output").plan(
+    reply = _diagnostic_session(tmp_path, "output").plan(
         "Create 100 frost items."
     )
 
@@ -193,7 +200,7 @@ def test_invalid_arena_dimensions_are_deferred_without_default_fallback(
     dimensions: str,
     tmp_path,
 ) -> None:
-    reply = ModAISession(output_root=tmp_path / dimensions).plan(
+    reply = _diagnostic_session(tmp_path, dimensions).plan(
         f"Create a {dimensions} arena."
     )
 

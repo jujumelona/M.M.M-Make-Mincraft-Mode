@@ -1,18 +1,8 @@
 """Public Python API contract for conversational mod-building sessions.
 
-The intended API is deliberately smaller than the internal Proposal/Pipeline
-surface:
-
-* ``ModAISession`` is importable from the package root.
-* ``plan()`` starts and ``revise()`` continues the same natural-language brief;
-* a plan reply exposes ``proposal``, ``buildable``, ``questions``, and
-  user-facing ``message`` attributes;
-* ``build(source_only=True)`` executes the latest buildable proposal in a
-  fresh run directory.
-
-These tests are written before the public session implementation.  They should
-not be weakened by exposing approval hashes or requiring callers to manipulate
-Proposal JSON.
+These offline contract tests inject the deterministic diagnostic planner. Product
+entrypoints keep the role-routed AI planner as the default and expose backend
+failures instead of silently substituting this test planner.
 """
 
 from __future__ import annotations
@@ -24,14 +14,21 @@ from typing import Any
 
 import pytest
 
-from minecraft_mod_ai import ModAISession
+from minecraft_mod_ai import HeuristicPlanner, ModAISession
 from minecraft_mod_ai.planner import OpenAICompatiblePlanner
+
+
+def _offline_session(output_root: Path) -> ModAISession:
+    return ModAISession(
+        output_root=output_root,
+        planner=HeuristicPlanner(),
+    )
 
 
 def test_natural_language_plan_and_revision_share_the_current_brief(
     tmp_path: Path,
 ) -> None:
-    session = ModAISession(output_root=tmp_path / "outputs")
+    session = _offline_session(tmp_path / "outputs")
 
     first = session.plan("Create one frost item.")
     assert first.buildable is True
@@ -60,7 +57,7 @@ def test_vague_skill_and_map_request_is_not_buildable_and_forces_no_boss(
     tmp_path: Path,
 ) -> None:
     output_root = tmp_path / "must-remain-empty"
-    session = ModAISession(output_root=output_root)
+    session = _offline_session(output_root)
 
     reply = session.plan(
         "Make a mod with a teleport skill and a large open-world map."
@@ -84,7 +81,7 @@ def test_explicit_supported_request_can_build_source_twice_in_unique_runs(
     tmp_path: Path,
 ) -> None:
     output_root = tmp_path / "outputs"
-    session = ModAISession(output_root=output_root)
+    session = _offline_session(output_root)
     reply = session.plan("Create one frost item and one frost block.")
     assert reply.buildable is True
 
@@ -162,8 +159,6 @@ def test_openai_compatible_planner_filters_unrequested_content_and_never_leaks_k
                 "recipe": True,
             },
         ],
-        # The remote model is not allowed to turn an unrequested map into even
-        # a deferred capability. Deferred work must originate in the user brief.
         "deferred_capabilities": ["custom_map"],
     }
 

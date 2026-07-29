@@ -9,12 +9,6 @@ from .spec import canonical_json
 
 @dataclass(frozen=True)
 class CapabilityRecord:
-    """Code-owned description shared by the broker and MCP adapter.
-
-    MCP annotations are discovery hints, never authorization.  The local broker
-    independently checks proposal state, manifest hash and workspace scope.
-    """
-
     name: str
     group: str
     readOnlyHint: bool
@@ -25,118 +19,93 @@ class CapabilityRecord:
     evidence_required: bool
 
 
+def _cap(
+    name: str,
+    group: str,
+    *,
+    read: bool,
+    destructive: bool = False,
+    idempotent: bool = True,
+    open_world: bool = False,
+    approval: bool = False,
+    evidence: bool = True,
+) -> CapabilityRecord:
+    return CapabilityRecord(
+        name,
+        group,
+        read,
+        destructive,
+        idempotent,
+        open_world,
+        approval,
+        evidence,
+    )
+
+
 CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
-    CapabilityRecord(
-        name="plan.mod",
-        group="planning",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="evidence.search",
-        group="research",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="project.inspect",
-        group="existing-project",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="workflow.compile",
-        group="planning",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=False,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="fabric.scaffold",
-        group="generation",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="quality.validate",
-        group="quality",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="build.gradle",
-        group="build",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=True,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="test.gametest",
-        group="quality",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
-    CapabilityRecord(
-        name="release.package",
-        group="release",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-        approval_required=True,
-        evidence_required=True,
-    ),
+    _cap("plan.mod", "planning", read=True),
+    _cap("plan.revise", "planning", read=True),
+    _cap("plan.approve", "planning", read=True),
+    _cap("evidence.search", "research", read=True),
+    _cap("evidence.index", "research", read=False),
+    _cap("evidence.rerank", "research", read=True),
+    _cap("project.inspect", "existing-project", read=True),
+    _cap("workflow.compile", "planning", read=True),
+    _cap("fabric.scaffold", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.system.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("asset.generate", "generation", read=False, idempotent=False, open_world=True, approval=True),
+    _cap("blockbench.model", "generation", read=False, idempotent=False, open_world=True, approval=True),
+    _cap("geckolib.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("world.ir.generate", "planning", read=False, idempotent=False),
+    _cap("world.compile", "generation", read=False, idempotent=False, approval=True),
+    _cap("java.diagnostics", "quality", read=True),
+    _cap("java.symbols", "quality", read=True),
+    _cap("quality.validate", "quality", read=True, approval=True),
+    _cap("build.gradle", "build", read=False, open_world=True, approval=True),
+    _cap("test.gametest", "quality", read=False, approval=True),
+    _cap("jar.inspect", "quality", read=True),
+    _cap("runtime.instance", "runtime", read=False, idempotent=False, open_world=True, approval=True),
+    _cap("runtime.command", "runtime", read=False, open_world=True, approval=True),
+    _cap("runtime.screenshot", "runtime", read=True),
+    _cap("mineflayer.playtest", "runtime", read=False, open_world=True, approval=True),
+    _cap("model.smoke", "models", read=False, idempotent=False, open_world=True),
+    _cap("training.trace.record", "training", read=False),
+    _cap("training.dataset.export", "training", read=False),
+    _cap("release.package", "release", read=False, approval=True),
 )
 
 
 def capability_manifest() -> dict[str, Any]:
-    """Return a fresh, deterministic manifest for the local policy broker."""
-
     return {
-        "schema_version": "minecraft-mod-ai/capabilities-v2",
-        "protocol_alignment": "MCP Python SDK 2.0.0; compatible protocol negotiation",
-        "implementation_kind": "local-policy-manifest-not-mcp-server",
-        "authorization_source": "approved-proposal-hash-only",
+        "schema_version": "minecraft-mod-ai/capabilities-v4",
+        "protocol_alignment": "Model Context Protocol; Python SDK FastMCP stdio server",
+        "implementation_kind": "mcp-fastmcp-server-with-local-policy-and-runtime-brokers",
+        "server_entrypoint": "python -m minecraft_mod_ai.mcp_server",
+        "authorization_source": "approved-proposal-hash-only-for-project-writes-and-runtime",
         "retrieved_context_can_authorize": False,
         "tool_annotations_can_authorize": False,
+        "runtime_target": "disposable-minecraft-java-1.20.1-only",
         "staged_discovery": {
-            "planning": ["plan.mod", "evidence.search", "project.inspect", "workflow.compile"],
-            "execution_after_approval": [
-                "fabric.scaffold",
-                "quality.validate",
-                "build.gradle",
-                "test.gametest",
-                "release.package",
+            "planning_research": [
+                record.name
+                for record in CAPABILITY_RECORDS
+                if not record.approval_required
+                and record.group in {"planning", "research", "existing-project", "models"}
+            ],
+            "generation_after_approval": [
+                record.name
+                for record in CAPABILITY_RECORDS
+                if record.approval_required
+                and record.group in {"generation", "build", "quality"}
+            ],
+            "runtime_after_build_and_approval": [
+                record.name
+                for record in CAPABILITY_RECORDS
+                if record.group == "runtime"
+            ],
+            "training_from_verified_receipts_only": [
+                "training.trace.record",
+                "training.dataset.export",
             ],
         },
         "tools": [asdict(record) for record in CAPABILITY_RECORDS],

@@ -1,26 +1,18 @@
-"""Show the optional local-model and verified build resources.
-
-Core generation and deterministic validation have no model dependency.
-`mmm ui --local-model` downloads the optional Hugging Face model
-through Transformers on first use.  Gradle is fetched by the build runner and
-checked against the published SHA-256 before execution.
-"""
+"""Inspect or download the exact local models declared by config/model_registry.yaml."""
 
 from __future__ import annotations
 
+import argparse
 import json
+from pathlib import Path
 
+from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.runner import GRADLE_SHA256, GRADLE_URL, GRADLE_VERSION
 
 
 def resource_manifest() -> dict[str, object]:
     return {
-        "optional_planner_model": {
-            "id": "Qwen/Qwen3-4B-Instruct-2507",
-            "purpose": "optional constrained ModSpec candidate drafting",
-            "required_for_core_pipeline": False,
-            "authority": "never authorizes tools or changes the platform lock",
-        },
+        "model_registry": ModelRegistry().to_public_dict(),
         "build_tool": {
             "name": "Gradle",
             "version": GRADLE_VERSION,
@@ -38,21 +30,74 @@ def resource_manifest() -> dict[str, object]:
     }
 
 
-def print_model_catalog() -> None:
-    manifest = resource_manifest()
-    print("=== PDF v6 Model & Resource Catalog ===")
-    print(f"• Optional LLM Model : Qwen/Qwen3.5-9B-Instruct / google/gemma-4-12B-it")
-    print(f"• Build Tool         : {manifest['build_tool']['name']} {manifest['build_tool']['version']}")
-    print(f"• Target Platform    : Minecraft {manifest['minecraft_target']['minecraft']} (Fabric Loader {manifest['minecraft_target']['loader']})")
+def local_model_ids(profile: str = "t4_local") -> tuple[str, ...]:
+    loaded = ModelRegistry().load_profile(profile)
+    return tuple(
+        sorted(
+            {
+                config.model_id
+                for config in loaded.roles.values()
+                if config.provider == "local" and config.model_id
+            }
+        )
+    )
 
 
-def generate_download_script(output_path: str = "download_models.sh") -> str:
-    script_content = "#!/usr/bin/env bash\n# PDF v6 Resource Download Helper\necho 'Downloading PDF v6 models...'\n"
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(script_content)
-    return output_path
+def generate_download_script(
+    output_path: str | Path = "download_models.sh",
+    *,
+    profile: str = "t4_local",
+) -> str:
+    target = Path(output_path)
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "# Downloads the exact repositories in config/model_registry.yaml.",
+        "# Gated repositories require HF_TOKEN and prior license acceptance.",
+        "command -v huggingface-cli >/dev/null || { echo 'Install huggingface_hub first.' >&2; exit 2; }",
+    ]
+    for model_id in local_model_ids(profile):
+        lines.append(f"huggingface-cli download {model_id} --resume-download")
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    target.chmod(0o755)
+    return str(target)
+
+
+def download_models(
+    *,
+    profile: str = "t4_local",
+    cache_dir: str | Path | None = None,
+) -> list[str]:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError("Install the local-model extra before downloading models.") from exc
+    downloaded: list[str] = []
+    for model_id in local_model_ids(profile):
+        path = snapshot_download(
+            repo_id=model_id,
+            cache_dir=(str(cache_dir) if cache_dir is not None else None),
+            resume_download=True,
+        )
+        downloaded.append(path)
+    return downloaded
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", default="t4_local")
+    parser.add_argument("--download", action="store_true")
+    parser.add_argument("--cache-dir")
+    parser.add_argument("--script", nargs="?", const="download_models.sh")
+    args = parser.parse_args()
+    if args.script:
+        print(generate_download_script(args.script, profile=args.profile))
+        return
+    if args.download:
+        print(json.dumps(download_models(profile=args.profile, cache_dir=args.cache_dir), indent=2))
+        return
+    print(json.dumps(resource_manifest(), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    print(json.dumps(resource_manifest(), ensure_ascii=False, indent=2))
-
+    main()

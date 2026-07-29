@@ -1,63 +1,134 @@
-"""Compatibility exports for the approval-gated local tool broker.
+"""Compatibility facade backed by the real core and production MCP tool services."""
 
-The former prototype accepted arbitrary string actions and reported simulated
-success.  The real broker uses a closed enum, an approved proposal hash, and a
-workspace boundary for every mutating request.
-"""
+from __future__ import annotations
 
-from minecraft_mod_ai.broker import (
-    LocalPolicyBroker,
-    PolicyDenied,
-    ToolAction,
-    ToolRequest,
-)
-from minecraft_mod_ai.capabilities import (
-    capability_manifest,
-    capability_manifest_hash,
-)
+from dataclasses import dataclass, field
+from typing import Any
 
+from minecraft_mod_ai.mcp_tools import MMMToolService
+from minecraft_mod_ai.production_tools import ProductionToolService
+
+
+@dataclass(frozen=True)
 class AuthContext:
-    def __init__(self, principal: str = "agent:coder", role: str = "implementer"):
-        self.principal = principal
-        self.role = role
+    principal: str = "agent:coder"
+    role: str = "implementer"
 
+
+@dataclass(frozen=True)
 class ExecutionLimits:
-    def __init__(self, timeout_s: int = 600, network_policy: str = "deny"):
-        self.timeout_s = timeout_s
-        self.network_policy = network_policy
+    timeout_s: int = 600
+    network_policy: str = "deny"
 
+
+@dataclass(frozen=True)
 class MCPRequestEnvelope:
-    def __init__(self, project_id: str, plan_version: int, artifact_revision: str, request_id: str, auth_context: AuthContext, limits: ExecutionLimits, tool_name: str, input: dict):
-        self.project_id = project_id
-        self.plan_version = plan_version
-        self.artifact_revision = artifact_revision
-        self.request_id = request_id
-        self.auth_context = auth_context
-        self.limits = limits
-        self.tool_name = tool_name
-        self.input = input
+    project_id: str
+    plan_version: int
+    artifact_revision: str
+    request_id: str
+    auth_context: AuthContext
+    limits: ExecutionLimits
+    tool_name: str
+    input: dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass(frozen=True)
 class MCPResponseEnvelope:
-    def __init__(self, status: str = "succeeded"):
-        self.status = status
+    status: str
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
+
+_CORE_TOOLS = frozenset(
+    {
+        "plan_game",
+        "revise_plan",
+        "approve_plan",
+        "search_project_rag",
+        "inspect_existing_mod",
+        "generate_fabric_project",
+        "generate_assets",
+        "generate_world_ir",
+        "run_static_validation",
+        "run_gradle_build",
+        "run_gametest",
+        "inspect_jar",
+        "package_release",
+    }
+)
+_PRODUCTION_TOOLS = frozenset(
+    {
+        "index_project_rag",
+        "search_code_rag",
+        "java_diagnostics",
+        "java_workspace_symbols",
+        "blockbench_list_tools",
+        "blockbench_execute",
+        "compile_world",
+        "generate_geckolib_entity",
+        "generate_system_plugin",
+        "runtime_prepare_instance",
+        "runtime_start_server",
+        "runtime_start_client",
+        "runtime_send_command",
+        "runtime_logs",
+        "runtime_register_screenshot",
+        "runtime_status",
+        "runtime_stop",
+        "mineflayer_connect",
+        "mineflayer_status",
+        "mineflayer_walk_to",
+        "mineflayer_interact_block",
+        "mineflayer_inventory",
+        "mineflayer_disconnect",
+        "run_model_smoke",
+        "record_training_trace",
+        "export_training_dataset",
+        "system_plugin_ids",
+    }
+)
+
 
 class DomainMCPServerRegistry:
-    def __init__(self):
-        self.broker = LocalPolicyBroker()
+    _ALLOWED = _CORE_TOOLS | _PRODUCTION_TOOLS
+
+    def __init__(
+        self,
+        service: MMMToolService | None = None,
+        production_service: ProductionToolService | None = None,
+    ) -> None:
+        self.service = service or MMMToolService()
+        self.production_service = production_service or ProductionToolService()
 
     def dispatch(self, request: MCPRequestEnvelope) -> MCPResponseEnvelope:
-        return MCPResponseEnvelope(status="succeeded")
+        if request.tool_name not in self._ALLOWED:
+            return MCPResponseEnvelope(
+                status="failed",
+                error=f"Unknown or disallowed MCP tool: {request.tool_name}",
+            )
+        target = (
+            self.service
+            if request.tool_name in _CORE_TOOLS
+            else self.production_service
+        )
+        method = getattr(target, request.tool_name)
+        try:
+            result = method(**request.input)
+        except Exception as exc:
+            return MCPResponseEnvelope(
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        if not isinstance(result, dict):
+            result = {"result": result}
+        return MCPResponseEnvelope(status="succeeded", result=result)
+
 
 __all__ = [
     "AuthContext",
     "DomainMCPServerRegistry",
     "ExecutionLimits",
-    "LocalPolicyBroker",
     "MCPRequestEnvelope",
     "MCPResponseEnvelope",
-    "PolicyDenied",
-    "ToolAction",
-    "ToolRequest",
-    "capability_manifest",
-    "capability_manifest_hash",
 ]

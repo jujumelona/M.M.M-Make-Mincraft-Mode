@@ -4,20 +4,46 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmm-make-mincraft-mode"
-version = "0.1.0"
-description = "M.M.M Make Mincraft Mode - Minecraft Fabric mod builder for local and Colab use"
+version = "0.3.0"
+description = "M.M.M multimodal Minecraft Fabric production system with role routing, MCP, runtime validation and verified fine-tuning traces"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "M.M.M Make Mincraft Mode contributors" }]
-dependencies = []
+dependencies = [
+  "PyYAML>=6.0.2,<7",
+  "anyio>=4.4,<5",
+  "httpx>=0.27,<1",
+  "mcp>=1.27,<2",
+  "packaging>=24,<27",
+]
 
 [project.optional-dependencies]
 ui = ["gradio>=6.0,<7"]
 local-model = [
   "accelerate>=1.0,<2",
+  "bitsandbytes>=0.45,<1",
+  "huggingface-hub>=0.34,<2",
+  "Pillow>=10.4,<13",
+  "safetensors>=0.4,<1",
   "transformers>=4.57,<6",
+]
+rag = [
+  "sentence-transformers>=3.0,<6",
+]
+image = [
+  "diffusers>=0.35,<1",
+  "sentencepiece>=0.2,<1",
+]
+speech = [
+  "librosa>=0.10,<1",
+  "soundfile>=0.12,<1",
+]
+training = [
+  "datasets>=3.0,<5",
+  "peft>=0.14,<1",
+  "trl>=0.15,<1",
 ]
 dev = [
   "nbformat>=5.10,<6",
@@ -27,14 +53,22 @@ dev = [
 [project.scripts]
 mmm = "minecraft_mod_ai.cli:main"
 minecraft-mod-ai = "minecraft_mod_ai.cli:main"
+mmm-mcp = "minecraft_mod_ai.mcp_server:main"
+mmm-training = "minecraft_mod_ai.training_cli:main"
 
 [project.urls]
 Repository = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode"
 Colab = "https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft-Mode/blob/main/M.M.M_Make_Mincraft_Mode_Colab.ipynb"
 Issues = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/issues"
 
+[tool.setuptools]
+py-modules = ["mcp_gateway", "download_resources"]
+
 [tool.setuptools.packages.find]
 include = ["minecraft_mod_ai*"]
+
+[tool.setuptools.package-data]
+minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/mineflayer-1201/*", "training_configs/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
