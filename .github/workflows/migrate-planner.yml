@@ -3,7 +3,7 @@ name: Planner policy
 on:
   pull_request:
   push:
-    branches: [main, feat/real-multimodal-mcp-router]
+    branches: [main]
 
 permissions:
   contents: read
