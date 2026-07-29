@@ -40,13 +40,13 @@ def test_planner_binds_reviewed_evidence_and_code_owned_capabilities() -> None:
     assert manifest["retrieved_context_can_authorize"] is False
     assert (
         manifest["implementation_kind"]
-        == "mcp-fastmcp-server-with-local-policy-broker"
+        == "mcp-fastmcp-server-with-local-policy-and-runtime-brokers"
     )
     assert manifest["server_entrypoint"] == "python -m minecraft_mod_ai.mcp_server"
-    assert (
-        manifest["runtime_mcp_1201"]
-        == "disabled-until-version-compatible-fork-is-validated"
-    )
+    assert manifest["runtime_target"] == "disposable-minecraft-java-1.20.1-only"
+    assert "runtime.instance" in manifest["staged_discovery"][
+        "runtime_after_build_and_approval"
+    ]
 
 
 def test_evidence_search_is_version_scoped_deterministic_and_data_only() -> None:
