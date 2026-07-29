@@ -1,0 +1,1 @@
+No non-main branch may be deleted until all branch commits and files are verified present in main.
