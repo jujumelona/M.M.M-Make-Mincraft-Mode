@@ -1,0 +1,23 @@
+name: Apply complete production patch
+
+on:
+  push:
+    branches: [feat/real-multimodal-mcp-router]
+    paths: [tools/apply_production_patch_bundle.py]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/real-multimodal-mcp-router
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python tools/apply_production_patch_bundle.py
