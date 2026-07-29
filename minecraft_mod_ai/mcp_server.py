@@ -44,6 +44,66 @@ def plan_game(prompt: str, media_paths: list[str] | None = None) -> dict[str, An
 
 
 @mcp.tool()
+def plan_complete_game(
+    prompt: str,
+    media_paths: list[str] | None = None,
+    existing_input_sha256: str = "",
+) -> dict[str, Any]:
+    """Plan the complete mod, world, systems, assets and runtime acceptance graph."""
+    return _core().plan_complete_game(
+        prompt,
+        media_paths or [],
+        existing_input_sha256,
+    )
+
+
+@mcp.tool()
+def approve_complete_plan(
+    complete_proposal: dict[str, Any],
+    approval_hash: str,
+) -> dict[str, Any]:
+    """Approve the immutable complete-production proposal."""
+    return _core().approve_complete_plan(complete_proposal, approval_hash)
+
+
+@mcp.tool()
+def execute_complete_project(
+    complete_proposal: dict[str, Any],
+    approval_hash: str,
+    run_name: str,
+    options: dict[str, Any] | None = None,
+    existing_input: str | None = None,
+) -> dict[str, Any]:
+    """Run the integrated source, build, repair, runtime, playtest and release pipeline."""
+    return _core().execute_complete_project(
+        complete_proposal,
+        approval_hash,
+        run_name,
+        options,
+        existing_input,
+    )
+
+
+@mcp.tool()
+def apply_source_patch(
+    project_root: str,
+    operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply a transactional exact patch with SHA-256 preconditions and rollback."""
+    return _core().apply_source_patch(project_root, operations)
+
+
+@mcp.tool()
+def repair_project(
+    project_root: str,
+    run_gametest: bool = True,
+    max_attempts: int = 3,
+) -> dict[str, Any]:
+    """Run the finite diagnostics, exact-patch and rebuild loop."""
+    return _core().repair_project(project_root, run_gametest, max_attempts)
+
+
+@mcp.tool()
 def revise_plan(
     original_prompt: str,
     revision: str,

@@ -1,34 +1,30 @@
-# Production model, MCP and plugin stack
+# Complete Minecraft production stack
 
-## Local T4
+The default path is `CompleteGameDesignPlanner -> immutable CompleteProposal -> CompleteProductionOrchestrator`.
+The old item/block slice remains only as an explicit compatibility command.
 
-| Role | Model | Adapter |
-|---|---|---|
-| planner / world planner / visual critic | Qwen/Qwen3.5-4B | multimodal, 4-bit |
-| coder | Qwen/Qwen2.5-Coder-7B-Instruct | text, 4-bit |
-| safe coder / researcher | Qwen/Qwen2.5-Coder-3B-Instruct | text, 4-bit |
-| embedding | Qwen/Qwen3-Embedding-0.6B | CPU |
-| reranker | Qwen/Qwen3-Reranker-0.6B | CPU |
-| asset generator | FLUX.2-klein-4B | exclusive GPU + CPU offload |
-| speech input | Whisper-small | exclusive GPU |
+## One approved execution graph
 
-No automatic model substitution is allowed. The operator selects another
-profile explicitly when the T4 quality model cannot load.
+1. Parse a multimodal brief and inspect an optional existing source ZIP.
+2. Produce a dependency-checked module graph covering content, entities, systems, world, assets, audio and custom Java.
+3. Freeze the complete proposal and all external-input hashes.
+4. Generate or safely patch a Fabric 1.20.1 project.
+5. Bind extended content, persistent quests/classes/economy/GUI/party systems, GeckoLib entities, Jigsaw/NBT world resources, textures and SoundEvents.
+6. Run deterministic validation and JDT LS.
+7. Run Gradle and GameTest, applying at most three hash-guarded minimal repair transactions from new diagnostics.
+8. Independently inspect the JAR.
+9. Launch a disposable Fabric server/client, Mineflayer tasks and visual review when the reviewed external environment is connected.
+10. Package source, validated JAR, manifests and optional Modrinth/CurseForge upload receipts.
 
-## MCP
+## Safety and correctness
 
-- `mmm-local`: approval, generation, build, runtime, training receipts.
-- `minecraft-dev`: 1.20.1 source, mappings and JAR evidence.
-- `playwright`: documentation and web UI evidence.
-- `github`: optional official repository and CI operations.
-- `jdtls`: real Java diagnostics and symbols.
-- `blockbench`: localhost-only restricted modeling operations.
-- `minecraft-runtime-1201`: disposable local server/client processes.
-- `mineflayer-1201`: localhost-only player task completion.
+- All writes remain under the approved workspace.
+- Existing files require their exact SHA-256 before replacement or editing.
+- A multi-file patch validates completely before the first write and rolls back on failure.
+- Retrieved text and model output never grant authorization.
+- No silent model substitution, loader mixing or success simulation is allowed.
+- A complete binary run fails closed when JDT, Gradle, GameTest, JAR, runtime, Blockbench, Mineflayer or visual evidence required by the proposal is unavailable.
 
-## Release rule
+## Environment boundary
 
-A generated feature is not release-ready until its plugin-specific gates,
-Gradle, GameTest, JAR validation and any required runtime/visual tests pass.
-`binding-gated`, `runtime-gated` and `configuration-required` are deliberate
-states, not aliases for implemented.
+CPU CI proves Python contracts, generators, parsers, notebooks and MCP behavior. Actual T4 weights, Java dependencies, Minecraft, Blockbench and publishing credentials require the manual `Production integration` workflow on reviewed self-hosted runners. Their absence is reported as a missing gate, never as a pass.

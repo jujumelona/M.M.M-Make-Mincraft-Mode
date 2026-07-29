@@ -46,7 +46,7 @@ def compile_world_ir(
         structure_id = structure["id"]
         size = _size(structure)
         palette = _palette(structure)
-        blocks = _build_blocks(size, palette)
+        blocks = _build_blocks(structure, size, palette)
         nbt_path = data_root / "structures" / f"{structure_id}.nbt"
         nbt_path.parent.mkdir(parents=True, exist_ok=True)
         nbt_path.write_bytes(_structure_nbt(size, palette, blocks))
@@ -294,38 +294,127 @@ def _palette(structure: dict[str, Any]) -> list[str]:
 
 
 def _build_blocks(
+    structure: dict[str, Any],
     size: tuple[int, int, int],
     palette: list[str],
 ) -> list[tuple[tuple[int, int, int], int]]:
+    """Build a deterministic architecture matching the requested structure kind.
+
+    The previous compiler emitted only a hollow cuboid. This compiler creates floors,
+    entrances, windows, roofs, internal rooms/corridors, stairs and landmarks while
+    remaining bounded to the vanilla structure NBT volume.
+    """
+
     width, height, depth = size
-    air_state = (
-        palette.index("minecraft:air")
-        if "minecraft:air" in palette
-        else None
-    )
-    solid_state = next(
-        (
-            index
-            for index, block in enumerate(palette)
-            if block != "minecraft:air"
-        ),
-        0,
-    )
-    blocks: list[tuple[tuple[int, int, int], int]] = []
-    for x in range(width):
-        for y in range(height):
+    air_state = palette.index("minecraft:air") if "minecraft:air" in palette else None
+    solid_states = [index for index, block in enumerate(palette) if block != "minecraft:air"]
+    primary = solid_states[0] if solid_states else 0
+    accent = solid_states[1] if len(solid_states) > 1 else primary
+    blocks: dict[tuple[int, int, int], int] = {}
+    if air_state is not None:
+        for x in range(width):
+            for y in range(height):
+                for z in range(depth):
+                    blocks[(x, y, z)] = air_state
+
+    def put(x: int, y: int, z: int, state: int = primary) -> None:
+        if 0 <= x < width and 0 <= y < height and 0 <= z < depth:
+            blocks[(x, y, z)] = state
+
+    def floor(y: int = 0, state: int = primary) -> None:
+        for x in range(width):
             for z in range(depth):
-                boundary = (
-                    y == 0
-                    or y == height - 1
-                    or x in {0, width - 1}
-                    or z in {0, depth - 1}
-                )
-                if boundary:
-                    blocks.append(((x, y, z), solid_state))
-                elif air_state is not None:
-                    blocks.append(((x, y, z), air_state))
-    return blocks
+                put(x, y, z, state)
+
+    kind = str(structure.get("kind", "room")).lower()
+    floor()
+
+    if kind in {"road", "bridge"}:
+        center = width // 2
+        half = max(1, min(width // 2, int(structure.get("road_half_width", 2))))
+        for x in range(max(0, center - half), min(width, center + half + 1)):
+            for z in range(depth):
+                put(x, 0, z, primary if (x + z) % 3 else accent)
+        for z in range(0, depth, 4):
+            put(max(0, center - half - 1), 1, z, accent)
+            put(min(width - 1, center + half + 1), 1, z, accent)
+    elif kind == "tower":
+        cx, cz = (width - 1) / 2.0, (depth - 1) / 2.0
+        radius = max(2.0, min(width, depth) / 2.0 - 1.0)
+        for y in range(1, height):
+            for x in range(width):
+                for z in range(depth):
+                    distance = math.hypot(x - cx, z - cz)
+                    if radius - 0.8 <= distance <= radius + 0.25:
+                        if not (z == 0 and abs(x - cx) <= 1 and y <= 2):
+                            put(x, y, z, primary)
+            if y % 4 == 0:
+                for x in range(width):
+                    for z in range(depth):
+                        if math.hypot(x - cx, z - cz) < radius - 0.8:
+                            put(x, y, z, accent)
+        for step in range(min(height - 1, max(width, depth))):
+            put(1 + step % max(1, width - 2), 1 + step, 1 + (step // max(1, width - 2)) % max(1, depth - 2), accent)
+    elif kind == "dungeon":
+        for x in range(width):
+            for y in range(1, height):
+                for z in range(depth):
+                    boundary = x in {0, width - 1} or z in {0, depth - 1} or y == height - 1
+                    if boundary and not (z == 0 and abs(x - width // 2) <= 1 and y <= 2):
+                        put(x, y, z, primary)
+        mid_x, mid_z = width // 2, depth // 2
+        for x in range(1, width - 1):
+            if abs(x - mid_x) > 1:
+                for y in range(1, min(height - 1, 4)):
+                    put(x, y, mid_z, accent)
+        for z in range(1, depth - 1):
+            if abs(z - mid_z) > 1:
+                for y in range(1, min(height - 1, 4)):
+                    put(mid_x, y, z, accent)
+        for x, z in ((1, 1), (width - 2, 1), (1, depth - 2), (width - 2, depth - 2)):
+            for y in range(1, height - 1):
+                put(x, y, z, accent)
+    elif kind in {"arena", "boss_arena"}:
+        for x in range(width):
+            for z in range(depth):
+                if x in {0, width - 1} or z in {0, depth - 1}:
+                    for y in range(1, min(height, 5)):
+                        if not (z == 0 and abs(x - width // 2) <= 1 and y <= 2):
+                            put(x, y, z, primary)
+                elif (x + z) % 5 == 0:
+                    put(x, 0, z, accent)
+        for x, z in ((2, 2), (width - 3, 2), (2, depth - 3), (width - 3, depth - 3)):
+            for y in range(1, min(height, 4)):
+                put(x, y, z, accent)
+    else:
+        # Village/house/default: usable doorway, windows, pitched roof and an interior partition.
+        wall_top = max(2, height - 2)
+        for x in range(width):
+            for z in range(depth):
+                boundary = x in {0, width - 1} or z in {0, depth - 1}
+                if not boundary:
+                    continue
+                for y in range(1, wall_top + 1):
+                    doorway = z == 0 and abs(x - width // 2) <= 1 and y <= 2
+                    window = y == 2 and ((z in {0, depth - 1} and x % 4 == 1) or (x in {0, width - 1} and z % 4 == 1))
+                    if not doorway and not window:
+                        put(x, y, z, primary)
+        partition_x = width // 2
+        for z in range(2, depth - 1):
+            if abs(z - depth // 2) > 1:
+                for y in range(1, min(wall_top, 3) + 1):
+                    put(partition_x, y, z, accent)
+        roof_y = min(height - 1, wall_top + 1)
+        for layer in range(max(1, min(width, depth) // 3)):
+            y = min(height - 1, roof_y + layer)
+            for x in range(layer, width - layer):
+                put(x, y, layer, accent)
+                put(x, y, depth - 1 - layer, accent)
+        for x, z in ((1, 1), (width - 2, depth - 2)):
+            for y in range(1, min(height - 1, 3)):
+                put(x, y, z, accent)
+
+    return sorted(blocks.items())
 
 
 def _structure_nbt(

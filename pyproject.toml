@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmm-make-mincraft-mode"
-version = "0.3.0"
-description = "M.M.M multimodal Minecraft Fabric production system with role routing, MCP, runtime validation and verified fine-tuning traces"
+version = "0.4.0"
+description = "Complete Minecraft Fabric production system with immutable planning, generation, repair, runtime playtests and distribution"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -29,26 +29,12 @@ local-model = [
   "safetensors>=0.4,<1",
   "transformers>=4.57,<6",
 ]
-rag = [
-  "sentence-transformers>=3.0,<6",
-]
-image = [
-  "diffusers>=0.35,<1",
-  "sentencepiece>=0.2,<1",
-]
-speech = [
-  "librosa>=0.10,<1",
-  "soundfile>=0.12,<1",
-]
-training = [
-  "datasets>=3.0,<5",
-  "peft>=0.14,<1",
-  "trl>=0.15,<1",
-]
-dev = [
-  "nbformat>=5.10,<6",
-  "pytest>=8,<10",
-]
+rag = ["sentence-transformers>=3.0,<6"]
+image = ["diffusers>=0.35,<1", "sentencepiece>=0.2,<1"]
+speech = ["librosa>=0.10,<1", "soundfile>=0.12,<1"]
+production-audio = ["numpy>=1.26,<3", "soundfile>=0.12,<1"]
+training = ["datasets>=3.0,<5", "peft>=0.14,<1", "trl>=0.15,<1"]
+dev = ["nbformat>=5.10,<6", "pytest>=8,<10"]
 
 [project.scripts]
 mmm = "minecraft_mod_ai.cli:main"

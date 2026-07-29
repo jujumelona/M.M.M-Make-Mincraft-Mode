@@ -43,8 +43,13 @@ class MCPResponseEnvelope:
 _CORE_TOOLS = frozenset(
     {
         "plan_game",
+        "plan_complete_game",
         "revise_plan",
         "approve_plan",
+        "approve_complete_plan",
+        "execute_complete_project",
+        "apply_source_patch",
+        "repair_project",
         "search_project_rag",
         "inspect_existing_mod",
         "generate_fabric_project",
@@ -107,11 +112,7 @@ class DomainMCPServerRegistry:
                 status="failed",
                 error=f"Unknown or disallowed MCP tool: {request.tool_name}",
             )
-        target = (
-            self.service
-            if request.tool_name in _CORE_TOOLS
-            else self.production_service
-        )
+        target = self.service if request.tool_name in _CORE_TOOLS else self.production_service
         method = getattr(target, request.tool_name)
         try:
             result = method(**request.input)

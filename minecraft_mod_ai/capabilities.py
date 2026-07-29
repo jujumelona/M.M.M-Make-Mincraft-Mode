@@ -44,6 +44,8 @@ def _cap(
 
 CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     _cap("plan.mod", "planning", read=True),
+    _cap("plan.complete", "planning", read=True),
+    _cap("plan.complete.approve", "planning", read=True),
     _cap("plan.revise", "planning", read=True),
     _cap("plan.approve", "planning", read=True),
     _cap("evidence.search", "research", read=True),
@@ -51,9 +53,13 @@ CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     _cap("evidence.rerank", "research", read=True),
     _cap("project.inspect", "existing-project", read=True),
     _cap("workflow.compile", "planning", read=True),
+    _cap("workflow.complete", "generation", read=False, idempotent=False, open_world=True, approval=True),
+    _cap("source.patch", "generation", read=False, idempotent=False, approval=True),
+    _cap("source.repair", "quality", read=False, idempotent=False, open_world=True, approval=True),
     _cap("fabric.scaffold", "generation", read=False, idempotent=False, approval=True),
     _cap("fabric.system.generate", "generation", read=False, idempotent=False, approval=True),
     _cap("asset.generate", "generation", read=False, idempotent=False, open_world=True, approval=True),
+    _cap("audio.generate", "generation", read=False, idempotent=False, approval=True),
     _cap("blockbench.model", "generation", read=False, idempotent=False, open_world=True, approval=True),
     _cap("geckolib.generate", "generation", read=False, idempotent=False, approval=True),
     _cap("world.ir.generate", "planning", read=False, idempotent=False),
@@ -72,6 +78,7 @@ CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     _cap("training.trace.record", "training", read=False),
     _cap("training.dataset.export", "training", read=False),
     _cap("release.package", "release", read=False, approval=True),
+    _cap("release.publish", "release", read=False, idempotent=False, open_world=True, approval=True),
 )
 
 

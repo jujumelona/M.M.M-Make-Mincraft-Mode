@@ -1,6 +1,9 @@
 """M.M.M Make Mincraft Mode: role-routed multimodal Fabric production tools."""
 
-from .api import ChatReply, ModAISession, supported_minecraft_versions
+from .api import ChatReply, CompleteChatReply, CompleteModAISession, ModAISession, supported_minecraft_versions
+from .complete_orchestrator import CompleteExecutionOptions, CompletePipelineResult, CompleteProductionOrchestrator
+from .complete_planner import CompleteGameDesignPlanner
+from .complete_spec import AudioRequest, AssetRequest, CompleteProposal, ProductionModule
 from .external_mcp import ExternalMCPRegistry
 from .game_design import GameDesignPlanner
 from .importer import (
@@ -24,7 +27,16 @@ __all__ = [
     "ArenaSpec",
     "BossSpec",
     "ChatReply",
+    "CompleteChatReply",
+    "CompleteExecutionOptions",
+    "CompleteGameDesignPlanner",
+    "CompleteModAISession",
+    "CompletePipelineResult",
+    "CompleteProductionOrchestrator",
+    "CompleteProposal",
     "ContentSpec",
+    "AssetRequest",
+    "AudioRequest",
     "ExistingProjectImportError",
     "ExistingProjectReport",
     "ExternalMCPRegistry",
@@ -40,6 +52,7 @@ __all__ = [
     "OpenAICompatiblePlanner",
     "PipelineResult",
     "PlatformLock",
+    "ProductionModule",
     "ProductionToolService",
     "ProjectRAGIndex",
     "Proposal",
@@ -50,4 +63,4 @@ __all__ = [
     "supported_minecraft_versions",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

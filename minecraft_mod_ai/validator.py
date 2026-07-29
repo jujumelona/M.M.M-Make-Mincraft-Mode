@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .complete_spec import CompleteProposal
 from .generator import _arena_path_length
 from .spec import ContentKind, ModSpec
 
@@ -52,6 +53,9 @@ class ProjectValidator:
         root = root.resolve()
         findings: list[Finding] = []
         checks = 0
+        complete = _load_complete_project_proposal(root, spec, findings)
+        complete_entity_ids = _complete_entity_ids(complete)
+        complete_client_allowed = _complete_client_required(complete)
 
         for path in sorted(root.rglob("*")):
             checks += 1
@@ -421,7 +425,7 @@ class ProjectValidator:
                     "fabric.mod.json must use the Gradle-expanded version.",
                 )
             )
-        if spec.boss is None:
+        if spec.boss is None and not complete_entity_ids:
             entrypoints = fabric.get("entrypoints")
             checks += 1
             if isinstance(entrypoints, dict) and "client" in entrypoints:
@@ -469,6 +473,34 @@ class ProjectValidator:
                     )
                 )
 
+        if complete is not None:
+            checks += 1
+            entrypoints = fabric.get("entrypoints")
+            if complete_client_allowed:
+                values = entrypoints.get("client", []) if isinstance(entrypoints, dict) else []
+                if not isinstance(values, list) or not values:
+                    findings.append(
+                        Finding(
+                            "COMPLETE_CLIENT_ENTRYPOINT_MISSING",
+                            "error",
+                            self._rel(root, fabric_path),
+                            "The approved complete proposal requires a client entrypoint.",
+                        )
+                    )
+            for entity_id in sorted(complete_entity_ids):
+                class_name = "".join(part.capitalize() for part in entity_id.split("_")) + "Entity.java"
+                entity_path = root / f"src/main/java/{spec.package_name.replace('.', '/')}/entity/{class_name}"
+                checks += 1
+                if not entity_path.is_file():
+                    findings.append(
+                        Finding(
+                            "COMPLETE_ENTITY_SOURCE_MISSING",
+                            "error",
+                            self._rel(root, entity_path),
+                            f"Approved complete entity source is missing: {entity_id}",
+                        )
+                    )
+
         status = "PASS" if not any(item.severity == "error" for item in findings) else "FAIL"
         return ValidationReport(status=status, checks_run=checks, findings=tuple(findings))
 
@@ -515,6 +547,74 @@ class ProjectValidator:
             return str(path)
 
 
+def _load_complete_project_proposal(
+    root: Path,
+    spec: ModSpec,
+    findings: list[Finding],
+) -> CompleteProposal | None:
+    path = root / ".minecraft_ai/complete-proposal.json"
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        proposal = CompleteProposal.from_dict(raw)
+        if proposal.status.value != "approved":
+            raise ValueError("complete proposal is not approved")
+        if proposal.base_proposal.spec.mod_id != spec.mod_id:
+            raise ValueError("complete proposal mod id mismatch")
+        return proposal
+    except Exception as exc:
+        findings.append(
+            Finding(
+                "INVALID_COMPLETE_PROPOSAL",
+                "error",
+                str(path.relative_to(root)).replace("\\", "/"),
+                str(exc),
+            )
+        )
+        return None
+
+
+def _load_complete_jar_proposal(
+    archive: zipfile.ZipFile,
+    spec: ModSpec,
+    findings: list[Finding],
+) -> CompleteProposal | None:
+    name = "META-INF/mmm-complete-proposal.json"
+    if name not in archive.namelist():
+        return None
+    try:
+        raw = json.loads(archive.read(name).decode("utf-8"))
+        proposal = CompleteProposal.from_dict(raw)
+        if proposal.status.value != "approved":
+            raise ValueError("complete proposal is not approved")
+        if proposal.base_proposal.spec.mod_id != spec.mod_id:
+            raise ValueError("complete proposal mod id mismatch")
+        return proposal
+    except Exception as exc:
+        findings.append(Finding("JAR_INVALID_COMPLETE_PROPOSAL", "error", name, str(exc)))
+        return None
+
+
+def _complete_entity_ids(proposal: CompleteProposal | None) -> set[str]:
+    if proposal is None:
+        return set()
+    return {
+        module.module_id
+        for module in proposal.modules
+        if module.kind in {"entity", "boss", "npc"}
+    }
+
+
+def _complete_client_required(proposal: CompleteProposal | None) -> bool:
+    if proposal is None:
+        return False
+    return any(
+        module.kind in {"entity", "boss", "npc"}
+        for module in proposal.modules
+    )
+
+
 def validate_jar(jar_path: Path, spec: ModSpec) -> ValidationReport:
     findings: list[Finding] = []
     checks = 0
@@ -535,6 +635,9 @@ def validate_jar(jar_path: Path, spec: ModSpec) -> ValidationReport:
     with zipfile.ZipFile(jar_path) as archive:
         raw_names = archive.namelist()
         names = set(raw_names)
+        complete = _load_complete_jar_proposal(archive, spec, findings)
+        complete_entity_ids = _complete_entity_ids(complete)
+        complete_client_allowed = _complete_client_required(complete)
         checks += 1
         if len(names) != len(raw_names):
             findings.append(
@@ -642,6 +745,46 @@ def validate_jar(jar_path: Path, spec: ModSpec) -> ValidationReport:
                 f"{spec.package_name}.client.{main_class}Client"
             )
 
+        if complete is not None:
+            module_kinds = {module.kind for module in complete.modules}
+            if module_kinds & {"item", "block", "tool", "weapon", "armor", "food", "crop", "machine", "effect", "enchantment", "command", "recipe", "advancement", "loot"}:
+                expected_classes.add(f"{java_root}/extended/GeneratedExtendedContent.class")
+            system_classes = {
+                "quest": "QuestSystem",
+                "class": "ClassSkillSystem",
+                "skill": "ClassSkillSystem",
+                "economy": "EconomyShopSystem",
+                "shop": "EconomyShopSystem",
+                "gui": "GuiNetworkingSystem",
+                "networking": "GuiNetworkingSystem",
+                "party": "PartyGuildSystem",
+                "guild": "PartyGuildSystem",
+            }
+            required_systems = {system_classes[kind] for kind in module_kinds if kind in system_classes}
+            if required_systems:
+                expected_classes.add(f"{java_root}/system/MmmPersistentStore.class")
+                expected_classes.update(
+                    f"{java_root}/system/{class_name}.class"
+                    for class_name in required_systems
+                )
+            if complete_entity_ids:
+                expected_classes.add(f"{java_root}/geckolib/GeneratedGeckoEntities.class")
+                expected_entrypoints.setdefault(
+                    "client",
+                    f"{spec.package_name}.client.geckolib.GeneratedGeckoClient",
+                )
+                for entity_id in complete_entity_ids:
+                    class_name_value = "".join(part.capitalize() for part in entity_id.split("_"))
+                    expected_classes.update(
+                        {
+                            f"{java_root}/entity/{class_name_value}Entity.class",
+                            f"{java_root}/client/geckolib/{class_name_value}GeoModel.class",
+                            f"{java_root}/client/geckolib/{class_name_value}GeoRenderer.class",
+                        }
+                    )
+            if complete.audio:
+                expected_classes.add(f"{java_root}/sound/GeneratedSounds.class")
+
         checks += len(expected_classes)
         for class_name in sorted(expected_classes):
             if class_name not in names:
@@ -682,7 +825,7 @@ def validate_jar(jar_path: Path, spec: ModSpec) -> ValidationReport:
                             f"{group} must include {expected_class}.",
                         )
                     )
-        if spec.boss is None:
+        if spec.boss is None and not complete_entity_ids and not complete_client_allowed:
             checks += 1
             if isinstance(entrypoints, dict) and "client" in entrypoints:
                 findings.append(

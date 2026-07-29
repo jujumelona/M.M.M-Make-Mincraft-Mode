@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -212,7 +213,118 @@ class ModAISession:
 
 __all__ = [
     "ChatReply",
+    "CompleteChatReply",
+    "CompleteModAISession",
     "ModAISession",
     "SUPPORTED_MINECRAFT_VERSIONS",
     "supported_minecraft_versions",
 ]
+
+
+@dataclass(frozen=True)
+class CompleteChatReply:
+    """Complete-production plan shown to the user before immutable approval."""
+
+    message: str
+    approval_hash: str
+    complete_proposal: "CompleteProposal" = field(repr=False)
+
+    @property
+    def ready_to_build(self) -> bool:
+        return True
+
+
+class CompleteModAISession:
+    """Default complete plan -> approve -> full production API."""
+
+    def __init__(
+        self,
+        *,
+        output_root: str | Path = "mmm-output",
+        minecraft_version: str = "1.20.1",
+        model_profile: str = "t4_local",
+        existing_input: str | Path | None = None,
+    ) -> None:
+        from .complete_orchestrator import CompleteProductionOrchestrator
+        from .complete_planner import CompleteGameDesignPlanner
+        from .model_router import ModelRouter
+
+        if minecraft_version != "1.20.1":
+            raise SpecValidationError("Complete production is pinned to Minecraft Java 1.20.1 Fabric.")
+        self.output_root = Path(output_root)
+        self.model_profile = model_profile
+        self.existing_input = Path(existing_input) if existing_input is not None else None
+        self.router = ModelRouter(profile=model_profile)
+        self.planner = CompleteGameDesignPlanner(self.router)
+        self.orchestrator = CompleteProductionOrchestrator(
+            workspace_root=self.output_root,
+            profile=model_profile,
+            router_factory=lambda: self.router,
+        )
+        self.complete_proposal: "CompleteProposal | None" = None
+
+    def plan(
+        self,
+        prompt: str,
+        *,
+        media_paths: tuple[str | Path, ...] = (),
+    ) -> CompleteChatReply:
+        import hashlib
+
+        existing_hash = ""
+        if self.existing_input is not None:
+            if not self.existing_input.is_file():
+                raise FileNotFoundError(self.existing_input)
+            existing_hash = "sha256:" + hashlib.sha256(self.existing_input.read_bytes()).hexdigest()
+        proposal = self.planner.plan(
+            prompt,
+            media_paths=media_paths,
+            existing_input_sha256=existing_hash,
+        )
+        self.complete_proposal = proposal
+        return CompleteChatReply(
+            message=json.dumps(
+                {
+                    "game_design": proposal.game_design,
+                    "modules": [module.module_id for module in proposal.modules],
+                    "acceptance_tests": list(proposal.acceptance_tests),
+                    "external_runtime_required": proposal.external_runtime_required,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            approval_hash=proposal.calculate_hash(),
+            complete_proposal=proposal,
+        )
+
+    def build(
+        self,
+        candidate: CompleteChatReply | "CompleteProposal | None" = None,
+        *,
+        run_name: str = "complete-run",
+        source_only: bool = False,
+        options: "CompleteExecutionOptions | None" = None,
+    ) -> "CompletePipelineResult":
+        from .complete_orchestrator import CompleteExecutionOptions
+        from .complete_spec import CompleteProposal
+
+        if isinstance(candidate, CompleteChatReply):
+            proposal = candidate.complete_proposal
+        elif isinstance(candidate, CompleteProposal):
+            proposal = candidate
+        elif candidate is None:
+            proposal = self.complete_proposal
+        else:
+            raise TypeError("candidate must be CompleteChatReply, CompleteProposal or None.")
+        if proposal is None:
+            raise SpecValidationError("Create a complete plan before building.")
+        selected = options or CompleteExecutionOptions(source_only=source_only)
+        if source_only and not selected.source_only:
+            selected = CompleteExecutionOptions(**{**selected.__dict__, "source_only": True})
+        return self.orchestrator.execute(
+            proposal,
+            approval_hash=proposal.calculate_hash(),
+            run_name=run_name,
+            options=selected,
+            existing_input=self.existing_input,
+        )

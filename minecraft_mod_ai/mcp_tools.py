@@ -8,12 +8,17 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .broker import LocalPolicyBroker, ToolAction, approved_request
+from .complete_orchestrator import CompleteExecutionOptions, CompleteProductionOrchestrator
+from .complete_planner import CompleteGameDesignPlanner
+from .complete_spec import CompleteProposal
 from .game_design import GameDesignPlanner
 from .importer import inspect_existing_project_archive
 from .knowledge import AuthoritativeEvidenceRetriever
 from .model_router import ModelRouter
 from .pipeline import MinecraftModPipeline
+from .repair_engine import RepairEngine
 from .runner import GradleRunner
+from .source_patch import TransactionalSourcePatcher
 from .spec import Proposal, ProposalStatus, SpecValidationError, canonical_json
 from .validator import ProjectValidator, validate_jar
 
@@ -51,6 +56,81 @@ class MMMToolService:
             "proposal": proposal.to_dict(),
             "approval_hash": proposal.calculate_hash(),
         }
+
+    def plan_complete_game(
+        self,
+        prompt: str,
+        media_paths: Sequence[str] = (),
+        existing_input_sha256: str = "",
+    ) -> dict[str, Any]:
+        """Plan every requested gameplay, asset, world and runtime module."""
+        proposal = CompleteGameDesignPlanner(self.router_factory()).plan(
+            prompt,
+            media_paths=media_paths,
+            existing_input_sha256=existing_input_sha256,
+        )
+        return {
+            "schema_version": "mmm/complete-plan-result-v1",
+            "profile": self.profile,
+            "game_design": proposal.game_design,
+            "complete_proposal": proposal.to_dict(),
+            "approval_hash": proposal.calculate_hash(),
+        }
+
+    def approve_complete_plan(
+        self,
+        complete_proposal: dict[str, Any],
+        approval_hash: str,
+    ) -> dict[str, Any]:
+        parsed = CompleteProposal.from_dict(complete_proposal)
+        approved = parsed.approve(approval_hash)
+        return {
+            "status": approved.status.value,
+            "complete_proposal": approved.to_dict(),
+            "approval_hash": approved.calculate_hash(),
+        }
+
+    def execute_complete_project(
+        self,
+        complete_proposal: dict[str, Any],
+        approval_hash: str,
+        run_name: str,
+        options: dict[str, Any] | None = None,
+        existing_input: str | None = None,
+    ) -> dict[str, Any]:
+        parsed_options = CompleteExecutionOptions(**(options or {}))
+        return CompleteProductionOrchestrator(
+            workspace_root=self.workspace_root,
+            profile=self.profile,
+            router_factory=self.router_factory,
+        ).execute(
+            complete_proposal,
+            approval_hash=approval_hash,
+            run_name=run_name,
+            options=parsed_options,
+            existing_input=existing_input,
+        ).to_dict()
+
+    def apply_source_patch(
+        self,
+        project_root: str,
+        operations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply one transactional, hash-guarded source patch."""
+        root = self._existing_dir(project_root)
+        return TransactionalSourcePatcher(root).apply(operations)
+
+    def repair_project(
+        self,
+        project_root: str,
+        run_gametest: bool = True,
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        root = self._existing_dir(project_root)
+        return RepairEngine(
+            router=self.router_factory(),
+            gradle_cache=self.workspace_root / ".cache" / "gradle",
+        ).repair(root, run_gametest=run_gametest, max_attempts=max_attempts)
 
     def revise_plan(
         self,
@@ -198,8 +278,8 @@ class MMMToolService:
             "world_ir": ir,
             "path": str(target),
             "sha256": _sha256(target),
-            "compiler_status": "blocked",
-            "compiler_reason": "worldgen-map Jigsaw/NBT compiler is not implemented yet.",
+            "compiler_status": "available",
+            "compiler_tool": "compile_world_ir",
         }
 
     def run_static_validation(

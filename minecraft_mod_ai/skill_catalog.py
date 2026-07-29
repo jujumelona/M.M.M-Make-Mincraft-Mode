@@ -23,6 +23,10 @@ CANONICAL_SKILLS = (
     "runtime-playtest",
     "visual-review",
     "release-security",
+    "execute-complete-production",
+    "patch-existing-project",
+    "generate-audio",
+    "publish-release",
 )
 REQUIRED_SECTIONS = (
     "activate_when:",
@@ -60,23 +64,34 @@ def validate_skill_catalog(root: str | Path | None = None) -> dict[str, Any]:
 
 
 def _skill_texts(root: str | Path | None) -> dict[str, str]:
-    if root is not None:
-        base = Path(root).expanduser().resolve()
-    else:
-        base = Path(__file__).resolve().parents[1] / "skills"
-    if base.is_dir():
-        return {
-            skill: (base / skill / "SKILL.md").read_text(encoding="utf-8")
-            for skill in CANONICAL_SKILLS
-            if (base / skill / "SKILL.md").is_file()
-        }
+    """Load a complete catalog and overlay checked-out Skill files.
+
+    Wheel installs contain ``packaged_skills.json`` while source checkouts expose
+    ``skills/<name>/SKILL.md``.  A partial checkout must not hide packaged Skills,
+    so both sources are merged and repository files take precedence.
+    """
+
+    texts: dict[str, str] = {}
     packaged = Path(__file__).resolve().parent / "packaged_skills.json"
-    if not packaged.is_file():
-        return {}
-    raw = json.loads(packaged.read_text(encoding="utf-8"))
-    skills = raw.get("skills", {})
-    return {
-        str(name): str(text)
-        for name, text in skills.items()
-        if isinstance(name, str) and isinstance(text, str)
-    }
+    if packaged.is_file():
+        raw = json.loads(packaged.read_text(encoding="utf-8"))
+        skills = raw.get("skills", {})
+        texts.update(
+            {
+                str(name): str(text)
+                for name, text in skills.items()
+                if isinstance(name, str) and isinstance(text, str)
+            }
+        )
+
+    base = (
+        Path(root).expanduser().resolve()
+        if root is not None
+        else Path(__file__).resolve().parents[1] / "skills"
+    )
+    if base.is_dir():
+        for skill in CANONICAL_SKILLS:
+            path = base / skill / "SKILL.md"
+            if path.is_file():
+                texts[skill] = path.read_text(encoding="utf-8")
+    return texts
