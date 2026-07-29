@@ -1,0 +1,152 @@
+name: Production integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Integration stage to execute on reviewed self-hosted runners
+        required: true
+        type: choice
+        options: [models, runtime, blockbench, all]
+        default: models
+      model_profile:
+        description: Model registry profile
+        required: true
+        default: t4_local
+      runtime_instance:
+        description: Disposable runtime instance name
+        required: true
+        default: gha-integration
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --upgrade pip && python -m pip install -e '.[dev,ui]'
+      - run: python -m compileall -q minecraft_mod_ai tools mcp_gateway.py download_resources.py
+      - run: python tools/build_colab_notebook.py --check
+      - run: pytest -q
+
+  model-smoke:
+    if: inputs.stage == 'models' || inputs.stage == 'all'
+    needs: contracts
+    runs-on: [self-hosted, linux, x64, gpu, t4]
+    timeout-minutes: 180
+    env:
+      MMM_MODEL_PROFILE: ${{ inputs.model_profile }}
+      MMM_WORKSPACE: ${{ github.workspace }}/integration-output
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -e '.[local-model,rag,image,speech,training]'
+      - run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from minecraft_mod_ai.model_smoke import run_model_smoke
+          roles = ["planner", "researcher", "coder_safe", "coder", "embedding", "reranker"]
+          out = Path("integration-output/model-smoke")
+          reports = []
+          for role in roles:
+              reports.append(run_model_smoke(role=role, profile="${{ inputs.model_profile }}", output_dir=out / role))
+          (out / "all-results.json").write_text(json.dumps(reports, indent=2), encoding="utf-8")
+          failed = [report for report in reports if report.get("status") != "PASS"]
+          if failed:
+              raise SystemExit("Model smoke failures: " + ", ".join(report["role"] for report in failed))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t4-model-smoke
+          path: integration-output/model-smoke/
+          if-no-files-found: error
+
+  runtime:
+    if: inputs.stage == 'runtime' || inputs.stage == 'all'
+    needs: contracts
+    runs-on: [self-hosted, linux, x64, minecraft-1201]
+    timeout-minutes: 180
+    env:
+      MMM_WORKSPACE: ${{ github.workspace }}/integration-output
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -e '.[dev,ui]'
+      - name: Verify reviewed runtime prerequisites
+        run: |
+          test -n "${MMM_TEST_MOD_JAR:-}" || { echo "MMM_TEST_MOD_JAR is required"; exit 2; }
+          test -n "${MMM_FABRIC_SERVER_LAUNCHER:-}" || { echo "MMM_FABRIC_SERVER_LAUNCHER is required"; exit 2; }
+          test "${MMM_EULA_ACCEPTED:-false}" = "true" || { echo "Explicit EULA acceptance required"; exit 2; }
+      - name: Run disposable runtime contract
+        run: |
+          python - <<'PY'
+          import json, os
+          from minecraft_mod_ai.runtime_manager import MinecraftRuntimeManager
+          from pathlib import Path
+          import shutil
+          workspace = Path(os.environ["MMM_WORKSPACE"]).resolve()
+          inputs = workspace / "integration-inputs"
+          inputs.mkdir(parents=True, exist_ok=True)
+          mod = inputs / "test-mod.jar"
+          launcher = inputs / "fabric-server-launch.jar"
+          shutil.copy2(os.environ["MMM_TEST_MOD_JAR"], mod)
+          shutil.copy2(os.environ["MMM_FABRIC_SERVER_LAUNCHER"], launcher)
+          manager = MinecraftRuntimeManager(workspace)
+          prepared = manager.prepare_instance(
+              "${{ inputs.runtime_instance }}",
+              mod_jar=mod,
+              server_launcher=launcher,
+              eula_accepted=True,
+          )
+          started = manager.start_server(timeout_seconds=180)
+          status = manager.status()
+          stopped = manager.stop_server()
+          result = {"prepared": prepared, "started": started, "status": status, "stopped": stopped}
+          open("runtime-result.json", "w", encoding="utf-8").write(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minecraft-runtime-evidence
+          path: |
+            runtime-result.json
+            integration-output/
+          if-no-files-found: warn
+
+  blockbench:
+    if: inputs.stage == 'blockbench' || inputs.stage == 'all'
+    needs: contracts
+    runs-on: [self-hosted, linux, x64, blockbench]
+    timeout-minutes: 60
+    env:
+      MMM_BLOCKBENCH_MCP_URL: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -e '.[dev,ui]'
+      - run: |
+          python - <<'PY'
+          import json
+          from minecraft_mod_ai.blockbench_client import BlockbenchMCPClient
+          client = BlockbenchMCPClient()
+          try:
+              result = {
+                  "reviewed_tools": client.reviewed_tools(),
+                  "available_tools": client.list_tools(),
+              }
+              open("blockbench-result.json", "w", encoding="utf-8").write(json.dumps(result, indent=2))
+          finally:
+              client.close()
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blockbench-evidence
+          path: blockbench-result.json
+          if-no-files-found: error
