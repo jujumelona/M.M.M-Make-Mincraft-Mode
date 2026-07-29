@@ -13,6 +13,7 @@ EXPECTED_B64_LENGTH = 64008
 EXPECTED_B64_SHA256 = "7fd7296d7714b000021e35639b4a486e220a0e133db14d19034d2db15f76371c"
 EXPECTED_PAYLOAD_SHA256 = "f53ed184fc08899f0367f48fb86314772aa4ce89fce406fa273fe4f1b844d080"
 EXPECTED_FILE_COUNT = 87
+WORKFLOW_PREFIX = ".github/workflows/"
 
 
 def main() -> None:
@@ -47,22 +48,28 @@ def main() -> None:
             f"!= {EXPECTED_FILE_COUNT}"
         )
 
+    skipped_workflows: list[str] = []
     for relative, content in files.items():
         if not isinstance(relative, str) or not isinstance(content, str):
             raise RuntimeError("Patch payload contains a non-text file entry.")
+        if relative.startswith(WORKFLOW_PREFIX):
+            skipped_workflows.append(relative)
+            continue
         target = (root / relative).resolve()
         target.relative_to(root)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
+    if sorted(skipped_workflows) != [
+        ".github/workflows/ci.yml",
+        ".github/workflows/production-integration.yml",
+    ]:
+        raise RuntimeError(f"Unexpected workflow payload set: {skipped_workflows}")
+
     shutil.rmtree(chunk_dir)
-    for relative in (
-        "tools/apply_production_patch_bundle.py",
-        ".github/workflows/apply-production-patch.yml",
-    ):
-        path = root / relative
-        if path.exists():
-            path.unlink()
+    self_path = root / "tools" / "apply_production_patch_bundle.py"
+    if self_path.exists():
+        self_path.unlink()
 
     subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
     subprocess.run(
