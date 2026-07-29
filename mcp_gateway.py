@@ -1,9 +1,4 @@
-"""Compatibility facade backed by the real MMM MCP tool service.
-
-This module no longer reports unconditional success. It accepts only the closed tool
-set implemented by :class:`minecraft_mod_ai.mcp_tools.MMMToolService` and returns the
-actual result or a failed envelope.
-"""
+"""Compatibility facade backed by the real core and production MCP tool services."""
 
 from __future__ import annotations
 
@@ -11,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from minecraft_mod_ai.mcp_tools import MMMToolService
+from minecraft_mod_ai.production_tools import ProductionToolService
 
 
 @dataclass(frozen=True)
@@ -44,39 +40,85 @@ class MCPResponseEnvelope:
     error: str | None = None
 
 
-class DomainMCPServerRegistry:
-    _ALLOWED = frozenset(
-        {
-            "plan_game",
-            "revise_plan",
-            "approve_plan",
-            "search_project_rag",
-            "inspect_existing_mod",
-            "generate_fabric_project",
-            "generate_assets",
-            "generate_world_ir",
-            "run_static_validation",
-            "run_gradle_build",
-            "run_gametest",
-            "inspect_jar",
-            "package_release",
-        }
-    )
+_CORE_TOOLS = frozenset(
+    {
+        "plan_game",
+        "revise_plan",
+        "approve_plan",
+        "search_project_rag",
+        "inspect_existing_mod",
+        "generate_fabric_project",
+        "generate_assets",
+        "generate_world_ir",
+        "run_static_validation",
+        "run_gradle_build",
+        "run_gametest",
+        "inspect_jar",
+        "package_release",
+    }
+)
+_PRODUCTION_TOOLS = frozenset(
+    {
+        "index_project_rag",
+        "search_code_rag",
+        "java_diagnostics",
+        "java_workspace_symbols",
+        "blockbench_list_tools",
+        "blockbench_execute",
+        "compile_world",
+        "generate_geckolib_entity",
+        "generate_system_plugin",
+        "runtime_prepare_instance",
+        "runtime_start_server",
+        "runtime_start_client",
+        "runtime_send_command",
+        "runtime_logs",
+        "runtime_register_screenshot",
+        "runtime_status",
+        "runtime_stop",
+        "mineflayer_connect",
+        "mineflayer_status",
+        "mineflayer_walk_to",
+        "mineflayer_interact_block",
+        "mineflayer_inventory",
+        "mineflayer_disconnect",
+        "run_model_smoke",
+        "record_training_trace",
+        "export_training_dataset",
+        "system_plugin_ids",
+    }
+)
 
-    def __init__(self, service: MMMToolService | None = None) -> None:
+
+class DomainMCPServerRegistry:
+    _ALLOWED = _CORE_TOOLS | _PRODUCTION_TOOLS
+
+    def __init__(
+        self,
+        service: MMMToolService | None = None,
+        production_service: ProductionToolService | None = None,
+    ) -> None:
         self.service = service or MMMToolService()
+        self.production_service = production_service or ProductionToolService()
 
     def dispatch(self, request: MCPRequestEnvelope) -> MCPResponseEnvelope:
         if request.tool_name not in self._ALLOWED:
             return MCPResponseEnvelope(
-                status="failed", error=f"Unknown or disallowed MCP tool: {request.tool_name}"
+                status="failed",
+                error=f"Unknown or disallowed MCP tool: {request.tool_name}",
             )
-        method = getattr(self.service, request.tool_name)
+        target = (
+            self.service
+            if request.tool_name in _CORE_TOOLS
+            else self.production_service
+        )
+        method = getattr(target, request.tool_name)
         try:
             result = method(**request.input)
         except Exception as exc:
             return MCPResponseEnvelope(
-                status="failed", error=f"{type(exc).__name__}: {exc}"
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
             )
         if not isinstance(result, dict):
             result = {"result": result}

@@ -7,16 +7,21 @@ from typing import Any, Mapping
 
 import yaml
 
+from .config_paths import config_path
 from .model_adapters import AdapterConfig, ModelConfigurationError
 
 
+LEGACY_REQUIRED_ROLES = frozenset({"planner", "researcher", "coder", "visual_critic", "world_planner", "image_generator", "speech_recognition"})
 REQUIRED_ROLES = frozenset(
     {
         "planner",
         "researcher",
         "coder",
+        "coder_safe",
         "visual_critic",
         "world_planner",
+        "embedding",
+        "reranker",
         "image_generator",
         "speech_recognition",
     }
@@ -28,8 +33,11 @@ ALLOWED_ADAPTERS = frozenset(
         "openai_compatible",
         "image_diffusion",
         "speech",
+        "embedding",
+        "reranker",
     }
 )
+SUPPORTED_SCHEMAS = frozenset({"mmm/model-registry-v1", "mmm/model-registry-v2"})
 
 
 @dataclass(frozen=True)
@@ -44,16 +52,17 @@ class ModelRegistry:
         self.path = (
             Path(path).expanduser().resolve()
             if path is not None
-            else Path(__file__).resolve().parents[1] / "config" / "model_registry.yaml"
+            else config_path("model_registry.yaml")
         )
         if not self.path.is_file():
             raise ModelConfigurationError(f"Model registry not found: {self.path}")
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("schema_version") != "mmm/model-registry-v1":
+        if not isinstance(raw, dict) or raw.get("schema_version") not in SUPPORTED_SCHEMAS:
             raise ModelConfigurationError("Unsupported or malformed model registry.")
         profiles = raw.get("profiles")
         if not isinstance(profiles, dict) or not profiles:
             raise ModelConfigurationError("Model registry contains no profiles.")
+        self.schema_version = str(raw["schema_version"])
         self._raw_profiles = profiles
 
     def profile_names(self) -> tuple[str, ...]:
@@ -68,7 +77,12 @@ class ModelRegistry:
         raw_roles = raw_profile.get("roles")
         if not isinstance(raw_roles, dict):
             raise ModelConfigurationError(f"Profile {name!r} has no roles mapping.")
-        missing = REQUIRED_ROLES - set(raw_roles)
+        required_roles = (
+            LEGACY_REQUIRED_ROLES
+            if self.schema_version == "mmm/model-registry-v1"
+            else REQUIRED_ROLES
+        )
+        missing = required_roles - set(raw_roles)
         if missing:
             raise ModelConfigurationError(
                 f"Profile {name!r} is missing roles: {sorted(missing)}"
@@ -115,6 +129,11 @@ class ModelRegistry:
             raise ModelConfigurationError(
                 f"Invalid Qwen3.5 repository ID for role {role!r}: {model_id!r}"
             )
+        if role in {"coder", "coder_safe"} and provider == "local":
+            if "Coder" not in model_id:
+                raise ModelConfigurationError(
+                    f"Local coding role {role!r} must use a code-specialized model: {model_id!r}"
+                )
         known = {
             "model_id",
             "provider",
@@ -153,7 +172,8 @@ class ModelRegistry:
 
     def to_public_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
-            "schema_version": "mmm/model-registry-public-v1",
+            "schema_version": "mmm/model-registry-public-v2",
+            "source_schema_version": self.schema_version,
             "profiles": {},
         }
         for name in self.profile_names():

@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .model_adapters import (
+    EmbeddingAdapter,
     GenerationRequest,
     ImageDiffusionAdapter,
     ModelConfigurationError,
     OpenAICompatibleAdapter,
+    RerankerAdapter,
     SpeechAdapter,
     TransformersMultimodalAdapter,
     TransformersTextAdapter,
@@ -59,6 +61,36 @@ class ModelRouter:
         )
         with self._gpu_scope(config.exclusive_gpu):
             return adapter.generate(request)
+
+    def embed(self, texts: Sequence[str], role: str = "embedding") -> list[list[float]]:
+        config = self.registry.role(self.profile, role)
+        if config.adapter != "embedding":
+            raise ModelConfigurationError(
+                f"Role {role!r} does not expose an embedding adapter."
+            )
+        return EmbeddingAdapter(config).embed(texts)
+
+    def rerank(
+        self,
+        query: str,
+        documents: Sequence[str],
+        *,
+        role: str = "reranker",
+        instruction: str = (
+            "Retrieve Minecraft Fabric 1.20.1 and Yarn 1.20.1 evidence that directly "
+            "answers the query."
+        ),
+    ) -> list[float]:
+        config = self.registry.role(self.profile, role)
+        if config.adapter != "reranker":
+            raise ModelConfigurationError(
+                f"Role {role!r} does not expose a reranker adapter."
+            )
+        return RerankerAdapter(config).score(
+            query,
+            documents,
+            instruction=instruction,
+        )
 
     def generate_image(
         self,
