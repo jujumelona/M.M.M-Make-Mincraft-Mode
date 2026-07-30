@@ -9,10 +9,8 @@ from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.runner import BuildReport, CommandResult
 from minecraft_mod_ai.spec import (
-    BossSpec,
     ContentKind,
     ContentSpec,
-    ModSpec,
     PlatformLock,
     Proposal,
     SpecValidationError,
@@ -30,7 +28,10 @@ def test_every_platform_component_is_exactly_pinned() -> None:
         "gradle",
     ):
         drifted = replace(platform, **{field_name: "unreviewed-version"})
-        with pytest.raises(SpecValidationError, match="Unsupported platform lock"):
+        with pytest.raises(
+            SpecValidationError,
+            match=r"Unsupported platform (lock|adapter)",
+        ):
             drifted.validate()
 
 
@@ -45,16 +46,29 @@ def test_recipe_string_is_not_coerced_to_boolean() -> None:
 
 
 def test_java_and_registry_identifier_collisions_fail_in_the_spec() -> None:
-    base = MinecraftModPipeline().plan("Create a frost boss and item").spec
+    base = MinecraftModPipeline().plan(
+        "Create a frost boss and item"
+    ).spec
     with pytest.raises(SpecValidationError, match="reserved package"):
         replace(base, package_name="com.class.generated").validate()
-    with pytest.raises(SpecValidationError, match="platform package prefix"):
+    with pytest.raises(
+        SpecValidationError,
+        match="platform package prefix",
+    ):
         replace(base, package_name="java.user.generated").validate()
-    with pytest.raises(SpecValidationError, match="generated Java field"):
+    with pytest.raises(
+        SpecValidationError,
+        match="generated Java field",
+    ):
         replace(
             base,
             contents=(
-                ContentSpec("logger", ContentKind.ITEM, "Logger", "로거"),
+                ContentSpec(
+                    "logger",
+                    ContentKind.ITEM,
+                    "Logger",
+                    "로거",
+                ),
             ),
         ).validate()
     with pytest.raises(SpecValidationError, match="spawn egg ID"):
@@ -73,13 +87,19 @@ def test_java_and_registry_identifier_collisions_fail_in_the_spec() -> None:
         replace(base, mod_id="minecraft").validate()
 
 
-def test_boss_spawn_egg_model_and_bounded_arena_commands(tmp_path: Path) -> None:
+def test_boss_spawn_egg_model_and_bounded_arena_commands(
+    tmp_path: Path,
+) -> None:
     proposal = MinecraftModPipeline().plan(
         "Create a frost boss, arena map, 3D model, item and block"
     )
     spec = replace(
         proposal.spec,
-        arena=replace(proposal.spec.arena, radius=32, wall_height=12),
+        arena=replace(
+            proposal.spec.arena,
+            radius=32,
+            wall_height=12,
+        ),
     )
     FabricProjectGenerator().generate(spec, tmp_path)
 
@@ -95,7 +115,10 @@ def test_boss_spawn_egg_model_and_bounded_arena_commands(tmp_path: Path) -> None
         f"build_{spec.arena.arena_id}.mcfunction"
     )
     commands = [
-        line for line in function_path.read_text(encoding="utf-8").splitlines()
+        line
+        for line in function_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
         if line.startswith("fill ")
     ]
     assert commands
@@ -103,12 +126,26 @@ def test_boss_spawn_egg_model_and_bounded_arena_commands(tmp_path: Path) -> None
     assert all(_fill_volume(line) <= 32_768 for line in commands)
 
 
-def test_arena_palette_is_a_reviewed_solid_block_allowlist() -> None:
-    base = MinecraftModPipeline().plan("Create a frost boss arena map").spec
-    with pytest.raises(SpecValidationError, match="solid-block allowlist"):
+def test_arena_palette_accepts_namespaced_blocks_and_rejects_bad_ids() -> None:
+    base = MinecraftModPipeline().plan(
+        "Create a frost boss arena map"
+    ).spec
+    custom = replace(
+        base,
+        arena=replace(
+            base.arena,
+            floor_block="minecraft:smooth_stone",
+            accent_block="minecraft:copper_block",
+        ),
+    )
+    custom.validate()
+    with pytest.raises(
+        SpecValidationError,
+        match="namespaced block IDs",
+    ):
         replace(
             base,
-            arena=replace(base.arena, floor_block="minecraft:air"),
+            arena=replace(base.arena, floor_block="bad block id"),
         ).validate()
 
 
@@ -130,36 +167,54 @@ def test_gametest_gate_requires_real_passing_xml(tmp_path: Path) -> None:
         jar_path=None,
         gametest_report=str(report_path),
     )
-    assert not MinecraftModPipeline._gametest_passed(missing_report, spec)
+    assert not MinecraftModPipeline._gametest_passed(
+        missing_report,
+        spec,
+    )
 
     report_path.write_text(
         '<testsuite><testcase name="generatedRegistriesAreLive">'
         '<failure message="boom"/></testcase></testsuite>',
         encoding="utf-8",
     )
-    assert not MinecraftModPipeline._gametest_passed(missing_report, spec)
+    assert not MinecraftModPipeline._gametest_passed(
+        missing_report,
+        spec,
+    )
 
     report_path.write_text(
         '<testsuite><testcase name="generatedRegistriesAreLive">'
         '<skipped/></testcase></testsuite>',
         encoding="utf-8",
     )
-    assert not MinecraftModPipeline._gametest_passed(missing_report, spec)
+    assert not MinecraftModPipeline._gametest_passed(
+        missing_report,
+        spec,
+    )
 
     report_path.write_text(
         '<testsuite><testcase '
-        'name="frostworksmodgametests.generatedRegistriesAreLive"/></testsuite>',
+        'name="frostworksmodgametests.generatedRegistriesAreLive"/>'
+        '</testsuite>',
         encoding="utf-8",
     )
-    assert MinecraftModPipeline._gametest_passed(missing_report, spec)
+    assert MinecraftModPipeline._gametest_passed(
+        missing_report,
+        spec,
+    )
 
 
-def test_external_gradle_cache_is_rejected_before_writes(tmp_path: Path) -> None:
+def test_external_gradle_cache_is_rejected_before_writes(
+    tmp_path: Path,
+) -> None:
     pipeline = MinecraftModPipeline()
     proposal = pipeline.plan("Create a frost item")
     output = tmp_path / "approved-output"
 
-    with pytest.raises(SpecValidationError, match="inside the approved output"):
+    with pytest.raises(
+        SpecValidationError,
+        match="inside the approved output",
+    ):
         pipeline.execute(
             proposal,
             approval_hash=proposal.approval_hash,
@@ -170,9 +225,13 @@ def test_external_gradle_cache_is_rejected_before_writes(tmp_path: Path) -> None
     assert not output.exists()
 
 
-def test_release_obj_material_keeps_its_texture_handoff(tmp_path: Path) -> None:
+def test_release_obj_material_keeps_its_texture_handoff(
+    tmp_path: Path,
+) -> None:
     pipeline = MinecraftModPipeline()
-    proposal = pipeline.plan("Create a frost boss with a 3D model and item")
+    proposal = pipeline.plan(
+        "Create a frost boss with a 3D model and item"
+    )
     result = pipeline.execute(
         proposal,
         approval_hash=proposal.approval_hash,
@@ -182,9 +241,9 @@ def test_release_obj_material_keeps_its_texture_handoff(tmp_path: Path) -> None:
     art_root = Path(result.release_dir) / "art_sources"
     texture_name = f"{proposal.spec.boss.entity_id}.png"
     assert (art_root / texture_name).is_file()
-    material = (art_root / f"{proposal.spec.boss.entity_id}.mtl").read_text(
-        encoding="utf-8"
-    )
+    material = (
+        art_root / f"{proposal.spec.boss.entity_id}.mtl"
+    ).read_text(encoding="utf-8")
     assert f"map_Kd {texture_name}" in material
     assert "../../src/" not in material
 
