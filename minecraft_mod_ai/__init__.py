@@ -1,6 +1,13 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Fabric production tools."""
 
-# Install validator contract corrections before pipeline modules import the validator.
+# Install the verified toolchain before generator and runner users are imported.
+from . import runner as _runner_module
+from . import spec as _spec_module
+from .toolchain_contract import install as _install_toolchain_contract
+
+_install_toolchain_contract(_spec_module, _runner_module)
+
+# Install the corrected legacy-boss source contract before pipeline imports.
 from . import validator as _validator_module
 from .validator_boss_contract import install as _install_validator_boss_contract
 
@@ -57,7 +64,6 @@ from .spec import (
 from .training import TrainingTraceStore
 from .world_compiler import compile_world_ir
 
-# Backward-compatible public name now resolves to the scalable implementation.
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
