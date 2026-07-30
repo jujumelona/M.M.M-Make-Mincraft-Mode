@@ -30,7 +30,7 @@ from .importer import (
 from .model_adapters import ModelBackendError, ModelConfigurationError
 from .model_registry import ModelRegistry
 from .model_router import ModelRouter
-from .pipeline import MinecraftModPipeline, PipelineResult
+from .pipeline import PipelineResult
 from .planner import HeuristicPlanner, OpenAICompatiblePlanner
 from .production_tools import ProductionToolService
 from .project_index import ProjectIndex
@@ -38,6 +38,7 @@ from .rag_index import ProjectRAGIndex
 from .routed_planner import RoutedPlanner
 from .scale_policy import ScalePolicy, ScalePolicyError
 from .scalable_generator import ScalableFabricProjectGenerator
+from .scalable_pipeline import ScalableMinecraftModPipeline
 from .scalable_world_compiler import compile_scalable_world_ir
 from .spec import (
     ArenaSpec,
@@ -49,6 +50,9 @@ from .spec import (
 )
 from .training import TrainingTraceStore
 from .world_compiler import compile_world_ir
+
+# Backward-compatible public name now resolves to the scalable implementation.
+MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
     "ArenaSpec",
@@ -89,6 +93,7 @@ __all__ = [
     "ScalePolicy",
     "ScalePolicyError",
     "ScalableFabricProjectGenerator",
+    "ScalableMinecraftModPipeline",
     "TrainingTraceStore",
     "compile_scalable_world_ir",
     "compile_world_ir",
@@ -96,4 +101,4 @@ __all__ = [
     "supported_minecraft_versions",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
