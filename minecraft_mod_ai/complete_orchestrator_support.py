@@ -115,6 +115,10 @@ def _normalize_modules(
     return _topological_modules(kept), receipts
 
 
+def _is_custom(module: ProductionModule) -> bool:
+    return module.kind == "custom_java" or module.config.get("implementation") == "custom"
+
+
 def _system_groups(
     modules: list[ProductionModule],
 ) -> dict[str, list[ProductionModule]]:
@@ -131,6 +135,8 @@ def _system_groups(
     }
     result: dict[str, list[ProductionModule]] = {}
     for module in modules:
+        if _is_custom(module):
+            continue
         pack = mapping.get(module.kind)
         if pack:
             result.setdefault(pack, []).append(module)
@@ -168,7 +174,11 @@ def _handled_module_ids(modules: list[ProductionModule]) -> set[str]:
         "structure",
         "audio",
     }
-    return {module.module_id for module in modules if module.kind in built_in}
+    return {
+        module.module_id
+        for module in modules
+        if module.kind in built_in and not _is_custom(module)
+    }
 
 
 def _module_dict(module: ProductionModule) -> dict[str, Any]:
