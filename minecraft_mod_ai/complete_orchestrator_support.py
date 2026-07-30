@@ -46,6 +46,8 @@ def _topological_modules(
     modules: tuple[ProductionModule, ...] | list[ProductionModule],
 ) -> list[ProductionModule]:
     lookup = {module.module_id: module for module in modules}
+    if len(lookup) != len(modules):
+        raise CompleteProductionError("Production module IDs must be unique.")
     indegree = {module.module_id: len(module.depends_on) for module in modules}
     outgoing: dict[str, list[str]] = {module.module_id: [] for module in modules}
     for module in modules:
@@ -72,19 +74,60 @@ def _topological_modules(
     return ordered
 
 
+def _is_custom(module: ProductionModule) -> bool:
+    return module.kind == "custom_java" or module.config.get("implementation") == "custom"
+
+
 def _normalize_modules(
     modules: tuple[ProductionModule, ...], spec
 ) -> tuple[list[ProductionModule], list[dict[str, Any]]]:
+    """Deduplicate bootstrap content and route custom semantics exactly once.
+
+    An explicit ``implementation=custom`` module is converted to ``custom_java`` before
+    any content, system, entity or world generator sees it. The requested kind is kept
+    in config so the indexed coder receives the original semantic target. This prevents
+    built-in generation followed by a second custom patch for the same module.
+    """
+
     base = {content.content_id: content.kind.value for content in spec.contents}
     if spec.boss is not None:
         base[spec.boss.entity_id] = "boss"
         base[f"{spec.boss.entity_id}_spawn_egg"] = "item"
     if spec.arena is not None:
         base[spec.arena.arena_id] = "structure"
+
     reused: set[str] = set()
     staged: list[ProductionModule] = []
     receipts: list[dict[str, Any]] = []
     for module in modules:
+        if _is_custom(module):
+            requested_kind = (
+                str(module.config.get("requested_kind", module.kind))
+                if module.kind == "custom_java"
+                else module.kind
+            )
+            custom_config = dict(module.config)
+            custom_config.pop("implementation", None)
+            custom_config["requested_kind"] = requested_kind
+            staged.append(
+                ProductionModule(
+                    module_id=module.module_id,
+                    kind="custom_java",
+                    config=custom_config,
+                    depends_on=module.depends_on,
+                    required_gates=module.required_gates,
+                )
+            )
+            receipts.append(
+                {
+                    "schema_version": "mmm/custom-routing-v1",
+                    "status": "ROUTED_CUSTOM",
+                    "module_id": module.module_id,
+                    "requested_kind": requested_kind,
+                }
+            )
+            continue
+
         existing = base.get(module.module_id)
         if existing is None:
             staged.append(module)
@@ -102,6 +145,7 @@ def _normalize_modules(
             raise CompleteProductionError(
                 f"Module {module.module_id}/{module.kind} collides with bootstrap {existing}."
             )
+
     kept = [
         ProductionModule(
             module_id=module.module_id,
@@ -113,10 +157,6 @@ def _normalize_modules(
         for module in staged
     ]
     return _topological_modules(kept), receipts
-
-
-def _is_custom(module: ProductionModule) -> bool:
-    return module.kind == "custom_java" or module.config.get("implementation") == "custom"
 
 
 def _system_groups(
@@ -135,8 +175,6 @@ def _system_groups(
     }
     result: dict[str, list[ProductionModule]] = {}
     for module in modules:
-        if _is_custom(module):
-            continue
         pack = mapping.get(module.kind)
         if pack:
             result.setdefault(pack, []).append(module)
@@ -174,11 +212,7 @@ def _handled_module_ids(modules: list[ProductionModule]) -> set[str]:
         "structure",
         "audio",
     }
-    return {
-        module.module_id
-        for module in modules
-        if module.kind in built_in and not _is_custom(module)
-    }
+    return {module.module_id for module in modules if module.kind in built_in}
 
 
 def _module_dict(module: ProductionModule) -> dict[str, Any]:
