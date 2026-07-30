@@ -8,26 +8,35 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .broker import LocalPolicyBroker, ToolAction, approved_request
-from .complete_orchestrator import CompleteExecutionOptions, CompleteProductionOrchestrator
+from .complete_orchestrator import (
+    CompleteExecutionOptions,
+    CompleteProductionOrchestrator,
+)
 from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import CompleteProposal
 from .game_design import GameDesignPlanner
 from .importer import inspect_existing_project_archive
 from .knowledge import AuthoritativeEvidenceRetriever
 from .model_router import ModelRouter
-from .pipeline import MinecraftModPipeline
 from .repair_engine import RepairEngine
 from .runner import GradleRunner
+from .scalable_pipeline import ScalableMinecraftModPipeline
+from .scalable_validator import ScalableProjectValidator
+from .scale_policy import ScalePolicy
 from .source_patch import TransactionalSourcePatcher
-from .spec import Proposal, ProposalStatus, SpecValidationError, canonical_json
-from .validator import ProjectValidator, validate_jar
-
+from .spec import (
+    Proposal,
+    ProposalStatus,
+    SpecValidationError,
+    canonical_json,
+)
+from .validator import validate_jar
 
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 class MMMToolService:
-    """Concrete tool service used by the stdio MCP server and compatibility gateway."""
+    """Concrete tool service for the stdio MCP server and compatibility gateway."""
 
     def __init__(
         self,
@@ -35,11 +44,16 @@ class MMMToolService:
         workspace_root: str | Path = "mmm-output",
         profile: str = "t4_local",
         router_factory: Callable[[], ModelRouter] | None = None,
+        policy: ScalePolicy | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.profile = profile
-        self.router_factory = router_factory or (lambda: ModelRouter(profile=profile))
+        self.router_factory = router_factory or (
+            lambda: ModelRouter(profile=profile)
+        )
+        self.policy = policy or ScalePolicy.from_environment()
+        self.policy.validate()
         self.broker = LocalPolicyBroker()
 
     def plan_game(
@@ -50,7 +64,7 @@ class MMMToolService:
         planner = GameDesignPlanner(self.router_factory())
         design, proposal = planner.plan(prompt, media_paths=media_paths)
         return {
-            "schema_version": "mmm/plan-result-v1",
+            "schema_version": "mmm/plan-result-v2",
             "profile": self.profile,
             "game_design": design,
             "proposal": proposal.to_dict(),
@@ -63,14 +77,13 @@ class MMMToolService:
         media_paths: Sequence[str] = (),
         existing_input_sha256: str = "",
     ) -> dict[str, Any]:
-        """Plan every requested gameplay, asset, world and runtime module."""
         proposal = CompleteGameDesignPlanner(self.router_factory()).plan(
             prompt,
             media_paths=media_paths,
             existing_input_sha256=existing_input_sha256,
         )
         return {
-            "schema_version": "mmm/complete-plan-result-v1",
+            "schema_version": "mmm/complete-plan-result-v2",
             "profile": self.profile,
             "game_design": proposal.game_design,
             "complete_proposal": proposal.to_dict(),
@@ -83,7 +96,7 @@ class MMMToolService:
         approval_hash: str,
     ) -> dict[str, Any]:
         parsed = CompleteProposal.from_dict(complete_proposal)
-        approved = parsed.approve(approval_hash)
+        approved = parsed.approve(approval_hash, policy=self.policy)
         return {
             "status": approved.status.value,
             "complete_proposal": approved.to_dict(),
@@ -98,13 +111,15 @@ class MMMToolService:
         options: dict[str, Any] | None = None,
         existing_input: str | None = None,
     ) -> dict[str, Any]:
+        parsed = CompleteProposal.from_dict(complete_proposal)
         parsed_options = CompleteExecutionOptions(**(options or {}))
         return CompleteProductionOrchestrator(
             workspace_root=self.workspace_root,
             profile=self.profile,
             router_factory=self.router_factory,
+            policy=self.policy,
         ).execute(
-            complete_proposal,
+            parsed,
             approval_hash=approval_hash,
             run_name=run_name,
             options=parsed_options,
@@ -116,21 +131,43 @@ class MMMToolService:
         project_root: str,
         operations: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Apply one transactional, hash-guarded source patch."""
         root = self._existing_dir(project_root)
+        encoded = json.dumps(
+            operations,
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded) > self.policy.max_patch_bytes:
+            raise SpecValidationError(
+                "Patch exceeds MMM_MAX_PATCH_BYTES host resource policy."
+            )
         return TransactionalSourcePatcher(root).apply(operations)
 
     def repair_project(
         self,
         project_root: str,
         run_gametest: bool = True,
-        max_attempts: int = 3,
+        max_attempts: int | None = None,
     ) -> dict[str, Any]:
         root = self._existing_dir(project_root)
+        attempts = (
+            self.policy.repair_attempts
+            if max_attempts is None
+            else max_attempts
+        )
+        if type(attempts) is not int or attempts < 1:
+            raise SpecValidationError(
+                "max_attempts must be null or a positive integer."
+            )
         return RepairEngine(
             router=self.router_factory(),
             gradle_cache=self.workspace_root / ".cache" / "gradle",
-        ).repair(root, run_gametest=run_gametest, max_attempts=max_attempts)
+            policy=self.policy,
+        ).repair(
+            root,
+            run_gametest=run_gametest,
+            max_attempts=attempts,
+        )
 
     def revise_plan(
         self,
@@ -140,7 +177,10 @@ class MMMToolService:
     ) -> dict[str, Any]:
         if not revision.strip():
             raise SpecValidationError("revision must not be empty.")
-        merged = f"{original_prompt.strip()}\n\nUser revision:\n{revision.strip()}"
+        merged = (
+            f"{original_prompt.strip()}\n\n"
+            f"User revision:\n{revision.strip()}"
+        )
         return self.plan_game(merged, media_paths=media_paths)
 
     def approve_plan(
@@ -163,6 +203,8 @@ class MMMToolService:
         minecraft_version: str = "1.20.1",
         limit: int = 6,
     ) -> dict[str, Any]:
+        if type(limit) is not int or limit < 1:
+            raise SpecValidationError("limit must be a positive integer.")
         sources = AuthoritativeEvidenceRetriever().search(
             query,
             minecraft_version=minecraft_version,
@@ -187,7 +229,9 @@ class MMMToolService:
     ) -> dict[str, Any]:
         parsed = Proposal.from_dict(proposal)
         run_root = self._new_child(run_name)
-        result = MinecraftModPipeline().execute(
+        result = ScalableMinecraftModPipeline(
+            policy=self.policy
+        ).execute(
             parsed,
             approval_hash=approval_hash,
             output_root=run_root,
@@ -202,8 +246,44 @@ class MMMToolService:
         output_dir: str = "assets-generated",
         seed: int = 0,
     ) -> dict[str, Any]:
-        if not 1 <= len(assets) <= 16:
-            raise SpecValidationError("assets must contain 1-16 id-to-prompt entries.")
+        if not isinstance(assets, dict) or not assets:
+            raise SpecValidationError(
+                "assets must be a non-empty id-to-prompt object."
+            )
+        if type(seed) is not int:
+            raise SpecValidationError("seed must be a JSON integer.")
+        try:
+            encoded = json.dumps(
+                assets,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise SpecValidationError(
+                "assets must contain JSON string prompts."
+            ) from exc
+        if len(encoded) > self.policy.max_patch_bytes:
+            raise SpecValidationError(
+                "Asset request exceeds MMM_MAX_PATCH_BYTES host resource policy."
+            )
+
+        normalized: list[tuple[str, str]] = []
+        for asset_id, prompt in assets.items():
+            if not isinstance(asset_id, str) or not _SAFE_ID.fullmatch(asset_id):
+                raise SpecValidationError(
+                    f"Invalid asset id: {asset_id!r}"
+                )
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise SpecValidationError(
+                    f"Asset prompt is empty: {asset_id}"
+                )
+            if len(prompt.encode("utf-8")) > self.policy.max_single_file_bytes:
+                raise SpecValidationError(
+                    f"Asset prompt exceeds host resource policy: {asset_id}"
+                )
+            normalized.append((asset_id, prompt.strip()))
+
         target = self._new_child(output_dir)
         concepts = target / "concepts"
         textures = target / "textures"
@@ -211,16 +291,13 @@ class MMMToolService:
         textures.mkdir(parents=True, exist_ok=True)
         router = self.router_factory()
         generated: list[dict[str, str]] = []
-        for index, (asset_id, prompt) in enumerate(sorted(assets.items())):
-            if not _SAFE_ID.fullmatch(asset_id):
-                raise SpecValidationError(f"Invalid asset id: {asset_id!r}")
-            if not isinstance(prompt, str) or not prompt.strip():
-                raise SpecValidationError(f"Asset prompt is empty: {asset_id}")
+        for index, (asset_id, prompt) in enumerate(sorted(normalized)):
             concept = router.generate_image(
                 "image_generator",
                 prompt=(
-                    "Minecraft Java resource-pack source art, centered object, clean silhouette, "
-                    "no text, no watermark, square composition. " + prompt.strip()
+                    "Minecraft Java resource-pack source art, centered object, "
+                    "clean silhouette, no text, no watermark, square composition. "
+                    + prompt
                 ),
                 output_path=concepts / f"{asset_id}.png",
                 width=512,
@@ -239,10 +316,13 @@ class MMMToolService:
                 }
             )
         return {
-            "schema_version": "mmm/asset-result-v1",
+            "schema_version": "mmm/asset-result-v2",
             "output_dir": str(target),
             "generated": generated,
-            "warning": "Generated textures require VisualCritic review before release.",
+            "asset_count": len(generated),
+            "warning": (
+                "Generated textures require VisualCritic review before release."
+            ),
         }
 
     def generate_world_ir(
@@ -251,6 +331,8 @@ class MMMToolService:
         output_path: str = "world/world-ir.json",
         media_paths: Sequence[str] = (),
     ) -> dict[str, Any]:
+        if not brief.strip():
+            raise SpecValidationError("World brief must not be empty.")
         messages = [
             {
                 "role": "system",
@@ -258,15 +340,19 @@ class MMMToolService:
                     "Return exactly one JSON object for a Minecraft 1.20.1 world design IR. "
                     "Keys: schema_version, regions, routes, structures, quests, constraints. "
                     "regions is a list of {id,purpose,biome_hint,entry_level}; routes is a list "
-                    "of {from,to,travel_mode}; structures is a list of {id,region_id,kind,brief}; "
-                    "quests is a list of {id,start_region,end_region,objective}. Use snake_case IDs. "
-                    "This is planning IR only; do not claim NBT, Jigsaw or world files were generated."
+                    "of {from,to,travel_mode}; structures is a list of "
+                    "{id,region_id,kind,brief,size,palette,biomes}; quests is a list of "
+                    "{id,start_region,end_region,objective}. Use snake_case IDs. "
+                    "The compile_world_ir tool converts this IR to NBT/Jigsaw/function shards."
                 ),
             },
             {"role": "user", "content": brief},
         ]
         text = self.router_factory().generate_text(
-            "world_planner", messages, media_paths=media_paths, response_format="json"
+            "world_planner",
+            messages,
+            media_paths=media_paths,
+            response_format="json",
         )
         ir = _extract_json(text)
         _validate_world_ir(ir)
@@ -274,7 +360,7 @@ class MMMToolService:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(canonical_json(ir) + "\n", encoding="utf-8")
         return {
-            "schema_version": "mmm/world-ir-result-v1",
+            "schema_version": "mmm/world-ir-result-v2",
             "world_ir": ir,
             "path": str(target),
             "sha256": _sha256(target),
@@ -299,7 +385,9 @@ class MMMToolService:
             ),
             approved,
         )
-        return ProjectValidator().validate(root, approved.spec).to_dict()
+        return ScalableProjectValidator(
+            policy=self.policy
+        ).validate(root, approved.spec).to_dict()
 
     def run_gradle_build(
         self,
@@ -308,7 +396,10 @@ class MMMToolService:
         approval_hash: str,
     ) -> dict[str, Any]:
         return self._run_gradle(
-            project_root, proposal, approval_hash, run_gametest=False
+            project_root,
+            proposal,
+            approval_hash,
+            run_gametest=False,
         )
 
     def run_gametest(
@@ -318,7 +409,10 @@ class MMMToolService:
         approval_hash: str,
     ) -> dict[str, Any]:
         return self._run_gradle(
-            project_root, proposal, approval_hash, run_gametest=True
+            project_root,
+            proposal,
+            approval_hash,
+            run_gametest=True,
         )
 
     def inspect_jar(
@@ -354,27 +448,40 @@ class MMMToolService:
             ),
             approved,
         )
-        source_report = ProjectValidator().validate(root, approved.spec)
+        source_report = ScalableProjectValidator(
+            policy=self.policy
+        ).validate(root, approved.spec)
         if not source_report.passed:
-            raise RuntimeError("Source validation failed; release package was not created.")
+            raise RuntimeError(
+                "Source validation failed; release package was not created."
+            )
         jar: Path | None = None
         jar_report: dict[str, Any] | None = None
         if jar_path is not None:
             jar = self._existing_file(jar_path)
             validated = validate_jar(jar, approved.spec)
             if not validated.passed:
-                raise RuntimeError("JAR validation failed; release package was not created.")
+                raise RuntimeError(
+                    "JAR validation failed; release package was not created."
+                )
             jar_report = validated.to_dict()
         target = self._new_file(output_zip)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             raise FileExistsError(f"Release already exists: {target}")
-        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
+        with zipfile.ZipFile(
+            target,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as zipped:
             for path in sorted(root.rglob("*")):
                 if not path.is_file() or path.is_symlink():
                     continue
                 relative = path.relative_to(root)
-                if any(part in {".gradle", ".cache", "gradle-user-home"} for part in relative.parts):
+                if any(
+                    part in {".gradle", ".cache", "gradle-user-home", "run"}
+                    for part in relative.parts
+                ):
                     continue
                 zipped.write(path, Path("source") / relative)
             if jar is not None:
@@ -383,10 +490,11 @@ class MMMToolService:
                 "release-manifest.json",
                 canonical_json(
                     {
-                        "schema_version": "mmm/release-manifest-v1",
+                        "schema_version": "mmm/release-manifest-v2",
                         "proposal_hash": approved.calculate_hash(),
                         "source_validation": source_report.to_dict(),
                         "jar_validation": jar_report,
+                        "resource_policy": self.policy.__dict__,
                     }
                 ),
             )
@@ -407,7 +515,11 @@ class MMMToolService:
     ) -> dict[str, Any]:
         approved = self._approved(proposal, approval_hash)
         root = self._existing_dir(project_root)
-        action = ToolAction.GAME_TEST if run_gametest else ToolAction.GRADLE_BUILD
+        action = (
+            ToolAction.GAME_TEST
+            if run_gametest
+            else ToolAction.GRADLE_BUILD
+        )
         self.broker.authorize(
             approved_request(
                 action,
@@ -418,10 +530,16 @@ class MMMToolService:
             approved,
         )
         cache = self.workspace_root / ".cache" / "gradle"
-        return GradleRunner(cache).build(root, run_gametest=run_gametest).to_dict()
+        return GradleRunner(cache).build(
+            root,
+            run_gametest=run_gametest,
+        ).to_dict()
 
     @staticmethod
-    def _approved(proposal: dict[str, Any], approval_hash: str) -> Proposal:
+    def _approved(
+        proposal: dict[str, Any],
+        approval_hash: str,
+    ) -> Proposal:
         parsed = Proposal.from_dict(proposal)
         approved = parsed.approve(approval_hash)
         if approved.status is not ProposalStatus.APPROVED:
@@ -444,13 +562,17 @@ class MMMToolService:
     def _existing_file(self, value: str) -> Path:
         path = self._resolve_child(value)
         if not path.is_file() or path.is_symlink():
-            raise FileNotFoundError(f"File not found inside workspace: {path}")
+            raise FileNotFoundError(
+                f"File not found inside workspace: {path}"
+            )
         return path
 
     def _existing_dir(self, value: str) -> Path:
         path = self._resolve_child(value)
         if not path.is_dir() or path.is_symlink():
-            raise FileNotFoundError(f"Directory not found inside workspace: {path}")
+            raise FileNotFoundError(
+                f"Directory not found inside workspace: {path}"
+            )
         return path
 
     def _resolve_child(self, value: str) -> Path:
@@ -463,9 +585,13 @@ class MMMToolService:
         try:
             target.relative_to(self.workspace_root)
         except ValueError as exc:
-            raise SpecValidationError("Tool path escaped the configured workspace.") from exc
+            raise SpecValidationError(
+                "Tool path escaped the configured workspace."
+            ) from exc
         if target == self.workspace_root:
-            raise SpecValidationError("Tools may not target the workspace root itself.")
+            raise SpecValidationError(
+                "Tools may not target the workspace root itself."
+            )
         return target
 
 
@@ -480,26 +606,68 @@ def _extract_json(text: str) -> dict[str, Any]:
             continue
         if isinstance(value, dict):
             return value
-    raise SpecValidationError("Model output did not contain a JSON object.")
+    raise SpecValidationError(
+        "Model output did not contain a JSON object."
+    )
 
 
 def _validate_world_ir(ir: dict[str, Any]) -> None:
-    required = {"schema_version", "regions", "routes", "structures", "quests", "constraints"}
+    required = {
+        "schema_version",
+        "regions",
+        "routes",
+        "structures",
+        "quests",
+        "constraints",
+    }
     if set(ir) != required or ir.get("schema_version") != "mmm/world-ir-v1":
         raise SpecValidationError("World IR schema is invalid.")
     for key in ("regions", "routes", "structures", "quests", "constraints"):
         if not isinstance(ir[key], list):
-            raise SpecValidationError(f"World IR field {key!r} must be a list.")
+            raise SpecValidationError(
+                f"World IR field {key!r} must be a list."
+            )
     region_ids: set[str] = set()
     for region in ir["regions"]:
-        if not isinstance(region, dict) or not _SAFE_ID.fullmatch(str(region.get("id", ""))):
-            raise SpecValidationError("World IR contains an invalid region id.")
+        if (
+            not isinstance(region, dict)
+            or not _SAFE_ID.fullmatch(str(region.get("id", "")))
+        ):
+            raise SpecValidationError(
+                "World IR contains an invalid region id."
+            )
         if region["id"] in region_ids:
-            raise SpecValidationError(f"Duplicate region id: {region['id']}")
+            raise SpecValidationError(
+                f"Duplicate region id: {region['id']}"
+            )
         region_ids.add(region["id"])
+    graph = {region: set() for region in region_ids}
     for route in ir["routes"]:
-        if not isinstance(route, dict) or route.get("from") not in region_ids or route.get("to") not in region_ids:
-            raise SpecValidationError("World IR route references an unknown region.")
+        if (
+            not isinstance(route, dict)
+            or route.get("from") not in region_ids
+            or route.get("to") not in region_ids
+            or route.get("from") == route.get("to")
+        ):
+            raise SpecValidationError(
+                "World IR route references an invalid region."
+            )
+        graph[route["from"]].add(route["to"])
+        graph[route["to"]].add(route["from"])
+    if graph:
+        start = next(iter(graph))
+        seen = {start}
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            for neighbor in graph[node]:
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        if len(seen) != len(graph):
+            raise SpecValidationError(
+                "World IR region graph is disconnected."
+            )
 
 
 def _minecraft_texture(source: Path, target: Path) -> None:
