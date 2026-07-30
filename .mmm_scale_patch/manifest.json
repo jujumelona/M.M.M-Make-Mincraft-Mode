@@ -1,8 +1,0 @@
-{
-  "schema_version": "mmm/scale-hardening-payload-v1",
-  "chunk_count": 5,
-  "base64_length": 53656,
-  "base64_sha256": "db49f6897900f0a0369b7f647961157875bfa781e377d69d2bea42b5f500c136",
-  "archive_sha256": "819fe6ae600a2644b1368c68c335411064f2ddc84ba0c312e6efcdf12a2b92aa",
-  "archive_size": 40240
-}
