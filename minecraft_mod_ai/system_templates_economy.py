@@ -42,8 +42,7 @@ public final class {class_name} {{
                 .then(CommandManager.literal("grant").requires(source -> source.hasPermissionLevel(2))
                     .then(CommandManager.argument("amount", DoubleArgumentType.doubleArg(0.0d)).executes(context -> {{
                         ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
-                        credit(player, DoubleArgumentType.getDouble(context, "amount"));
-                        return 1;
+                        return credit(player, DoubleArgumentType.getDouble(context, "amount")) ? 1 : 0;
                     }})))
             )
         );
@@ -69,20 +68,29 @@ public final class {class_name} {{
             JsonObject module = element.getAsJsonObject();
             String kind = module.get("kind").getAsString();
             JsonObject config = module.getAsJsonObject("config");
-            if ("economy".equals(kind) && config.has("initial_balance")) initialBalance = config.get("initial_balance").getAsDouble();
+            if ("economy".equals(kind) && config.has("initial_balance")) {{
+                initialBalance = config.get("initial_balance").getAsDouble();
+                if (!Double.isFinite(initialBalance) || initialBalance < 0.0d) {{
+                    throw new IllegalStateException("Invalid initial economy balance");
+                }}
+            }}
             if (!"shop".equals(kind)) return;
-            JsonArray entries = config.has("entries") ? config.getAsJsonArray("entries") : new JsonArray();
+            JsonArray entries = config.getAsJsonArray("entries");
             entries.forEach(raw -> {{
                 JsonObject entry = raw.getAsJsonObject();
                 String id = entry.get("id").getAsString();
                 Identifier item = new Identifier(entry.get("item").getAsString());
-                if (!Registries.ITEM.containsId(item)) throw new IllegalStateException("Unknown shop item: " + item);
-                CATALOG.put(id, new ShopEntry(
-                    id,
-                    item,
-                    entry.has("count") ? Math.max(1, entry.get("count").getAsInt()) : 1,
-                    Math.max(0.0d, entry.get("price").getAsDouble())
-                ));
+                if (!Registries.ITEM.containsId(item)) {{
+                    throw new IllegalStateException("Unknown shop item: " + item);
+                }}
+                int count = entry.has("count") ? entry.get("count").getAsInt() : 1;
+                double price = entry.get("price").getAsDouble();
+                if (count < 1 || !Double.isFinite(price) || price < 0.0d) {{
+                    throw new IllegalStateException("Invalid shop entry: " + id);
+                }}
+                if (CATALOG.putIfAbsent(id, new ShopEntry(id, item, count, price)) != null) {{
+                    throw new IllegalStateException("Duplicate shop entry: " + id);
+                }}
             }});
         }});
     }}
@@ -90,12 +98,21 @@ public final class {class_name} {{
     private static double balance(ServerPlayerEntity player) {{
         Map<String, Object> data = MmmPersistentStore.namespace("economy");
         Object raw = data.computeIfAbsent(player.getUuidAsString(), ignored -> initialBalance);
-        return raw instanceof Number number ? number.doubleValue() : initialBalance;
+        double value = raw instanceof Number number ? number.doubleValue() : initialBalance;
+        if (!Double.isFinite(value) || value < 0.0d) {{
+            data.put(player.getUuidAsString(), initialBalance);
+            return initialBalance;
+        }}
+        return value;
     }}
 
-    public static void credit(ServerPlayerEntity player, double amount) {{
-        MmmPersistentStore.namespace("economy").put(player.getUuidAsString(), balance(player) + amount);
+    public static boolean credit(ServerPlayerEntity player, double amount) {{
+        if (!Double.isFinite(amount) || amount < 0.0d) return false;
+        double next = balance(player) + amount;
+        if (!Double.isFinite(next)) return false;
+        MmmPersistentStore.namespace("economy").put(player.getUuidAsString(), next);
         MmmPersistentStore.save(player.getServer());
+        return true;
     }}
 
     private static int buy(ServerPlayerEntity player, String id) {{
@@ -103,9 +120,18 @@ public final class {class_name} {{
         if (entry == null) return 0;
         double current = balance(player);
         if (current < entry.price()) return 0;
-        MmmPersistentStore.namespace("economy").put(player.getUuidAsString(), current - entry.price());
-        player.giveItemStack(new ItemStack(Registries.ITEM.get(entry.item()), entry.count()));
+
+        ItemStack delivery = new ItemStack(
+            Registries.ITEM.get(entry.item()),
+            entry.count()
+        );
+        double next = current - entry.price();
+        MmmPersistentStore.namespace("economy").put(player.getUuidAsString(), next);
         MmmPersistentStore.save(player.getServer());
+
+        if (!player.giveItemStack(delivery) && !delivery.isEmpty()) {{
+            player.dropItem(delivery, false);
+        }}
         return 1;
     }}
 }}
