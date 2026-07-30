@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import math
 import re
@@ -230,22 +231,21 @@ class CompleteProposal:
                 raise SpecValidationError("Complete proposal approval_hash does not match its payload.")
 
     def _validate_acyclic(self) -> None:
-        # Kahn's algorithm avoids recursion-depth failures for very large projects.
         outgoing: dict[str, list[str]] = {module.module_id: [] for module in self.modules}
         indegree = {module.module_id: len(module.depends_on) for module in self.modules}
         for module in self.modules:
             for dependency in module.depends_on:
                 outgoing[dependency].append(module.module_id)
-        ready = sorted(node for node, degree in indegree.items() if degree == 0)
+        ready = [node for node, degree in indegree.items() if degree == 0]
+        heapq.heapify(ready)
         emitted = 0
         while ready:
-            node = ready.pop(0)
+            node = heapq.heappop(ready)
             emitted += 1
-            for dependent in sorted(outgoing[node]):
+            for dependent in outgoing[node]:
                 indegree[dependent] -= 1
                 if indegree[dependent] == 0:
-                    ready.append(dependent)
-            ready.sort()
+                    heapq.heappush(ready, dependent)
         if emitted != len(self.modules):
             cyclic = sorted(node for node, degree in indegree.items() if degree > 0)
             raise SpecValidationError(f"Production module dependency cycle detected: {cyclic[:20]}")
@@ -266,8 +266,13 @@ class CompleteProposal:
         )
         return CompleteProposal(**{**draft.__dict__, "approval_hash": draft.calculate_hash()})
 
-    def approve(self, supplied_hash: str) -> "CompleteProposal":
-        self.validate()
+    def approve(
+        self,
+        supplied_hash: str,
+        *,
+        policy: ScalePolicy | None = None,
+    ) -> "CompleteProposal":
+        self.validate(policy=policy)
         expected = self.calculate_hash()
         if supplied_hash != expected:
             raise SpecValidationError("Complete proposal approval hash mismatch.")
@@ -324,12 +329,21 @@ class CompleteProposal:
             assets=tuple(AssetRequest(**item) for item in data["assets"]),
             audio=tuple(AudioRequest(**item) for item in data["audio"]),
             acceptance_tests=tuple(str(value) for value in data["acceptance_tests"]),
-            external_runtime_required=bool(data["external_runtime_required"]),
+            external_runtime_required=_strict_bool(
+                data["external_runtime_required"],
+                "external_runtime_required",
+            ),
             existing_input_sha256=str(data["existing_input_sha256"]),
             approval_hash=str(data["approval_hash"]),
         )
         proposal.validate()
         return proposal
+
+
+def _strict_bool(value: Any, field_name: str) -> bool:
+    if type(value) is not bool:
+        raise SpecValidationError(f"{field_name} must be a JSON boolean.")
+    return value
 
 
 def complete_proposal_from_parts(
