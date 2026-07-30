@@ -7,9 +7,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .pipeline import MinecraftModPipeline, PipelineResult
+from .pipeline import PipelineResult
 from .planner import OpenAICompatiblePlanner, Planner
 from .routed_planner import RoutedPlanner
+from .scalable_pipeline import ScalableMinecraftModPipeline
 from .spec import Proposal, SpecValidationError
 from .webui import (
     _buildable,
@@ -19,7 +20,6 @@ from .webui import (
     _new_execution_root,
     _render_plan,
 )
-
 
 SUPPORTED_MINECRAFT_VERSIONS = ("1.20.1",)
 
@@ -41,7 +41,7 @@ class ChatReply:
 
 
 class ModAISession:
-    """Stateful plan -> revise -> build API with an explicit model profile."""
+    """Stateful plan -> revise -> scalable build API."""
 
     def __init__(
         self,
@@ -61,8 +61,10 @@ class ModAISession:
             )
         self.minecraft_version = requested_version
         self.output_root = Path(output_root)
-        self.existing_input = Path(existing_input) if existing_input is not None else None
-        self.pipeline = MinecraftModPipeline(
+        self.existing_input = (
+            Path(existing_input) if existing_input is not None else None
+        )
+        self.pipeline = ScalableMinecraftModPipeline(
             planner=planner or RoutedPlanner(profile=model_profile)
         )
         self.brief = ""
@@ -177,16 +179,27 @@ class ModAISession:
         elif candidate is None:
             proposal = self.proposal
         else:
-            raise TypeError("candidate must be ChatReply, Proposal, or None.")
+            raise TypeError(
+                "candidate must be ChatReply, Proposal, or None."
+            )
         if proposal is None:
-            raise SpecValidationError("먼저 대화로 계획을 만들어 주세요.")
-        questions = _clarification_questions(proposal.requested_prompt, proposal)
+            raise SpecValidationError(
+                "먼저 대화로 계획을 만들어 주세요."
+            )
+        questions = _clarification_questions(
+            proposal.requested_prompt,
+            proposal,
+        )
         if not _buildable(proposal, questions):
             raise SpecValidationError(
                 "아직 정하지 않았거나 구현과 연결되지 않은 내용이 있습니다. "
                 "대화에서 필요한 내용을 더 정해 주세요."
             )
-        base_output = Path(output_root) if output_root is not None else self.output_root
+        base_output = (
+            Path(output_root)
+            if output_root is not None
+            else self.output_root
+        )
         return self.pipeline.execute(
             proposal,
             approval_hash=proposal.approval_hash,
@@ -202,7 +215,10 @@ class ModAISession:
 
     @staticmethod
     def _reply(proposal: Proposal) -> ChatReply:
-        questions = _clarification_questions(proposal.requested_prompt, proposal)
+        questions = _clarification_questions(
+            proposal.requested_prompt,
+            proposal,
+        )
         return ChatReply(
             message=_render_plan(proposal, questions),
             ready_to_build=_buildable(proposal, questions),
@@ -211,19 +227,9 @@ class ModAISession:
         )
 
 
-__all__ = [
-    "ChatReply",
-    "CompleteChatReply",
-    "CompleteModAISession",
-    "ModAISession",
-    "SUPPORTED_MINECRAFT_VERSIONS",
-    "supported_minecraft_versions",
-]
-
-
 @dataclass(frozen=True)
 class CompleteChatReply:
-    """Complete-production plan shown to the user before immutable approval."""
+    """Complete-production plan shown before immutable approval."""
 
     message: str
     approval_hash: str
@@ -250,10 +256,14 @@ class CompleteModAISession:
         from .model_router import ModelRouter
 
         if minecraft_version != "1.20.1":
-            raise SpecValidationError("Complete production is pinned to Minecraft Java 1.20.1 Fabric.")
+            raise SpecValidationError(
+                "Complete production is pinned to Minecraft Java 1.20.1 Fabric."
+            )
         self.output_root = Path(output_root)
         self.model_profile = model_profile
-        self.existing_input = Path(existing_input) if existing_input is not None else None
+        self.existing_input = (
+            Path(existing_input) if existing_input is not None else None
+        )
         self.router = ModelRouter(profile=model_profile)
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
@@ -275,7 +285,9 @@ class CompleteModAISession:
         if self.existing_input is not None:
             if not self.existing_input.is_file():
                 raise FileNotFoundError(self.existing_input)
-            existing_hash = "sha256:" + hashlib.sha256(self.existing_input.read_bytes()).hexdigest()
+            existing_hash = "sha256:" + hashlib.sha256(
+                self.existing_input.read_bytes()
+            ).hexdigest()
         proposal = self.planner.plan(
             prompt,
             media_paths=media_paths,
@@ -286,9 +298,15 @@ class CompleteModAISession:
             message=json.dumps(
                 {
                     "game_design": proposal.game_design,
-                    "modules": [module.module_id for module in proposal.modules],
-                    "acceptance_tests": list(proposal.acceptance_tests),
-                    "external_runtime_required": proposal.external_runtime_required,
+                    "modules": [
+                        module.module_id for module in proposal.modules
+                    ],
+                    "acceptance_tests": list(
+                        proposal.acceptance_tests
+                    ),
+                    "external_runtime_required": (
+                        proposal.external_runtime_required
+                    ),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -315,12 +333,23 @@ class CompleteModAISession:
         elif candidate is None:
             proposal = self.complete_proposal
         else:
-            raise TypeError("candidate must be CompleteChatReply, CompleteProposal or None.")
+            raise TypeError(
+                "candidate must be CompleteChatReply, CompleteProposal or None."
+            )
         if proposal is None:
-            raise SpecValidationError("Create a complete plan before building.")
-        selected = options or CompleteExecutionOptions(source_only=source_only)
+            raise SpecValidationError(
+                "Create a complete plan before building."
+            )
+        selected = options or CompleteExecutionOptions(
+            source_only=source_only
+        )
         if source_only and not selected.source_only:
-            selected = CompleteExecutionOptions(**{**selected.__dict__, "source_only": True})
+            selected = CompleteExecutionOptions(
+                **{
+                    **selected.__dict__,
+                    "source_only": True,
+                }
+            )
         return self.orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),
@@ -328,3 +357,13 @@ class CompleteModAISession:
             options=selected,
             existing_input=self.existing_input,
         )
+
+
+__all__ = [
+    "ChatReply",
+    "CompleteChatReply",
+    "CompleteModAISession",
+    "ModAISession",
+    "SUPPORTED_MINECRAFT_VERSIONS",
+    "supported_minecraft_versions",
+]
