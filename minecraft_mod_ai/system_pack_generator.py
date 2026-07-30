@@ -34,6 +34,12 @@ _PACKS = frozenset(
 )
 
 
+def supported_system_packs() -> tuple[str, ...]:
+    """Return the stable built-in system-pack IDs in deterministic order."""
+
+    return tuple(sorted(_PACKS))
+
+
 def generate_system_pack(
     *,
     project_root: str | Path,
