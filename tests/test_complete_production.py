@@ -158,8 +158,11 @@ def test_audio_registration_writes_soundevent_and_sounds_json(tmp_path: Path) ->
         (project / "src/main/resources/assets/complete_test/sounds.json").read_text(encoding="utf-8")
     )
     assert sounds["menu_click"]["sounds"][0]["name"] == "complete_test:menu_click"
-    java = project / "src/main/java/ai/minecraft/complete_test/sound/GeneratedSounds.java"
-    assert "SoundEvent.of" in java.read_text(encoding="utf-8")
+    root_java = project / "src/main/java/ai/minecraft/complete_test/sound/GeneratedSounds.java"
+    assert "GeneratedSoundShard" in root_java.read_text(encoding="utf-8")
+    shards = sorted(project.rglob("GeneratedSoundShard*.java"))
+    assert shards
+    assert any("SoundEvent.of" in path.read_text(encoding="utf-8") for path in shards)
 
 
 def test_world_architecture_is_not_only_a_hollow_box() -> None:
@@ -168,7 +171,6 @@ def test_world_architecture_is_not_only_a_hollow_box() -> None:
     palette = ["minecraft:stone_bricks", "minecraft:oak_planks", "minecraft:air"]
     blocks = dict(_build_blocks(structure, size, palette))
     air = 2
-    # Interior partition and roof exist, while doorway and windows remain air.
     assert blocks[(size[0] // 2, 2, size[2] // 2 + 2)] == 1
     assert blocks[(size[0] // 2, 1, 0)] == air
     assert any(position[1] >= 5 and state != air for position, state in blocks.items())
