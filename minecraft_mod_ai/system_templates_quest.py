@@ -53,16 +53,14 @@ public final class {class_name} {{
                 );
             }}
         }});
-        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {{
-            if (player instanceof ServerPlayerEntity serverPlayer) {{
-                progress(
-                    serverPlayer,
-                    "break",
-                    Registries.BLOCK.getId(state.getBlock()).toString(),
-                    1
-                );
-            }}
-        }});
+        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) ->
+            progress(
+                player,
+                "break",
+                Registries.BLOCK.getId(state.getBlock()).toString(),
+                1
+            )
+        );
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
             dispatcher.register(CommandManager.literal("mmmquest")
                 .then(CommandManager.literal("list").executes(context -> {{
