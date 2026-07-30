@@ -15,6 +15,24 @@ class MineflayerBridgeError(RuntimeError):
 class MineflayerBridge:
     """Persistent JSONL client for the first-party Mineflayer 1.20.1 bridge."""
 
+    ACTIONS = frozenset(
+        {
+            "connect",
+            "status",
+            "walk_to",
+            "interact_block",
+            "use_item",
+            "attack_entity",
+            "inventory",
+            "chat",
+            "craft",
+            "wait_for",
+            "open_container",
+            "click_slot",
+            "disconnect",
+        }
+    )
+
     def __init__(self, bridge_path: str | Path | None = None) -> None:
         self.bridge_path = (
             Path(bridge_path).expanduser().resolve()
@@ -44,27 +62,25 @@ class MineflayerBridge:
         )
 
     def call(self, action: str, **params: Any) -> dict[str, Any]:
-        allowed = {
-            "connect",
-            "status",
-            "walk_to",
-            "interact_block",
-            "use_item",
-            "attack_entity",
-            "inventory",
-            "disconnect",
-        }
-        if action not in allowed:
-            raise MineflayerBridgeError(f"Mineflayer action is not allowlisted: {action}")
+        if action not in self.ACTIONS:
+            raise MineflayerBridgeError(
+                f"Mineflayer action is not allowlisted: {action}"
+            )
         with self._lock:
             self.start()
             assert self.process is not None
             if self.process.stdin is None or self.process.stdout is None:
-                raise MineflayerBridgeError("Mineflayer bridge pipes are unavailable.")
+                raise MineflayerBridgeError(
+                    "Mineflayer bridge pipes are unavailable."
+                )
             request_id = self._next_id
             self._next_id += 1
             self.process.stdin.write(
-                json.dumps({"id": request_id, "action": action, "params": params}) + "\n"
+                json.dumps(
+                    {"id": request_id, "action": action, "params": params},
+                    ensure_ascii=False,
+                )
+                + "\n"
             )
             self.process.stdin.flush()
             while True:
@@ -82,7 +98,9 @@ class MineflayerBridge:
                 if response.get("id") != request_id:
                     continue
                 if not response.get("ok"):
-                    raise MineflayerBridgeError(str(response.get("error", "unknown error")))
+                    raise MineflayerBridgeError(
+                        str(response.get("error", "unknown error"))
+                    )
                 result = response.get("result", {})
                 return result if isinstance(result, dict) else {"value": result}
 
