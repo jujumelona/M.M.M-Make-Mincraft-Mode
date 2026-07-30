@@ -25,9 +25,15 @@ import java.util.UUID;
 
 public final class {class_name} {{
     private record QuestDefinition(
-        String id, String objective, String target, int required,
-        String rewardItem, int rewardCount, double rewardCurrency
+        String id,
+        String objective,
+        String target,
+        int required,
+        String rewardItem,
+        int rewardCount,
+        double rewardCurrency
     ) {{}}
+
     private static final Map<String, QuestDefinition> DEFINITIONS = new LinkedHashMap<>();
     private static boolean registered;
     private {class_name}() {{}}
@@ -39,12 +45,22 @@ public final class {class_name} {{
         ServerLifecycleEvents.SERVER_STARTED.register(server -> loadDefinitions());
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {{
             if (source.getAttacker() instanceof ServerPlayerEntity player) {{
-                progress(player, "kill", Registries.ENTITY_TYPE.getId(entity.getType()).toString(), 1);
+                progress(
+                    player,
+                    "kill",
+                    Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
+                    1
+                );
             }}
         }});
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {{
             if (player instanceof ServerPlayerEntity serverPlayer) {{
-                progress(serverPlayer, "break", Registries.BLOCK.getId(state.getBlock()).toString(), 1);
+                progress(
+                    serverPlayer,
+                    "break",
+                    Registries.BLOCK.getId(state.getBlock()).toString(),
+                    1
+                );
             }}
         }});
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
@@ -107,15 +123,55 @@ public final class {class_name} {{
             if (!"quest".equals(module.get("kind").getAsString())) return;
             String id = module.get("module_id").getAsString();
             JsonObject config = module.getAsJsonObject("config");
-            DEFINITIONS.put(id, new QuestDefinition(
+            String objective = string(config, "objective", "manual");
+            String target = string(config, "target", id);
+            String rewardItem = string(config, "reward_item", "");
+            int required = integer(config, "required", 1);
+            int rewardCount = integer(config, "reward_count", 1);
+            double rewardCurrency = decimal(config, "reward_currency", 0.0d);
+
+            if ("manual".equals(objective)) {{
+                if (!id.equals(target)) {{
+                    throw new IllegalStateException(
+                        "Manual quest target must equal its quest ID: " + id
+                    );
+                }}
+            }} else if ("kill".equals(objective)) {{
+                Identifier entity = new Identifier(target);
+                if (!Registries.ENTITY_TYPE.containsId(entity)) {{
+                    throw new IllegalStateException("Unknown quest entity target: " + entity);
+                }}
+            }} else if ("break".equals(objective)) {{
+                Identifier block = new Identifier(target);
+                if (!Registries.BLOCK.containsId(block)) {{
+                    throw new IllegalStateException("Unknown quest block target: " + block);
+                }}
+            }} else {{
+                throw new IllegalStateException("Unknown built-in quest objective: " + objective);
+            }}
+
+            if (!rewardItem.isBlank()) {{
+                Identifier reward = new Identifier(rewardItem);
+                if (!Registries.ITEM.containsId(reward)) {{
+                    throw new IllegalStateException("Unknown quest reward item: " + reward);
+                }}
+            }}
+            if (!Double.isFinite(rewardCurrency) || rewardCurrency < 0.0d) {{
+                throw new IllegalStateException("Invalid quest currency reward: " + id);
+            }}
+
+            QuestDefinition definition = new QuestDefinition(
                 id,
-                string(config, "objective", "manual"),
-                string(config, "target", id),
-                integer(config, "required", 1),
-                string(config, "reward_item", ""),
-                integer(config, "reward_count", 1),
-                decimal(config, "reward_currency", 0.0d)
-            ));
+                objective,
+                target,
+                required,
+                rewardItem,
+                rewardCount,
+                rewardCurrency
+            );
+            if (DEFINITIONS.putIfAbsent(id, definition) != null) {{
+                throw new IllegalStateException("Duplicate quest definition: " + id);
+            }}
         }});
     }}
 
@@ -125,6 +181,7 @@ public final class {class_name} {{
         String target,
         int amount
     ) {{
+        if (amount < 1) return 0;
         int changed = 0;
         Map<String, Object> data = MmmPersistentStore.namespace("quests");
         for (QuestDefinition definition : DEFINITIONS.values()) {{
@@ -157,10 +214,12 @@ public final class {class_name} {{
         data.put(key(player.getUuid(), definition.id(), "completed"), true);
         if (!definition.rewardItem().isBlank()) {{
             Identifier id = new Identifier(definition.rewardItem());
-            if (Registries.ITEM.containsId(id)) {{
-                player.giveItemStack(
-                    new ItemStack(Registries.ITEM.get(id), definition.rewardCount())
-                );
+            ItemStack delivery = new ItemStack(
+                Registries.ITEM.get(id),
+                definition.rewardCount()
+            );
+            if (!player.giveItemStack(delivery) && !delivery.isEmpty()) {{
+                player.dropItem(delivery, false);
             }}
         }}
         if (definition.rewardCurrency() != 0.0d) {{
@@ -168,7 +227,11 @@ public final class {class_name} {{
             String economyKey = player.getUuid().toString();
             Object raw = economy.getOrDefault(economyKey, 0.0d);
             double current = raw instanceof Number number ? number.doubleValue() : 0.0d;
-            economy.put(economyKey, current + definition.rewardCurrency());
+            double next = current + definition.rewardCurrency();
+            if (!Double.isFinite(next) || next < 0.0d) {{
+                throw new IllegalStateException("Quest reward overflow: " + definition.id());
+            }}
+            economy.put(economyKey, next);
         }}
         player.sendMessage(Text.literal("Quest completed: " + definition.id()), false);
     }}
