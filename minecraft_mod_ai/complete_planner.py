@@ -291,6 +291,14 @@ def _module(value: Any) -> ProductionModule:
 def _asset(value: Any) -> AssetRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every asset request must be an object.")
+    allowed = {"asset_id", "kind", "prompt", "target_path", "width", "height"}
+    unknown = set(value) - allowed
+    required = {"asset_id", "kind", "prompt", "target_path"}
+    missing = required - set(value)
+    if unknown or missing:
+        raise SpecValidationError(
+            f"Asset request fields are invalid; missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
     return AssetRequest(
         asset_id=str(value["asset_id"]),
         kind=str(value["kind"]),
@@ -304,13 +312,24 @@ def _asset(value: Any) -> AssetRequest:
 def _audio(value: Any) -> AudioRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every audio request must be an object.")
+    allowed = {
+        "sound_id", "kind", "duration_seconds", "frequency_hz", "volume",
+        "loop", "subtitle_en", "subtitle_ko",
+    }
+    unknown = set(value) - allowed
+    required = {"sound_id", "kind", "duration_seconds"}
+    missing = required - set(value)
+    if unknown or missing:
+        raise SpecValidationError(
+            f"Audio request fields are invalid; missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
     return AudioRequest(
         sound_id=str(value["sound_id"]),
         kind=str(value["kind"]),
         duration_seconds=float(value["duration_seconds"]),
         frequency_hz=float(value.get("frequency_hz", 440.0)),
         volume=float(value.get("volume", 0.8)),
-        loop=bool(value.get("loop", False)),
+        loop=_strict_bool(value.get("loop", False), "audio.loop"),
         subtitle_en=str(value.get("subtitle_en", "")),
         subtitle_ko=str(value.get("subtitle_ko", "")),
     )
@@ -332,7 +351,6 @@ def _remove_bootstrap_duplicates(
             f"Complete module {module.module_id} collides with bootstrap {base_kind}."
         )
     if not result:
-        # A bootstrap-only request still needs one executable graph node.
         result.append(
             ProductionModule(
                 module_id="bootstrap_integration",
@@ -342,3 +360,9 @@ def _remove_bootstrap_duplicates(
             )
         )
     return tuple(result)
+
+
+def _strict_bool(value: Any, field_name: str) -> bool:
+    if type(value) is not bool:
+        raise SpecValidationError(f"{field_name} must be a JSON boolean.")
+    return value
