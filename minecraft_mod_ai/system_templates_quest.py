@@ -50,7 +50,10 @@ public final class {class_name} {{
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
             dispatcher.register(CommandManager.literal("mmmquest")
                 .then(CommandManager.literal("list").executes(context -> {{
-                    context.getSource().sendFeedback(() -> Text.literal("Quests: " + String.join(", ", DEFINITIONS.keySet())), false);
+                    context.getSource().sendFeedback(
+                        () -> Text.literal("Quests: " + String.join(", ", DEFINITIONS.keySet())),
+                        false
+                    );
                     return DEFINITIONS.size();
                 }}))
                 .then(CommandManager.literal("accept")
@@ -59,6 +62,8 @@ public final class {class_name} {{
                         String id = StringArgumentType.getString(context, "id");
                         if (!DEFINITIONS.containsKey(id)) return 0;
                         Map<String, Object> data = MmmPersistentStore.namespace("quests");
+                        if (Boolean.TRUE.equals(data.get(key(player.getUuid(), id, "active")))
+                            || Boolean.TRUE.equals(data.get(key(player.getUuid(), id, "completed")))) return 0;
                         data.put(key(player.getUuid(), id, "active"), true);
                         data.put(key(player.getUuid(), id, "progress"), 0.0d);
                         MmmPersistentStore.save(player.getServer());
@@ -70,16 +75,25 @@ public final class {class_name} {{
                         String id = StringArgumentType.getString(context, "id");
                         QuestDefinition definition = DEFINITIONS.get(id);
                         if (definition == null) return 0;
-                        Object raw = MmmPersistentStore.namespace("quests").getOrDefault(key(player.getUuid(), id, "progress"), 0.0d);
+                        Object raw = MmmPersistentStore.namespace("quests")
+                            .getOrDefault(key(player.getUuid(), id, "progress"), 0.0d);
                         int value = raw instanceof Number number ? number.intValue() : 0;
-                        context.getSource().sendFeedback(() -> Text.literal(id + ": " + value + "/" + definition.required()), false);
+                        context.getSource().sendFeedback(
+                            () -> Text.literal(id + ": " + value + "/" + definition.required()),
+                            false
+                        );
                         return value;
                     }})))
                 .then(CommandManager.literal("progress")
                     .requires(source -> source.hasPermissionLevel(2))
                     .then(CommandManager.argument("id", StringArgumentType.word())
                         .then(CommandManager.argument("amount", IntegerArgumentType.integer(1)).executes(context ->
-                            progress(context.getSource().getPlayerOrThrow(), "manual", StringArgumentType.getString(context, "id"), IntegerArgumentType.getInteger(context, "amount"))
+                            progress(
+                                context.getSource().getPlayerOrThrow(),
+                                "manual",
+                                StringArgumentType.getString(context, "id"),
+                                IntegerArgumentType.getInteger(context, "amount")
+                            )
                         ))))
             )
         );
@@ -105,12 +119,21 @@ public final class {class_name} {{
         }});
     }}
 
-    public static int progress(ServerPlayerEntity player, String objective, String target, int amount) {{
+    public static int progress(
+        ServerPlayerEntity player,
+        String objective,
+        String target,
+        int amount
+    ) {{
         int changed = 0;
         Map<String, Object> data = MmmPersistentStore.namespace("quests");
         for (QuestDefinition definition : DEFINITIONS.values()) {{
-            if (!objective.equals("manual") && !definition.objective().equals(objective)) continue;
-            if (!objective.equals("manual") && !definition.target().equals(target)) continue;
+            if (!definition.objective().equals(objective)) continue;
+            if ("manual".equals(objective)) {{
+                if (!definition.id().equals(target)) continue;
+            }} else if (!definition.target().equals(target)) {{
+                continue;
+            }}
             String activeKey = key(player.getUuid(), definition.id(), "active");
             if (!Boolean.TRUE.equals(data.get(activeKey))) continue;
             String progressKey = key(player.getUuid(), definition.id(), "progress");
@@ -125,26 +148,45 @@ public final class {class_name} {{
         return changed;
     }}
 
-    private static void complete(ServerPlayerEntity player, QuestDefinition definition, Map<String, Object> data) {{
+    private static void complete(
+        ServerPlayerEntity player,
+        QuestDefinition definition,
+        Map<String, Object> data
+    ) {{
         data.put(key(player.getUuid(), definition.id(), "active"), false);
         data.put(key(player.getUuid(), definition.id(), "completed"), true);
         if (!definition.rewardItem().isBlank()) {{
             Identifier id = new Identifier(definition.rewardItem());
-            if (Registries.ITEM.containsId(id)) player.giveItemStack(new ItemStack(Registries.ITEM.get(id), definition.rewardCount()));
+            if (Registries.ITEM.containsId(id)) {{
+                player.giveItemStack(
+                    new ItemStack(Registries.ITEM.get(id), definition.rewardCount())
+                );
+            }}
         }}
         if (definition.rewardCurrency() != 0.0d) {{
             Map<String, Object> economy = MmmPersistentStore.namespace("economy");
-            String key = player.getUuid().toString();
-            Object raw = economy.getOrDefault(key, 0.0d);
+            String economyKey = player.getUuid().toString();
+            Object raw = economy.getOrDefault(economyKey, 0.0d);
             double current = raw instanceof Number number ? number.doubleValue() : 0.0d;
-            economy.put(key, current + definition.rewardCurrency());
+            economy.put(economyKey, current + definition.rewardCurrency());
         }}
         player.sendMessage(Text.literal("Quest completed: " + definition.id()), false);
     }}
 
-    private static String key(UUID player, String quest, String field) {{ return player + "|" + quest + "|" + field; }}
-    private static String string(JsonObject value, String key, String fallback) {{ return value.has(key) ? value.get(key).getAsString() : fallback; }}
-    private static int integer(JsonObject value, String key, int fallback) {{ return value.has(key) ? Math.max(1, value.get(key).getAsInt()) : fallback; }}
-    private static double decimal(JsonObject value, String key, double fallback) {{ return value.has(key) ? value.get(key).getAsDouble() : fallback; }}
+    private static String key(UUID player, String quest, String field) {{
+        return player + "|" + quest + "|" + field;
+    }}
+
+    private static String string(JsonObject value, String key, String fallback) {{
+        return value.has(key) ? value.get(key).getAsString() : fallback;
+    }}
+
+    private static int integer(JsonObject value, String key, int fallback) {{
+        return value.has(key) ? Math.max(1, value.get(key).getAsInt()) : fallback;
+    }}
+
+    private static double decimal(JsonObject value, String key, double fallback) {{
+        return value.has(key) ? value.get(key).getAsDouble() : fallback;
+    }}
 }}
 '''
