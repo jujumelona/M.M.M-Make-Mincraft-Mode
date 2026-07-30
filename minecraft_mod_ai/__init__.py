@@ -37,6 +37,7 @@ from .project_index import ProjectIndex
 from .rag_index import ProjectRAGIndex
 from .routed_planner import RoutedPlanner
 from .scale_policy import ScalePolicy, ScalePolicyError
+from .scalable_generator import ScalableFabricProjectGenerator
 from .scalable_world_compiler import compile_scalable_world_ir
 from .spec import (
     ArenaSpec,
@@ -87,6 +88,7 @@ __all__ = [
     "RoutedPlanner",
     "ScalePolicy",
     "ScalePolicyError",
+    "ScalableFabricProjectGenerator",
     "TrainingTraceStore",
     "compile_scalable_world_ir",
     "compile_world_ir",
