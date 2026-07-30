@@ -29,13 +29,25 @@ def inspect_fabric_project(project_root: str | Path) -> FabricProjectInfo:
     root = Path(project_root).expanduser().resolve()
     metadata = root / "src/main/resources/fabric.mod.json"
     if not metadata.is_file() or metadata.is_symlink():
-        raise ProjectEditError("fabric.mod.json is missing from the generated project.")
+        raise ProjectEditError(
+            "fabric.mod.json is missing from the generated project."
+        )
     raw = json.loads(metadata.read_text(encoding="utf-8"))
     mod_id = raw.get("id")
     entrypoints = raw.get("entrypoints", {})
-    main_raw = entrypoints.get("main", []) if isinstance(entrypoints, dict) else []
-    if not isinstance(mod_id, str) or not isinstance(main_raw, list) or not main_raw:
-        raise ProjectEditError("Expected at least one Fabric main entrypoint.")
+    main_raw = (
+        entrypoints.get("main", [])
+        if isinstance(entrypoints, dict)
+        else []
+    )
+    if (
+        not isinstance(mod_id, str)
+        or not isinstance(main_raw, list)
+        or not main_raw
+    ):
+        raise ProjectEditError(
+            "Expected at least one Fabric main entrypoint."
+        )
 
     main_values: list[str] = []
     for entry in main_raw:
@@ -44,16 +56,25 @@ def inspect_fabric_project(project_root: str | Path) -> FabricProjectInfo:
         elif isinstance(entry, dict) and isinstance(entry.get("value"), str):
             value = str(entry["value"])
         else:
-            raise ProjectEditError("Fabric main entrypoint is invalid.")
+            raise ProjectEditError(
+                "Fabric main entrypoint is invalid."
+            )
         if "." not in value:
-            raise ProjectEditError("Fabric main entrypoint is invalid.")
+            raise ProjectEditError(
+                "Fabric main entrypoint is invalid."
+            )
         main_values.append(value)
 
     selected = main_values[0]
     selected_java: Path | None = None
     for candidate in main_values:
         package, class_name = candidate.rsplit(".", 1)
-        java = root / "src/main/java" / Path(*package.split(".")) / f"{class_name}.java"
+        java = (
+            root
+            / "src/main/java"
+            / Path(*package.split("."))
+            / f"{class_name}.java"
+        )
         if java.is_file() and not java.is_symlink():
             selected = candidate
             selected_java = java
@@ -88,22 +109,36 @@ def ensure_main_initializer_call(
     call_line = call_line.rstrip(";") + ";"
     if info.main_java.is_file() and not info.main_java.is_symlink():
         text = info.main_java.read_text(encoding="utf-8")
-        changed = _insert_import(text, import_line)
-        changed, inserted = _insert_initializer_call(changed, call_line, marker)
+        with_call, inserted = _insert_initializer_call(
+            text,
+            call_line,
+            marker,
+        )
         if inserted:
-            if changed == text:
-                return {"status": "UNCHANGED", "path": str(info.main_java)}
-            relative = info.main_java.relative_to(info.root).as_posix()
-            return TransactionalSourcePatcher(info.root).apply(
-                [
-                    {
-                        "operation": "replace",
-                        "path": relative,
-                        "expected_sha256": sha256_file(info.main_java),
-                        "content": changed,
+            try:
+                changed = _insert_import(with_call, import_line)
+            except ProjectEditError:
+                # A source file without a parseable package/import section is not
+                # modified. The isolated generated ModInitializer below remains safe.
+                changed = text
+                inserted = False
+            if inserted:
+                if changed == text:
+                    return {
+                        "status": "UNCHANGED",
+                        "path": str(info.main_java),
                     }
-                ]
-            )
+                relative = info.main_java.relative_to(info.root).as_posix()
+                return TransactionalSourcePatcher(info.root).apply(
+                    [
+                        {
+                            "operation": "replace",
+                            "path": relative,
+                            "expected_sha256": sha256_file(info.main_java),
+                            "content": changed,
+                        }
+                    ]
+                )
     return _ensure_generated_initializer(
         info,
         import_line=import_line,
@@ -115,7 +150,9 @@ def ensure_main_initializer_call(
 def _insert_import(text: str, import_line: str) -> str:
     if import_line in text:
         return text
-    imports = list(re.finditer(r"(?m)^import\s+[^;]+;\s*$", text))
+    imports = list(
+        re.finditer(r"(?m)^import\s+[^;]+;\s*$", text)
+    )
     if imports:
         position = imports[-1].end()
         return text[:position] + "\n" + import_line + text[position:]
@@ -123,7 +160,9 @@ def _insert_import(text: str, import_line: str) -> str:
     if package:
         position = package.end()
         return text[:position] + "\n\n" + import_line + text[position:]
-    raise ProjectEditError("Could not locate Java package/import insertion point.")
+    raise ProjectEditError(
+        "Could not locate Java package/import insertion point."
+    )
 
 
 def _insert_initializer_call(
@@ -192,6 +231,7 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
             + "\n        // MMM:GENERATED_CALLS",
             1,
         )
+
     operations: list[dict[str, Any]] = []
     if path.is_file():
         current = path.read_text(encoding="utf-8")
@@ -206,16 +246,26 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
             )
     else:
         operations.append(
-            {"operation": "create", "path": relative, "content": source}
+            {
+                "operation": "create",
+                "path": relative,
+                "content": source,
+            }
         )
 
-    metadata = json.loads(info.fabric_mod_json.read_text(encoding="utf-8"))
+    metadata = json.loads(
+        info.fabric_mod_json.read_text(encoding="utf-8")
+    )
     entrypoints = metadata.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
-        raise ProjectEditError("fabric.mod.json entrypoints must be an object.")
+        raise ProjectEditError(
+            "fabric.mod.json entrypoints must be an object."
+        )
     main = entrypoints.setdefault("main", [])
     if not isinstance(main, list):
-        raise ProjectEditError("fabric.mod.json main entrypoints must be a list.")
+        raise ProjectEditError(
+            "fabric.mod.json main entrypoints must be a list."
+        )
     existing_values = {
         item if isinstance(item, str) else item.get("value")
         for item in main
@@ -227,12 +277,22 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
             {
                 "operation": "replace",
                 "path": "src/main/resources/fabric.mod.json",
-                "expected_sha256": sha256_file(info.fabric_mod_json),
-                "content": json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+                "expected_sha256": sha256_file(
+                    info.fabric_mod_json
+                ),
+                "content": json.dumps(
+                    metadata,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
             }
         )
     if not operations:
-        return {"status": "UNCHANGED", "path": str(path)}
+        return {
+            "status": "UNCHANGED",
+            "path": str(path),
+        }
     return TransactionalSourcePatcher(info.root).apply(operations)
 
 
@@ -241,28 +301,44 @@ def ensure_client_entrypoint(
     *,
     entrypoint: str,
 ) -> dict[str, Any]:
-    raw = json.loads(info.fabric_mod_json.read_text(encoding="utf-8"))
+    raw = json.loads(
+        info.fabric_mod_json.read_text(encoding="utf-8")
+    )
     entrypoints = raw.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
-        raise ProjectEditError("fabric.mod.json entrypoints must be an object.")
+        raise ProjectEditError(
+            "fabric.mod.json entrypoints must be an object."
+        )
     client = entrypoints.setdefault("client", [])
     if not isinstance(client, list):
-        raise ProjectEditError("fabric.mod.json client entrypoints must be a list.")
+        raise ProjectEditError(
+            "fabric.mod.json client entrypoints must be a list."
+        )
     existing = {
         item if isinstance(item, str) else item.get("value")
         for item in client
         if isinstance(item, (str, dict))
     }
     if entrypoint in existing:
-        return {"status": "UNCHANGED", "path": str(info.fabric_mod_json)}
+        return {
+            "status": "UNCHANGED",
+            "path": str(info.fabric_mod_json),
+        }
     client.append(entrypoint)
     return TransactionalSourcePatcher(info.root).apply(
         [
             {
                 "operation": "replace",
                 "path": "src/main/resources/fabric.mod.json",
-                "expected_sha256": sha256_file(info.fabric_mod_json),
-                "content": json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                "expected_sha256": sha256_file(
+                    info.fabric_mod_json
+                ),
+                "content": json.dumps(
+                    raw,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
             }
         ]
     )
@@ -305,7 +381,9 @@ def ensure_dependency(
     if dependency_marker not in changed:
         match = re.search(r"dependencies\s*\{", changed)
         if not match:
-            raise ProjectEditError("Could not locate dependencies block.")
+            raise ProjectEditError(
+                "Could not locate dependencies block."
+            )
         position = match.end()
         changed = (
             changed[:position]
@@ -316,7 +394,10 @@ def ensure_dependency(
             + changed[position:]
         )
     if changed == text:
-        return {"status": "UNCHANGED", "path": str(build)}
+        return {
+            "status": "UNCHANGED",
+            "path": str(build),
+        }
     return TransactionalSourcePatcher(info.root).apply(
         [
             {
@@ -343,10 +424,10 @@ def write_text_files(
                 raise ProjectEditError(
                     f"Generated target is not a regular file: {relative}"
                 )
+            current = path.read_text(encoding="utf-8")
+            if current == content:
+                continue
             if not replace_existing:
-                current = path.read_text(encoding="utf-8")
-                if current == content:
-                    continue
                 raise ProjectEditError(
                     f"Generated target already exists: {relative}"
                 )
@@ -360,7 +441,11 @@ def write_text_files(
             )
         else:
             operations.append(
-                {"operation": "create", "path": relative, "content": content}
+                {
+                    "operation": "create",
+                    "path": relative,
+                    "content": content,
+                }
             )
     if not operations:
         return {
@@ -374,5 +459,6 @@ def write_text_files(
 def _indent(text: str, spaces: int) -> str:
     prefix = " " * spaces
     return "\n".join(
-        prefix + line if line else line for line in text.splitlines()
+        prefix + line if line else line
+        for line in text.splitlines()
     )
