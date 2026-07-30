@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-from .spec import Proposal, ProposalStatus, SpecValidationError, canonical_json
+from .scale_policy import ScalePolicy
+from .spec import Proposal, SpecValidationError, canonical_json
 
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -66,20 +68,29 @@ class ProductionModule:
     depends_on: tuple[str, ...] = ()
     required_gates: tuple[str, ...] = ()
 
-    def validate(self) -> None:
+    def validate(self, *, policy: ScalePolicy | None = None) -> None:
+        policy = policy or ScalePolicy.from_environment()
         if not _ID.fullmatch(self.module_id):
             raise SpecValidationError(f"Invalid production module id: {self.module_id!r}")
         if self.kind not in MODULE_KINDS:
             raise SpecValidationError(f"Unsupported production module kind: {self.kind!r}")
         if not isinstance(self.config, dict):
             raise SpecValidationError(f"Module config must be an object: {self.module_id}")
-        if len(json.dumps(self.config, ensure_ascii=False)) > 128_000:
-            raise SpecValidationError(f"Module config is too large: {self.module_id}")
+        try:
+            encoded = json.dumps(self.config, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise SpecValidationError(f"Module config is not finite JSON: {self.module_id}") from exc
+        if len(encoded) > policy.max_single_file_bytes:
+            raise SpecValidationError(
+                f"Module config exceeds the configured per-file resource policy: {self.module_id}"
+            )
         for dependency in self.depends_on:
             if not _ID.fullmatch(dependency):
                 raise SpecValidationError(
                     f"Invalid dependency {dependency!r} in module {self.module_id}"
                 )
+        if len(set(self.depends_on)) != len(self.depends_on):
+            raise SpecValidationError(f"Duplicate dependency in module {self.module_id}")
         for gate in self.required_gates:
             if not isinstance(gate, str) or not gate.strip():
                 raise SpecValidationError(f"Invalid gate in module {self.module_id}")
@@ -94,24 +105,23 @@ class AssetRequest:
     width: int = 16
     height: int = 16
 
-    def validate(self) -> None:
+    def validate(self, *, policy: ScalePolicy | None = None) -> None:
+        policy = policy or ScalePolicy.from_environment()
         if not _ID.fullmatch(self.asset_id):
             raise SpecValidationError(f"Invalid asset id: {self.asset_id!r}")
         if self.kind not in {"item", "block", "entity", "gui", "environment", "icon"}:
             raise SpecValidationError(f"Unsupported asset kind: {self.kind!r}")
         if not self.prompt.strip():
             raise SpecValidationError(f"Asset prompt is empty: {self.asset_id}")
-        if not self.target_path or self.target_path.startswith(('/', '\\')) or '..' in self.target_path.replace('\\', '/').split('/'):
+        normalized = self.target_path.replace("\\", "/")
+        if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
             raise SpecValidationError(f"Unsafe asset target path: {self.target_path!r}")
-        if self.width not in {16, 32, 64, 128, 256, 512} or self.height not in {
-            16,
-            32,
-            64,
-            128,
-            256,
-            512,
-        }:
-            raise SpecValidationError(f"Unsupported asset dimensions: {self.width}x{self.height}")
+        if type(self.width) is not int or type(self.height) is not int:
+            raise SpecValidationError(f"Asset dimensions must be integers: {self.asset_id}")
+        if not (1 <= self.width <= policy.max_texture_dimension):
+            raise SpecValidationError(f"Asset width exceeds configured resource policy: {self.asset_id}")
+        if not (1 <= self.height <= policy.max_texture_dimension):
+            raise SpecValidationError(f"Asset height exceeds configured resource policy: {self.asset_id}")
 
 
 @dataclass(frozen=True)
@@ -125,17 +135,25 @@ class AudioRequest:
     subtitle_en: str = ""
     subtitle_ko: str = ""
 
-    def validate(self) -> None:
+    def validate(self, *, policy: ScalePolicy | None = None) -> None:
+        policy = policy or ScalePolicy.from_environment()
         if not _ID.fullmatch(self.sound_id):
             raise SpecValidationError(f"Invalid sound id: {self.sound_id!r}")
         if self.kind not in {"effect", "ambient", "music", "ui"}:
             raise SpecValidationError(f"Unsupported audio kind: {self.kind!r}")
-        if not 0.05 <= float(self.duration_seconds) <= 180.0:
-            raise SpecValidationError(f"Invalid audio duration: {self.sound_id}")
-        if not 20.0 <= float(self.frequency_hz) <= 20_000.0:
+        values = (self.duration_seconds, self.frequency_hz, self.volume)
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+            raise SpecValidationError(f"Audio numeric fields are invalid: {self.sound_id}")
+        if any(not math.isfinite(float(value)) for value in values):
+            raise SpecValidationError(f"Audio numeric fields must be finite: {self.sound_id}")
+        if not 0.001 <= float(self.duration_seconds) <= policy.max_audio_seconds:
+            raise SpecValidationError(f"Audio duration exceeds configured resource policy: {self.sound_id}")
+        if not 1.0 <= float(self.frequency_hz) <= 96_000.0:
             raise SpecValidationError(f"Invalid audio frequency: {self.sound_id}")
-        if not 0.0 < float(self.volume) <= 1.0:
+        if not 0.0 < float(self.volume) <= 4.0:
             raise SpecValidationError(f"Invalid audio volume: {self.sound_id}")
+        if type(self.loop) is not bool:
+            raise SpecValidationError(f"Audio loop must be boolean: {self.sound_id}")
 
 
 @dataclass(frozen=True)
@@ -155,7 +173,9 @@ class CompleteProposal:
     existing_input_sha256: str = ""
     approval_hash: str = ""
 
-    def validate(self) -> None:
+    def validate(self, *, policy: ScalePolicy | None = None) -> None:
+        policy = policy or ScalePolicy.from_environment()
+        policy.validate()
         if self.schema_version != "mmm/complete-proposal-v1":
             raise SpecValidationError(f"Unsupported complete proposal schema: {self.schema_version}")
         if type(self.proposal_version) is not int or self.proposal_version < 1:
@@ -165,11 +185,12 @@ class CompleteProposal:
         self.base_proposal.validate()
         if not isinstance(self.game_design, dict) or not self.game_design:
             raise SpecValidationError("game_design must be a non-empty object.")
-        if not 1 <= len(self.modules) <= 128:
-            raise SpecValidationError("A complete proposal must contain 1-128 production modules.")
+        if not self.modules:
+            raise SpecValidationError("A complete proposal must contain at least one production module.")
+
         ids: set[str] = set()
         for module in self.modules:
-            module.validate()
+            module.validate(policy=policy)
             if module.module_id in ids:
                 raise SpecValidationError(f"Duplicate production module: {module.module_id}")
             ids.add(module.module_id)
@@ -180,12 +201,15 @@ class CompleteProposal:
                     f"Module {module.module_id} references missing dependencies: {sorted(missing)}"
                 )
         self._validate_acyclic()
+
         for asset in self.assets:
-            asset.validate()
+            asset.validate(policy=policy)
         if len({asset.asset_id for asset in self.assets}) != len(self.assets):
             raise SpecValidationError("Asset IDs must be unique.")
+        if len({asset.target_path.replace('\\', '/') for asset in self.assets}) != len(self.assets):
+            raise SpecValidationError("Asset target paths must be unique.")
         for audio in self.audio:
-            audio.validate()
+            audio.validate(policy=policy)
         if len({audio.sound_id for audio in self.audio}) != len(self.audio):
             raise SpecValidationError("Audio IDs must be unique.")
         if self.world_ir is not None:
@@ -193,8 +217,10 @@ class CompleteProposal:
                 raise SpecValidationError("world_ir must be an object or null.")
             if self.world_ir.get("schema_version") != "mmm/world-ir-v1":
                 raise SpecValidationError("world_ir must use mmm/world-ir-v1.")
-        if not self.acceptance_tests:
-            raise SpecValidationError("At least one complete-production acceptance test is required.")
+        if not self.acceptance_tests or any(not value.strip() for value in self.acceptance_tests):
+            raise SpecValidationError("At least one non-empty complete-production acceptance test is required.")
+        if type(self.external_runtime_required) is not bool:
+            raise SpecValidationError("external_runtime_required must be boolean.")
         if self.existing_input_sha256 and not _SHA.fullmatch(self.existing_input_sha256):
             raise SpecValidationError("existing_input_sha256 must be empty or a lowercase SHA-256 digest.")
         if self.approval_hash:
@@ -204,23 +230,25 @@ class CompleteProposal:
                 raise SpecValidationError("Complete proposal approval_hash does not match its payload.")
 
     def _validate_acyclic(self) -> None:
-        graph = {module.module_id: tuple(module.depends_on) for module in self.modules}
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(node: str) -> None:
-            if node in visited:
-                return
-            if node in visiting:
-                raise SpecValidationError(f"Production module dependency cycle detected at {node}")
-            visiting.add(node)
-            for dependency in graph[node]:
-                visit(dependency)
-            visiting.remove(node)
-            visited.add(node)
-
-        for node in graph:
-            visit(node)
+        # Kahn's algorithm avoids recursion-depth failures for very large projects.
+        outgoing: dict[str, list[str]] = {module.module_id: [] for module in self.modules}
+        indegree = {module.module_id: len(module.depends_on) for module in self.modules}
+        for module in self.modules:
+            for dependency in module.depends_on:
+                outgoing[dependency].append(module.module_id)
+        ready = sorted(node for node, degree in indegree.items() if degree == 0)
+        emitted = 0
+        while ready:
+            node = ready.pop(0)
+            emitted += 1
+            for dependent in sorted(outgoing[node]):
+                indegree[dependent] -= 1
+                if indegree[dependent] == 0:
+                    ready.append(dependent)
+            ready.sort()
+        if emitted != len(self.modules):
+            cyclic = sorted(node for node, degree in indegree.items() if degree > 0)
+            raise SpecValidationError(f"Production module dependency cycle detected: {cyclic[:20]}")
 
     def calculate_hash(self) -> str:
         payload = self.to_dict()
@@ -229,7 +257,13 @@ class CompleteProposal:
         return "sha256:" + hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
     def with_hash(self) -> "CompleteProposal":
-        draft = CompleteProposal(**{**self.__dict__, "status": CompleteProposalStatus.AWAITING_APPROVAL, "approval_hash": ""})
+        draft = CompleteProposal(
+            **{
+                **self.__dict__,
+                "status": CompleteProposalStatus.AWAITING_APPROVAL,
+                "approval_hash": "",
+            }
+        )
         return CompleteProposal(**{**draft.__dict__, "approval_hash": draft.calculate_hash()})
 
     def approve(self, supplied_hash: str) -> "CompleteProposal":
@@ -281,8 +315,8 @@ class CompleteProposal:
                     module_id=str(item["module_id"]),
                     kind=str(item["kind"]),
                     config=dict(item.get("config", {})),
-                    depends_on=tuple(item.get("depends_on", ())),
-                    required_gates=tuple(item.get("required_gates", ())),
+                    depends_on=tuple(str(value) for value in item.get("depends_on", ())),
+                    required_gates=tuple(str(value) for value in item.get("required_gates", ())),
                 )
                 for item in data["modules"]
             ),
