@@ -50,7 +50,8 @@ def generate_assets(
         target.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(concept) as image:
             image.convert("RGBA").resize(
-                (request.width, request.height), Image.Resampling.NEAREST
+                (request.width, request.height),
+                Image.Resampling.NEAREST,
             ).save(target)
         generated.append(
             {
@@ -94,6 +95,14 @@ def blockbench_review(
         client.call("close_project", {})
     finally:
         client.close()
+    if not isinstance(uv, dict) or uv.get("status") not in {"PASS", "OK"}:
+        raise CompleteProductionError(
+            "Blockbench UV validation did not return a passing receipt."
+        )
+    if not preview.is_file() or preview.is_symlink():
+        raise CompleteProductionError(
+            "Blockbench did not produce a regular preview image."
+        )
     return {
         "entity": gecko_receipt["entity_id"],
         "uv": uv,
@@ -103,9 +112,51 @@ def blockbench_review(
 
 
 def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    requested = tuple(actions)
+    if not requested:
+        raise CompleteProductionError(
+            "Complete runtime verification requires explicit playtest actions; an empty bot session cannot prove functionality."
+        )
+    allowed = MineflayerBridge.ACTIONS - {"connect", "disconnect"}
+    observational = {"status", "inventory"}
+    normalized: list[tuple[str, dict[str, Any]]] = []
+    has_interaction = False
+    has_assertion = False
+    for action in requested:
+        if not isinstance(action, dict) or set(action) - {"action", "params"}:
+            raise CompleteProductionError(
+                "Every playtest action must contain only action and optional params."
+            )
+        if "action" not in action:
+            raise CompleteProductionError(
+                "Every playtest action must contain action."
+            )
+        name = str(action["action"])
+        if name not in allowed:
+            raise CompleteProductionError(
+                f"Unsupported playtest action: {name}"
+            )
+        params = action.get("params", {})
+        if not isinstance(params, dict):
+            raise CompleteProductionError(
+                "Playtest params must be an object."
+            )
+        if name not in observational and name != "wait_for":
+            has_interaction = True
+        if name == "wait_for":
+            has_assertion = True
+        normalized.append((name, params))
+    if not has_interaction:
+        raise CompleteProductionError(
+            "Complete playtesting must perform at least one gameplay interaction, not only status or inventory reads."
+        )
+    if not has_assertion:
+        raise CompleteProductionError(
+            "Complete playtesting must include wait_for so the requested outcome is machine-checked."
+        )
+
     bridge = MineflayerBridge()
     results: list[dict[str, Any]] = []
-    allowed = MineflayerBridge.ACTIONS - {"connect", "disconnect"}
     try:
         results.append(
             bridge.call(
@@ -115,26 +166,36 @@ def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 username="MMMTestBot",
             )
         )
-        for action in actions:
-            if not isinstance(action, dict) or "action" not in action:
+        for name, params in normalized:
+            result = bridge.call(name, **params)
+            if name == "wait_for" and result.get("matched") is not True:
                 raise CompleteProductionError(
-                    "Every playtest action must contain action."
+                    "Mineflayer wait_for returned without a matched condition."
                 )
-            name = str(action["action"])
-            if name not in allowed:
-                raise CompleteProductionError(
-                    f"Unsupported playtest action: {name}"
-                )
-            params = action.get("params", {})
-            if not isinstance(params, dict):
-                raise CompleteProductionError(
-                    "Playtest params must be an object."
-                )
-            results.append(bridge.call(name, **params))
-        results.append(bridge.call("inventory"))
+            results.append(
+                {
+                    "action": name,
+                    "params": params,
+                    "result": result,
+                }
+            )
+        results.append(
+            {
+                "action": "inventory",
+                "result": bridge.call("inventory"),
+            }
+        )
         return {
-            "schema_version": "mmm/playtest-result-v2",
+            "schema_version": "mmm/playtest-result-v3",
             "status": "PASS",
+            "interaction_count": sum(
+                1
+                for name, _ in normalized
+                if name not in observational and name != "wait_for"
+            ),
+            "assertion_count": sum(
+                1 for name, _ in normalized if name == "wait_for"
+            ),
             "results": results,
         }
     finally:
@@ -147,6 +208,10 @@ def visual_review(
     screenshots: tuple[str, ...],
 ) -> dict[str, Any]:
     paths = [Path(value).expanduser().resolve() for value in screenshots]
+    if not paths:
+        raise CompleteProductionError(
+            "Visual review requires at least one runtime screenshot."
+        )
     if any(not path.is_file() or path.is_symlink() for path in paths):
         raise CompleteProductionError(
             "Every visual-review screenshot must be a regular file."
@@ -157,9 +222,11 @@ def visual_review(
             {
                 "role": "system",
                 "content": (
-                    "Return JSON {status: PASS|FAIL, findings: [...], acceptance_test_results: [...]} "
-                    "for Minecraft runtime screenshots. Reject missing textures, broken models, unreadable GUI, "
-                    "animation clipping and deviations from the approved design."
+                    "Return JSON {status: PASS|FAIL, findings: [...], acceptance_test_results: "
+                    "[{test: string, status: PASS|FAIL, evidence: string}]}. Return exactly one result "
+                    "for every supplied acceptance test. Reject missing textures, broken models, unreadable GUI, "
+                    "animation clipping and deviations from the approved design. Do not mark non-visual behavior "
+                    "as PASS unless the screenshot visibly proves it."
                 ),
             },
             {
@@ -177,14 +244,54 @@ def visual_review(
         response_format="json",
     )
     value = _extract_json(text)
-    if value.get("status") not in {"PASS", "FAIL"} or not isinstance(
-        value.get("findings"), list
-    ):
+    if set(value) != {
+        "status",
+        "findings",
+        "acceptance_test_results",
+    }:
+        raise CompleteProductionError(
+            "VisualCritic returned invalid top-level fields."
+        )
+    findings = value["findings"]
+    test_results = value["acceptance_test_results"]
+    if value["status"] not in {"PASS", "FAIL"} or not isinstance(
+        findings, list
+    ) or not isinstance(test_results, list):
         raise CompleteProductionError(
             "VisualCritic returned an invalid result contract."
         )
+    if len(test_results) != len(proposal.acceptance_tests):
+        raise CompleteProductionError(
+            "VisualCritic did not return one result per acceptance test."
+        )
+    expected = list(proposal.acceptance_tests)
+    for index, result in enumerate(test_results):
+        if not isinstance(result, dict) or set(result) != {
+            "test",
+            "status",
+            "evidence",
+        }:
+            raise CompleteProductionError(
+                "VisualCritic acceptance result fields are invalid."
+            )
+        if str(result["test"]) != expected[index]:
+            raise CompleteProductionError(
+                "VisualCritic acceptance results changed or reordered the approved tests."
+            )
+        if result["status"] not in {"PASS", "FAIL"} or not str(
+            result["evidence"]
+        ).strip():
+            raise CompleteProductionError(
+                "VisualCritic acceptance result lacks a valid status or evidence."
+            )
+    if value["status"] == "PASS" and any(
+        result["status"] != "PASS" for result in test_results
+    ):
+        raise CompleteProductionError(
+            "VisualCritic overall PASS conflicts with a failed acceptance test."
+        )
     return {
-        "schema_version": "mmm/visual-review-v1",
+        "schema_version": "mmm/visual-review-v2",
         **value,
         "screenshots": [str(path) for path in paths],
     }
