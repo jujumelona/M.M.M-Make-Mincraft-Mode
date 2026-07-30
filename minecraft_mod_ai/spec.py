@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -12,6 +13,7 @@ ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+BLOCK_ID_PATTERN = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
 JAVA_RESERVED_WORDS = frozenset(
     {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch",
@@ -37,17 +39,17 @@ RESERVED_PACKAGE_PREFIXES = (
     "com.mojang.",
     "net.fabricmc.",
 )
-SAFE_ARENA_BLOCKS = frozenset(
+BOSS_MODEL_KINDS = frozenset(
     {
-        "minecraft:deepslate_tiles",
-        "minecraft:amethyst_block",
-        "minecraft:packed_ice",
-        "minecraft:blue_ice",
-        "minecraft:stone_bricks",
-        "minecraft:polished_blackstone_bricks",
-        "minecraft:obsidian",
+        "biped_blockbench",
+        "quadruped_blockbench",
+        "flying_blockbench",
+        "serpentine_blockbench",
+        "construct_blockbench",
+        "custom_geckolib",
     }
 )
+ARENA_MAP_MODES = frozenset({"in_mod_function", "partitioned_function", "jigsaw"})
 
 
 class SpecValidationError(ValueError):
@@ -77,6 +79,8 @@ class PlatformLock:
     gradle: str = "8.5"
 
     def validate(self) -> None:
+        # This is a compatibility lock, not a project-size limit. Supporting another
+        # target requires a separate version adapter rather than mixed mappings.
         expected = {
             "edition": "java",
             "loader": "fabric",
@@ -92,8 +96,8 @@ class PlatformLock:
             actual = getattr(self, field_name)
             if actual != expected_value:
                 raise SpecValidationError(
-                    f"Unsupported platform lock: {field_name}={actual!r}; "
-                    f"the MVP is pinned to {expected_value!r}."
+                    f"Unsupported platform adapter: {field_name}={actual!r}; "
+                    f"this adapter targets {expected_value!r}."
                 )
 
 
@@ -142,20 +146,21 @@ class BossSpec:
             "scale": self.scale,
         }
         for field_name, value in numeric_fields.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise SpecValidationError(f"Boss {field_name} must be a JSON number.")
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) <= 0
+            ):
+                raise SpecValidationError(
+                    f"Boss {field_name} must be a positive finite JSON number."
+                )
         if not ID_PATTERN.fullmatch(self.entity_id):
             raise SpecValidationError(f"Invalid boss entity_id: {self.entity_id!r}.")
-        if not 20.0 <= self.max_health <= 2048.0:
-            raise SpecValidationError("Boss max_health must be between 20 and 2048.")
-        if not 1.0 <= self.attack_damage <= 100.0:
-            raise SpecValidationError("Boss attack_damage must be between 1 and 100.")
-        if not 0.05 <= self.movement_speed <= 1.0:
-            raise SpecValidationError("Boss movement_speed must be between 0.05 and 1.0.")
-        if not 0.5 <= self.scale <= 3.0:
-            raise SpecValidationError("Boss scale must be between 0.5 and 3.0.")
-        if self.model_kind != "biped_blockbench":
-            raise SpecValidationError("The MVP supports only the biped_blockbench boss archetype.")
+        if self.model_kind not in BOSS_MODEL_KINDS:
+            raise SpecValidationError(
+                f"Unsupported boss model_kind {self.model_kind!r}; use one of {sorted(BOSS_MODEL_KINDS)}."
+            )
         for color in (self.primary_color, self.secondary_color):
             if not HEX_COLOR_PATTERN.fullmatch(color):
                 raise SpecValidationError(f"Invalid boss color: {color!r}.")
@@ -177,25 +182,16 @@ class ArenaSpec:
             raise SpecValidationError("Arena radius and wall_height must be JSON integers.")
         if not ID_PATTERN.fullmatch(self.arena_id):
             raise SpecValidationError(f"Invalid arena_id: {self.arena_id!r}.")
-        if not 6 <= self.radius <= 32:
-            raise SpecValidationError("Arena radius must be between 6 and 32.")
-        if not 3 <= self.wall_height <= 12:
-            raise SpecValidationError("Arena wall_height must be between 3 and 12.")
-        block_id = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
-        if not block_id.fullmatch(self.floor_block) or not block_id.fullmatch(self.accent_block):
+        if self.radius < 1 or self.wall_height < 1:
+            raise SpecValidationError("Arena radius and wall_height must be positive.")
+        if not BLOCK_ID_PATTERN.fullmatch(self.floor_block) or not BLOCK_ID_PATTERN.fullmatch(
+            self.accent_block
+        ):
             raise SpecValidationError("Arena palette entries must be namespaced block IDs.")
-        if self.floor_block not in SAFE_ARENA_BLOCKS:
+        if self.map_mode not in ARENA_MAP_MODES:
             raise SpecValidationError(
-                "Arena floor block is outside the reviewed solid-block allowlist: "
-                f"{self.floor_block}"
+                f"Unsupported arena map_mode {self.map_mode!r}; use one of {sorted(ARENA_MAP_MODES)}."
             )
-        if self.accent_block not in SAFE_ARENA_BLOCKS:
-            raise SpecValidationError(
-                "Arena accent block is outside the reviewed solid-block allowlist: "
-                f"{self.accent_block}"
-            )
-        if self.map_mode != "in_mod_function":
-            raise SpecValidationError("The MVP supports only the in_mod_function arena mode.")
 
 
 @dataclass(frozen=True)
@@ -220,8 +216,7 @@ class ModSpec:
             raise SpecValidationError(f"Reserved mod_id is not allowed: {self.mod_id}")
         if not PACKAGE_PATTERN.fullmatch(self.package_name):
             raise SpecValidationError(
-                f"Invalid package_name {self.package_name!r}; "
-                "use a lowercase dotted Java package."
+                f"Invalid package_name {self.package_name!r}; use a lowercase dotted Java package."
             )
         if self.package_name.startswith(RESERVED_PACKAGE_PREFIXES):
             raise SpecValidationError(
@@ -230,13 +225,10 @@ class ModSpec:
         reserved_components = set(self.package_name.split(".")) & JAVA_RESERVED_WORDS
         if reserved_components:
             raise SpecValidationError(
-                f"Java reserved package component is not allowed: "
-                f"{sorted(reserved_components)}"
+                f"Java reserved package component is not allowed: {sorted(reserved_components)}"
             )
         if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?", self.version):
             raise SpecValidationError(f"Invalid semantic version {self.version!r}.")
-        if len(self.contents) > 24:
-            raise SpecValidationError("The MVP supports at most 24 content entries per release.")
         seen: set[str] = set()
         for content in self.contents:
             content.validate()
@@ -361,9 +353,8 @@ class Proposal:
             raise SpecValidationError(
                 "capability_manifest_hash must be a lowercase sha256 digest."
             )
-        if (
+        if self.imported_source_snapshot_hash and not SHA256_PATTERN.fullmatch(
             self.imported_source_snapshot_hash
-            and not SHA256_PATTERN.fullmatch(self.imported_source_snapshot_hash)
         ):
             raise SpecValidationError(
                 "imported_source_snapshot_hash must be empty or a lowercase sha256 digest."
@@ -402,8 +393,7 @@ class Proposal:
             acceptance_tests=self.acceptance_tests,
             evidence_sources=self.evidence_sources,
             evidence_snapshot_hash=(
-                self.evidence_snapshot_hash
-                or evidence_snapshot_hash(self.evidence_sources)
+                self.evidence_snapshot_hash or evidence_snapshot_hash(self.evidence_sources)
             ),
             capability_manifest_hash=(
                 self.capability_manifest_hash or capability_manifest_hash()
@@ -427,7 +417,11 @@ class Proposal:
         data = asdict(self)
         data["status"] = self.status.value
         for content in data["spec"]["contents"]:
-            content["kind"] = content["kind"].value if isinstance(content["kind"], Enum) else content["kind"]
+            content["kind"] = (
+                content["kind"].value
+                if isinstance(content["kind"], Enum)
+                else content["kind"]
+            )
         return data
 
     @classmethod
@@ -463,7 +457,9 @@ class Proposal:
             platform=platform,
             **spec_data,
         )
-        evidence_sources = tuple(EvidenceSource(**item) for item in data["evidence_sources"])
+        evidence_sources = tuple(
+            EvidenceSource(**item) for item in data["evidence_sources"]
+        )
         from .capabilities import capability_manifest_hash
         from .knowledge import evidence_snapshot_hash
 
@@ -475,20 +471,19 @@ class Proposal:
             spec=spec,
             assumptions=tuple(data["assumptions"]),
             exclusions=tuple(data["exclusions"]),
-            deferred_requests=tuple(DeferredRequest(**item) for item in data["deferred_requests"]),
+            deferred_requests=tuple(
+                DeferredRequest(**item) for item in data["deferred_requests"]
+            ),
             acceptance_tests=tuple(data["acceptance_tests"]),
             evidence_sources=evidence_sources,
             evidence_snapshot_hash=data.get(
-                "evidence_snapshot_hash",
-                evidence_snapshot_hash(evidence_sources),
+                "evidence_snapshot_hash", evidence_snapshot_hash(evidence_sources)
             ),
             capability_manifest_hash=data.get(
-                "capability_manifest_hash",
-                capability_manifest_hash(),
+                "capability_manifest_hash", capability_manifest_hash()
             ),
             imported_source_snapshot_hash=data.get(
-                "imported_source_snapshot_hash",
-                "",
+                "imported_source_snapshot_hash", ""
             ),
             risk_approvals=tuple(data["risk_approvals"]),
             approval_hash=data["approval_hash"],
@@ -498,7 +493,9 @@ class Proposal:
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _json_bool(value: Any, field_name: str) -> bool:
