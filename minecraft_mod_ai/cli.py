@@ -6,14 +6,17 @@ import json
 import sys
 from pathlib import Path
 
-from .complete_orchestrator import CompleteExecutionOptions, CompleteProductionOrchestrator
+from .complete_orchestrator import (
+    CompleteExecutionOptions,
+    CompleteProductionOrchestrator,
+)
 from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import CompleteProposal
 from .importer import inspect_existing_project_archive
 from .model_router import ModelRouter
-from .pipeline import MinecraftModPipeline
 from .planner import HeuristicPlanner
 from .routed_planner import RoutedPlanner
+from .scalable_pipeline import ScalableMinecraftModPipeline
 from .spec import Proposal
 
 
@@ -24,18 +27,27 @@ def _json_dump(value: object) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mmm",
-        description="승인된 전체 Minecraft Fabric 1.20.1 제작 그래프를 생성·수리·실행·검증합니다.",
+        description=(
+            "승인된 전체 Minecraft Fabric 1.20.1 제작 그래프를 "
+            "생성·수리·실행·검증합니다."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    plan = subparsers.add_parser("plan", help="전체 모드·월드·GUI·시스템·자산 계획을 생성합니다.")
+    plan = subparsers.add_parser(
+        "plan",
+        help="전체 모드·월드·GUI·시스템·자산 계획을 생성합니다.",
+    )
     plan.add_argument("prompt")
     plan.add_argument("--profile", default="t4_local")
     plan.add_argument("--media", type=Path, action="append", default=[])
     plan.add_argument("--existing-zip", type=Path)
     plan.add_argument("--save", type=Path)
 
-    execute = subparsers.add_parser("execute", help="전체 제안서를 승인 해시로 끝까지 실행합니다.")
+    execute = subparsers.add_parser(
+        "execute",
+        help="전체 제안서를 승인 해시로 끝까지 실행합니다.",
+    )
     execute.add_argument("proposal", type=Path)
     execute.add_argument("--approve", required=True)
     execute.add_argument("--output", type=Path, default=Path("mmm-output"))
@@ -46,14 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--skip-jdt", action="store_true")
     execute.add_argument("--skip-gametest", action="store_true")
     execute.add_argument("--no-repair", action="store_true")
-    execute.add_argument(
-        "--repair-attempts",
-        type=int,
-        default=None,
-        help="미지정 시 MMM_REPAIR_ATTEMPTS 정책값을 사용합니다.",
-    )
-    execute.add_argument("--gradle-heap-mb", type=int)
-    execute.add_argument("--server-memory-mb", type=int)
+    execute.add_argument("--repair-attempts", type=int)
     execute.add_argument("--skip-blockbench", action="store_true")
     execute.add_argument("--skip-runtime", action="store_true")
     execute.add_argument("--skip-client", action="store_true")
@@ -63,24 +68,44 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--accept-eula", action="store_true")
     execute.add_argument("--screenshot", action="append", default=[])
     execute.add_argument("--playtest-actions", type=Path)
-    execute.add_argument("--publish-provider", choices=("modrinth", "curseforge"))
+    execute.add_argument(
+        "--publish-provider",
+        choices=("modrinth", "curseforge"),
+    )
     execute.add_argument("--publish-project-id")
-    execute.add_argument("--changelog", default="Generated and verified by M.M.M")
+    execute.add_argument(
+        "--changelog",
+        default="Generated and verified by M.M.M",
+    )
 
-    legacy_plan = subparsers.add_parser("plan-slice", help="호환용 아이템·블록 슬라이스를 계획합니다.")
-    legacy_plan.add_argument("prompt")
-    legacy_plan.add_argument("--backend", choices=("local", "heuristic-dev"), default="local")
-    legacy_plan.add_argument("--profile", default="t4_local")
-    legacy_plan.add_argument("--existing-zip", type=Path)
-    legacy_plan.add_argument("--save", type=Path)
+    slice_plan = subparsers.add_parser(
+        "plan-slice",
+        help="호환용 아이템·블록 슬라이스를 scalable 명세로 계획합니다.",
+    )
+    slice_plan.add_argument("prompt")
+    slice_plan.add_argument(
+        "--backend",
+        choices=("local", "heuristic-dev"),
+        default="local",
+    )
+    slice_plan.add_argument("--profile", default="t4_local")
+    slice_plan.add_argument("--existing-zip", type=Path)
+    slice_plan.add_argument("--save", type=Path)
 
-    legacy_execute = subparsers.add_parser("execute-slice", help="호환용 슬라이스 제안서를 실행합니다.")
-    legacy_execute.add_argument("proposal", type=Path)
-    legacy_execute.add_argument("--approve", required=True)
-    legacy_execute.add_argument("--output", type=Path, default=Path("mmm-output"))
-    legacy_execute.add_argument("--source-only", action="store_true")
-    legacy_execute.add_argument("--skip-gametest", action="store_true")
-    legacy_execute.add_argument("--existing-zip", type=Path)
+    slice_execute = subparsers.add_parser(
+        "execute-slice",
+        help="호환용 슬라이스를 shard generator와 정책 검증기로 실행합니다.",
+    )
+    slice_execute.add_argument("proposal", type=Path)
+    slice_execute.add_argument("--approve", required=True)
+    slice_execute.add_argument(
+        "--output",
+        type=Path,
+        default=Path("mmm-output"),
+    )
+    slice_execute.add_argument("--source-only", action="store_true")
+    slice_execute.add_argument("--skip-gametest", action="store_true")
+    slice_execute.add_argument("--existing-zip", type=Path)
 
     inspect_existing = subparsers.add_parser("inspect-existing")
     inspect_existing.add_argument("archive", type=Path)
@@ -108,8 +133,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan":
             existing_hash = ""
             if args.existing_zip:
-                existing_hash = "sha256:" + hashlib.sha256(args.existing_zip.read_bytes()).hexdigest()
-            proposal = CompleteGameDesignPlanner(ModelRouter(profile=args.profile)).plan(
+                existing_hash = "sha256:" + hashlib.sha256(
+                    args.existing_zip.read_bytes()
+                ).hexdigest()
+            proposal = CompleteGameDesignPlanner(
+                ModelRouter(profile=args.profile)
+            ).plan(
                 args.prompt,
                 media_paths=args.media,
                 existing_input_sha256=existing_hash,
@@ -122,12 +151,22 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "execute":
-            proposal = CompleteProposal.from_dict(_read_json(args.proposal))
-            actions = []
+            proposal = CompleteProposal.from_dict(
+                _read_json(args.proposal)
+            )
+            actions: list[dict] = []
             if args.playtest_actions:
-                value = json.loads(args.playtest_actions.read_text(encoding="utf-8"))
+                value = json.loads(
+                    args.playtest_actions.read_text(encoding="utf-8")
+                )
                 if not isinstance(value, list):
-                    raise ValueError("playtest-actions must be a JSON list.")
+                    raise ValueError(
+                        "playtest-actions must be a JSON list."
+                    )
+                if any(not isinstance(item, dict) for item in value):
+                    raise ValueError(
+                        "Every playtest action must be a JSON object."
+                    )
                 actions = value
             options = CompleteExecutionOptions(
                 source_only=args.source_only,
@@ -147,8 +186,6 @@ def main(argv: list[str] | None = None) -> int:
                 publish_provider=args.publish_provider,
                 publish_project_id=args.publish_project_id,
                 changelog=args.changelog,
-                gradle_heap_mb=args.gradle_heap_mb,
-                server_memory_mb=args.server_memory_mb,
             )
             result = CompleteProductionOrchestrator(
                 workspace_root=args.output,
@@ -164,8 +201,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.status in {"VERIFIED", "SOURCE_READY"} else 1
 
         if args.command == "plan-slice":
-            planner = RoutedPlanner(profile=args.profile) if args.backend == "local" else HeuristicPlanner()
-            proposal = MinecraftModPipeline(planner=planner).plan(args.prompt, existing_input=args.existing_zip)
+            planner = (
+                RoutedPlanner(profile=args.profile)
+                if args.backend == "local"
+                else HeuristicPlanner()
+            )
+            proposal = ScalableMinecraftModPipeline(
+                planner=planner
+            ).plan(
+                args.prompt,
+                existing_input=args.existing_zip,
+            )
             rendered = _json_dump(proposal.to_dict()) + "\n"
             if args.save:
                 args.save.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "execute-slice":
             proposal = Proposal.from_dict(_read_json(args.proposal))
-            result = MinecraftModPipeline().execute(
+            result = ScalableMinecraftModPipeline().execute(
                 proposal,
                 approval_hash=args.approve,
                 output_root=args.output,
@@ -187,7 +233,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.status in {"VERIFIED", "SOURCE_READY"} else 1
 
         if args.command == "inspect-existing":
-            sys.stdout.write(_json_dump(inspect_existing_project_archive(args.archive).to_dict()) + "\n")
+            sys.stdout.write(
+                _json_dump(
+                    inspect_existing_project_archive(
+                        args.archive
+                    ).to_dict()
+                )
+                + "\n"
+            )
             return 0
 
         if args.command == "validate-proposal":
@@ -198,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
                     "status": "PASS",
                     "kind": "complete",
                     "approval_hash": proposal.calculate_hash(),
-                    "stored_hash_matches": proposal.approval_hash == proposal.calculate_hash(),
+                    "stored_hash_matches": (
+                        proposal.approval_hash
+                        == proposal.calculate_hash()
+                    ),
                 }
             else:
                 proposal = Proposal.from_dict(raw)
@@ -206,7 +262,10 @@ def main(argv: list[str] | None = None) -> int:
                     "status": "PASS",
                     "kind": "slice",
                     "approval_hash": proposal.calculate_hash(),
-                    "stored_hash_matches": proposal.approval_hash == proposal.calculate_hash(),
+                    "stored_hash_matches": (
+                        proposal.approval_hash
+                        == proposal.calculate_hash()
+                    ),
                 }
             sys.stdout.write(_json_dump(result) + "\n")
             return 0
@@ -214,7 +273,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "ui":
             from .ai_webui import launch
 
-            launch(output_root=args.output, profile=args.profile, share=args.share, server_name=args.server_name)
+            launch(
+                output_root=args.output,
+                profile=args.profile,
+                share=args.share,
+                server_name=args.server_name,
+            )
             return 0
     except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write(f"ERROR: {exc}\n")
