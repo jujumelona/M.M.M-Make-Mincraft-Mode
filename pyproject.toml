@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmm-make-mincraft-mode"
-version = "0.5.0"
+version = "0.6.0"
 description = "Scalable Minecraft Fabric production system with immutable planning, sharded generation, indexed repair, runtime playtests and distribution"
 readme = "README.md"
 requires-python = ">=3.10"
