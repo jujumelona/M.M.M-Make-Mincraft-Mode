@@ -1,5 +1,11 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Fabric production tools."""
 
+# Install validator contract corrections before pipeline modules import the validator.
+from . import validator as _validator_module
+from .validator_boss_contract import install as _install_validator_boss_contract
+
+_install_validator_boss_contract(_validator_module)
+
 from .api import (
     ChatReply,
     CompleteChatReply,
