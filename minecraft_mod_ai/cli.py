@@ -46,7 +46,14 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--skip-jdt", action="store_true")
     execute.add_argument("--skip-gametest", action="store_true")
     execute.add_argument("--no-repair", action="store_true")
-    execute.add_argument("--repair-attempts", type=int, default=3)
+    execute.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=None,
+        help="미지정 시 MMM_REPAIR_ATTEMPTS 정책값을 사용합니다.",
+    )
+    execute.add_argument("--gradle-heap-mb", type=int)
+    execute.add_argument("--server-memory-mb", type=int)
     execute.add_argument("--skip-blockbench", action="store_true")
     execute.add_argument("--skip-runtime", action="store_true")
     execute.add_argument("--skip-client", action="store_true")
@@ -140,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
                 publish_provider=args.publish_provider,
                 publish_project_id=args.publish_project_id,
                 changelog=args.changelog,
+                gradle_heap_mb=args.gradle_heap_mb,
+                server_memory_mb=args.server_memory_mb,
             )
             result = CompleteProductionOrchestrator(
                 workspace_root=args.output,
