@@ -6,6 +6,8 @@ from typing import Any
 
 from .complete_spec import ProductionModule
 from .model_router import ModelRouter
+from .project_index import ProjectIndex
+from .scale_policy import ScalePolicy
 from .source_patch import TransactionalSourcePatcher
 
 
@@ -14,10 +16,23 @@ class CustomModuleGenerationError(RuntimeError):
 
 
 class CustomModuleGenerator:
-    """Generate unusual Fabric modules through bounded, exact source patches."""
+    """Generate unusual Fabric modules from a whole-project relevance index.
 
-    def __init__(self, router: ModelRouter) -> None:
+    The previous implementation inspected the first 20 Java and 12 JSON files and
+    rejected modules touching more than 40 files. This implementation indexes the
+    complete project and paginates model output until the module is complete. Host
+    protection is byte-based and configurable; feature/file counts are not capped.
+    """
+
+    def __init__(
+        self,
+        router: ModelRouter,
+        *,
+        policy: ScalePolicy | None = None,
+    ) -> None:
         self.router = router
+        self.policy = policy or ScalePolicy.from_environment()
+        self.policy.validate()
 
     def generate(
         self,
@@ -28,14 +43,25 @@ class CustomModuleGenerator:
         loader: str = "fabric",
         mappings: str = "1.20.1+build.1",
     ) -> dict[str, Any]:
-        module.validate()
+        module.validate(policy=self.policy)
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir() or root.is_symlink():
             raise CustomModuleGenerationError("Custom module target must be a regular project directory.")
-        snapshot_paths = self._snapshot_paths(root)
-        snapshot = TransactionalSourcePatcher(root).snapshot(snapshot_paths)
-        request = {
-            "task": "Implement one complete approved Minecraft Fabric module as the smallest exact source patch.",
+
+        index = ProjectIndex(root, policy=self.policy)
+        query = json.dumps(
+            {
+                "module_id": module.module_id,
+                "kind": module.kind,
+                "config": module.config,
+                "depends_on": module.depends_on,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        context = index.select(query=query)
+        base_request = {
+            "task": "Implement one complete approved Minecraft Fabric module as exact source patches.",
             "target": {
                 "minecraft_version": minecraft_version,
                 "loader": loader,
@@ -49,7 +75,8 @@ class CustomModuleGenerator:
                 "depends_on": list(module.depends_on),
                 "required_gates": list(module.required_gates),
             },
-            "snapshot": snapshot,
+            "project_manifest": index.manifest(),
+            "relevant_context": context,
             "output_contract": {
                 "operations": [
                     {
@@ -61,72 +88,88 @@ class CustomModuleGenerator:
                     }
                 ],
                 "runtime_tests": ["observable tests"],
+                "complete": True,
+                "next_cursor": "empty when complete; otherwise stable opaque cursor",
             },
             "forbidden": [
                 "shell or scripts",
                 "deleting files or requested functionality",
                 "mixing loaders, mappings or Minecraft versions",
-                "writing outside src, build.gradle, gradle.properties or .minecraft_ai",
+                "writing outside src, Gradle metadata or .minecraft_ai",
                 "claiming success without generated code and resources",
             ],
         }
-        text = self.router.generate_text(
-            "coder",
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "Return exactly one JSON object. Implement compileable Minecraft Java 1.20.1 "
-                        "Fabric code and data. Use current project conventions and server authority."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
-            ],
-            response_format="json",
-        )
-        payload = _extract_json(text)
-        if set(payload) != {"operations", "runtime_tests"}:
-            raise CustomModuleGenerationError("Custom module response fields are invalid.")
-        operations = payload["operations"]
-        if not isinstance(operations, list) or not operations:
-            raise CustomModuleGenerationError("Custom module did not return patch operations.")
-        self._validate_operations(operations)
-        receipt = TransactionalSourcePatcher(root).apply(operations)
-        runtime_tests = payload["runtime_tests"]
-        if not isinstance(runtime_tests, list) or not runtime_tests:
+
+        operations: list[dict[str, Any]] = []
+        runtime_tests: list[str] = []
+        seen_cursors: set[str] = set()
+        cursor = ""
+        while True:
+            request = {**base_request, "cursor": cursor}
+            text = self.router.generate_text(
+                "coder",
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return exactly one JSON object. Implement compilable Minecraft Java 1.20.1 "
+                            "Fabric code and data. Use project conventions, server authority and persistence. "
+                            "When the patch is too large, return a non-empty next_cursor and continue without "
+                            "repeating paths on the next page."
+                        ),
+                    },
+                    {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+                ],
+                response_format="json",
+            )
+            payload = _extract_json(text)
+            allowed = {"operations", "runtime_tests", "complete", "next_cursor"}
+            if set(payload) != allowed:
+                raise CustomModuleGenerationError("Custom module response fields are invalid.")
+            page_operations = payload["operations"]
+            page_tests = payload["runtime_tests"]
+            complete = payload["complete"]
+            next_cursor = payload["next_cursor"]
+            if not isinstance(page_operations, list) or not page_operations:
+                raise CustomModuleGenerationError("Custom module page did not return patch operations.")
+            if not isinstance(page_tests, list):
+                raise CustomModuleGenerationError("Custom module runtime_tests must be a list.")
+            if type(complete) is not bool or not isinstance(next_cursor, str):
+                raise CustomModuleGenerationError("Custom module pagination contract is invalid.")
+            self._validate_operations(page_operations)
+            operations.extend(page_operations)
+            runtime_tests.extend(str(value) for value in page_tests if str(value).strip())
+            self._validate_total_patch_bytes(operations)
+            if complete:
+                if next_cursor:
+                    raise CustomModuleGenerationError("A complete custom module may not return next_cursor.")
+                break
+            if not next_cursor or next_cursor in seen_cursors:
+                raise CustomModuleGenerationError("Custom module pagination did not advance.")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        paths = [str(item.get("path", "")).replace("\\", "/") for item in operations]
+        if len(paths) != len(set(paths)):
+            raise CustomModuleGenerationError(
+                "Paginated custom module returned the same path more than once; combine edits per path."
+            )
+        if not runtime_tests:
             raise CustomModuleGenerationError("Custom module must provide runtime tests.")
+        receipt = TransactionalSourcePatcher(root).apply(operations)
+        ProjectIndex(root, policy=self.policy).write_manifest()
         return {
-            "schema_version": "mmm/custom-module-result-v1",
+            "schema_version": "mmm/custom-module-result-v2",
             "module_id": module.module_id,
             "kind": module.kind,
             "status": "SOURCE_GENERATED",
             "patch_receipt": receipt,
-            "runtime_tests": [str(value) for value in runtime_tests],
+            "operation_count": len(operations),
+            "runtime_tests": runtime_tests,
             "required_gates": ["JDT", "Gradle", "GameTest", *module.required_gates],
         }
 
-    @staticmethod
-    def _snapshot_paths(root: Path) -> list[str]:
-        paths: list[str] = []
-        for fixed in (
-            "build.gradle",
-            "gradle.properties",
-            "src/main/resources/fabric.mod.json",
-        ):
-            if (root / fixed).is_file():
-                paths.append(fixed)
-        for path in sorted((root / "src/main/java").rglob("*.java"))[:20]:
-            if path.is_file() and not path.is_symlink():
-                paths.append(path.relative_to(root).as_posix())
-        for path in sorted((root / "src/main/resources").rglob("*.json"))[:12]:
-            if path.is_file() and not path.is_symlink():
-                paths.append(path.relative_to(root).as_posix())
-        return paths
-
-    @staticmethod
-    def _validate_operations(operations: list[dict[str, Any]]) -> None:
-        if len(operations) > 40:
-            raise CustomModuleGenerationError("One custom module may touch at most 40 files.")
+    def _validate_operations(self, operations: list[dict[str, Any]]) -> None:
         for item in operations:
             if not isinstance(item, dict):
                 raise CustomModuleGenerationError("Patch operation must be an object.")
@@ -137,11 +180,22 @@ class CustomModuleGenerator:
                 path.startswith("src/main/java/")
                 or path.startswith("src/main/resources/")
                 or path.startswith("src/test/java/")
+                or path.startswith("src/gametest/")
                 or path.startswith(".minecraft_ai/")
                 or path in {"build.gradle", "gradle.properties", "settings.gradle"}
             )
             if not allowed:
-                raise CustomModuleGenerationError(f"Custom module path is outside the allowed scope: {path}")
+                raise CustomModuleGenerationError(
+                    f"Custom module path is outside the allowed scope: {path}"
+                )
+
+    def _validate_total_patch_bytes(self, operations: list[dict[str, Any]]) -> None:
+        size = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))
+        if size > self.policy.max_patch_bytes:
+            raise CustomModuleGenerationError(
+                "Custom module patch exceeds MMM_MAX_PATCH_BYTES; raise the explicit host resource policy "
+                "or split the feature into dependency-linked modules."
+            )
 
 
 def _extract_json(text: str) -> dict[str, Any]:
