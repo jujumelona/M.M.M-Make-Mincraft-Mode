@@ -17,8 +17,9 @@ from .system_templates_common import (
     _persistent_store_java,
 )
 from .system_templates_economy import _economy_java
+from .system_templates_groups import _party_java
 from .system_templates_quest import _quest_java
-from .system_templates_social import _gui_java, _party_java
+from .system_templates_social import _gui_java
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _PACKAGE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
@@ -152,4 +153,4 @@ def _system_java(
             class_name,
             absolute_resource,
         )
-    return _party_java(package_name, class_name)
+    return _party_java(package_name, class_name, absolute_resource)
