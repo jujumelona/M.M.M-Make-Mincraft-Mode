@@ -18,8 +18,12 @@ _ACTION_TYPES = {"message", "grant_item", "status_effect"}
 
 
 def validate_system_modules(pack_id: str, modules: list[Any]) -> None:
+    if pack_id not in _PACK_KINDS:
+        raise ValueError(f"Unknown system pack: {pack_id}")
     expected_kinds = _PACK_KINDS[pack_id]
-    seen: set[str] = set()
+    seen_modules: set[str] = set()
+    typed: list[tuple[str, str, dict[str, Any]]] = []
+
     for item in modules:
         if not isinstance(item, dict):
             raise ValueError("System module must be an object.")
@@ -35,11 +39,11 @@ def validate_system_modules(pack_id: str, modules: list[Any]) -> None:
                 f"System module fields are invalid: {sorted(set(item))}"
             )
         module_id = str(item["module_id"])
-        if not _ID.fullmatch(module_id) or module_id in seen:
+        if not _ID.fullmatch(module_id) or module_id in seen_modules:
             raise ValueError(
                 f"Invalid or duplicate system module id: {module_id!r}"
             )
-        seen.add(module_id)
+        seen_modules.add(module_id)
         kind = str(item["kind"])
         if kind not in expected_kinds:
             raise ValueError(
@@ -54,6 +58,8 @@ def validate_system_modules(pack_id: str, modules: list[Any]) -> None:
             raise ValueError(
                 f"Custom module {module_id} must not be sent to built-in system pack."
             )
+        typed.append((module_id, kind, config))
+
         if kind == "quest":
             _validate_quest(module_id, config)
         elif kind == "class":
@@ -70,6 +76,63 @@ def validate_system_modules(pack_id: str, modules: list[Any]) -> None:
             _validate_networking(module_id, config)
         elif kind in {"party", "guild"}:
             _validate_social(module_id, config)
+
+    _validate_cross_module_semantics(pack_id, typed)
+
+
+def _validate_cross_module_semantics(
+    pack_id: str,
+    modules: list[tuple[str, str, dict[str, Any]]],
+) -> None:
+    if pack_id == "class-skill-system":
+        class_ids = {module_id for module_id, kind, _ in modules if kind == "class"}
+        for module_id, kind, config in modules:
+            if kind != "skill":
+                continue
+            required = str(config.get("required_class", ""))
+            if required and required not in class_ids:
+                raise ValueError(
+                    f"Skill {module_id} references missing class {required!r}."
+                )
+
+    elif pack_id == "economy-shop":
+        economies = [module_id for module_id, kind, _ in modules if kind == "economy"]
+        if len(economies) > 1:
+            raise ValueError(
+                "Built-in economy-shop supports one authoritative economy definition; use custom_java to combine multiple currencies."
+            )
+        entries: set[str] = set()
+        for module_id, kind, config in modules:
+            if kind != "shop":
+                continue
+            for entry in config["entries"]:
+                entry_id = str(entry["id"])
+                if entry_id in entries:
+                    raise ValueError(
+                        f"Shop entry ID is duplicated across catalogs: {entry_id!r}."
+                    )
+                entries.add(entry_id)
+
+    elif pack_id == "gui-networking":
+        actions: set[str] = set()
+        for module_id, kind, config in modules:
+            if kind != "networking":
+                continue
+            for action in config["actions"]:
+                action_id = str(action["id"])
+                if action_id in actions:
+                    raise ValueError(
+                        f"Network action ID is duplicated across channels: {action_id!r}."
+                    )
+                actions.add(action_id)
+
+    elif pack_id == "party-guild":
+        for kind in ("party", "guild"):
+            matching = [module_id for module_id, current, _ in modules if current == kind]
+            if len(matching) > 1:
+                raise ValueError(
+                    f"Built-in {kind} system accepts one definition; use custom_java for multiple independent {kind} systems."
+                )
 
 
 def _validate_quest(module_id: str, config: dict[str, Any]) -> None:
@@ -92,6 +155,10 @@ def _validate_quest(module_id: str, config: dict[str, Any]) -> None:
         raise ValueError(
             f"Quest {module_id} requires a namespaced target for {objective}."
         )
+    if objective == "manual" and "target" in config and target != module_id:
+        raise ValueError(
+            f"Manual quest {module_id} target is its quest ID and may not be overridden."
+        )
     _positive_int(config.get("required", 1), f"{module_id}.required")
     reward_item = str(config.get("reward_item", ""))
     if reward_item and not _RESOURCE_ID.fullmatch(reward_item):
@@ -102,10 +169,14 @@ def _validate_quest(module_id: str, config: dict[str, Any]) -> None:
         config.get("reward_count", 1),
         f"{module_id}.reward_count",
     )
-    _finite_number(
+    reward_currency = _finite_number(
         config.get("reward_currency", 0.0),
         f"{module_id}.reward_currency",
     )
+    if reward_currency < 0:
+        raise ValueError(
+            f"Quest {module_id} reward_currency must be nonnegative."
+        )
 
 
 def _validate_class(module_id: str, config: dict[str, Any]) -> None:
@@ -139,10 +210,12 @@ def _validate_skill(module_id: str, config: dict[str, Any]) -> None:
         config.get("duration_ticks", 100),
         f"{module_id}.duration_ticks",
     )
-    _nonnegative_int(
+    amplifier = _nonnegative_int(
         config.get("amplifier", 0),
         f"{module_id}.amplifier",
     )
+    if amplifier > 255:
+        raise ValueError(f"{module_id}.amplifier must be 0-255.")
     _positive_int(
         config.get("cooldown_ticks", 100),
         f"{module_id}.cooldown_ticks",
@@ -267,21 +340,7 @@ def _validate_networking(module_id: str, config: dict[str, Any]) -> None:
         )
     seen: set[str] = set()
     for action in actions:
-        if not isinstance(action, dict):
-            raise ValueError(
-                f"Networking {module_id} action must be an object."
-            )
-        allowed = {
-            "id",
-            "type",
-            "message",
-            "item",
-            "count",
-            "effect",
-            "duration_ticks",
-            "amplifier",
-        }
-        if set(action) - allowed or "id" not in action or "type" not in action:
+        if not isinstance(action, dict) or "id" not in action or "type" not in action:
             raise ValueError(
                 f"Networking {module_id} action fields are invalid."
             )
@@ -297,12 +356,20 @@ def _validate_networking(module_id: str, config: dict[str, Any]) -> None:
                 f"Networking {module_id}/{action_id} type {action_type!r} is not built in; use custom_java."
             )
         if action_type == "message":
-            if not str(action.get("message", "")).strip():
+            _require_exact_fields(action, {"id", "type", "message"}, module_id, action_id)
+            if not str(action["message"]).strip():
                 raise ValueError(
                     f"Networking {module_id}/{action_id} message is empty."
                 )
         elif action_type == "grant_item":
-            if not _RESOURCE_ID.fullmatch(str(action.get("item", ""))):
+            _require_exact_or_optional(
+                action,
+                required={"id", "type", "item"},
+                optional={"count"},
+                module_id=module_id,
+                action_id=action_id,
+            )
+            if not _RESOURCE_ID.fullmatch(str(action["item"])):
                 raise ValueError(
                     f"Networking {module_id}/{action_id} item must be namespaced."
                 )
@@ -311,7 +378,14 @@ def _validate_networking(module_id: str, config: dict[str, Any]) -> None:
                 f"{module_id}.{action_id}.count",
             )
         else:
-            if not _RESOURCE_ID.fullmatch(str(action.get("effect", ""))):
+            _require_exact_or_optional(
+                action,
+                required={"id", "type", "effect"},
+                optional={"duration_ticks", "amplifier"},
+                module_id=module_id,
+                action_id=action_id,
+            )
+            if not _RESOURCE_ID.fullmatch(str(action["effect"])):
                 raise ValueError(
                     f"Networking {module_id}/{action_id} effect must be namespaced."
                 )
@@ -319,8 +393,11 @@ def _validate_networking(module_id: str, config: dict[str, Any]) -> None:
                 action.get("duration_ticks", 100),
                 f"{module_id}.{action_id}.duration_ticks",
             )
-            amplifier = action.get("amplifier", 0)
-            if type(amplifier) is not int or not 0 <= amplifier <= 255:
+            amplifier = _nonnegative_int(
+                action.get("amplifier", 0),
+                f"{module_id}.{action_id}.amplifier",
+            )
+            if amplifier > 255:
                 raise ValueError(
                     f"{module_id}.{action_id}.amplifier must be 0-255."
                 )
@@ -331,6 +408,33 @@ def _validate_social(module_id: str, config: dict[str, Any]) -> None:
     if "display_name" in config and not str(config["display_name"]).strip():
         raise ValueError(
             f"Social module {module_id} display_name is empty."
+        )
+
+
+def _require_exact_fields(
+    value: dict[str, Any],
+    expected: set[str],
+    module_id: str,
+    action_id: str,
+) -> None:
+    if set(value) != expected:
+        raise ValueError(
+            f"Networking {module_id}/{action_id} fields must be exactly {sorted(expected)}."
+        )
+
+
+def _require_exact_or_optional(
+    value: dict[str, Any],
+    *,
+    required: set[str],
+    optional: set[str],
+    module_id: str,
+    action_id: str,
+) -> None:
+    fields = set(value)
+    if not required <= fields or fields - required - optional:
+        raise ValueError(
+            f"Networking {module_id}/{action_id} fields are invalid."
         )
 
 
