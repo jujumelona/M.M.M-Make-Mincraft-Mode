@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .production_hardener import harden_generated_project
 from .scale_policy import ScalePolicy
 from .source_patch import TransactionalSourcePatcher, sha256_file
 
@@ -16,7 +17,9 @@ def tune_gradle_resources(
     policy: ScalePolicy | None = None,
 ) -> dict[str, Any]:
     policy = policy or ScalePolicy.from_environment()
+    policy.validate()
     root = Path(project_root).expanduser().resolve()
+    hardening = harden_generated_project(root, policy=policy)
     properties = root / "gradle.properties"
     if not properties.is_file() or properties.is_symlink():
         raise FileNotFoundError(properties)
@@ -37,7 +40,14 @@ def tune_gradle_resources(
     else:
         changed = rendered + "\n" + text
     if changed == text:
-        return {"status": "UNCHANGED", "heap_mb": heap, "path": str(properties)}
+        return {
+            "status": (
+                "HARDENED" if hardening.get("status") == "HARDENED" else "UNCHANGED"
+            ),
+            "heap_mb": heap,
+            "path": str(properties),
+            "hardening": hardening,
+        }
     receipt = TransactionalSourcePatcher(root).apply(
         [
             {
@@ -48,4 +58,9 @@ def tune_gradle_resources(
             }
         ]
     )
-    return {"status": "TUNED", "heap_mb": heap, "receipt": receipt}
+    return {
+        "status": "TUNED",
+        "heap_mb": heap,
+        "receipt": receipt,
+        "hardening": hardening,
+    }
