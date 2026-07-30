@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import json
 from pathlib import Path
 from typing import Any
@@ -54,16 +55,16 @@ def _topological_modules(
                     f"Production module {module.module_id} references missing {dependency}."
                 )
             outgoing[dependency].append(module.module_id)
-    ready = sorted(node for node, degree in indegree.items() if degree == 0)
+    ready = [node for node, degree in indegree.items() if degree == 0]
+    heapq.heapify(ready)
     ordered: list[ProductionModule] = []
     while ready:
-        node = ready.pop(0)
+        node = heapq.heappop(ready)
         ordered.append(lookup[node])
-        for dependent in sorted(outgoing[node]):
+        for dependent in outgoing[node]:
             indegree[dependent] -= 1
             if indegree[dependent] == 0:
-                ready.append(dependent)
-        ready.sort()
+                heapq.heappush(ready, dependent)
     if len(ordered) != len(lookup):
         raise CompleteProductionError(
             "Production module graph contains an unresolved cycle."
