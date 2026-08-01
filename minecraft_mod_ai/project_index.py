@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -32,7 +34,12 @@ _IGNORED_PARTS = {
     "run",
     ".cache",
     "node_modules",
+    # Generated receipts contain timestamps and indexes of this index. They are
+    # audit metadata, not project source, and including them makes every resume
+    # fingerprint change itself.
+    ".minecraft_ai",
 }
+_MANIFEST_SHARD_SIZE = 256
 
 
 @dataclass(frozen=True)
@@ -121,6 +128,13 @@ class ProjectIndex:
         return "sha256:" + digest.hexdigest()
 
     def manifest(self) -> dict[str, Any]:
+        """Return the legacy expanded view for explicit compatibility callers.
+
+        Model prompts and durable checkpoint fingerprints must use
+        :meth:`manifest_receipt`; expanding every path into every request creates a
+        project-size context ceiling.
+        """
+
         return {
             "schema_version": "mmm/project-index-v1",
             "project_root": str(self.root),
@@ -129,6 +143,39 @@ class ProjectIndex:
                 item.size_bytes for item in self.files
             ),
             "files": [item.to_dict() for item in self.files],
+        }
+
+    def manifest_receipt(self) -> dict[str, Any]:
+        """Return a fixed-size, stable commitment to the complete source tree."""
+
+        digest = hashlib.sha256()
+        total_bytes = 0
+        suffix_counts: dict[str, int] = {}
+        for item in self.files:
+            record = json.dumps(
+                {
+                    "path": item.path,
+                    "size_bytes": item.size_bytes,
+                    "sha256": item.sha256,
+                    "suffix": item.suffix,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            digest.update(len(record).to_bytes(8, "big"))
+            digest.update(record)
+            total_bytes += item.size_bytes
+            suffix_counts[item.suffix or "<none>"] = (
+                suffix_counts.get(item.suffix or "<none>", 0) + 1
+            )
+        return {
+            "schema_version": "mmm/project-index-receipt-v2",
+            "file_count": len(self.files),
+            "total_text_bytes": total_bytes,
+            "sha256": "sha256:" + digest.hexdigest(),
+            "suffix_counts": dict(sorted(suffix_counts.items())),
+            "expanded_manifest": ".minecraft_ai/project-index.json",
         }
 
     def select(
@@ -266,9 +313,61 @@ class ProjectIndex:
             else self.root / ".minecraft_ai/project-index.json"
         )
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
+        receipt = self.manifest_receipt()
+        version = receipt["sha256"].removeprefix("sha256:")
+        parts_root = target.parent / f"{target.stem}-parts"
+        version_root = parts_root / version
+        if not version_root.is_dir():
+            temporary_root = parts_root / f".{version}.{uuid.uuid4().hex}.tmp"
+            temporary_root.mkdir(parents=True, exist_ok=False)
+            try:
+                for index, start in enumerate(
+                    range(0, len(self.files), _MANIFEST_SHARD_SIZE)
+                ):
+                    members = self.files[start : start + _MANIFEST_SHARD_SIZE]
+                    payload = {
+                        "schema_version": "mmm/project-index-part-v2",
+                        "part": index,
+                        "files": [item.to_dict() for item in members],
+                    }
+                    (temporary_root / f"part-{index:08d}.json").write_text(
+                        json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                parts_root.mkdir(parents=True, exist_ok=True)
+                os.replace(temporary_root, version_root)
+            except BaseException:
+                if temporary_root.is_dir():
+                    import shutil
+
+                    shutil.rmtree(temporary_root)
+                raise
+        part_records = []
+        for part in sorted(version_root.glob("part-*.json")):
+            part_records.append(
+                {
+                    "path": part.relative_to(target.parent).as_posix(),
+                    "sha256": self._sha256(part),
+                }
+            )
+        index_payload = {
+            **receipt,
+            "schema_version": "mmm/project-index-v2",
+            "shard_size": _MANIFEST_SHARD_SIZE,
+            "parts": part_records,
+        }
+        temporary_target = target.with_name(
+            f".{target.name}.{uuid.uuid4().hex}.tmp"
+        )
+        temporary_target.write_text(
             json.dumps(
-                self.manifest(),
+                index_payload,
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
@@ -276,6 +375,7 @@ class ProjectIndex:
             + "\n",
             encoding="utf-8",
         )
+        os.replace(temporary_target, target)
         return target
 
 

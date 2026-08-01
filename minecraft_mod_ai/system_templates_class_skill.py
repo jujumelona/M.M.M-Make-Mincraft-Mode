@@ -4,7 +4,6 @@ from __future__ import annotations
 def _class_skill_java(package_name: str, class_name: str, resource: str) -> str:
     return f'''package {package_name}.system;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -87,9 +86,7 @@ public final class {class_name} {{
         CLASSES.clear();
         SKILLS.clear();
         COOLDOWNS.clear();
-        JsonArray modules = MmmSystemConfig.load("{resource}").getAsJsonArray("modules");
-        modules.forEach(element -> {{
-            JsonObject module = element.getAsJsonObject();
+        MmmSystemConfig.forEachModule("{resource}", module -> {{
             String kind = module.get("kind").getAsString();
             String id = module.get("module_id").getAsString();
             JsonObject config = module.getAsJsonObject("config");
@@ -99,8 +96,7 @@ public final class {class_name} {{
                 }}
             }}
         }});
-        modules.forEach(element -> {{
-            JsonObject module = element.getAsJsonObject();
+        MmmSystemConfig.forEachModule("{resource}", module -> {{
             if (!"skill".equals(module.get("kind").getAsString())) return;
             String id = module.get("module_id").getAsString();
             JsonObject config = module.getAsJsonObject("config");

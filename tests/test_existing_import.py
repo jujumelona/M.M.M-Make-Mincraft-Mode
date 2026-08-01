@@ -125,6 +125,27 @@ def test_entry_and_size_limits_fail_closed(
         inspect_existing_project_archive(too_large_total)
 
 
+def test_zero_global_host_quotas_do_not_become_project_caps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "large-inventory.zip"
+    _write_zip(
+        archive_path,
+        [
+            (f"project/src/main/java/test/C{index}.java", "class C {}")
+            for index in range(2_501)
+        ],
+    )
+    monkeypatch.setattr(importer, "MAX_ARCHIVE_ENTRIES", 0)
+    monkeypatch.setattr(importer, "MAX_TOTAL_UNCOMPRESSED_BYTES", 0)
+
+    report = inspect_existing_project_archive(archive_path)
+
+    assert report.file_count == 2_501
+    assert len(report.source_files) == 2_501
+
+
 def test_snapshot_is_stable_across_zip_order_and_container_metadata(
     tmp_path: Path,
 ) -> None:
@@ -223,8 +244,86 @@ def test_source_project_metadata_and_assets_are_inventoried_and_safely_extracted
     assert not (extracted / "frost").exists()
     json.dumps(report.to_dict())
 
-    with pytest.raises(ExistingProjectImportError, match="already exists"):
-        inspect_existing_project_archive(archive_path, extract_root=extract_root)
+    resumed = inspect_existing_project_archive(
+        archive_path,
+        extract_root=extract_root,
+        expected_archive_sha256=report.archive_sha256,
+    )
+    assert resumed.extracted_to == report.extracted_to
+
+
+def test_expected_archive_hash_is_checked_before_extraction(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "bound.zip"
+    _write_zip(
+        archive_path,
+        [
+            ("project/build.gradle", "plugins {}\n"),
+            (
+                "project/src/main/resources/fabric.mod.json",
+                '{"schemaVersion":1,"id":"bound","version":"1.0.0"}',
+            ),
+            (
+                "project/src/main/java/example/Bound.java",
+                "class Bound {}\n",
+            ),
+        ],
+    )
+    extract_root = tmp_path / "imports"
+
+    with pytest.raises(
+        ExistingProjectImportError,
+        match="changed after complete-plan approval",
+    ):
+        inspect_existing_project_archive(
+            archive_path,
+            extract_root=extract_root,
+            expected_archive_sha256="sha256:" + ("0" * 64),
+        )
+
+    assert not extract_root.exists()
+
+
+def test_tampered_completed_extraction_is_preserved_and_rebuilt(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "retry.zip"
+    _write_zip(
+        archive_path,
+        [
+            ("project/build.gradle", "plugins {}\n"),
+            (
+                "project/src/main/resources/fabric.mod.json",
+                '{"schemaVersion":1,"id":"retry","version":"1.0.0"}',
+            ),
+            (
+                "project/src/main/java/example/Retry.java",
+                "class Retry {}\n",
+            ),
+        ],
+    )
+    extract_root = tmp_path / "imports"
+    first = inspect_existing_project_archive(
+        archive_path,
+        extract_root=extract_root,
+    )
+    extracted = Path(str(first.extracted_to))
+    source = extracted / "src/main/java/example/Retry.java"
+    source.write_text("tampered\n", encoding="utf-8")
+
+    second = inspect_existing_project_archive(
+        archive_path,
+        extract_root=extract_root,
+        expected_archive_sha256=first.archive_sha256,
+    )
+
+    assert second.extracted_to == first.extracted_to
+    assert source.read_text(encoding="utf-8") == "class Retry {}\n"
+    preserved = extracted.with_name(extracted.name + ".incomplete-1")
+    assert (preserved / "src/main/java/example/Retry.java").read_text(
+        encoding="utf-8"
+    ) == "tampered\n"
 
 
 def test_jar_only_mod_metadata_is_inventoried_without_execution(tmp_path: Path) -> None:
@@ -257,6 +356,38 @@ def test_jar_only_mod_metadata_is_inventoried_without_execution(tmp_path: Path) 
     assert report.fabric_metadata_paths == ("jar_mod.jar!/fabric.mod.json",)
     assert report.jar_files == ("jar_mod.jar",)
     assert report.asset_files == ("jar_mod.jar!/assets/jar_mod/lang/en_us.json",)
+
+
+def test_nested_archives_are_spooled_instead_of_retained_as_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jar = _jar_bytes(
+        [
+            (
+                "fabric.mod.json",
+                '{"schemaVersion":1,"id":"spooled","version":"1.0.0"}',
+            ),
+            ("payload.bin", b"x" * (3 * 1024 * 1024)),
+        ]
+    )
+    archive_path = tmp_path / "spooled.zip"
+    _write_zip(archive_path, [("release/spooled.jar", jar)])
+    observed: list[bool] = []
+    original = importer._inspect_nested_jar
+
+    def recording(path, data, warnings):
+        observed.append(isinstance(data, Path))
+        assert isinstance(data, Path)
+        assert data.is_file()
+        return original(path, data, warnings)
+
+    monkeypatch.setattr(importer, "_inspect_nested_jar", recording)
+
+    report = inspect_existing_project_archive(archive_path)
+
+    assert report.mod_id == "spooled"
+    assert observed == [True]
 
 
 def test_embedded_approved_proposal_is_validated_but_not_trusted_as_evidence(

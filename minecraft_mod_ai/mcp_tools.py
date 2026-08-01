@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import secrets
 import zipfile
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -14,10 +16,18 @@ from .complete_orchestrator import (
 )
 from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import CompleteProposal
+from .conversation import merge_design_brief
+from .ecosystem_discovery import EcosystemDiscoveryClient
 from .game_design import GameDesignPlanner
 from .importer import inspect_existing_project_archive
 from .knowledge import AuthoritativeEvidenceRetriever
 from .model_router import ModelRouter
+from .plan_render import render_complete_plan
+from .proposal_store import (
+    load_sharded_complete_proposal,
+    read_sharded_complete_proposal_section,
+    write_sharded_complete_proposal,
+)
 from .repair_engine import RepairEngine
 from .runner import GradleRunner
 from .scalable_pipeline import ScalableMinecraftModPipeline
@@ -30,9 +40,17 @@ from .spec import (
     SpecValidationError,
     canonical_json,
 )
+from .technology_radar import (
+    _assess_technology_candidate_with_receipt_key as assess_technology_candidate,
+    _build_signed_official_target_evidence,
+    build_technology_radar as create_technology_radar,
+)
 from .validator import validate_jar
 
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+_PROPOSAL_REF = re.compile(
+    r"^plan_([0-9a-f]{64})_([0-9a-f]{64})$"
+)
 
 
 class MMMToolService:
@@ -44,6 +62,8 @@ class MMMToolService:
         workspace_root: str | Path = "mmm-output",
         profile: str = "t4_local",
         router_factory: Callable[[], ModelRouter] | None = None,
+        discovery_client_factory: Callable[[], EcosystemDiscoveryClient]
+        | None = None,
         policy: ScalePolicy | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -52,9 +72,88 @@ class MMMToolService:
         self.router_factory = router_factory or (
             lambda: ModelRouter(profile=profile)
         )
+        self.discovery_client_factory = discovery_client_factory or (
+            EcosystemDiscoveryClient
+        )
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
         self.broker = LocalPolicyBroker()
+        self._technology_receipt_key = secrets.token_bytes(32)
+
+    def discover_ecosystem_resources(
+        self,
+        provider: str,
+        query: str,
+        cursor: str = "",
+        limit: int = 20,
+        target_profile: str = "minecraft_mod",
+    ) -> dict[str, Any]:
+        """Search one read-only, evidence-only ecosystem page."""
+
+        return self.discovery_client_factory().search(
+            provider,
+            query,
+            cursor=cursor,
+            limit=limit,
+            target_profile=target_profile,
+        )
+
+    def inspect_modrinth_project(self, project_id: str) -> dict[str, Any]:
+        """Inspect exact Fabric 1.20.1 versions without downloading a JAR."""
+
+        return self.discovery_client_factory().inspect_modrinth_project(
+            project_id
+        )
+
+    def inspect_github_repository(self, full_name: str) -> dict[str, Any]:
+        """Pin a public commit and license receipt without cloning the source."""
+
+        return self.discovery_client_factory().inspect_github_repository(
+            full_name
+        )
+
+    def inspect_huggingface_model(self, repo_id: str) -> dict[str, Any]:
+        """Pin and inspect public model metadata without downloading weights."""
+
+        return self.discovery_client_factory().inspect_huggingface_model(
+            repo_id
+        )
+
+    @staticmethod
+    def build_technology_radar(
+        prompt: str,
+        research_brief: dict[str, Any] | None = None,
+        cursor: str = "",
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """Page request-derived AI and speech requirements read-only."""
+
+        return create_technology_radar(
+            prompt,
+            research_brief,
+            cursor=cursor,
+            page_size=page_size,
+        )
+
+    def assess_technology_compatibility(
+        self,
+        requirement: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Fail closed on compatibility, license, consent and benchmark gates."""
+
+        assessed_candidate = dict(candidate)
+        assessed_candidate["official_target_evidence"] = (
+            _build_signed_official_target_evidence(
+                requirement,
+                receipt_key=self._technology_receipt_key,
+            )
+        )
+        return assess_technology_candidate(
+            requirement,
+            assessed_candidate,
+            receipt_key=self._technology_receipt_key,
+        )
 
     def plan_game(
         self,
@@ -62,7 +161,10 @@ class MMMToolService:
         media_paths: Sequence[str] = (),
     ) -> dict[str, Any]:
         planner = GameDesignPlanner(self.router_factory())
-        design, proposal = planner.plan(prompt, media_paths=media_paths)
+        design, proposal = planner.plan(
+            prompt,
+            media_paths=self._scoped_media_paths(media_paths),
+        )
         return {
             "schema_version": "mmm/plan-result-v2",
             "profile": self.profile,
@@ -79,40 +181,95 @@ class MMMToolService:
     ) -> dict[str, Any]:
         proposal = CompleteGameDesignPlanner(self.router_factory()).plan(
             prompt,
+            media_paths=self._scoped_media_paths(media_paths),
+            existing_input_sha256=existing_input_sha256,
+        )
+        proposal_ref = self._store_complete_proposal(proposal)
+        return {
+            "schema_version": "mmm/complete-plan-result-v3",
+            "profile": self.profile,
+            "message": render_complete_plan(
+                requested_prompt=proposal.requested_prompt,
+                game_design=proposal.game_design,
+                modules=proposal.modules,
+                acceptance_tests=proposal.acceptance_tests,
+            ),
+            "proposal_ref": proposal_ref,
+            "approval_hash": proposal.calculate_hash(),
+            "counts": self._complete_proposal_counts(proposal),
+            "detail_tool": "read_complete_plan_section",
+        }
+
+    def revise_complete_plan(
+        self,
+        original_prompt: str,
+        revision: str,
+        media_paths: Sequence[str] = (),
+        existing_input_sha256: str = "",
+    ) -> dict[str, Any]:
+        try:
+            merged = merge_design_brief(original_prompt, revision)
+        except ValueError as exc:
+            raise SpecValidationError("revision must not be empty.") from exc
+        return self.plan_complete_game(
+            merged,
             media_paths=media_paths,
             existing_input_sha256=existing_input_sha256,
         )
-        return {
-            "schema_version": "mmm/complete-plan-result-v2",
-            "profile": self.profile,
-            "game_design": proposal.game_design,
-            "complete_proposal": proposal.to_dict(),
-            "approval_hash": proposal.calculate_hash(),
-        }
 
     def approve_complete_plan(
         self,
-        complete_proposal: dict[str, Any],
-        approval_hash: str,
+        complete_proposal: dict[str, Any] | None = None,
+        approval_hash: str = "",
+        proposal_ref: str = "",
     ) -> dict[str, Any]:
-        parsed = CompleteProposal.from_dict(complete_proposal)
+        parsed, stored_ref = self._resolve_complete_proposal(
+            complete_proposal=complete_proposal,
+            proposal_ref=proposal_ref,
+        )
         approved = parsed.approve(approval_hash, policy=self.policy)
         return {
+            "schema_version": "mmm/complete-plan-approval-v2",
             "status": approved.status.value,
-            "complete_proposal": approved.to_dict(),
+            "proposal_ref": stored_ref,
             "approval_hash": approved.calculate_hash(),
+            "counts": self._complete_proposal_counts(approved),
         }
 
     def execute_complete_project(
         self,
-        complete_proposal: dict[str, Any],
-        approval_hash: str,
-        run_name: str,
+        complete_proposal: dict[str, Any] | None = None,
+        approval_hash: str = "",
+        run_name: str = "",
         options: dict[str, Any] | None = None,
         existing_input: str | None = None,
+        proposal_ref: str = "",
     ) -> dict[str, Any]:
-        parsed = CompleteProposal.from_dict(complete_proposal)
-        parsed_options = CompleteExecutionOptions(**(options or {}))
+        parsed, _ = self._resolve_complete_proposal(
+            complete_proposal=complete_proposal,
+            proposal_ref=proposal_ref,
+        )
+        scoped_options = dict(options or {})
+        if scoped_options.get("server_launcher"):
+            scoped_options["server_launcher"] = str(
+                self._existing_file(str(scoped_options["server_launcher"]))
+            )
+        if scoped_options.get("screenshot_paths"):
+            raw_screenshots = scoped_options["screenshot_paths"]
+            if not isinstance(raw_screenshots, (list, tuple)):
+                raise SpecValidationError(
+                    "screenshot_paths must be a list of workspace files."
+                )
+            scoped_options["screenshot_paths"] = tuple(
+                str(self._existing_file(str(value)))
+                for value in raw_screenshots
+            )
+        parsed_options = CompleteExecutionOptions(**scoped_options)
+        scoped_existing = (
+            str(self._existing_file(existing_input))
+            if existing_input is not None
+            else None
+        )
         return CompleteProductionOrchestrator(
             workspace_root=self.workspace_root,
             profile=self.profile,
@@ -123,8 +280,45 @@ class MMMToolService:
             approval_hash=approval_hash,
             run_name=run_name,
             options=parsed_options,
-            existing_input=existing_input,
+            existing_input=scoped_existing,
         ).to_dict()
+
+    def read_complete_plan_section(
+        self,
+        proposal_ref: str,
+        section: str = "overview",
+        cursor: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Read one bounded proposal page without transferring the full plan."""
+
+        index, expected_hash, expected_index_hash = self._proposal_index_for_ref(
+            proposal_ref,
+            require_existing=True,
+        )
+        if _sha256(index) != expected_index_hash:
+            raise SpecValidationError(
+                "Stored proposal index does not match its opaque reference."
+            )
+        result = read_sharded_complete_proposal_section(
+            index,
+            section,
+            cursor=cursor,
+            limit=limit,
+            max_bytes=self.policy.mcp_page_bytes,
+            cursor_key=self._proposal_cursor_key(
+                index,
+                create=False,
+            ),
+        )
+        if result.get("proposal_hash") != expected_hash:
+            raise SpecValidationError(
+                "Stored proposal does not match its opaque reference."
+            )
+        return {
+            **result,
+            "proposal_ref": proposal_ref,
+        }
 
     def apply_source_patch(
         self,
@@ -348,10 +542,11 @@ class MMMToolService:
             },
             {"role": "user", "content": brief},
         ]
+        scoped_media = self._scoped_media_paths(media_paths)
         text = self.router_factory().generate_text(
             "world_planner",
             messages,
-            media_paths=media_paths,
+            media_paths=scoped_media,
             response_format="json",
         )
         ir = _extract_json(text)
@@ -546,6 +741,216 @@ class MMMToolService:
             raise SpecValidationError("Proposal approval failed.")
         return approved
 
+    def _store_complete_proposal(
+        self,
+        proposal: CompleteProposal,
+    ) -> str:
+        proposal.validate(policy=self.policy)
+        digest = proposal.calculate_hash().removeprefix("sha256:")
+        expected_hash = f"sha256:{digest}"
+        index = self._proposal_index_for_digest(
+            digest,
+            require_existing=False,
+        )
+        if index.exists():
+            if not index.is_file() or index.is_symlink():
+                raise SpecValidationError(
+                    "Stored proposal index is unsafe."
+                )
+            stored = load_sharded_complete_proposal(index)
+            if stored.calculate_hash() != expected_hash:
+                raise SpecValidationError(
+                    "Stored proposal does not match its opaque reference."
+                )
+            self._proposal_cursor_key(index, create=True)
+            return (
+                f"plan_{digest}_"
+                f"{_sha256(index).removeprefix('sha256:')}"
+            )
+        index.parent.mkdir(parents=True, exist_ok=True)
+        if index.parent.is_symlink():
+            raise SpecValidationError(
+                "Stored proposal directory may not be a symlink."
+            )
+        write_sharded_complete_proposal(
+            proposal,
+            index,
+            shard_size=self.policy.java_shard_size,
+            policy=self.policy,
+        )
+        stored = load_sharded_complete_proposal(index)
+        if stored.calculate_hash() != expected_hash:
+            raise SpecValidationError(
+                "Stored proposal verification failed."
+            )
+        self._proposal_cursor_key(index, create=True)
+        return (
+            f"plan_{digest}_"
+            f"{_sha256(index).removeprefix('sha256:')}"
+        )
+
+    def _resolve_complete_proposal(
+        self,
+        *,
+        complete_proposal: dict[str, Any] | None,
+        proposal_ref: str,
+    ) -> tuple[CompleteProposal, str]:
+        has_inline = complete_proposal is not None
+        has_ref = bool(proposal_ref)
+        if has_inline == has_ref:
+            raise SpecValidationError(
+                "Supply exactly one of complete_proposal or proposal_ref."
+            )
+        if has_inline:
+            if not isinstance(complete_proposal, dict):
+                raise SpecValidationError(
+                    "complete_proposal must be an object."
+                )
+            parsed = CompleteProposal.from_dict(complete_proposal)
+            return parsed, self._store_complete_proposal(parsed)
+        index, expected_hash, expected_index_hash = self._proposal_index_for_ref(
+            proposal_ref,
+            require_existing=True,
+        )
+        if _sha256(index) != expected_index_hash:
+            raise SpecValidationError(
+                "Stored proposal index does not match its opaque reference."
+            )
+        parsed = load_sharded_complete_proposal(index)
+        if parsed.calculate_hash() != expected_hash:
+            raise SpecValidationError(
+                "Stored proposal does not match its opaque reference."
+            )
+        return parsed, proposal_ref
+
+    def _proposal_index_for_ref(
+        self,
+        proposal_ref: str,
+        *,
+        require_existing: bool,
+    ) -> tuple[Path, str, str]:
+        if not isinstance(proposal_ref, str):
+            raise SpecValidationError("proposal_ref must be a string.")
+        match = _PROPOSAL_REF.fullmatch(proposal_ref)
+        if match is None:
+            raise SpecValidationError(
+                "proposal_ref is not a valid M.M.M plan reference."
+            )
+        digest = match.group(1)
+        index_digest = match.group(2)
+        index = self._proposal_index_for_digest(
+            digest,
+            require_existing=require_existing,
+        )
+        return (
+            index,
+            f"sha256:{digest}",
+            f"sha256:{index_digest}",
+        )
+
+    def _proposal_index_for_digest(
+        self,
+        digest: str,
+        *,
+        require_existing: bool,
+    ) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise SpecValidationError("Proposal digest is invalid.")
+        logical_parts = (
+            self.workspace_root / ".minecraft_ai",
+            self.workspace_root / ".minecraft_ai" / "plans",
+            self.workspace_root / ".minecraft_ai" / "plans" / digest,
+        )
+        for part in logical_parts:
+            if part.exists() and part.is_symlink():
+                raise SpecValidationError(
+                    "Proposal storage directories may not be symlinks."
+                )
+        index = (logical_parts[-1] / "complete-proposal.json").resolve()
+        try:
+            index.relative_to(self.workspace_root)
+        except ValueError as exc:
+            raise SpecValidationError(
+                "Proposal reference escaped the configured workspace."
+            ) from exc
+        if require_existing and (
+            not index.is_file() or index.is_symlink()
+        ):
+            raise SpecValidationError(
+                "Stored proposal reference was not found."
+            )
+        return index
+
+    def _proposal_cursor_key(
+        self,
+        index: Path,
+        *,
+        create: bool,
+    ) -> bytes:
+        key_path = (index.parent / "cursor.key").resolve()
+        try:
+            key_path.relative_to(self.workspace_root)
+        except ValueError as exc:
+            raise SpecValidationError(
+                "Proposal cursor key escaped the configured workspace."
+            ) from exc
+        if key_path.exists():
+            if not key_path.is_file() or key_path.is_symlink():
+                raise SpecValidationError(
+                    "Proposal cursor key is unsafe."
+                )
+            value = key_path.read_bytes()
+            if len(value) != 32:
+                raise SpecValidationError(
+                    "Proposal cursor key has an invalid size."
+                )
+            return value
+        if not create:
+            raise SpecValidationError(
+                "Proposal cursor key is missing."
+            )
+        value = os.urandom(32)
+        try:
+            with key_path.open("xb") as stream:
+                stream.write(value)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except FileExistsError:
+            return self._proposal_cursor_key(index, create=False)
+        return value
+
+    @staticmethod
+    def _complete_proposal_counts(
+        proposal: CompleteProposal,
+    ) -> dict[str, int]:
+        world = proposal.world_ir or {}
+        counts = {
+            "production_batches": (
+                len(proposal.game_design.get("production_outline", ()))
+                if isinstance(
+                    proposal.game_design.get("production_outline"),
+                    list,
+                )
+                else 0
+            ),
+            "modules": len(proposal.modules),
+            "assets": len(proposal.assets),
+            "audio": len(proposal.audio),
+            "acceptance_tests": len(proposal.acceptance_tests),
+        }
+        for name in (
+            "regions",
+            "routes",
+            "structures",
+            "quests",
+            "constraints",
+        ):
+            value = world.get(name, ())
+            counts[f"world.{name}"] = (
+                len(value) if isinstance(value, list) else 0
+            )
+        return counts
+
     def _new_child(self, relative: str) -> Path:
         target = self._resolve_child(relative)
         if target.exists():
@@ -574,6 +979,19 @@ class MMMToolService:
                 f"Directory not found inside workspace: {path}"
             )
         return path
+
+    def _scoped_media_paths(
+        self,
+        values: Sequence[str],
+    ) -> tuple[str, ...]:
+        if isinstance(values, (str, bytes)):
+            raise SpecValidationError(
+                "media_paths must be a list of workspace files."
+            )
+        return tuple(
+            str(self._existing_file(str(value)))
+            for value in values
+        )
 
     def _resolve_child(self, value: str) -> Path:
         candidate = Path(value).expanduser()

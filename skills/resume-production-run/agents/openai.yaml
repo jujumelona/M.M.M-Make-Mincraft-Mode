@@ -1,0 +1,4 @@
+interface:
+  display_name: "Resume Production Run"
+  short_description: "Resume a durable M.M.M run from verified checkpoints."
+  default_prompt: "Use $resume-production-run to inspect and safely continue this interrupted production run."

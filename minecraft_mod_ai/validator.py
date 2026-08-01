@@ -10,6 +10,15 @@ from typing import Any
 
 from .complete_spec import CompleteProposal
 from .generator import _arena_path_length
+from .local_ai_sidecar_generator import (
+    INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
+    LocalAiSidecarGenerationError,
+    local_ai_sidecar_manifest_path,
+    local_ai_sidecar_source_path,
+    normalize_local_ai_sidecar_config,
+    render_local_ai_sidecar_manifest,
+    render_local_ai_sidecar_source,
+)
 from .scale_policy import ScalePolicy
 from .spec import ContentKind, ModSpec
 
@@ -75,6 +84,11 @@ class ProjectValidator:
         complete = _load_complete_project_proposal(root, spec, findings)
         complete_entity_ids = _complete_entity_ids(complete)
         complete_client_allowed = _complete_client_required(complete)
+        reviewed_network_sources = _reviewed_local_ai_sidecar_network_sources(
+            root,
+            spec,
+            complete,
+        )
 
         for path in sorted(root.rglob("*")):
             checks += 1
@@ -137,13 +151,19 @@ class ProjectValidator:
         for path in java_files:
             checks += 1
             text = path.read_text(encoding="utf-8", errors="replace")
+            relative = self._rel(root, path)
             for token in self.FORBIDDEN_JAVA:
                 if token in text:
+                    if (
+                        token == "java.net."
+                        and reviewed_network_sources.get(relative) == text
+                    ):
+                        continue
                     findings.append(
                         Finding(
                             "FORBIDDEN_JAVA_API",
                             "error",
-                            self._rel(root, path),
+                            relative,
                             f"Generated source contains forbidden API token {token!r}.",
                         )
                     )
@@ -801,6 +821,88 @@ class ProjectValidator:
                         "Compiled world manifest is missing.",
                     )
                 )
+        checks += self._validate_local_ai_sidecar_sources(
+            root,
+            spec,
+            complete,
+            findings,
+        )
+        return checks
+
+    def _validate_local_ai_sidecar_sources(
+        self,
+        root: Path,
+        spec: ModSpec,
+        complete: CompleteProposal,
+        findings: list[Finding],
+    ) -> int:
+        checks = 0
+        for module in complete.modules:
+            if (
+                module.kind != "integration"
+                or module.config.get("integration_type")
+                != LOCAL_AI_SIDECAR_INTEGRATION_TYPE
+            ):
+                continue
+            checks += 1
+            try:
+                normalized = normalize_local_ai_sidecar_config(module.config)
+                source_relative = local_ai_sidecar_source_path(
+                    spec.package_name,
+                    module.module_id,
+                )
+                manifest_relative = local_ai_sidecar_manifest_path(module.module_id)
+                expected_source = render_local_ai_sidecar_source(
+                    package_name=spec.package_name,
+                    module_id=module.module_id,
+                    config=normalized,
+                )
+                expected_manifest = render_local_ai_sidecar_manifest(
+                    package_name=spec.package_name,
+                    module_id=module.module_id,
+                    config=normalized,
+                )
+            except LocalAiSidecarGenerationError as exc:
+                findings.append(
+                    Finding(
+                        "LOCAL_AI_SIDECAR_POLICY_INVALID",
+                        "error",
+                        ".minecraft_ai/complete-proposal.json",
+                        f"Approved local AI sidecar policy is invalid: {exc}",
+                    )
+                )
+                continue
+
+            for relative, expected, code, label in (
+                (
+                    source_relative,
+                    expected_source,
+                    "LOCAL_AI_SIDECAR_SOURCE_MISMATCH",
+                    "source",
+                ),
+                (
+                    manifest_relative,
+                    expected_manifest,
+                    "LOCAL_AI_SIDECAR_MANIFEST_MISMATCH",
+                    "policy manifest",
+                ),
+            ):
+                checks += 1
+                path = root / relative
+                if (
+                    not path.is_file()
+                    or path.is_symlink()
+                    or path.read_text(encoding="utf-8", errors="replace") != expected
+                ):
+                    findings.append(
+                        Finding(
+                            code,
+                            "error",
+                            relative,
+                            "Reviewed local AI sidecar "
+                            f"{label} must exactly match the approved deterministic reconstruction.",
+                        )
+                    )
         return checks
 
     def _load_json(
@@ -898,7 +1000,15 @@ def _load_complete_project_proposal(
         return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        proposal = CompleteProposal.from_dict(raw)
+        if raw.get("schema_version") in {
+            "mmm/complete-proposal-index-v1",
+            "mmm/complete-proposal-index-v2",
+        }:
+            from .proposal_store import load_sharded_complete_proposal
+
+            proposal = load_sharded_complete_proposal(path)
+        else:
+            proposal = CompleteProposal.from_dict(raw)
         if proposal.status.value != "approved":
             raise ValueError("complete proposal is not approved")
         if proposal.base_proposal.spec.mod_id != spec.mod_id:
@@ -916,6 +1026,56 @@ def _load_complete_project_proposal(
         return None
 
 
+def _reviewed_local_ai_sidecar_network_sources(
+    root: Path,
+    spec: ModSpec,
+    complete: CompleteProposal | None,
+) -> dict[str, str]:
+    """Return only source whose approved policy manifest also matches exactly."""
+
+    if complete is None:
+        return {}
+    reviewed: dict[str, str] = {}
+    for module in complete.modules:
+        if (
+            module.kind != "integration"
+            or module.config.get("integration_type")
+            != LOCAL_AI_SIDECAR_INTEGRATION_TYPE
+        ):
+            continue
+        try:
+            normalized = normalize_local_ai_sidecar_config(module.config)
+            source_relative = local_ai_sidecar_source_path(
+                spec.package_name,
+                module.module_id,
+            )
+            manifest_relative = local_ai_sidecar_manifest_path(module.module_id)
+            expected_source = render_local_ai_sidecar_source(
+                package_name=spec.package_name,
+                module_id=module.module_id,
+                config=normalized,
+            )
+            expected_manifest = render_local_ai_sidecar_manifest(
+                package_name=spec.package_name,
+                module_id=module.module_id,
+                config=normalized,
+            )
+            source_path = root / source_relative
+            manifest_path = root / manifest_relative
+            if (
+                source_path.is_file()
+                and not source_path.is_symlink()
+                and manifest_path.is_file()
+                and not manifest_path.is_symlink()
+                and source_path.read_text(encoding="utf-8") == expected_source
+                and manifest_path.read_text(encoding="utf-8") == expected_manifest
+            ):
+                reviewed[source_relative] = expected_source
+        except (LocalAiSidecarGenerationError, OSError, UnicodeError):
+            continue
+    return reviewed
+
+
 def _load_complete_jar_proposal(
     archive: zipfile.ZipFile,
     spec: ModSpec,
@@ -926,7 +1086,18 @@ def _load_complete_jar_proposal(
         return None
     try:
         raw = json.loads(archive.read(name).decode("utf-8"))
-        proposal = CompleteProposal.from_dict(raw)
+        if raw.get("schema_version") in {
+            "mmm/complete-proposal-index-v1",
+            "mmm/complete-proposal-index-v2",
+        }:
+            from .proposal_store import load_sharded_complete_proposal_from_zip
+
+            proposal = load_sharded_complete_proposal_from_zip(
+                archive,
+                name,
+            )
+        else:
+            proposal = CompleteProposal.from_dict(raw)
         if proposal.status.value != "approved":
             raise ValueError("complete proposal is not approved")
         if proposal.base_proposal.spec.mod_id != spec.mod_id:

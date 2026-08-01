@@ -77,15 +77,26 @@ public final class MmmPersistentStore {{
 '''
 
 
-def _config_loader_java(package_name: str) -> str:
+def _config_loader_java(package_name: str, mod_id: str) -> str:
     return f'''package {package_name}.system;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Consumer;
 
 public final class MmmSystemConfig {{
     private static final Gson GSON = new Gson();
@@ -98,6 +109,174 @@ public final class MmmSystemConfig {{
         }} catch (Exception exception) {{
             throw new IllegalStateException("Could not load system resource: " + absoluteResourcePath, exception);
         }}
+    }}
+
+    public static void forEachModule(
+        String absoluteResourcePath,
+        Consumer<JsonObject> visitor
+    ) {{
+        JsonObject catalog = load(absoluteResourcePath);
+        if (catalog.has("modules")) {{
+            visitModules(catalog.getAsJsonArray("modules"), visitor);
+            return;
+        }}
+        String storage = catalog.get("storage_schema_version").getAsString();
+        int expected = catalog.get("module_count").getAsInt();
+        if ("mmm/system-pack-directory-v1".equals(storage)) {{
+            visitDirectory(
+                resourcePath(catalog.get("directory")),
+                expected,
+                visitor
+            );
+            return;
+        }}
+        if (!"mmm/system-pack-index-v1".equals(storage)) {{
+            throw new IllegalStateException(
+                "Unsupported system catalog: " + absoluteResourcePath
+            );
+        }}
+        int visitedModules = 0;
+        ArrayDeque<String> pending = new ArrayDeque<>();
+        Set<String> visitedPaths = new HashSet<>();
+        pending.add(resourcePath(catalog.get("root")));
+        while (!pending.isEmpty()) {{
+            String path = pending.removeFirst();
+            if (!visitedPaths.add(path)) {{
+                throw new IllegalStateException("System catalog cycle: " + path);
+            }}
+            JsonObject node = load(path);
+            String schema = node.get("schema_version").getAsString();
+            if ("mmm/system-module-shard-v1".equals(schema)) {{
+                JsonArray modules = node.getAsJsonArray("modules");
+                visitedModules += modules.size();
+                visitModules(modules, visitor);
+                continue;
+            }}
+            if (!"mmm/system-module-index-node-v1".equals(schema)) {{
+                throw new IllegalStateException(
+                    "Unsupported system catalog node: " + path
+                );
+            }}
+            JsonArray children = node.getAsJsonArray("children");
+            if (children.size() == 0) {{
+                throw new IllegalStateException(
+                    "Empty system catalog index: " + path
+                );
+            }}
+            for (int index = children.size() - 1; index >= 0; index--) {{
+                pending.addFirst(resourcePath(children.get(index)));
+            }}
+        }}
+        if (visitedModules != expected) {{
+            throw new IllegalStateException(
+                "System module count mismatch: expected "
+                    + expected + ", loaded " + visitedModules
+            );
+        }}
+    }}
+
+    private static void visitDirectory(
+        String absoluteDirectory,
+        int expected,
+        Consumer<JsonObject> visitor
+    ) {{
+        Map<String, Path> records = new TreeMap<>();
+        String relative = absoluteDirectory.substring(1);
+        FabricLoader.getInstance()
+            .getModContainer("{mod_id}")
+            .orElseThrow()
+            .getRootPaths()
+            .forEach(root -> collectRecords(root.resolve(relative), records));
+        if (records.size() != expected) {{
+            throw new IllegalStateException(
+                "System module count mismatch: expected "
+                    + expected + ", found " + records.size()
+            );
+        }}
+        for (Map.Entry<String, Path> entry : records.entrySet()) {{
+            JsonObject record = loadFile(entry.getValue());
+            if (!"mmm/system-module-record-v1".equals(
+                record.get("schema_version").getAsString()
+            )) {{
+                throw new IllegalStateException(
+                    "Unsupported system module record: " + entry.getKey()
+                );
+            }}
+            JsonObject module = record.getAsJsonObject("module");
+            String moduleId = module.get("module_id").getAsString();
+            if (!entry.getKey().equals(moduleId + ".json")) {{
+                throw new IllegalStateException(
+                    "System module record filename mismatch: " + entry.getKey()
+                );
+            }}
+            visitor.accept(module);
+        }}
+    }}
+
+    private static void collectRecords(
+        Path directory,
+        Map<String, Path> records
+    ) {{
+        if (!Files.isDirectory(directory) || Files.isSymbolicLink(directory)) {{
+            return;
+        }}
+        try (var paths = Files.list(directory)) {{
+            paths.filter(path ->
+                Files.isRegularFile(path)
+                    && !Files.isSymbolicLink(path)
+                    && path.getFileName().toString().endsWith(".json")
+            ).forEach(path -> {{
+                String name = path.getFileName().toString();
+                Path previous = records.putIfAbsent(name, path);
+                if (previous != null && !previous.equals(path)) {{
+                    throw new IllegalStateException(
+                        "Duplicate system module record: " + name
+                    );
+                }}
+            }});
+        }} catch (java.io.IOException error) {{
+            throw new IllegalStateException(
+                "Could not enumerate system module records",
+                error
+            );
+        }}
+    }}
+
+    private static JsonObject loadFile(Path path) {{
+        try (var reader = Files.newBufferedReader(
+            path,
+            StandardCharsets.UTF_8
+        )) {{
+            return GSON.fromJson(reader, JsonObject.class);
+        }} catch (Exception error) {{
+            throw new IllegalStateException(
+                "Could not load system module record: " + path,
+                error
+            );
+        }}
+    }}
+
+    private static void visitModules(
+        JsonArray modules,
+        Consumer<JsonObject> visitor
+    ) {{
+        for (JsonElement element : modules) {{
+            visitor.accept(element.getAsJsonObject());
+        }}
+    }}
+
+    private static String resourcePath(JsonElement raw) {{
+        String path = raw.getAsString();
+        if (
+            !path.startsWith("/data/")
+                || path.contains("..")
+                || path.contains("\\\\")
+        ) {{
+            throw new IllegalStateException(
+                "Unsafe system catalog resource path: " + path
+            );
+        }}
+        return path;
     }}
 }}
 '''

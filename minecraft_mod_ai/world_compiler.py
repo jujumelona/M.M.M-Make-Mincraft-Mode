@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import struct
 import zipfile
 from pathlib import Path
@@ -27,179 +28,548 @@ def compile_world_ir(
     output_root: str | Path,
     package_world_zip: bool = True,
 ) -> dict[str, Any]:
-    """Compile validated WorldDesignIR into deterministic 1.20.1 datapack resources.
-
-    The compiler emits real binary structure NBT plus Jigsaw template pools,
-    processors, structures, structure sets and biome tags. Runtime placement still
-    has to pass a disposable-world integration test before release.
-    """
+    """Compile a deterministic, crash-resumable Minecraft 1.20.1 world pack."""
 
     _validate(ir, mod_id)
     root = Path(output_root).expanduser().resolve()
-    if root.exists():
-        raise FileExistsError(root)
-    root.mkdir(parents=True)
-    data_root = root / "data" / mod_id
-    generated: list[Path] = []
+    world_hash = _world_ir_sha256(ir)
     structures = sorted(ir["structures"], key=lambda item: item["id"])
+    if _compiled_root_matches(
+        root,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+    ):
+        archive = _package_world_root(root) if package_world_zip else None
+        return _world_result(
+            root,
+            archive,
+            structures=[str(item["id"]) for item in structures],
+        )
+
+    stage = _prepare_world_stage(
+        root,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+    )
+    if stage.exists():
+        _promote_world_stage(stage, root)
+        archive = _package_world_root(root) if package_world_zip else None
+        return _world_result(
+            root,
+            archive,
+            structures=[str(item["id"]) for item in structures],
+        )
+    stage.mkdir(parents=True, exist_ok=False)
+    data_root = stage / "data" / mod_id
     for index, structure in enumerate(structures):
-        structure_id = structure["id"]
         size = _size(structure)
         palette = _palette(structure)
         blocks = _build_blocks(structure, size, palette)
-        nbt_path = data_root / "structures" / f"{structure_id}.nbt"
-        nbt_path.parent.mkdir(parents=True, exist_ok=True)
-        nbt_path.write_bytes(_structure_nbt(size, palette, blocks))
-        generated.append(nbt_path)
+        _write_structure_resources(
+            data_root=data_root,
+            mod_id=mod_id,
+            structure=structure,
+            structure_index=index,
+            size=size,
+            palette=palette,
+            blocks=blocks,
+            emit_worldgen=True,
+            runtime_placement="vanilla_worldgen",
+        )
+    _write_world_contract_shards(ir, data_root=data_root)
+    _write_pack_metadata(stage)
+    _write_world_manifest(
+        stage,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+        logical_structure_count=len(structures),
+        partitioned_structure_count=0,
+        physical_template_count=len(structures),
+    )
+    if not _compiled_root_matches(
+        stage,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+    ):
+        raise WorldCompileError("Staged world output failed integrity validation.")
+    _promote_world_stage(stage, root)
+    archive = _package_world_root(root) if package_world_zip else None
+    return _world_result(
+        root,
+        archive,
+        structures=[str(item["id"]) for item in structures],
+    )
 
-        pool = {
-            "name": f"{mod_id}:{structure_id}",
-            "fallback": "minecraft:empty",
-            "elements": [
-                {
-                    "weight": 1,
-                    "element": {
-                        "location": f"{mod_id}:{structure_id}",
-                        "processors": f"{mod_id}:{structure_id}",
-                        "projection": "rigid",
-                        "element_type": "minecraft:single_pool_element",
-                    },
-                }
-            ],
-        }
-        generated.append(
-            _write_json(
-                data_root / "worldgen" / "template_pool" / f"{structure_id}.json",
-                pool,
-            )
-        )
-        generated.append(
-            _write_json(
-                data_root / "worldgen" / "processor_list" / f"{structure_id}.json",
-                {"processors": []},
-            )
-        )
-        structure_json = {
-            "type": "minecraft:jigsaw",
-            "biomes": f"#{mod_id}:has_structure/{structure_id}",
-            "step": "surface_structures",
-            "spawn_overrides": {},
-            "terrain_adaptation": "beard_thin",
-            "start_pool": f"{mod_id}:{structure_id}",
-            "size": int(structure.get("jigsaw_depth", 1)),
-            "start_height": {
-                "absolute": int(structure.get("start_height", 0))
+
+def _write_structure_resources(
+    *,
+    data_root: Path,
+    mod_id: str,
+    structure: dict[str, Any],
+    structure_index: int,
+    size: tuple[int, int, int],
+    palette: list[str],
+    blocks: list[tuple[tuple[int, int, int], int]],
+    emit_worldgen: bool,
+    runtime_placement: str,
+) -> None:
+    structure_id = str(structure["id"])
+    nbt_path = data_root / "structures" / f"{structure_id}.nbt"
+    nbt_path.parent.mkdir(parents=True, exist_ok=True)
+    nbt_path.write_bytes(_structure_nbt(size, palette, blocks))
+
+    spacing, separation, salt, biomes = _placement_fields(
+        structure,
+        structure_index,
+    )
+    if emit_worldgen:
+        _write_json(
+            data_root / "worldgen" / "template_pool" / f"{structure_id}.json",
+            {
+                "name": f"{mod_id}:{structure_id}",
+                "fallback": "minecraft:empty",
+                "elements": [
+                    {
+                        "weight": 1,
+                        "element": {
+                            "location": f"{mod_id}:{structure_id}",
+                            "processors": f"{mod_id}:{structure_id}",
+                            "projection": "rigid",
+                            "element_type": "minecraft:single_pool_element",
+                        },
+                    }
+                ],
             },
-            "project_start_to_heightmap": "WORLD_SURFACE_WG",
-            "max_distance_from_center": int(
-                structure.get("max_distance_from_center", 80)
-            ),
-            "use_expansion_hack": False,
-        }
-        generated.append(
-            _write_json(
-                data_root / "worldgen" / "structure" / f"{structure_id}.json",
-                structure_json,
-            )
         )
-        spacing = int(structure.get("spacing", 32))
-        separation = int(structure.get("separation", 8))
-        if not 2 <= separation < spacing <= 4096:
-            raise WorldCompileError(
-                f"Invalid spacing/separation for {structure_id}: {spacing}/{separation}"
-            )
-        generated.append(
-            _write_json(
-                data_root / "worldgen" / "structure_set" / f"{structure_id}.json",
-                {
-                    "structures": [
-                        {
-                            "structure": f"{mod_id}:{structure_id}",
-                            "weight": 1,
-                        }
-                    ],
-                    "placement": {
-                        "type": "minecraft:random_spread",
-                        "salt": int(structure.get("salt", 918273 + index)),
-                        "spacing": spacing,
-                        "separation": separation,
-                    },
+        _write_json(
+            data_root
+            / "worldgen"
+            / "processor_list"
+            / f"{structure_id}.json",
+            {"processors": []},
+        )
+        _write_json(
+            data_root / "worldgen" / "structure" / f"{structure_id}.json",
+            {
+                "type": "minecraft:jigsaw",
+                "biomes": f"#{mod_id}:has_structure/{structure_id}",
+                "step": "surface_structures",
+                "spawn_overrides": {},
+                "terrain_adaptation": "beard_thin",
+                "start_pool": f"{mod_id}:{structure_id}",
+                "size": int(structure.get("jigsaw_depth", 1)),
+                "start_height": {
+                    "absolute": int(structure.get("start_height", 0))
                 },
+                "project_start_to_heightmap": "WORLD_SURFACE_WG",
+                "max_distance_from_center": int(
+                    structure.get("max_distance_from_center", 80)
+                ),
+                "use_expansion_hack": False,
+            },
+        )
+        _write_json(
+            data_root
+            / "worldgen"
+            / "structure_set"
+            / f"{structure_id}.json",
+            {
+                "structures": [
+                    {
+                        "structure": f"{mod_id}:{structure_id}",
+                        "weight": 1,
+                    }
+                ],
+                "placement": {
+                    "type": "minecraft:random_spread",
+                    "salt": salt,
+                    "spacing": spacing,
+                    "separation": separation,
+                },
+            },
+        )
+        _write_json(
+            data_root
+            / "tags"
+            / "worldgen"
+            / "biome"
+            / "has_structure"
+            / f"{structure_id}.json",
+            {"replace": False, "values": biomes},
+        )
+    _write_structure_runtime_contract(
+        data_root=data_root,
+        mod_id=mod_id,
+        structure=structure,
+        placement=runtime_placement,
+        spacing=spacing,
+        separation=separation,
+        salt=salt,
+        biomes=biomes,
+        shard_count=0,
+    )
+
+
+def _placement_fields(
+    structure: dict[str, Any],
+    structure_index: int,
+) -> tuple[int, int, int, list[str]]:
+    structure_id = str(structure["id"])
+    spacing = int(structure.get("spacing", 32))
+    separation = int(structure.get("separation", 8))
+    if not 2 <= separation < spacing <= 4096:
+        raise WorldCompileError(
+            f"Invalid spacing/separation for {structure_id}: "
+            f"{spacing}/{separation}"
+        )
+    if "salt" in structure:
+        salt = int(structure["salt"])
+    else:
+        salt = (918273 + structure_index) & 0xFFFFFFFF
+        if salt >= 2**31:
+            salt -= 2**32
+    if not -(2**31) <= salt < 2**31:
+        raise WorldCompileError(
+            f"Structure salt must fit a signed 32-bit integer: {structure_id}"
+        )
+    biomes = structure.get(
+        "biomes",
+        ["minecraft:plains", "minecraft:forest"],
+    )
+    if (
+        not isinstance(biomes, list)
+        or not biomes
+        or any(
+            not isinstance(value, str) or not _BLOCK.fullmatch(value)
+            for value in biomes
+        )
+    ):
+        raise WorldCompileError(
+            f"{structure_id} requires valid biome identifiers."
+        )
+    return spacing, separation, salt, list(biomes)
+
+
+def _write_structure_runtime_contract(
+    *,
+    data_root: Path,
+    mod_id: str,
+    structure: dict[str, Any],
+    placement: str,
+    spacing: int,
+    separation: int,
+    salt: int,
+    biomes: list[str],
+    shard_count: int,
+) -> Path:
+    structure_id = str(structure["id"])
+    dimension = str(
+        structure.get("dimension", "minecraft:overworld")
+    )
+    if not _BLOCK.fullmatch(dimension):
+        raise WorldCompileError(
+            f"Invalid dimension for {structure_id}: {dimension!r}"
+        )
+    anchor_y = structure.get("start_height")
+    if anchor_y is not None and type(anchor_y) is not int:
+        raise WorldCompileError(
+            f"start_height for {structure_id} must be an integer."
+        )
+    return _write_json(
+        data_root
+        / "mmm_world"
+        / "contracts"
+        / "structures"
+        / f"{structure_id}.json",
+        {
+            "schema_version": "mmm/world-structure-runtime-v1",
+            "id": structure_id,
+            "region_id": str(structure["region_id"]),
+            "placement": placement,
+            "dimension": dimension,
+            "spacing": spacing,
+            "separation": separation,
+            "salt": salt,
+            "biomes": biomes,
+            "anchor_y": anchor_y,
+            "function": (
+                f"{mod_id}:generated/{structure_id}/part_{{shard}}"
+                if shard_count
+                else None
+            ),
+            "shard_count": shard_count,
+        },
+    )
+
+
+def _write_world_contract_shards(
+    ir: dict[str, Any],
+    *,
+    data_root: Path,
+) -> None:
+    definitions = (
+        ("regions", "region", "activate_region"),
+        ("routes", "route", "connect_regions"),
+        ("quests", "quest", "register_quest"),
+        ("constraints", "constraint", "enforce_constraint"),
+    )
+    for plural, singular, operation in definitions:
+        used_ids: set[str] = set()
+        for index, value in enumerate(ir[plural]):
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
             )
-        )
-        biomes = structure.get(
-            "biomes",
-            ["minecraft:plains", "minecraft:forest"],
-        )
-        if not isinstance(biomes, list) or not biomes:
-            raise WorldCompileError(f"{structure_id} requires at least one biome.")
-        generated.append(
+            digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
+            candidate = (
+                str(value.get("id", ""))
+                if isinstance(value, dict)
+                else ""
+            )
+            contract_id = (
+                candidate
+                if _ID.fullmatch(candidate) and candidate not in used_ids
+                else f"{singular}_{index:08d}_{digest}"
+            )
+            collision = 0
+            while contract_id in used_ids:
+                contract_id = (
+                    f"{singular}_{index:08d}_{digest}_{collision:04d}"
+                )
+                collision += 1
+            used_ids.add(contract_id)
             _write_json(
                 data_root
-                / "tags"
-                / "worldgen"
-                / "biome"
-                / "has_structure"
-                / f"{structure_id}.json",
-                {"replace": False, "values": biomes},
+                / "mmm_world"
+                / "contracts"
+                / plural
+                / f"{contract_id}.json",
+                {
+                    "schema_version": f"mmm/world-{singular}-runtime-v1",
+                    "id": contract_id,
+                    "operation": operation,
+                    "enabled": True,
+                    "payload": value,
+                },
             )
-        )
 
-    generated.append(
-        _write_json(
-            root / "pack.mcmeta",
-            {
-                "pack": {
-                    "pack_format": 15,
-                    "description": (
-                        "M.M.M generated Minecraft 1.20.1 worldgen resources; "
-                        "runtime verification required"
-                    ),
-                }
-            },
-        )
-    )
-    manifest = {
-        "schema_version": "mmm/world-compile-manifest-v1",
-        "minecraft_version": "1.20.1",
-        "mod_id": mod_id,
-        "world_ir_sha256": "sha256:"
-        + hashlib.sha256(
-            json.dumps(ir, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest(),
-        "files": [
-            {
-                "path": str(path.relative_to(root)).replace("\\", "/"),
-                "sha256": _sha256(path),
+
+def _write_pack_metadata(root: Path) -> Path:
+    return _write_json(
+        root / "pack.mcmeta",
+        {
+            "pack": {
+                "pack_format": 15,
+                "description": (
+                    "M.M.M generated Minecraft 1.20.1 world resources; "
+                    "runtime verification required"
+                ),
             }
-            for path in sorted(generated)
-        ],
-        "runtime_verification": "required",
-    }
-    manifest_path = _write_json(root / "mmm-world-manifest.json", manifest)
-    generated.append(manifest_path)
+        },
+    )
 
-    archive_path: Path | None = None
-    if package_world_zip:
-        archive_path = root.with_suffix(".zip")
-        if archive_path.exists():
-            raise FileExistsError(archive_path)
-        with zipfile.ZipFile(
-            archive_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as archive:
-            for path in sorted(root.rglob("*")):
-                if path.is_file() and not path.is_symlink():
-                    archive.write(path, path.relative_to(root))
 
+def _world_ir_sha256(ir: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        ir,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _artifact_set(root: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    count = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise WorldCompileError(
+                f"World output contains a symlink: {path}"
+            )
+        if (
+            not path.is_file()
+            or path.name == "mmm-world-manifest.json"
+        ):
+            continue
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_sha256(path).encode("ascii"))
+        digest.update(b"\n")
+        count += 1
+    return count, "sha256:" + digest.hexdigest()
+
+
+def _write_world_manifest(
+    root: Path,
+    *,
+    mod_id: str,
+    world_ir_sha256: str,
+    logical_structure_count: int,
+    partitioned_structure_count: int,
+    physical_template_count: int,
+) -> Path:
+    artifact_count, artifact_hash = _artifact_set(root)
+    return _write_json(
+        root / "mmm-world-manifest.json",
+        {
+            "schema_version": "mmm/world-compile-manifest-v3",
+            "minecraft_version": "1.20.1",
+            "mod_id": mod_id,
+            "world_ir_sha256": world_ir_sha256,
+            "artifact_set": {
+                "algorithm": "sorted-path-sha256-v1",
+                "count": artifact_count,
+                "sha256": artifact_hash,
+            },
+            "logical_structure_count": logical_structure_count,
+            "partitioned_structure_count": (
+                partitioned_structure_count
+            ),
+            "physical_template_count": physical_template_count,
+            "runtime_contract_prefix": (
+                f"data/{mod_id}/mmm_world/contracts"
+            ),
+            "runtime_verification": "required",
+        },
+    )
+
+
+def _compiled_root_matches(
+    root: Path,
+    *,
+    mod_id: str,
+    world_ir_sha256: str,
+) -> bool:
+    if not root.is_dir() or root.is_symlink():
+        return False
+    manifest_path = root / "mmm-world-manifest.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        return False
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        expected = manifest["artifact_set"]
+        count, digest = _artifact_set(root)
+        return (
+            manifest.get("schema_version")
+            == "mmm/world-compile-manifest-v3"
+            and manifest.get("mod_id") == mod_id
+            and manifest.get("world_ir_sha256")
+            == world_ir_sha256
+            and expected.get("count") == count
+            and expected.get("sha256") == digest
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _prepare_world_stage(
+    root: Path,
+    *,
+    mod_id: str,
+    world_ir_sha256: str,
+) -> Path:
+    root.parent.mkdir(parents=True, exist_ok=True)
+    if root.exists() and root.is_symlink():
+        raise WorldCompileError("World output root must not be a symlink.")
+    stage = root.with_name(f".{root.name}.mmm-stage")
+    if stage.exists():
+        if stage.is_symlink():
+            raise WorldCompileError("World staging root must not be a symlink.")
+        if _compiled_root_matches(
+            stage,
+            mod_id=mod_id,
+            world_ir_sha256=world_ir_sha256,
+        ):
+            return stage
+        _preserve_world_path(stage, "incomplete")
+    return stage
+
+
+def _promote_world_stage(stage: Path, root: Path) -> None:
+    if root.exists():
+        _preserve_world_path(root, "replaced")
+    stage.rename(root)
+
+
+def _preserve_world_path(path: Path, label: str) -> Path:
+    index = 1
+    while True:
+        target = path.with_name(
+            f".{path.name}.{label}-{index:05d}"
+        )
+        if not target.exists():
+            path.rename(target)
+            return target
+        index += 1
+
+
+def _package_world_root(root: Path) -> Path:
+    archive_path = root.with_suffix(".zip")
+    if archive_path.exists() and archive_path.is_symlink():
+        raise WorldCompileError("World ZIP target must not be a symlink.")
+    temporary = archive_path.with_name(f".{archive_path.name}.tmp")
+    if temporary.exists():
+        if not temporary.is_file() or temporary.is_symlink():
+            raise WorldCompileError(
+                "World ZIP staging target is not a regular file."
+            )
+        temporary.unlink()
+    with zipfile.ZipFile(
+        temporary,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink():
+                raise WorldCompileError(
+                    f"World output contains a symlink: {path}"
+                )
+            if path.is_file():
+                relative = path.relative_to(root).as_posix()
+                info = zipfile.ZipInfo(
+                    relative,
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o100644 << 16
+                with (
+                    path.open("rb") as source,
+                    archive.open(info, "w") as target,
+                ):
+                    shutil.copyfileobj(
+                        source,
+                        target,
+                        length=1024 * 1024,
+                    )
+    temporary.replace(archive_path)
+    return archive_path
+
+
+def _world_result(
+    root: Path,
+    archive: Path | None,
+    *,
+    structures: list[str],
+) -> dict[str, Any]:
+    manifest_path = root / "mmm-world-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     return {
-        "schema_version": "mmm/world-compile-result-v1",
+        "schema_version": "mmm/world-compile-result-v3",
         "output_root": str(root),
-        "world_zip": str(archive_path) if archive_path else None,
-        "structures": [item["id"] for item in structures],
-        "file_count": len(generated),
+        "world_zip": str(archive) if archive else None,
+        "structures": structures,
+        "file_count": int(manifest["artifact_set"]["count"]) + 1,
         "manifest_sha256": _sha256(manifest_path),
+        "runtime_contract_prefix": manifest[
+            "runtime_contract_prefix"
+        ],
         "runtime_verification": "required",
     }
 

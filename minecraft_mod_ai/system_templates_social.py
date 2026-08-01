@@ -148,9 +148,7 @@ public final class {class_name} {{
         MENUS.clear();
         ACTIONS.clear();
         LAST_USE_TICK.clear();
-        JsonArray modules = MmmSystemConfig.load("{resource}").getAsJsonArray("modules");
-        modules.forEach(element -> {{
-            JsonObject module = element.getAsJsonObject();
+        MmmSystemConfig.forEachModule("{resource}", module -> {{
             String kind = module.get("kind").getAsString();
             String moduleId = module.get("module_id").getAsString();
             JsonObject config = module.getAsJsonObject("config");

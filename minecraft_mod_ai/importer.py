@@ -10,10 +10,13 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import stat
+import tempfile
 import unicodedata
+import uuid
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -22,15 +25,37 @@ from typing import Any
 from .spec import Proposal, ProposalStatus, canonical_json
 
 
-MAX_ARCHIVE_ENTRIES = 2_000
-MAX_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
-MAX_SINGLE_FILE_BYTES = 32 * 1024 * 1024
-MAX_JSON_BYTES = 1024 * 1024
-MAX_NESTED_JAR_ENTRIES = 10_000
-MAX_NESTED_JAR_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
-MAX_NESTED_SOURCE_ARCHIVES = 4
+def _host_limit(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a non-negative integer.") from exc
+    if value < 0:
+        raise RuntimeError(f"{name} must be a non-negative integer.")
+    return value
+
+
+# Zero means no project-wide product cap. Operators may set finite host quotas.
+MAX_ARCHIVE_ENTRIES = _host_limit("MMM_IMPORT_MAX_ENTRIES", 0)
+MAX_TOTAL_UNCOMPRESSED_BYTES = _host_limit("MMM_IMPORT_MAX_TOTAL_BYTES", 0)
+MAX_SINGLE_FILE_BYTES = _host_limit(
+    "MMM_IMPORT_MAX_SINGLE_FILE_BYTES",
+    512 * 1024 * 1024,
+)
+MAX_JSON_BYTES = _host_limit("MMM_IMPORT_MAX_JSON_BYTES", 8 * 1024 * 1024)
+MAX_NESTED_JAR_ENTRIES = _host_limit("MMM_IMPORT_MAX_JAR_ENTRIES", 0)
+MAX_NESTED_JAR_UNCOMPRESSED_BYTES = _host_limit(
+    "MMM_IMPORT_MAX_JAR_BYTES",
+    0,
+)
+MAX_NESTED_SOURCE_ARCHIVES = _host_limit(
+    "MMM_IMPORT_MAX_NESTED_SOURCE_ARCHIVES",
+    0,
+)
 
 _DRIVE_PATH = re.compile(r"^[A-Za-z]:")
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_EXTRACT_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _WINDOWS_DEVICES = frozenset(
     {
@@ -78,6 +103,9 @@ _WORLD_SUFFIXES = frozenset(
 
 class ExistingProjectImportError(ValueError):
     """Raised when an existing-project ZIP fails the fail-closed policy."""
+
+
+_CapturedValue = bytes | Path
 
 
 @dataclass(frozen=True)
@@ -159,23 +187,45 @@ def inspect_existing_project_archive(
     archive_path: str | Path,
     *,
     extract_root: str | Path | None = None,
+    expected_archive_sha256: str | None = None,
 ) -> ExistingProjectReport:
     """Inspect an existing mod/project ZIP without executing its contents.
 
-    If ``extract_root`` is supplied, regular files are copied into a new,
-    archive-specific child directory.  The child must not already exist.
-    Extraction happens only after every entry and every byte has passed the
-    archive policy.
+    If ``extract_root`` is supplied, regular files are copied into an
+    archive-specific child directory using a staged atomic rename. A completed
+    extraction may be reused after its receipt and original file hashes are
+    revalidated. Incomplete deterministic destinations are preserved under a
+    distinct ``.incomplete-N`` name before retrying.
+
+    When ``expected_archive_sha256`` is supplied, it is compared with the hash
+    of the already-open archive stream before ZIP parsing or extraction. This
+    binds the bytes being inspected and extracted to the approved input.
     """
 
     path = Path(archive_path)
+    if expected_archive_sha256 is not None and not _SHA256.fullmatch(
+        expected_archive_sha256
+    ):
+        raise ExistingProjectImportError(
+            "expected_archive_sha256 must be a lowercase sha256: digest."
+        )
     if path.suffix.casefold() != ".zip":
         raise ExistingProjectImportError("Existing projects must be supplied as a .zip archive.")
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         raise ExistingProjectImportError(f"Archive does not exist or is not a file: {path}")
 
+    capture_spool = tempfile.TemporaryDirectory(prefix="mmm-import-capture-")
+    capture_root = Path(capture_spool.name).resolve()
     with path.open("rb") as archive_stream:
         archive_sha256 = _hash_stream(archive_stream)
+        qualified_archive_sha256 = f"sha256:{archive_sha256}"
+        if (
+            expected_archive_sha256 is not None
+            and qualified_archive_sha256 != expected_archive_sha256
+        ):
+            raise ExistingProjectImportError(
+                "Existing input bytes changed after complete-plan approval."
+            )
         archive_stream.seek(0)
         try:
             with zipfile.ZipFile(archive_stream, "r") as archive:
@@ -184,7 +234,10 @@ def inspect_existing_project_archive(
                     captured,
                     root_name,
                     total_uncompressed,
-                ) = _inspect_zip(archive)
+                ) = _inspect_zip(
+                    archive,
+                    spool_root=capture_root,
+                )
 
                 warnings: list[str] = [
                     "User-supplied archives are untrusted input and never become "
@@ -197,6 +250,7 @@ def inspect_existing_project_archive(
                     files,
                     captured,
                     warnings,
+                    spool_root=capture_root,
                 )
                 metadata = (*metadata, *nested_source.metadata)
                 metadata_paths = _sorted_paths(
@@ -295,6 +349,7 @@ def inspect_existing_project_archive(
                         extract_root=Path(extract_root),
                         archive_stem=path.stem,
                         snapshot_hash=snapshot_hash,
+                        archive_sha256=qualified_archive_sha256,
                     )
                     if extract_root is not None
                     else None
@@ -306,9 +361,10 @@ def inspect_existing_project_archive(
                 "The ZIP uses encryption or an unsupported compression method."
             ) from exc
 
+    capture_spool.cleanup()
     return ExistingProjectReport(
         archive_name=path.name,
-        archive_sha256=f"sha256:{archive_sha256}",
+        archive_sha256=qualified_archive_sha256,
         source_snapshot_hash=snapshot_hash,
         file_count=len(files),
         total_uncompressed_bytes=total_uncompressed,
@@ -349,9 +405,11 @@ def inspect_existing_project_archive(
 
 def _inspect_zip(
     archive: zipfile.ZipFile,
-) -> tuple[list[_ArchiveFile], dict[str, bytes], str | None, int]:
+    *,
+    spool_root: Path,
+) -> tuple[list[_ArchiveFile], dict[str, _CapturedValue], str | None, int]:
     infos = archive.infolist()
-    if len(infos) > MAX_ARCHIVE_ENTRIES:
+    if MAX_ARCHIVE_ENTRIES and len(infos) > MAX_ARCHIVE_ENTRIES:
         raise ExistingProjectImportError(
             f"Archive has too many entries ({len(infos)} > {MAX_ARCHIVE_ENTRIES})."
         )
@@ -372,12 +430,15 @@ def _inspect_zip(
         normalized.append((info, normalized_path, is_directory))
         if is_directory:
             continue
-        if info.file_size > MAX_SINGLE_FILE_BYTES:
+        if MAX_SINGLE_FILE_BYTES and info.file_size > MAX_SINGLE_FILE_BYTES:
             raise ExistingProjectImportError(
                 f"Archive entry exceeds the single-file limit: {normalized_path}"
             )
         total_uncompressed += info.file_size
-        if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
+        if (
+            MAX_TOTAL_UNCOMPRESSED_BYTES
+            and total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES
+        ):
             raise ExistingProjectImportError(
                 "Archive exceeds the total uncompressed-size limit."
             )
@@ -389,13 +450,18 @@ def _inspect_zip(
     root_name = _common_wrapper_root(file_paths)
 
     files: list[_ArchiveFile] = []
-    captured: dict[str, bytes] = {}
+    captured: dict[str, _CapturedValue] = {}
     for info, archive_member, is_directory in normalized:
         if is_directory:
             continue
         relative = _strip_wrapper_root(archive_member, root_name)
         capture = _should_capture(relative)
-        digest, data = _read_and_hash_member(archive, info, capture=capture)
+        digest, data = _read_and_hash_member(
+            archive,
+            info,
+            capture=capture,
+            spool_root=spool_root,
+        )
         files.append(
             _ArchiveFile(
                 info=info,
@@ -517,27 +583,62 @@ def _read_and_hash_member(
     info: zipfile.ZipInfo,
     *,
     capture: bool,
-) -> tuple[str, bytes | None]:
+    spool_root: Path,
+) -> tuple[str, _CapturedValue | None]:
     digest = hashlib.sha256()
-    data = bytearray() if capture else None
+    spool_archive = (
+        capture
+        and PurePosixPath(info.filename.casefold()).suffix in {".jar", ".zip"}
+    )
+    data = bytearray() if capture and not spool_archive else None
+    spool_path = (
+        spool_root / f"{uuid.uuid4().hex}.archive"
+        if spool_archive
+        else None
+    )
+    spool_stream = spool_path.open("xb") if spool_path is not None else None
     actual_size = 0
-    with archive.open(info, "r") as source:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            actual_size += len(chunk)
-            if actual_size > MAX_SINGLE_FILE_BYTES or actual_size > info.file_size:
-                raise ExistingProjectImportError(
-                    f"Archive entry expanded beyond its declared or allowed size: {info.filename!r}"
-                )
-            digest.update(chunk)
-            if data is not None:
-                data.extend(chunk)
+    try:
+        with archive.open(info, "r") as source:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                actual_size += len(chunk)
+                if (
+                    (
+                        MAX_SINGLE_FILE_BYTES
+                        and actual_size > MAX_SINGLE_FILE_BYTES
+                    )
+                    or actual_size > info.file_size
+                ):
+                    raise ExistingProjectImportError(
+                        "Archive entry expanded beyond its declared or "
+                        f"allowed size: {info.filename!r}"
+                    )
+                digest.update(chunk)
+                if data is not None:
+                    data.extend(chunk)
+                if spool_stream is not None:
+                    spool_stream.write(chunk)
+        if spool_stream is not None:
+            spool_stream.flush()
+            os.fsync(spool_stream.fileno())
+    except BaseException:
+        if spool_stream is not None:
+            spool_stream.close()
+        if spool_path is not None:
+            spool_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if spool_stream is not None and not spool_stream.closed:
+            spool_stream.close()
     if actual_size != info.file_size:
         raise ExistingProjectImportError(
             f"Archive entry size mismatch: {info.filename!r}"
         )
+    if spool_path is not None:
+        return digest.hexdigest(), spool_path
     return digest.hexdigest(), bytes(data) if data is not None else None
 
 
@@ -553,9 +654,37 @@ def _source_snapshot_hash(files: list[_ArchiveFile]) -> str:
     return f"sha256:{hashlib.sha256(canonical_json(payload).encode('utf-8')).hexdigest()}"
 
 
+def _captured_bytes(
+    value: _CapturedValue,
+    *,
+    context: str,
+) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if (
+        not value.is_file()
+        or value.is_symlink()
+        or (MAX_JSON_BYTES and value.stat().st_size > MAX_JSON_BYTES)
+    ):
+        raise ExistingProjectImportError(
+            f"Captured metadata is missing, unsafe, or too large: {context}"
+        )
+    return value.read_bytes()
+
+
+def _zip_source(value: _CapturedValue) -> Path | io.BytesIO:
+    if isinstance(value, Path):
+        if not value.is_file() or value.is_symlink():
+            raise ExistingProjectImportError(
+                "Captured nested archive is missing or unsafe."
+            )
+        return value
+    return io.BytesIO(value)
+
+
 def _inspect_fabric_metadata(
     files: list[_ArchiveFile],
-    captured: dict[str, bytes],
+    captured: dict[str, _CapturedValue],
     warnings: list[str],
 ) -> tuple[
     tuple[_FabricMetadata, ...],
@@ -573,7 +702,12 @@ def _inspect_fabric_metadata(
         if PurePosixPath(lowered).name == "fabric.mod.json":
             metadata_paths.append(file.relative_path)
             parsed = _parse_fabric_json(
-                captured[file.relative_path], file.relative_path, warnings
+                _captured_bytes(
+                    captured[file.relative_path],
+                    context=file.relative_path,
+                ),
+                file.relative_path,
+                warnings,
             )
             if parsed is not None:
                 metadata.append(parsed)
@@ -608,8 +742,10 @@ def _inspect_fabric_metadata(
 
 def _inspect_nested_source_archives(
     files: list[_ArchiveFile],
-    captured: dict[str, bytes],
+    captured: dict[str, _CapturedValue],
     warnings: list[str],
+    *,
+    spool_root: Path,
 ) -> _NestedSourceInventory:
     """Inventory source ZIPs embedded in a generated release bundle.
 
@@ -625,7 +761,10 @@ def _inspect_nested_source_archives(
         for file in files
         if _is_nested_source_archive_path(file.relative_path)
     ]
-    if len(candidates) > MAX_NESTED_SOURCE_ARCHIVES:
+    if (
+        MAX_NESTED_SOURCE_ARCHIVES
+        and len(candidates) > MAX_NESTED_SOURCE_ARCHIVES
+    ):
         raise ExistingProjectImportError(
             "Release bundle contains too many nested source archives."
         )
@@ -650,8 +789,16 @@ def _inspect_nested_source_archives(
                 f"Nested source archive was not captured: {candidate.relative_path}"
             )
         try:
-            with zipfile.ZipFile(io.BytesIO(data), "r") as nested:
-                nested_files, nested_captured, _, nested_total = _inspect_zip(nested)
+            with zipfile.ZipFile(_zip_source(data), "r") as nested:
+                (
+                    nested_files,
+                    nested_captured,
+                    _,
+                    nested_total,
+                ) = _inspect_zip(
+                    nested,
+                    spool_root=spool_root,
+                )
         except zipfile.BadZipFile as exc:
             raise ExistingProjectImportError(
                 f"Nested source archive is not a valid ZIP: {candidate.relative_path}"
@@ -663,7 +810,10 @@ def _inspect_nested_source_archives(
             ) from exc
 
         combined_uncompressed += nested_total
-        if combined_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
+        if (
+            MAX_TOTAL_UNCOMPRESSED_BYTES
+            and combined_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES
+        ):
             raise ExistingProjectImportError(
                 "Nested source archives exceed the combined uncompressed-size limit."
             )
@@ -763,18 +913,21 @@ def _is_nested_source_archive_path(path: str) -> bool:
 
 def _inspect_nested_jar(
     jar_path: str,
-    data: bytes,
+    data: _CapturedValue,
     warnings: list[str],
 ) -> tuple[_FabricMetadata | None, tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None:
     try:
-        with zipfile.ZipFile(io.BytesIO(data), "r") as jar:
+        with zipfile.ZipFile(_zip_source(data), "r") as jar:
             infos = jar.infolist()
-            if len(infos) > MAX_NESTED_JAR_ENTRIES:
+            if MAX_NESTED_JAR_ENTRIES and len(infos) > MAX_NESTED_JAR_ENTRIES:
                 raise ExistingProjectImportError(
                     f"Nested JAR has too many entries: {jar_path}"
                 )
             declared_total = sum(info.file_size for info in infos if not info.is_dir())
-            if declared_total > MAX_NESTED_JAR_UNCOMPRESSED_BYTES:
+            if (
+                MAX_NESTED_JAR_UNCOMPRESSED_BYTES
+                and declared_total > MAX_NESTED_JAR_UNCOMPRESSED_BYTES
+            ):
                 raise ExistingProjectImportError(
                     f"Nested JAR exceeds the uncompressed-size inventory limit: {jar_path}"
                 )
@@ -926,7 +1079,7 @@ def _select_primary_metadata(
 
 def _inspect_embedded_proposal(
     files: list[_ArchiveFile],
-    captured: dict[str, bytes],
+    captured: dict[str, _CapturedValue],
     warnings: list[str],
 ) -> tuple[str | None, str, str | None]:
     candidates = [
@@ -944,7 +1097,10 @@ def _inspect_embedded_proposal(
         return None, "ambiguous", None
 
     proposal_path = candidates[0]
-    raw = captured[proposal_path]
+    raw = _captured_bytes(
+        captured[proposal_path],
+        context=proposal_path,
+    )
     if len(raw) > MAX_JSON_BYTES:
         warnings.append("Embedded approved proposal exceeds the JSON parse limit.")
         return proposal_path, "invalid", None
@@ -976,6 +1132,7 @@ def _extract_validated_archive(
     extract_root: Path,
     archive_stem: str,
     snapshot_hash: str,
+    archive_sha256: str,
 ) -> str:
     if extract_root.exists() and (not extract_root.is_dir() or extract_root.is_symlink()):
         raise ExistingProjectImportError(
@@ -985,17 +1142,43 @@ def _extract_validated_archive(
     resolved_root = extract_root.resolve()
     safe_stem = _SAFE_EXTRACT_NAME.sub("-", archive_stem).strip("._-") or "existing-mod"
     child = resolved_root / f"{safe_stem}-{snapshot_hash.removeprefix('sha256:')[:12]}"
+    receipt = (
+        resolved_root
+        / ".mmm-import-receipts"
+        / f"{child.name}.json"
+    )
     if child.exists():
+        if _completed_extraction_matches(
+            child,
+            receipt=receipt,
+            files=files,
+            archive_sha256=archive_sha256,
+            snapshot_hash=snapshot_hash,
+        ):
+            return str(child)
+        _preserve_incomplete_path(child)
+
+    staging = resolved_root / f".{child.name}.staging"
+    if staging.exists():
+        _preserve_incomplete_path(staging)
+
+    required_bytes = sum(file.size for file in files)
+    free_bytes = shutil.disk_usage(resolved_root).free
+    reserve_bytes = min(1024 * 1024 * 1024, max(64 * 1024 * 1024, required_bytes // 10))
+    if required_bytes + reserve_bytes > free_bytes:
         raise ExistingProjectImportError(
-            f"Extraction destination already exists and will not be overwritten: {child}"
+            "The validated archive does not fit in the extraction workspace."
         )
-    child.mkdir()
+    staging.mkdir()
 
     try:
         for file in files:
-            destination = child.joinpath(*PurePosixPath(file.relative_path).parts)
+            destination = staging.joinpath(*PurePosixPath(file.relative_path).parts)
             resolved_destination = destination.resolve(strict=False)
-            if resolved_destination == child or child not in resolved_destination.parents:
+            if (
+                resolved_destination == staging
+                or staging not in resolved_destination.parents
+            ):
                 raise ExistingProjectImportError(
                     f"Extraction path escaped its new directory: {file.relative_path}"
                 )
@@ -1008,7 +1191,10 @@ def _extract_validated_archive(
                     if not chunk:
                         break
                     actual_size += len(chunk)
-                    if actual_size > file.size or actual_size > MAX_SINGLE_FILE_BYTES:
+                    if actual_size > file.size or (
+                        MAX_SINGLE_FILE_BYTES
+                        and actual_size > MAX_SINGLE_FILE_BYTES
+                    ):
                         raise ExistingProjectImportError(
                             f"Entry changed size while extracting: {file.relative_path}"
                         )
@@ -1019,9 +1205,117 @@ def _extract_validated_archive(
                     f"Entry changed after validation: {file.relative_path}"
                 )
     except Exception:
-        shutil.rmtree(child)
+        _preserve_incomplete_path(staging)
+        raise
+
+    try:
+        staging.replace(child)
+        _write_extraction_receipt(
+            receipt,
+            child=child,
+            archive_sha256=archive_sha256,
+            snapshot_hash=snapshot_hash,
+            file_count=len(files),
+        )
+    except Exception:
+        if staging.exists():
+            _preserve_incomplete_path(staging)
         raise
     return str(child)
+
+
+def _completed_extraction_matches(
+    child: Path,
+    *,
+    receipt: Path,
+    files: list[_ArchiveFile],
+    archive_sha256: str,
+    snapshot_hash: str,
+) -> bool:
+    if not child.is_dir() or child.is_symlink():
+        return False
+    if not receipt.is_file() or receipt.is_symlink():
+        return False
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    expected_receipt = {
+        "schema_version": "mmm/import-extraction-receipt-v1",
+        "archive_sha256": archive_sha256,
+        "source_snapshot_hash": snapshot_hash,
+        "file_count": len(files),
+        "destination": str(child),
+    }
+    if payload != expected_receipt:
+        return False
+    for file in files:
+        path = child.joinpath(*PurePosixPath(file.relative_path).parts)
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(child)
+        except (OSError, ValueError):
+            return False
+        if path.is_symlink() or not resolved.is_file() or resolved.is_symlink():
+            return False
+        try:
+            stat_result = resolved.stat()
+            with resolved.open("rb") as stream:
+                digest = _hash_stream(stream)
+        except OSError:
+            return False
+        if stat_result.st_size != file.size or digest != file.sha256:
+            return False
+    return True
+
+
+def _write_extraction_receipt(
+    receipt: Path,
+    *,
+    child: Path,
+    archive_sha256: str,
+    snapshot_hash: str,
+    file_count: int,
+) -> None:
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    temporary = receipt.with_suffix(".json.pending")
+    if temporary.exists():
+        _preserve_incomplete_path(temporary)
+    temporary.write_text(
+        json.dumps(
+            {
+                "schema_version": "mmm/import-extraction-receipt-v1",
+                "archive_sha256": archive_sha256,
+                "source_snapshot_hash": snapshot_hash,
+                "file_count": file_count,
+                "destination": str(child),
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(receipt)
+
+
+def _preserve_incomplete_path(path: Path) -> Path:
+    """Move a run-owned partial path aside without deleting its contents."""
+
+    resolved_parent = path.parent.resolve()
+    resolved = path.resolve(strict=False)
+    if resolved.parent != resolved_parent:
+        raise ExistingProjectImportError(
+            "Incomplete extraction path escaped its expected parent."
+        )
+    index = 1
+    while True:
+        candidate = resolved_parent / f"{path.name}.incomplete-{index}"
+        if not candidate.exists():
+            path.rename(candidate)
+            return candidate
+        index += 1
 
 
 def _is_gradle_path(path: str) -> bool:

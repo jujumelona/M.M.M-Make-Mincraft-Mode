@@ -154,19 +154,17 @@ def test_item_count_ignores_arena_dimensions() -> None:
     assert proposal.spec.arena.radius == 20
 
 
-def test_count_overflow_is_deferred_instead_of_clamped_to_eight(
+def test_large_explicit_item_count_has_no_legacy_eight_item_cap(
     tmp_path,
 ) -> None:
     reply = _diagnostic_session(tmp_path, "output").plan(
         "Create 100 frost items."
     )
 
-    assert reply.proposal.spec.contents == ()
-    assert "item_count_limit" in {
+    assert len(reply.proposal.spec.contents) == 100
+    assert "item_count_limit" not in {
         request.capability for request in reply.proposal.deferred_requests
     }
-    assert reply.buildable is False
-    assert any("1~8" in question for question in reply.questions)
 
 
 def test_model_output_cannot_exceed_requested_kind_cardinality() -> None:

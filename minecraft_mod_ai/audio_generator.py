@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -74,13 +75,7 @@ def generate_audio_assets(
     korean: dict[str, str] = {}
     generated: list[dict[str, Any]] = []
 
-    manifest_path = info.root / ".minecraft_ai/audio-assets.json"
-    manifest = _load_object(manifest_path)
-    manifest_entries = {
-        str(item["sound_id"]): dict(item)
-        for item in manifest.get("sounds", [])
-        if isinstance(item, dict) and item.get("sound_id")
-    }
+    manifest_entries, directory_manifest = _load_audio_manifest(info.root)
 
     for request in items:
         target = sound_dir / f"{request.sound_id}.ogg"
@@ -128,6 +123,11 @@ def generate_audio_assets(
         generated.append(entry)
 
     all_ids = sorted(sounds_json)
+    manifest_records = (
+        generated
+        if directory_manifest
+        else [manifest_entries[key] for key in sorted(manifest_entries)]
+    )
     files: dict[str, str] = {
         f"{assets_root}/sounds.json": json.dumps(
             sounds_json,
@@ -136,23 +136,45 @@ def generate_audio_assets(
             sort_keys=True,
         )
         + "\n",
-        ".minecraft_ai/audio-assets.json": json.dumps(
+        ".minecraft_ai/audio-assets.json": _json_text(
             {
-                "schema_version": "mmm/audio-assets-v2",
-                "sounds": [manifest_entries[key] for key in sorted(manifest_entries)],
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
+                "schema_version": "mmm/audio-asset-directory-v1",
+                "sound_count": len(manifest_entries),
+                "directory": ".minecraft_ai/audio-asset-records",
+            }
+        ),
     }
+    files.update(
+        {
+            f".minecraft_ai/audio-asset-records/{item['sound_id']}.json": (
+                _json_text(item)
+            )
+            for item in manifest_records
+        }
+    )
+    java_root = (
+        info.root
+        / "src/main/java"
+        / Path(*package_name.split("."))
+        / "sound/GeneratedSounds.java"
+    )
+    incremental_registrar = (
+        java_root.is_file()
+        and "GeneratedSoundUnit" in java_root.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    )
+    emitted_sound_ids = (
+        [item.sound_id for item in items]
+        if incremental_registrar
+        else all_ids
+    )
     files.update(
         _sound_java_files(
             package_name=package_name,
             mod_id=mod_id,
-            sound_ids=all_ids,
-            shard_size=policy.java_shard_size,
+            sound_ids=emitted_sound_ids,
         )
     )
     _merge_lang(
@@ -175,10 +197,7 @@ def generate_audio_assets(
         "status": "GENERATED",
         "sounds": generated,
         "sound_count": len(all_ids),
-        "registrar_shards": max(
-            1,
-            math.ceil(len(all_ids) / policy.java_shard_size),
-        ),
+        "registrar_shards": len(emitted_sound_ids),
         "source_receipt": receipt,
         "binding_receipt": binding,
         "required_gates": [
@@ -244,6 +263,22 @@ def register_existing_ogg(
             }
         ],
     }
+    manifest_entries, directory_manifest = _load_audio_manifest(info.root)
+    manifest_entry = {
+        "sound_id": sound_id,
+        "kind": kind,
+        "loop": False,
+        "duration_seconds": None,
+        "sample_rate": None,
+        "path": str(destination),
+        "size_bytes": destination.stat().st_size,
+    }
+    manifest_entries[sound_id] = manifest_entry
+    manifest_records = (
+        [manifest_entry]
+        if directory_manifest
+        else [manifest_entries[key] for key in sorted(manifest_entries)]
+    )
     files = {
         f"{assets_root}/sounds.json": json.dumps(
             sounds,
@@ -252,13 +287,44 @@ def register_existing_ogg(
             sort_keys=True,
         )
         + "\n",
+        ".minecraft_ai/audio-assets.json": _json_text(
+            {
+                "schema_version": "mmm/audio-asset-directory-v1",
+                "sound_count": len(manifest_entries),
+                "directory": ".minecraft_ai/audio-asset-records",
+            }
+        ),
     }
+    files.update(
+        {
+            f".minecraft_ai/audio-asset-records/{item['sound_id']}.json": (
+                _json_text(item)
+            )
+            for item in manifest_records
+        }
+    )
+    java_root = (
+        info.root
+        / "src/main/java"
+        / Path(*package_name.split("."))
+        / "sound/GeneratedSounds.java"
+    )
+    incremental_registrar = (
+        java_root.is_file()
+        and "GeneratedSoundUnit" in java_root.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    )
     files.update(
         _sound_java_files(
             package_name=package_name,
             mod_id=mod_id,
-            sound_ids=sorted(sounds),
-            shard_size=policy.java_shard_size,
+            sound_ids=(
+                [sound_id]
+                if incremental_registrar
+                else sorted(sounds)
+            ),
         )
     )
     write_receipt = write_text_files(info, files, replace_existing=True)
@@ -426,30 +492,28 @@ def _sound_java_files(
     package_name: str,
     mod_id: str,
     sound_ids: list[str],
-    shard_size: int,
 ) -> dict[str, str]:
     package_path = package_name.replace(".", "/")
     files: dict[str, str] = {}
-    shard_names: list[str] = []
-    for offset in range(0, len(sound_ids), shard_size):
-        shard = sound_ids[offset : offset + shard_size]
-        index = offset // shard_size
-        class_name = f"GeneratedSoundShard{index:04d}"
-        shard_names.append(class_name)
+    for sound_id in sound_ids:
+        class_name = _sound_unit_class_name(sound_id)
         files[
             f"src/main/java/{package_path}/sound/{class_name}.java"
         ] = _sound_shard_java(
             package_name,
             mod_id,
             class_name,
-            shard,
+            [sound_id],
         )
-    calls = "\n".join(
-        f"        {name}.register();" for name in shard_names
-    )
     files[
         f"src/main/java/{package_path}/sound/GeneratedSounds.java"
     ] = f'''package {package_name}.sound;
+
+import net.fabricmc.loader.api.FabricLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Set;
+import java.util.TreeSet;
 
 public final class GeneratedSounds {{
     private static boolean registered;
@@ -458,11 +522,49 @@ public final class GeneratedSounds {{
     public static synchronized void register() {{
         if (registered) return;
         registered = true;
-{calls}
+        Set<String> classes = new TreeSet<>();
+        String relative = "{package_path}/sound";
+        FabricLoader.getInstance().getModContainer("{mod_id}").orElseThrow().getRootPaths().forEach(root -> {{
+            Path directory = root.resolve(relative);
+            if (!Files.isDirectory(directory)) return;
+            try (var paths = Files.list(directory)) {{
+                paths.filter(path -> {{
+                    String name = path.getFileName().toString();
+                    return name.startsWith("GeneratedSoundUnit") && name.endsWith(".class");
+                }}).forEach(path -> {{
+                    String name = path.getFileName().toString();
+                    classes.add("{package_name}.sound." + name.substring(0, name.length() - 6));
+                }});
+            }} catch (java.io.IOException error) {{
+                throw new IllegalStateException("Could not enumerate generated sound units", error);
+            }}
+        }});
+        for (String className : classes) {{
+            try {{
+                Class<?> unit = Class.forName(
+                    className,
+                    true,
+                    GeneratedSounds.class.getClassLoader()
+                );
+                unit.getMethod("register").invoke(null);
+            }} catch (ReflectiveOperationException error) {{
+                throw new IllegalStateException(
+                    "Could not register generated sound unit " + className,
+                    error
+                );
+            }}
+        }}
     }}
 }}
 '''
     return files
+
+
+def _sound_unit_class_name(sound_id: str) -> str:
+    return (
+        "GeneratedSoundUnit"
+        + hashlib.sha256(sound_id.encode("utf-8")).hexdigest()[:20]
+    )
 
 
 def _sound_shard_java(
@@ -516,6 +618,70 @@ def _constant(value: str) -> str:
     if not rendered or rendered[0].isdigit():
         rendered = "SOUND_" + rendered
     return rendered
+
+
+def _load_audio_manifest(
+    project_root: Path,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    manifest_path = project_root / ".minecraft_ai/audio-assets.json"
+    if not manifest_path.is_file():
+        return {}, False
+    manifest = _load_object(manifest_path)
+    if manifest.get("schema_version") == "mmm/audio-asset-directory-v1":
+        raw_directory = manifest.get("directory")
+        expected = manifest.get("sound_count")
+        if not isinstance(raw_directory, str) or type(expected) is not int:
+            raise AudioGenerationError("Audio asset directory index is invalid.")
+        directory = (project_root / raw_directory).resolve()
+        try:
+            directory.relative_to(project_root)
+        except ValueError as exc:
+            raise AudioGenerationError(
+                "Audio asset directory escaped the project."
+            ) from exc
+        if not directory.is_dir() or directory.is_symlink():
+            raise AudioGenerationError(
+                "Audio asset directory is missing or unsafe."
+            )
+        entries: dict[str, dict[str, Any]] = {}
+        for path in sorted(directory.glob("*.json")):
+            if not path.is_file() or path.is_symlink():
+                raise AudioGenerationError(
+                    "Audio asset record is unsafe."
+                )
+            item = _load_object(path)
+            sound_id = str(item.get("sound_id", ""))
+            if not sound_id or path.stem != sound_id:
+                raise AudioGenerationError(
+                    "Audio asset record is invalid."
+                )
+            entries[sound_id] = item
+        if len(entries) != expected:
+            raise AudioGenerationError(
+                "Audio asset directory count does not match."
+            )
+        return entries, True
+    return (
+        {
+            str(item["sound_id"]): dict(item)
+            for item in manifest.get("sounds", [])
+            if isinstance(item, dict) and item.get("sound_id")
+        },
+        False,
+    )
+
+
+def _json_text(value: Any) -> str:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def _load_object(path: Path) -> dict[str, Any]:

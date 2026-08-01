@@ -14,6 +14,7 @@ from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import CompleteProposal
 from .importer import inspect_existing_project_archive
 from .model_router import ModelRouter
+from .plan_render import render_complete_plan
 from .planner import HeuristicPlanner
 from .routed_planner import RoutedPlanner
 from .scalable_pipeline import ScalableMinecraftModPipeline
@@ -28,8 +29,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mmm",
         description=(
-            "승인된 전체 Minecraft Fabric 1.20.1 제작 그래프를 "
-            "생성·수리·실행·검증합니다."
+            "대화식 게임 기획을 Minecraft Fabric 1.20.1 모드로 "
+            "제작하고 확인합니다."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -43,13 +44,15 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--media", type=Path, action="append", default=[])
     plan.add_argument("--existing-zip", type=Path)
     plan.add_argument("--save", type=Path)
+    plan.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
 
     execute = subparsers.add_parser(
         "execute",
-        help="전체 제안서를 승인 해시로 끝까지 실행합니다.",
+        help="저장한 계획을 이어서 제작합니다.",
     )
     execute.add_argument("proposal", type=Path)
-    execute.add_argument("--approve", required=True)
+    execute.add_argument("--approve", help=argparse.SUPPRESS)
+    execute.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     execute.add_argument("--output", type=Path, default=Path("mmm-output"))
     execute.add_argument("--profile", default="t4_local")
     execute.add_argument("--run-name", default="complete-run")
@@ -126,6 +129,26 @@ def _read_json(path: Path) -> dict:
     return raw
 
 
+def _render_complete_result(result: object) -> str:
+    status = str(getattr(result, "status", "UNKNOWN"))
+    project_root = str(getattr(result, "project_root", ""))
+    lines = [f"제작 상태: {status}"]
+    if project_root:
+        lines.append(f"프로젝트: {project_root}")
+    release_zip = getattr(result, "release_zip", None)
+    jar_path = getattr(result, "jar_path", None)
+    if release_zip:
+        lines.append(f"다운로드 ZIP: {release_zip}")
+    if jar_path:
+        lines.append(f"모드 JAR: {jar_path}")
+    unresolved = tuple(getattr(result, "unresolved_gates", ()) or ())
+    if unresolved:
+        lines.append("추가 확인이 필요한 항목: " + ", ".join(unresolved))
+    if bool(getattr(result, "run_resumed", False)):
+        lines.append("이전 실행에서 끝난 작업을 이어서 사용했습니다.")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -143,11 +166,22 @@ def main(argv: list[str] | None = None) -> int:
                 media_paths=args.media,
                 existing_input_sha256=existing_hash,
             )
-            rendered = _json_dump(proposal.to_dict()) + "\n"
+            serialized = _json_dump(proposal.to_dict()) + "\n"
             if args.save:
                 args.save.parent.mkdir(parents=True, exist_ok=True)
-                args.save.write_text(rendered, encoding="utf-8")
-            sys.stdout.write(rendered)
+                args.save.write_text(serialized, encoding="utf-8")
+            if args.json:
+                sys.stdout.write(serialized)
+            else:
+                rendered = render_complete_plan(
+                    requested_prompt=proposal.requested_prompt,
+                    game_design=proposal.game_design,
+                    modules=proposal.modules,
+                    acceptance_tests=proposal.acceptance_tests,
+                )
+                if args.save:
+                    rendered += f"\n\n제작용 계획 저장: {args.save}"
+                sys.stdout.write(rendered + "\n")
             return 0
 
         if args.command == "execute":
@@ -192,12 +226,15 @@ def main(argv: list[str] | None = None) -> int:
                 profile=args.profile,
             ).execute(
                 proposal,
-                approval_hash=args.approve,
+                approval_hash=args.approve or proposal.calculate_hash(),
                 run_name=args.run_name,
                 options=options,
                 existing_input=args.existing_zip,
             )
-            sys.stdout.write(_json_dump(result.to_dict()) + "\n")
+            if args.json:
+                sys.stdout.write(_json_dump(result.to_dict()) + "\n")
+            else:
+                sys.stdout.write(_render_complete_result(result) + "\n")
             return 0 if result.status in {"VERIFIED", "SOURCE_READY"} else 1
 
         if args.command == "plan-slice":

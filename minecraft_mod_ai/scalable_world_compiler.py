@@ -9,10 +9,23 @@ from typing import Any
 from .scale_policy import ScalePolicy
 from .world_compiler import (
     WorldCompileError,
+    _build_blocks,
+    _compiled_root_matches,
+    _package_world_root,
     _palette,
-    _sha256,
+    _placement_fields,
+    _prepare_world_stage,
+    _promote_world_stage,
     _structure_nbt,
-    compile_world_ir,
+    _validate,
+    _world_ir_sha256,
+    _world_result,
+    _write_pack_metadata,
+    _write_structure_resources,
+    _write_structure_runtime_contract,
+    _write_world_contract_shards,
+    _write_world_manifest,
+    _write_json,
 )
 
 
@@ -31,9 +44,9 @@ def compile_scalable_world_ir(
     """Compile World IR without rejecting large logical structures.
 
     Vanilla structure templates remain bounded physical artifacts. Logical structures
-    larger than that artifact limit are partitioned into coherent templates and receive
-    a sharded ``build_<id>`` function that places every piece at its approved offset.
-    Small structures keep normal Jigsaw world-generation resources.
+    larger than that artifact limit are streamed into coherent templates and bounded
+    function pages. The generated Fabric runtime executes those pages at one persistent
+    anchor across ticks. Small structures keep normal Jigsaw world-generation resources.
     """
 
     policy = policy or ScalePolicy.from_environment()
@@ -41,137 +54,177 @@ def compile_scalable_world_ir(
     if not isinstance(ir, dict) or ir.get("schema_version") != "mmm/world-ir-v1":
         raise ScalableWorldCompileError("World IR schema is invalid.")
 
-    expanded = dict(ir)
-    expanded_structures: list[dict[str, Any]] = []
-    logical: list[dict[str, Any]] = []
-
-    for structure in ir.get("structures", []):
-        if not isinstance(structure, dict):
-            raise ScalableWorldCompileError("Every structure must be an object.")
-        raw_size = structure.get("size", [9, 6, 9])
-        size = _logical_size(raw_size)
-        pieces = _partition(size, policy)
-        if len(pieces) == 1:
-            expanded_structures.append(dict(structure, size=list(size)))
-            logical.append(
-                {
-                    "id": structure["id"],
-                    "size": list(size),
-                    "placement": "worldgen",
-                    "pieces": [
-                        {
-                            "id": structure["id"],
-                            "origin": [0, 0, 0],
-                            "size": list(size),
-                        }
-                    ],
-                }
+    structures = sorted(
+        ir.get("structures", []),
+        key=lambda item: str(item.get("id", ""))
+        if isinstance(item, dict)
+        else "",
+    )
+    validation_ir = {
+        **ir,
+        "structures": [
+            {**item, "size": [1, 1, 1]}
+            if isinstance(item, dict)
+            else item
+            for item in structures
+        ],
+    }
+    _validate(validation_ir, mod_id)
+    world_hash = _world_ir_sha256(ir)
+    root = Path(output_root).expanduser().resolve()
+    logical_ids = [str(item["id"]) for item in structures]
+    if _compiled_root_matches(
+        root,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+    ):
+        archive = _package_world_root(root) if package_world_zip else None
+        result = _world_result(root, archive, structures=logical_ids)
+        manifest = json.loads(
+            (root / "mmm-world-manifest.json").read_text(
+                encoding="utf-8"
             )
-            continue
-
-        piece_records: list[dict[str, Any]] = []
-        for index, (origin, piece_size) in enumerate(pieces):
-            piece_id = _piece_id(str(structure["id"]), index, origin)
-            piece = dict(structure)
-            piece["id"] = piece_id
-            piece["size"] = list(piece_size)
-            piece["jigsaw_depth"] = 1
-            expanded_structures.append(piece)
-            piece_records.append(
-                {"id": piece_id, "origin": list(origin), "size": list(piece_size)}
-            )
-        logical.append(
+        )
+        result.update(
             {
-                "id": structure["id"],
-                "size": list(size),
-                "placement": "function_shards",
-                "pieces": piece_records,
+                "logical_structure_count": len(logical_ids),
+                "physical_template_count": int(
+                    manifest.get("physical_template_count", len(logical_ids))
+                ),
+                "partitioned_structures": _partitioned_contract_ids(
+                    root,
+                    mod_id,
+                ),
+                "runtime_bridge_required": bool(
+                    manifest.get("partitioned_structure_count", 0)
+                ),
             }
         )
+        return result
 
-    expanded["structures"] = expanded_structures
-    result = compile_world_ir(
-        expanded,
+    stage = _prepare_world_stage(
+        root,
         mod_id=mod_id,
-        output_root=output_root,
-        package_world_zip=False,
+        world_ir_sha256=world_hash,
     )
-    root = Path(result["output_root"]).resolve()
-
-    original_by_id = {
-        str(item["id"]): item
-        for item in ir.get("structures", [])
-        if isinstance(item, dict) and "id" in item
-    }
-    for logical_item in logical:
-        if logical_item["placement"] != "function_shards":
-            continue
-        source = original_by_id[logical_item["id"]]
-        palette = _palette(source)
-        full_size = tuple(logical_item["size"])
-        for piece in logical_item["pieces"]:
-            origin = tuple(piece["origin"])
-            piece_size = tuple(piece["size"])
-            blocks = _logical_piece_blocks(source, full_size, origin, piece_size, palette)
-            nbt_path = root / "data" / mod_id / "structures" / f"{piece['id']}.nbt"
-            nbt_path.write_bytes(_structure_nbt(piece_size, palette, blocks))
-        _remove_piece_worldgen(root, mod_id, logical_item["pieces"])
-        _write_build_functions(root, mod_id, logical_item, policy)
-
-    manifest_path = root / "mmm-world-manifest.json"
-    manifest = {
-        "schema_version": "mmm/world-compile-manifest-v2",
-        "minecraft_version": "1.20.1",
-        "mod_id": mod_id,
-        "world_ir_sha256": "sha256:"
-        + hashlib.sha256(
-            json.dumps(ir, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest(),
-        "logical_structures": logical,
-        "files": [
+    if stage.exists():
+        _promote_world_stage(stage, root)
+        archive = _package_world_root(root) if package_world_zip else None
+        result = _world_result(
+            root,
+            archive,
+            structures=logical_ids,
+        )
+        manifest = json.loads(
+            (root / "mmm-world-manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        result.update(
             {
-                "path": path.relative_to(root).as_posix(),
-                "sha256": _sha256(path),
+                "logical_structure_count": len(logical_ids),
+                "physical_template_count": int(
+                    manifest.get(
+                        "physical_template_count",
+                        len(logical_ids),
+                    )
+                ),
+                "partitioned_structures": _partitioned_contract_ids(
+                    root,
+                    mod_id,
+                ),
+                "runtime_bridge_required": bool(
+                    manifest.get("partitioned_structure_count", 0)
+                ),
             }
-            for path in sorted(root.rglob("*"))
-            if path.is_file()
-            and not path.is_symlink()
-            and path != manifest_path
-            and path.suffix != ".zip"
-        ],
-        "runtime_verification": "required",
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        )
+        return result
+    stage.mkdir(parents=True, exist_ok=False)
+    data_root = stage / "data" / mod_id
+    partitioned: list[str] = []
+    physical_template_count = 0
+    for structure_index, structure in enumerate(structures):
+        if not isinstance(structure, dict):
+            raise ScalableWorldCompileError(
+                "Every structure must be an object."
+            )
+        size = _logical_size(structure.get("size", [9, 6, 9]))
+        piece_count = _partition_count(size, policy)
+        palette = _palette(structure)
+        if piece_count == 1:
+            _write_structure_resources(
+                data_root=data_root,
+                mod_id=mod_id,
+                structure=structure,
+                structure_index=structure_index,
+                size=size,
+                palette=palette,
+                blocks=_build_blocks(structure, size, palette),
+                emit_worldgen=True,
+                runtime_placement="vanilla_worldgen",
+            )
+            physical_template_count += 1
+            continue
+
+        structure_id = str(structure["id"])
+        partitioned.append(structure_id)
+        shard_count, written_pieces = _write_partitioned_structure(
+            root=stage,
+            data_root=data_root,
+            mod_id=mod_id,
+            structure=structure,
+            structure_index=structure_index,
+            full_size=size,
+            palette=palette,
+            policy=policy,
+        )
+        physical_template_count += written_pieces
+        spacing, separation, salt, biomes = _placement_fields(
+            structure,
+            structure_index,
+        )
+        _write_structure_runtime_contract(
+            data_root=data_root,
+            mod_id=mod_id,
+            structure=structure,
+            placement="runtime_function_shards",
+            spacing=spacing,
+            separation=separation,
+            salt=salt,
+            biomes=biomes,
+            shard_count=shard_count,
+        )
+
+    _write_world_contract_shards(ir, data_root=data_root)
+    _write_pack_metadata(stage)
+    _write_world_manifest(
+        stage,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+        logical_structure_count=len(logical_ids),
+        partitioned_structure_count=len(partitioned),
+        physical_template_count=physical_template_count,
     )
-
-    archive_path: Path | None = None
-    if package_world_zip:
-        import zipfile
-
-        archive_path = root.with_suffix(".zip")
-        if archive_path.exists():
-            archive_path.unlink()
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(root.rglob("*")):
-                if path.is_file() and not path.is_symlink():
-                    archive.write(path, path.relative_to(root))
-
-    return {
-        "schema_version": "mmm/world-compile-result-v2",
-        "output_root": str(root),
-        "world_zip": str(archive_path) if archive_path else None,
-        "structures": [item["id"] for item in logical],
-        "logical_structure_count": len(logical),
-        "physical_template_count": sum(len(item["pieces"]) for item in logical),
-        "partitioned_structures": [
-            item["id"] for item in logical if item["placement"] == "function_shards"
-        ],
-        "file_count": sum(1 for path in root.rglob("*") if path.is_file()),
-        "manifest_sha256": _sha256(manifest_path),
-        "runtime_verification": "required",
-    }
+    if not _compiled_root_matches(
+        stage,
+        mod_id=mod_id,
+        world_ir_sha256=world_hash,
+    ):
+        raise ScalableWorldCompileError(
+            "Staged scalable world output failed integrity validation."
+        )
+    _promote_world_stage(stage, root)
+    archive = _package_world_root(root) if package_world_zip else None
+    result = _world_result(root, archive, structures=logical_ids)
+    result.update(
+        {
+            "logical_structure_count": len(logical_ids),
+            "physical_template_count": physical_template_count,
+            "partitioned_structures": partitioned,
+            "runtime_bridge_required": bool(partitioned),
+        }
+    )
+    return result
 
 
 def _logical_size(raw: Any) -> tuple[int, int, int]:
@@ -184,11 +237,22 @@ def _logical_size(raw: Any) -> tuple[int, int, int]:
     return int(raw[0]), int(raw[1]), int(raw[2])
 
 
-def _partition(
-    size: tuple[int, int, int], policy: ScalePolicy
-) -> list[tuple[tuple[int, int, int], tuple[int, int, int]]]:
+def _partition_count(
+    size: tuple[int, int, int],
+    policy: ScalePolicy,
+) -> int:
     axis = policy.nbt_piece_axis
-    pieces: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
+    return math.prod(
+        (value + axis - 1) // axis
+        for value in size
+    )
+
+
+def _partition(
+    size: tuple[int, int, int],
+    policy: ScalePolicy,
+):
+    axis = policy.nbt_piece_axis
     for x in range(0, size[0], axis):
         for y in range(0, size[1], axis):
             for z in range(0, size[2], axis):
@@ -201,8 +265,7 @@ def _partition(
                     raise ScalableWorldCompileError(
                         "Configured NBT piece exceeds the physical piece-volume policy."
                     )
-                pieces.append(((x, y, z), piece))
-    return pieces
+                yield (x, y, z), piece
 
 
 def _piece_id(base: str, index: int, origin: tuple[int, int, int]) -> str:
@@ -214,46 +277,116 @@ def _piece_id(base: str, index: int, origin: tuple[int, int, int]) -> str:
     return base[: 63 - len(digest) - 3] + "__" + digest
 
 
-def _remove_piece_worldgen(root: Path, mod_id: str, pieces: list[dict[str, Any]]) -> None:
-    for piece in pieces:
-        piece_id = piece["id"]
-        for relative in (
-            f"data/{mod_id}/worldgen/template_pool/{piece_id}.json",
-            f"data/{mod_id}/worldgen/processor_list/{piece_id}.json",
-            f"data/{mod_id}/worldgen/structure/{piece_id}.json",
-            f"data/{mod_id}/worldgen/structure_set/{piece_id}.json",
-            f"data/{mod_id}/tags/worldgen/biome/has_structure/{piece_id}.json",
-        ):
-            (root / relative).unlink(missing_ok=True)
-
-
-def _write_build_functions(
+def _write_partitioned_structure(
+    *,
     root: Path,
+    data_root: Path,
     mod_id: str,
-    logical: dict[str, Any],
+    structure: dict[str, Any],
+    structure_index: int,
+    full_size: tuple[int, int, int],
+    palette: list[str],
     policy: ScalePolicy,
-) -> None:
-    function_root = root / "data" / mod_id / "functions"
-    generated = function_root / "generated" / logical["id"]
+) -> tuple[int, int]:
+    del structure_index
+    structure_id = str(structure["id"])
+    generated = (
+        root
+        / "data"
+        / mod_id
+        / "functions"
+        / "generated"
+        / structure_id
+    )
     generated.mkdir(parents=True, exist_ok=True)
-    commands = [
-        f"place template {mod_id}:{piece['id']} ~{piece['origin'][0]} ~{piece['origin'][1]} ~{piece['origin'][2]}"
-        for piece in logical["pieces"]
-    ]
-    shard_paths: list[str] = []
-    for index in range(0, len(commands), policy.function_shard_size):
-        shard_index = index // policy.function_shard_size
-        path = generated / f"part_{shard_index:04d}.mcfunction"
-        path.write_text(
-            "\n".join(commands[index : index + policy.function_shard_size]) + "\n",
-            encoding="utf-8",
+    page: list[str] = []
+    per_tick = min(
+        policy.function_shard_size,
+        policy.world_placements_per_tick,
+    )
+    shard_count = 0
+    piece_count = 0
+    for piece_index, (origin, piece_size) in enumerate(
+        _partition(full_size, policy)
+    ):
+        piece_id = _piece_id(structure_id, piece_index, origin)
+        blocks = _logical_piece_blocks(
+            structure,
+            full_size,
+            origin,
+            piece_size,
+            palette,
         )
-        shard_paths.append(f"{mod_id}:generated/{logical['id']}/part_{shard_index:04d}")
-    root_function = function_root / f"build_{logical['id']}.mcfunction"
-    root_function.write_text(
-        "\n".join(f"function {path}" for path in shard_paths) + "\n",
+        nbt_path = (
+            data_root / "structures" / f"{piece_id}.nbt"
+        )
+        nbt_path.parent.mkdir(parents=True, exist_ok=True)
+        nbt_path.write_bytes(
+            _structure_nbt(piece_size, palette, blocks)
+        )
+        _write_json(
+            data_root
+            / "mmm_world"
+            / "contracts"
+            / "structure_pieces"
+            / structure_id
+            / f"{piece_id}.json",
+            {
+                "schema_version": "mmm/world-structure-piece-v1",
+                "logical_structure_id": structure_id,
+                "template": f"{mod_id}:{piece_id}",
+                "origin": list(origin),
+                "size": list(piece_size),
+            },
+        )
+        page.append(
+            f"place template {mod_id}:{piece_id} "
+            f"~{origin[0]} ~{origin[1]} ~{origin[2]}"
+        )
+        piece_count += 1
+        if len(page) == per_tick:
+            _write_function_page(generated, shard_count, page)
+            shard_count += 1
+            page = []
+    if page:
+        _write_function_page(generated, shard_count, page)
+        shard_count += 1
+    if not shard_count or not piece_count:
+        raise ScalableWorldCompileError(
+            f"Partitioned structure emitted no pieces: {structure_id}"
+        )
+    return shard_count, piece_count
+
+
+def _write_function_page(
+    generated: Path,
+    shard_index: int,
+    commands: list[str],
+) -> None:
+    (generated / f"part_{shard_index:04d}.mcfunction").write_text(
+        "\n".join(commands) + "\n",
         encoding="utf-8",
     )
+
+
+def _partitioned_contract_ids(root: Path, mod_id: str) -> list[str]:
+    contract_root = (
+        root
+        / "data"
+        / mod_id
+        / "mmm_world"
+        / "contracts"
+        / "structures"
+    )
+    result: list[str] = []
+    for path in sorted(contract_root.glob("*.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if value.get("placement") == "runtime_function_shards":
+            result.append(str(value.get("id", path.stem)))
+    return result
 
 
 def _logical_piece_blocks(

@@ -4,9 +4,6 @@ from __future__ import annotations
 def _party_java(package_name: str, class_name: str, resource: str) -> str:
     return f'''package {package_name}.system;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.argument.EntityArgumentType;
@@ -25,15 +22,14 @@ public final class {class_name} {{
         registered = true;
         MmmPersistentStore.registerLifecycle();
 
-        boolean partyEnabled = false;
-        boolean guildEnabled = false;
-        JsonArray modules = MmmSystemConfig.load("{resource}").getAsJsonArray("modules");
-        for (JsonElement element : modules) {{
-            JsonObject module = element.getAsJsonObject();
+        boolean[] enabled = new boolean[2];
+        MmmSystemConfig.forEachModule("{resource}", module -> {{
             String kind = module.get("kind").getAsString();
-            if ("party".equals(kind)) partyEnabled = true;
-            if ("guild".equals(kind)) guildEnabled = true;
-        }}
+            if ("party".equals(kind)) enabled[0] = true;
+            if ("guild".equals(kind)) enabled[1] = true;
+        }});
+        boolean partyEnabled = enabled[0];
+        boolean guildEnabled = enabled[1];
         if (!partyEnabled && !guildEnabled) {{
             throw new IllegalStateException("Party-guild pack contains no supported definitions");
         }}

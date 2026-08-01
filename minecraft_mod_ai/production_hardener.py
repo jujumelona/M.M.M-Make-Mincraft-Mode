@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .extended_content_generator import iter_extended_module_records
+from .gametest_discovery import discovered_gametest_root_java
+from .geckolib_generator import iter_geckolib_entity_records
 from .project_edit import inspect_fabric_project, write_text_files
 from .scale_policy import ScalePolicy
 from .source_patch import TransactionalSourcePatcher, sha256_file
@@ -36,23 +39,35 @@ def harden_generated_project(
         receipts.append(machine_receipt)
 
     definitions = _registry_definitions(info.root)
-    test_files, entrypoints = _gametest_files(
+    test_files, entrypoints, shard_count = _gametest_files(
         package_name=info.package_name,
         mod_id=info.mod_id,
         definitions=definitions,
         shard_size=policy.java_shard_size,
     )
     if test_files:
-        receipts.append(write_text_files(info, test_files, replace_existing=True))
-        entry_receipt = _ensure_gametest_entrypoints(info, entrypoints)
-        if entry_receipt.get("status") != "UNCHANGED":
-            receipts.append(entry_receipt)
+        write_receipt = write_text_files(
+            info,
+            test_files,
+            replace_existing=True,
+        )
+        if write_receipt.get("status") != "UNCHANGED":
+            receipts.append(write_receipt)
+    prune_receipt = _prune_obsolete_gametest_files(
+        info,
+        active_paths=set(test_files),
+    )
+    if prune_receipt.get("status") != "UNCHANGED":
+        receipts.append(prune_receipt)
+    entry_receipt = _ensure_gametest_entrypoints(info, entrypoints)
+    if entry_receipt.get("status") != "UNCHANGED":
+        receipts.append(entry_receipt)
 
     return {
         "schema_version": "mmm/production-hardening-v1",
         "status": "HARDENED" if receipts else "UNCHANGED",
         "registry_definition_count": len(definitions),
-        "gametest_shard_count": len(entrypoints),
+        "gametest_shard_count": shard_count,
         "receipts": receipts,
     }
 
@@ -109,47 +124,38 @@ def _ensure_machine_model_render(info) -> dict[str, Any]:
 
 def _registry_definitions(root: Path) -> list[dict[str, str]]:
     result: dict[tuple[str, str], dict[str, str]] = {}
-    extended = root / ".minecraft_ai/extended-modules.json"
-    if extended.is_file() and not extended.is_symlink():
-        raw = json.loads(extended.read_text(encoding="utf-8"))
-        for item in raw.get("modules", []):
-            if not isinstance(item, dict):
-                continue
-            module_id = str(item.get("module_id", ""))
-            kind = str(item.get("kind", ""))
-            registry = {
-                "item": "ITEM",
-                "food": "ITEM",
-                "weapon": "ITEM",
-                "tool": "ITEM",
-                "armor": "ITEM",
-                "block": "BLOCK",
-                "machine": "BLOCK",
-                "crop": "BLOCK",
-                "effect": "STATUS_EFFECT",
-                "enchantment": "ENCHANTMENT",
-            }.get(kind)
-            if registry:
-                result[(registry, module_id)] = {
-                    "registry": registry,
-                    "id": module_id,
-                }
-            if kind == "crop":
-                result[("ITEM", module_id + "_seeds")] = {
-                    "registry": "ITEM",
-                    "id": module_id + "_seeds",
-                }
+    for item in iter_extended_module_records(root):
+        module_id = str(item.get("module_id", ""))
+        kind = str(item.get("kind", ""))
+        registry = {
+            "item": "ITEM",
+            "food": "ITEM",
+            "weapon": "ITEM",
+            "tool": "ITEM",
+            "armor": "ITEM",
+            "block": "BLOCK",
+            "machine": "BLOCK",
+            "crop": "BLOCK",
+            "effect": "STATUS_EFFECT",
+            "enchantment": "ENCHANTMENT",
+        }.get(kind)
+        if registry:
+            result[(registry, module_id)] = {
+                "registry": registry,
+                "id": module_id,
+            }
+        if kind == "crop":
+            result[("ITEM", module_id + "_seeds")] = {
+                "registry": "ITEM",
+                "id": module_id + "_seeds",
+            }
 
-    gecko = root / ".minecraft_ai/geckolib-entities.json"
-    if gecko.is_file() and not gecko.is_symlink():
-        raw = json.loads(gecko.read_text(encoding="utf-8"))
-        for item in raw.get("entities", []):
-            if isinstance(item, dict) and item.get("entity_id"):
-                entity_id = str(item["entity_id"])
-                result[("ENTITY_TYPE", entity_id)] = {
-                    "registry": "ENTITY_TYPE",
-                    "id": entity_id,
-                }
+    for item in iter_geckolib_entity_records(root):
+        entity_id = str(item["entity_id"])
+        result[("ENTITY_TYPE", entity_id)] = {
+            "registry": "ENTITY_TYPE",
+            "id": entity_id,
+        }
     return [result[key] for key in sorted(result)]
 
 
@@ -159,34 +165,46 @@ def _gametest_files(
     mod_id: str,
     definitions: list[dict[str, str]],
     shard_size: int,
-) -> tuple[dict[str, str], list[str]]:
+) -> tuple[dict[str, str], list[str], int]:
+    if not definitions:
+        return {}, [], 0
+
     files: dict[str, str] = {}
-    entries: list[str] = []
     package_path = package_name.replace(".", "/")
+    test_package = f"{package_name}.gametest"
+    test_package_path = f"{package_path}/gametest"
+    root_class_name = "GeneratedRegistryGameTest"
+    unit_prefix = root_class_name + "Unit"
+    root_relative = (
+        f"src/main/java/{test_package_path}/{root_class_name}.java"
+    )
+    files[root_relative] = discovered_gametest_root_java(
+        package_name=test_package,
+        mod_id=mod_id,
+        root_class_name=root_class_name,
+        unit_class_prefix=unit_prefix,
+    )
+
+    shard_count = 0
     for offset in range(0, len(definitions), shard_size):
         shard = definitions[offset : offset + shard_size]
         index = offset // shard_size
-        class_name = f"GeneratedRegistryGameTest{index:04d}"
-        entrypoint = f"{package_name}.gametest.{class_name}"
-        entries.append(entrypoint)
-        relative = f"src/main/java/{package_path}/gametest/{class_name}.java"
+        shard_count += 1
+        class_name = f"{unit_prefix}{index:04d}"
+        relative = f"src/main/java/{test_package_path}/{class_name}.java"
         checks = "\n".join(
             f'        require(Registries.{item["registry"]}.containsId(new Identifier("{mod_id}", "{item["id"]}")), "{item["registry"]}:{item["id"]} missing");'
             for item in shard
         )
-        files[relative] = f'''package {package_name}.gametest;
+        files[relative] = f'''package {test_package};
 
-import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.registry.Registries;
-import net.minecraft.test.GameTest;
 import net.minecraft.test.TestContext;
 import net.minecraft.util.Identifier;
 
 public final class {class_name} {{
-    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)
-    public void generatedRegistriesAreLive(TestContext context) {{
+    public static void run(TestContext context) {{
 {checks}
-        context.complete();
     }}
 
     private static void require(boolean condition, String message) {{
@@ -194,12 +212,50 @@ public final class {class_name} {{
     }}
 }}
 '''
-    return files, entries
+    return (
+        files,
+        [f"{test_package}.{root_class_name}"],
+        shard_count,
+    )
+
+
+def _prune_obsolete_gametest_files(
+    info,
+    *,
+    active_paths: set[str],
+) -> dict[str, Any]:
+    package_directory = (
+        info.root
+        / "src/main/java"
+        / Path(*info.package_name.split("."))
+        / "gametest"
+    )
+    if not package_directory.is_dir():
+        return {"status": "UNCHANGED", "removed": []}
+    active = {
+        (info.root / relative).resolve()
+        for relative in active_paths
+    }
+    obsolete = [
+        path
+        for path in sorted(package_directory.glob("GeneratedRegistryGameTest*.java"))
+        if path.resolve() not in active and path.is_file() and not path.is_symlink()
+    ]
+    if not obsolete:
+        return {"status": "UNCHANGED", "removed": []}
+    return TransactionalSourcePatcher(info.root).apply(
+        [
+            {
+                "operation": "delete",
+                "path": path.relative_to(info.root).as_posix(),
+                "expected_sha256": sha256_file(path),
+            }
+            for path in obsolete
+        ]
+    )
 
 
 def _ensure_gametest_entrypoints(info, entries: list[str]) -> dict[str, Any]:
-    if not entries:
-        return {"status": "UNCHANGED", "entries": []}
     metadata = json.loads(info.fabric_mod_json.read_text(encoding="utf-8"))
     entrypoints = metadata.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
@@ -207,15 +263,28 @@ def _ensure_gametest_entrypoints(info, entries: list[str]) -> dict[str, Any]:
     gametest = entrypoints.setdefault("fabric-gametest", [])
     if not isinstance(gametest, list):
         raise ProductionHardeningError("fabric-gametest entrypoints must be a list.")
-    existing = {
-        item if isinstance(item, str) else item.get("value")
+    generated_prefix = f"{info.package_name}.gametest.GeneratedRegistryGameTest"
+
+    def entrypoint_value(item: Any) -> str | None:
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            value = item.get("value")
+            return value if isinstance(value, str) else None
+        return None
+
+    retained = [
+        item
         for item in gametest
-        if isinstance(item, (str, dict))
-    }
-    added = [entry for entry in entries if entry not in existing]
-    if not added:
+        if not (
+            (value := entrypoint_value(item))
+            and value.startswith(generated_prefix)
+        )
+    ]
+    replacement = retained + entries
+    if replacement == gametest:
         return {"status": "UNCHANGED", "entries": entries}
-    gametest.extend(added)
+    entrypoints["fabric-gametest"] = replacement
     return TransactionalSourcePatcher(info.root).apply(
         [
             {

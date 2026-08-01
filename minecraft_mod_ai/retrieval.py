@@ -206,6 +206,45 @@ BUILTIN_CORPUS: tuple[CorpusDocument, ...] = (
         exact=True,
         related_ids=("fabric-api-1201",),
     ),
+    CorpusDocument(
+        document_id="fabric-loader-01610",
+        title="Fabric Loader 0.16.10 metadata for Minecraft 1.20.1",
+        url="https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.16.10",
+        authority="Fabric official metadata service",
+        trust_tier="official_primary",
+        license_id="Apache-2.0-or-service-terms",
+        revision="minecraft-1.20.1/fabric-loader-0.16.10",
+        verified_on="2026-07-29",
+        minecraft_versions=("1.20.1",),
+        loader="fabric-0.16.10",
+        mappings="not_applicable",
+        families=("profile", "build"),
+        topics=("loader", "minecraft version", "metadata", "dependency"),
+        content=(
+            "Exact official Fabric Meta endpoint for Minecraft 1.20.1 with "
+            "Fabric Loader 0.16.10. Freeze the resolved coordinate before generation."
+        ),
+        related_ids=("fabric-yarn-1201", "fabric-api-1201"),
+    ),
+    CorpusDocument(
+        document_id="java-17-runtime",
+        title="Java Platform Standard Edition 17 documentation",
+        url="https://docs.oracle.com/en/java/javase/17/",
+        authority="Oracle Java SE documentation",
+        trust_tier="official_primary",
+        license_id="Oracle-documentation-license",
+        revision="java-se-17",
+        verified_on="2026-07-29",
+        minecraft_versions=("*",),
+        loader="not_applicable",
+        mappings="not_applicable",
+        families=("profile", "build", "runtime"),
+        topics=("java", "jdk", "runtime", "version"),
+        content=(
+            "Official documentation lane for the pinned Java SE 17 build and runtime target."
+        ),
+        related_ids=("fabric-loader-01610",),
+    ),
     _fabric_document(
         "fabric-project-structure",
         "Fabric project structure",

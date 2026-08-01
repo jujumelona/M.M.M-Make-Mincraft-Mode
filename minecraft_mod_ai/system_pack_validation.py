@@ -99,7 +99,10 @@ def _validate_cross_module_semantics(
         economies = [module_id for module_id, kind, _ in modules if kind == "economy"]
         if len(economies) > 1:
             raise ValueError(
-                "Built-in economy-shop supports one authoritative economy definition; use custom_java to combine multiple currencies."
+                "Built-in economy-shop provides one server-authoritative currency "
+                "manager with any number of accounts, shops, and catalog entries. "
+                "Route multiple independent currencies to custom_java so every "
+                "currency has an explicit instance namespace."
             )
         entries: set[str] = set()
         for module_id, kind, config in modules:
@@ -131,7 +134,10 @@ def _validate_cross_module_semantics(
             matching = [module_id for module_id, current, _ in modules if current == kind]
             if len(matching) > 1:
                 raise ValueError(
-                    f"Built-in {kind} system accepts one definition; use custom_java for multiple independent {kind} systems."
+                    f"Built-in {kind} provides one manager that can create any "
+                    f"number of runtime {kind} groups. Route multiple independent "
+                    f"{kind} managers to custom_java so each manager has an "
+                    "explicit instance namespace."
                 )
 
 

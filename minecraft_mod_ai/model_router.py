@@ -103,12 +103,16 @@ class ModelRouter:
         seed: int = 0,
     ) -> Path:
         config = self.registry.role(self.profile, role)
-        if config.adapter != "image_diffusion":
+        if config.adapter == "image_diffusion":
+            adapter = ImageDiffusionAdapter(config)
+        elif config.adapter == "openai_compatible":
+            adapter = OpenAICompatibleAdapter(config)
+        else:
             raise ModelConfigurationError(
-                f"Role {role!r} does not expose a local image diffusion adapter."
+                f"Role {role!r} cannot generate images with adapter "
+                f"{config.adapter!r}."
             )
-        adapter = ImageDiffusionAdapter(config)
-        with self._gpu_scope(True):
+        with self._gpu_scope(config.exclusive_gpu):
             return adapter.generate_image(
                 prompt=prompt,
                 output_path=Path(output_path),
@@ -119,11 +123,15 @@ class ModelRouter:
 
     def transcribe(self, role: str, audio_path: str | Path) -> str:
         config = self.registry.role(self.profile, role)
-        if config.adapter != "speech":
+        if config.adapter == "speech":
+            adapter = SpeechAdapter(config)
+        elif config.adapter == "openai_compatible":
+            adapter = OpenAICompatibleAdapter(config)
+        else:
             raise ModelConfigurationError(
-                f"Role {role!r} does not expose a local speech adapter."
+                f"Role {role!r} cannot transcribe audio with adapter "
+                f"{config.adapter!r}."
             )
-        adapter = SpeechAdapter(config)
         with self._gpu_scope(config.exclusive_gpu):
             return adapter.transcribe(Path(audio_path))
 

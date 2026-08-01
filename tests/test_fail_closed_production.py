@@ -255,13 +255,29 @@ def test_hardener_adds_machine_model_and_registry_gametest(
     assert "BlockRenderType.MODEL" in text
     tests = sorted(project.rglob("GeneratedRegistryGameTest*.java"))
     assert tests
-    assert "processor" in tests[0].read_text(encoding="utf-8")
+    root_test = next(
+        project.rglob("GeneratedRegistryGameTest.java")
+    )
+    assert "Files.list(directory)" in root_test.read_text(
+        encoding="utf-8"
+    )
+    units = sorted(
+        project.rglob("GeneratedRegistryGameTestUnit*.java")
+    )
+    assert any(
+        "processor" in path.read_text(encoding="utf-8")
+        for path in units
+    )
     metadata = json.loads(
         (project / "src/main/resources/fabric.mod.json").read_text(
             encoding="utf-8"
         )
     )
-    assert any(
-        "GeneratedRegistryGameTest" in entry
+    generated_entries = [
+        entry
         for entry in metadata["entrypoints"]["fabric-gametest"]
-    )
+        if "GeneratedRegistryGameTest" in entry
+    ]
+    assert generated_entries == [
+        "ai.minecraft.closed_test.gametest.GeneratedRegistryGameTest"
+    ]

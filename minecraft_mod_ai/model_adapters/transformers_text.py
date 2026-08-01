@@ -6,6 +6,7 @@ from .base import (
     GenerationRequest,
     ModelAdapter,
     ModelBackendError,
+    ModelConfigurationError,
     preflight_cuda,
     quantization_config,
     require_package,
@@ -30,9 +31,16 @@ class TransformersTextAdapter(ModelAdapter):
             inputs = tokenizer(
                 rendered,
                 return_tensors="pt",
-                truncation=True,
-                max_length=cfg.max_context,
+                truncation=False,
             )
+            input_tokens = int(inputs["input_ids"].shape[-1])
+            if input_tokens > cfg.max_context:
+                raise ModelConfigurationError(
+                    "Rendered text prompt exceeds "
+                    f"max_context={cfg.max_context} ({input_tokens} tokens). "
+                    "Split the request into bounded, verifiable pages instead of "
+                    "discarding prompt tokens."
+                )
             kwargs: dict[str, Any] = {
                 "device_map": "auto",
                 "low_cpu_mem_usage": True,

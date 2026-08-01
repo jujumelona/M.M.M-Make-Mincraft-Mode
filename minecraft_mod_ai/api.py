@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .conversation import merge_design_brief
 from .pipeline import PipelineResult
 from .planner import OpenAICompatiblePlanner, Planner
 from .routed_planner import RoutedPlanner
@@ -229,10 +230,10 @@ class ModAISession:
 
 @dataclass(frozen=True)
 class CompleteChatReply:
-    """Complete-production plan shown before immutable approval."""
+    """Natural-language complete-production plan with hidden execution state."""
 
     message: str
-    approval_hash: str
+    approval_hash: str = field(repr=False)
     complete_proposal: "CompleteProposal" = field(repr=False)
 
     @property
@@ -271,6 +272,7 @@ class CompleteModAISession:
             profile=model_profile,
             router_factory=lambda: self.router,
         )
+        self.brief = ""
         self.complete_proposal: "CompleteProposal | None" = None
 
     def plan(
@@ -279,8 +281,29 @@ class CompleteModAISession:
         *,
         media_paths: tuple[str | Path, ...] = (),
     ) -> CompleteChatReply:
+        self.reset()
+        return self.chat(prompt, media_paths=media_paths)
+
+    def revise(
+        self,
+        message: str,
+        *,
+        media_paths: tuple[str | Path, ...] = (),
+    ) -> CompleteChatReply:
+        return self.chat(message, media_paths=media_paths)
+
+    def chat(
+        self,
+        message: str,
+        *,
+        media_paths: tuple[str | Path, ...] = (),
+    ) -> CompleteChatReply:
         import hashlib
 
+        try:
+            updated_brief = merge_design_brief(self.brief, message)
+        except ValueError as exc:
+            raise SpecValidationError("대화 내용을 입력해 주세요.") from exc
         existing_hash = ""
         if self.existing_input is not None:
             if not self.existing_input.is_file():
@@ -289,31 +312,28 @@ class CompleteModAISession:
                 self.existing_input.read_bytes()
             ).hexdigest()
         proposal = self.planner.plan(
-            prompt,
+            updated_brief,
             media_paths=media_paths,
             existing_input_sha256=existing_hash,
         )
+        self.brief = updated_brief
         self.complete_proposal = proposal
+        from .plan_render import render_complete_plan
+
         return CompleteChatReply(
-            message=json.dumps(
-                {
-                    "game_design": proposal.game_design,
-                    "modules": [
-                        module.module_id for module in proposal.modules
-                    ],
-                    "acceptance_tests": list(
-                        proposal.acceptance_tests
-                    ),
-                    "external_runtime_required": (
-                        proposal.external_runtime_required
-                    ),
-                },
-                ensure_ascii=False,
-                indent=2,
+            message=render_complete_plan(
+                requested_prompt=proposal.requested_prompt,
+                game_design=proposal.game_design,
+                modules=proposal.modules,
+                acceptance_tests=proposal.acceptance_tests,
             ),
             approval_hash=proposal.calculate_hash(),
             complete_proposal=proposal,
         )
+
+    def reset(self) -> None:
+        self.brief = ""
+        self.complete_proposal = None
 
     def build(
         self,

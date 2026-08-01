@@ -7,8 +7,14 @@ import shlex
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
+
+
+_DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES = 128
+_DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES = 8 * 1024 * 1024
+_DEFAULT_DIAGNOSTIC_QUIET_SECONDS = 2.0
 
 
 class JDTLanguageServerError(RuntimeError):
@@ -26,7 +32,7 @@ class _JsonRpcProcess:
             shell=False,
         )
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
-        self.stderr: list[str] = []
+        self.stderr: deque[str] = deque(maxlen=30)
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._error_reader = threading.Thread(target=self._read_stderr, daemon=True)
         self._reader.start()
@@ -126,11 +132,33 @@ class JavaLanguageService:
     The command is operator configuration, never model-generated input.
     """
 
-    def __init__(self, command: str | None = None) -> None:
+    def __init__(
+        self,
+        command: str | None = None,
+        *,
+        diagnostic_page_max_files: int = _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES,
+        diagnostic_page_max_source_bytes: int = (
+            _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES
+        ),
+        diagnostic_quiet_seconds: float = _DEFAULT_DIAGNOSTIC_QUIET_SECONDS,
+    ) -> None:
         raw = command or os.environ.get("MMM_JDTLS_CMD", "").strip()
         self.command = shlex.split(raw) if raw else ["jdtls"]
         if not self.command:
             raise JDTLanguageServerError("Empty JDT LS command.")
+        if diagnostic_page_max_files <= 0:
+            raise ValueError("diagnostic_page_max_files must be positive.")
+        if diagnostic_page_max_source_bytes <= 0:
+            raise ValueError(
+                "diagnostic_page_max_source_bytes must be positive."
+            )
+        if diagnostic_quiet_seconds < 0:
+            raise ValueError("diagnostic_quiet_seconds cannot be negative.")
+        self.diagnostic_page_max_files = diagnostic_page_max_files
+        self.diagnostic_page_max_source_bytes = (
+            diagnostic_page_max_source_bytes
+        )
+        self.diagnostic_quiet_seconds = diagnostic_quiet_seconds
 
     def diagnostics(
         self,
@@ -142,7 +170,27 @@ class JavaLanguageService:
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir():
             raise FileNotFoundError(root)
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive.")
         files = _java_files(root, relative_files)
+        pages = _diagnostic_pages(
+            files,
+            max_files=self.diagnostic_page_max_files,
+            max_source_bytes=self.diagnostic_page_max_source_bytes,
+        )
+        if not pages:
+            return _diagnostic_result(
+                root=root,
+                files_opened=0,
+                total_source_bytes=0,
+                page_receipts=[],
+                diagnostics={},
+                stderr_tail=[],
+                max_files=self.diagnostic_page_max_files,
+                max_source_bytes=self.diagnostic_page_max_source_bytes,
+                timeout_seconds=timeout_seconds,
+            )
+
         rpc = _JsonRpcProcess(self.command, root)
         try:
             rpc.request(
@@ -161,56 +209,70 @@ class JavaLanguageService:
                 timeout=min(timeout_seconds, 45),
             )
             rpc.notify("initialized", {})
-            for path in files:
-                rpc.notify(
-                    "textDocument/didOpen",
-                    {
-                        "textDocument": {
-                            "uri": path.as_uri(),
-                            "languageId": "java",
-                            "version": 1,
-                            "text": path.read_text(encoding="utf-8", errors="replace"),
-                        }
-                    },
-                )
             diagnostics: dict[str, list[dict[str, Any]]] = {}
-            deadline = time.monotonic() + timeout_seconds
-            quiet_since = time.monotonic()
-            while time.monotonic() < deadline:
-                try:
-                    message = rpc.messages.get(timeout=0.25)
-                except queue.Empty:
-                    if time.monotonic() - quiet_since >= 2.0:
-                        break
-                    continue
-                if message.get("method") == "textDocument/publishDiagnostics":
-                    params = message.get("params", {})
-                    uri = str(params.get("uri", ""))
-                    values = params.get("diagnostics", [])
-                    if isinstance(values, list):
-                        diagnostics[uri] = values
-                        quiet_since = time.monotonic()
-            errors = sum(
-                1
-                for values in diagnostics.values()
-                for item in values
-                if int(item.get("severity", 1)) == 1
+            page_receipts: list[dict[str, Any]] = []
+            total_source_bytes = 0
+            for page_index, page in enumerate(pages):
+                sources, source_bytes = _read_source_page(
+                    page,
+                    max_source_bytes=self.diagnostic_page_max_source_bytes,
+                )
+                expected_uris = {path.as_uri() for path, _text in sources}
+                for path, text in sources:
+                    rpc.notify(
+                        "textDocument/didOpen",
+                        {
+                            "textDocument": {
+                                "uri": path.as_uri(),
+                                "languageId": "java",
+                                "version": 1,
+                                "text": text,
+                            }
+                        },
+                    )
+                page_diagnostics = _collect_diagnostics(
+                    rpc,
+                    expected_uris=expected_uris,
+                    timeout_seconds=timeout_seconds,
+                    quiet_seconds=self.diagnostic_quiet_seconds,
+                )
+                for path, _text in sources:
+                    rpc.notify(
+                        "textDocument/didClose",
+                        {"textDocument": {"uri": path.as_uri()}},
+                    )
+                diagnostics.update(page_diagnostics)
+                page_errors, page_warnings = _diagnostic_counts(
+                    page_diagnostics
+                )
+                relative_paths = [
+                    path.relative_to(root).as_posix()
+                    for path, _text in sources
+                ]
+                page_receipts.append(
+                    {
+                        "page_index": page_index,
+                        "file_count": len(sources),
+                        "source_bytes": source_bytes,
+                        "first_file": relative_paths[0],
+                        "last_file": relative_paths[-1],
+                        "diagnostic_uri_count": len(page_diagnostics),
+                        "error_count": page_errors,
+                        "warning_count": page_warnings,
+                    }
+                )
+                total_source_bytes += source_bytes
+            return _diagnostic_result(
+                root=root,
+                files_opened=len(files),
+                total_source_bytes=total_source_bytes,
+                page_receipts=page_receipts,
+                diagnostics=diagnostics,
+                stderr_tail=list(rpc.stderr),
+                max_files=self.diagnostic_page_max_files,
+                max_source_bytes=self.diagnostic_page_max_source_bytes,
+                timeout_seconds=timeout_seconds,
             )
-            warnings = sum(
-                1
-                for values in diagnostics.values()
-                for item in values
-                if int(item.get("severity", 2)) == 2
-            )
-            return {
-                "schema_version": "mmm/java-diagnostics-v1",
-                "project_root": str(root),
-                "files_opened": len(files),
-                "error_count": errors,
-                "warning_count": warnings,
-                "diagnostics": diagnostics,
-                "server_stderr_tail": rpc.stderr[-30:],
-            }
         finally:
             rpc.close()
 
@@ -251,9 +313,13 @@ class JavaLanguageService:
 
 def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
     if relative_files is None:
-        paths = sorted(root.rglob("*.java"))
+        candidates = (
+            path.resolve()
+            for path in root.rglob("*.java")
+            if path.is_file() and not path.is_symlink()
+        )
     else:
-        paths = []
+        requested: list[Path] = []
         for relative in relative_files:
             path = (root / relative).resolve()
             try:
@@ -262,7 +328,175 @@ def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
                 raise ValueError("Java file escaped the project root.") from exc
             if path.suffix != ".java" or not path.is_file() or path.is_symlink():
                 raise FileNotFoundError(path)
-            paths.append(path)
-    if len(paths) > 256:
-        raise ValueError("JDT LS request is limited to 256 Java files.")
-    return paths
+            requested.append(path)
+        candidates = iter(requested)
+    return sorted(set(candidates), key=lambda path: path.as_posix())
+
+
+def _diagnostic_pages(
+    files: Iterable[Path],
+    *,
+    max_files: int,
+    max_source_bytes: int,
+) -> list[tuple[Path, ...]]:
+    pages: list[tuple[Path, ...]] = []
+    current: list[Path] = []
+    current_bytes = 0
+    for path in files:
+        source_bytes = path.stat().st_size
+        if source_bytes > max_source_bytes:
+            raise ValueError(
+                "Java source exceeds the per-page JDT LS source-byte limit: "
+                f"{path} ({source_bytes} > {max_source_bytes})."
+            )
+        if current and (
+            len(current) >= max_files
+            or current_bytes + source_bytes > max_source_bytes
+        ):
+            pages.append(tuple(current))
+            current = []
+            current_bytes = 0
+        current.append(path)
+        current_bytes += source_bytes
+    if current:
+        pages.append(tuple(current))
+    return pages
+
+
+def _read_source_page(
+    page: Iterable[Path],
+    *,
+    max_source_bytes: int,
+) -> tuple[list[tuple[Path, str]], int]:
+    sources: list[tuple[Path, str]] = []
+    total_bytes = 0
+    for path in page:
+        raw = path.read_bytes()
+        total_bytes += len(raw)
+        if total_bytes > max_source_bytes:
+            raise ValueError(
+                "Java sources changed while preparing a JDT LS page and now "
+                "exceed its source-byte limit."
+            )
+        sources.append((path, raw.decode("utf-8", errors="replace")))
+    return sources, total_bytes
+
+
+def _collect_diagnostics(
+    rpc: _JsonRpcProcess,
+    *,
+    expected_uris: set[str],
+    timeout_seconds: float,
+    quiet_seconds: float,
+) -> dict[str, list[dict[str, Any]]]:
+    diagnostics: dict[str, list[dict[str, Any]]] = {}
+    deadline = time.monotonic() + timeout_seconds
+    quiet_since = time.monotonic()
+    quiet_reached = False
+    while time.monotonic() < deadline:
+        if (
+            expected_uris.issubset(diagnostics)
+            and time.monotonic() - quiet_since >= quiet_seconds
+        ):
+            quiet_reached = True
+            break
+        remaining = deadline - time.monotonic()
+        wait_seconds = min(
+            0.25,
+            max(0.001, quiet_seconds),
+            max(0.001, remaining),
+        )
+        try:
+            message = rpc.messages.get(timeout=wait_seconds)
+        except queue.Empty:
+            if (
+                expected_uris.issubset(diagnostics)
+                and time.monotonic() - quiet_since >= quiet_seconds
+            ):
+                quiet_reached = True
+                break
+            continue
+        if message.get("method") != "textDocument/publishDiagnostics":
+            continue
+        params = message.get("params", {})
+        uri = str(params.get("uri", ""))
+        values = params.get("diagnostics", [])
+        if uri not in expected_uris or not isinstance(values, list):
+            continue
+        diagnostics[uri] = _sorted_diagnostics(values)
+        quiet_since = time.monotonic()
+    if not quiet_reached:
+        missing_count = len(expected_uris.difference(diagnostics))
+        raise TimeoutError(
+            "JDT LS diagnostic page did not publish a complete quiet result "
+            f"within {timeout_seconds} seconds ({missing_count} files missing)."
+        )
+    return dict(sorted(diagnostics.items()))
+
+
+def _sorted_diagnostics(
+    values: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return sorted(
+        values,
+        key=lambda item: json.dumps(
+            item,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ),
+    )
+
+
+def _diagnostic_counts(
+    diagnostics: dict[str, list[dict[str, Any]]],
+) -> tuple[int, int]:
+    errors = sum(
+        1
+        for values in diagnostics.values()
+        for item in values
+        if int(item.get("severity", 1)) == 1
+    )
+    warnings = sum(
+        1
+        for values in diagnostics.values()
+        for item in values
+        if int(item.get("severity", 2)) == 2
+    )
+    return errors, warnings
+
+
+def _diagnostic_result(
+    *,
+    root: Path,
+    files_opened: int,
+    total_source_bytes: int,
+    page_receipts: list[dict[str, Any]],
+    diagnostics: dict[str, list[dict[str, Any]]],
+    stderr_tail: list[str],
+    max_files: int,
+    max_source_bytes: int,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    deterministic_diagnostics = {
+        uri: _sorted_diagnostics(values)
+        for uri, values in sorted(diagnostics.items())
+    }
+    errors, warnings = _diagnostic_counts(deterministic_diagnostics)
+    return {
+        "schema_version": "mmm/java-diagnostics-v2",
+        "project_root": str(root),
+        "files_opened": files_opened,
+        "total_source_bytes": total_source_bytes,
+        "page_count": len(page_receipts),
+        "page_limits": {
+            "max_files": max_files,
+            "max_source_bytes": max_source_bytes,
+            "timeout_seconds": timeout_seconds,
+        },
+        "pages": page_receipts,
+        "error_count": errors,
+        "warning_count": warnings,
+        "diagnostics": deterministic_diagnostics,
+        "server_stderr_tail": stderr_tail[-30:],
+    }

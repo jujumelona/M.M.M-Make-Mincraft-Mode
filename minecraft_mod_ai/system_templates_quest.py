@@ -4,7 +4,6 @@ from __future__ import annotations
 def _quest_java(package_name: str, class_name: str, resource: str) -> str:
     return f'''package {package_name}.system;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -115,9 +114,7 @@ public final class {class_name} {{
 
     private static void loadDefinitions() {{
         DEFINITIONS.clear();
-        JsonArray modules = MmmSystemConfig.load("{resource}").getAsJsonArray("modules");
-        modules.forEach(element -> {{
-            JsonObject module = element.getAsJsonObject();
+        MmmSystemConfig.forEachModule("{resource}", module -> {{
             if (!"quest".equals(module.get("kind").getAsString())) return;
             String id = module.get("module_id").getAsString();
             JsonObject config = module.getAsJsonObject("config");

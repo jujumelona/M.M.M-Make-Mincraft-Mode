@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .complete_spec import ProductionModule
 from .extended_content_generator import generate_extended_content
+from .gametest_discovery import discovered_gametest_root_java
 from .generator import FabricProjectGenerator, GeneratedProject
 from .project_edit import inspect_fabric_project, write_text_files
 from .scale_policy import ScalePolicy
@@ -17,8 +18,8 @@ class ScalableFabricProjectGenerator:
     """Generate the bootstrap project and shard arbitrary content counts.
 
     The legacy generator remains the versioned resource compiler. Content registration
-    is moved to GeneratedContentShard classes so the bootstrap main class never grows
-    with the number of requested items or blocks.
+    is moved to independently discoverable GeneratedContentUnit classes so neither
+    the bootstrap main class nor a registrar root grows with requested content.
     """
 
     def __init__(self, *, policy: ScalePolicy | None = None) -> None:
@@ -80,17 +81,27 @@ class ScalableFabricProjectGenerator:
 
     def _write_gametest_shards(self, root: Path, spec: ModSpec) -> None:
         info = inspect_fabric_project(root)
-        entries: list[str] = []
         files: dict[str, str] = {}
         contents = list(spec.contents)
+        package_path = spec.package_name.replace(".", "/")
+        root_class_name = "ScalableContentGameTest"
+        unit_prefix = root_class_name + "Unit"
+        root_entrypoint = f"{spec.package_name}.{root_class_name}"
+        files[
+            f"src/main/java/{package_path}/{root_class_name}.java"
+        ] = discovered_gametest_root_java(
+            package_name=spec.package_name,
+            mod_id=spec.mod_id,
+            root_class_name=root_class_name,
+            unit_class_prefix=unit_prefix,
+        )
         for offset in range(0, len(contents), self.policy.java_shard_size):
             shard = contents[offset : offset + self.policy.java_shard_size]
             index = offset // self.policy.java_shard_size
-            class_name = f"ScalableContentGameTest{index:04d}"
-            entries.append(f"{spec.package_name}.{class_name}")
+            class_name = f"{unit_prefix}{index:04d}"
             relative = (
                 "src/main/java/"
-                + spec.package_name.replace(".", "/")
+                + package_path
                 + f"/{class_name}.java"
             )
             files[relative] = _gametest_java(
@@ -107,17 +118,27 @@ class ScalableFabricProjectGenerator:
         gametest = entrypoints.setdefault("fabric-gametest", [])
         if not isinstance(gametest, list):
             raise ValueError("fabric-gametest entrypoints must be a list")
-        existing = {
-            item if isinstance(item, str) else item.get("value")
+        generated_prefix = f"{spec.package_name}.ScalableContentGameTest"
+
+        def entrypoint_value(item) -> str | None:
+            if isinstance(item, str):
+                return item
+            if isinstance(item, dict):
+                value = item.get("value")
+                return value if isinstance(value, str) else None
+            return None
+
+        retained = [
+            item
             for item in gametest
-            if isinstance(item, (str, dict))
-        }
-        changed = False
-        for entry in entries:
-            if entry not in existing:
-                gametest.append(entry)
-                changed = True
-        if changed:
+            if not (
+                (value := entrypoint_value(item))
+                and value.startswith(generated_prefix)
+            )
+        ]
+        replacement = retained + [root_entrypoint]
+        if replacement != gametest:
+            entrypoints["fabric-gametest"] = replacement
             TransactionalSourcePatcher(root).apply(
                 [
                     {
@@ -148,17 +169,13 @@ def _gametest_java(spec: ModSpec, class_name: str, contents: list) -> str:
             )
     return f'''package {spec.package_name};
 
-import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.registry.Registries;
-import net.minecraft.test.GameTest;
 import net.minecraft.test.TestContext;
 import net.minecraft.util.Identifier;
 
 public final class {class_name} {{
-    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)
-    public void generatedRegistriesAreLive(TestContext context) {{
+    public static void run(TestContext context) {{
 {chr(10).join(checks)}
-        context.complete();
     }}
 
     private static void require(boolean condition, String message) {{

@@ -63,9 +63,7 @@ public final class {class_name} {{
     private static void loadDefinitions() {{
         CATALOG.clear();
         initialBalance = 0.0d;
-        JsonArray modules = MmmSystemConfig.load("{resource}").getAsJsonArray("modules");
-        modules.forEach(element -> {{
-            JsonObject module = element.getAsJsonObject();
+        MmmSystemConfig.forEachModule("{resource}", module -> {{
             String kind = module.get("kind").getAsString();
             JsonObject config = module.getAsJsonObject("config");
             if ("economy".equals(kind) && config.has("initial_balance")) {{

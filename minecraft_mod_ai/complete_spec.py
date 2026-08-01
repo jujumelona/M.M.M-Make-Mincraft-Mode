@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import heapq
 import json
 import math
@@ -9,8 +8,13 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
+from .json_stream import (
+    CanonicalJsonError,
+    canonical_json_sha256,
+    validate_canonical_json,
+)
 from .scale_policy import ScalePolicy
-from .spec import Proposal, SpecValidationError, canonical_json
+from .spec import Proposal, SpecValidationError
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -83,6 +87,22 @@ class ProductionModule:
             raise SpecValidationError(
                 f"Module config must be an object: {self.module_id}"
             )
+        if (
+            self.kind == "integration"
+            and self.config.get("integration_type")
+            == "mmm_local_ai_sidecar"
+        ):
+            from .local_ai_sidecar_generator import (
+                LocalAiSidecarGenerationError,
+                normalize_local_ai_sidecar_config,
+            )
+
+            try:
+                normalize_local_ai_sidecar_config(self.config)
+            except LocalAiSidecarGenerationError as exc:
+                raise SpecValidationError(
+                    f"Invalid reviewed local AI sidecar module {self.module_id}: {exc}"
+                ) from exc
         implementation = self.config.get("implementation")
         if implementation is not None and implementation != "custom":
             raise SpecValidationError(
@@ -268,19 +288,11 @@ class CompleteProposal:
                 "game_design must be a non-empty object."
             )
         try:
-            design_bytes = json.dumps(
-                self.game_design,
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
-        except (TypeError, ValueError) as exc:
+            validate_canonical_json(self.game_design)
+        except (CanonicalJsonError, RecursionError) as exc:
             raise SpecValidationError(
                 "game_design must contain finite JSON values."
             ) from exc
-        if len(design_bytes) > policy.max_single_file_bytes:
-            raise SpecValidationError(
-                "game_design exceeds the configured per-file resource policy."
-            )
         if not self.modules:
             raise SpecValidationError(
                 "A complete proposal must contain at least one production module."
@@ -414,12 +426,24 @@ class CompleteProposal:
             )
 
     def calculate_hash(self) -> str:
-        payload = self.to_dict()
-        payload["status"] = CompleteProposalStatus.AWAITING_APPROVAL.value
-        payload["approval_hash"] = ""
-        return "sha256:" + hashlib.sha256(
-            canonical_json(payload).encode("utf-8")
-        ).hexdigest()
+        return canonical_json_sha256(
+            {
+                "schema_version": self.schema_version,
+                "proposal_version": self.proposal_version,
+                "status": CompleteProposalStatus.AWAITING_APPROVAL.value,
+                "requested_prompt": self.requested_prompt,
+                "base_proposal": self.base_proposal,
+                "game_design": self.game_design,
+                "modules": self.modules,
+                "world_ir": self.world_ir,
+                "assets": self.assets,
+                "audio": self.audio,
+                "acceptance_tests": self.acceptance_tests,
+                "external_runtime_required": self.external_runtime_required,
+                "existing_input_sha256": self.existing_input_sha256,
+                "approval_hash": "",
+            }
+        )
 
     def with_hash(self) -> "CompleteProposal":
         draft = CompleteProposal(
@@ -648,19 +672,11 @@ def _validate_world_ir(
     if set(ir) != required or ir.get("schema_version") != "mmm/world-ir-v1":
         raise SpecValidationError("world_ir schema is invalid.")
     try:
-        encoded = json.dumps(
-            ir,
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+        validate_canonical_json(ir)
+    except (CanonicalJsonError, RecursionError) as exc:
         raise SpecValidationError(
             "world_ir must contain finite JSON values."
         ) from exc
-    if len(encoded) > policy.max_single_file_bytes:
-        raise SpecValidationError(
-            "world_ir exceeds the configured per-file resource policy."
-        )
     for key in ("regions", "routes", "structures", "quests", "constraints"):
         if not isinstance(ir[key], list):
             raise SpecValidationError(f"world_ir.{key} must be a list.")

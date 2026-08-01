@@ -71,8 +71,10 @@ def test_scalable_generator_shards_bootstrap_content_and_gametests(
     result = ScalableFabricProjectGenerator(policy=policy).generate(spec, project)
     assert result.root == project.resolve()
 
-    shard_files = sorted(project.rglob("GeneratedContentShard*.java"))
-    assert len(shard_files) == 9
+    registrar_units = sorted(
+        project.rglob("GeneratedContentUnit*.java")
+    )
+    assert len(registrar_units) == 130
     main_java = project / "src/main/java/ai/minecraft/scale_test/ScaleTestMod.java"
     assert "ITEM_0129" not in main_java.read_text(encoding="utf-8")
 
@@ -84,7 +86,14 @@ def test_scalable_generator_shards_bootstrap_content_and_gametests(
         for value in metadata["entrypoints"]["fabric-gametest"]
         if "ScalableContentGameTest" in value
     ]
-    assert len(scale_tests) == 9
+    assert scale_tests == [
+        "ai.minecraft.scale_test.ScalableContentGameTest"
+    ]
+    assert len(
+        list(project.rglob("ScalableContentGameTestUnit*.java"))
+    ) == 9
+    root_test = next(project.rglob("ScalableContentGameTest.java"))
+    assert "item_0129" not in root_test.read_text(encoding="utf-8")
     assert ScalableProjectValidator(policy=policy).validate(project, spec).passed
 
 
@@ -111,6 +120,36 @@ def test_project_index_retrieves_relevant_file_not_first_directory_entries(
     selected = {item["path"] for item in context["files"]}
     assert important.relative_to(root).as_posix() in selected
     assert context["indexed_file_count"] == 201
+
+
+def test_project_index_manifest_is_sharded_and_fingerprint_is_stable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    source = root / "src/main/java/example"
+    source.mkdir(parents=True)
+    for index in range(700):
+        (source / f"Generated{index:04d}.java").write_text(
+            f"package example; final class Generated{index:04d} {{}}\n",
+            encoding="utf-8",
+        )
+
+    first = ProjectIndex(root)
+    receipt = first.manifest_receipt()
+    manifest_path = first.write_manifest()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    second_receipt = ProjectIndex(root).manifest_receipt()
+
+    assert receipt == second_receipt
+    assert manifest["schema_version"] == "mmm/project-index-v2"
+    assert manifest["file_count"] == 700
+    assert len(manifest["parts"]) == 3
+    assert "files" not in manifest
+    for item in manifest["parts"]:
+        part = json.loads((manifest_path.parent / item["path"]).read_text(
+            encoding="utf-8"
+        ))
+        assert len(part["files"]) <= 256
 
 
 def test_large_logical_world_is_partitioned_instead_of_rejected(
@@ -146,10 +185,54 @@ def test_large_logical_world_is_partitioned_instead_of_rejected(
     )
     assert result["partitioned_structures"] == ["capital_city"]
     assert result["physical_template_count"] == 18
-    assert (
+    contract = json.loads(
+        (
+            tmp_path
+            / "world/data/scale_test/mmm_world/contracts/structures/"
+            "capital_city.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["placement"] == "runtime_function_shards"
+    assert contract["spacing"] == 32
+    assert contract["separation"] == 8
+    assert contract["biomes"] == ["minecraft:plains"]
+    assert contract["function"].endswith("/part_{shard}")
+    parts = sorted(
+        (
+            tmp_path
+            / "world/data/scale_test/functions/generated/capital_city"
+        ).glob("part_*.mcfunction")
+    )
+    assert contract["shard_count"] == len(parts)
+    assert result["runtime_bridge_required"] is True
+    assert not (
         tmp_path
         / "world/data/scale_test/functions/build_capital_city.mcfunction"
-    ).is_file()
+    ).exists()
+    assert len(parts) > 1
+    for path in parts:
+        text = path.read_text(encoding="utf-8")
+        assert text.count("place template") <= 4
+        assert "schedule function" not in text
+    piece_contracts = sorted(
+        (
+            tmp_path
+            / "world/data/scale_test/mmm_world/contracts/"
+            "structure_pieces/capital_city"
+        ).glob("*.json")
+    )
+    assert len(piece_contracts) == 18
+    repeated = compile_scalable_world_ir(
+        ir,
+        mod_id="scale_test",
+        output_root=tmp_path / "world",
+        policy=ScalePolicy(
+            nbt_piece_axis=32,
+            nbt_piece_volume=32768,
+        ),
+    )
+    assert repeated["manifest_sha256"] == result["manifest_sha256"]
+    assert not list(tmp_path.glob(".world.replaced-*"))
 
 
 def test_shop_uses_server_owned_catalog_and_not_player_supplied_price(

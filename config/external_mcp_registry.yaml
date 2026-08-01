@@ -1,22 +1,65 @@
 schema_version: mmm/external-mcp-registry-v1
 servers:
-  mmm-local:
+  mmm-frontdoor:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: frontdoor}
+    target_versions: ["1.20.1"]
+    trust: first_party
+  mmm-research:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: research}
+    target_versions: ["1.20.1"]
+    trust: first_party
+  mmm-generation:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: generation}
+    target_versions: ["1.20.1"]
+    trust: first_party
+  mmm-quality:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: quality}
+    target_versions: ["1.20.1"]
+    trust: first_party
+  mmm-runtime:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: runtime}
+    target_versions: ["1.20.1"]
+    trust: first_party
+  mmm-release:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: release}
+    target_versions: ["1.20.1"]
+    trust: first_party
+  mmm-training:
+    status: enabled
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: training}
     target_versions: ["1.20.1"]
     trust: first_party
   minecraft-dev:
     status: enabled
     transport: stdio
-    command: [npx, -y, "@mcdxai/minecraft-dev-mcp"]
+    command: [npx, -y, "@mcdxai/minecraft-dev-mcp@1.2.4"]
     target_versions: ["1.20.1"]
     trust: reviewed_open_source
     purpose: source decompilation, mappings, symbol search and JAR inspection
   playwright:
     status: enabled
     transport: stdio
-    command: [npx, -y, "@playwright/mcp@latest", "--headless"]
+    command: [npx, -y, "@playwright/mcp@0.0.78", "--headless"]
     trust: official_open_source
     purpose: documentation and web UI research
   github:

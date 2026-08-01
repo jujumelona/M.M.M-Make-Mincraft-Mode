@@ -75,7 +75,9 @@ class CustomModuleGenerator:
                 "depends_on": list(module.depends_on),
                 "required_gates": list(module.required_gates),
             },
-            "project_manifest": index.manifest(),
+            # A fixed-size commitment prevents project size from becoming model
+            # context size. Exact relevant files and hashes are supplied below.
+            "project_manifest": index.manifest_receipt(),
             "relevant_context": context,
             "output_contract": {
                 "operations": [

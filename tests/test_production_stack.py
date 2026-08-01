@@ -8,7 +8,11 @@ from minecraft_mod_ai.system_pack_generator import supported_system_packs
 
 def test_external_mcp_registry_is_version_locked() -> None:
     registry = ExternalMCPRegistry().public_dict()["servers"]
+    assert registry["mmm-frontdoor"]["env"]["MMM_MCP_STAGE"] == "frontdoor"
+    assert registry["mmm-generation"]["env"]["MMM_MCP_STAGE"] == "generation"
     assert registry["minecraft-dev"]["status"] == "enabled"
+    assert registry["minecraft-dev"]["command"][-1].endswith("@1.2.4")
+    assert registry["playwright"]["command"][2] == "@playwright/mcp@0.0.78"
     assert "1.20.1" in registry["minecraft-dev"]["target_versions"]
     assert "1.20.1" in registry["mineflayer-1201"]["target_versions"]
     assert registry["gdmc"]["status"] == "incompatible_by_default"
@@ -17,7 +21,7 @@ def test_external_mcp_registry_is_version_locked() -> None:
 def test_canonical_skill_catalog_is_complete() -> None:
     report = validate_skill_catalog()
     assert report["passed"], report["findings"]
-    assert len(CANONICAL_SKILLS) == 21
+    assert len(CANONICAL_SKILLS) == 26
 
 
 def test_restricted_blockbench_tools_have_no_shell_or_script() -> None:

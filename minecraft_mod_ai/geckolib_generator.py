@@ -47,11 +47,15 @@ def generate_geckolib_entity_assets(
     cls = "".join(part.capitalize() for part in entity_id.split("_")); entity_cls = cls + "Entity"
     package_path = package_name.replace(".", "/"); base = f"src/main/java/{package_path}"; assets = f"src/main/resources/assets/{mod_id}"
     manifest_path = info.root / ".minecraft_ai/geckolib-entities.json"
-    entries: dict[str, dict[str, Any]] = {}
+    legacy_entries: list[dict[str, Any]] = []
     if manifest_path.is_file():
-        raw = json.loads(manifest_path.read_text(encoding="utf-8")); entries = {str(x["entity_id"]): dict(x) for x in raw.get("entities", [])}
-    entries[entity_id] = {"entity_id": entity_id, "class_name": cls, "entity_class": entity_cls, "max_health": float(max_health), "attack_damage": float(attack_damage), "movement_speed": float(movement_speed), "follow_range": float(follow_range), "entity_width": float(entity_width), "entity_height": float(entity_height), "archetype": archetype, "behavior": behavior, "spawn_group": spawn_group}
-    ordered = [entries[key] for key in sorted(entries)]
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and isinstance(raw.get("entities"), list):
+            legacy_entries = [
+                _legacy_entity_record(value)
+                for value in raw["entities"]
+            ]
+    entry = {"entity_id": entity_id, "class_name": cls, "entity_class": entity_cls, "max_health": float(max_health), "attack_damage": float(attack_damage), "movement_speed": float(movement_speed), "follow_range": float(follow_range), "entity_width": float(entity_width), "entity_height": float(entity_height), "archetype": archetype, "behavior": behavior, "spawn_group": spawn_group}
     bones = custom_bones if custom_bones is not None else _bones(archetype)
     files = {
         f"{assets}/geo/{entity_id}.geo.json": json.dumps(_geometry(mod_id, entity_id, texture_width, texture_height, bones), indent=2, sort_keys=True) + "\n",
@@ -59,9 +63,34 @@ def generate_geckolib_entity_assets(
         f"{base}/entity/{entity_cls}.java": _entity_java(package_name, mod_id, entity_id, entity_cls, float(max_health), float(attack_damage), float(movement_speed), float(follow_range), behavior),
         f"{base}/client/geckolib/{cls}GeoModel.java": _model_java(package_name, mod_id, entity_id, cls, entity_cls),
         f"{base}/client/geckolib/{cls}GeoRenderer.java": _renderer_java(package_name, cls, entity_cls, float(entity_width)),
-        ".minecraft_ai/geckolib-entities.json": json.dumps({"schema_version": "mmm/geckolib-entities-v2", "shard_size": policy.entity_shard_size, "entities": ordered}, indent=2, sort_keys=True) + "\n",
+        ".minecraft_ai/geckolib-entities.json": _entity_index_text(
+            mod_id
+        ),
+        f"{base}/geckolib/GeneratedGeckoEntities.java": _root_reg(
+            package_name,
+            mod_id,
+        ),
+        f"{base}/client/geckolib/GeneratedGeckoClient.java": _root_client(
+            package_name,
+        ),
     }
-    files.update(_registrars(package_name, mod_id, base, ordered, policy.entity_shard_size))
+    for legacy in legacy_entries:
+        files.update(
+            _registration_unit_files(
+                package_name,
+                mod_id,
+                base,
+                legacy,
+            )
+        )
+    files.update(
+        _registration_unit_files(
+            package_name,
+            mod_id,
+            base,
+            entry,
+        )
+    )
     write_receipt = write_text_files(info, files, replace_existing=True)
     texture = info.root / f"{assets}/textures/entity/{entity_id}.png"; texture.parent.mkdir(parents=True, exist_ok=True)
     if not texture.exists(): texture.write_bytes(make_texture_png("#5ba6d8", entity_id, kind="entity", size=max(texture_width, texture_height)))
@@ -74,7 +103,13 @@ def generate_geckolib_entity_assets(
         depends["geckolib"] = f">={geckolib_version}"
         meta_receipt: dict[str, Any] = TransactionalSourcePatcher(info.root).apply([{"operation": "replace", "path": "src/main/resources/fabric.mod.json", "expected_sha256": sha256_file(info.fabric_mod_json), "content": json.dumps(metadata, indent=2) + "\n"}])
     else: meta_receipt = {"status": "UNCHANGED"}
-    return {"schema_version": "mmm/geckolib-generation-v3", "entity_id": entity_id, "archetype": archetype, "behavior": behavior, "entity_count": len(ordered), "registrar_shards": max(1, math.ceil(len(ordered) / policy.entity_shard_size)), "files": [str(info.root / p) for p in files] + [str(texture)], "status": "fabric_binding_generated", "receipts": {"files": write_receipt, "dependency": dependency, "main": main, "client": client, "metadata": meta_receipt}, "required_gates": ["Blockbench UV and bone hierarchy review", "Gradle clean build", "GameTest spawn and attributes", "runtime animation review"]}
+    record_root = info.root / ".minecraft_ai/geckolib-entities"
+    entity_count = sum(
+        1
+        for path in record_root.glob("*.json")
+        if path.is_file() and not path.is_symlink()
+    )
+    return {"schema_version": "mmm/geckolib-generation-v3", "entity_id": entity_id, "archetype": archetype, "behavior": behavior, "entity_count": entity_count, "registrar_shards": entity_count, "files": [str(info.root / p) for p in files] + [str(texture)], "status": "fabric_binding_generated", "receipts": {"files": write_receipt, "dependency": dependency, "main": main, "client": client, "metadata": meta_receipt}, "required_gates": ["Blockbench UV and bone hierarchy review", "Gradle clean build", "GameTest spawn and attributes", "runtime animation review"]}
 
 
 def _bones(kind: str) -> list[dict[str, Any]]:
@@ -124,33 +159,394 @@ def _renderer_java(package: str, name: str, cls: str, width: float) -> str:
     return f'''package {package}.client.geckolib;\nimport {package}.entity.{cls};\nimport net.minecraft.client.render.entity.EntityRendererFactory;\nimport software.bernie.geckolib.renderer.GeoEntityRenderer;\npublic final class {name}GeoRenderer extends GeoEntityRenderer<{cls}> {{ public {name}GeoRenderer(EntityRendererFactory.Context c){{super(c,new {name}GeoModel());this.shadowRadius={max(.1,min(4.,width*.55)):.3f}f;}} }}\n'''
 
 
-def _registrars(package: str, mod_id: str, base: str, entries: list[dict[str, Any]], size: int) -> dict[str,str]:
-    shards=[entries[i:i+size] for i in range(0,len(entries),size)]
-    if len(shards)==1:
-        return {f"{base}/geckolib/GeneratedGeckoEntities.java":_server_reg(package,mod_id,"GeneratedGeckoEntities",shards[0]),f"{base}/client/geckolib/GeneratedGeckoClient.java":_client_reg(package,"GeneratedGeckoClient","GeneratedGeckoEntities",shards[0],True)}
-    files={}; server_names=[]; client_names=[]
-    for i,shard in enumerate(shards):
-        sn=f"GeneratedGeckoEntityShard{i:04d}"; cn=f"GeneratedGeckoClientShard{i:04d}"; server_names.append(sn); client_names.append(cn)
-        files[f"{base}/geckolib/{sn}.java"]=_server_reg(package,mod_id,sn,shard); files[f"{base}/client/geckolib/{cn}.java"]=_client_reg(package,cn,sn,shard,False)
-    files[f"{base}/geckolib/GeneratedGeckoEntities.java"]=_root_reg(package,server_names)
-    files[f"{base}/client/geckolib/GeneratedGeckoClient.java"]=_root_client(package,client_names)
-    return files
+def iter_geckolib_entity_records(
+    project_root: str | Path,
+):
+    """Yield legacy or per-entity metadata without an aggregate manifest."""
+
+    root = Path(project_root).expanduser().resolve()
+    manifest = root / ".minecraft_ai/geckolib-entities.json"
+    if not manifest.is_file() or manifest.is_symlink():
+        return
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise GeckoLibGenerationError("GeckoLib entity index must be an object.")
+    legacy = raw.get("entities")
+    if isinstance(legacy, list):
+        for value in legacy:
+            yield _legacy_entity_record(value)
+        return
+    if raw.get("schema_version") != "mmm/geckolib-entity-index-v1":
+        raise GeckoLibGenerationError("Unsupported GeckoLib entity index.")
+    relative = raw.get("record_directory")
+    if relative != ".minecraft_ai/geckolib-entities":
+        raise GeckoLibGenerationError(
+            "GeckoLib entity record directory is invalid."
+        )
+    records = root / relative
+    if not records.exists():
+        return
+    if not records.is_dir() or records.is_symlink():
+        raise GeckoLibGenerationError(
+            "GeckoLib entity record directory is unsafe."
+        )
+    for path in sorted(records.glob("*.json")):
+        if not path.is_file() or path.is_symlink():
+            raise GeckoLibGenerationError("GeckoLib entity record is unsafe.")
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            isinstance(loaded, dict)
+            and loaded.get("schema_version")
+            == "mmm/geckolib-entity-record-v1"
+        ):
+            value = _legacy_entity_record(loaded.get("entity"))
+        else:
+            value = _legacy_entity_record(loaded)
+        if path.stem != value["entity_id"]:
+            raise GeckoLibGenerationError(
+                "GeckoLib entity record name does not match its entity ID."
+            )
+        yield value
 
 
-def _server_reg(package: str, mod_id: str, name: str, entries: list[dict[str, Any]]) -> str:
-    imports='\n'.join(f'import {package}.entity.{e["entity_class"]};' for e in entries); fields='\n'.join(f' public static EntityType<{e["entity_class"]}> {e["entity_id"].upper()};' for e in entries); regs=[]
-    for e in entries:
-        c=e['entity_id'].upper(); regs.append(f'''  {c}=Registry.register(Registries.ENTITY_TYPE,new Identifier("{mod_id}","{e['entity_id']}"),FabricEntityTypeBuilder.create(SpawnGroup.{_SPAWN[e['spawn_group']]},{e['entity_class']}::new).dimensions(EntityDimensions.fixed({e['entity_width']:.4f}f,{e['entity_height']:.4f}f)).trackRangeBlocks(10).build());\n  FabricDefaultAttributeRegistry.register({c},{e['entity_class']}.createAttributes());''')
-    return f'''package {package}.geckolib;\n{imports}\nimport net.fabricmc.fabric.api.object.builder.v1.entity.*;\nimport net.minecraft.entity.*;\nimport net.minecraft.registry.*;\nimport net.minecraft.util.Identifier;\nimport software.bernie.geckolib.GeckoLib;\npublic final class {name} {{\n{fields}\n private static boolean registered; private {name}(){{}}\n public static synchronized void register(){{if(registered)return;registered=true;GeckoLib.initialize();\n{chr(10).join(regs)}\n }}\n}}\n'''
+def _legacy_entity_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise GeckoLibGenerationError(
+            "GeckoLib entity record must be an object."
+        )
+    required = {
+        "entity_id",
+        "class_name",
+        "entity_class",
+        "max_health",
+        "attack_damage",
+        "movement_speed",
+        "follow_range",
+        "entity_width",
+        "entity_height",
+        "archetype",
+        "behavior",
+        "spawn_group",
+    }
+    if set(value) != required:
+        raise GeckoLibGenerationError(
+            "GeckoLib entity record fields are invalid."
+        )
+    entity_id = str(value["entity_id"])
+    if not _ID.fullmatch(entity_id):
+        raise GeckoLibGenerationError(
+            "GeckoLib entity record ID is invalid."
+        )
+    return dict(value)
 
 
-def _client_reg(package: str, name: str, server: str, entries: list[dict[str, Any]], root: bool) -> str:
-    regs='\n'.join(f'  EntityRendererRegistry.register({server}.{e["entity_id"].upper()},{e["class_name"]}GeoRenderer::new);' for e in entries); interface=' implements ClientModInitializer' if root else ''; override=' @Override' if root else ''; method='onInitializeClient' if root else 'register'
-    return f'''package {package}.client.geckolib;\nimport {package}.geckolib.{server};\nimport net.fabricmc.api.ClientModInitializer;\nimport net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;\npublic final class {name}{interface} {{{override} public {'void' if root else 'static void'} {method}(){{\n{regs}\n }} }}\n'''
+def _registration_unit_files(
+    package: str,
+    mod_id: str,
+    base: str,
+    entry: dict[str, Any],
+) -> dict[str, str]:
+    entity_id = str(entry["entity_id"])
+    class_name = str(entry["class_name"])
+    server_name = f"{class_name}GeckoRegistration"
+    client_name = f"{class_name}GeckoClientRegistration"
+    descriptor = {
+        "schema_version": "mmm/geckolib-registration-unit-v1",
+        "entity_id": entity_id,
+        "server_registrar": f"{package}.geckolib.entry.{server_name}",
+        "client_registrar": (
+            f"{package}.client.geckolib.entry.{client_name}"
+        ),
+    }
+    return {
+        f".minecraft_ai/geckolib-entities/{entity_id}.json": _json_text(
+            {
+                "schema_version": "mmm/geckolib-entity-record-v1",
+                "entity": entry,
+            }
+        ),
+        (
+            f"src/main/resources/data/{mod_id}/mmm_geckolib/entities/"
+            f"{entity_id}.json"
+        ): _json_text(descriptor),
+        f"{base}/geckolib/entry/{server_name}.java": _server_unit_java(
+            package,
+            mod_id,
+            server_name,
+            entry,
+        ),
+        (
+            f"{base}/client/geckolib/entry/{client_name}.java"
+        ): _client_unit_java(
+            package,
+            client_name,
+            server_name,
+            entry,
+        ),
+    }
 
 
-def _root_reg(package: str, names: list[str]) -> str:
-    calls=''.join(f'{n}.register();' for n in names); return f'package {package}.geckolib;\npublic final class GeneratedGeckoEntities{{private static boolean r;public static synchronized void register(){{if(r)return;r=true;{calls}}}}}\n'
+def _server_unit_java(
+    package: str,
+    mod_id: str,
+    name: str,
+    entry: dict[str, Any],
+) -> str:
+    entity_class = str(entry["entity_class"])
+    constant = str(entry["entity_id"]).upper()
+    return f'''package {package}.geckolib.entry;
 
-def _root_client(package: str, names: list[str]) -> str:
-    calls=''.join(f'{n}.register();' for n in names); return f'package {package}.client.geckolib;\nimport net.fabricmc.api.ClientModInitializer;\npublic final class GeneratedGeckoClient implements ClientModInitializer{{@Override public void onInitializeClient(){{{calls}}}}}\n'
+import {package}.entity.{entity_class};
+import {package}.geckolib.GeneratedGeckoEntities;
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
+import net.minecraft.entity.EntityDimensions;
+import net.minecraft.entity.EntityType;
+import net.minecraft.entity.SpawnGroup;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.util.Identifier;
+
+public final class {name} implements GeneratedGeckoEntities.Registration {{
+    public static EntityType<{entity_class}> {constant};
+    private static boolean registered;
+
+    @Override
+    public synchronized void register() {{
+        if (registered) return;
+        registered = true;
+        {constant} = Registry.register(
+            Registries.ENTITY_TYPE,
+            new Identifier("{mod_id}", "{entry['entity_id']}"),
+            FabricEntityTypeBuilder.create(
+                SpawnGroup.{_SPAWN[str(entry['spawn_group'])]},
+                {entity_class}::new
+            ).dimensions(
+                EntityDimensions.fixed(
+                    {float(entry['entity_width']):.4f}f,
+                    {float(entry['entity_height']):.4f}f
+                )
+            ).trackRangeBlocks(10).build()
+        );
+        FabricDefaultAttributeRegistry.register(
+            {constant},
+            {entity_class}.createAttributes()
+        );
+    }}
+}}
+'''
+
+
+def _client_unit_java(
+    package: str,
+    name: str,
+    server_name: str,
+    entry: dict[str, Any],
+) -> str:
+    return f'''package {package}.client.geckolib.entry;
+
+import {package}.client.geckolib.GeneratedGeckoClient;
+import {package}.client.geckolib.{entry['class_name']}GeoRenderer;
+import {package}.geckolib.entry.{server_name};
+import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+
+public final class {name} implements GeneratedGeckoClient.Registration {{
+    @Override
+    public void register() {{
+        EntityRendererRegistry.register(
+            {server_name}.{str(entry['entity_id']).upper()},
+            {entry['class_name']}GeoRenderer::new
+        );
+    }}
+}}
+'''
+
+
+def _root_reg(package: str, mod_id: str) -> str:
+    return f'''package {package}.geckolib;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.loader.api.ModContainer;
+import software.bernie.geckolib.GeckoLib;
+
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
+
+public final class GeneratedGeckoEntities {{
+    private static final Gson GSON = new Gson();
+    private static final String SERVER_PREFIX =
+        "{package}.geckolib.entry.";
+    private static boolean registered;
+
+    public interface Registration {{
+        void register();
+    }}
+
+    private GeneratedGeckoEntities() {{}}
+
+    public static synchronized void register() {{
+        if (registered) return;
+        registered = true;
+        GeckoLib.initialize();
+        forEachDescriptor(GeneratedGeckoEntities::registerDescriptor);
+    }}
+
+    public static void forEachDescriptor(Consumer<JsonObject> visitor) {{
+        ModContainer container = FabricLoader.getInstance()
+            .getModContainer("{mod_id}")
+            .orElseThrow(() -> new IllegalStateException(
+                "Missing Fabric mod container: {mod_id}"
+            ));
+        Path directory = container.findPath(
+            "data/{mod_id}/mmm_geckolib/entities"
+        ).orElseThrow(() -> new IllegalStateException(
+            "Missing GeckoLib entity descriptor directory"
+        ));
+        try (Stream<Path> paths = Files.list(directory)) {{
+            paths.filter(path ->
+                    path.getFileName().toString().endsWith(".json")
+                )
+                .sorted()
+                .forEach(path -> readDescriptor(path, visitor));
+        }} catch (Exception exception) {{
+            throw new IllegalStateException(
+                "Could not scan GeckoLib entity descriptors",
+                exception
+            );
+        }}
+    }}
+
+    private static void readDescriptor(
+        Path path,
+        Consumer<JsonObject> visitor
+    ) {{
+        try (Reader reader = Files.newBufferedReader(
+            path,
+            StandardCharsets.UTF_8
+        )) {{
+            JsonObject descriptor = GSON.fromJson(reader, JsonObject.class);
+            if (!"mmm/geckolib-registration-unit-v1".equals(
+                descriptor.get("schema_version").getAsString()
+            )) {{
+                throw new IllegalStateException(
+                    "Unsupported GeckoLib descriptor: " + path
+                );
+            }}
+            visitor.accept(descriptor);
+        }} catch (Exception exception) {{
+            throw new IllegalStateException(
+                "Could not load GeckoLib descriptor: " + path,
+                exception
+            );
+        }}
+    }}
+
+    private static void registerDescriptor(JsonObject descriptor) {{
+        String className = descriptor.get("server_registrar").getAsString();
+        if (!className.startsWith(SERVER_PREFIX)) {{
+            throw new IllegalStateException(
+                "Untrusted GeckoLib server registrar: " + className
+            );
+        }}
+        try {{
+            Object value = Class.forName(className)
+                .getDeclaredConstructor()
+                .newInstance();
+            if (!(value instanceof Registration registration)) {{
+                throw new IllegalStateException(
+                    "Invalid GeckoLib server registrar: " + className
+                );
+            }}
+            registration.register();
+        }} catch (ReflectiveOperationException exception) {{
+            throw new IllegalStateException(
+                "Could not initialize GeckoLib server registrar: "
+                    + className,
+                exception
+            );
+        }}
+    }}
+}}
+'''
+
+
+def _root_client(package: str) -> str:
+    return f'''package {package}.client.geckolib;
+
+import com.google.gson.JsonObject;
+import {package}.geckolib.GeneratedGeckoEntities;
+import net.fabricmc.api.ClientModInitializer;
+
+public final class GeneratedGeckoClient implements ClientModInitializer {{
+    private static final String CLIENT_PREFIX =
+        "{package}.client.geckolib.entry.";
+
+    public interface Registration {{
+        void register();
+    }}
+
+    @Override
+    public void onInitializeClient() {{
+        GeneratedGeckoEntities.forEachDescriptor(
+            GeneratedGeckoClient::registerDescriptor
+        );
+    }}
+
+    private static void registerDescriptor(JsonObject descriptor) {{
+        String className = descriptor.get("client_registrar").getAsString();
+        if (!className.startsWith(CLIENT_PREFIX)) {{
+            throw new IllegalStateException(
+                "Untrusted GeckoLib client registrar: " + className
+            );
+        }}
+        try {{
+            Object value = Class.forName(className)
+                .getDeclaredConstructor()
+                .newInstance();
+            if (!(value instanceof Registration registration)) {{
+                throw new IllegalStateException(
+                    "Invalid GeckoLib client registrar: " + className
+                );
+            }}
+            registration.register();
+        }} catch (ReflectiveOperationException exception) {{
+            throw new IllegalStateException(
+                "Could not initialize GeckoLib client registrar: "
+                    + className,
+                exception
+            );
+        }}
+    }}
+}}
+'''
+
+
+def _json_text(value: Any) -> str:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def _entity_index_text(mod_id: str) -> str:
+    return _json_text(
+        {
+            "schema_version": "mmm/geckolib-entity-index-v1",
+            "record_directory": ".minecraft_ai/geckolib-entities",
+            "runtime_record_directory": (
+                f"data/{mod_id}/mmm_geckolib/entities"
+            ),
+        }
+    )

@@ -110,7 +110,6 @@ def _count(
         prompt,
         terms=terms,
         default=default,
-        maximum=8,
     )
 
 
@@ -258,12 +257,27 @@ class HeuristicPlanner:
         item_english = ("Crystal", "Shard", "Relic", "Gem", "Dust", "Core", "Token", "Charm")
         item_korean = ("결정", "조각", "유물", "보석", "가루", "핵", "토큰", "부적")
         for index in range(item_count):
+            suffix = (
+                item_suffixes[index]
+                if index < len(item_suffixes)
+                else f"item_{index + 1:06d}"
+            )
+            english_label = (
+                item_english[index]
+                if index < len(item_english)
+                else f"Item {index + 1}"
+            )
+            korean_label = (
+                item_korean[index]
+                if index < len(item_korean)
+                else f"아이템 {index + 1}"
+            )
             contents.append(
                 ContentSpec(
-                    content_id=f"{stem}_{item_suffixes[index]}",
+                    content_id=f"{stem}_{suffix}",
                     kind=ContentKind.ITEM,
-                    display_name_en=f"{english_theme} {item_english[index]}",
-                    display_name_ko=f"{korean_theme} {item_korean[index]}",
+                    display_name_en=f"{english_theme} {english_label}",
+                    display_name_ko=f"{korean_theme} {korean_label}",
                     color=color,
                 )
             )
@@ -273,12 +287,27 @@ class HeuristicPlanner:
         block_english = ("Ore" if block_base == "ore" else "Crystal Block", "Bricks", "Tiles", "Pillar", "Lamp", "Stone", "Glass", "Slab")
         block_korean = ("광석" if block_base == "ore" else "결정 블록", "벽돌", "타일", "기둥", "등불", "돌", "유리", "반 블록")
         for index in range(block_count):
+            suffix = (
+                block_suffixes[index]
+                if index < len(block_suffixes)
+                else f"block_{index + 1:06d}"
+            )
+            english_label = (
+                block_english[index]
+                if index < len(block_english)
+                else f"Block {index + 1}"
+            )
+            korean_label = (
+                block_korean[index]
+                if index < len(block_korean)
+                else f"블록 {index + 1}"
+            )
             contents.append(
                 ContentSpec(
-                    content_id=f"{stem}_{block_suffixes[index]}",
+                    content_id=f"{stem}_{suffix}",
                     kind=ContentKind.BLOCK,
-                    display_name_en=f"{english_theme} {block_english[index]}",
-                    display_name_ko=f"{korean_theme} {block_korean[index]}",
+                    display_name_en=f"{english_theme} {english_label}",
+                    display_name_ko=f"{korean_theme} {korean_label}",
                     color=color,
                 )
             )

@@ -4,43 +4,43 @@ agents:
     model_role: planner
     skills: [intake-mod-brief, plan-game-design, freeze-approved-spec]
     purpose: gameplay loop, progression, combat, quest, world and acceptance-test design
-    mcp_servers: [mmm-local, minecraft-dev, playwright]
+    mcp_servers: [mmm-frontdoor, mmm-research, minecraft-dev, playwright]
   ResearchAgent:
     model_role: researcher
     skills: [research-minecraft-evidence, inspect-existing-project]
     purpose: version-pinned Fabric, Yarn, library, source and license evidence
-    mcp_servers: [minecraft-dev, playwright, github, mmm-local]
+    mcp_servers: [mmm-research, minecraft-dev, playwright, github]
   MinecraftCoder:
     model_role: coder
     safe_model_role: coder_safe
     skills: [generate-fabric-core, generate-datagen, generate-geckolib-entity, generate-worldgen, generate-quest-progression, generate-gui-networking, compile-and-repair]
     purpose: Fabric Java, datagen, Jigsaw/NBT, GeckoLib, GameTest and minimal build repair
-    mcp_servers: [minecraft-dev, jdtls, mmm-local, github]
+    mcp_servers: [mmm-generation, mmm-quality, minecraft-dev, jdtls, github]
   VisualCritic:
     model_role: visual_critic
     skills: [visual-review, model-with-blockbench]
     purpose: texture, UV, model, animation, GUI and in-game screenshot validation
-    mcp_servers: [blockbench, minecraft-runtime-1201, mmm-local]
+    mcp_servers: [mmm-quality, mmm-runtime, blockbench, minecraft-runtime-1201]
   AssetGenerator:
     model_role: image_generator
     skills: [generate-textures, model-with-blockbench]
     purpose: original concept art and texture candidates; never shares T4 residency with an LLM
-    mcp_servers: [blockbench, mmm-local]
+    mcp_servers: [mmm-generation, mmm-quality, blockbench]
   WorldPlanner:
     model_role: world_planner
     skills: [plan-game-design, generate-worldgen]
     purpose: region graph, terrain constraints, routes, structures, dungeon and quest movement
-    mcp_servers: [minecraft-dev, minecraft-runtime-1201, mmm-local]
+    mcp_servers: [mmm-research, mmm-generation, minecraft-dev, minecraft-runtime-1201]
   RuntimeTester:
     model_role: coder_safe
     skills: [runtime-playtest, compile-and-repair, release-security]
     purpose: bounded runtime lifecycle, log-driven repair and player task completion
-    mcp_servers: [minecraft-runtime-1201, mineflayer-1201, minecraft-dev, mmm-local]
+    mcp_servers: [mmm-quality, mmm-runtime, mmm-release, minecraft-runtime-1201, mineflayer-1201, minecraft-dev]
   SpeechAgent:
     model_role: speech_recognition
     skills: [intake-mod-brief]
     purpose: optional voice transcription only; never presented as sound or music generation
-    mcp_servers: [mmm-local]
+    mcp_servers: [mmm-frontdoor]
 
 routing_policy:
   max_tools_per_skill: 10

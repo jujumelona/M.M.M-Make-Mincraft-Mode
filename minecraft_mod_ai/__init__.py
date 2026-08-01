@@ -33,6 +33,7 @@ from .complete_spec import (
     CompleteProposal,
     ProductionModule,
 )
+from .ecosystem_discovery import EcosystemDiscoveryClient
 from .external_mcp import ExternalMCPRegistry
 from .game_design import GameDesignPlanner
 from .importer import (
@@ -62,7 +63,14 @@ from .spec import (
     Proposal,
 )
 from .training import TrainingTraceStore
+from .technology_radar import (
+    assess_technology_compatibility,
+    build_technology_radar,
+    compute_voice_language_intersection,
+    technology_research_routes,
+)
 from .world_compiler import compile_world_ir
+from .world_runtime_generator import generate_world_runtime_bridge
 
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
@@ -81,6 +89,7 @@ __all__ = [
     "CompleteProductionOrchestrator",
     "CompleteProposal",
     "ContentSpec",
+    "EcosystemDiscoveryClient",
     "ExistingProjectImportError",
     "ExistingProjectReport",
     "ExternalMCPRegistry",
@@ -107,10 +116,15 @@ __all__ = [
     "ScalableFabricProjectGenerator",
     "ScalableMinecraftModPipeline",
     "TrainingTraceStore",
+    "assess_technology_compatibility",
+    "build_technology_radar",
     "compile_scalable_world_ir",
     "compile_world_ir",
+    "compute_voice_language_intersection",
+    "generate_world_runtime_bridge",
     "inspect_existing_project_archive",
     "supported_minecraft_versions",
+    "technology_research_routes",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

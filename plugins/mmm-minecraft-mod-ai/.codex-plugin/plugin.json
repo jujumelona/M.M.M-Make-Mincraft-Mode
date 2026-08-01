@@ -1,0 +1,28 @@
+{
+  "name": "mmm-minecraft-mod-ai",
+  "version": "0.7.0",
+  "description": "Plan, build, validate, and resume Minecraft Fabric mods through M.M.M.",
+  "author": {
+    "name": "M.M.M Make Mincraft Mode contributors",
+    "url": "https://github.com/jujumelona"
+  },
+  "homepage": "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode",
+  "repository": "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode",
+  "license": "MIT",
+  "keywords": ["minecraft", "fabric", "modding", "rag", "mcp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "M.M.M Make Mincraft Mode",
+    "shortDescription": "Turn a game idea into a scalable Fabric mod.",
+    "longDescription": "Conversational planning, exact-version evidence retrieval, sharded generation, validation, and resumable Minecraft Fabric production.",
+    "developerName": "M.M.M contributors",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Plan a Minecraft mod from my idea and ask what I want to change.",
+      "Build the approved mod and keep going from saved checkpoints.",
+      "Modify my existing Fabric source project without losing features."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

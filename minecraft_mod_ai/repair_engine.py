@@ -184,7 +184,7 @@ class RepairEngine:
                     query_parts.append(text[-32_000:])
         index = ProjectIndex(root, policy=self.policy)
         return {
-            "manifest": index.manifest(),
+            "manifest": index.manifest_receipt(),
             "relevant": index.select(
                 query="\n".join(query_parts),
                 diagnostic_paths=diagnostic_paths,

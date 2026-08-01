@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from pathlib import Path
-from typing import Any, Iterable
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterable, Iterator
 
 from .complete_spec import ProductionModule
 from .generator import make_texture_png
@@ -34,6 +35,10 @@ _SUPPORTED = frozenset(
     }
 )
 _JAVA_KINDS = _SUPPORTED - {"recipe", "advancement", "loot"}
+_CATALOG_SCHEMA = "mmm/extended-module-catalog-v1"
+_DIRECTORY_CATALOG_SCHEMA = "mmm/extended-module-directory-v1"
+_CATALOG_NODE_SCHEMA = "mmm/extended-module-catalog-node-v1"
+_CATALOG_SHARD_SCHEMA = "mmm/extended-module-shard-v1"
 
 
 def generate_extended_content(
@@ -55,11 +60,10 @@ def generate_extended_content(
     for module in selected:
         module.validate(policy=policy)
 
-    manifest_path = info.root / ".minecraft_ai/extended-modules.json"
-    existing: dict[str, Any] = {}
-    if manifest_path.is_file():
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        existing = {str(item["module_id"]): item for item in raw.get("modules", [])}
+    existing = {
+        str(item["module_id"]): item
+        for item in iter_extended_module_records(info.root)
+    }
     for module in selected:
         existing[module.module_id] = {
             "module_id": module.module_id,
@@ -69,23 +73,31 @@ def generate_extended_content(
             "required_gates": list(module.required_gates),
         }
     ordered = [existing[key] for key in sorted(existing)]
-    manifest = {
-        "schema_version": "mmm/extended-modules-v2",
-        "shard_size": policy.java_shard_size,
-        "modules": ordered,
-    }
-
-    files: dict[str, str] = {
-        ".minecraft_ai/extended-modules.json": json.dumps(
-            manifest, ensure_ascii=False, indent=2, sort_keys=True
-        )
-        + "\n",
-    }
+    catalog_path = info.root / ".minecraft_ai/extended-modules.json"
+    already_directory = False
+    if catalog_path.is_file() and not catalog_path.is_symlink():
+        try:
+            already_directory = (
+                json.loads(catalog_path.read_text(encoding="utf-8")).get(
+                    "schema_version"
+                )
+                == _DIRECTORY_CATALOG_SCHEMA
+            )
+        except (json.JSONDecodeError, OSError, AttributeError):
+            already_directory = False
+    selected_records = [existing[module.module_id] for module in selected]
+    generation_records = (
+        selected_records if already_directory else ordered
+    )
+    files = _extended_directory_catalog_files(
+        selected_records if already_directory else ordered,
+        module_count=len(ordered),
+    )
     lang_en: dict[str, str] = {}
     lang_ko: dict[str, str] = {}
     generated_binary: list[str] = []
 
-    for item in ordered:
+    for item in generation_records:
         module_id = item["module_id"]
         kind = item["kind"]
         config = item["config"]
@@ -134,20 +146,20 @@ def generate_extended_content(
             )
             generated_binary.append(str(texture_path))
 
-    java_items = [item for item in ordered if item["kind"] in _JAVA_KINDS]
-    shards = [
-        java_items[index : index + policy.java_shard_size]
-        for index in range(0, len(java_items), policy.java_shard_size)
+    java_items = [
+        item for item in generation_records if item["kind"] in _JAVA_KINDS
     ]
-    shard_names: list[str] = []
-    for index, shard in enumerate(shards):
-        class_name = f"GeneratedContentShard{index:04d}"
-        shard_names.append(class_name)
+    for item in java_items:
+        class_name = _unit_class_name(str(item["module_id"]))
         files[_java_path(package_name, class_name)] = _shard_java(
-            package_name, mod_id, class_name, shard
+            package_name,
+            mod_id,
+            class_name,
+            [item],
         )
     files[_java_path(package_name, "GeneratedExtendedContent")] = _root_java(
-        package_name, mod_id, shard_names
+        package_name,
+        mod_id,
     )
 
     _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/en_us.json", lang_en)
@@ -162,14 +174,243 @@ def generate_extended_content(
     return {
         "schema_version": "mmm/extended-content-v2",
         "status": "GENERATED",
-        "modules": [item["module_id"] for item in ordered],
-        "shard_count": len(shards),
+        "modules": [item["module_id"] for item in generation_records],
+        "catalog_module_count": len(ordered),
+        "shard_count": len(java_items),
         "shard_size": policy.java_shard_size,
+        "registrar_dispatch_count": 0,
         "files": [str(info.root / path) for path in files] + generated_binary,
         "source_receipt": receipt,
         "binding_receipt": binding,
         "required_gates": ["JDT", "Gradle", "GameTest", "runtime interaction tests"],
     }
+
+
+def iter_extended_module_records(
+    project_root: str | Path,
+) -> Iterator[dict[str, Any]]:
+    """Read both legacy monoliths and the bounded catalog tree."""
+
+    root = Path(project_root).expanduser().resolve()
+    catalog = root / ".minecraft_ai/extended-modules.json"
+    if not catalog.is_file() or catalog.is_symlink():
+        return
+    raw = json.loads(catalog.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ExtendedContentError("Extended module catalog must be an object.")
+    legacy = raw.get("modules")
+    if isinstance(legacy, list):
+        for item in legacy:
+            if not isinstance(item, dict) or not item.get("module_id"):
+                raise ExtendedContentError(
+                    "Legacy extended module catalog contains an invalid module."
+                )
+            yield item
+        return
+    if raw.get("schema_version") == _DIRECTORY_CATALOG_SCHEMA:
+        relative = raw.get("directory")
+        expected = raw.get("module_count")
+        if not isinstance(relative, str) or type(expected) is not int:
+            raise ExtendedContentError(
+                "Extended module directory catalog is invalid."
+            )
+        normalized = PurePosixPath(relative.replace("\\", "/"))
+        if (
+            normalized.is_absolute()
+            or any(part in {"", ".", ".."} for part in normalized.parts)
+        ):
+            raise ExtendedContentError(
+                "Extended module directory path is unsafe."
+            )
+        directory = (root / Path(*normalized.parts)).resolve()
+        try:
+            directory.relative_to(root)
+        except ValueError as exc:
+            raise ExtendedContentError(
+                "Extended module directory escaped the project."
+            ) from exc
+        if not directory.is_dir() or directory.is_symlink():
+            raise ExtendedContentError(
+                "Extended module directory is missing or unsafe."
+            )
+        yielded = 0
+        for path in sorted(directory.glob("*.json")):
+            if not path.is_file() or path.is_symlink():
+                raise ExtendedContentError(
+                    "Extended module record is unsafe."
+                )
+            item = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(item, dict)
+                or not item.get("module_id")
+                or path.stem != str(item["module_id"])
+            ):
+                raise ExtendedContentError(
+                    "Extended module record is invalid."
+                )
+            yielded += 1
+            yield item
+        if yielded != expected:
+            raise ExtendedContentError(
+                "Extended module directory count does not match."
+            )
+        return
+    if raw.get("schema_version") != _CATALOG_SCHEMA:
+        raise ExtendedContentError("Unsupported extended module catalog schema.")
+    entry = raw.get("root")
+    if not isinstance(entry, str) or not entry:
+        raise ExtendedContentError("Extended module catalog root is invalid.")
+
+    pending = [entry]
+    visited: set[str] = set()
+    yielded = 0
+    while pending:
+        relative = pending.pop()
+        if relative in visited:
+            raise ExtendedContentError("Extended module catalog contains a cycle.")
+        visited.add(relative)
+        node_path = _catalog_target(root, relative)
+        node = json.loads(node_path.read_text(encoding="utf-8"))
+        if not isinstance(node, dict):
+            raise ExtendedContentError("Extended module catalog node is invalid.")
+        schema = node.get("schema_version")
+        if schema == _CATALOG_NODE_SCHEMA:
+            children = node.get("children")
+            if not isinstance(children, list) or not children:
+                raise ExtendedContentError(
+                    "Extended module catalog index has no children."
+                )
+            if not all(isinstance(value, str) and value for value in children):
+                raise ExtendedContentError(
+                    "Extended module catalog child path is invalid."
+                )
+            pending.extend(reversed(children))
+            continue
+        if schema != _CATALOG_SHARD_SCHEMA:
+            raise ExtendedContentError(
+                "Unsupported extended module catalog node schema."
+            )
+        modules = node.get("modules")
+        if not isinstance(modules, list) or not modules:
+            raise ExtendedContentError("Extended module shard is empty or invalid.")
+        for item in modules:
+            if not isinstance(item, dict) or not item.get("module_id"):
+                raise ExtendedContentError(
+                    "Extended module shard contains an invalid module."
+                )
+            yielded += 1
+            yield item
+    expected = raw.get("module_count")
+    if type(expected) is not int or expected != yielded:
+        raise ExtendedContentError("Extended module catalog count does not match.")
+
+
+def _extended_directory_catalog_files(
+    modules: list[dict[str, Any]],
+    *,
+    module_count: int,
+) -> dict[str, str]:
+    directory = ".minecraft_ai/extended-module-records"
+    files = {
+        f"{directory}/{item['module_id']}.json": _json_text(item)
+        for item in modules
+    }
+    files[".minecraft_ai/extended-modules.json"] = _json_text(
+        {
+            "schema_version": _DIRECTORY_CATALOG_SCHEMA,
+            "module_count": module_count,
+            "directory": directory,
+        }
+    )
+    return files
+
+
+def _extended_catalog_files(
+    modules: list[dict[str, Any]],
+    *,
+    shard_size: int,
+) -> dict[str, str]:
+    base = ".minecraft_ai/extended-modules"
+    files: dict[str, str] = {}
+    leaves: list[str] = []
+    for offset in range(0, len(modules), shard_size):
+        relative = f"{base}/shards/modules-{offset // shard_size:08d}.json"
+        leaves.append(relative)
+        files[relative] = _json_text(
+            {
+                "schema_version": _CATALOG_SHARD_SCHEMA,
+                "modules": modules[offset : offset + shard_size],
+            }
+        )
+    current = leaves
+    fanout = _bounded_fanout(shard_size)
+    level = 0
+    while len(current) > 1:
+        parents: list[str] = []
+        for offset in range(0, len(current), fanout):
+            relative = (
+                f"{base}/index/level-{level:04d}-"
+                f"{offset // fanout:08d}.json"
+            )
+            parents.append(relative)
+            files[relative] = _json_text(
+                {
+                    "schema_version": _CATALOG_NODE_SCHEMA,
+                    "children": current[offset : offset + fanout],
+                }
+            )
+        current = parents
+        level += 1
+    files[".minecraft_ai/extended-modules.json"] = _json_text(
+        {
+            "schema_version": _CATALOG_SCHEMA,
+            "module_count": len(modules),
+            "shard_size": shard_size,
+            "root": current[0],
+        }
+    )
+    return files
+
+
+def _catalog_target(root: Path, relative: str) -> Path:
+    normalized = PurePosixPath(relative.replace("\\", "/"))
+    if (
+        normalized.is_absolute()
+        or any(part in {"", ".", ".."} for part in normalized.parts)
+    ):
+        raise ExtendedContentError("Extended module catalog path is unsafe.")
+    candidate = root / Path(*normalized.parts)
+    if candidate.is_symlink():
+        raise ExtendedContentError("Extended module catalog path is a symlink.")
+    target = candidate.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ExtendedContentError(
+            "Extended module catalog path escaped the project."
+        ) from exc
+    if not target.is_file():
+        raise ExtendedContentError(
+            f"Extended module catalog node is missing: {relative}"
+        )
+    return target
+
+
+def _json_text(value: Any) -> str:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def _bounded_fanout(shard_size: int) -> int:
+    return max(2, min(shard_size, 32))
 
 
 def _java_path(package_name: str, class_name: str) -> str:
@@ -182,11 +423,20 @@ def _java_path(package_name: str, class_name: str) -> str:
     )
 
 
-def _root_java(package_name: str, mod_id: str, shard_names: list[str]) -> str:
-    calls = "\n".join(f"        {name}.register();" for name in shard_names)
-    collectors = "\n".join(f"        machineBlocks.addAll({name}.machineBlocks());" for name in shard_names)
+def _unit_class_name(module_id: str) -> str:
+    return (
+        "GeneratedContentUnit"
+        + hashlib.sha256(module_id.encode("utf-8")).hexdigest()[:20]
+    )
+
+
+def _root_java(
+    package_name: str,
+    mod_id: str,
+) -> str:
     return f'''package {package_name}.extended;
 
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.object.builder.v1.block.entity.FabricBlockEntityTypeBuilder;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -211,6 +461,10 @@ import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public final class GeneratedExtendedContent {{
     private static final String MOD_ID = "{mod_id}";
@@ -222,9 +476,7 @@ public final class GeneratedExtendedContent {{
     public static synchronized void register() {{
         if (registered) return;
         registered = true;
-{calls}
-        List<Block> machineBlocks = new ArrayList<>();
-{collectors}
+        List<Block> machineBlocks = registerGeneratedUnits();
         if (!machineBlocks.isEmpty()) {{
             MACHINE_ENTITY_TYPE = Registry.register(
                 Registries.BLOCK_ENTITY_TYPE,
@@ -235,6 +487,50 @@ public final class GeneratedExtendedContent {{
                 ).build()
             );
         }}
+    }}
+
+    @SuppressWarnings("unchecked")
+    private static List<Block> registerGeneratedUnits() {{
+        Set<String> classes = new TreeSet<>();
+        String relative = "{package_name.replace(".", "/")}/extended";
+        FabricLoader.getInstance().getModContainer(MOD_ID).orElseThrow().getRootPaths().forEach(root -> {{
+            Path directory = root.resolve(relative);
+            if (!Files.isDirectory(directory)) return;
+            try (var paths = Files.list(directory)) {{
+                paths.filter(path -> {{
+                    String name = path.getFileName().toString();
+                    return name.startsWith("GeneratedContentUnit") && name.endsWith(".class");
+                }}).forEach(path -> {{
+                    String name = path.getFileName().toString();
+                    classes.add("{package_name}.extended." + name.substring(0, name.length() - 6));
+                }});
+            }} catch (java.io.IOException error) {{
+                throw new IllegalStateException("Could not enumerate generated content units", error);
+            }}
+        }});
+        List<Block> machineBlocks = new ArrayList<>();
+        for (String className : classes) {{
+            try {{
+                Class<?> unit = Class.forName(
+                    className,
+                    true,
+                    GeneratedExtendedContent.class.getClassLoader()
+                );
+                unit.getMethod("register").invoke(null);
+                Object value = unit.getMethod("machineBlocks").invoke(null);
+                if (value instanceof List<?> blocks) {{
+                    for (Object block : blocks) {{
+                        if (block instanceof Block typed) machineBlocks.add(typed);
+                    }}
+                }}
+            }} catch (ReflectiveOperationException error) {{
+                throw new IllegalStateException(
+                    "Could not register generated content unit " + className,
+                    error
+                );
+            }}
+        }}
+        return machineBlocks;
     }}
 
     public record MachineDefinition(
@@ -351,6 +647,69 @@ public final class GeneratedExtendedContent {{
             Inventories.readNbt(nbt, items);
             progress = nbt.getInt("Progress");
         }}
+    }}
+}}
+'''
+
+
+def _registrar_tree_files(
+    package_name: str,
+    leaf_names: list[str],
+    *,
+    fanout: int,
+) -> tuple[str | None, dict[str, str]]:
+    if not leaf_names:
+        return None, {}
+    current = list(leaf_names)
+    files: dict[str, str] = {}
+    level = 0
+    while len(current) > 1:
+        parents: list[str] = []
+        for offset in range(0, len(current), fanout):
+            children = current[offset : offset + fanout]
+            class_name = (
+                f"GeneratedContentDispatchL{level:03d}"
+                f"N{len(parents):08d}"
+            )
+            parents.append(class_name)
+            files[_java_path(package_name, class_name)] = _dispatch_java(
+                package_name,
+                class_name,
+                children,
+            )
+        current = parents
+        level += 1
+    return current[0], files
+
+
+def _dispatch_java(
+    package_name: str,
+    class_name: str,
+    children: list[str],
+) -> str:
+    calls = "\n".join(f"        {name}.register();" for name in children)
+    collectors = "\n".join(
+        f"        blocks.addAll({name}.machineBlocks());"
+        for name in children
+    )
+    return f'''package {package_name}.extended;
+
+import net.minecraft.block.Block;
+
+import java.util.ArrayList;
+import java.util.List;
+
+final class {class_name} {{
+    private {class_name}() {{}}
+
+    static void register() {{
+{calls}
+    }}
+
+    static List<Block> machineBlocks() {{
+        List<Block> blocks = new ArrayList<>();
+{collectors}
+        return blocks;
     }}
 }}
 '''

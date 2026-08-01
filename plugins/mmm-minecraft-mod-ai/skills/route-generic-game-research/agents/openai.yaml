@@ -1,0 +1,4 @@
+interface:
+  display_name: "Route Generic Game Research"
+  short_description: "Classify any game request and route evidence by domain."
+  default_prompt: "Use $route-generic-game-research to classify this request and close every evidence gap before planning."

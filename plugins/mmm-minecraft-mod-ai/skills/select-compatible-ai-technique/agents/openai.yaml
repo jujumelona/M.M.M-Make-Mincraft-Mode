@@ -1,0 +1,4 @@
+interface:
+  display_name: "Select Compatible AI Technique"
+  short_description: "Research and gate compatible AI and voice runtimes"
+  default_prompt: "Use $select-compatible-ai-technique to research and gate the AI or voice pipeline for this Minecraft mod."

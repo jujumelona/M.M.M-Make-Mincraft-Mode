@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compile Massive Work Graph"
+  short_description: "Compile unbounded mod scope into durable task shards."
+  default_prompt: "Use $compile-massive-work-graph to turn this large mod plan into resumable task shards."

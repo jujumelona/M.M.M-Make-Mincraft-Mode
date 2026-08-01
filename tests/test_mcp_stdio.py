@@ -7,10 +7,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
-async def _handshake(workspace: Path) -> None:
+async def _handshake(workspace: Path, stage: str) -> set[str]:
     env = os.environ.copy()
     env["MMM_WORKSPACE"] = str(workspace)
     env["MMM_MODEL_PROFILE"] = "t4_local"
+    env["MMM_MCP_STAGE"] = stage
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "minecraft_mod_ai.mcp_server"],
@@ -23,11 +24,49 @@ async def _handshake(workspace: Path) -> None:
             resources = await session.list_resources()
             tool_names = {tool.name for tool in tools.tools}
             resource_uris = {str(item.uri) for item in resources.resources}
-            assert "plan_game" in tool_names
-            assert "run_gametest" in tool_names
             assert "mmm://model-registry" in resource_uris
             assert "mmm://plugins" in resource_uris
+            return tool_names
 
 
-def test_real_stdio_initialize_tools_and_resources(tmp_path: Path) -> None:
-    asyncio.run(_handshake(tmp_path / "workspace"))
+def test_real_stdio_frontdoor_hides_specialist_mutators(tmp_path: Path) -> None:
+    tools = asyncio.run(_handshake(tmp_path / "workspace", "frontdoor"))
+    assert "discover_mmm_capabilities" in tools
+    assert "plan_complete_game" in tools
+    assert "revise_complete_plan" in tools
+    assert "read_complete_plan_section" not in tools
+    assert "plan_game" not in tools
+    assert "work_status" in tools
+    assert "work_cancel_run" in tools
+    assert "work_resume_run" in tools
+    assert "execute_complete_project" not in tools
+    assert "build_technology_radar" in tools
+    assert "inspect_huggingface_model" not in tools
+    assert "assess_technology_compatibility" not in tools
+    assert "run_gametest" not in tools
+    assert "runtime_start_server" not in tools
+
+
+def test_real_stdio_quality_stage_is_narrow(tmp_path: Path) -> None:
+    tools = asyncio.run(_handshake(tmp_path / "workspace", "quality"))
+    assert "discover_mmm_capabilities" in tools
+    assert "run_gametest" in tools
+    assert "java_diagnostics" in tools
+    assert "plan_game" not in tools
+    assert "runtime_start_server" not in tools
+    assert "build_technology_radar" not in tools
+    assert "inspect_huggingface_model" not in tools
+    assert "assess_technology_compatibility" not in tools
+
+
+def test_real_stdio_planning_stage_exposes_paged_complete_plan(
+    tmp_path: Path,
+) -> None:
+    tools = asyncio.run(_handshake(tmp_path / "workspace", "planning"))
+    assert "plan_complete_game" in tools
+    assert "read_complete_plan_section" in tools
+    assert "approve_complete_plan" in tools
+    assert "execute_complete_project" not in tools
+    assert "build_technology_radar" in tools
+    assert "inspect_huggingface_model" in tools
+    assert "assess_technology_compatibility" in tools

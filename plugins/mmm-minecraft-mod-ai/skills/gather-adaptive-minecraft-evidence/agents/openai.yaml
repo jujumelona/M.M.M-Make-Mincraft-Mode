@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gather Adaptive Minecraft Evidence"
+  short_description: "Route exact-version evidence and correct weak retrieval."
+  default_prompt: "Use $gather-adaptive-minecraft-evidence to collect exact-version evidence for this implementation."

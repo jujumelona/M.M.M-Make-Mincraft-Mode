@@ -28,7 +28,9 @@ class ScalePolicy:
     java_shard_size: int = 48
     entity_shard_size: int = 24
     function_shard_size: int = 128
+    world_placements_per_tick: int = 4
     model_context_bytes: int = 1_500_000
+    mcp_page_bytes: int = 256 * 1024
     max_patch_bytes: int = 32 * 1024 * 1024
     max_single_file_bytes: int = 64 * 1024 * 1024
     max_texture_dimension: int = 8192
@@ -46,7 +48,9 @@ class ScalePolicy:
             "java_shard_size": self.java_shard_size,
             "entity_shard_size": self.entity_shard_size,
             "function_shard_size": self.function_shard_size,
+            "world_placements_per_tick": self.world_placements_per_tick,
             "model_context_bytes": self.model_context_bytes,
+            "mcp_page_bytes": self.mcp_page_bytes,
             "max_patch_bytes": self.max_patch_bytes,
             "max_single_file_bytes": self.max_single_file_bytes,
             "max_texture_dimension": self.max_texture_dimension,
@@ -81,7 +85,12 @@ class ScalePolicy:
             java_shard_size=_env_int("MMM_JAVA_SHARD_SIZE", 48),
             entity_shard_size=_env_int("MMM_ENTITY_SHARD_SIZE", 24),
             function_shard_size=_env_int("MMM_FUNCTION_SHARD_SIZE", 128),
+            world_placements_per_tick=_env_int(
+                "MMM_WORLD_PLACEMENTS_PER_TICK",
+                4,
+            ),
             model_context_bytes=_env_int("MMM_MODEL_CONTEXT_BYTES", 1_500_000),
+            mcp_page_bytes=_env_int("MMM_MCP_PAGE_BYTES", 256 * 1024),
             max_patch_bytes=_env_int("MMM_MAX_PATCH_BYTES", 32 * 1024 * 1024),
             max_single_file_bytes=_env_int("MMM_MAX_SINGLE_FILE_BYTES", 64 * 1024 * 1024),
             max_texture_dimension=_env_int("MMM_MAX_TEXTURE_DIMENSION", 8192),

@@ -16,11 +16,29 @@ class PluginStatus:
 
 PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
     PluginStatus(
+        "central-evidence-broker",
+        "implemented",
+        "minecraft_mod_ai.central_research plus ecosystem_discovery",
+        (
+            "request-derived research graph",
+            "adaptive exact-version RAG",
+            "paginated dependency and licensed-media candidates",
+            "Modrinth version and GitHub commit/license inspections",
+            "coverage and provenance receipts",
+        ),
+        ("mmm-research",),
+        (
+            "exact compatibility inspection",
+            "origin license verification",
+            "immutable artifact hash before reuse",
+        ),
+    ),
+    PluginStatus(
         "fabric-core",
         "implemented",
         "minecraft_mod_ai.scalable_generator",
         ("Fabric 1.20.1 Java project", "sharded registrars", "sharded GameTests"),
-        ("mmm-local", "minecraft-dev"),
+        ("mmm-generation", "mmm-quality", "minecraft-dev"),
         ("Gradle", "GameTest", "JAR validation"),
     ),
     PluginStatus(
@@ -28,15 +46,15 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.extended_content_generator",
         ("recipes", "loot", "tags", "lang", "models", "textures"),
-        ("mmm-local",),
+        ("mmm-generation",),
         ("resource validation", "GameTest"),
     ),
     PluginStatus(
         "entity-basic",
         "implemented",
         "minecraft_mod_ai.generator",
-        ("bounded boss", "spawn egg", "loot", "GameTest"),
-        ("mmm-local", "minecraft-dev"),
+        ("requested entity", "optional spawn egg", "loot", "GameTest"),
+        ("mmm-generation", "mmm-quality", "minecraft-dev"),
         ("Gradle", "GameTest", "runtime combat review"),
     ),
     PluginStatus(
@@ -44,7 +62,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.geckolib_generator",
         ("entity class", "GeoModel", "GeoRenderer", "geo JSON", "animation JSON", "client/server registration"),
-        ("blockbench", "minecraft-dev", "jdtls", "mmm-local"),
+        ("blockbench", "minecraft-dev", "jdtls", "mmm-generation", "mmm-quality"),
         ("Blockbench UV", "Gradle", "GameTest", "runtime animation review"),
     ),
     PluginStatus(
@@ -52,7 +70,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.generator",
         ("arena function", "WorldDesignIR", "navigation proof", "preview"),
-        ("mmm-local",),
+        ("mmm-generation", "mmm-quality"),
         ("GameTest", "runtime placement"),
     ),
     PluginStatus(
@@ -60,7 +78,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.scalable_world_compiler",
         ("partitioned binary NBT", "Jigsaw pools", "processors", "structure sets", "biome tags", "assembly functions", "world ZIP"),
-        ("minecraft-dev", "minecraft-runtime-1201", "mmm-local"),
+        ("minecraft-dev", "minecraft-runtime-1201", "mmm-generation", "mmm-quality"),
         ("Gradle", "fresh-world placement", "route reachability", "visual review"),
     ),
     PluginStatus(
@@ -68,7 +86,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.system_pack_generator",
         ("kill/break/manual objectives", "server persistence", "rewards", "commands"),
-        ("jdtls", "minecraft-dev", "mmm-local"),
+        ("jdtls", "minecraft-dev", "mmm-generation", "mmm-quality"),
         ("Gradle", "GameTest", "restart persistence", "multiplayer authority"),
     ),
     PluginStatus(
@@ -76,7 +94,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.system_pack_generator",
         ("class selection", "StatusEffect skills", "cooldowns", "persistence"),
-        ("jdtls", "minecraft-dev", "mmm-local"),
+        ("jdtls", "minecraft-dev", "mmm-generation", "mmm-quality"),
         ("Gradle", "GameTest", "cooldown runtime tests"),
     ),
     PluginStatus(
@@ -84,7 +102,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.system_pack_generator",
         ("server-owned catalog", "balances", "purchase delivery", "atomic persistence"),
-        ("jdtls", "minecraft-dev", "mmm-local"),
+        ("jdtls", "minecraft-dev", "mmm-generation", "mmm-quality"),
         ("Gradle", "restart", "concurrency", "multiplayer authority"),
     ),
     PluginStatus(
@@ -108,7 +126,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "image adapter plus policy-bounded Minecraft post-process",
         ("concept PNG", "target-resolution PNG"),
-        ("mmm-local",),
+        ("mmm-generation", "mmm-quality"),
         ("VisualCritic", "runtime screenshot"),
     ),
     PluginStatus(
@@ -120,12 +138,38 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         ("external Blockbench service", "tool allowlist", "UV validation"),
     ),
     PluginStatus(
-        "audio-voice",
+        "speech-input-transcription",
         "implemented",
-        "Whisper transcription plus streaming deterministic OGG synthesis and sharded SoundEvent registration",
-        ("transcript", "OGG", "sounds.json", "SoundEvent Java"),
-        ("mmm-local",),
+        "speech-model transcription adapter for planning input and smoke tests; not an in-game microphone or TTS feature",
+        ("transcript", "language metadata"),
+        ("mmm-research", "mmm-training"),
+        ("audio consent", "model revision and license", "language and latency test"),
+    ),
+    PluginStatus(
+        "procedural-audio",
+        "implemented",
+        "deterministic OGG synthesis and sharded SoundEvent registration; not speech synthesis or voice cloning",
+        ("OGG", "sounds.json", "SoundEvent Java"),
+        ("mmm-generation",),
         ("Gradle", "client playback", "volume and loop review"),
+    ),
+    PluginStatus(
+        "local-ai-voice-sidecar",
+        "implemented",
+        "reviewed Java 17 localhost-only asynchronous HTTP boundary; it does not bundle an AI, ASR or TTS model and cannot mutate world state",
+        (
+            "typed JSON request and response utility",
+            "exact-reconstruction policy manifest",
+            "bounded timeout, bytes and in-flight concurrency",
+        ),
+        ("mmm-research", "mmm-generation", "mmm-quality"),
+        (
+            "approved capability allowlist",
+            "exact source and manifest validation",
+            "separately installed compatible localhost sidecar",
+            "runtime latency and failure fallback test",
+            "voice consent when adaptation or conversion is requested",
+        ),
     ),
     PluginStatus(
         "java-language-analysis",
@@ -140,7 +184,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "whole-project metadata index with relevance retrieval and optional embeddings/reranker",
         ("project index", "ranked source context", "hashes"),
-        ("mmm-local",),
+        ("mmm-research",),
     ),
     PluginStatus(
         "runtime-playtest",
@@ -163,7 +207,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "verified trace store and LLaMA-Factory/TRL configs",
         ("licensed trace store", "SFT JSONL", "reward"),
-        ("mmm-local",),
+        ("mmm-training",),
         ("all build/runtime evidence must pass before trace promotion",),
     ),
     PluginStatus(
@@ -171,7 +215,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "policy-native source validator, Gradle runner, JAR inspection and safe ZIP packaging",
         ("reports", "verified JAR", "release ZIP", "SBOM", "provenance"),
-        ("mmm-local",),
+        ("mmm-quality", "mmm-release"),
         ("all approved gates",),
     ),
     PluginStatus(
@@ -179,7 +223,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "typed sharded Fabric generator for tools, weapons, armor, food, crops, machines, effects, enchantments and commands",
         ("Java registrations", "models", "recipes", "textures", "registry GameTests"),
-        ("mmm-local", "minecraft-dev", "jdtls"),
+        ("mmm-generation", "mmm-quality", "minecraft-dev", "jdtls"),
         ("Gradle", "GameTest", "runtime interaction"),
     ),
     PluginStatus(
@@ -187,7 +231,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "transactional SHA-256 guarded text patcher with rollback and policy-bounded repair loop",
         ("patch receipts", "repair evidence", "project index"),
-        ("mmm-local", "jdtls"),
+        ("mmm-generation", "mmm-quality", "jdtls"),
         ("Gradle", "GameTest"),
     ),
     PluginStatus(
@@ -195,7 +239,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "single approved graph orchestrating generation, repair, runtime, visual review and distribution",
         ("complete proposal", "source", "JAR", "runtime receipts", "release bundle"),
-        ("mmm-local", "minecraft-runtime-1201", "mineflayer-1201"),
+        ("mmm-generation", "mmm-quality", "mmm-runtime", "mmm-release", "minecraft-runtime-1201", "mineflayer-1201"),
         ("every requested external gate",),
     ),
     PluginStatus(
@@ -203,7 +247,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "Modrinth upload and reviewed CurseForge endpoint adapter",
         ("distribution metadata", "publish receipt"),
-        ("mmm-local",),
+        ("mmm-release",),
         ("validated JAR", "provider project ID", "provider token"),
     ),
 )

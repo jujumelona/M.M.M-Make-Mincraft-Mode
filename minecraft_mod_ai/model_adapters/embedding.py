@@ -25,11 +25,14 @@ class EmbeddingAdapter:
 
             device = str(self.config.extra.get("device", "cpu"))
             dimensions = int(self.config.extra.get("dimensions", 512))
-            model = SentenceTransformer(
-                self.config.model_id,
-                device=device,
-                trust_remote_code=True,
-            )
+            load_options: dict[str, object] = {
+                "device": device,
+                "trust_remote_code": False,
+            }
+            revision = str(self.config.extra.get("revision", "")).strip()
+            if revision:
+                load_options["revision"] = revision
+            model = SentenceTransformer(self.config.model_id, **load_options)
             vectors = model.encode(
                 cleaned,
                 normalize_embeddings=True,

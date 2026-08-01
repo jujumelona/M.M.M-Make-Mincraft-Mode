@@ -39,18 +39,25 @@ def test_257_contents_generate_in_deterministic_shards(tmp_path: Path) -> None:
     result = ScalableFabricProjectGenerator(policy=policy).generate(spec, root)
     assert result.root == root.resolve()
 
-    registrar_shards = sorted(
-        root.rglob("GeneratedContentShard*.java")
+    registrar_units = sorted(
+        root.rglob("GeneratedContentUnit*.java")
     )
-    gametest_shards = sorted(
-        root.rglob("ScalableContentGameTest*.java")
+    gametest_units = sorted(
+        root.rglob("ScalableContentGameTestUnit*.java")
     )
-    assert len(registrar_shards) == 9
-    assert len(gametest_shards) == 9
+    assert len(registrar_units) == 257
+    assert len(gametest_units) == 9
+    gametest_root = next(
+        root.rglob("ScalableContentGameTest.java")
+    )
     assert all(
         path.stat().st_size < policy.max_single_file_bytes
-        for path in registrar_shards + gametest_shards
+        for path in registrar_units + gametest_units + [gametest_root]
     )
+    root_text = gametest_root.read_text(encoding="utf-8")
+    assert "Files.list(directory)" in root_text
+    assert "ScalableContentGameTestUnit" in root_text
+    assert "scale_item_256" not in root_text
 
     metadata = json.loads(
         (root / "src/main/resources/fabric.mod.json").read_text(
@@ -58,7 +65,11 @@ def test_257_contents_generate_in_deterministic_shards(tmp_path: Path) -> None:
         )
     )
     entries = metadata["entrypoints"]["fabric-gametest"]
-    assert sum("ScalableContentGameTest" in str(item) for item in entries) == 9
+    assert sum("ScalableContentGameTest" in str(item) for item in entries) == 1
+    assert (
+        "ai.minecraft.scale_test.ScalableContentGameTest"
+        in entries
+    )
     report = ScalableProjectValidator(policy=policy).validate(root, spec)
     assert report.passed, report.to_dict()
 

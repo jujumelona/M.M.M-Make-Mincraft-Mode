@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmm-make-mincraft-mode"
-version = "0.6.0"
+version = "0.7.0"
 description = "Scalable Minecraft Fabric production system with immutable planning, sharded generation, indexed repair, runtime playtests and distribution"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,7 +15,7 @@ dependencies = [
   "PyYAML>=6.0.2,<7",
   "anyio>=4.4,<5",
   "httpx>=0.27,<1",
-  "mcp>=1.27,<2",
+  "mcp==2.0.0",
   "packaging>=24,<27",
 ]
 

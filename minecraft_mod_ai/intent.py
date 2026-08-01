@@ -270,7 +270,7 @@ def requested_count(
     *,
     terms: tuple[str, ...],
     default: int,
-    maximum: int = 8,
+    maximum: int | None = None,
 ) -> CountIntent:
     event = latest_intent_event(text, terms)
     if event is None or not event.requested:
@@ -284,6 +284,6 @@ def requested_count(
         return CountIntent(count=default, explicit=False)
 
     _, count = max(candidates, key=lambda item: item[0])
-    if count > maximum:
+    if maximum is not None and count > maximum:
         return CountIntent(count=0, explicit=True, overflow=count)
     return CountIntent(count=max(0, count), explicit=True)

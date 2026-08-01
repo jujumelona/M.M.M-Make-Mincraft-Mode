@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
@@ -22,18 +21,36 @@ def launch(
 
     service = MMMToolService(workspace_root=output_root, profile=profile)
 
-    def do_plan(prompt: str, files: list[str] | None, existing_zip: str | None):
+    def do_plan(
+        message: str,
+        files: list[str] | None,
+        existing_zip: str | None,
+        state: dict[str, Any] | None,
+    ):
         existing_hash = ""
         if existing_zip:
             path = Path(existing_zip)
             existing_hash = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-        result = service.plan_complete_game(prompt, files or [], existing_hash)
-        return (
-            json.dumps(result["game_design"], ensure_ascii=False, indent=2),
-            json.dumps(result["complete_proposal"], ensure_ascii=False, indent=2),
-            result["approval_hash"],
-            result,
-        )
+        if state:
+            original = str(
+                state.get("complete_proposal", {}).get("requested_prompt", "")
+            )
+            result = service.revise_complete_plan(
+                original,
+                message,
+                files or [],
+                existing_hash,
+            )
+        else:
+            result = service.plan_complete_game(
+                message,
+                files or [],
+                existing_hash,
+            )
+        return result["message"], result
+
+    def reset_plan():
+        return "", "", None
 
     def do_generate(
         state: dict[str, Any] | None,
@@ -69,23 +86,51 @@ def launch(
             options,
             existing_zip or None,
         )
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        lines = [
+            f"제작 상태: {result['status']}",
+            f"프로젝트: {result['project_root']}",
+        ]
+        if result.get("release_zip"):
+            lines.append(f"다운로드 ZIP: {result['release_zip']}")
+        if result.get("jar_path"):
+            lines.append(f"모드 JAR: {result['jar_path']}")
+        unresolved = result.get("unresolved_gates") or []
+        if unresolved:
+            lines.append("아직 실행하지 않은 확인: " + ", ".join(unresolved))
+        if result.get("run_resumed"):
+            lines.append("이전 실행의 완료 작업을 이어서 사용했습니다.")
+        return "\n".join(lines)
 
     with gr.Blocks(title="M.M.M Complete Minecraft Production") as demo:
         gr.Markdown(
             "# M.M.M Complete Minecraft Production\n"
-            "아이템 슬라이스가 아니라 퀘스트·직업·경제·GUI·엔티티·월드·오디오·빌드·실행·플레이테스트를 하나의 승인 그래프로 처리합니다. "
-            "외부 프로그램이나 실행 증거가 없으면 성공으로 위장하지 않고 정확히 실패합니다."
+            "원하는 규모에 맞춰 게임 기획부터 모드 소스, 자산, 빌드와 플레이 확인까지 이어서 제작합니다. "
+            "계획에서 바꾸고 싶은 점은 평소 말하듯 입력하면 반영됩니다."
         )
-        prompt = gr.Textbox(label="전체 게임·모드 요구사항", lines=10)
+        prompt = gr.Textbox(
+            label="처음 만들 내용 또는 계획에서 바꿀 내용",
+            lines=8,
+        )
         media = gr.File(label="레퍼런스 이미지", file_count="multiple", type="filepath")
         existing_zip = gr.File(label="수정할 기존 Fabric 소스 ZIP(선택)", type="filepath")
-        plan_button = gr.Button("전체 제작 계획 생성")
-        design = gr.Code(label="전체 게임 디자인", language="json")
-        proposal = gr.Code(label="전체 불변 제작 제안서", language="json")
-        approval_hash = gr.Textbox(label="불변 승인 해시", interactive=False)
+        with gr.Row():
+            plan_button = gr.Button("계획 만들기 / 수정 반영")
+            reset_button = gr.Button("새 계획 시작")
+        design = gr.Textbox(
+            label="게임 기획",
+            lines=22,
+            interactive=False,
+        )
         state = gr.State()
-        plan_button.click(do_plan, [prompt, media, existing_zip], [design, proposal, approval_hash, state])
+        plan_button.click(
+            do_plan,
+            [prompt, media, existing_zip, state],
+            [design, state],
+        )
+        reset_button.click(
+            reset_plan,
+            outputs=[prompt, design, state],
+        )
 
         run_name = gr.Textbox(label="실행 폴더 이름", value="complete-run")
         source_only = gr.Checkbox(label="소스만 생성", value=False)
@@ -98,8 +143,8 @@ def launch(
         server_launcher = gr.Textbox(label="Fabric server launcher 경로")
         accept_eula = gr.Checkbox(label="Minecraft EULA를 명시적으로 승인했습니다", value=False)
         screenshots = gr.File(label="런타임 검사용 스크린샷", file_count="multiple", type="filepath")
-        generate_button = gr.Button("승인 해시로 전체 제작 실행")
-        result = gr.Code(label="전체 제작 결과와 미해결 gate", language="json")
+        generate_button = gr.Button("이 계획으로 만들기")
+        result = gr.Textbox(label="제작 결과", lines=10, interactive=False)
         generate_button.click(
             do_generate,
             [

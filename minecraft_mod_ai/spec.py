@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
@@ -8,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
+from .json_stream import canonical_json_sha256
 
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
@@ -368,14 +368,26 @@ class Proposal:
                 )
 
     def _hash_payload(self) -> dict[str, Any]:
-        payload = self.to_dict()
-        payload["approval_hash"] = ""
-        payload["status"] = ProposalStatus.AWAITING_APPROVAL.value
-        return payload
+        return {
+            "schema_version": self.schema_version,
+            "proposal_version": self.proposal_version,
+            "status": ProposalStatus.AWAITING_APPROVAL.value,
+            "requested_prompt": self.requested_prompt,
+            "spec": self.spec,
+            "assumptions": self.assumptions,
+            "exclusions": self.exclusions,
+            "deferred_requests": self.deferred_requests,
+            "acceptance_tests": self.acceptance_tests,
+            "evidence_sources": self.evidence_sources,
+            "evidence_snapshot_hash": self.evidence_snapshot_hash,
+            "capability_manifest_hash": self.capability_manifest_hash,
+            "imported_source_snapshot_hash": self.imported_source_snapshot_hash,
+            "risk_approvals": self.risk_approvals,
+            "approval_hash": "",
+        }
 
     def calculate_hash(self) -> str:
-        encoded = canonical_json(self._hash_payload()).encode("utf-8")
-        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+        return canonical_json_sha256(self._hash_payload())
 
     def with_hash(self) -> "Proposal":
         from .capabilities import capability_manifest_hash
