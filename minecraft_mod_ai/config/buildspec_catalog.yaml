@@ -1,0 +1,121 @@
+schema_version: mmm/buildspec-catalog-v1
+records:
+  - record_id: structural_roles
+    category: ontology
+    aliases: [foundation, column, beam, floor, wall, roof, stair, railing, opening, decoration, machine_part, terrain]
+    central_agent_notes: Map visual or language concepts to structural_role IDs and explicit geometry.
+    builder_projection:
+      target: parts
+      fields: [part_id, component_id, structural_role, bbox, orientation, material_role]
+
+  - record_id: component_geometry
+    category: ontology
+    aliases: [component, bbox, orientation, local_origin, size, mask, parent, child, attachment]
+    central_agent_notes: Decompose a scene into bounded components before Builder execution.
+    builder_projection:
+      target: components
+      fields: [component_id, component_type_id, bbox, orientation, local_origin, size, parent_component_id, child_component_ids]
+
+  - record_id: support_and_walkability
+    category: ontology
+    aliases: [support, walkable, boundary, permanent, temporary, functional_block]
+    central_agent_notes: Convert physical feasibility and navigation into per-part machine attributes.
+    builder_projection:
+      target: parts
+      fields: [support_class, walkable, boundary, permanence, functional_block]
+
+  - record_id: spatial_relations
+    category: relation
+    aliases: [inside, contains, attached_to, supported_by, above, below, adjacent_to, surrounds, connected_to, aligned_with, overlaps, clearance, 내부, 포함, 부착, 지지, 위, 아래, 인접, 연결, 정렬, 겹침, 간격]
+    central_agent_notes: Express composition through typed graph edges rather than prose.
+    builder_projection:
+      target: relations
+      predicates: [inside, contains, attached_to, supported_by, above, below, adjacent_to, surrounds, connected_to, aligned_with, overlaps, clearance]
+
+  - record_id: connection_ports
+    category: port
+    aliases: [entrance, exit, road_connection, vertical_connection, open_boundary, input, output, attachment_point, 입구, 출구, 도로연결, 수직연결, 열린경계, 연결점]
+    central_agent_notes: Turn access and continuation requirements into explicit ports.
+    builder_projection:
+      target: ports
+      fields: [port_id, component_id, part_id, port_type_id, position, direction, size, state]
+
+  - record_id: spatial_zones
+    category: zone
+    aliases: [zone, entrance, exit, walkable_path, material_yard, road, protected_region, terrain_contact]
+    central_agent_notes: Represent function through zone masks and connectivity, not natural-language function descriptions.
+    builder_projection:
+      target: zones
+      fields: [zone_id, zone_type_id, bbox, mask_ref, connected_zone_ids]
+
+  - record_id: repetition_patterns
+    category: pattern
+    aliases: [repeat, interval, symmetry, grid, radial, floor_bay, facade_bay]
+    central_agent_notes: Encode repeated geometry as reusable pattern records.
+    builder_projection:
+      target: patterns
+      fields: [pattern_id, pattern_type_id, source_ids, axis, interval, count, symmetry]
+
+  - record_id: generation_operators
+    category: operator
+    aliases: [repeat, stack, mirror, wrap, extrude, bridge, fill, hollow, cut_opening, replace_material, extend_boundary, connect_ports, partial_complete, damage, repair]
+    central_agent_notes: Convert construction intent into ordered executable operators.
+    builder_projection:
+      target: operators
+      operator_types: [repeat, stack, mirror, wrap, extrude, bridge, fill, hollow, cut_opening, replace_material, extend_boundary, connect_ports, partial_complete, damage, repair]
+
+  - record_id: task_modes
+    category: task
+    aliases: [generate, continue, repair, partial_complete, extend_boundary, connect_ports]
+    central_agent_notes: Select one Builder task mode and explicit target IDs.
+    builder_projection:
+      target: task
+      task_types: [generate, continue, repair, partial_complete, extend_boundary, connect_ports]
+
+  - record_id: hard_constraints
+    category: constraint
+    aliases: [forbidden_overlap, support_required, protected_mask, all_access_paths_connected, preserve_region, clearance]
+    central_agent_notes: Requirements that Builder output may not violate.
+    builder_projection:
+      target: constraints.hard
+      constraint_types: [forbidden_overlap, support_required, protected_mask, all_access_paths_connected, preserve_region, minimum_clearance]
+
+  - record_id: soft_constraints
+    category: constraint
+    aliases: [material_balance, symmetry_preference, repetition_consistency, silhouette, density, variation]
+    central_agent_notes: Preferences represented by weighted numeric targets.
+    builder_projection:
+      target: constraints.soft
+      fields: [constraint_id, type_id, weight, target, tolerance]
+
+  - record_id: style_projection
+    category: central_interpretation
+    aliases: [style, gothic, modern, medieval, industrial, organic, brutalist, japanese, 스타일, 고딕, 현대, 중세, 산업, 유기적, 브루탈리즘, 일본식]
+    central_agent_notes: Style is central-agent-only. Project it to palette IDs, proportions, roof profiles, opening ratios, symmetry and repetition.
+    builder_projection:
+      targets: [components, parts, patterns, operators, constraints.soft]
+      forbidden: [style_description, visual_identity, prompt, caption]
+
+  - record_id: image_projection
+    category: central_interpretation
+    aliases: [image, reference, screenshot, vlm, vision, visual]
+    central_agent_notes: VLM extracts components, geometry, material roles, state, ports and constraints; captions never cross the Builder boundary.
+    builder_projection:
+      targets: [zones, components, parts, relations, ports, patterns, operators]
+      forbidden: [image_caption, scene_meaning, natural_language]
+
+  - record_id: construction_site_composition
+    category: composition_example
+    aliases: [construction_site, scaffold, crane, unfinished, frame, fence, storage, temporary_office, 공사장, 비계, 타워크레인, 미완성, 골조, 울타리, 자재적재, 임시사무실]
+    central_agent_notes: Decompose construction-site semantics centrally into machine components and completion parameters.
+    builder_projection:
+      component_type_ids: [structural_frame, scaffolding, tower_crane, perimeter_fence, material_storage, access_road, temporary_office]
+      parameters: [completion_ratio, wall_coverage, floor_count, floor_height, column_spacing]
+
+  - record_id: context_artifacts
+    category: world_context
+    aliases: [context_blocks, terrain, protected_mask, npz, world_context]
+    central_agent_notes: Preserve supplied artifact references exactly; Builder reads world state from NPZ, not prose.
+    builder_projection:
+      target: world
+      fields: [context_blocks_ref, terrain_ref, protected_mask_ref]
