@@ -1,4 +1,4 @@
-"""M.M.M Make Mincraft Mode: scalable multimodal Fabric production tools."""
+"""M.M.M Make Mincraft Mode: scalable multimodal Fabric mod production tools."""
 
 # Install the verified toolchain before generator and runner users are imported.
 from . import runner as _runner_module
@@ -41,6 +41,11 @@ from .importer import (
     ExistingProjectReport,
     inspect_existing_project_archive,
 )
+from .mod_development_methods import (
+    ModDevelopmentMethod,
+    mod_development_method_catalog,
+    resolve_mod_development_methods,
+)
 from .model_adapters import ModelBackendError, ModelConfigurationError
 from .model_registry import ModelRegistry
 from .model_router import ModelRouter
@@ -53,7 +58,6 @@ from .routed_planner import RoutedPlanner
 from .scale_policy import ScalePolicy, ScalePolicyError
 from .scalable_generator import ScalableFabricProjectGenerator
 from .scalable_pipeline import ScalableMinecraftModPipeline
-from .scalable_world_compiler import compile_scalable_world_ir
 from .spec import (
     ArenaSpec,
     BossSpec,
@@ -69,8 +73,6 @@ from .technology_radar import (
     compute_voice_language_intersection,
     technology_research_routes,
 )
-from .world_compiler import compile_world_ir
-from .world_runtime_generator import generate_world_runtime_bridge
 
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
@@ -96,6 +98,7 @@ __all__ = [
     "GameDesignPlanner",
     "HeuristicPlanner",
     "MinecraftModPipeline",
+    "ModDevelopmentMethod",
     "ModelBackendError",
     "ModelConfigurationError",
     "ModelRegistry",
@@ -118,13 +121,12 @@ __all__ = [
     "TrainingTraceStore",
     "assess_technology_compatibility",
     "build_technology_radar",
-    "compile_scalable_world_ir",
-    "compile_world_ir",
     "compute_voice_language_intersection",
-    "generate_world_runtime_bridge",
     "inspect_existing_project_archive",
+    "mod_development_method_catalog",
+    "resolve_mod_development_methods",
     "supported_minecraft_versions",
     "technology_research_routes",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
