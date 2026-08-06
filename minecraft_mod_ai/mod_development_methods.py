@@ -103,23 +103,63 @@ OPTIONAL_METHODS: tuple[tuple[tuple[str, ...], ModDevelopmentMethod], ...] = (
         ),
     ),
     (
-        ("event", "이벤트", "hook", "훅", "mixin", "믹스인", "vanilla", "바닐라", "accessor", "access widener"),
+        (
+            "event",
+            "이벤트",
+            "hook",
+            "훅",
+            "mixin",
+            "믹스인",
+            "vanilla",
+            "바닐라",
+            "accessor",
+            "access widener",
+        ),
         ModDevelopmentMethod(
             "events_mixins_access",
             "Prefer Fabric events; use Mixins or access wideners only where the public API cannot implement the requested behavior.",
-            ("event handlers", "bounded Mixins", "mixin config", "access widener when necessary"),
+            (
+                "event handlers",
+                "bounded Mixins",
+                "mixin config",
+                "access widener when necessary",
+            ),
             ("target method descriptors", "mapping/version evidence"),
-            ("Mixin target validation", "dedicated server check", "behavior GameTest"),
+            (
+                "Mixin target validation",
+                "dedicated server check",
+                "behavior GameTest",
+            ),
         ),
     ),
     (
-        ("gui", "화면", "메뉴", "screen", "hud", "overlay", "network", "패킷", "packet"),
+        (
+            "gui",
+            "화면",
+            "메뉴",
+            "screen",
+            "hud",
+            "overlay",
+            "network",
+            "패킷",
+            "packet",
+        ),
         ModDevelopmentMethod(
             "gui_and_networking",
             "Keep server authority for state changes and validate every client-to-server action.",
-            ("screen handler", "client screen", "typed packets", "server validation", "rate limits"),
+            (
+                "screen handler",
+                "client screen",
+                "typed packets",
+                "server validation",
+                "rate limits",
+            ),
             ("Fabric networking API", "threading rules"),
-            ("packet decode tests", "permission tests", "replay/rate-limit tests"),
+            (
+                "packet decode tests",
+                "permission tests",
+                "replay/rate-limit tests",
+            ),
         ),
     ),
     (
@@ -142,9 +182,18 @@ OPTIONAL_METHODS: tuple[tuple[tuple[str, ...], ModDevelopmentMethod], ...] = (
         ModDevelopmentMethod(
             "persistent_game_state",
             "Store authoritative state on the server with schema versions, atomic writes and migration handling.",
-            ("persistent state", "schema version", "migration code", "restart tests"),
+            (
+                "persistent state",
+                "schema version",
+                "migration code",
+                "restart tests",
+            ),
             ("Minecraft persistence lifecycle", "serialization format evidence"),
-            ("restart persistence", "corruption fallback", "multiplayer authority"),
+            (
+                "restart persistence",
+                "corruption fallback",
+                "multiplayer authority",
+            ),
         ),
     ),
     (
@@ -158,13 +207,35 @@ OPTIONAL_METHODS: tuple[tuple[tuple[str, ...], ModDevelopmentMethod], ...] = (
         ),
     ),
     (
-        ("entity", "엔티티", "mob", "몹", "boss", "보스", "animation", "애니메이션", "geckolib"),
+        (
+            "entity",
+            "엔티티",
+            "mob",
+            "몹",
+            "boss",
+            "보스",
+            "animation",
+            "애니메이션",
+            "geckolib",
+        ),
         ModDevelopmentMethod(
             "entity_rendering_animation",
             "Generate entity logic, attributes, goals, renderer/model bindings and optional GeckoLib animation assets.",
-            ("entity type", "attributes", "goals", "renderer", "model", "animation", "spawn rules when requested"),
+            (
+                "entity type",
+                "attributes",
+                "goals",
+                "renderer",
+                "model",
+                "animation",
+                "spawn rules when requested",
+            ),
             ("entity API", "renderer API", "GeckoLib compatibility when selected"),
-            ("dedicated server compile", "spawn GameTest", "runtime animation review"),
+            (
+                "dedicated server compile",
+                "spawn GameTest",
+                "runtime animation review",
+            ),
         ),
     ),
     (
@@ -177,6 +248,12 @@ OPTIONAL_METHODS: tuple[tuple[tuple[str, ...], ModDevelopmentMethod], ...] = (
             "차원",
             "structure",
             "구조물",
+            "arena",
+            "아레나",
+            "dungeon",
+            "던전",
+            "template pool",
+            "jigsaw",
             "ore generation",
             "광석 생성",
             "placed feature",
@@ -193,25 +270,57 @@ OPTIONAL_METHODS: tuple[tuple[tuple[str, ...], ModDevelopmentMethod], ...] = (
                 "fresh-world tests",
             ),
             ("Fabric/Minecraft worldgen codecs", "datapack schema evidence"),
-            ("fresh-world generation", "upgrade compatibility", "no standalone world save"),
+            (
+                "fresh-world generation",
+                "upgrade compatibility",
+                "no standalone world save",
+            ),
         ),
     ),
     (
-        ("command", "명령어", "permission", "권한", "server", "서버", "multiplayer", "멀티플레이"),
+        (
+            "command",
+            "명령어",
+            "permission",
+            "권한",
+            "server",
+            "서버",
+            "multiplayer",
+            "멀티플레이",
+        ),
         ModDevelopmentMethod(
             "commands_permissions_multiplayer",
             "Implement commands and multiplayer operations with explicit permissions, server authority and concurrency-safe state changes.",
-            ("Brigadier commands", "permission checks", "server-side handlers", "concurrency tests"),
+            (
+                "Brigadier commands",
+                "permission checks",
+                "server-side handlers",
+                "concurrency tests",
+            ),
             ("command API", "server lifecycle evidence"),
             ("permission tests", "two-client tests", "restart tests"),
         ),
     ),
     (
-        ("existing", "기존 모드", "수정", "patch", "포팅", "port", "upgrade", "업데이트"),
+        (
+            "existing",
+            "기존 모드",
+            "수정",
+            "patch",
+            "포팅",
+            "port",
+            "upgrade",
+            "업데이트",
+        ),
         ModDevelopmentMethod(
             "existing_project_patch",
             "Inspect and patch an owned source project transactionally without treating a JAR as editable source.",
-            ("project index", "SHA-256 guarded patch", "rollback receipt", "migration report"),
+            (
+                "project index",
+                "SHA-256 guarded patch",
+                "rollback receipt",
+                "migration report",
+            ),
             ("source ownership/permission", "current project version graph"),
             ("compile before/after", "regression tests", "rollback test"),
         ),
@@ -259,7 +368,9 @@ def resolve_mod_development_methods(
             )
         )
 
-    standalone_map_requested = any(term in folded for term in _STANDALONE_MAP_TERMS)
+    standalone_map_requested = any(
+        term in folded for term in _STANDALONE_MAP_TERMS
+    )
     unique = {method.method_id: method for method in selected}
     ordered = [unique[key] for key in sorted(unique)]
 
