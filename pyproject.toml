@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmm-make-mincraft-mode"
-version = "0.7.0"
-description = "Scalable Minecraft Fabric production system with immutable planning, sharded generation, indexed repair, runtime playtests and distribution"
+version = "0.8.0"
+description = "Minecraft Fabric mod production system with immutable planning, request-resolved implementation methods, sharded generation, indexed repair, runtime playtests and distribution"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -40,6 +40,7 @@ dev = ["nbformat>=5.10,<6", "pytest>=8,<10"]
 mmm = "minecraft_mod_ai.cli:main"
 minecraft-mod-ai = "minecraft_mod_ai.cli:main"
 mmm-mcp = "minecraft_mod_ai.mcp_server:main"
+mmm-mod-generation-mcp = "minecraft_mod_ai.mod_generation_mcp_server:main"
 mmm-training = "minecraft_mod_ai.training_cli:main"
 
 [project.urls]
