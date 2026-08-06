@@ -48,6 +48,8 @@ CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     _cap("plan.complete.approve", "planning", read=True),
     _cap("plan.revise", "planning", read=True),
     _cap("plan.approve", "planning", read=True),
+    _cap("mod.methods.resolve", "planning", read=True),
+    _cap("mod.methods.catalog", "planning", read=True),
     _cap("evidence.search", "research", read=True),
     _cap("evidence.index", "research", read=False),
     _cap("evidence.rerank", "research", read=True),
@@ -57,13 +59,20 @@ CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     _cap("source.patch", "generation", read=False, idempotent=False, approval=True),
     _cap("source.repair", "quality", read=False, idempotent=False, open_world=True, approval=True),
     _cap("fabric.scaffold", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.registry.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.datagen.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.event.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.mixin.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.network.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.persistence.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.config.generate", "generation", read=False, idempotent=False, approval=True),
+    _cap("fabric.worldgen.generate", "generation", read=False, idempotent=False, approval=True),
     _cap("fabric.system.generate", "generation", read=False, idempotent=False, approval=True),
     _cap("asset.generate", "generation", read=False, idempotent=False, open_world=True, approval=True),
     _cap("audio.generate", "generation", read=False, idempotent=False, approval=True),
     _cap("blockbench.model", "generation", read=False, idempotent=False, open_world=True, approval=True),
     _cap("geckolib.generate", "generation", read=False, idempotent=False, approval=True),
-    _cap("world.ir.generate", "planning", read=False, idempotent=False),
-    _cap("world.compile", "generation", read=False, idempotent=False, approval=True),
+    _cap("compatibility.audit", "quality", read=True, approval=True),
     _cap("java.diagnostics", "quality", read=True),
     _cap("java.symbols", "quality", read=True),
     _cap("quality.validate", "quality", read=True, approval=True),
@@ -84,13 +93,20 @@ CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
 
 def capability_manifest() -> dict[str, Any]:
     return {
-        "schema_version": "minecraft-mod-ai/capabilities-v4",
+        "schema_version": "minecraft-mod-ai/capabilities-v5",
+        "product_scope": "Minecraft Fabric mod projects; no standalone map/world-save generation",
         "protocol_alignment": "Model Context Protocol; Python SDK FastMCP stdio server",
         "implementation_kind": "mcp-fastmcp-server-with-local-policy-and-runtime-brokers",
         "server_entrypoint": "python -m minecraft_mod_ai.mcp_server",
+        "generation_entrypoint": "python -m minecraft_mod_ai.mod_generation_mcp_server",
         "authorization_source": "approved-proposal-hash-only-for-project-writes-and-runtime",
         "retrieved_context_can_authorize": False,
         "tool_annotations_can_authorize": False,
+        "standalone_map_generation": False,
+        "worldgen_policy": (
+            "Mod-owned structures, biomes, dimensions and configured/placed features "
+            "are generated only when explicitly required by the mod."
+        ),
         "runtime_target": "disposable-minecraft-java-1.20.1-only",
         "staged_discovery": {
             "planning_research": [
