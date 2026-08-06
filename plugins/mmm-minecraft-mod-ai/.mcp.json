@@ -28,19 +28,7 @@
       "command": "python",
       "args": [
         "-m",
-        "minecraft_mod_ai.mcp_server"
-      ],
-      "env": {
-        "MMM_MCP_STAGE": "generation",
-        "MMM_MODEL_PROFILE": "t4_local",
-        "MMM_WORKSPACE": "mmm-output"
-      }
-    },
-    "mmm-builder-contract": {
-      "command": "python",
-      "args": [
-        "-m",
-        "minecraft_mod_ai.builder_mcp_server"
+        "minecraft_mod_ai.mod_generation_mcp_server"
       ],
       "env": {
         "MMM_MODEL_PROFILE": "t4_local",
