@@ -8,6 +8,10 @@ from minecraft_mod_ai.capabilities import capability_names
 from minecraft_mod_ai.capability_plugins import buildable_plugin_ids
 from minecraft_mod_ai.mod_development_methods import resolve_mod_development_methods
 from minecraft_mod_ai.mod_scope_contract import install
+from minecraft_mod_ai.skill_catalog import (
+    REVIEWED_TOOL_STAGES,
+    compile_skill_contract,
+)
 from minecraft_mod_ai.spec import SpecValidationError
 
 
@@ -66,6 +70,19 @@ def test_plugins_have_no_standalone_map_builder() -> None:
     assert "worldgen-arena" not in plugin_ids
     assert "fabric-worldgen" in plugin_ids
     assert "mod-development-methods" in plugin_ids
+
+
+def test_skill_policy_has_no_standalone_map_tools() -> None:
+    assert "generate_world_ir" not in REVIEWED_TOOL_STAGES
+    assert "compile_world_ir" not in REVIEWED_TOOL_STAGES
+
+    plan = compile_skill_contract("plan-game-design")
+    worldgen = compile_skill_contract("generate-worldgen")
+
+    assert "generate_world_ir" not in plan.allowed_tools
+    assert "compile_world_ir" not in worldgen.allowed_tools
+    assert "generate_fabric_project" in worldgen.allowed_tools
+    assert "run_gametest" in worldgen.allowed_tools
 
 
 def _fake_contract_modules():
