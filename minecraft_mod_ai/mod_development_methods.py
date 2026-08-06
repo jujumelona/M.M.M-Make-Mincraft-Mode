@@ -341,6 +341,34 @@ _STANDALONE_MAP_TERMS = (
     "도시를 그대로",
     "서울시를 그대로",
 )
+_PREFIX_EXCLUSION_MARKERS = (
+    "no ",
+    "without ",
+    "exclude ",
+    "excluding ",
+    "remove ",
+    "do not create ",
+    "don't create ",
+    "not create ",
+    "avoid ",
+)
+_SUFFIX_EXCLUSION_MARKERS = (
+    "빼",
+    "제외",
+    "없이",
+    "없는",
+    "없게",
+    "만들지",
+    "생성하지",
+    "하지 마",
+    "말고",
+    "필요 없",
+    "금지",
+    "not needed",
+    "do not include",
+    "excluded",
+    "disabled",
+)
 
 
 def resolve_mod_development_methods(
@@ -369,7 +397,8 @@ def resolve_mod_development_methods(
         )
 
     standalone_map_requested = any(
-        term in folded for term in _STANDALONE_MAP_TERMS
+        _has_positive_request(folded, term)
+        for term in _STANDALONE_MAP_TERMS
     )
     unique = {method.method_id: method for method in selected}
     ordered = [unique[key] for key in sorted(unique)]
@@ -387,6 +416,25 @@ def resolve_mod_development_methods(
         "methods": [asdict(method) for method in ordered],
         "method_ids": [method.method_id for method in ordered],
     }
+
+
+def _has_positive_request(text: str, term: str) -> bool:
+    start = 0
+    while True:
+        index = text.find(term, start)
+        if index < 0:
+            return False
+        prefix = text[max(0, index - 32):index]
+        suffix = text[index + len(term):index + len(term) + 32]
+        prefix_excluded = any(
+            marker in prefix for marker in _PREFIX_EXCLUSION_MARKERS
+        )
+        suffix_excluded = any(
+            marker in suffix for marker in _SUFFIX_EXCLUSION_MARKERS
+        )
+        if not prefix_excluded and not suffix_excluded:
+            return True
+        start = index + len(term)
 
 
 def mod_development_method_catalog() -> dict[str, Any]:
