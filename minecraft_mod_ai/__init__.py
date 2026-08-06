@@ -13,6 +13,12 @@ from .validator_boss_contract import install as _install_validator_boss_contract
 
 _install_validator_boss_contract(_validator_module)
 
+# Remove standalone map tools from source and packaged Skill policy.
+from . import skill_catalog as _skill_catalog_module
+from .skill_scope_contract import install as _install_skill_scope_contract
+
+_install_skill_scope_contract(_skill_catalog_module)
+
 # Apply the mod-only scope to every complete planner path before public API import.
 from . import complete_planner as _complete_planner_module
 from . import complete_spec as _complete_spec_module
