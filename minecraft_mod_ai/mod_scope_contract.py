@@ -20,20 +20,21 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
     if getattr(complete_spec_module, _INSTALL_MARKER, False):
         return
 
-    original_prompt: Callable[..., str] = complete_planner_module._implementation_prompt
-    original_builder: Callable[..., Any] = complete_spec_module.complete_proposal_from_parts
+    original_prompt: Callable[..., str] = (
+        complete_planner_module._implementation_prompt
+    )
+    original_builder: Callable[..., Any] = (
+        complete_spec_module.complete_proposal_from_parts
+    )
 
     def scoped_implementation_prompt(
         prompt: str,
         game_design: dict[str, Any],
     ) -> str:
         method_plan = resolve_mod_development_methods(prompt)
-        enriched_design = {
-            **game_design,
-            "_mod_development_methods": method_plan,
-        }
+        game_design["_mod_development_methods"] = method_plan
         return (
-            original_prompt(prompt, enriched_design)
+            original_prompt(prompt, game_design)
             + "\n\nThe resolved mod-development method plan is authoritative for "
             "implementation scope. Generate only a Fabric mod project. Never emit a "
             "standalone map, world save, world ZIP, schematic, Litematica file, "
@@ -106,7 +107,13 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             existing_input_sha256=existing_input_sha256,
         )
 
-    complete_planner_module._implementation_prompt = scoped_implementation_prompt
-    complete_spec_module.complete_proposal_from_parts = scoped_complete_proposal_from_parts
-    complete_planner_module.complete_proposal_from_parts = scoped_complete_proposal_from_parts
+    complete_planner_module._implementation_prompt = (
+        scoped_implementation_prompt
+    )
+    complete_spec_module.complete_proposal_from_parts = (
+        scoped_complete_proposal_from_parts
+    )
+    complete_planner_module.complete_proposal_from_parts = (
+        scoped_complete_proposal_from_parts
+    )
     setattr(complete_spec_module, _INSTALL_MARKER, True)
