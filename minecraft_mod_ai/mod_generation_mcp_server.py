@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
 from typing import Any
@@ -58,8 +59,13 @@ def discover_mod_generation_capabilities() -> dict[str, Any]:
 
 
 @mcp.resource("mmm://mod-development/methods")
-def mod_method_catalog_resource() -> dict[str, Any]:
-    return mod_development_method_catalog()
+def mod_method_catalog_resource() -> str:
+    return json.dumps(
+        mod_development_method_catalog(),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
 
 
 @mcp.tool()
