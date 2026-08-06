@@ -13,6 +13,13 @@ from .validator_boss_contract import install as _install_validator_boss_contract
 
 _install_validator_boss_contract(_validator_module)
 
+# Apply the mod-only scope to every complete planner path before public API import.
+from . import complete_planner as _complete_planner_module
+from . import complete_spec as _complete_spec_module
+from .mod_scope_contract import install as _install_mod_scope_contract
+
+_install_mod_scope_contract(_complete_spec_module, _complete_planner_module)
+
 from .api import (
     ChatReply,
     CompleteChatReply,
