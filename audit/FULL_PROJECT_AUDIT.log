@@ -1,5 +1,5 @@
-[PASS] tracked_file_inventory: tracked_files=296
-[PASS] syntax_and_structured_data: python=163, json=9, yaml=31, notebooks=2
+[PASS] tracked_file_inventory: tracked_files=297
+[PASS] syntax_and_structured_data: python=163, json=9, yaml=32, notebooks=2
 [PASS] relative_import_resolution: checked=307
 [PASS] version_consistency: {"__version__": "0.8.0", "minecraft_mod_ai/mcp_server.py": "0.8.0", "minecraft_mod_ai/mod_generation_mcp_server.py": "0.8.0", "pyproject": "0.8.0"}
 [PASS] mod_only_public_surface: clean
@@ -1691,7 +1691,7 @@ running install_egg_info
 Copying mmm_make_mincraft_mode.egg-info to build/bdist.linux-x86_64/wheel/./mmm_make_mincraft_mode-0.8.0-py3.12.egg-info
 running install_scripts
 creating build/bdist.linux-x86_64/wheel/mmm_make_mincraft_mode-0.8.0.dist-info/WHEEL
-creating '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/audit/dist/.tmp-p0m0bvfa/mmm_make_mincraft_mode-0.8.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
+creating '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/audit/dist/.tmp-_63xkk0j/mmm_make_mincraft_mode-0.8.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
 adding 'download_resources.py'
 adding 'mcp_gateway.py'
 adding 'minecraft_mod_ai/__init__.py'
