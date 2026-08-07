@@ -32,9 +32,12 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         game_design: dict[str, Any],
     ) -> str:
         method_plan = resolve_mod_development_methods(prompt)
-        game_design["_mod_development_methods"] = method_plan
+        enriched_design = {
+            **game_design,
+            "_mod_development_methods": method_plan,
+        }
         return (
-            original_prompt(prompt, game_design)
+            original_prompt(prompt, enriched_design)
             + "\n\nThe resolved mod-development method plan is authoritative for "
             "implementation scope. Generate only a Fabric mod project. Never emit a "
             "standalone map, world save, world ZIP, schematic, Litematica file, "
