@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -416,7 +417,7 @@ def resolve_mod_development_methods(
             "handoffs are outside this product. Mod-owned worldgen code and datapack "
             "resources remain available only when explicitly required by the mod."
         ),
-        "methods": [asdict(method) for method in ordered],
+        "methods": _json_native_methods(ordered),
         "method_ids": [method.method_id for method in ordered],
     }
 
@@ -440,6 +441,20 @@ def _has_positive_request(text: str, term: str) -> bool:
         start = index + len(term)
 
 
+def _json_native_methods(
+    methods: list[ModDevelopmentMethod] | tuple[ModDevelopmentMethod, ...],
+) -> list[dict[str, Any]]:
+    """Return stable JSON-native records; tuples must not leak into contracts."""
+
+    return json.loads(
+        json.dumps(
+            [asdict(method) for method in methods],
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    )
+
+
 def mod_development_method_catalog() -> dict[str, Any]:
     methods = {
         method.method_id: method
@@ -452,5 +467,7 @@ def mod_development_method_catalog() -> dict[str, Any]:
         "schema_version": "mmm/mod-development-method-catalog-v1",
         "scope": "MINECRAFT_FABRIC_MOD_PROJECT",
         "standalone_map_generation": False,
-        "methods": [asdict(methods[key]) for key in sorted(methods)],
+        "methods": _json_native_methods(
+            [methods[key] for key in sorted(methods)]
+        ),
     }
