@@ -203,7 +203,10 @@ def build_reference(output: Path) -> dict:
     }
 
     proposal = complete_proposal_from_parts(
-        requested_prompt="Build a complete deterministic Fabric reference mod",
+        requested_prompt=(
+            "Build a complete deterministic Fabric reference mod with an "
+            "explicit village structure"
+        ),
         base_proposal=base,
         game_design={
             "title": "Complete Reference",
