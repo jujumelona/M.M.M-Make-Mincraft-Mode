@@ -6,7 +6,10 @@ import shutil
 import traceback
 from pathlib import Path
 
-from tools.verify_complete_reference_build import build_reference
+if __package__:
+    from .verify_complete_reference_build import build_reference
+else:
+    from verify_complete_reference_build import build_reference
 
 
 def _collect_logs(output: Path) -> list[dict[str, object]]:
