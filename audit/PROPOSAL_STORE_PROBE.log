@@ -87,8 +87,8 @@
   },
   {
     "label": "equality",
-    "file_equals_proposal": false,
-    "zip_equals_proposal": false,
+    "file_equals_proposal": true,
+    "zip_equals_proposal": true,
     "file_equals_zip": true
   }
 ]
