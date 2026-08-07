@@ -32,8 +32,7 @@ def test_skill_policy_physically_excludes_removed_tools() -> None:
             encoding="utf-8"
         )
     )
-    selected = "
-".join(
+    selected = "\n".join(
         packaged["skills"][name]
         for name in ("plan-game-design", "generate-worldgen")
     )
