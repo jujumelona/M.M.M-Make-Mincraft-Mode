@@ -1,0 +1,63 @@
+name: Proposal store probe
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "audit/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: proposal-store-probe-main
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install core and pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Run deterministic round-trip probe
+        shell: bash
+        run: |
+          set +e
+          python tools/proposal_store_probe.py > audit/PROPOSAL_STORE_PROBE.log 2>&1
+          echo "$?" > audit/PROPOSAL_STORE_PROBE_EXIT_CODE.txt
+          python -m pytest -q --tb=short \
+            tests/test_proposal_store.py::test_large_game_design_uses_fixed_size_files_and_round_trips \
+            tests/test_proposal_store.py::test_v2_chunked_store_loads_from_release_zip \
+            > audit/PROPOSAL_STORE_TESTS.log 2>&1
+          echo "$?" > audit/PROPOSAL_STORE_TESTS_EXIT_CODE.txt
+          cat audit/PROPOSAL_STORE_PROBE.log
+          cat audit/PROPOSAL_STORE_TESTS.log
+          exit 0
+
+      - name: Commit focused evidence
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add audit/
+          if ! git diff --cached --quiet; then
+            git commit -m "Record proposal store probe evidence [skip ci]"
+            git push origin HEAD:main
+          fi
