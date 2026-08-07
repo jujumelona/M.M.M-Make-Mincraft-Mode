@@ -1,4 +1,4 @@
-name: Fabric template locator
+name: Fabric template fix migration
 
 on:
   push:
@@ -11,11 +11,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: fabric-template-locator-main
+  group: fabric-template-fix-main
   cancel-in-progress: true
 
 jobs:
-  locate:
+  migrate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,16 +26,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Locate generated Java template sources
-        run: python tools/locate_fabric_compile_templates.py
-      - name: Commit locator evidence
+      - name: Apply generated Java compile fixes
+        run: python tools/apply_fabric_generator_compile_fixes.py
+      - name: Verify patched source templates compile as Python
+        run: python -m compileall -q minecraft_mod_ai tests
+      - name: Commit generator template fixes
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main
-          git add audit/FABRIC_TEMPLATE_LOCATIONS.json
+          git add \
+            minecraft_mod_ai/geckolib_generator.py \
+            minecraft_mod_ai/extended_content_generator.py \
+            minecraft_mod_ai/system_templates_quest.py
           if ! git diff --cached --quiet; then
-            git commit -m "Record Fabric template locations [skip ci]"
+            git commit -m "Fix generated Fabric Java compile contracts [skip ci]"
             git push origin HEAD:main
           fi
