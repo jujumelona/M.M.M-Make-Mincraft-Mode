@@ -55,7 +55,14 @@ jobs:
           fi
 
       - name: Probe proposal storage round trips
-        run: python tools/proposal_store_probe.py
+        shell: bash
+        run: |
+          set +e
+          python tools/proposal_store_probe.py > audit/PROPOSAL_STORE_PROBE.log 2>&1
+          code=$?
+          echo "$code" > audit/PROPOSAL_STORE_PROBE_EXIT_CODE.txt
+          cat audit/PROPOSAL_STORE_PROBE.log
+          exit 0
 
       - name: Capture concise pytest diagnostics
         shell: bash
@@ -68,19 +75,19 @@ jobs:
           exit 0
 
       - name: Run complete repository audit
-        run: python tools/full_project_audit.py
+        shell: bash
+        run: |
+          set +e
+          python tools/full_project_audit.py
+          echo "$?" > audit/FULL_PROJECT_AUDIT_EXIT_CODE.txt
+          exit 0
 
       - name: Commit audit evidence
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            audit/FULL_PROJECT_AUDIT.json \
-            audit/FULL_PROJECT_AUDIT.log \
-            audit/PROPOSAL_STORE_PROBE.json \
-            audit/PYTEST_DIAGNOSTICS.log \
-            audit/PYTEST_EXIT_CODE.txt
+          git add audit/
           if ! git diff --cached --quiet; then
             git commit -m "Record full project audit evidence [skip ci]"
             git push origin HEAD:main
@@ -93,6 +100,9 @@ jobs:
           import json
           from pathlib import Path
           report = json.loads(Path("audit/FULL_PROJECT_AUDIT.json").read_text())
+          probe_exit = Path("audit/PROPOSAL_STORE_PROBE_EXIT_CODE.txt").read_text().strip()
+          if probe_exit != "0":
+              raise SystemExit("Proposal store probe failed; inspect audit/PROPOSAL_STORE_PROBE.log")
           if report["overall_status"] != "passed":
               raise SystemExit(
                   "Full project audit failed: " + ", ".join(report["failed_checks"])
