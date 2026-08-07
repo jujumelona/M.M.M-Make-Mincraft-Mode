@@ -51,6 +51,16 @@ jobs:
             git push origin HEAD:main
           fi
 
+      - name: Capture concise pytest diagnostics
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q --tb=short --disable-warnings > audit/PYTEST_DIAGNOSTICS.log 2>&1
+          code=$?
+          echo "$code" > audit/PYTEST_EXIT_CODE.txt
+          cat audit/PYTEST_DIAGNOSTICS.log
+          exit 0
+
       - name: Run complete repository audit
         run: python tools/full_project_audit.py
 
@@ -59,7 +69,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add audit/FULL_PROJECT_AUDIT.json audit/FULL_PROJECT_AUDIT.log
+          git add \
+            audit/FULL_PROJECT_AUDIT.json \
+            audit/FULL_PROJECT_AUDIT.log \
+            audit/PYTEST_DIAGNOSTICS.log \
+            audit/PYTEST_EXIT_CODE.txt
           if ! git diff --cached --quiet; then
             git commit -m "Record full project audit evidence [skip ci]"
             git push origin HEAD:main
