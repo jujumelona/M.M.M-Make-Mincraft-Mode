@@ -587,7 +587,7 @@ public final class GeneratedExtendedContent {{
             BlockEntityType<T> type
         ) {{
             if (world.isClient || MACHINE_ENTITY_TYPE == null) return null;
-            return validateTicker(type, MACHINE_ENTITY_TYPE, GeneratedMachineBlockEntity::tick);
+            return checkType(type, MACHINE_ENTITY_TYPE, GeneratedMachineBlockEntity::tick);
         }}
     }}
 
