@@ -37,6 +37,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" build
 
+      - name: Apply generated Java compile fixes
+        run: python tools/apply_fabric_generator_compile_fixes.py
+
+      - name: Commit generated Java template fixes
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain -- minecraft_mod_ai/geckolib_generator.py minecraft_mod_ai/extended_content_generator.py minecraft_mod_ai/system_templates_quest.py)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add \
+              minecraft_mod_ai/geckolib_generator.py \
+              minecraft_mod_ai/extended_content_generator.py \
+              minecraft_mod_ai/system_templates_quest.py
+            git commit -m "Fix generated Fabric Java compile contracts [skip ci]"
+            git push origin HEAD:main
+          fi
+
       - name: Verify packaged Skill catalog is synchronized
         shell: bash
         run: |
