@@ -1,0 +1,84 @@
+name: Full project audit
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "audit/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: full-project-audit-main
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install audit dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" build
+
+      - name: Reconcile mod-only public surfaces
+        run: python tools/reconcile_mod_scope.py
+
+      - name: Commit deterministic source reconciliation
+        id: reconcile
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain -- . ':!audit')" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A -- . ':!audit'
+            git commit -m "Physically reconcile mod-only public surfaces [skip ci]"
+            git push origin HEAD:main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run complete repository audit
+        run: python tools/full_project_audit.py
+
+      - name: Commit audit evidence
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add audit/FULL_PROJECT_AUDIT.json audit/FULL_PROJECT_AUDIT.log
+          if ! git diff --cached --quiet; then
+            git commit -m "Record full project audit evidence [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      - name: Enforce audit result
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("audit/FULL_PROJECT_AUDIT.json").read_text())
+          if report["overall_status"] != "passed":
+              raise SystemExit(
+                  "Full project audit failed: " + ", ".join(report["failed_checks"])
+              )
+          print("Full project audit passed.")
+          PY
