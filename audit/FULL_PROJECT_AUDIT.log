@@ -1,5 +1,5 @@
-[PASS] tracked_file_inventory: tracked_files=297
-[PASS] syntax_and_structured_data: python=163, json=9, yaml=32, notebooks=2
+[PASS] tracked_file_inventory: tracked_files=298
+[PASS] syntax_and_structured_data: python=163, json=9, yaml=31, notebooks=2
 [PASS] relative_import_resolution: checked=307
 [PASS] version_consistency: {"__version__": "0.8.0", "minecraft_mod_ai/mcp_server.py": "0.8.0", "minecraft_mod_ai/mod_generation_mcp_server.py": "0.8.0", "pyproject": "0.8.0"}
 [PASS] mod_only_public_surface: clean
@@ -21,12 +21,12 @@ $ /opt/hostedtoolcache/Python/3.12.13/x64/bin/python -m pytest -q
 ....................F................................................... [ 36%]
 ........................................................................ [ 54%]
 ..............................F.............F........................... [ 72%]
-..........F.....F....................................................... [ 90%]
-.......................................                                  [100%]
+...........F.....F...................................................... [ 90%]
+........................................                                 [100%]
 =================================== FAILURES ===================================
 ________ test_complete_orchestrator_source_only_connects_all_generators ________
 
-tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_complete_orchestrator_sou0')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_complete_orchestrator_sou0')
 
     def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Path) -> None:
         base = MinecraftModPipeline(planner=HeuristicPlanner()).plan("Create one frost item")
@@ -118,10 +118,10 @@ existing_input_sha256 = ''
             )
 E           minecraft_mod_ai.spec.SpecValidationError: The planner attempted world or structure generation although the request did not select fabric_worldgen.
 
-minecraft_mod_ai/mod_scope_contract.py:84: SpecValidationError
+minecraft_mod_ai/mod_scope_contract.py:87: SpecValidationError
 _________ test_ui_uses_server_state_without_raw_json_or_hash_controls __________
 
-output_root = PosixPath('/tmp/pytest-of-runner/pytest-0/test_ui_uses_server_state_with0/output')
+output_root = PosixPath('/tmp/pytest-of-runner/pytest-1/test_ui_uses_server_state_with0/output')
 local_model = False, api_base_url = None, api_model = None, api_key = None
 existing_input = None
 
@@ -142,7 +142,7 @@ minecraft_mod_ai/webui.py:841: ModuleNotFoundError
 
 The above exception was the direct cause of the following exception:
 
-tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_ui_uses_server_state_with0')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_ui_uses_server_state_with0')
 
     def test_ui_uses_server_state_without_raw_json_or_hash_controls(tmp_path: Path) -> None:
 >       demo = create_demo(output_root=tmp_path / "output")
@@ -151,7 +151,7 @@ tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_ui_uses_server_state_w
 tests/test_conversational_ui.py:162: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-output_root = PosixPath('/tmp/pytest-of-runner/pytest-0/test_ui_uses_server_state_with0/output')
+output_root = PosixPath('/tmp/pytest-of-runner/pytest-1/test_ui_uses_server_state_with0/output')
 local_model = False, api_base_url = None, api_model = None, api_key = None
 existing_input = None
 
@@ -205,7 +205,7 @@ E               ]
 tests/test_mcp_config.py:18: AssertionError
 ______ test_mcp_planning_media_cannot_escape_workspace[generate_world_ir] ______
 
-tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_mcp_planning_media_cannot2')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_mcp_planning_media_cannot2')
 method_name = 'generate_world_ir'
 
     @pytest.mark.parametrize(
@@ -238,7 +238,7 @@ E           AttributeError: 'MMMToolService' object has no attribute 'generate_w
 tests/test_mcp_tool_path_policy.py:124: AttributeError
 _________ test_large_game_design_uses_fixed_size_files_and_round_trips _________
 
-tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_large_game_design_uses_fi0')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_large_game_design_uses_fi0')
 
     def test_large_game_design_uses_fixed_size_files_and_round_trips(
         tmp_path: Path,
@@ -518,7 +518,7 @@ E           }
 tests/test_proposal_store.py:168: AssertionError
 _________________ test_v2_chunked_store_loads_from_release_zip _________________
 
-tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_v2_chunked_store_loads_fr0')
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_v2_chunked_store_loads_fr0')
 
     def test_v2_chunked_store_loads_from_release_zip(tmp_path: Path) -> None:
         proposal = _large_proposal(
@@ -1691,7 +1691,7 @@ running install_egg_info
 Copying mmm_make_mincraft_mode.egg-info to build/bdist.linux-x86_64/wheel/./mmm_make_mincraft_mode-0.8.0-py3.12.egg-info
 running install_scripts
 creating build/bdist.linux-x86_64/wheel/mmm_make_mincraft_mode-0.8.0.dist-info/WHEEL
-creating '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/audit/dist/.tmp-_63xkk0j/mmm_make_mincraft_mode-0.8.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
+creating '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/audit/dist/.tmp-zb0god9n/mmm_make_mincraft_mode-0.8.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
 adding 'download_resources.py'
 adding 'mcp_gateway.py'
 adding 'minecraft_mod_ai/__init__.py'
