@@ -34,7 +34,12 @@ image = ["diffusers>=0.35,<1", "sentencepiece>=0.2,<1"]
 speech = ["librosa>=0.10,<1", "soundfile>=0.12,<1"]
 production-audio = ["numpy>=1.26,<3", "soundfile>=0.12,<1"]
 training = ["datasets>=3.0,<5", "peft>=0.14,<1", "trl>=0.15,<1"]
-dev = ["nbformat>=5.10,<6", "Pillow>=10.4,<13", "pytest>=8,<10"]
+dev = [
+  "gradio>=6.0,<7",
+  "nbformat>=5.10,<6",
+  "Pillow>=10.4,<13",
+  "pytest>=8,<10",
+]
 
 [project.scripts]
 mmm = "minecraft_mod_ai.cli:main"
