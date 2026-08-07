@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,18 @@ def test_baseline_mod_methods_exclude_standalone_map() -> None:
     assert "registry_and_datagen" in result["method_ids"]
     assert "content_registry" in result["method_ids"]
     assert "fabric_worldgen" not in result["method_ids"]
+
+
+def test_mod_method_contract_is_json_native() -> None:
+    result = resolve_mod_development_methods(
+        "퀘스트와 GUI가 있는 멀티플레이 모드를 만들어줘"
+    )
+
+    assert json.loads(json.dumps(result, ensure_ascii=False)) == result
+    for method in result["methods"]:
+        assert isinstance(method["outputs"], list)
+        assert isinstance(method["required_evidence"], list)
+        assert isinstance(method["release_gates"], list)
 
 
 def test_worldgen_is_mod_owned_and_explicit() -> None:
