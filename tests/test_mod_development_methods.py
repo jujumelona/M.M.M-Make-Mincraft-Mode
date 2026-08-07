@@ -104,6 +104,20 @@ def _fake_contract_modules():
     return FakeCompleteSpec, FakeCompletePlanner
 
 
+def test_complete_scope_prompt_does_not_mutate_caller_design() -> None:
+    _, fake_planner = _fake_contract_modules()
+    design = {"title": "ZIP", "payload": "z" * 50_000}
+    original = dict(design)
+
+    rendered = fake_planner._implementation_prompt(
+        "음식 아이템 모드를 만들어줘",
+        design,
+    )
+
+    assert design == original
+    assert "_mod_development_methods" in rendered
+
+
 def test_complete_scope_attaches_methods_to_proposal() -> None:
     fake_spec, _ = _fake_contract_modules()
     item_module = SimpleNamespace(
