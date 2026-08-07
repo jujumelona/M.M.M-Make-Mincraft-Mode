@@ -37,17 +37,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" build
 
+      - name: Apply worldgen alias migration
+        run: python tools/apply_worldgen_alias_patch.py
+
       - name: Rebuild packaged Skill catalog
         run: python tools/package_skills.py
 
-      - name: Commit packaged Skill synchronization
+      - name: Commit deterministic source synchronization
         shell: bash
         run: |
-          if ! git diff --quiet -- minecraft_mod_ai/packaged_skills.json; then
+          if [[ -n "$(git status --porcelain -- minecraft_mod_ai/mod_development_methods.py minecraft_mod_ai/packaged_skills.json)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add minecraft_mod_ai/packaged_skills.json
-            git commit -m "Synchronize packaged Skills with source [skip ci]"
+            git add minecraft_mod_ai/mod_development_methods.py minecraft_mod_ai/packaged_skills.json
+            git commit -m "Synchronize mod method aliases and packaged Skills [skip ci]"
             git push origin HEAD:main
           fi
 
