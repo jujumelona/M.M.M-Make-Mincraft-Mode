@@ -1,0 +1,797 @@
+[PASS] tracked_file_inventory: tracked_files=293
+[PASS] syntax_and_structured_data: python=162, json=8, yaml=31, notebooks=2
+[PASS] relative_import_resolution: checked=307
+[PASS] version_consistency: {"__version__": "0.8.0", "minecraft_mod_ai/mcp_server.py": "0.8.0", "minecraft_mod_ai/mod_generation_mcp_server.py": "0.8.0", "pyproject": "0.8.0"}
+[FAIL] mod_only_public_surface: minecraft_mod_ai/packaged_skills.json: contains generate_world_ir | minecraft_mod_ai/packaged_skills.json: contains compile_world_ir
+[PASS] obsolete_imports: clean
+[PASS] runtime_contract_smoke: imports, skill catalog and mod-scope routing passed
+
+$ /opt/hostedtoolcache/Python/3.12.13/x64/bin/python -m compileall -q minecraft_mod_ai tests tools
+
+
+[PASS] compileall: exit=0; output_tail=
+
+$ /opt/hostedtoolcache/Python/3.12.13/x64/bin/python -m pip check
+No broken requirements found.
+
+[PASS] pip_check: exit=0; output_tail=No broken requirements found.
+
+$ /opt/hostedtoolcache/Python/3.12.13/x64/bin/python -m pytest -q
+==================================== ERRORS ====================================
+____________ ERROR collecting tests/test_complete_asset_scaling.py _____________
+ImportError while importing test module '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/tests/test_complete_asset_scaling.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_complete_asset_scaling.py:7: in <module>
+    from PIL import Image
+E   ModuleNotFoundError: No module named 'PIL'
+_____________ ERROR collecting tests/test_remote_image_adapter.py ______________
+ImportError while importing test module '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/tests/test_remote_image_adapter.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_remote_image_adapter.py:7: in <module>
+    from PIL import Image
+E   ModuleNotFoundError: No module named 'PIL'
+=========================== short test summary info ============================
+ERROR tests/test_complete_asset_scaling.py
+ERROR tests/test_remote_image_adapter.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+
+[FAIL] pytest_full: exit=2; output_tail=.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_complete_asset_scaling.py:7: in <module>
+    from PIL import Image
+E   ModuleNotFoundError: No module named 'PIL'
+_____________ ERROR collecting tests/test_remote_image_adapter.py ______________
+ImportError while importing test module '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/tests/test_remote_image_adapter.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_remote_image_adapter.py:7: in <module>
+    from PIL import Image
+E   ModuleNotFoundError: No module named 'PIL'
+=========================== short test summary info ============================
+ERROR tests/test_complete_asset_scaling.py
+ERROR tests/test_remote_image_adapter.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+
+$ /opt/hostedtoolcache/Python/3.12.13/x64/bin/python -m build --sdist --wheel --outdir /home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/audit/dist
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=77.0.3
+* Getting build dependencies for sdist...
+running egg_info
+writing mmm_make_mincraft_mode.egg-info/PKG-INFO
+writing dependency_links to mmm_make_mincraft_mode.egg-info/dependency_links.txt
+writing entry points to mmm_make_mincraft_mode.egg-info/entry_points.txt
+writing requirements to mmm_make_mincraft_mode.egg-info/requires.txt
+writing top-level names to mmm_make_mincraft_mode.egg-info/top_level.txt
+reading manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+* Building sdist...
+running sdist
+running egg_info
+writing mmm_make_mincraft_mode.egg-info/PKG-INFO
+writing dependency_links to mmm_make_mincraft_mode.egg-info/dependency_links.txt
+writing entry points to mmm_make_mincraft_mode.egg-info/entry_points.txt
+writing requirements to mmm_make_mincraft_mode.egg-info/requires.txt
+writing top-level names to mmm_make_mincraft_mode.egg-info/top_level.txt
+reading manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+running check
+creating mmm_make_mincraft_mode-0.8.0
+creating mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+creating mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/config
+creating mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/integrations/mineflayer-1201
+creating mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+creating mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/training_configs
+creating mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+creating mmm_make_mincraft_mode-0.8.0/tests
+copying files to mmm_make_mincraft_mode-0.8.0...
+copying LICENSE -> mmm_make_mincraft_mode-0.8.0
+copying README.md -> mmm_make_mincraft_mode-0.8.0
+copying download_resources.py -> mmm_make_mincraft_mode-0.8.0
+copying mcp_gateway.py -> mmm_make_mincraft_mode-0.8.0
+copying pyproject.toml -> mmm_make_mincraft_mode-0.8.0
+copying minecraft_mod_ai/__init__.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/ai_webui.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/api.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/audio_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/blockbench_client.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/broker.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/capabilities.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/capability_plugins.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/central_research.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/cli.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/complete_orchestrator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/complete_orchestrator_services.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/complete_orchestrator_support.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/complete_planner.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/complete_spec.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/config_paths.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/conversation.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/custom_module_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/ecosystem_discovery.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/extended_content_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/external_mcp.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/game_design.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/gametest_discovery.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/geckolib_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/importer.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/intent.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/java_lsp.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/json_stream.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/knowledge.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/local_ai_sidecar_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/mcp_server.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/mcp_tools.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/mineflayer_bridge.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/mod_development_methods.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/mod_generation_mcp_server.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/mod_scope_contract.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/model_registry.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/model_router.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/model_smoke.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/orchestration.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/packaged_skills.json -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/pipeline.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/plan_render.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/planner.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/production_hardener.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/production_tools.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/project_edit.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/project_index.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/proposal_store.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/publisher.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/rag_index.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/repair_engine.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/resource_tuning.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/retrieval.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/routed_planner.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/runner.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/runtime_manager.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_pipeline.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_validator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_world_compiler.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/scale_policy.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/skill_catalog.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/source_patch.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/spec.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_pack_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_pack_validation.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_class_skill.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_common.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_economy.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_groups.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_quest.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_social.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/technology_radar.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/toolchain_contract.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/training.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/training_cli.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/validator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/validator_boss_contract.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/webui.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/work_graph.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/world_compiler.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/world_runtime_generator.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai
+copying minecraft_mod_ai/config/agent_roles.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/external_mcp_registry.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/model_registry.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/runtime_profiles.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/training_policy.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/config
+copying minecraft_mod_ai/integrations/mineflayer-1201/bridge.mjs -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/integrations/mineflayer-1201
+copying minecraft_mod_ai/integrations/mineflayer-1201/package.json -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/integrations/mineflayer-1201
+copying minecraft_mod_ai/model_adapters/__init__.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/base.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/embedding.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/image_diffusion.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/openai_compatible.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/reranker.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/speech.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/transformers_multimodal.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/transformers_text.py -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/training_configs/dataset_info.json -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml -> mmm_make_mincraft_mode-0.8.0/minecraft_mod_ai/training_configs
+copying mmm_make_mincraft_mode.egg-info/PKG-INFO -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+copying mmm_make_mincraft_mode.egg-info/SOURCES.txt -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+copying mmm_make_mincraft_mode.egg-info/dependency_links.txt -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+copying mmm_make_mincraft_mode.egg-info/entry_points.txt -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+copying mmm_make_mincraft_mode.egg-info/requires.txt -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+copying mmm_make_mincraft_mode.egg-info/top_level.txt -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+copying tests/test_blockbench_client_security.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_central_research.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_cli_ux.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_complete_asset_scaling.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_complete_conversation.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_complete_planner_scaling.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_complete_planner_technology_sidecar.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_complete_production.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_complete_technology_integration.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_content_catalog_scaling.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_conversational_ui.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_durable_work_graph.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_ecosystem_discovery.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_evidence_capabilities.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_existing_import.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_fail_closed_production.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_game_design_plan.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_game_design_router.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_gametest_entrypoint_scaling.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_geckolib_incremental_scaling.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_hardened_release_gates.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_huggingface_discovery.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_intent_parser.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_java_lsp_scaling.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_local_ai_sidecar.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mcp_complete_plan_refs.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mcp_config.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mcp_gateway_real_dispatch.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mcp_stdio.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mcp_technology_tools.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mcp_tool_path_policy.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mod_development_methods.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mod_only_public_surface.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_mod_scope_exclusions.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_model_registry_v2.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_no_legacy_planner_loader.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_notebook_registry_policy.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_plan_render.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_plugin_package.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_production_stack.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_proposal_store.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_python_api.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_rag_index.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_regression_contracts.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_remote_image_adapter.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_remote_speech_adapter.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_revision_binding.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_runtime_policy_v2.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_scalable_limits.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_scalable_production.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_skill_policy.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_system_pack_generator.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_technology_radar.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_training_pipeline.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_transformers_text_context.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_world_compiler.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying tests/test_world_runtime_generator.py -> mmm_make_mincraft_mode-0.8.0/tests
+copying mmm_make_mincraft_mode.egg-info/SOURCES.txt -> mmm_make_mincraft_mode-0.8.0/mmm_make_mincraft_mode.egg-info
+Writing mmm_make_mincraft_mode-0.8.0/setup.cfg
+Creating tar archive
+removing 'mmm_make_mincraft_mode-0.8.0' (and everything under it)
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=77.0.3
+* Getting build dependencies for wheel...
+running egg_info
+writing mmm_make_mincraft_mode.egg-info/PKG-INFO
+writing dependency_links to mmm_make_mincraft_mode.egg-info/dependency_links.txt
+writing entry points to mmm_make_mincraft_mode.egg-info/entry_points.txt
+writing requirements to mmm_make_mincraft_mode.egg-info/requires.txt
+writing top-level names to mmm_make_mincraft_mode.egg-info/top_level.txt
+reading manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+* Building wheel...
+running bdist_wheel
+running build
+running build_py
+creating build/lib
+copying mcp_gateway.py -> build/lib
+copying download_resources.py -> build/lib
+creating build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/mod_generation_mcp_server.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/source_patch.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/geckolib_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_common.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/knowledge.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/pipeline.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/mineflayer_bridge.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/rag_index.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/routed_planner.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/scale_policy.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/capability_plugins.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/complete_spec.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_quest.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/retrieval.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/custom_module_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/central_research.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/world_compiler.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/model_router.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/gametest_discovery.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/ecosystem_discovery.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/runner.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/work_graph.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_pack_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_groups.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/complete_planner.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/capabilities.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_validator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/world_runtime_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/mcp_tools.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/mod_scope_contract.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/config_paths.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/webui.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/java_lsp.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_pipeline.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/__init__.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/conversation.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_pack_validation.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/toolchain_contract.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/importer.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/production_tools.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/ai_webui.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/planner.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/external_mcp.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/validator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/blockbench_client.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_social.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/production_hardener.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_world_compiler.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/cli.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/game_design.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/project_edit.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/model_smoke.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/orchestration.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_class_skill.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/validator_boss_contract.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/local_ai_sidecar_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/plan_render.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/runtime_manager.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/proposal_store.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/training_cli.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/json_stream.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/scalable_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/mcp_server.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/system_templates_economy.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/technology_radar.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/extended_content_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/spec.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/mod_development_methods.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/api.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/skill_catalog.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/project_index.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/repair_engine.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/complete_orchestrator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/model_registry.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/broker.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/complete_orchestrator_services.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/training.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/publisher.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/audio_generator.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/complete_orchestrator_support.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/resource_tuning.py -> build/lib/minecraft_mod_ai
+copying minecraft_mod_ai/intent.py -> build/lib/minecraft_mod_ai
+creating build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/transformers_multimodal.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/reranker.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/openai_compatible.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/__init__.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/speech.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/image_diffusion.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/embedding.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/transformers_text.py -> build/lib/minecraft_mod_ai/model_adapters
+copying minecraft_mod_ai/model_adapters/base.py -> build/lib/minecraft_mod_ai/model_adapters
+running egg_info
+writing mmm_make_mincraft_mode.egg-info/PKG-INFO
+writing dependency_links to mmm_make_mincraft_mode.egg-info/dependency_links.txt
+writing entry points to mmm_make_mincraft_mode.egg-info/entry_points.txt
+writing requirements to mmm_make_mincraft_mode.egg-info/requires.txt
+writing top-level names to mmm_make_mincraft_mode.egg-info/top_level.txt
+reading manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'mmm_make_mincraft_mode.egg-info/SOURCES.txt'
+copying minecraft_mod_ai/packaged_skills.json -> build/lib/minecraft_mod_ai
+creating build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/training_policy.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/external_mcp_registry.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/model_registry.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/agent_roles.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/runtime_profiles.yaml -> build/lib/minecraft_mod_ai/config
+creating build/lib/minecraft_mod_ai/integrations/mineflayer-1201
+copying minecraft_mod_ai/integrations/mineflayer-1201/package.json -> build/lib/minecraft_mod_ai/integrations/mineflayer-1201
+copying minecraft_mod_ai/integrations/mineflayer-1201/bridge.mjs -> build/lib/minecraft_mod_ai/integrations/mineflayer-1201
+creating build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/dataset_info.json -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/dataset_info.json -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml -> build/lib/minecraft_mod_ai/training_configs
+copying minecraft_mod_ai/config/agent_roles.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/external_mcp_registry.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/model_registry.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/runtime_profiles.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/config/training_policy.yaml -> build/lib/minecraft_mod_ai/config
+copying minecraft_mod_ai/integrations/mineflayer-1201/bridge.mjs -> build/lib/minecraft_mod_ai/integrations/mineflayer-1201
+copying minecraft_mod_ai/integrations/mineflayer-1201/package.json -> build/lib/minecraft_mod_ai/integrations/mineflayer-1201
+installing to build/bdist.linux-x86_64/wheel
+running install
+running install_lib
+creating build/bdist.linux-x86_64/wheel
+copying build/lib/download_resources.py -> build/bdist.linux-x86_64/wheel/.
+creating build/bdist.linux-x86_64/wheel/minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/mod_generation_mcp_server.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/source_patch.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/geckolib_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_templates_common.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/knowledge.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/pipeline.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/mineflayer_bridge.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/rag_index.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/routed_planner.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/scale_policy.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/capability_plugins.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/complete_spec.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/packaged_skills.json -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_templates_quest.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/retrieval.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/custom_module_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/central_research.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/world_compiler.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/model_router.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/gametest_discovery.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/ecosystem_discovery.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+creating build/bdist.linux-x86_64/wheel/minecraft_mod_ai/training_configs
+copying build/lib/minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/training_configs
+copying build/lib/minecraft_mod_ai/training_configs/dataset_info.json -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/training_configs
+copying build/lib/minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/training_configs
+copying build/lib/minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/training_configs
+copying build/lib/minecraft_mod_ai/runner.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/work_graph.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_pack_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_templates_groups.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/complete_planner.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/capabilities.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/scalable_validator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/world_runtime_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/mcp_tools.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/mod_scope_contract.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/config_paths.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/webui.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/java_lsp.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/scalable_pipeline.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/__init__.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/conversation.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_pack_validation.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/toolchain_contract.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/importer.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/production_tools.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/ai_webui.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/planner.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/external_mcp.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/validator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/blockbench_client.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_templates_social.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/production_hardener.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/scalable_world_compiler.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/cli.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/game_design.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/project_edit.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/model_smoke.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/orchestration.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_templates_class_skill.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/validator_boss_contract.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/local_ai_sidecar_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/plan_render.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+creating build/bdist.linux-x86_64/wheel/minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/transformers_multimodal.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/reranker.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/openai_compatible.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/__init__.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/speech.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/image_diffusion.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/embedding.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/transformers_text.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/model_adapters/base.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/model_adapters
+copying build/lib/minecraft_mod_ai/runtime_manager.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/proposal_store.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+creating build/bdist.linux-x86_64/wheel/minecraft_mod_ai/config
+copying build/lib/minecraft_mod_ai/config/training_policy.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/config
+copying build/lib/minecraft_mod_ai/config/external_mcp_registry.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/config
+copying build/lib/minecraft_mod_ai/config/model_registry.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/config
+copying build/lib/minecraft_mod_ai/config/agent_roles.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/config
+copying build/lib/minecraft_mod_ai/config/runtime_profiles.yaml -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/config
+copying build/lib/minecraft_mod_ai/training_cli.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/json_stream.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/scalable_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/mcp_server.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/system_templates_economy.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/technology_radar.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/extended_content_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/spec.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/mod_development_methods.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/api.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/skill_catalog.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/project_index.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/repair_engine.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/complete_orchestrator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/model_registry.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/broker.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/complete_orchestrator_services.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/training.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/publisher.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/audio_generator.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/complete_orchestrator_support.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+creating build/bdist.linux-x86_64/wheel/minecraft_mod_ai/integrations
+creating build/bdist.linux-x86_64/wheel/minecraft_mod_ai/integrations/mineflayer-1201
+copying build/lib/minecraft_mod_ai/integrations/mineflayer-1201/package.json -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/integrations/mineflayer-1201
+copying build/lib/minecraft_mod_ai/integrations/mineflayer-1201/bridge.mjs -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai/integrations/mineflayer-1201
+copying build/lib/minecraft_mod_ai/resource_tuning.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/minecraft_mod_ai/intent.py -> build/bdist.linux-x86_64/wheel/./minecraft_mod_ai
+copying build/lib/mcp_gateway.py -> build/bdist.linux-x86_64/wheel/.
+running install_egg_info
+Copying mmm_make_mincraft_mode.egg-info to build/bdist.linux-x86_64/wheel/./mmm_make_mincraft_mode-0.8.0-py3.12.egg-info
+running install_scripts
+creating build/bdist.linux-x86_64/wheel/mmm_make_mincraft_mode-0.8.0.dist-info/WHEEL
+creating '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/audit/dist/.tmp-xpte9uhu/mmm_make_mincraft_mode-0.8.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
+adding 'download_resources.py'
+adding 'mcp_gateway.py'
+adding 'minecraft_mod_ai/__init__.py'
+adding 'minecraft_mod_ai/ai_webui.py'
+adding 'minecraft_mod_ai/api.py'
+adding 'minecraft_mod_ai/audio_generator.py'
+adding 'minecraft_mod_ai/blockbench_client.py'
+adding 'minecraft_mod_ai/broker.py'
+adding 'minecraft_mod_ai/capabilities.py'
+adding 'minecraft_mod_ai/capability_plugins.py'
+adding 'minecraft_mod_ai/central_research.py'
+adding 'minecraft_mod_ai/cli.py'
+adding 'minecraft_mod_ai/complete_orchestrator.py'
+adding 'minecraft_mod_ai/complete_orchestrator_services.py'
+adding 'minecraft_mod_ai/complete_orchestrator_support.py'
+adding 'minecraft_mod_ai/complete_planner.py'
+adding 'minecraft_mod_ai/complete_spec.py'
+adding 'minecraft_mod_ai/config_paths.py'
+adding 'minecraft_mod_ai/conversation.py'
+adding 'minecraft_mod_ai/custom_module_generator.py'
+adding 'minecraft_mod_ai/ecosystem_discovery.py'
+adding 'minecraft_mod_ai/extended_content_generator.py'
+adding 'minecraft_mod_ai/external_mcp.py'
+adding 'minecraft_mod_ai/game_design.py'
+adding 'minecraft_mod_ai/gametest_discovery.py'
+adding 'minecraft_mod_ai/geckolib_generator.py'
+adding 'minecraft_mod_ai/generator.py'
+adding 'minecraft_mod_ai/importer.py'
+adding 'minecraft_mod_ai/intent.py'
+adding 'minecraft_mod_ai/java_lsp.py'
+adding 'minecraft_mod_ai/json_stream.py'
+adding 'minecraft_mod_ai/knowledge.py'
+adding 'minecraft_mod_ai/local_ai_sidecar_generator.py'
+adding 'minecraft_mod_ai/mcp_server.py'
+adding 'minecraft_mod_ai/mcp_tools.py'
+adding 'minecraft_mod_ai/mineflayer_bridge.py'
+adding 'minecraft_mod_ai/mod_development_methods.py'
+adding 'minecraft_mod_ai/mod_generation_mcp_server.py'
+adding 'minecraft_mod_ai/mod_scope_contract.py'
+adding 'minecraft_mod_ai/model_registry.py'
+adding 'minecraft_mod_ai/model_router.py'
+adding 'minecraft_mod_ai/model_smoke.py'
+adding 'minecraft_mod_ai/orchestration.py'
+adding 'minecraft_mod_ai/packaged_skills.json'
+adding 'minecraft_mod_ai/pipeline.py'
+adding 'minecraft_mod_ai/plan_render.py'
+adding 'minecraft_mod_ai/planner.py'
+adding 'minecraft_mod_ai/production_hardener.py'
+adding 'minecraft_mod_ai/production_tools.py'
+adding 'minecraft_mod_ai/project_edit.py'
+adding 'minecraft_mod_ai/project_index.py'
+adding 'minecraft_mod_ai/proposal_store.py'
+adding 'minecraft_mod_ai/publisher.py'
+adding 'minecraft_mod_ai/rag_index.py'
+adding 'minecraft_mod_ai/repair_engine.py'
+adding 'minecraft_mod_ai/resource_tuning.py'
+adding 'minecraft_mod_ai/retrieval.py'
+adding 'minecraft_mod_ai/routed_planner.py'
+adding 'minecraft_mod_ai/runner.py'
+adding 'minecraft_mod_ai/runtime_manager.py'
+adding 'minecraft_mod_ai/scalable_generator.py'
+adding 'minecraft_mod_ai/scalable_pipeline.py'
+adding 'minecraft_mod_ai/scalable_validator.py'
+adding 'minecraft_mod_ai/scalable_world_compiler.py'
+adding 'minecraft_mod_ai/scale_policy.py'
+adding 'minecraft_mod_ai/skill_catalog.py'
+adding 'minecraft_mod_ai/source_patch.py'
+adding 'minecraft_mod_ai/spec.py'
+adding 'minecraft_mod_ai/system_pack_generator.py'
+adding 'minecraft_mod_ai/system_pack_validation.py'
+adding 'minecraft_mod_ai/system_templates_class_skill.py'
+adding 'minecraft_mod_ai/system_templates_common.py'
+adding 'minecraft_mod_ai/system_templates_economy.py'
+adding 'minecraft_mod_ai/system_templates_groups.py'
+adding 'minecraft_mod_ai/system_templates_quest.py'
+adding 'minecraft_mod_ai/system_templates_social.py'
+adding 'minecraft_mod_ai/technology_radar.py'
+adding 'minecraft_mod_ai/toolchain_contract.py'
+adding 'minecraft_mod_ai/training.py'
+adding 'minecraft_mod_ai/training_cli.py'
+adding 'minecraft_mod_ai/validator.py'
+adding 'minecraft_mod_ai/validator_boss_contract.py'
+adding 'minecraft_mod_ai/webui.py'
+adding 'minecraft_mod_ai/work_graph.py'
+adding 'minecraft_mod_ai/world_compiler.py'
+adding 'minecraft_mod_ai/world_runtime_generator.py'
+adding 'minecraft_mod_ai/config/agent_roles.yaml'
+adding 'minecraft_mod_ai/config/external_mcp_registry.yaml'
+adding 'minecraft_mod_ai/config/model_registry.yaml'
+adding 'minecraft_mod_ai/config/runtime_profiles.yaml'
+adding 'minecraft_mod_ai/config/training_policy.yaml'
+adding 'minecraft_mod_ai/integrations/mineflayer-1201/bridge.mjs'
+adding 'minecraft_mod_ai/integrations/mineflayer-1201/package.json'
+adding 'minecraft_mod_ai/model_adapters/__init__.py'
+adding 'minecraft_mod_ai/model_adapters/base.py'
+adding 'minecraft_mod_ai/model_adapters/embedding.py'
+adding 'minecraft_mod_ai/model_adapters/image_diffusion.py'
+adding 'minecraft_mod_ai/model_adapters/openai_compatible.py'
+adding 'minecraft_mod_ai/model_adapters/reranker.py'
+adding 'minecraft_mod_ai/model_adapters/speech.py'
+adding 'minecraft_mod_ai/model_adapters/transformers_multimodal.py'
+adding 'minecraft_mod_ai/model_adapters/transformers_text.py'
+adding 'minecraft_mod_ai/training_configs/dataset_info.json'
+adding 'minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml'
+adding 'minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml'
+adding 'minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/licenses/LICENSE'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/METADATA'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/WHEEL'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/entry_points.txt'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/top_level.txt'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/RECORD'
+removing build/bdist.linux-x86_64/wheel
+Successfully built mmm_make_mincraft_mode-0.8.0.tar.gz and mmm_make_mincraft_mode-0.8.0-py3-none-any.whl
+
+[PASS] package_build: exit=0; output_tail=ai/model_adapters/embedding.py'
+adding 'minecraft_mod_ai/model_adapters/image_diffusion.py'
+adding 'minecraft_mod_ai/model_adapters/openai_compatible.py'
+adding 'minecraft_mod_ai/model_adapters/reranker.py'
+adding 'minecraft_mod_ai/model_adapters/speech.py'
+adding 'minecraft_mod_ai/model_adapters/transformers_multimodal.py'
+adding 'minecraft_mod_ai/model_adapters/transformers_text.py'
+adding 'minecraft_mod_ai/training_configs/dataset_info.json'
+adding 'minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml'
+adding 'minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml'
+adding 'minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/licenses/LICENSE'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/METADATA'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/WHEEL'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/entry_points.txt'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/top_level.txt'
+adding 'mmm_make_mincraft_mode-0.8.0.dist-info/RECORD'
+removing build/bdist.linux-x86_64/wheel
+Successfully built mmm_make_mincraft_mode-0.8.0.tar.gz and mmm_make_mincraft_mode-0.8.0-py3-none-any.whl
+
+[wheel clean env]
+Processing ./audit/dist/mmm_make_mincraft_mode-0.8.0-py3-none-any.whl
+Collecting PyYAML<7,>=6.0.2 (from mmm-make-mincraft-mode==0.8.0)
+  Using cached pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+Collecting anyio<5,>=4.4 (from mmm-make-mincraft-mode==0.8.0)
+  Using cached anyio-4.14.2-py3-none-any.whl.metadata (4.6 kB)
+Collecting httpx<1,>=0.27 (from mmm-make-mincraft-mode==0.8.0)
+  Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+Collecting mcp==2.0.0 (from mmm-make-mincraft-mode==0.8.0)
+  Using cached mcp-2.0.0-py3-none-any.whl.metadata (7.7 kB)
+Collecting packaging<27,>=24 (from mmm-make-mincraft-mode==0.8.0)
+  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting httpx2>=2.5.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached httpx2-2.9.1-py3-none-any.whl.metadata (8.2 kB)
+Collecting jsonschema>=4.20.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached jsonschema-4.26.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting mcp-types==2.0.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached mcp_types-2.0.0-py3-none-any.whl.metadata (1.9 kB)
+Collecting opentelemetry-api>=1.28.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached opentelemetry_api-1.44.0-py3-none-any.whl.metadata (1.4 kB)
+Collecting pydantic>=2.12.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
+Collecting pyjwt>=2.10.1 (from pyjwt[crypto]>=2.10.1->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached pyjwt-2.13.0-py3-none-any.whl.metadata (3.4 kB)
+Collecting python-multipart>=0.0.9 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached python_multipart-0.0.32-py3-none-any.whl.metadata (2.1 kB)
+Collecting sse-starlette>=3.0.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached sse_starlette-3.4.8-py3-none-any.whl.metadata (15 kB)
+Collecting starlette>=0.27 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached starlette-1.4.1-py3-none-any.whl.metadata (6.4 kB)
+Collecting typing-extensions>=4.13.0 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting typing-inspection>=0.4.1 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
+Collecting uvicorn>=0.31.1 (from mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached uvicorn-0.52.1-py3-none-any.whl.metadata (6.6 kB)
+Collecting idna>=2.8 (from anyio<5,>=4.4->mmm-make-mincraft-mode==0.8.0)
+  Using cached idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+Collecting certifi (from httpx<1,>=0.27->mmm-make-mincraft-mode==0.8.0)
+  Using cached certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+Collecting httpcore==1.* (from httpx<1,>=0.27->mmm-make-mincraft-mode==0.8.0)
+  Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+Collecting h11>=0.16 (from httpcore==1.*->httpx<1,>=0.27->mmm-make-mincraft-mode==0.8.0)
+  Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+Collecting httpcore2==2.9.1 (from httpx2>=2.5.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached httpcore2-2.9.1-py3-none-any.whl.metadata (24 kB)
+Collecting truststore>=0.10 (from httpx2>=2.5.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached truststore-0.10.4-py3-none-any.whl.metadata (4.4 kB)
+Collecting attrs>=22.2.0 (from jsonschema>=4.20.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+Collecting jsonschema-specifications>=2023.03.6 (from jsonschema>=4.20.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached jsonschema_specifications-2025.9.1-py3-none-any.whl.metadata (2.9 kB)
+Collecting referencing>=0.28.4 (from jsonschema>=4.20.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached referencing-0.37.0-py3-none-any.whl.metadata (2.8 kB)
+Collecting rpds-py>=0.25.0 (from jsonschema>=4.20.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached rpds_py-2026.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.1 kB)
+Collecting annotated-types>=0.6.0 (from pydantic>=2.12.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+Collecting pydantic-core==2.46.4 (from pydantic>=2.12.0->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+Collecting cryptography>=3.4.0 (from pyjwt[crypto]>=2.10.1->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached cryptography-50.0.0-cp311-abi3-manylinux_2_34_x86_64.whl.metadata (4.3 kB)
+Collecting click>=7.0 (from uvicorn>=0.31.1->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached click-8.4.2-py3-none-any.whl.metadata (2.6 kB)
+Collecting cffi>=2.0.0 (from cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.5 kB)
+Collecting pycparser (from cffi>=2.0.0->cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==2.0.0->mmm-make-mincraft-mode==0.8.0)
+  Using cached pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+Using cached mcp-2.0.0-py3-none-any.whl (349 kB)
+Using cached mcp_types-2.0.0-py3-none-any.whl (69 kB)
+Using cached anyio-4.14.2-py3-none-any.whl (125 kB)
+Using cached httpx-0.28.1-py3-none-any.whl (73 kB)
+Using cached httpcore-1.0.9-py3-none-any.whl (78 kB)
+Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Using cached pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (807 kB)
+Using cached httpx2-2.9.1-py3-none-any.whl (91 kB)
+Using cached httpcore2-2.9.1-py3-none-any.whl (82 kB)
+Using cached idna-3.18-py3-none-any.whl (65 kB)
+Using cached jsonschema-4.26.0-py3-none-any.whl (90 kB)
+Using cached opentelemetry_api-1.44.0-py3-none-any.whl (60 kB)
+Using cached pydantic-2.13.4-py3-none-any.whl (472 kB)
+Using cached pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+Using cached pyjwt-2.13.0-py3-none-any.whl (31 kB)
+Using cached python_multipart-0.0.32-py3-none-any.whl (30 kB)
+Using cached sse_starlette-3.4.8-py3-none-any.whl (16 kB)
+Using cached starlette-1.4.1-py3-none-any.whl (74 kB)
+Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Using cached typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+Using cached uvicorn-0.52.1-py3-none-any.whl (79 kB)
+Using cached certifi-2026.7.22-py3-none-any.whl (136 kB)
+Using cached annotated_types-0.8.0-py3-none-any.whl (13 kB)
+Using cached attrs-26.1.0-py3-none-any.whl (67 kB)
+Using cached click-8.4.2-py3-none-any.whl (119 kB)
+Using cached cryptography-50.0.0-cp311-abi3-manylinux_2_34_x86_64.whl (4.7 MB)
+Using cached h11-0.16.0-py3-none-any.whl (37 kB)
+Using cached jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
+Using cached referencing-0.37.0-py3-none-any.whl (26 kB)
+Using cached rpds_py-2026.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (366 kB)
+Using cached truststore-0.10.4-py3-none-any.whl (18 kB)
+Using cached cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
+Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+Installing collected packages: typing-extensions, truststore, rpds-py, PyYAML, python-multipart, pyjwt, pycparser, packaging, idna, h11, click, certifi, attrs, annotated-types, uvicorn, typing-inspection, referencing, pydantic-core, opentelemetry-api, httpcore2, httpcore, cffi, anyio, starlette, pydantic, jsonschema-specifications, httpx2, httpx, cryptography, sse-starlette, mcp-types, jsonschema, mcp, mmm-make-mincraft-mode
+Successfully installed PyYAML-6.0.3 annotated-types-0.8.0 anyio-4.14.2 attrs-26.1.0 certifi-2026.7.22 cffi-2.1.1 click-8.4.2 cryptography-50.0.0 h11-0.16.0 httpcore-1.0.9 httpcore2-2.9.1 httpx-0.28.1 httpx2-2.9.1 idna-3.18 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 mcp-2.0.0 mcp-types-2.0.0 mmm-make-mincraft-mode-0.8.0 opentelemetry-api-1.44.0 packaging-26.3 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pyjwt-2.13.0 python-multipart-0.0.32 referencing-0.37.0 rpds-py-2026.6.3 sse-starlette-3.4.8 starlette-1.4.1 truststore-0.10.4 typing-extensions-4.16.0 typing-inspection-0.4.2 uvicorn-0.52.1
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: python -m pip install --upgrade pip
+
+
+[PASS] wheel_clean_environment_import: wheel=mmm_make_mincraft_mode-0.8.0-py3-none-any.whl; output_tail=arser-3.0-py3-none-any.whl (48 kB)
+Installing collected packages: typing-extensions, truststore, rpds-py, PyYAML, python-multipart, pyjwt, pycparser, packaging, idna, h11, click, certifi, attrs, annotated-types, uvicorn, typing-inspection, referencing, pydantic-core, opentelemetry-api, httpcore2, httpcore, cffi, anyio, starlette, pydantic, jsonschema-specifications, httpx2, httpx, cryptography, sse-starlette, mcp-types, jsonschema, mcp, mmm-make-mincraft-mode
+Successfully installed PyYAML-6.0.3 annotated-types-0.8.0 anyio-4.14.2 attrs-26.1.0 certifi-2026.7.22 cffi-2.1.1 click-8.4.2 cryptography-50.0.0 h11-0.16.0 httpcore-1.0.9 httpcore2-2.9.1 httpx-0.28.1 httpx2-2.9.1 idna-3.18 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 mcp-2.0.0 mcp-types-2.0.0 mmm-make-mincraft-mode-0.8.0 opentelemetry-api-1.44.0 packaging-26.3 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pyjwt-2.13.0 python-multipart-0.0.32 referencing-0.37.0 rpds-py-2026.6.3 sse-starlette-3.4.8 starlette-1.4.1 truststore-0.10.4 typing-extensions-4.16.0 typing-inspection-0.4.2 uvicorn-0.52.1
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: python -m pip install --upgrade pip
+

@@ -1,0 +1,89 @@
+{
+  "checks": [
+    {
+      "detail": "tracked_files=293",
+      "duration_seconds": 0.0,
+      "name": "tracked_file_inventory",
+      "passed": true
+    },
+    {
+      "detail": "python=162, json=8, yaml=31, notebooks=2",
+      "duration_seconds": 0.0,
+      "name": "syntax_and_structured_data",
+      "passed": true
+    },
+    {
+      "detail": "checked=307",
+      "duration_seconds": 0.0,
+      "name": "relative_import_resolution",
+      "passed": true
+    },
+    {
+      "detail": "{\"__version__\": \"0.8.0\", \"minecraft_mod_ai/mcp_server.py\": \"0.8.0\", \"minecraft_mod_ai/mod_generation_mcp_server.py\": \"0.8.0\", \"pyproject\": \"0.8.0\"}",
+      "duration_seconds": 0.0,
+      "name": "version_consistency",
+      "passed": true
+    },
+    {
+      "detail": "minecraft_mod_ai/packaged_skills.json: contains generate_world_ir | minecraft_mod_ai/packaged_skills.json: contains compile_world_ir",
+      "duration_seconds": 0.0,
+      "name": "mod_only_public_surface",
+      "passed": false
+    },
+    {
+      "detail": "clean",
+      "duration_seconds": 0.0,
+      "name": "obsolete_imports",
+      "passed": true
+    },
+    {
+      "detail": "imports, skill catalog and mod-scope routing passed",
+      "duration_seconds": 1.886,
+      "name": "runtime_contract_smoke",
+      "passed": true
+    },
+    {
+      "detail": "exit=0; output_tail=",
+      "duration_seconds": 0.139,
+      "name": "compileall",
+      "passed": true
+    },
+    {
+      "detail": "exit=0; output_tail=No broken requirements found.",
+      "duration_seconds": 0.262,
+      "name": "pip_check",
+      "passed": true
+    },
+    {
+      "detail": "exit=2; output_tail=.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_complete_asset_scaling.py:7: in <module>\n    from PIL import Image\nE   ModuleNotFoundError: No module named 'PIL'\n_____________ ERROR collecting tests/test_remote_image_adapter.py ______________\nImportError while importing test module '/home/runner/work/M.M.M-Make-Mincraft-Mode/M.M.M-Make-Mincraft-Mode/tests/test_remote_image_adapter.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_remote_image_adapter.py:7: in <module>\n    from PIL import Image\nE   ModuleNotFoundError: No module named 'PIL'\n=========================== short test summary info ============================\nERROR tests/test_complete_asset_scaling.py\nERROR tests/test_remote_image_adapter.py\n!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!",
+      "duration_seconds": 2.964,
+      "name": "pytest_full",
+      "passed": false
+    },
+    {
+      "detail": "exit=0; output_tail=ai/model_adapters/embedding.py'\nadding 'minecraft_mod_ai/model_adapters/image_diffusion.py'\nadding 'minecraft_mod_ai/model_adapters/openai_compatible.py'\nadding 'minecraft_mod_ai/model_adapters/reranker.py'\nadding 'minecraft_mod_ai/model_adapters/speech.py'\nadding 'minecraft_mod_ai/model_adapters/transformers_multimodal.py'\nadding 'minecraft_mod_ai/model_adapters/transformers_text.py'\nadding 'minecraft_mod_ai/training_configs/dataset_info.json'\nadding 'minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_3b_qlora.yaml'\nadding 'minecraft_mod_ai/training_configs/llamafactory_qwen25_coder_7b_qlora.yaml'\nadding 'minecraft_mod_ai/training_configs/llamafactory_qwen35_4b_vision_lora.yaml'\nadding 'mmm_make_mincraft_mode-0.8.0.dist-info/licenses/LICENSE'\nadding 'mmm_make_mincraft_mode-0.8.0.dist-info/METADATA'\nadding 'mmm_make_mincraft_mode-0.8.0.dist-info/WHEEL'\nadding 'mmm_make_mincraft_mode-0.8.0.dist-info/entry_points.txt'\nadding 'mmm_make_mincraft_mode-0.8.0.dist-info/top_level.txt'\nadding 'mmm_make_mincraft_mode-0.8.0.dist-info/RECORD'\nremoving build/bdist.linux-x86_64/wheel\nSuccessfully built mmm_make_mincraft_mode-0.8.0.tar.gz and mmm_make_mincraft_mode-0.8.0-py3-none-any.whl",
+      "duration_seconds": 3.458,
+      "name": "package_build",
+      "passed": true
+    },
+    {
+      "detail": "wheel=mmm_make_mincraft_mode-0.8.0-py3-none-any.whl; output_tail=arser-3.0-py3-none-any.whl (48 kB)\nInstalling collected packages: typing-extensions, truststore, rpds-py, PyYAML, python-multipart, pyjwt, pycparser, packaging, idna, h11, click, certifi, attrs, annotated-types, uvicorn, typing-inspection, referencing, pydantic-core, opentelemetry-api, httpcore2, httpcore, cffi, anyio, starlette, pydantic, jsonschema-specifications, httpx2, httpx, cryptography, sse-starlette, mcp-types, jsonschema, mcp, mmm-make-mincraft-mode\nSuccessfully installed PyYAML-6.0.3 annotated-types-0.8.0 anyio-4.14.2 attrs-26.1.0 certifi-2026.7.22 cffi-2.1.1 click-8.4.2 cryptography-50.0.0 h11-0.16.0 httpcore-1.0.9 httpcore2-2.9.1 httpx-0.28.1 httpx2-2.9.1 idna-3.18 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 mcp-2.0.0 mcp-types-2.0.0 mmm-make-mincraft-mode-0.8.0 opentelemetry-api-1.44.0 packaging-26.3 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pyjwt-2.13.0 python-multipart-0.0.32 referencing-0.37.0 rpds-py-2026.6.3 sse-starlette-3.4.8 starlette-1.4.1 truststore-0.10.4 typing-extensions-4.16.0 typing-inspection-0.4.2 uvicorn-0.52.1\n\n[notice] A new release of pip is available: 25.0.1 -> 26.2.1\n[notice] To update, run: python -m pip install --upgrade pip\n",
+      "duration_seconds": 8.106,
+      "name": "wheel_clean_environment_import",
+      "passed": true
+    }
+  ],
+  "failed_checks": [
+    "mod_only_public_surface",
+    "pytest_full"
+  ],
+  "limitations": [
+    "No Minecraft/Fabric client or dedicated server was launched by this Python repository audit.",
+    "No GPU model, Blockbench, JDT LS, Modrinth publication or external sidecar was executed.",
+    "Those integrations remain release-time gates for requests that require them."
+  ],
+  "overall_status": "failed",
+  "python": "3.12.13 (main, Jun 16 2026, 22:05:08) [GCC 13.3.0]",
+  "schema_version": "mmm/full-project-audit-v1",
+  "tracked_file_count": 293
+}
