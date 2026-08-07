@@ -22,6 +22,7 @@ def test_geckolib_attack_controller_returns_play_state() -> None:
         "hostile_melee",
     )
 
+    assert "import software.bernie.geckolib.core.object.PlayState;" in source
     assert "PlayState.STOP" in source
     assert "state.stop()" not in source
 
