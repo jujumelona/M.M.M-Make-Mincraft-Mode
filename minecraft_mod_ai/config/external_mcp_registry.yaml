@@ -17,10 +17,10 @@ servers:
   mmm-generation:
     status: enabled
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
-    env: {MMM_MCP_STAGE: generation}
+    command: [python, -m, minecraft_mod_ai.mod_generation_mcp_server]
     target_versions: ["1.20.1"]
     trust: first_party
+    purpose: mod-only Fabric project generation; no standalone map artifacts
   mmm-quality:
     status: enabled
     transport: stdio

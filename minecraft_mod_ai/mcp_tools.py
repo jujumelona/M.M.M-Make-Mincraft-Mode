@@ -519,50 +519,6 @@ class MMMToolService:
             ),
         }
 
-    def generate_world_ir(
-        self,
-        brief: str,
-        output_path: str = "world/world-ir.json",
-        media_paths: Sequence[str] = (),
-    ) -> dict[str, Any]:
-        if not brief.strip():
-            raise SpecValidationError("World brief must not be empty.")
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Return exactly one JSON object for a Minecraft 1.20.1 world design IR. "
-                    "Keys: schema_version, regions, routes, structures, quests, constraints. "
-                    "regions is a list of {id,purpose,biome_hint,entry_level}; routes is a list "
-                    "of {from,to,travel_mode}; structures is a list of "
-                    "{id,region_id,kind,brief,size,palette,biomes}; quests is a list of "
-                    "{id,start_region,end_region,objective}. Use snake_case IDs. "
-                    "The compile_world_ir tool converts this IR to NBT/Jigsaw/function shards."
-                ),
-            },
-            {"role": "user", "content": brief},
-        ]
-        scoped_media = self._scoped_media_paths(media_paths)
-        text = self.router_factory().generate_text(
-            "world_planner",
-            messages,
-            media_paths=scoped_media,
-            response_format="json",
-        )
-        ir = _extract_json(text)
-        _validate_world_ir(ir)
-        target = self._new_file(output_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(canonical_json(ir) + "\n", encoding="utf-8")
-        return {
-            "schema_version": "mmm/world-ir-result-v2",
-            "world_ir": ir,
-            "path": str(target),
-            "sha256": _sha256(target),
-            "compiler_status": "available",
-            "compiler_tool": "compile_world_ir",
-        }
-
     def run_static_validation(
         self,
         project_root: str,

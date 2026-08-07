@@ -71,8 +71,6 @@ _TOOL_STAGES: dict[str, frozenset[str]] = {
     "execute_complete_project": frozenset({"generation"}),
     "generate_fabric_project": frozenset({"generation"}),
     "generate_assets": frozenset({"generation"}),
-    "generate_world_ir": frozenset({"generation"}),
-    "compile_world_ir": frozenset({"generation"}),
     "generate_geckolib_entity": frozenset({"generation"}),
     "generate_system_plugin": frozenset({"generation"}),
     "apply_source_patch": frozenset({"generation"}),
@@ -105,7 +103,7 @@ _TOOL_STAGES: dict[str, frozenset[str]] = {
     "export_training_dataset": frozenset({"training"}),
 }
 
-mcp = MCPServer("M.M.M Minecraft Mod AI", version="0.7.0")
+mcp = MCPServer("M.M.M Minecraft Mod AI", version="0.8.0")
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -503,33 +501,6 @@ def generate_assets(
     """Generate concept art and Minecraft texture candidates on an exclusive GPU."""
     return _core().generate_assets(assets, output_dir, seed)
 
-
-@_stage_tool()
-def generate_world_ir(
-    brief: str,
-    output_path: str = "world/world-ir.json",
-    media_paths: list[str] | None = None,
-) -> dict[str, Any]:
-    """Generate validated world-planning IR."""
-    return _core().generate_world_ir(brief, output_path, media_paths or [])
-
-
-@_stage_tool()
-def compile_world_ir(
-    world_ir: dict[str, Any],
-    mod_id: str,
-    output_root: str,
-    proposal: dict[str, Any],
-    approval_hash: str,
-) -> dict[str, Any]:
-    """Compile WorldDesignIR into NBT, Jigsaw and 1.20.1 datapack resources."""
-    return _production().compile_world(
-        world_ir=world_ir,
-        mod_id=mod_id,
-        output_root=output_root,
-        proposal=proposal,
-        approval_hash=approval_hash,
-    )
 
 
 @_stage_tool()
