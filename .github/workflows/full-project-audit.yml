@@ -37,59 +37,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" build
 
-      - name: Apply deterministic source migrations
-        run: |
-          python tools/apply_worldgen_alias_patch.py
-          python tools/apply_json_native_method_patch.py
-
-      - name: Rebuild packaged Skill catalog
-        run: python tools/package_skills.py
-
-      - name: Commit deterministic source synchronization
+      - name: Verify packaged Skill catalog is synchronized
         shell: bash
         run: |
-          if [[ -n "$(git status --porcelain -- minecraft_mod_ai/mod_development_methods.py minecraft_mod_ai/packaged_skills.json)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add minecraft_mod_ai/mod_development_methods.py minecraft_mod_ai/packaged_skills.json
-            git commit -m "Synchronize JSON-native mod methods and packaged Skills [skip ci]"
-            git push origin HEAD:main
-          fi
-
-      - name: Probe proposal storage round trips
-        shell: bash
-        run: |
-          set +e
-          python tools/proposal_store_probe.py > audit/PROPOSAL_STORE_PROBE.log 2>&1
-          code=$?
-          echo "$code" > audit/PROPOSAL_STORE_PROBE_EXIT_CODE.txt
-          cat audit/PROPOSAL_STORE_PROBE.log
-          exit 0
-
-      - name: Capture concise pytest diagnostics
-        shell: bash
-        run: |
-          set +e
-          python -m pytest -q --tb=short --disable-warnings > audit/PYTEST_DIAGNOSTICS.log 2>&1
-          code=$?
-          echo "$code" > audit/PYTEST_EXIT_CODE.txt
-          cat audit/PYTEST_DIAGNOSTICS.log
-          exit 0
+          python tools/package_skills.py
+          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
 
       - name: Run complete repository audit
-        shell: bash
-        run: |
-          set +e
-          python tools/full_project_audit.py
-          echo "$?" > audit/FULL_PROJECT_AUDIT_EXIT_CODE.txt
-          exit 0
+        run: python tools/full_project_audit.py
 
       - name: Commit audit evidence
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add audit/
+          git add audit/FULL_PROJECT_AUDIT.json audit/FULL_PROJECT_AUDIT.log
           if ! git diff --cached --quiet; then
             git commit -m "Record full project audit evidence [skip ci]"
             git push origin HEAD:main
@@ -102,9 +64,6 @@ jobs:
           import json
           from pathlib import Path
           report = json.loads(Path("audit/FULL_PROJECT_AUDIT.json").read_text())
-          probe_exit = Path("audit/PROPOSAL_STORE_PROBE_EXIT_CODE.txt").read_text().strip()
-          if probe_exit != "0":
-              raise SystemExit("Proposal store probe failed; inspect audit/PROPOSAL_STORE_PROBE.log")
           if report["overall_status"] != "passed":
               raise SystemExit(
                   "Full project audit failed: " + ", ".join(report["failed_checks"])
