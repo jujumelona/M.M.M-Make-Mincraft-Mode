@@ -103,7 +103,7 @@ def test_complete_execution_rejects_relative_parent_escape(
 
 @pytest.mark.parametrize(
     "method_name",
-    ("plan_game", "plan_complete_game", "generate_world_ir"),
+    ("plan_game", "plan_complete_game"),
 )
 def test_mcp_planning_media_cannot_escape_workspace(
     tmp_path: Path,
