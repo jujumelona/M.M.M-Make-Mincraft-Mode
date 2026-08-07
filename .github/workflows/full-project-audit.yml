@@ -37,6 +37,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" build
 
+      - name: Rebuild packaged Skill catalog
+        run: python tools/package_skills.py
+
+      - name: Commit packaged Skill synchronization
+        shell: bash
+        run: |
+          if ! git diff --quiet -- minecraft_mod_ai/packaged_skills.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add minecraft_mod_ai/packaged_skills.json
+            git commit -m "Synchronize packaged Skills with source [skip ci]"
+            git push origin HEAD:main
+          fi
+
       - name: Run complete repository audit
         run: python tools/full_project_audit.py
 
