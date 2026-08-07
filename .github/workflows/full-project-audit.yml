@@ -51,6 +51,9 @@ jobs:
             git push origin HEAD:main
           fi
 
+      - name: Probe proposal storage round trips
+        run: python tools/proposal_store_probe.py
+
       - name: Capture concise pytest diagnostics
         shell: bash
         run: |
@@ -72,6 +75,7 @@ jobs:
           git add \
             audit/FULL_PROJECT_AUDIT.json \
             audit/FULL_PROJECT_AUDIT.log \
+            audit/PROPOSAL_STORE_PROBE.json \
             audit/PYTEST_DIAGNOSTICS.log \
             audit/PYTEST_EXIT_CODE.txt
           if ! git diff --cached --quiet; then
