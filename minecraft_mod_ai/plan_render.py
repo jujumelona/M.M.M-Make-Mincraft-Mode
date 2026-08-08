@@ -112,6 +112,10 @@ def render_complete_plan(
         _strings(game_design.get("progression")),
         korean=korean,
     )
+    art_direction_lines = _bounded_list(
+        _art_direction_lines(game_design.get("art_direction"), korean=korean),
+        korean=korean,
+    )
     tests = _bounded_list(_strings(acceptance_tests), korean=korean)
     module_values = tuple(modules)
     integration_lines = _bounded_list(
@@ -159,6 +163,9 @@ def render_complete_plan(
         lines.extend(_numbered(core_loop, empty="요청에 맞춰 핵심 플레이 흐름을 먼저 확정합니다."))
         lines.extend(("", "성장과 진행"))
         lines.extend(_numbered(progression, empty="별도 성장 시스템은 요청하지 않은 상태입니다."))
+        if art_direction_lines:
+            lines.extend(("", "시각·연출 방향"))
+            lines.extend(f"- {value}" for value in art_direction_lines)
         if integration_lines:
             lines.extend(("", "마인크래프트 연동 범위"))
             lines.extend(f"- {value}" for value in integration_lines)
@@ -190,6 +197,9 @@ def render_complete_plan(
         lines.extend(_numbered(core_loop, empty="We will define the core loop from the request."))
         lines.extend(("", "Progression"))
         lines.extend(_numbered(progression, empty="No separate progression system was requested."))
+        if art_direction_lines:
+            lines.extend(("", "Visual direction"))
+            lines.extend(f"- {value}" for value in art_direction_lines)
         if integration_lines:
             lines.extend(("", "Minecraft integration scope"))
             lines.extend(f"- {value}" for value in integration_lines)
@@ -226,6 +236,26 @@ def _strings(value: Any) -> list[str]:
         for item in value
         if (text := str(item).strip())
     ]
+
+
+def _art_direction_lines(value: Any, *, korean: bool) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    lines: list[str] = []
+    visual_tone = str(value.get("visual_tone", "")).strip()
+    if visual_tone:
+        lines.append(
+            f"분위기: {visual_tone}" if korean else f"Tone: {visual_tone}"
+        )
+    texture_guidance = _strings(value.get("texture_guidance"))
+    if texture_guidance:
+        label = "텍스처" if korean else "Textures"
+        lines.append(f"{label}: {', '.join(texture_guidance)}")
+    model_animation_guidance = _strings(value.get("model_animation_guidance"))
+    if model_animation_guidance:
+        label = "3D·애니메이션" if korean else "3D and animation"
+        lines.append(f"{label}: {', '.join(model_animation_guidance)}")
+    return lines
 
 
 def _bounded_text(value: str, *, korean: bool) -> str:

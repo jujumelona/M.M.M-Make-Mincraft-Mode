@@ -67,6 +67,36 @@ def test_plan_does_not_suggest_unrequested_map_or_encounter_shapes() -> None:
     assert "arena" not in text.lower()
 
 
+def test_plan_surfaces_requested_art_direction_without_inventing_gameplay() -> None:
+    text = render_complete_plan(
+        requested_prompt="Create a moon relic visual mod.",
+        game_design={
+            "title": "Moon Relics",
+            "pitch": "Lunar artifacts with a clear readable silhouette.",
+            "core_loop": ["Craft and place relics"],
+            "progression": [],
+            "art_direction": {
+                "visual_tone": "cool moonlit blue",
+                "texture_guidance": ["16x16 clean contrast"],
+                "model_animation_guidance": ["subtle glow pulse"],
+            },
+            "mod_context": {
+                "vanilla_integration": [],
+                "compatibility_targets": [],
+            },
+            "modules": [],
+        },
+        modules=(),
+        acceptance_tests=("Visual direction is visible in the plan.",),
+    )
+
+    assert "Visual direction" in text
+    assert "cool moonlit blue" in text
+    assert "Textures: 16x16 clean contrast" in text
+    assert "3D and animation: subtle glow pulse" in text
+    assert "boss" not in text.lower()
+
+
 def test_large_plan_preview_is_bounded_without_dropping_stored_scope() -> None:
     text = render_complete_plan(
         requested_prompt="Create a very large content mod.",

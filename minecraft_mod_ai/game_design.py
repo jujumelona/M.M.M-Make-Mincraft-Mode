@@ -11,6 +11,55 @@ from .planner import _proposal_from_model_data
 from .spec import Proposal, SpecValidationError
 
 
+_PLAN_FIELDS = frozenset({"game_design", "build_slice"})
+_OPTIONAL_PLAN_FIELDS = frozenset({"research_brief"})
+_RESPONSE_WRAPPER_KEYS = (
+    "response",
+    "result",
+    "data",
+    "plan",
+    "output",
+    "payload",
+    "message",
+    "content",
+)
+_RESPONSE_LIST_WRAPPER_KEYS = ("choices", "results", "outputs")
+_GAME_DESIGN_FIELDS = (
+    "title",
+    "pitch",
+    "core_loop",
+    "progression",
+    "combat",
+    "mod_context",
+    "modules",
+    "assets",
+    "acceptance_tests",
+)
+_OPTIONAL_GAME_DESIGN_FIELDS = ("art_direction",)
+_BUILD_SLICE_FIELDS = (
+    "mod_id",
+    "mod_name",
+    "package_name",
+    "summary",
+    "contents",
+    "deferred_capabilities",
+)
+_RESEARCH_BRIEF_FIELDS = (
+    "summary",
+    "domains",
+    "unresolved_questions",
+)
+_RESEARCH_DOMAIN_FIELDS = (
+    "domain_id",
+    "objective",
+    "requirements",
+    "evidence_kinds",
+    "queries",
+    "providers",
+    "depends_on",
+)
+
+
 class GameDesignPlanner:
     """Emit a reader-facing design overview plus a bootstrap Fabric spec.
 
@@ -42,28 +91,22 @@ class GameDesignPlanner:
             response_format="json",
         )
         payload = _extract_json(text)
-        allowed_shapes = (
-            {"game_design", "build_slice"},
-            {"game_design", "build_slice", "research_brief"},
-        )
-        if set(payload) not in allowed_shapes:
-            raise SpecValidationError(
-                "Planner output must contain game_design, build_slice and the "
-                "optional research_brief."
-            )
         design = payload["game_design"]
         build_slice = payload["build_slice"]
         if not isinstance(design, dict) or not isinstance(build_slice, dict):
             raise SpecValidationError(
-                "Planner output fields must be JSON objects."
+                "Planner response has an invalid game_design or build_slice. "
+                "Please retry the plan."
             )
         _validate_design(design)
+        design = _canonical_game_design(design)
+        build_slice = _canonical_build_slice(build_slice)
         classification_issue = ""
         try:
             research_brief = normalize_research_brief(
                 prompt,
                 design,
-                payload.get("research_brief"),
+                _canonical_research_brief(payload.get("research_brief")),
             )
         except SpecValidationError as exc:
             research_brief = normalize_research_brief(prompt, design)
@@ -129,6 +172,7 @@ Output contract:
     "progression": ["milestones"],
     "combat": {{"player_verbs": ["..."], "enemy_roles": ["..."]}},
     "mod_context": {{"vanilla_integration": ["..."], "compatibility_targets": ["..."]}},
+    "art_direction": {{"visual_tone": "...", "texture_guidance": ["..."], "model_animation_guidance": ["..."]}},
     "modules": [{{"plugin_id":"from manifest or custom","status":"implemented|custom","reason":"..."}}],
     "assets": [{{"id":"snake_case","kind":"item|block|entity|gui|environment","brief":"..."}}],
     "acceptance_tests": ["observable test"]
@@ -175,11 +219,33 @@ Choose only the bootstrap item/block entries genuinely needed before complete-mo
 compilation. There is no numeric content cap and no requested feature may be hidden.
 If combat or mod integration details are not requested, keep those lists empty; their presence in this
 JSON shape is not permission to invent them.
+art_direction is optional: include it only for requested visual direction, and omit it otherwise.
 """.strip()
 
 
 def _extract_json(text: str) -> dict[str, Any]:
+    candidates = tuple(_json_objects(text))
+    incomplete_envelope: dict[str, Any] | None = None
+    for candidate in candidates:
+        envelope = _planner_envelope(candidate)
+        if envelope is not None:
+            if _has_complete_canonical_fields(envelope):
+                return envelope
+            if incomplete_envelope is None:
+                incomplete_envelope = envelope
+    if incomplete_envelope is not None:
+        return incomplete_envelope
+    if candidates:
+        raise SpecValidationError(
+            "Planner response is incomplete. Include game_design and build_slice "
+            "JSON objects, then retry the plan."
+        )
+    raise SpecValidationError("Planner did not return a JSON object.")
+
+
+def _json_objects(text: str) -> list[dict[str, Any]]:
     decoder = json.JSONDecoder()
+    values: list[dict[str, Any]] = []
     for index, char in enumerate(text):
         if char != "{":
             continue
@@ -188,25 +254,106 @@ def _extract_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         if isinstance(value, dict):
-            return value
-    raise SpecValidationError("Planner did not return a JSON object.")
+            values.append(value)
+    return values
+
+
+def _planner_envelope(value: dict[str, Any]) -> dict[str, Any] | None:
+    """Find the canonical plan inside harmless model/API response wrappers."""
+
+    pending: list[dict[str, Any]] = [value]
+    visited: set[int] = set()
+    while pending:
+        candidate = pending.pop(0)
+        candidate_id = id(candidate)
+        if candidate_id in visited:
+            continue
+        visited.add(candidate_id)
+        if _PLAN_FIELDS <= set(candidate):
+            return {
+                key: candidate[key]
+                for key in _PLAN_FIELDS | _OPTIONAL_PLAN_FIELDS
+                if key in candidate
+            }
+        for key in _RESPONSE_WRAPPER_KEYS:
+            nested = candidate.get(key)
+            if isinstance(nested, dict):
+                pending.append(nested)
+            elif isinstance(nested, str):
+                pending.extend(_json_objects(nested))
+        for key in _RESPONSE_LIST_WRAPPER_KEYS:
+            nested = candidate.get(key)
+            if isinstance(nested, list):
+                pending.extend(item for item in nested if isinstance(item, dict))
+    return None
+
+
+def _has_complete_canonical_fields(envelope: dict[str, Any]) -> bool:
+    design = envelope["game_design"]
+    build_slice = envelope["build_slice"]
+    return (
+        isinstance(design, dict)
+        and isinstance(build_slice, dict)
+        and set(_GAME_DESIGN_FIELDS) <= set(design)
+        and set(_BUILD_SLICE_FIELDS) <= set(build_slice)
+    )
+
+
+def _canonical_build_slice(build_slice: dict[str, Any]) -> dict[str, Any]:
+    missing = [field for field in _BUILD_SLICE_FIELDS if field not in build_slice]
+    if missing:
+        raise SpecValidationError(
+            "Planner response is incomplete: build_slice is missing "
+            + ", ".join(missing)
+            + ". Please retry the plan."
+        )
+    # Bootstrap proposals are an executable contract, so ignore prose metadata
+    # rather than passing unexpected keys into the strict deterministic parser.
+    return {field: build_slice[field] for field in _BUILD_SLICE_FIELDS}
+
+
+def _canonical_game_design(design: dict[str, Any]) -> dict[str, Any]:
+    """Keep the reader-facing contract free of model-side trace metadata."""
+
+    canonical = {field: design[field] for field in _GAME_DESIGN_FIELDS}
+    for field in _OPTIONAL_GAME_DESIGN_FIELDS:
+        if field in design:
+            canonical[field] = design[field]
+    return canonical
+
+
+def _canonical_research_brief(value: Any) -> Any:
+    """Drop explanatory metadata while leaving required research validation intact."""
+
+    if not isinstance(value, dict):
+        return value
+    brief = {
+        field: value[field]
+        for field in _RESEARCH_BRIEF_FIELDS
+        if field in value
+    }
+    domains = brief.get("domains")
+    if isinstance(domains, list):
+        brief["domains"] = [
+            {
+                field: domain[field]
+                for field in _RESEARCH_DOMAIN_FIELDS
+                if field in domain
+            }
+            if isinstance(domain, dict)
+            else domain
+            for domain in domains
+        ]
+    return brief
 
 
 def _validate_design(design: dict[str, Any]) -> None:
-    required = {
-        "title",
-        "pitch",
-        "core_loop",
-        "progression",
-        "combat",
-        "mod_context",
-        "modules",
-        "assets",
-        "acceptance_tests",
-    }
-    if set(design) != required:
+    missing = sorted(set(_GAME_DESIGN_FIELDS) - set(design))
+    if missing:
         raise SpecValidationError(
-            f"game_design keys must be exactly {sorted(required)}."
+            "Planner response is incomplete: game_design is missing "
+            + ", ".join(missing)
+            + ". Please retry the plan."
         )
     for field in (
         "core_loop",
@@ -225,3 +372,5 @@ def _validate_design(design: dict[str, Any]) -> None:
         raise SpecValidationError(
             "game_design combat and mod_context must be objects."
         )
+    if "art_direction" in design and not isinstance(design["art_direction"], dict):
+        raise SpecValidationError("game_design.art_direction must be an object.")

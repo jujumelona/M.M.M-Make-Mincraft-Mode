@@ -64,6 +64,11 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 "temperature": 0.1,
                 "max_tokens": cfg.max_new_tokens,
             }
+            if request.response_format == "json":
+                # Standard OpenAI-compatible structured-output hint.  Keep it
+                # scoped to text generation so image and speech endpoints retain
+                # their own response contracts.
+                payload["response_format"] = {"type": "json_object"}
             with httpx.Client(timeout=120.0, follow_redirects=False) as client:
                 response = client.post(
                     f"{cfg.base_url.rstrip('/')}/chat/completions",

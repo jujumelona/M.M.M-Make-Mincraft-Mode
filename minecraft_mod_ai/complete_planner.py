@@ -160,7 +160,16 @@ class CompleteGameDesignPlanner:
             media_paths=media_paths,
             response_format="json",
         )
-        payload = _extract_json(text)
+        payload = _extract_json(
+            text,
+            expected_contracts=(
+                frozenset({"modules", "assets", "audio", "acceptance_tests"}),
+                frozenset(
+                    {"module_batches", "assets", "audio", "acceptance_tests"}
+                ),
+                frozenset({"production_batches", "complete", "next_cursor"}),
+            ),
+        )
         common = {"assets", "audio", "acceptance_tests"}
         if set(payload) == common | {"modules"}:
             modules = tuple(_module(item) for item in _list(payload, "modules"))
@@ -353,7 +362,10 @@ class CompleteGameDesignPlanner:
                 media_paths=(),
                 response_format="json",
             )
-            page = _extract_json(text)
+            page = _extract_json(
+                text,
+                expected_contracts=(frozenset(_PRODUCTION_OUTLINE_CONTRACT),),
+            )
         return _topological_production_batches(tuple(result))
 
     def _expand_production_batches(
@@ -467,7 +479,10 @@ class CompleteGameDesignPlanner:
                 response_format="json",
             )
             first_page = False
-            page = _extract_json(text)
+            page = _extract_json(
+                text,
+                expected_contracts=(frozenset(_PRODUCTION_PAGE_CONTRACT),),
+            )
             if set(page) != set(_PRODUCTION_PAGE_CONTRACT):
                 raise SpecValidationError(
                     "Production batch page fields are invalid."
@@ -673,7 +688,12 @@ class CompleteGameDesignPlanner:
                 ),
                 response_format="json",
             )
-            page = _extract_json(text)
+            page = _extract_json(
+                text,
+                expected_contracts=(
+                    frozenset({"modules", "complete", "next_cursor"}),
+                ),
+            )
             if set(page) != {"modules", "complete", "next_cursor"}:
                 raise SpecValidationError("Module batch page fields are invalid.")
             raw_modules = page["modules"]
@@ -1206,8 +1226,43 @@ def _retrieve_implementation_evidence(
     return retrieve_domain_evidence(brief)
 
 
-def _extract_json(text: str) -> dict[str, Any]:
+def _extract_json(
+    text: str,
+    *,
+    expected_contracts: Sequence[frozenset[str]],
+) -> dict[str, Any]:
+    """Return the final JSON object matching the contract requested at this stage.
+
+    Qwen reasoning output may contain valid JSON scratch objects inside a thinking
+    block before the actual answer.  Selecting the first object would bind the
+    stage to that scratchpad rather than to its explicitly requested contract.
+    """
+
+    candidates = _json_objects(text)
+    matches: list[tuple[dict[str, Any], frozenset[str]]] = []
+    for candidate in candidates:
+        fields = frozenset(candidate)
+        for expected in expected_contracts:
+            if expected <= fields:
+                matches.append((candidate, expected))
+                break
+    if matches:
+        candidate, expected = matches[-1]
+        return {field: candidate[field] for field in expected}
+    if candidates:
+        expected = " or ".join(
+            ", ".join(sorted(contract)) for contract in expected_contracts
+        )
+        raise SpecValidationError(
+            "Complete planner response did not match the requested JSON "
+            f"contract ({expected}). Please retry the plan."
+        )
+    raise SpecValidationError("Complete planner did not return a JSON object.")
+
+
+def _json_objects(text: str) -> list[dict[str, Any]]:
     decoder = json.JSONDecoder()
+    values: list[dict[str, Any]] = []
     for index, char in enumerate(text):
         if char != "{":
             continue
@@ -1216,8 +1271,8 @@ def _extract_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         if isinstance(value, dict):
-            return value
-    raise SpecValidationError("Complete planner did not return a JSON object.")
+            values.append(value)
+    return values
 
 
 def _list(payload: dict[str, Any], field: str) -> list[Any]:

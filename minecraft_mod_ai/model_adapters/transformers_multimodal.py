@@ -60,12 +60,25 @@ class TransformersMultimodalAdapter(ModelAdapter):
             model = AutoModelForMultimodalLM.from_pretrained(cfg.model_id, **kwargs)
             try:
                 messages = _normalize_messages(list(request.messages), request.media_paths)
+                template_kwargs: dict[str, Any] = {
+                    "add_generation_prompt": True,
+                    "tokenize": True,
+                    "return_dict": True,
+                    "return_tensors": "pt",
+                }
+                # Qwen3.5 emits a separate <think> response by default.  That is
+                # useful for prose, but a structured planner response must begin
+                # with its contract JSON so a reasoning draft cannot be mistaken
+                # for the actual plan.  The flag is a documented Qwen3.5 chat
+                # template option, so do not pass it to unrelated models.
+                if (
+                    request.response_format == "json"
+                    and cfg.model_id.lower().startswith("qwen/qwen3.5")
+                ):
+                    template_kwargs["enable_thinking"] = False
                 inputs = processor.apply_chat_template(
                     messages,
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    return_dict=True,
-                    return_tensors="pt",
+                    **template_kwargs,
                 )
                 if inputs["input_ids"].shape[-1] > cfg.max_context:
                     raise ModelConfigurationError(

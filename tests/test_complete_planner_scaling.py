@@ -8,6 +8,7 @@ import pytest
 from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _ProductionBatch,
+    _extract_json,
     _remove_bootstrap_duplicates,
 )
 from minecraft_mod_ai.complete_spec import ProductionModule
@@ -130,6 +131,70 @@ class _ResponseRouter:
             str(path) for path in kwargs["media_paths"]
         ))
         return json.dumps(next(self.responses))
+
+
+def test_complete_json_extractor_skips_qwen_scratch_before_final_contract() -> None:
+    final = {
+        "modules": [_module("final_module")],
+        "assets": [],
+        "audio": [],
+        "acceptance_tests": ["final module is registered"],
+    }
+    response = "\n".join(
+        (
+            "<think>"
+            + json.dumps({"analysis": {"stage": "draft"}})
+            + "</think>",
+            json.dumps(
+                {
+                    **final,
+                    "generation_metadata": {"model": "local-planner"},
+                }
+            ),
+        )
+    )
+
+    assert _extract_json(
+        response,
+        expected_contracts=(frozenset(final),),
+    ) == final
+
+
+class _ThinkingModulePageRouter:
+    def generate_text(self, role, messages, **kwargs):
+        assert role == "planner"
+        assert kwargs["response_format"] == "json"
+        assert json.loads(messages[-1]["content"])["cursor"] == ""
+        return "\n".join(
+            (
+                json.dumps({"analysis": "draft the module page first"}),
+                json.dumps(
+                    {
+                        "modules": [_module("final_module")],
+                        "complete": True,
+                        "next_cursor": "",
+                        "notes": "Generated after internal reasoning.",
+                    }
+                ),
+            )
+        )
+
+
+def test_module_pagination_skips_qwen_scratch_before_final_page() -> None:
+    modules = CompleteGameDesignPlanner(_ThinkingModulePageRouter())._expand_batches(
+        prompt="Create the requested module.",
+        game_design={"title": "Scratch-safe module"},
+        batches=[
+            {
+                "batch_id": "core",
+                "scope": "Create the final module.",
+                "depends_on_batches": [],
+            }
+        ],
+        media_paths=(),
+    )
+
+    assert [module.module_id for module in modules] == ["final_module"]
 
 
 def test_module_pagination_rejects_duplicate_ids_within_page() -> None:
