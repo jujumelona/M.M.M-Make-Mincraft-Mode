@@ -8,7 +8,7 @@ profiles:
         adapter: transformers_multimodal
         quantization: bnb_4bit
         max_context: 8192
-        max_new_tokens: 1800
+        max_new_tokens: 4096
         min_free_vram_mb: 6500
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct

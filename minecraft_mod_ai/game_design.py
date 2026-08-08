@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Sequence
@@ -7,7 +8,7 @@ from typing import Any, Sequence
 from .capability_plugins import plugin_manifest
 from .central_research import normalize_research_brief
 from .model_router import ModelRouter
-from .planner import _proposal_from_model_data
+from .planner import HeuristicPlanner, _proposal_from_model_data
 from .spec import Proposal, SpecValidationError
 
 
@@ -90,7 +91,32 @@ class GameDesignPlanner:
             media_paths=media_paths,
             response_format="json",
         )
-        payload = _extract_json(text)
+        try:
+            payload = _extract_valid_plan_payload(prompt, text)
+        except SpecValidationError as initial_error:
+            payload = _recover_complete_design_with_safe_bootstrap(prompt, text)
+            if payload is None:
+                repaired_text = self.router.generate_text(
+                    "planner",
+                    _repair_messages(prompt, text),
+                    media_paths=(),
+                    response_format="json",
+                )
+                try:
+                    payload = _extract_valid_plan_payload(prompt, repaired_text)
+                except SpecValidationError as repair_error:
+                    payload = _recover_complete_design_with_safe_bootstrap(
+                        prompt,
+                        repaired_text,
+                    )
+                    if payload is None:
+                        raise SpecValidationError(
+                            "Planner could not return a complete game design after one "
+                            "automatic JSON-format repair. The essential game_design "
+                            "and build_slice contract is still incomplete. "
+                            f"Initial response: {initial_error} "
+                            f"Repair response: {repair_error}"
+                        ) from repair_error
         design = payload["game_design"]
         build_slice = payload["build_slice"]
         if not isinstance(design, dict) or not isinstance(build_slice, dict):
@@ -127,7 +153,7 @@ class GameDesignPlanner:
 
 def _system_prompt() -> str:
     manifest = json.dumps(
-        plugin_manifest(), ensure_ascii=False, sort_keys=True
+        _planner_plugin_manifest(), ensure_ascii=False, sort_keys=True
     )
     return f"""
 You are GameDesignPlanner for a Minecraft Java 1.20.1 Fabric production system.
@@ -160,8 +186,11 @@ not as permission to copy its proprietary code, characters, logos, textures, mod
 audio, writing, maps, or other protected material. Plan original assets unless the
 user supplies authorized material or a third-party artifact passes the origin license.
 
-Current executable plugin manifest:
+Current planner plugin catalog (the executable registry retains full details):
 {manifest}
+
+Return required game_design and build_slice first. research_brief is optional and, when
+included, must be the final top-level field.
 
 Output contract:
 {{
@@ -177,6 +206,16 @@ Output contract:
     "assets": [{{"id":"snake_case","kind":"item|block|entity|gui|environment","brief":"..."}}],
     "acceptance_tests": ["observable test"]
   }},
+  "build_slice": {{
+    "mod_id": "lowercase_snake_case",
+    "mod_name": "English name",
+    "package_name": "lowercase.dotted.package",
+    "summary": "short summary",
+    "contents": [
+      {{"content_id":"lowercase_snake_case","kind":"item or block","display_name_en":"English","display_name_ko":"Korean","color":"#RRGGBB","recipe":true}}
+    ],
+    "deferred_capabilities": []
+  }},
   "research_brief": {{
     "summary": "plain-language description of what must be understood",
     "domains": [
@@ -191,16 +230,6 @@ Output contract:
       }}
     ],
     "unresolved_questions": ["facts that evidence must resolve"]
-  }},
-  "build_slice": {{
-    "mod_id": "lowercase_snake_case",
-    "mod_name": "English name",
-    "package_name": "lowercase.dotted.package",
-    "summary": "short summary",
-    "contents": [
-      {{"content_id":"lowercase_snake_case","kind":"item or block","display_name_en":"English","display_name_ko":"Korean","color":"#RRGGBB","recipe":true}}
-    ],
-    "deferred_capabilities": []
   }}
 }}
 Allowed evidence_kinds are minecraft_api, dependency, source_code,
@@ -223,6 +252,23 @@ art_direction is optional: include it only for requested visual direction, and o
 """.strip()
 
 
+def _planner_plugin_manifest() -> dict[str, Any]:
+    """Keep only planner-selection fields from the full executable manifest."""
+
+    manifest = plugin_manifest()
+    return {
+        "product_scope": manifest["product_scope"],
+        "standalone_map_generation": manifest["standalone_map_generation"],
+        "plugins": [
+            {
+                "plugin_id": plugin["plugin_id"],
+                "status": plugin["status"],
+            }
+            for plugin in manifest["plugins"]
+        ],
+    }
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     candidates = tuple(_json_objects(text))
     incomplete_envelope: dict[str, Any] | None = None
@@ -241,6 +287,172 @@ def _extract_json(text: str) -> dict[str, Any]:
             "JSON objects, then retry the plan."
         )
     raise SpecValidationError("Planner did not return a JSON object.")
+
+
+def _extract_valid_plan_payload(prompt: str, text: str) -> dict[str, Any]:
+    """Extract a structurally complete plan before downstream canonicalization."""
+
+    payload = _extract_json(text)
+    design = payload.get("game_design")
+    build_slice = payload.get("build_slice")
+    if not isinstance(design, dict) or not isinstance(build_slice, dict):
+        raise SpecValidationError(
+            "Planner response has an invalid game_design or build_slice."
+        )
+    _validate_design(design)
+    canonical_build_slice = _canonical_build_slice(build_slice)
+    try:
+        proposal = _proposal_from_model_data(prompt, canonical_build_slice)
+        proposal.validate()
+    except SpecValidationError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SpecValidationError(
+            f"Planner build_slice contains invalid values: {exc}"
+        ) from exc
+    return payload
+
+
+def _repair_messages(prompt: str, malformed_text: str) -> list[dict[str, str]]:
+    """Ask the planner once to repair only its response contract."""
+
+    return [
+        {"role": "system", "content": _repair_system_prompt()},
+        {"role": "user", "content": prompt},
+        {
+            "role": "assistant",
+            "content": _bounded_response_excerpt(malformed_text),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Your previous answer was incomplete or malformed. Return one complete "
+                "JSON object matching the exact game_design and build_slice contract. "
+                "Preserve the requested design and every distinct requested system. "
+                "Do not include analysis or markdown."
+            ),
+        },
+    ]
+
+
+def _repair_system_prompt() -> str:
+    """Compact repair contract that fits small local-model context windows."""
+
+    return """
+Repair an incomplete Minecraft mod-planner response. Return exactly one JSON object
+and no analysis or markdown. Preserve the original request and completed design;
+do not add unrequested systems. Omit research_brief during repair.
+
+Required shape:
+{
+  "game_design": {
+    "title": "string", "pitch": "string", "core_loop": [], "progression": [],
+    "combat": {}, "mod_context": {}, "modules": [], "assets": [],
+    "acceptance_tests": []
+  },
+  "build_slice": {
+    "mod_id": "lowercase_snake_case", "mod_name": "string",
+    "package_name": "lowercase.dotted.package", "summary": "string",
+    "contents": [], "deferred_capabilities": []
+  }
+}
+build_slice is only a small deterministic Fabric bootstrap. Its contents may contain
+only explicitly requested item or block entries with content_id, kind,
+display_name_en, display_name_ko, color, and a JSON-boolean recipe field.
+""".strip()
+
+
+def _bounded_response_excerpt(text: str, *, limit: int = 8_000) -> str:
+    """Keep repair context bounded while retaining both response boundaries."""
+
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return (
+        text[:half]
+        + "\n[...middle of malformed response omitted...]\n"
+        + text[-half:]
+    )
+
+
+def _recover_complete_design_with_safe_bootstrap(
+    prompt: str,
+    text: str,
+) -> dict[str, Any] | None:
+    """Recover a truncated envelope without inventing missing game design.
+
+    A deterministic bootstrap is safe only when the model completed the full,
+    validated reader-facing design but lost or malformed the outer envelope/build
+    slice. If no complete design survived, fail closed so model-authored design is
+    never replaced by a generic template.
+    """
+
+    design = _last_complete_standalone_design(text)
+    if design is None:
+        return None
+    return {
+        "game_design": design,
+        "build_slice": _deterministic_bootstrap(prompt, design),
+    }
+
+
+def _last_complete_standalone_design(text: str) -> dict[str, Any] | None:
+    designs: list[dict[str, Any]] = []
+    for candidate in _json_objects(text):
+        nested = candidate.get("game_design")
+        possible = nested if isinstance(nested, dict) else candidate
+        if not set(_GAME_DESIGN_FIELDS) <= set(possible):
+            continue
+        try:
+            _validate_design(possible)
+        except SpecValidationError:
+            continue
+        designs.append(possible)
+    return designs[-1] if designs else None
+
+
+def _deterministic_bootstrap(
+    prompt: str,
+    design: dict[str, Any],
+) -> dict[str, Any]:
+    """Translate the request-derived heuristic proposal into the bootstrap schema."""
+
+    proposal = HeuristicPlanner().plan(prompt)
+    spec = proposal.spec
+    title = str(design.get("title", "")).strip() or spec.mod_name
+    pitch = str(design.get("pitch", "")).strip() or spec.summary
+    normalized_title = "".join(
+        character if character.isascii() and character.isalnum() else "_"
+        for character in title.lower()
+    )
+    title_stem = "_".join(
+        part for part in normalized_title.split("_") if part
+    )
+    if not title_stem:
+        title_stem = f"mmm_{hashlib.sha256(title.encode('utf-8')).hexdigest()[:10]}"
+    if not title_stem[0].isalpha():
+        title_stem = f"mmm_{title_stem}"
+    mod_id = f"{title_stem[:55].rstrip('_')}_mod"
+    return {
+        "mod_id": mod_id,
+        "mod_name": title,
+        "package_name": f"ai.minecraft.generated.{mod_id}",
+        "summary": pitch,
+        "contents": [
+            {
+                "content_id": content.content_id,
+                "kind": content.kind.value,
+                "display_name_en": content.display_name_en,
+                "display_name_ko": content.display_name_ko,
+                "color": content.color,
+                "recipe": content.recipe,
+            }
+            for content in spec.contents
+        ],
+        "deferred_capabilities": [
+            deferred.capability for deferred in proposal.deferred_requests
+        ],
+    }
 
 
 def _json_objects(text: str) -> list[dict[str, Any]]:

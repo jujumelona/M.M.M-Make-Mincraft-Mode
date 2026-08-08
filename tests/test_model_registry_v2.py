@@ -11,6 +11,7 @@ def test_t4_registry_has_role_specific_real_model_ids() -> None:
     profile = registry.load_profile("t4_local")
     assert profile.roles["planner"].model_id == "Qwen/Qwen3.5-4B"
     assert profile.roles["planner"].adapter == "transformers_multimodal"
+    assert profile.roles["planner"].max_new_tokens == 4096
     assert profile.roles["coder"].model_id == "Qwen/Qwen2.5-Coder-7B-Instruct"
     assert profile.roles["coder_safe"].model_id == "Qwen/Qwen2.5-Coder-3B-Instruct"
     assert profile.roles["coder"].adapter == "transformers_text"
@@ -58,3 +59,14 @@ def test_local_coder_must_be_code_specialized(tmp_path: Path) -> None:
     )
     with pytest.raises(ModelConfigurationError, match="code-specialized"):
         ModelRegistry(path).load_profile("t4_local")
+
+
+def test_repository_and_packaged_planner_budgets_stay_in_sync() -> None:
+    repository = ModelRegistry("config/model_registry.yaml").role(
+        "t4_local", "planner"
+    )
+    packaged = ModelRegistry(
+        "minecraft_mod_ai/config/model_registry.yaml"
+    ).role("t4_local", "planner")
+
+    assert repository.max_new_tokens == packaged.max_new_tokens == 4096
