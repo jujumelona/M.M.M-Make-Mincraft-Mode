@@ -9,7 +9,6 @@ from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _ProductionBatch,
     _remove_bootstrap_duplicates,
-    _merge_world_fragments,
 )
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, SpecValidationError
@@ -257,7 +256,6 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
         [
             {
                 "modules": [_module("core_module")],
-                "world_ir_fragment": None,
                 "assets": [],
                 "audio": [],
                 "acceptance_tests": [],
@@ -267,13 +265,10 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
             },
             {
                 "modules": [],
-                "world_ir_fragment": {
-                    "regions": [{"id": "capital", "purpose": "start"}],
-                },
                 "assets": [],
                 "audio": [],
                 "acceptance_tests": ["capital loads"],
-                "completed_deliverables": ["capital_world"],
+                "completed_deliverables": ["capital_feature"],
                 "complete": True,
                 "next_cursor": "",
             },
@@ -284,10 +279,6 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
                         "depends_on": ["core_module"],
                     }
                 ],
-                "world_ir_fragment": {
-                    "regions": [{"id": "outpost", "purpose": "destination"}],
-                    "routes": [{"from": "capital", "to": "outpost"}],
-                },
                 "assets": [],
                 "audio": [],
                 "acceptance_tests": ["travel reaches outpost"],
@@ -302,9 +293,9 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
         batches=(
             _ProductionBatch(
                 "core",
-                "Implement core and capital.",
+                "Implement core and the requested feature.",
                 (),
-                ("core", "capital_world"),
+                ("core", "capital_feature"),
                 ("core_module",),
             ),
             _ProductionBatch(
@@ -315,7 +306,7 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
                 ("travel_module",),
             ),
         ),
-        prompt="Create the requested world and travel system.",
+        prompt="Create the requested feature and travel system.",
         game_design={"title": "Scalable"},
         media_paths=("reference.png",),
     )
@@ -326,19 +317,12 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
     ]
     assert router.requests[0]["remaining_deliverables"] == [
         "core",
-        "capital_world",
+        "capital_feature",
     ]
-    assert router.requests[1]["remaining_deliverables"] == ["capital_world"]
+    assert router.requests[1]["remaining_deliverables"] == ["capital_feature"]
     assert router.requests[2]["dependency_exports"] == {
         "core": ["core_module"]
     }
-    merged = _merge_world_fragments(parts.world_fragments)
-    assert merged is not None
-    assert [item["id"] for item in merged["regions"]] == [
-        "capital",
-        "outpost",
-    ]
-    assert merged["routes"] == [{"from": "capital", "to": "outpost"}]
 
 
 def test_production_outline_paginates_without_repeating_full_evidence() -> None:

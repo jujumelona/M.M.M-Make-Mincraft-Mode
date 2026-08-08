@@ -22,6 +22,12 @@ from .local_ai_sidecar_generator import (
 from .model_router import ModelRouter
 from .project_edit import ProjectEditError, inspect_fabric_project
 from .project_index import ProjectIndex
+from .production_contract import (
+    evaluate_quality_contract,
+    persist_quality_report,
+    quality_unresolved,
+)
+from .quality_evidence import compile_quality_evidence
 from .proposal_store import write_sharded_complete_proposal
 from .publisher import build_distribution_metadata, package_distribution_bundle, publish_curseforge, publish_modrinth
 from .repair_engine import RepairEngine
@@ -29,12 +35,10 @@ from .resource_tuning import tune_gradle_resources
 from .runner import GradleRunner
 from .runtime_manager import MinecraftRuntimeManager
 from .scalable_validator import ScalableProjectValidator
-from .scalable_world_compiler import compile_scalable_world_ir
 from .scale_policy import ScalePolicy
 from .spec import SpecValidationError
 from .system_pack_generator import generate_system_pack
 from .validator import validate_jar
-from .world_runtime_generator import generate_world_runtime_bridge
 from .complete_orchestrator_services import blockbench_review, generate_assets, package_source_only, run_playtest, runtime_profile, visual_review
 from .work_graph import (
     DurableWorkLedger,
@@ -124,7 +128,6 @@ class CompletePipelineResult:
     build_report: dict[str, Any] | None
     jar_validation: dict[str, Any] | None
     module_receipts: tuple[dict[str, Any], ...]
-    world_receipt: dict[str, Any] | None
     asset_receipt: dict[str, Any] | None
     audio_receipt: dict[str, Any] | None
     blockbench_receipts: tuple[dict[str, Any], ...]
@@ -137,6 +140,7 @@ class CompletePipelineResult:
     work_graph_hash: str
     work_ledger_path: str
     run_resumed: bool
+    quality_report: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -191,7 +195,6 @@ class CompleteProductionOrchestrator:
         router: ModelRouter | None = None
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
-        world_receipt: dict[str, Any] | None = None
         asset_receipt: dict[str, Any] | None = None
         audio_receipt: dict[str, Any] | None = None
         jdt_receipt: dict[str, Any] | None = None
@@ -241,7 +244,6 @@ class CompleteProductionOrchestrator:
         module_receipts.extend(generation["module_receipts"])
         blockbench_receipts.extend(generation["blockbench_receipts"])
         unresolved.extend(generation["unresolved"])
-        world_receipt = generation["world_receipt"]
         asset_receipt = generation["asset_receipt"]
         audio_receipt = generation["audio_receipt"]
         router = generation["router"]
@@ -352,7 +354,33 @@ class CompleteProductionOrchestrator:
                 validate_cached=lambda value: Path(value).is_file(),
             )
             unresolved.extend(_external_gates(approved, options))
-            return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='SOURCE_READY', project_root=str(project_root), release_zip=release, jar_path=None, complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=None, jar_validation=None, module_receipts=tuple(module_receipts), world_receipt=world_receipt, asset_receipt=asset_receipt, audio_receipt=audio_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=None, playtest_receipt=None, visual_receipt=None, distribution_receipt=None, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=False, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed)
+            quality_report = self._evaluate_quality(
+                approved=approved,
+                run_root=run_root,
+                project_root=project_root,
+                source_validation=source_report,
+                build_report=None,
+                jar_validation=None,
+                module_receipts=module_receipts,
+                asset_receipt=asset_receipt,
+                audio_receipt=audio_receipt,
+                blockbench_receipts=blockbench_receipts,
+                runtime_receipt=None,
+                playtest_receipt=None,
+                visual_receipt=None,
+            )
+            if quality_report is not None:
+                unresolved.extend(
+                    f"quality:{dimension_id}"
+                    for dimension_id in quality_unresolved(quality_report)
+                )
+                self._record_quality_nodes(
+                    ledger,
+                    quality_report,
+                    allow_success=False,
+                )
+            self._persist_work_evidence(project_root, ledger, work_plan)
+            return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='SOURCE_READY', project_root=str(project_root), release_zip=release, jar_path=None, complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=None, jar_validation=None, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, audio_receipt=audio_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=None, playtest_receipt=None, visual_receipt=None, distribution_receipt=None, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=False, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
         cache = run_root / '.cache/gradle'
 
         def build_with_repair() -> dict[str, Any]:
@@ -457,10 +485,10 @@ class CompleteProductionOrchestrator:
                         for module in ordered
                         if module.kind in {"entity", "boss", "npc"}
                     ),
-                    structure_count=(
-                        len(approved.world_ir.get("structures", []))
-                        if approved.world_ir
-                        else 0
+                    structure_count=sum(
+                        1
+                        for module in ordered
+                        if module.kind == "structure"
                     ),
                 )
                 runtime_config = self._runtime_profile(run_root, memory)
@@ -536,7 +564,6 @@ class CompleteProductionOrchestrator:
                 approved,
                 generated_receipts=(
                     module_receipts,
-                    world_receipt,
                     asset_receipt,
                     audio_receipt,
                 ),
@@ -550,6 +577,35 @@ class CompleteProductionOrchestrator:
                 visual_receipt=visual_receipt,
             )
         )
+        quality_report = self._evaluate_quality(
+            approved=approved,
+            run_root=run_root,
+            project_root=project_root,
+            source_validation=source_report,
+            build_report=build,
+            jar_validation=jar_validation,
+            module_receipts=module_receipts,
+            asset_receipt=asset_receipt,
+            audio_receipt=audio_receipt,
+            blockbench_receipts=blockbench_receipts,
+            runtime_receipt=runtime_receipt,
+            playtest_receipt=playtest_receipt,
+            visual_receipt=visual_receipt,
+        )
+        quality_passed = quality_report is None or (
+            quality_report.get("overall_status") == "PASS"
+        )
+        if quality_report is not None:
+            unresolved.extend(
+                f"quality:{dimension_id}"
+                for dimension_id in quality_unresolved(quality_report)
+            )
+            self._record_quality_nodes(
+                ledger,
+                quality_report,
+                allow_success=True,
+            )
+        self._persist_work_evidence(project_root, ledger, work_plan)
         from .mcp_tools import MMMToolService
         tool_service = MMMToolService(workspace_root=run_root, profile=self.profile)
         release_result = run_named_checkpoint(
@@ -575,7 +631,20 @@ class CompleteProductionOrchestrator:
             ).is_file(),
         )
         release_zip = str(release_result['release_zip'])
-        if runtime_verified:
+        metadata = build_distribution_metadata(jar_path=jar_path, mod_id=spec.mod_id, version=spec.version, name=spec.mod_name, changelog=options.changelog, platform_lock=spec.platform)
+        bundle = package_distribution_bundle(metadata, output_zip=run_root / 'releases/distribution-bundle.zip', source_zip=release_zip)
+        distribution_receipt = {'metadata': metadata, 'bundle': bundle}
+        release_ready = not unresolved and quality_passed
+        if options.publish_provider and not release_ready:
+            raise CompleteProductionError(
+                "Publishing is blocked because required verification gates "
+                "remain unresolved."
+            )
+        if options.publish_provider == 'modrinth':
+            distribution_receipt['publish'] = publish_modrinth(metadata, project_id=str(options.publish_project_id))
+        elif options.publish_provider == 'curseforge':
+            distribution_receipt['publish'] = publish_curseforge(metadata, project_id=str(options.publish_project_id))
+        if release_ready:
             self._succeed_work_node(
                 ledger,
                 "package-release",
@@ -585,20 +654,155 @@ class CompleteProductionOrchestrator:
                     "release_zip": release_zip,
                 },
             )
-        metadata = build_distribution_metadata(jar_path=jar_path, mod_id=spec.mod_id, version=spec.version, name=spec.mod_name, changelog=options.changelog)
-        bundle = package_distribution_bundle(metadata, output_zip=run_root / 'releases/distribution-bundle.zip', source_zip=release_zip)
-        distribution_receipt = {'metadata': metadata, 'bundle': bundle}
-        if options.publish_provider and unresolved:
-            raise CompleteProductionError(
-                "Publishing is blocked because required verification gates "
-                "remain unresolved."
+        else:
+            ledger.fail(
+                "package-release",
+                "Release quality evidence is incomplete.",
+                input_required=True,
             )
-        if options.publish_provider == 'modrinth':
-            distribution_receipt['publish'] = publish_modrinth(metadata, project_id=str(options.publish_project_id))
-        elif options.publish_provider == 'curseforge':
-            distribution_receipt['publish'] = publish_curseforge(metadata, project_id=str(options.publish_project_id))
-        release_ready = not unresolved
-        return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='VERIFIED' if release_ready else 'BUILT_WITH_UNRESOLVED_GATES', project_root=str(project_root), release_zip=release_zip, jar_path=str(jar_path), complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=tuple(module_receipts), world_receipt=world_receipt, asset_receipt=asset_receipt, audio_receipt=audio_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, distribution_receipt=distribution_receipt, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=release_ready, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed)
+        self._persist_work_evidence(project_root, ledger, work_plan)
+        return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='VERIFIED' if release_ready else 'BUILT_WITH_UNRESOLVED_GATES', project_root=str(project_root), release_zip=release_zip, jar_path=str(jar_path), complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, audio_receipt=audio_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, distribution_receipt=distribution_receipt, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=release_ready, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
+
+    def _evaluate_quality(
+        self,
+        *,
+        approved: CompleteProposal,
+        run_root: Path,
+        project_root: Path,
+        source_validation: dict[str, Any] | None,
+        build_report: dict[str, Any] | None,
+        jar_validation: dict[str, Any] | None,
+        module_receipts: Iterable[dict[str, Any]],
+        asset_receipt: dict[str, Any] | None,
+        audio_receipt: dict[str, Any] | None,
+        blockbench_receipts: Iterable[dict[str, Any]],
+        runtime_receipt: dict[str, Any] | None,
+        playtest_receipt: dict[str, Any] | None,
+        visual_receipt: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        contract = approved.game_design.get("_production_contract")
+        if approved.schema_version != "mmm/complete-proposal-v2":
+            return None
+        if not isinstance(contract, dict):
+            raise CompleteProductionError(
+                "Complete proposal v2 is missing its production contract."
+            )
+        proposal_hash = approved.calculate_hash()
+        evidence = compile_quality_evidence(
+            contract,
+            proposal_hash,
+            game_design=approved.game_design,
+            source_validation=source_validation,
+            build_report=build_report,
+            jar_validation=jar_validation,
+            module_receipts=module_receipts,
+            asset_receipt=asset_receipt,
+            audio_receipt=audio_receipt,
+            blockbench_receipts=blockbench_receipts,
+            runtime_receipt=runtime_receipt,
+            playtest_receipt=playtest_receipt,
+            visual_receipt=visual_receipt,
+        )
+        report_path = run_root / ".minecraft_ai/quality-convergence.json"
+        previous = self._read_quality_report(report_path)
+        current_ids = {
+            dimension_id: str(receipt.get("receipt_id", ""))
+            for dimension_id, receipt in evidence.items()
+        }
+        if previous is not None:
+            prior_ids = {
+                str(item.get("dimension_id", "")): str(
+                    item.get("receipt_id", "")
+                )
+                for item in previous.get("dimensions", [])
+                if isinstance(item, dict) and item.get("status") == "PASS"
+            }
+            if (
+                previous.get("proposal_hash") == proposal_hash
+                and previous.get("contract_sha256")
+                == contract.get("contract_sha256")
+                and prior_ids == current_ids
+            ):
+                report = previous
+            else:
+                report = evaluate_quality_contract(
+                    contract,
+                    evidence,
+                    proposal_hash,
+                )
+        else:
+            report = evaluate_quality_contract(
+                contract,
+                evidence,
+                proposal_hash,
+            )
+        persist_quality_report(report_path, report)
+        project_report = project_root / ".minecraft_ai/quality-convergence.json"
+        if project_report.resolve() != report_path.resolve():
+            persist_quality_report(project_report, report)
+        return report
+
+    def _read_quality_report(self, path: Path) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        if not path.is_file() or path.is_symlink():
+            raise CompleteProductionError(
+                "Existing quality report must be a regular file."
+            )
+        if path.stat().st_size > self.policy.mcp_page_bytes * 8:
+            raise CompleteProductionError(
+                "Existing quality report exceeds the size policy."
+            )
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CompleteProductionError(
+                f"Existing quality report is invalid: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise CompleteProductionError(
+                "Existing quality report must contain an object."
+            )
+        try:
+            quality_unresolved(value)
+        except ValueError as exc:
+            raise CompleteProductionError(
+                f"Existing quality report failed validation: {exc}"
+            ) from exc
+        return value
+
+    def _record_quality_nodes(
+        self,
+        ledger: DurableWorkLedger,
+        report: dict[str, Any],
+        *,
+        allow_success: bool,
+    ) -> None:
+        for dimension in report.get("dimensions", []):
+            if not isinstance(dimension, dict):
+                continue
+            dimension_id = str(dimension.get("dimension_id", ""))
+            node_id = "validate-quality-" + dimension_id.replace("_", "-")
+            if allow_success and dimension.get("status") == "PASS":
+                self._succeed_work_node(
+                    ledger,
+                    node_id,
+                    {
+                        "schema_version": "mmm/quality-work-node-receipt-v1",
+                        "status": "PASS",
+                        "dimension_id": dimension_id,
+                        "receipt_id": dimension.get("receipt_id", ""),
+                        "receipt_sha256": dimension.get(
+                            "receipt_sha256", ""
+                        ),
+                    },
+                )
+            else:
+                ledger.fail(
+                    node_id,
+                    str(dimension.get("reason") or "Quality evidence is missing."),
+                    input_required=True,
+                )
 
     def _execute_generation_work(
         self,
@@ -618,15 +822,6 @@ class CompleteProductionOrchestrator:
         module_lookup = {module.module_id: module for module in ordered}
         asset_lookup = {item.asset_id: item for item in approved.assets}
         audio_lookup = {item.sound_id: item for item in approved.audio}
-        world_structure_ids = {
-            str(item.get("id"))
-            for item in (
-                approved.world_ir.get("structures", [])
-                if isinstance(approved.world_ir, dict)
-                else []
-            )
-            if isinstance(item, dict) and item.get("id")
-        }
         extended_kinds = {
             "item",
             "block",
@@ -648,7 +843,6 @@ class CompleteProductionOrchestrator:
         unresolved: list[str] = []
         asset_shards: list[dict[str, Any]] = []
         audio_shards: list[dict[str, Any]] = []
-        world_receipt: dict[str, Any] | None = None
 
         def get_router() -> ModelRouter:
             nonlocal router
@@ -794,22 +988,6 @@ class CompleteProductionOrchestrator:
                     )
             elif stage == "custom":
                 receipts.extend(generate_custom(module) for module in members)
-            elif stage == "world-binding":
-                for module in members:
-                    if (
-                        module.kind == "structure"
-                        and module.module_id in world_structure_ids
-                    ):
-                        receipts.append(
-                            {
-                                "schema_version": "mmm/world-binding-v1",
-                                "status": "BOUND",
-                                "module_id": module.module_id,
-                                "world_ir": "generate-world",
-                            }
-                        )
-                    else:
-                        receipts.append(generate_custom(module))
             elif stage == "audio-binding":
                 for module in members:
                     if module.module_id in audio_lookup:
@@ -917,54 +1095,6 @@ class CompleteProductionOrchestrator:
                                 f"{module.module_id}:"
                                 "not-run-in-source-only-mode"
                             )
-            elif kind == "world-ir":
-                world_output = run_root / "world-compiled"
-
-                def build_world() -> dict[str, Any]:
-                    compile_receipt = compile_scalable_world_ir(
-                        approved.world_ir,
-                        mod_id=spec.mod_id,
-                        output_root=world_output,
-                        package_world_zip=True,
-                        policy=self.policy,
-                    )
-                    self._merge_world_resources(
-                        world_output,
-                        project_root,
-                        spec.mod_id,
-                    )
-                    runtime_bridge = generate_world_runtime_bridge(
-                        project_root=project_root,
-                        mod_id=spec.mod_id,
-                        package_name=spec.package_name,
-                        policy=self.policy,
-                    )
-                    return {
-                        **compile_receipt,
-                        "runtime_bridge": runtime_bridge,
-                    }
-
-                def cached_world_is_complete(value: dict[str, Any]) -> bool:
-                    bridge = value.get("runtime_bridge")
-                    if not isinstance(bridge, dict):
-                        return False
-                    java_files = bridge.get("java_files")
-                    return (
-                        (world_output / "mmm-world-manifest.json").is_file()
-                        and isinstance(java_files, list)
-                        and bool(java_files)
-                        and all(
-                            (project_root / str(path)).is_file()
-                            for path in java_files
-                        )
-                    )
-
-                world_receipt = self._run_work_node(
-                    ledger,
-                    node,
-                    action=build_world,
-                    validate_cached=cached_world_is_complete,
-                )
             elif kind == "asset-shard":
                 ids = [
                     str(item.get("asset_id"))
@@ -1063,7 +1193,6 @@ class CompleteProductionOrchestrator:
         return {
             "module_receipts": module_receipts,
             "blockbench_receipts": blockbench_receipts,
-            "world_receipt": world_receipt,
             "asset_receipt": asset_receipt,
             "audio_receipt": audio_receipt,
             "unresolved": unresolved,
@@ -1692,15 +1821,6 @@ class CompleteProductionOrchestrator:
             testcase.attrib.get("name", "").lower() == expected
             for testcase in testcases
         )
-
-    @staticmethod
-    def _merge_world_resources(world_output: Path, project_root: Path, mod_id: str) -> None:
-        source = world_output / 'data' / mod_id
-        target = project_root / 'src/main/resources/data' / mod_id
-        if not source.is_dir():
-            raise CompleteProductionError('World compiler did not produce the expected namespace.')
-        shutil.copytree(source, target, dirs_exist_ok=True)
-        shutil.copy2(world_output / 'mmm-world-manifest.json', project_root / '.minecraft_ai/mmm-world-manifest.json')
 
     def _generate_assets(self, router: ModelRouter, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
         return generate_assets(router, proposal, project_root, run_root)

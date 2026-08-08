@@ -10,11 +10,14 @@ class FakeRouter:
             {
                 "game_design": {
                     "title": "Moon Forge",
-                    "pitch": "Craft moon relics and fight in an arena.",
-                    "core_loop": ["mine", "craft", "fight"],
-                    "progression": ["ore", "relic", "boss"],
-                    "combat": {"player_verbs": ["strike"], "enemy_roles": ["boss"]},
-                    "world": {"regions": [{"id": "moon_arena", "purpose": "boss", "links": []}]},
+                    "pitch": "Craft moon relics and complete lunar quests.",
+                    "core_loop": ["mine", "craft", "complete quests"],
+                    "progression": ["ore", "relic", "quest reward"],
+                    "combat": {"player_verbs": [], "enemy_roles": []},
+                    "mod_context": {
+                        "vanilla_integration": ["crafting"],
+                        "compatibility_targets": [],
+                    },
                     "modules": [
                         {"plugin_id": "fabric-core", "status": "implemented", "reason": "available"},
                         {"plugin_id": "quest-system", "status": "blocked", "reason": "not implemented"},

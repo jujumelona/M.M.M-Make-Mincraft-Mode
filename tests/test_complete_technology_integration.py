@@ -29,7 +29,7 @@ class _PlannerRouter:
                         "core_loop": ["Talk", "Choose a server-approved action"],
                         "progression": [],
                         "combat": {"player_verbs": [], "enemy_roles": []},
-                        "world": {"regions": []},
+                        "mod_context": {"vanilla_integration": []},
                         "modules": [
                             {
                                 "plugin_id": "custom",
@@ -76,7 +76,6 @@ class _PlannerRouter:
                         ],
                     }
                 ],
-                "world_ir": None,
                 "assets": [],
                 "audio": [],
                 "acceptance_tests": ["Voice failure keeps typed dialogue available"],

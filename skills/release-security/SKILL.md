@@ -1,7 +1,6 @@
 ---
 name: release-security
-description: Release only validated source, JAR, world resources, provenance and receipts.
-schema_version: mmm/skill-v2
+description: Release only validated source, JAR, mod resources, provenance and receipts.
 ---
 
 activate_when:

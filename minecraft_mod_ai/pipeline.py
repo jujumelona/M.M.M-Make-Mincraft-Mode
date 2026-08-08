@@ -22,6 +22,11 @@ from .orchestration import (
     receipt_json_line,
 )
 from .planner import HeuristicPlanner, Planner
+from .publisher import (
+    dependency_inventory_from_metadata,
+    fabric_dependency_components,
+    read_fabric_metadata_file,
+)
 from .runner import BuildReport, GradleRunner
 from .spec import DeferredRequest, Proposal, ProposalStatus, SpecValidationError
 from .validator import Finding, ProjectValidator, ValidationReport, validate_jar
@@ -93,7 +98,6 @@ class MinecraftModPipeline:
         if (
             not approved.spec.contents
             and approved.spec.boss is None
-            and approved.spec.arena is None
         ):
             raise SpecValidationError(
                 "아직 만들기로 확정된 기능이 없습니다. 대화에서 필요한 기능을 더 정해 주세요."
@@ -446,11 +450,16 @@ class MinecraftModPipeline:
         final_release_dir = releases_root / release_name
         if final_release_dir.exists():
             raise FileExistsError(f"Release already exists: {final_release_dir}")
+        fabric_metadata_path = project_root / "src/main/resources/fabric.mod.json"
+        fabric_metadata = read_fabric_metadata_file(fabric_metadata_path)
+        fabric_dependencies = dependency_inventory_from_metadata(
+            fabric_metadata,
+            platform_lock=spec.platform,
+        )
         release_dir = releases_root / f".staging-{release_name}-{uuid.uuid4().hex[:10]}"
         for subdir in (
             "binaries",
             "source",
-            "world",
             "packs",
             "config",
             "docs",
@@ -507,12 +516,6 @@ class MinecraftModPipeline:
                 + "\n",
                 encoding="utf-8",
             )
-        if spec.arena is not None:
-            world_root = project_root / ".minecraft_ai" / "world"
-            for path in sorted(world_root.glob(f"{spec.arena.arena_id}*")):
-                shutil.copy2(path, release_dir / "world" / path.name)
-            self._make_arena_datapack(project_root, release_dir / "packs", spec)
-
         self._write_json(release_dir / "evidence" / "proposal.json", proposal.to_dict())
         self._write_json(
             release_dir / "evidence" / "evidence-snapshot.json",
@@ -551,7 +554,7 @@ class MinecraftModPipeline:
         self._copy_logs(project_root, release_dir / "evidence")
         self._write_json(
             release_dir / "supply_chain" / "sbom.cdx.json",
-            self._sbom(spec),
+            self._sbom(spec, fabric_dependencies),
         )
         self._write_json(
             release_dir / "supply_chain" / "provenance.json",
@@ -560,6 +563,9 @@ class MinecraftModPipeline:
                 "generator": "minecraft-mod-ai/0.1.0",
                 "proposal_hash": proposal.calculate_hash(),
                 "platform_lock": asdict(spec.platform),
+                "fabric_metadata_sha256": _sha256(fabric_metadata_path),
+                "distribution_environment": fabric_metadata["environment"],
+                "declared_fabric_dependencies": fabric_dependencies,
                 "evidence_snapshot_hash": proposal.evidence_snapshot_hash,
                 "capability_manifest_hash": proposal.capability_manifest_hash,
                 "imported_source_snapshot_hash": (
@@ -642,43 +648,73 @@ class MinecraftModPipeline:
         return final_release_dir, release_zip, released_jar
 
     @staticmethod
-    def _make_arena_datapack(project_root: Path, packs_root: Path, spec: Any) -> None:
-        if spec.arena is None:
-            return
-        destination = packs_root / f"{spec.mod_id}-{spec.arena.arena_id}-datapack.zip"
-        pack_meta = {
-            "pack": {
-                "pack_format": 15,
-                "description": f"{spec.mod_name} arena function (requires the mod)",
-            }
-        }
-        source_function = (
-            project_root
-            / f"src/main/resources/data/{spec.mod_id}/functions/build_{spec.arena.arena_id}.mcfunction"
-        )
-        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("pack.mcmeta", json.dumps(pack_meta, ensure_ascii=False, indent=2))
-            archive.write(
-                source_function,
-                f"data/{spec.mod_id}/functions/build_{spec.arena.arena_id}.mcfunction",
-            )
-
-    @staticmethod
-    def _sbom(spec: Any) -> dict[str, object]:
-        components = [
-            ("library", "Fabric Loader", f"pkg:maven/net.fabricmc/fabric-loader@{spec.platform.fabric_loader}"),
-            ("library", "Fabric API", f"pkg:maven/net.fabricmc.fabric-api/fabric-api@{spec.platform.fabric_api}"),
-            ("framework", "Fabric Loom", f"pkg:maven/net.fabricmc/fabric-loom@{spec.platform.fabric_loom}"),
-            ("application", "Minecraft", f"pkg:generic/minecraft@{spec.platform.minecraft_version}"),
+    def _sbom(
+        spec: Any,
+        fabric_dependencies: list[dict[str, Any]],
+    ) -> dict[str, object]:
+        application_ref = f"fabric:{spec.mod_id}@{spec.version}"
+        runtime_components = fabric_dependency_components(fabric_dependencies)
+        build_components = [
+            {
+                "type": "framework",
+                "name": "Fabric Loom",
+                "version": spec.platform.fabric_loom,
+                "scope": "excluded",
+                "bom-ref": f"build:fabric-loom@{spec.platform.fabric_loom}",
+                "purl": (
+                    "pkg:maven/net.fabricmc/fabric-loom@"
+                    f"{spec.platform.fabric_loom}"
+                ),
+                "properties": [
+                    {"name": "mmm:usage", "value": "build-plugin"},
+                ],
+            },
+            {
+                "type": "framework",
+                "name": "Yarn Mappings",
+                "version": spec.platform.yarn_mappings,
+                "scope": "excluded",
+                "bom-ref": f"build:yarn@{spec.platform.yarn_mappings}",
+                "purl": f"pkg:maven/net.fabricmc/yarn@{spec.platform.yarn_mappings}",
+                "properties": [
+                    {"name": "mmm:usage", "value": "compile-mappings"},
+                ],
+            },
+            {
+                "type": "framework",
+                "name": "Gradle",
+                "version": spec.platform.gradle,
+                "scope": "excluded",
+                "bom-ref": f"build:gradle@{spec.platform.gradle}",
+                "purl": f"pkg:generic/gradle@{spec.platform.gradle}",
+                "properties": [
+                    {"name": "mmm:usage", "value": "build-tool"},
+                ],
+            },
+        ]
+        runtime_refs = [
+            f"fabric:{item['mod_id']}:{item['relationship']}"
+            for item in fabric_dependencies
+            if item["fabric_section"] == "depends"
         ]
         return {
             "bomFormat": "CycloneDX",
             "specVersion": "1.5",
             "version": 1,
-            "metadata": {"component": {"type": "application", "name": spec.mod_id, "version": spec.version}},
-            "components": [
-                {"type": kind, "name": name, "purl": purl}
-                for kind, name, purl in components
+            "metadata": {
+                "component": {
+                    "type": "application",
+                    "name": spec.mod_id,
+                    "version": spec.version,
+                    "bom-ref": application_ref,
+                }
+            },
+            "components": [*runtime_components, *build_components],
+            "dependencies": [
+                {
+                    "ref": application_ref,
+                    "dependsOn": runtime_refs,
+                }
             ],
         }
 
@@ -690,12 +726,6 @@ class MinecraftModPipeline:
             if spec.boss
             else ""
         )
-        arena_text = (
-            f"\n- 아레나 생성: `/function {spec.mod_id}:build_{spec.arena.arena_id}` "
-            "(권한 있는 테스트 서버에서 명시적으로 실행)"
-            if spec.arena
-            else ""
-        )
         (docs_root / "MOD_DESCRIPTION_KO.md").write_text(
             f"""# {spec.mod_name}
 
@@ -703,7 +733,7 @@ class MinecraftModPipeline:
 
 - 대상: Minecraft Java {spec.platform.minecraft_version} / Fabric / Java 17
 - 릴리스 게이트: {"PASS" if gates_pass else "NOT RELEASE READY"}
-{boss_text}{arena_text}
+{boss_text}
 
 `NOT RELEASE READY`인 번들은 소스와 실패 증거만 제공하며 설치용 JAR를 포함하지 않습니다.
 """,
@@ -721,10 +751,8 @@ class MinecraftModPipeline:
         (docs_root / "ADMIN_KO.md").write_text(
             f"""# 관리자 가이드
 
-아레나 함수는 자동 실행되지 않습니다.
-{arena_text or "- 이 릴리스에는 아레나가 없습니다."}
-
-실제 월드에서 실행하기 전 백업과 테스트 월드 검증을 권장합니다.
+이 릴리스는 사용자 월드를 생성하거나 변경하지 않습니다.
+서버에 설치하기 전 별도 테스트 인스턴스에서 기능을 검증하세요.
 """,
             encoding="utf-8",
         )

@@ -87,20 +87,11 @@ def test_java_and_registry_identifier_collisions_fail_in_the_spec() -> None:
         replace(base, mod_id="minecraft").validate()
 
 
-def test_boss_spawn_egg_model_and_bounded_arena_commands(
-    tmp_path: Path,
-) -> None:
+def test_boss_spawn_egg_model_is_generated_without_map_commands(tmp_path: Path) -> None:
     proposal = MinecraftModPipeline().plan(
-        "Create a frost boss, arena map, 3D model, item and block"
+        "Create a frost boss, 3D model, item and block"
     )
-    spec = replace(
-        proposal.spec,
-        arena=replace(
-            proposal.spec.arena,
-            radius=32,
-            wall_height=12,
-        ),
-    )
+    spec = proposal.spec
     FabricProjectGenerator().generate(spec, tmp_path)
 
     egg_model = (
@@ -109,44 +100,7 @@ def test_boss_spawn_egg_model_and_bounded_arena_commands(
         f"{spec.boss.entity_id}_spawn_egg.json"
     )
     assert egg_model.is_file()
-    function_path = (
-        tmp_path
-        / f"src/main/resources/data/{spec.mod_id}/functions/"
-        f"build_{spec.arena.arena_id}.mcfunction"
-    )
-    commands = [
-        line
-        for line in function_path.read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if line.startswith("fill ")
-    ]
-    assert commands
-    assert all(" hollow" not in line for line in commands)
-    assert all(_fill_volume(line) <= 32_768 for line in commands)
-
-
-def test_arena_palette_accepts_namespaced_blocks_and_rejects_bad_ids() -> None:
-    base = MinecraftModPipeline().plan(
-        "Create a frost boss arena map"
-    ).spec
-    custom = replace(
-        base,
-        arena=replace(
-            base.arena,
-            floor_block="minecraft:smooth_stone",
-            accent_block="minecraft:copper_block",
-        ),
-    )
-    custom.validate()
-    with pytest.raises(
-        SpecValidationError,
-        match="namespaced block IDs",
-    ):
-        replace(
-            base,
-            arena=replace(base.arena, floor_block="bad block id"),
-        ).validate()
+    assert not list((tmp_path / "src/main/resources/data" / spec.mod_id).rglob("*.mcfunction"))
 
 
 def test_gametest_gate_requires_real_passing_xml(tmp_path: Path) -> None:
@@ -246,19 +200,3 @@ def test_release_obj_material_keeps_its_texture_handoff(
     ).read_text(encoding="utf-8")
     assert f"map_Kd {texture_name}" in material
     assert "../../src/" not in material
-
-
-def _coordinate(token: str) -> int:
-    assert token.startswith("~")
-    return int(token[1:] or "0")
-
-
-def _fill_volume(command: str) -> int:
-    parts = command.split()
-    first = [_coordinate(value) for value in parts[1:4]]
-    second = [_coordinate(value) for value in parts[4:7]]
-    return (
-        (abs(second[0] - first[0]) + 1)
-        * (abs(second[1] - first[1]) + 1)
-        * (abs(second[2] - first[2]) + 1)
-    )

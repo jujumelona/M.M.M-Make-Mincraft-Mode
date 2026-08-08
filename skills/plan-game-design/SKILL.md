@@ -1,7 +1,6 @@
 ---
 name: plan-game-design
 description: Produce a Fabric mod design, request-resolved implementation methods and acceptance-test plan.
-schema_version: mmm/skill-v2
 ---
 
 activate_when:

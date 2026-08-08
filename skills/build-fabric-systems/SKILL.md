@@ -6,7 +6,7 @@ description: Generate, compile, and repair only Fabric systems backed by impleme
 # Build Fabric Systems
 
 ## activate_when
-Use after a proposal is approved and the task requires Fabric source, datagen, a supported basic entity, arena function, Gradle build, or GameTest.
+Use after a proposal is approved and the task requires Fabric source, datagen, a supported entity, resource, system, Gradle build, or GameTest.
 
 ## inputs
 - Approved proposal JSON.

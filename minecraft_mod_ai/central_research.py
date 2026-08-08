@@ -44,6 +44,7 @@ _ALLOWED_EVIDENCE_KINDS = frozenset(
         "dataset_provenance",
         "consent_privacy",
         "latency_budget",
+        "scholarly_reference",
     }
 )
 _ALLOWED_PROVIDERS = frozenset(
@@ -58,6 +59,8 @@ _ALLOWED_PROVIDERS = frozenset(
         "blockbench",
         "runtime",
         "huggingface_models",
+        "openalex_works",
+        "crossref_works",
     }
 )
 _EXTERNAL_PROVIDERS = frozenset(
@@ -68,6 +71,8 @@ _EXTERNAL_PROVIDERS = frozenset(
         "openverse_audio",
         "wikipedia",
         "huggingface_models",
+        "openalex_works",
+        "crossref_works",
     }
 )
 
@@ -290,7 +295,7 @@ def _external_target_profile(
     }
     if provider in {"openverse_images", "openverse_audio"}:
         return "media"
-    if provider == "wikipedia":
+    if provider in {"wikipedia", "openalex_works", "crossref_works"}:
         return "general_reference"
     if kinds & speech:
         return "speech_ai"
@@ -417,13 +422,13 @@ def _fallback_domains(
             )
         )
     design_index = 0
-    for section in ("combat", "world"):
+    for section in ("combat", "mod_context"):
         for path, value in _leaf_strings(game_design.get(section), section):
             design_index += 1
             entries.append(
                 (
                     f"design_{design_index}",
-                    "Resolve one request-derived behavior or space requirement.",
+                    "Resolve one request-derived mod behavior or integration requirement.",
                     f"{path}: {value}",
                     ("minecraft_api", "runtime_behavior", "testing"),
                     ("official_docs", "project_rag", "modrinth", "github"),
@@ -578,6 +583,17 @@ def _augment_domain_routes(domain: ResearchDomain) -> ResearchDomain:
         "latency_budget",
     }:
         required.extend(("huggingface_models", "github"))
+    if "scholarly_reference" in kinds or kinds & {
+        "ai_inference",
+        "agent_tool_use",
+        "speech_recognition",
+        "voice_activity_detection",
+        "speech_synthesis",
+        "voice_adaptation",
+        "voice_conversion",
+        "translation",
+    }:
+        required.extend(("openalex_works", "crossref_works"))
     if kinds & {
         "ai_inference",
         "agent_tool_use",

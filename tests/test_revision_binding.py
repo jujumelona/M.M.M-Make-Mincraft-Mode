@@ -45,9 +45,9 @@ def test_existing_input_snapshot_is_bound_into_the_approval_hash(
     archive = _source_zip(tmp_path / "existing.zip")
     pipeline = MinecraftModPipeline()
 
-    fresh = pipeline.plan("Create a frost boss arena")
+    fresh = pipeline.plan("Create a frost boss")
     revision = pipeline.plan(
-        "Add a frost boss arena to this project",
+        "Add a frost boss to this project",
         existing_input=archive,
     )
 

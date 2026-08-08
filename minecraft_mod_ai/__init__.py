@@ -59,6 +59,13 @@ from .model_router import ModelRouter
 from .pipeline import PipelineResult
 from .planner import HeuristicPlanner, OpenAICompatiblePlanner
 from .production_tools import ProductionToolService
+from .production_contract import (
+    ProductionContractCompilation,
+    compile_production_contract,
+    evaluate_quality_contract,
+    quality_contract_summary,
+    quality_unresolved,
+)
 from .project_index import ProjectIndex
 from .rag_index import ProjectRAGIndex
 from .routed_planner import RoutedPlanner
@@ -66,7 +73,6 @@ from .scale_policy import ScalePolicy, ScalePolicyError
 from .scalable_generator import ScalableFabricProjectGenerator
 from .scalable_pipeline import ScalableMinecraftModPipeline
 from .spec import (
-    ArenaSpec,
     BossSpec,
     ContentSpec,
     ModSpec,
@@ -84,7 +90,6 @@ from .technology_radar import (
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
-    "ArenaSpec",
     "AssetRequest",
     "AudioRequest",
     "BossSpec",
@@ -116,6 +121,7 @@ __all__ = [
     "PipelineResult",
     "PlatformLock",
     "ProductionModule",
+    "ProductionContractCompilation",
     "ProductionToolService",
     "ProjectIndex",
     "ProjectRAGIndex",
@@ -128,9 +134,13 @@ __all__ = [
     "TrainingTraceStore",
     "assess_technology_compatibility",
     "build_technology_radar",
+    "compile_production_contract",
     "compute_voice_language_intersection",
+    "evaluate_quality_contract",
     "inspect_existing_project_archive",
     "mod_development_method_catalog",
+    "quality_contract_summary",
+    "quality_unresolved",
     "resolve_mod_development_methods",
     "supported_minecraft_versions",
     "technology_research_routes",

@@ -9,6 +9,7 @@ from minecraft_mod_ai.complete_spec import (
     complete_proposal_from_parts,
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
+from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.work_graph import (
@@ -100,6 +101,42 @@ def test_work_plan_can_bind_to_the_normalized_execution_modules() -> None:
         "content_000002",
         "content_000003",
     }
+
+
+def test_v2_work_plan_shards_every_quality_dimension_before_packaging() -> None:
+    legacy = _proposal(2)
+    compiled = compile_production_contract(
+        requested_prompt=legacy.requested_prompt,
+        game_design=legacy.game_design,
+        modules=legacy.modules,
+        acceptance_tests=legacy.acceptance_tests,
+    )
+    proposal = complete_proposal_from_parts(
+        requested_prompt=legacy.requested_prompt,
+        base_proposal=legacy.base_proposal,
+        game_design={
+            **legacy.game_design,
+            "_production_contract": compiled.contract,
+        },
+        modules=legacy.modules,
+        acceptance_tests=compiled.acceptance_tests,
+    )
+
+    plan = build_production_work_plan(proposal)
+    quality = [node for node in plan.nodes if node.stage == "validate:quality"]
+    package = next(node for node in plan.nodes if node.node_id == "package-release")
+
+    assert proposal.schema_version == "mmm/complete-proposal-v2"
+    dimension_ids = {node.payload["dimension_id"] for node in quality}
+    assert {"correctness", "build", "research", "runtime"} <= dimension_ids
+    assert package.dependencies == tuple(
+        sorted(node.node_id for node in quality)
+    )
+    by_dimension = {node.payload["dimension_id"]: node for node in quality}
+    assert by_dimension["correctness"].dependencies == ("validate-jar",)
+    assert by_dimension["build"].dependencies == ("validate-jar",)
+    assert by_dimension["research"].dependencies == ("validate-jar",)
+    assert by_dimension["runtime"].dependencies == ("runtime-playtest",)
 
 
 def test_ledger_resumes_and_invalidates_only_changed_node_and_descendants(

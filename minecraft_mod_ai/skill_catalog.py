@@ -17,8 +17,8 @@ CANONICAL_SKILLS = (
     "inspect-existing-project",
     "generate-fabric-core",
     "generate-datagen",
-    "generate-geckolib-entity",
     "generate-worldgen",
+    "generate-geckolib-entity",
     "generate-quest-progression",
     "generate-gui-networking",
     "generate-textures",
@@ -36,6 +36,7 @@ CANONICAL_SKILLS = (
     "resume-production-run",
     "route-generic-game-research",
     "select-compatible-ai-technique",
+    "converge-game-quality",
 )
 
 POLICY_NATIVE_SKILLS = frozenset(
@@ -45,6 +46,8 @@ POLICY_NATIVE_SKILLS = frozenset(
         "resume-production-run",
         "route-generic-game-research",
         "select-compatible-ai-technique",
+        "execute-complete-production",
+        "converge-game-quality",
     }
 )
 
@@ -85,6 +88,12 @@ REVIEWED_TOOL_STAGES: dict[str, frozenset[str]] = {
     "approve_plan": frozenset({"planning", "generation"}),
     "approve_complete_plan": frozenset({"planning", "generation"}),
     "read_complete_plan_section": frozenset({"planning", "generation"}),
+    "read_quality_contract": frozenset(
+        {"planning", "generation", "quality"}
+    ),
+    "quality_status": frozenset(
+        {"frontdoor", "planning", "generation", "quality", "release"}
+    ),
     "discover_ecosystem_resources": frozenset(
         {"frontdoor", "planning", "research"}
     ),
@@ -230,6 +239,10 @@ REVIEWED_VALIDATORS = frozenset(
         "retrieval_coverage",
         "retrieval_not_authority",
         "source_provenance",
+        "requirement_traceability",
+        "quality_convergence",
+        "evidence_freshness",
+        "no_self_certification",
     }
 )
 
@@ -634,7 +647,9 @@ def _skill_texts(root: str | Path | None) -> dict[str, str]:
 
     texts: dict[str, str] = {}
     packaged = Path(__file__).resolve().parent / "packaged_skills.json"
-    if packaged.is_file():
+    # A source-root build must be recoverable even when the generated package is
+    # absent, stale, or being regenerated after a merge conflict.
+    if root is None and packaged.is_file():
         raw = json.loads(packaged.read_text(encoding="utf-8"))
         skills = raw.get("skills", {})
         texts.update(

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai.rag_index import ProjectRAGIndex
+from minecraft_mod_ai.production_tools import ProductionToolService
 
 
 def _metadata() -> dict:
@@ -16,6 +17,30 @@ def _metadata() -> dict:
         "java_version": 17,
         "license": "Apache-2.0",
         "source_commit": "abc123",
+    }
+
+
+def test_production_rag_tool_preserves_search_receipt(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "project" / "Example.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("class CrystalRegistry {}", encoding="utf-8")
+    index_path = workspace / "rag" / "project.sqlite"
+    ProjectRAGIndex(index_path).build(
+        [source.parent],
+        metadata=_metadata(),
+    )
+
+    result = ProductionToolService(workspace_root=workspace).search_code_rag(
+        "CrystalRegistry",
+        index_path="rag/project.sqlite",
+        required_metadata={"source_commit": "abc123"},
+    )
+
+    assert result["hits"]
+    assert result["receipt"]["result_count"] == len(result["hits"])
+    assert result["receipt"]["required_metadata"] == {
+        "source_commit": "abc123"
     }
 
 

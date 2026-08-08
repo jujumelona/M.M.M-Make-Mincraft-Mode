@@ -23,11 +23,21 @@ from .complete_spec import (
 from .ecosystem_discovery import discover_seed_bundle
 from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
+from .production_contract import compile_production_contract
+from .research_coordinator import (
+    collect_ecosystem_seed_bundle,
+    collect_technology_radar,
+)
 from .spec import ContentSpec, SpecValidationError
 from .technology_radar import build_technology_radar
 
 
 _RECENT_MODULE_ID_LIMIT = 32
+_PLANNING_CAPABILITY_VIEW_LIMIT = 32
+_PLANNING_PROVIDER_VIEW_LIMIT = 12
+_PLANNING_CANDIDATES_PER_PROVIDER = 10
+_PLANNING_ERROR_VIEW_LIMIT = 12
+_PLANNING_METADATA_LIST_LIMIT = 16
 _BATCH_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SIDECAR_INTEGRATION_TYPE = "mmm_local_ai_sidecar"
 _SIDECAR_EXECUTION_CAPABILITIES = frozenset(
@@ -56,7 +66,6 @@ class _ProductionBatch:
 @dataclass
 class _ProductionParts:
     modules: list[ProductionModule]
-    world_fragments: list[dict[str, Any]]
     assets: list[AssetRequest]
     audio: list[AudioRequest]
     acceptance_tests: list[str]
@@ -118,10 +127,11 @@ class CompleteGameDesignPlanner:
         research_brief = game_design.get("_research_brief")
         if not isinstance(research_brief, dict):
             research_brief = normalize_research_brief(prompt, game_design)
-        technology_radar = build_technology_radar(
+        technology_radar = collect_technology_radar(
             prompt,
             research_brief,
             page_size=50,
+            page_builder=build_technology_radar,
         )
         internal_design = {
             **game_design,
@@ -132,10 +142,12 @@ class CompleteGameDesignPlanner:
                 game_design,
                 research_brief,
             ),
-            "_ecosystem_discovery": discover_seed_bundle(
+            "_ecosystem_discovery": collect_ecosystem_seed_bundle(
                 prompt,
                 game_design,
                 research_brief=research_brief,
+                page_builder=discover_seed_bundle,
+                allow_legacy_terminal=True,
             ),
         }
         implementation_prompt = _implementation_prompt(prompt, internal_design)
@@ -149,10 +161,9 @@ class CompleteGameDesignPlanner:
             response_format="json",
         )
         payload = _extract_json(text)
-        common = {"world_ir", "assets", "audio", "acceptance_tests"}
+        common = {"assets", "audio", "acceptance_tests"}
         if set(payload) == common | {"modules"}:
             modules = tuple(_module(item) for item in _list(payload, "modules"))
-            world_ir = payload["world_ir"]
             assets = tuple(_asset(item) for item in _list(payload, "assets"))
             audio = tuple(_audio(item) for item in _list(payload, "audio"))
             acceptance_tests = tuple(
@@ -165,7 +176,6 @@ class CompleteGameDesignPlanner:
                 batches=_list(payload, "module_batches"),
                 media_paths=media_paths,
             )
-            world_ir = payload["world_ir"]
             assets = tuple(_asset(item) for item in _list(payload, "assets"))
             audio = tuple(_audio(item) for item in _list(payload, "audio"))
             acceptance_tests = tuple(
@@ -204,7 +214,6 @@ class CompleteGameDesignPlanner:
                 ],
             }
             modules = tuple(parts.modules)
-            world_ir = _merge_world_fragments(parts.world_fragments)
             assets = tuple(parts.assets)
             audio = tuple(parts.audio)
             acceptance_tests = tuple(parts.acceptance_tests)
@@ -218,20 +227,36 @@ class CompleteGameDesignPlanner:
             raise SpecValidationError(
                 "Complete planner acceptance tests must be non-empty strings."
             )
-        if world_ir is not None and not isinstance(world_ir, dict):
-            raise SpecValidationError("Complete planner world_ir must be an object or null.")
         modules = _ensure_technology_sidecar(
             modules,
             technology_radar,
             base_proposal,
         )
         modules = _remove_bootstrap_duplicates(modules, base_proposal)
+        contract_design = {
+            key: value
+            for key, value in internal_design.items()
+            if not key.startswith("_")
+        }
+        compiled_contract = compile_production_contract(
+            requested_prompt=prompt,
+            game_design=contract_design,
+            research_brief=research_brief,
+            modules=modules,
+            assets=assets,
+            audio=audio,
+            acceptance_tests=acceptance_tests,
+        )
+        internal_design = {
+            **internal_design,
+            "_production_contract": compiled_contract.contract,
+        }
+        acceptance_tests = compiled_contract.acceptance_tests
         return complete_proposal_from_parts(
             requested_prompt=prompt,
             base_proposal=base_proposal,
             game_design=internal_design,
             modules=modules,
-            world_ir=world_ir,
             assets=assets,
             audio=audio,
             acceptance_tests=acceptance_tests,
@@ -339,7 +364,7 @@ class CompleteGameDesignPlanner:
         game_design: dict[str, Any],
         media_paths: Sequence[str | Path],
     ) -> _ProductionParts:
-        parts = _ProductionParts([], [], [], [], [])
+        parts = _ProductionParts([], [], [], [])
         module_catalog = _ModuleCatalog()
         asset_catalog = _ModuleCatalog()
         audio_catalog = _ModuleCatalog()
@@ -451,7 +476,6 @@ class CompleteGameDesignPlanner:
             raw_assets = _list(page, "assets")
             raw_audio = _list(page, "audio")
             raw_tests = _list(page, "acceptance_tests")
-            world_fragment = page["world_ir_fragment"]
             completed = page["completed_deliverables"]
             complete = page["complete"]
             next_cursor = page["next_cursor"]
@@ -502,15 +526,11 @@ class CompleteGameDesignPlanner:
                 raise SpecValidationError(
                     "Paginated planner returned duplicate acceptance tests."
                 )
-            if world_fragment is not None:
-                _validate_world_fragment(world_fragment)
-                parts.world_fragments.append(dict(world_fragment))
             if not (
                 page_modules
                 or page_assets
                 or page_audio
                 or tests
-                or world_fragment is not None
             ):
                 raise SpecValidationError(
                     "Production batch page did not produce any implementation output."
@@ -703,7 +723,6 @@ _PRODUCTION_OUTLINE_CONTRACT = {
 
 _PRODUCTION_PAGE_CONTRACT = {
     "modules": [],
-    "world_ir_fragment": None,
     "assets": [],
     "audio": [],
     "acceptance_tests": [],
@@ -720,6 +739,9 @@ represented as an executable production module. Do not reduce the request to an
 item/block slice and do not mark work complete merely because a contract file was
 created. Use kind=custom_java for unusual Fabric features that do not match a named
 kind. Dependencies must form an acyclic graph.
+Each module config should include `requirement_refs` naming the request, design,
+or research requirements it implements. The code-owned contract compiler will
+preserve every requirement and conservatively connect modules when refs are absent.
 
 For a small design, the legacy one-shot contract below is accepted. Prefer the
 production_batches contract for any design that may not fit comfortably in one
@@ -743,12 +765,11 @@ Preferred scalable outline:
 }
 
 If more outline batches are required, set complete=false and provide a new cursor.
-Do not put the full world, asset, audio, module, or test catalog in this outline.
+Do not put the full asset, audio, module, or test catalog in this outline.
 
 One-shot output:
 {
   "modules": [{"module_id":"snake_case","kind":"item|block|tool|weapon|armor|food|crop|fluid|machine|recipe|effect|enchantment|entity|boss|npc|quest|class|skill|economy|shop|gui|networking|party|guild|command|structure|biome|dimension|world_event|advancement|loot|audio|integration|custom_java","config":{},"depends_on":[],"required_gates":[]}],
-  "world_ir": null,
   "assets": [],
   "audio": [],
   "acceptance_tests": ["observable test"]
@@ -759,9 +780,11 @@ Legacy module-only pagination replaces modules with:
   {"batch_id":"content_core","scope":"complete scope description","depends_on_batches":[]}
 ]
 
-world_ir uses mmm/world-ir-v1 and may describe logical structures larger than one
-vanilla template; the compiler partitions them. Asset width/height are positive integer
-pixels and are controlled by host resource policy rather than a fixed enum.
+Do not create maps, arenas, world-layout IR, or user-world-edit commands. Native
+Minecraft structures, biomes, dimensions, and world events are mod modules only when
+explicitly requested, and must be implemented as version-locked mod code with their
+own runtime evidence. Asset width/height are positive integer pixels and are controlled
+by host resource policy rather than a fixed enum.
 """.strip()
 
 
@@ -793,8 +816,10 @@ def _implementation_prompt(prompt: str, game_design: dict[str, Any]) -> str:
         "Follow every request-derived research domain and preserve uncovered facts as "
         "explicit research or validation deliverables. Include server authority, persistence, "
         "networking, client UI, resources, runtime playtests and release gates only "
-        "when relevant. Never add a boss, arena, village, field, dungeon or other "
-        "map form merely because it appears in an example."
+        "when relevant. Never invent features, assets, entities, systems, or content "
+        "that the user did not request."
+        " Put request, design, and research references in each relevant module's "
+        "config.requirement_refs so implementation and tests stay traceable."
     )
 
 
@@ -858,8 +883,22 @@ def _implementation_design_view(game_design: dict[str, Any]) -> dict[str, Any]:
         }
     ecosystem = game_design.get("_ecosystem_discovery")
     if isinstance(ecosystem, dict):
+        ecosystem_pages = [
+            page
+            for page in ecosystem.get("pages", [])
+            if isinstance(page, dict)
+        ]
+        ecosystem_page_view = _ecosystem_planning_pages(ecosystem_pages)
+        ecosystem_errors = [
+            error
+            for error in ecosystem.get("errors", [])
+            if isinstance(error, dict)
+        ]
         result["_ecosystem_discovery"] = {
             "schema_version": ecosystem.get("schema_version", ""),
+            "aggregate_schema_version": ecosystem.get(
+                "aggregate_schema_version", ""
+            ),
             "status": ecosystem.get("status", ""),
             "route_sha256": ecosystem.get("route_sha256", ""),
             "route_count": ecosystem.get("route_count", 0),
@@ -871,36 +910,43 @@ def _implementation_design_view(game_design: dict[str, Any]) -> dict[str, Any]:
                 "remaining_route_count", 0
             ),
             "routes_complete": ecosystem.get("routes_complete", True),
-            "pages": [
+            "candidate_count": ecosystem.get("candidate_count", 0),
+            "page_count": len(ecosystem_pages),
+            "representative_pages": ecosystem_page_view,
+            "representative_page_count": len(ecosystem_page_view),
+            "page_view_complete": (
+                len(ecosystem_page_view) == len(ecosystem_pages)
+            ),
+            "error_count": len(ecosystem_errors),
+            "representative_errors": [
                 {
-                    "research_domain_id": page.get(
-                        "research_domain_id", ""
-                    ),
-                    "provider": page.get("provider", ""),
-                    "returned": page.get("returned", 0),
-                    "provider_total_estimate": page.get(
-                        "provider_total_estimate", 0
-                    ),
-                    "next_cursor": page.get("next_cursor", ""),
-                    "page_sha256": page.get("page_sha256", ""),
-                    "candidates": [
-                        _candidate_planning_view(candidate)
-                        for candidate in page.get("candidates", [])
-                        if isinstance(candidate, dict)
-                    ],
+                    "domain_id": error.get("domain_id", ""),
+                    "provider": error.get("provider", ""),
+                    "query_sha256": error.get("query_sha256", ""),
+                    "error_type": error.get("error_type", ""),
                 }
-                for page in ecosystem.get("pages", [])
-                if isinstance(page, dict)
+                for error in ecosystem_errors[:_PLANNING_ERROR_VIEW_LIMIT]
             ],
-            "errors": ecosystem.get("errors", []),
+            "collection_receipt": ecosystem.get("collection_receipt", {}),
             "coverage": ecosystem.get("coverage", ""),
             "authorization": "none",
             "external_text_forwarded": False,
         }
     radar = game_design.get("_technology_radar")
     if isinstance(radar, dict):
+        technology_requirements = [
+            item
+            for item in radar.get("requirements", [])
+            if isinstance(item, dict)
+        ]
+        requirement_view, capability_counts = _technology_planning_requirements(
+            technology_requirements
+        )
         result["_technology_radar"] = {
             "schema_version": radar.get("schema_version", ""),
+            "aggregate_schema_version": radar.get(
+                "aggregate_schema_version", ""
+            ),
             "radar_sha256": radar.get("radar_sha256", ""),
             "target": radar.get("target", {}),
             "target_evidence_policy": radar.get(
@@ -908,39 +954,94 @@ def _implementation_design_view(game_design: dict[str, Any]) -> dict[str, Any]:
             ),
             "classification": radar.get("classification", {}),
             "voice_contract": radar.get("voice_contract", {}),
-            "requirements": [
-                {
-                    "requirement_id": item.get("requirement_id", ""),
-                    "domain_id": item.get("domain_id", ""),
-                    "capability_kind": item.get("capability_kind", ""),
-                    "objective": _bounded_planning_text(
-                        item.get("objective", "")
-                    ),
-                    "target": item.get("target", {}),
-                    "allowed_topologies": item.get(
-                        "allowed_topologies", []
-                    ),
-                    "authority": item.get("authority", {}),
-                    "hardware": item.get("hardware", {}),
-                    "latency": item.get("latency", {}),
-                    "privacy": item.get("privacy", {}),
-                    "offline_required": item.get(
-                        "offline_required", False
-                    ),
-                    "required_gates": item.get("required_gates", []),
-                    "required_tests": item.get("required_tests", []),
-                    "deterministic_fallback": _bounded_planning_text(
-                        item.get("deterministic_fallback", "")
-                    ),
-                }
-                for item in radar.get("requirements", [])
-                if isinstance(item, dict)
-            ],
+            "requirement_count": len(technology_requirements),
+            "capability_counts": capability_counts,
+            "requirements": requirement_view,
+            "requirement_view_complete": (
+                len(requirement_view) == len(technology_requirements)
+            ),
             "pagination": radar.get("pagination", {}),
+            "collection_receipt": radar.get("collection_receipt", {}),
             "selection_policy": radar.get("discovery_policy", {}),
             "candidate_text_is_instructions": False,
         }
     return result
+
+
+def _ecosystem_planning_pages(
+    pages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a fixed-size typed view while the proposal retains every page."""
+
+    selected: list[dict[str, Any]] = []
+    seen_providers: set[str] = set()
+    for page in pages:
+        provider = str(page.get("provider", ""))
+        if provider in seen_providers:
+            continue
+        seen_providers.add(provider)
+        selected.append(
+            {
+                "research_domain_id": page.get("research_domain_id", ""),
+                "provider": provider,
+                "returned": page.get("returned", 0),
+                "provider_total_estimate": page.get(
+                    "provider_total_estimate", 0
+                ),
+                "next_cursor": page.get("next_cursor", ""),
+                "page_sha256": page.get("page_sha256", ""),
+                "candidates": [
+                    _candidate_planning_view(candidate)
+                    for candidate in page.get("candidates", [])[
+                        :_PLANNING_CANDIDATES_PER_PROVIDER
+                    ]
+                    if isinstance(candidate, dict)
+                ],
+            }
+        )
+        if len(selected) >= _PLANNING_PROVIDER_VIEW_LIMIT:
+            break
+    return selected
+
+
+def _technology_planning_requirements(
+    requirements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Represent every code-owned capability kind without copying every page."""
+
+    counts: dict[str, int] = {}
+    selected: list[dict[str, Any]] = []
+    selected_kinds: set[str] = set()
+    for item in requirements:
+        capability_kind = str(item.get("capability_kind", ""))
+        counts[capability_kind] = counts.get(capability_kind, 0) + 1
+        if (
+            capability_kind in selected_kinds
+            or len(selected) >= _PLANNING_CAPABILITY_VIEW_LIMIT
+        ):
+            continue
+        selected_kinds.add(capability_kind)
+        selected.append(
+            {
+                "requirement_id": item.get("requirement_id", ""),
+                "domain_id": item.get("domain_id", ""),
+                "capability_kind": capability_kind,
+                "objective": _bounded_planning_text(item.get("objective", "")),
+                "target": item.get("target", {}),
+                "allowed_topologies": item.get("allowed_topologies", []),
+                "authority": item.get("authority", {}),
+                "hardware": item.get("hardware", {}),
+                "latency": item.get("latency", {}),
+                "privacy": item.get("privacy", {}),
+                "offline_required": item.get("offline_required", False),
+                "required_gates": item.get("required_gates", []),
+                "required_tests": item.get("required_tests", []),
+                "deterministic_fallback": _bounded_planning_text(
+                    item.get("deterministic_fallback", "")
+                ),
+            }
+        )
+    return selected, dict(sorted(counts.items()))
 
 
 def _candidate_planning_view(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -972,9 +1073,15 @@ def _candidate_planning_view(candidate: dict[str, Any]) -> dict[str, Any]:
                     "license_evidence": card.get(
                         "license_evidence", ""
                     ),
-                    "base_models": card.get("base_models", []),
-                    "datasets": card.get("datasets", []),
-                    "languages": card.get("languages", []),
+                    "base_models": _bounded_planning_list(
+                        card.get("base_models", [])
+                    ),
+                    "datasets": _bounded_planning_list(
+                        card.get("datasets", [])
+                    ),
+                    "languages": _bounded_planning_list(
+                        card.get("languages", [])
+                    ),
                 }
                 if isinstance(card, dict)
                 else {}
@@ -1015,6 +1122,12 @@ def _candidate_planning_view(candidate: dict[str, Any]) -> dict[str, Any]:
 def _bounded_planning_text(value: Any, limit: int = 320) -> str:
     text = " ".join(str(value or "").strip().split())
     return text[:limit]
+
+
+def _bounded_planning_list(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    return value[:_PLANNING_METADATA_LIST_LIMIT]
 
 
 def _pagination_planning_context(
@@ -1195,88 +1308,6 @@ def _topological_production_batches(
     if len(ordered) != len(batches):
         raise SpecValidationError("Production batch dependency cycle detected.")
     return tuple(ordered)
-
-
-def _validate_world_fragment(value: Any) -> None:
-    if not isinstance(value, dict):
-        raise SpecValidationError("world_ir_fragment must be an object or null.")
-    allowed = {"regions", "routes", "structures", "quests", "constraints"}
-    if not value or set(value) - allowed:
-        raise SpecValidationError("world_ir_fragment fields are invalid.")
-    for key, items in value.items():
-        if not isinstance(items, list):
-            raise SpecValidationError(
-                f"world_ir_fragment.{key} must be a list."
-            )
-
-
-def _merge_world_fragments(
-    fragments: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    if not fragments:
-        return None
-    result: dict[str, Any] = {
-        "schema_version": "mmm/world-ir-v1",
-        "regions": [],
-        "routes": [],
-        "structures": [],
-        "quests": [],
-        "constraints": [],
-    }
-    seen: dict[str, set[str]] = {
-        "regions": set(),
-        "structures": set(),
-        "quests": set(),
-    }
-    route_keys: set[tuple[str, str]] = set()
-    constraint_hashes: set[str] = set()
-    for fragment in fragments:
-        for key, values in fragment.items():
-            if key in seen:
-                for item in values:
-                    if not isinstance(item, dict):
-                        raise SpecValidationError(
-                            f"World fragment {key} entries must be objects."
-                        )
-                    item_id = str(item.get("id", ""))
-                    if not item_id or item_id in seen[key]:
-                        raise SpecValidationError(
-                            f"Duplicate or missing world {key} ID: {item_id!r}"
-                        )
-                    seen[key].add(item_id)
-                    result[key].append(item)
-            elif key == "routes":
-                for item in values:
-                    if not isinstance(item, dict):
-                        raise SpecValidationError(
-                            "World fragment routes must be objects."
-                        )
-                    pair = tuple(
-                        sorted((str(item.get("from", "")), str(item.get("to", ""))))
-                    )
-                    if not all(pair) or pair in route_keys:
-                        raise SpecValidationError(
-                            f"Duplicate or invalid world route: {pair}"
-                        )
-                    route_keys.add(pair)
-                    result[key].append(item)
-            else:
-                for item in values:
-                    digest = hashlib.sha256(
-                        json.dumps(
-                            item,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()
-                    if digest in constraint_hashes:
-                        raise SpecValidationError(
-                            "Duplicate world constraint across plan pages."
-                        )
-                    constraint_hashes.add(digest)
-                    result[key].append(item)
-    return result
 
 
 def _module(value: Any) -> ProductionModule:
@@ -1542,8 +1573,6 @@ def _bootstrap_reserved_module_ids(base_proposal: Any) -> set[str]:
     if spec.boss is not None:
         result.add(spec.boss.entity_id)
         result.add(f"{spec.boss.entity_id}_spawn_egg")
-    if spec.arena is not None:
-        result.add(spec.arena.arena_id)
     return result
 
 

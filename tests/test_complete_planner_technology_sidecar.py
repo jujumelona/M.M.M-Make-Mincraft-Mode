@@ -193,7 +193,6 @@ class _ImplementationRouter:
         return json.dumps(
             {
                 "modules": self.modules,
-                "world_ir": None,
                 "assets": [],
                 "audio": [],
                 "acceptance_tests": ["The requested feature has an observable fallback."],
@@ -206,6 +205,10 @@ def _patch_frontdoor(monkeypatch: pytest.MonkeyPatch, prompt: str) -> None:
     game_design = {
         "title": "Request-derived integration",
         "pitch": prompt,
+        "mod_context": {
+            "vanilla_integration": [],
+            "compatibility_targets": [],
+        },
         "_research_brief": {
             "schema_version": "minecraft-mod-ai/research-brief-v1",
             "domains": [

@@ -23,6 +23,7 @@ from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.geckolib_generator import generate_geckolib_entity_assets
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
+from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.project_edit import inspect_fabric_project
 from minecraft_mod_ai.source_patch import (
     SourcePatchError,
@@ -30,7 +31,6 @@ from minecraft_mod_ai.source_patch import (
     sha256_file,
 )
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, SpecValidationError
-from minecraft_mod_ai.world_compiler import _build_blocks
 
 
 def _spec() -> ModSpec:
@@ -189,48 +189,22 @@ def test_audio_registration_writes_soundevent_and_sounds_json(tmp_path: Path) ->
     assert any("SoundEvent.of" in path.read_text(encoding="utf-8") for path in units)
 
 
-def test_world_architecture_is_not_only_a_hollow_box() -> None:
-    structure = {"kind": "village"}
-    size = (9, 7, 9)
-    palette = ["minecraft:stone_bricks", "minecraft:oak_planks", "minecraft:air"]
-    blocks = dict(_build_blocks(structure, size, palette))
-    air = 2
-    assert blocks[(size[0] // 2, 2, size[2] // 2 + 2)] == 1
-    assert blocks[(size[0] // 2, 1, 0)] == air
-    assert any(position[1] >= 5 and state != air for position, state in blocks.items())
-
-
 def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan("Create one frost item")
-    world_ir = {
-        "schema_version": "mmm/world-ir-v1",
-        "regions": [{"id": "spawn", "purpose": "start"}],
-        "routes": [],
-        "structures": [
-            {
-                "id": "spawn_hall",
-                "region_id": "spawn",
-                "kind": "village",
-                "brief": "starter hall",
-                "size": [7, 5, 7],
-                "palette": ["minecraft:stone_bricks", "minecraft:oak_planks", "minecraft:air"],
-                "biomes": ["minecraft:plains"],
-            }
-        ],
-        "quests": [],
-        "constraints": [],
-    }
     proposal = complete_proposal_from_parts(
-        requested_prompt="weapon, quest, animated entity and village",
+        requested_prompt="weapon, quest, animated entity and menu",
         base_proposal=base,
         game_design={"title": "Integrated"},
         modules=(
             ProductionModule("frost_blade", "weapon", {"attack_damage": 6}),
             ProductionModule("first_quest", "quest", {}, ("frost_blade",)),
             ProductionModule("frost_guard", "entity", {"max_health": 60}),
-            ProductionModule("spawn_hall", "structure", {}),
+            ProductionModule(
+                "status_menu",
+                "gui",
+                {"template": "read_only_menu"},
+            ),
         ),
-        world_ir=world_ir,
         acceptance_tests=("all generated systems are present",),
     )
     result = CompleteProductionOrchestrator(workspace_root=tmp_path / "out").execute(
@@ -253,12 +227,64 @@ def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Pat
     assert (project / "src/main/java" / package_path / "extended/GeneratedExtendedContent.java").is_file()
     assert any(path.name == "QuestSystem.java" for path in project.rglob("QuestSystem.java"))
     assert any(path.name == "GeneratedGeckoEntities.java" for path in project.rglob("GeneratedGeckoEntities.java"))
-    assert any(path.name == "GeneratedWorldRuntime.java" for path in project.rglob("GeneratedWorldRuntime.java"))
-    assert result.world_receipt is not None
-    assert result.world_receipt["runtime_bridge"]["contract_count"] >= 1
-    assert (project / f"src/main/resources/data/{base.spec.mod_id}/structures/spawn_hall.nbt").is_file()
+    assert not list(project.rglob("GeneratedWorldRuntime.java"))
     with zipfile.ZipFile(result.release_zip) as archive:
         assert any(name.endswith("GeneratedExtendedContent.java") for name in archive.namelist())
+
+
+def test_v2_source_only_persists_fail_closed_quality_convergence(
+    tmp_path: Path,
+) -> None:
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(
+        "Create one frost item"
+    )
+    modules = (ProductionModule("frost_item", "item"),)
+    game_design = {"title": "Evidence-bound source build"}
+    compiled = compile_production_contract(
+        requested_prompt="Create one frost item",
+        game_design=game_design,
+        modules=modules,
+        acceptance_tests=("the requested item exists",),
+    )
+    proposal = complete_proposal_from_parts(
+        requested_prompt="Create one frost item",
+        base_proposal=base,
+        game_design={
+            **game_design,
+            "_production_contract": compiled.contract,
+        },
+        modules=modules,
+        acceptance_tests=compiled.acceptance_tests,
+    )
+
+    result = CompleteProductionOrchestrator(
+        workspace_root=tmp_path / "out"
+    ).execute(
+        proposal,
+        approval_hash=proposal.calculate_hash(),
+        run_name="quality-source",
+        options=CompleteExecutionOptions(
+            source_only=True,
+            run_jdt=False,
+            run_blockbench=False,
+            run_runtime=False,
+            run_client=False,
+            run_mineflayer=False,
+            run_visual_review=False,
+        ),
+    )
+
+    assert result.status == "SOURCE_READY"
+    assert result.release_ready is False
+    assert result.quality_report is not None
+    assert result.quality_report["overall_status"] == "MISSING"
+    assert "quality:runtime" in result.unresolved_gates
+    run_root = Path(result.work_ledger_path).parent.parent
+    persisted = run_root / ".minecraft_ai/quality-convergence.json"
+    assert persisted.is_file()
+    assert json.loads(persisted.read_text(encoding="utf-8")) == (
+        result.quality_report
+    )
 
 
 def test_complete_orchestrator_requires_exact_existing_input_presence(

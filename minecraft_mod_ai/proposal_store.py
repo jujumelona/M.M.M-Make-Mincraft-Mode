@@ -22,8 +22,7 @@ from .json_stream import (
 from .scale_policy import ScalePolicy
 from .spec import SpecValidationError, canonical_json
 
-INDEX_SCHEMA_V1 = "mmm/complete-proposal-index-v1"
-INDEX_SCHEMA = "mmm/complete-proposal-index-v2"
+INDEX_SCHEMA = "mmm/complete-proposal-index-v3"
 CHUNKED_JSON_ENCODING = "mmm/canonical-json-chunks-v1"
 COLLECTION_FORMAT = "mmm/numbered-collection-manifests-v1"
 DEFAULT_PART_SIZE_BYTES = 1024 * 1024
@@ -155,12 +154,6 @@ def write_sharded_complete_proposal(
                 shard_size,
                 part_size_bytes=part_size_bytes,
             ),
-            "world_ir": _write_world_v2(
-                staging,
-                proposal.world_ir,
-                shard_size,
-                part_size_bytes=part_size_bytes,
-            ),
         }
         _prefix_part_paths(payload, f"{parts_root_name}/{version_name}")
         _sync_directory(staging)
@@ -256,12 +249,11 @@ def read_sharded_complete_proposal_section(
         "assets",
         "audio",
         "acceptance_tests",
-        "world_ir",
     }
     if (
         not isinstance(raw, dict)
         or set(raw) != required
-        or raw.get("schema_version") not in {INDEX_SCHEMA_V1, INDEX_SCHEMA}
+        or raw.get("schema_version") != INDEX_SCHEMA
     ):
         raise SpecValidationError("Complete proposal shard index fields are invalid.")
     proposal_hash = str(raw["proposal_hash"])
@@ -339,45 +331,6 @@ def read_sharded_complete_proposal_section(
             cursor_key=cursor_key,
         )
 
-    if selected.startswith("world."):
-        world_name = selected.removeprefix("world.")
-        names = {"regions", "routes", "structures", "quests", "constraints"}
-        world = raw["world_ir"]
-        if world_name not in names:
-            raise SpecValidationError(
-                f"Unknown complete proposal section: {selected!r}"
-            )
-        if world is None:
-            if cursor:
-                raise SpecValidationError(
-                    "An empty world section does not accept a cursor."
-                )
-            return {
-                "schema_version": "mmm/complete-plan-section-v1",
-                "proposal_hash": proposal_hash,
-                "section": selected,
-                "items": [],
-                "next_cursor": "",
-                "remaining": 0,
-            }
-        if (
-            not isinstance(world, dict)
-            or set(world) != {"schema_version", "collections"}
-            or not isinstance(world["collections"], dict)
-            or set(world["collections"]) != names
-        ):
-            raise SpecValidationError("World shard index fields are invalid.")
-        return _read_collection_page(
-            world["collections"][world_name],
-            read_part,
-            proposal_hash=proposal_hash,
-            section=selected,
-            cursor=cursor,
-            limit=limit,
-            max_bytes=max_bytes,
-            cursor_key=cursor_key,
-        )
-
     if selected.startswith("game_design."):
         field_name = selected.removeprefix("game_design.")
         if not field_name or "." in field_name:
@@ -445,11 +398,10 @@ def complete_proposal_from_index(
         "assets",
         "audio",
         "acceptance_tests",
-        "world_ir",
     }
     if not isinstance(raw, dict) or set(raw) != required:
         raise SpecValidationError("Complete proposal shard index fields are invalid.")
-    if raw["schema_version"] not in {INDEX_SCHEMA_V1, INDEX_SCHEMA}:
+    if raw["schema_version"] != INDEX_SCHEMA:
         raise SpecValidationError("Unsupported complete proposal shard index.")
     metadata = _read_json_part(raw["metadata"], read_part)
     base_proposal = _read_json_part(raw["base_proposal"], read_part)
@@ -458,7 +410,6 @@ def complete_proposal_from_index(
     assets = _read_collection(raw["assets"], read_part)
     audio = _read_collection(raw["audio"], read_part)
     acceptance_tests = _read_collection(raw["acceptance_tests"], read_part)
-    world_ir = _read_world(raw["world_ir"], read_part)
     if not isinstance(metadata, dict):
         raise SpecValidationError("Complete proposal metadata part must be an object.")
     expected_metadata = {
@@ -478,7 +429,6 @@ def complete_proposal_from_index(
             "base_proposal": base_proposal,
             "game_design": game_design,
             "modules": modules,
-            "world_ir": world_ir,
             "assets": assets,
             "audio": audio,
             "acceptance_tests": acceptance_tests,
@@ -489,83 +439,11 @@ def complete_proposal_from_index(
     return proposal
 
 
-def _write_world_v2(
-    root: Path,
-    world: dict[str, Any] | None,
-    shard_size: int,
-    *,
-    part_size_bytes: int,
-) -> dict[str, Any] | None:
-    if world is None:
-        return None
-    collection_names = ("regions", "routes", "structures", "quests", "constraints")
-    if set(world) != {"schema_version", *collection_names}:
-        raise SpecValidationError("world_ir fields are invalid.")
-    return {
-        "schema_version": world["schema_version"],
-        "collections": {
-            name: _write_collection_v2(
-                root,
-                f"world-{name}",
-                world[name],
-                shard_size,
-                part_size_bytes=part_size_bytes,
-            )
-            for name in collection_names
-        },
-    }
-
-
-def _read_world(
-    value: Any,
-    read_part: Callable[[str], bytes],
-) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict) or set(value) != {
-        "schema_version",
-        "collections",
-    }:
-        raise SpecValidationError("World shard index fields are invalid.")
-    collections = value["collections"]
-    names = ("regions", "routes", "structures", "quests", "constraints")
-    if not isinstance(collections, dict) or set(collections) != set(names):
-        raise SpecValidationError("World shard collections are invalid.")
-    return {
-        "schema_version": value["schema_version"],
-        **{
-            name: _read_collection(collections[name], read_part)
-            for name in names
-        },
-    }
-
-
 def _proposal_collection_counts(raw: dict[str, Any]) -> dict[str, int]:
-    counts = {
+    return {
         name: _collection_count(raw[name])
         for name in ("modules", "assets", "audio", "acceptance_tests")
     }
-    world = raw["world_ir"]
-    world_names = ("regions", "routes", "structures", "quests", "constraints")
-    if world is None:
-        counts.update({f"world.{name}": 0 for name in world_names})
-        return counts
-    if (
-        not isinstance(world, dict)
-        or set(world) != {"schema_version", "collections"}
-        or not isinstance(world["collections"], dict)
-        or set(world["collections"]) != set(world_names)
-    ):
-        raise SpecValidationError("World shard index fields are invalid.")
-    counts.update(
-        {
-            f"world.{name}": _collection_count(
-                world["collections"][name]
-            )
-            for name in world_names
-        }
-    )
-    return counts
 
 
 def _available_sections(raw: dict[str, Any]) -> list[str]:
@@ -579,17 +457,6 @@ def _available_sections(raw: dict[str, Any]) -> list[str]:
         "audio",
         "acceptance_tests",
     ]
-    if raw["world_ir"] is not None:
-        sections.extend(
-            f"world.{name}"
-            for name in (
-                "regions",
-                "routes",
-                "structures",
-                "quests",
-                "constraints",
-            )
-        )
     return sections
 
 

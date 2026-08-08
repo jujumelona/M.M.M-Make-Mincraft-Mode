@@ -84,7 +84,7 @@ def _normalize_modules(
     """Deduplicate bootstrap content and route custom semantics exactly once.
 
     An explicit ``implementation=custom`` module is converted to ``custom_java`` before
-    any content, system, entity or world generator sees it. The requested kind is kept
+    any content, system, entity or native-module generator sees it. The requested kind is kept
     in config so the indexed coder receives the original semantic target. This prevents
     built-in generation followed by a second custom patch for the same module.
     """
@@ -93,8 +93,6 @@ def _normalize_modules(
     if spec.boss is not None:
         base[spec.boss.entity_id] = "boss"
         base[f"{spec.boss.entity_id}_spawn_egg"] = "item"
-    if spec.arena is not None:
-        base[spec.arena.arena_id] = "structure"
 
     reused: set[str] = set()
     staged: list[ProductionModule] = []

@@ -468,6 +468,108 @@ def test_wikipedia_is_reference_only_and_uses_language_bound_pagination() -> Non
     assert len(requests) == 1
 
 
+def test_openalex_search_is_cursor_bound_research_evidence_only() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.host == "api.openalex.org"
+        assert request.url.path == "/works"
+        cursor = request.url.params["cursor"]
+        return httpx.Response(
+            200,
+            json={
+                "meta": {
+                    "count": 2,
+                    "next_cursor": "next-page" if cursor == "*" else None,
+                },
+                "results": [
+                    {
+                        "id": "https://openalex.org/W123",
+                        "doi": "https://doi.org/10.1000/example",
+                        "display_name": "Execution feedback for game agents",
+                        "publication_year": 2026,
+                        "type": "article",
+                        "cited_by_count": 7,
+                        "authorships": [
+                            {"author": {"display_name": "Ada Researcher"}}
+                        ],
+                        "primary_location": {},
+                        "best_oa_location": {"license": "cc-by"},
+                        "open_access": {"is_oa": True},
+                    }
+                ],
+            },
+        )
+
+    client = _client(handler)
+    first = client.search(
+        "openalex_works",
+        "game agent execution feedback",
+        limit=1,
+        target_profile="general_reference",
+    )
+    second = client.search(
+        "openalex_works",
+        "game agent execution feedback",
+        cursor=first["next_cursor"],
+        limit=1,
+        target_profile="general_reference",
+    )
+
+    assert requests[0].url.params["cursor"] == "*"
+    assert requests[1].url.params["cursor"] == "next-page"
+    assert second["next_cursor"] == ""
+    candidate = first["candidates"][0]
+    assert candidate["provider"] == "openalex_works"
+    assert candidate["reuse_status"] == (
+        "research_evidence_only_not_implementation_authority"
+    )
+    assert candidate["metadata"]["doi"] == "10.1000/example"
+
+
+def test_crossref_search_cross_checks_paper_metadata_without_full_text_reuse() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.crossref.org"
+        assert request.url.params["cursor"] == "*"
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "total-results": 1,
+                    "next-cursor": None,
+                    "items": [
+                        {
+                            "DOI": "10.5555/agent-test",
+                            "title": ["Repository agents with executable tests"],
+                            "abstract": "<jats:p>Fresh evidence matters.</jats:p>",
+                            "type": "proceedings-article",
+                            "published": {"date-parts": [[2025, 7, 2]]},
+                            "author": [{"given": "Grace", "family": "Tester"}],
+                            "publisher": "Example Society",
+                            "is-referenced-by-count": 3,
+                            "license": [
+                                {"URL": "https://creativecommons.org/licenses/by/4.0/"}
+                            ],
+                        }
+                    ],
+                }
+            },
+        )
+
+    page = _client(handler).search(
+        "crossref_works",
+        "repository agents executable tests",
+        target_profile="general_reference",
+    )
+
+    candidate = page["candidates"][0]
+    assert candidate["source_url"] == "https://doi.org/10.5555/agent-test"
+    assert candidate["metadata"]["abstract"] == "Fresh evidence matters."
+    assert candidate["metadata"]["published"] == "2025-07-02"
+    assert candidate["license_policy"].startswith("bibliographic_metadata_only")
+
+
 @pytest.mark.parametrize(
     ("prompt", "game_design", "expected_terms"),
     [

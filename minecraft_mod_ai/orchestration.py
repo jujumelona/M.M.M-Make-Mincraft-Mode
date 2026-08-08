@@ -226,18 +226,6 @@ def compile_task_graph(proposal: Proposal) -> TaskGraph:
             )
         )
         generation_dependencies.append("fabric.entity.generate")
-    if spec.arena is not None:
-        nodes.append(
-            TaskNode(
-                "world.arena.generate",
-                "Generate the explicitly requested arena and WorldDesignIR",
-                "fabric.scaffold",
-                ("fabric.scaffold",),
-                approval_required=True,
-            )
-        )
-        generation_dependencies.append("world.arena.generate")
-
     for request in proposal.deferred_requests:
         safe_capability = re.sub(r"[^a-z0-9_.-]+", "-", request.capability.lower())
         safe_capability = safe_capability.strip(".-") or "unknown"
@@ -321,7 +309,6 @@ def project_ir(proposal: Proposal) -> dict[str, Any]:
         "registry": {
             "content_ids": [content.content_id for content in spec.contents],
             "boss_id": spec.boss.entity_id if spec.boss else None,
-            "arena_id": spec.arena.arena_id if spec.arena else None,
         },
         "task_graph_hash": graph.graph_hash,
         "task_dag": graph.to_dict(),

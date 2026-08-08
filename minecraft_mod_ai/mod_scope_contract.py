@@ -5,7 +5,9 @@ from typing import Any, Callable
 from .mod_development_methods import resolve_mod_development_methods
 from .spec import SpecValidationError
 
-_WORLDGEN_MODULE_KINDS = frozenset({"structure", "biome", "dimension"})
+_WORLDGEN_MODULE_KINDS = frozenset(
+    {"structure", "biome", "dimension", "world_event"}
+)
 _INSTALL_MARKER = "_mmm_mod_scope_contract_installed"
 
 
@@ -41,9 +43,9 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             + "\n\nThe resolved mod-development method plan is authoritative for "
             "implementation scope. Generate only a Fabric mod project. Never emit a "
             "standalone map, world save, world ZIP, schematic, Litematica file, "
-            "BuildSpec, NPZ block delta, or external Builder handoff. A structure, "
-            "biome, dimension, arena, or dungeon may be represented only as mod-owned "
-            "worldgen code and datapack resources when fabric_worldgen was selected."
+            "BuildSpec, NPZ block delta, or external Builder handoff. Native Fabric "
+            "worldgen modules are mod-owned code and datapack resources only when "
+            "fabric_worldgen was selected from the request."
         )
 
     def scoped_complete_proposal_from_parts(
@@ -52,7 +54,6 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         base_proposal: Any,
         game_design: dict[str, Any],
         modules: tuple[Any, ...],
-        world_ir: dict[str, Any] | None = None,
         assets: tuple[Any, ...] = (),
         audio: tuple[Any, ...] = (),
         acceptance_tests: tuple[str, ...],
@@ -80,10 +81,7 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
                 in _WORLDGEN_MODULE_KINDS
             )
         )
-        legacy_arena = getattr(base_proposal, "arena", None) is not None
-        if not worldgen_selected and (
-            world_ir is not None or worldgen_modules or legacy_arena
-        ):
+        if not worldgen_selected and worldgen_modules:
             raise SpecValidationError(
                 "The planner attempted world or structure generation although the "
                 "request did not select fabric_worldgen."
@@ -103,7 +101,6 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             base_proposal=base_proposal,
             game_design=scoped_design,
             modules=modules,
-            world_ir=world_ir,
             assets=assets,
             audio=audio,
             acceptance_tests=acceptance_tests,

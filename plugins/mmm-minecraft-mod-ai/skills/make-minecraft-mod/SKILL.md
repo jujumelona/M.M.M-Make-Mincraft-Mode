@@ -5,11 +5,11 @@ description: Plan, revise, build, validate, or resume a Minecraft Java 1.20.1 Fa
 
 # Make Minecraft Mod
 
-Start from the user's words. Do not force a boss, village, field, dungeon,
-arena, creature shape, or any other example into the design.
+Start from the user's words. Do not inject unrequested content or an example
+template into the design.
 
 1. Use the `mmm-frontdoor` tools to produce a readable game plan. Show the
-   player fantasy, loop, progression, requested world/content, systems, and
+   player fantasy, loop, progression, requested mod content, systems, and
    acceptance criteria in normal language.
 2. Keep revising that plan through conversation until the user accepts the
    direction. Keep proposal IDs, hashes, and machine contracts out of the
@@ -36,6 +36,6 @@ arena, creature shape, or any other example into the design.
    extraction; never execute archive contents during inspection.
 
 Do not claim an infinite machine. M.M.M has no fixed project-wide feature,
-module, entity, asset, audio, or world-scope count cap; physical formats,
+module, entity, asset, or audio count cap; physical formats,
 available memory, storage, model context, API quotas, and runtime time remain
 resource boundaries handled through more shards and sessions.

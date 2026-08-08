@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -15,7 +16,6 @@ from .runtime_manager import MinecraftRuntimeManager
 from .spec import Proposal, ProposalStatus, SpecValidationError
 from .system_pack_generator import generate_system_pack, supported_system_packs
 from .training import TrainingTraceStore
-from .world_compiler import compile_world_ir
 
 
 class ProductionToolService:
@@ -63,7 +63,7 @@ class ProductionToolService:
     ) -> dict[str, Any]:
         target = self._existing_file(index_path)
         router = ModelRouter(profile=self.profile) if semantic or rerank else None
-        hits = ProjectRAGIndex(target).search(
+        result = ProjectRAGIndex(target).search_with_receipt(
             query,
             limit=limit,
             router=router,
@@ -74,7 +74,8 @@ class ProductionToolService:
         return {
             "schema_version": "mmm/code-rag-result-v1",
             "query": query,
-            "hits": [hit.__dict__ for hit in hits],
+            "hits": [asdict(hit) for hit in result.hits],
+            "receipt": asdict(result.receipt),
         }
 
     def java_diagnostics(
@@ -123,24 +124,6 @@ class ProductionToolService:
             return client.call(operation, arguments)
         finally:
             client.close()
-
-    def compile_world(
-        self,
-        *,
-        world_ir: dict[str, Any],
-        mod_id: str,
-        output_root: str,
-        proposal: dict[str, Any],
-        approval_hash: str,
-    ) -> dict[str, Any]:
-        self._approved(proposal, approval_hash)
-        target = self._new_path(output_root)
-        return compile_world_ir(
-            world_ir,
-            mod_id=mod_id,
-            output_root=target,
-            package_world_zip=True,
-        )
 
     def generate_geckolib_entity(
         self,

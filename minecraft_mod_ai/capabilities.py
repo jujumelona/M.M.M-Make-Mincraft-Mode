@@ -76,6 +76,8 @@ CAPABILITY_RECORDS: tuple[CapabilityRecord, ...] = (
     _cap("java.diagnostics", "quality", read=True),
     _cap("java.symbols", "quality", read=True),
     _cap("quality.validate", "quality", read=True, approval=True),
+    _cap("quality.contract.read", "quality", read=True),
+    _cap("quality.convergence.read", "quality", read=True),
     _cap("build.gradle", "build", read=False, open_world=True, approval=True),
     _cap("test.gametest", "quality", read=False, approval=True),
     _cap("jar.inspect", "quality", read=True),

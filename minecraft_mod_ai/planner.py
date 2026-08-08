@@ -10,16 +10,13 @@ from typing import Any, Protocol
 
 from .capabilities import capability_manifest_hash
 from .intent import (
-    MAP_CASCADE_REMOVALS,
     CountIntent,
     is_requested,
     latest_intent_event,
     requested_count,
-    term_occurrences,
 )
 from .knowledge import evidence_for_mvp, evidence_snapshot_hash
 from .spec import (
-    ArenaSpec,
     BossSpec,
     ContentKind,
     ContentSpec,
@@ -49,9 +46,6 @@ THEMES: tuple[tuple[tuple[str, ...], str, str, str, str], ...] = (
 
 ADVANCED_CAPABILITIES: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("스킬", "skill", "마법", "magic"), "skill_system", "future"),
-    (("마을", "village", "town"), "village_map", "future"),
-    (("필드", "field", "open world", "open-world"), "field_map", "future"),
-    (("던전", "dungeon"), "dungeon_map", "future"),
     (("몹", "mob", "엔티티", "entity"), "custom_entity", "future"),
     (("퀘스트", "quest"), "quest_system", "future"),
     (("직업", "class", "클래스"), "class_system", "future"),
@@ -65,10 +59,6 @@ ADVANCED_CAPABILITIES: tuple[tuple[tuple[str, ...], str, str], ...] = (
 
 ITEM_TERMS = ("아이템", "item", "결정", "crystal", "도구", "tool")
 BLOCK_TERMS = ("블록", "block", "광석", "ore", "벽돌", "brick")
-ARENA_TERMS = ("아레나", "arena", "투기장")
-NAMED_MAP_CAPABILITIES = frozenset(
-    {"village_map", "field_map", "dungeon_map"}
-)
 
 
 def _contains(
@@ -113,122 +103,11 @@ def _count(
     )
 
 
-@dataclass(frozen=True)
-class _ArenaDimensions:
-    radius: int | None
-    wall_height: int | None
-    explicit: bool = False
-    requested: str = ""
-    error: str = ""
-
-
-def _arena_dimensions(prompt: str) -> _ArenaDimensions:
-    """Resolve the latest arena-local size without substituting invalid dimensions."""
-
-    lowered = prompt.lower()
-    arena_positions = [
-        start
-        for start, _, _ in term_occurrences(lowered, ARENA_TERMS)
-    ]
-    other_zone_positions = [
-        start
-        for start, _, _ in term_occurrences(
-            lowered,
-            (
-                "마을",
-                "village",
-                "town",
-                "필드",
-                "field",
-                "던전",
-                "dungeon",
-            ),
-        )
-    ]
-    if not arena_positions:
-        return _ArenaDimensions(radius=12, wall_height=5)
-
-    def near_arena(position: int, *, distance: int = 56) -> bool:
-        arena_distance = min(
-            abs(position - arena_position) for arena_position in arena_positions
-        )
-        other_distance = min(
-            (abs(position - zone_position) for zone_position in other_zone_positions),
-            default=10_000,
-        )
-        return arena_distance <= distance and arena_distance <= other_distance
-
-    presets = (
-        (("소형", "작은", "작게", "small"), 8, 4),
-        (("대형", "큰", "크게", "넓게", "large"), 20, 7),
-    )
-    candidates: list[tuple[int, _ArenaDimensions]] = []
-    for words, radius, height in presets:
-        for position, _, _ in term_occurrences(lowered, words):
-            if near_arena(position):
-                candidates.append(
-                    (
-                        position,
-                        _ArenaDimensions(
-                            radius=radius,
-                            wall_height=height,
-                            explicit=True,
-                        ),
-                    )
-                )
-
-    for match in re.finditer(
-        r"(?<!\d)(\d{1,4})\s*[x×]\s*(\d{1,4})(?!\d)",
-        lowered,
-    ):
-        if not near_arena(match.end()):
-            continue
-        width = int(match.group(1))
-        depth = int(match.group(2))
-        requested = f"{width}×{depth}"
-        if width != depth:
-            parsed = _ArenaDimensions(
-                radius=None,
-                wall_height=None,
-                explicit=True,
-                requested=requested,
-                error="아레나는 정사각형 크기만 지원합니다.",
-            )
-        elif width % 2 == 0:
-            parsed = _ArenaDimensions(
-                radius=None,
-                wall_height=None,
-                explicit=True,
-                requested=requested,
-                error="아레나 한 변은 홀수여야 합니다.",
-            )
-        elif not 13 <= width <= 65:
-            parsed = _ArenaDimensions(
-                radius=None,
-                wall_height=None,
-                explicit=True,
-                requested=requested,
-                error="아레나 한 변은 13~65 블록만 지원합니다.",
-            )
-        else:
-            parsed = _ArenaDimensions(
-                radius=(width - 1) // 2,
-                wall_height=min(12, max(3, width // 6)),
-                explicit=True,
-                requested=requested,
-            )
-        candidates.append((match.start(), parsed))
-
-    if not candidates:
-        return _ArenaDimensions(radius=12, wall_height=5)
-    return max(candidates, key=lambda item: item[0])[1]
-
-
 class HeuristicPlanner:
     """Offline planner that maps common requests into a strict, safe MVP ModSpec.
 
-    It supports one bounded boss/entity, arena-function, and Blockbench/OBJ
-    archetype. Capabilities outside that reviewed slice remain explicit deferrals.
+    It supports bounded item/block/boss archetypes. Capabilities outside that
+    reviewed slice remain explicit deferrals.
     """
 
     def plan(self, prompt: str) -> Proposal:
@@ -313,11 +192,6 @@ class HeuristicPlanner:
             )
 
         asks_boss = _contains(prompt, ("보스", "boss"))
-        asks_arena = _contains(
-            prompt,
-            ARENA_TERMS,
-            cascade_removals=MAP_CASCADE_REMOVALS,
-        )
         asks_3d = _contains(prompt, ("3d", "모델링", "model", "모델"))
         unsupported_boss_shape = asks_boss and _contains(
             prompt,
@@ -360,44 +234,9 @@ class HeuristicPlanner:
             if asks_boss and not unsupported_boss_shape
             else None
         )
-        arena_dimensions = _arena_dimensions(prompt)
-        arena = (
-            ArenaSpec(
-                arena_id=f"{stem}_arena",
-                display_name_en=f"{english_theme} Arena",
-                display_name_ko=f"{korean_theme} 투기장",
-                radius=arena_dimensions.radius,
-                wall_height=arena_dimensions.wall_height,
-                floor_block=(
-                    "minecraft:packed_ice"
-                    if stem == "frost"
-                    else "minecraft:deepslate_tiles"
-                ),
-                accent_block=(
-                    "minecraft:blue_ice"
-                    if stem == "frost"
-                    else "minecraft:amethyst_block"
-                ),
-            )
-            if (
-                asks_arena
-                and arena_dimensions.radius is not None
-                and arena_dimensions.wall_height is not None
-            )
-            else None
-        )
-
         deferred: list[DeferredRequest] = []
         for keywords, capability, phase in ADVANCED_CAPABILITIES:
-            if _contains(
-                prompt,
-                keywords,
-                cascade_removals=(
-                    MAP_CASCADE_REMOVALS
-                    if capability in NAMED_MAP_CAPABILITIES
-                    else ()
-                ),
-            ):
+            if _contains(prompt, keywords):
                 deferred.append(
                     DeferredRequest(
                         capability=capability,
@@ -430,17 +269,6 @@ class HeuristicPlanner:
                     suggested_phase="planning",
                 )
             )
-        if asks_arena and arena_dimensions.error:
-            deferred.append(
-                DeferredRequest(
-                    capability="unsupported_arena_dimensions",
-                    reason=(
-                        f"요청한 {arena_dimensions.requested} 아레나를 25×25로 "
-                        f"바꾸지 않습니다. {arena_dimensions.error}"
-                    ),
-                    suggested_phase="planning",
-                )
-            )
         if unsupported_boss_shape:
             deferred.append(
                 DeferredRequest(
@@ -464,30 +292,6 @@ class HeuristicPlanner:
                 )
             )
 
-        asks_general_map = _contains(prompt, ("맵", "map", "월드", "world"))
-        has_named_map = _contains(
-            prompt,
-            (
-                "마을",
-                "village",
-                "town",
-                "필드",
-                "field",
-                "open world",
-                "open-world",
-                "던전",
-                "dungeon",
-            ),
-            cascade_removals=MAP_CASCADE_REMOVALS,
-        )
-        if asks_general_map and not asks_arena and not has_named_map:
-            deferred.append(
-                DeferredRequest(
-                    capability="custom_map",
-                    reason="요청한 맵 구성을 대화로 정한 뒤 구현해야 합니다.",
-                    suggested_phase="future",
-                )
-            )
         if asks_3d and boss is None:
             deferred.append(
                 DeferredRequest(
@@ -496,7 +300,7 @@ class HeuristicPlanner:
                     suggested_phase="future",
                 )
             )
-        if not contents and boss is None and arena is None and not deferred:
+        if not contents and boss is None and not deferred:
             deferred.append(
                 DeferredRequest(
                     capability="creative_brief",
@@ -516,18 +320,15 @@ class HeuristicPlanner:
                 + (" 아이템·블록" if contents else "")
                 + (" 보스" if boss else "")
                 + ("·3D" if boss and asks_3d else "")
-                + (" 아레나 맵" if arena else "")
                 + " 구성"
             ),
             contents=tuple(contents),
             boss=boss,
-            arena=arena,
             platform=PlatformLock(),
         )
         evidence_query = (
             f"{prompt} project build metadata dependency "
             + ("boss entity gametest " if boss else "item block recipe data generation ")
-            + ("arena structure runtime" if arena else "")
         )
         evidence_sources = evidence_for_mvp(evidence_query)
         proposal = Proposal(
@@ -544,7 +345,7 @@ class HeuristicPlanner:
             exclusions=(
                 "자동 게시, 실제 사용자 월드 수정, 외부 서버 명령",
                 "자유형 애니메이션·임의 차원·GUI·음성 생성",
-                "사용자 승인 없이 아레나 함수를 실행하거나 보스를 소환하는 동작",
+                "사용자 승인 없이 게임 내 명령을 실행하거나 보스를 소환하는 동작",
             ),
             deferred_requests=tuple(deferred),
             acceptance_tests=(
@@ -554,7 +355,6 @@ class HeuristicPlanner:
                 "JAR가 ZIP 형식이며 fabric.mod.json, 클래스, 생성 리소스를 포함한다.",
                 "영어와 한국어 번역 키가 모든 생성 콘텐츠를 포함한다.",
                 "보스 요청 시 서버 권위 엔티티·보스바·loot·spawn egg와 GameTest를 포함한다.",
-                "아레나 요청 시 결정론적 함수·WorldDesignIR·경로 검증을 포함한다.",
                 "지원되는 보스 3D 요청 시 bbmodel·texture·runtime renderer를 포함한다.",
             ),
             evidence_sources=evidence_sources,
@@ -771,7 +571,6 @@ def _proposal_from_model_data(prompt: str, data: dict[str, Any]) -> Proposal:
         summary=data["summary"],
         contents=contents,
         boss=heuristic_spec.boss,
-        arena=heuristic_spec.arena,
         platform=PlatformLock(),
     )
     # A remote/local model may explain a capability already found by the

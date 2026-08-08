@@ -48,6 +48,12 @@ _TOOL_STAGES: dict[str, frozenset[str]] = {
     "approve_plan": frozenset({"planning", "generation"}),
     "approve_complete_plan": frozenset({"planning", "generation"}),
     "read_complete_plan_section": frozenset({"planning", "generation"}),
+    "read_quality_contract": frozenset(
+        {"planning", "generation", "quality"}
+    ),
+    "quality_status": frozenset(
+        {"frontdoor", "planning", "generation", "quality", "release"}
+    ),
     "discover_ecosystem_resources": frozenset(
         {"frontdoor", "planning", "research"}
     ),
@@ -377,6 +383,18 @@ def read_complete_plan_section(
 
 
 @_stage_tool()
+def read_quality_contract(proposal_ref: str) -> dict[str, Any]:
+    """Read request coverage and required quality dimensions in bounded form."""
+    return _core().read_quality_contract(proposal_ref)
+
+
+@_stage_tool()
+def quality_status(run_name: str) -> dict[str, Any]:
+    """Read the latest validated quality-convergence status for a run."""
+    return _core().quality_status(run_name)
+
+
+@_stage_tool()
 def execute_complete_project(
     proposal_ref: str,
     approval_hash: str,
@@ -500,7 +518,6 @@ def generate_assets(
 ) -> dict[str, Any]:
     """Generate concept art and Minecraft texture candidates on an exclusive GPU."""
     return _core().generate_assets(assets, output_dir, seed)
-
 
 
 @_stage_tool()
@@ -794,7 +811,7 @@ def design_conversation(
     return (
         "You are the M.M.M game director. Discuss the requested Minecraft mod as "
         "a real game design: player fantasy, loop, progression, systems, content, "
-        "world forms, art/audio direction, multiplayer and acceptance tests. "
+        "vanilla integration, art/audio direction, multiplayer and acceptance tests. "
         "Scale the plan to the request and never introduce content the user did "
         "not ask for or accept. "
         "Keep hashes, DAG nodes, RAG and MCP mechanics out of the player-facing "

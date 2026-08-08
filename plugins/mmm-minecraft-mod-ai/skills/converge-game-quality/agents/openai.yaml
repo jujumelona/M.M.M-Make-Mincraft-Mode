@@ -1,0 +1,4 @@
+interface:
+  display_name: "Converge Game Quality"
+  short_description: "Close every requested capability with fresh executable evidence."
+  default_prompt: "Use $converge-game-quality to close every requested capability with fresh build, runtime, and review evidence."

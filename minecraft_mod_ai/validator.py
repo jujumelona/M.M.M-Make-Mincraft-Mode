@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from .complete_spec import CompleteProposal
-from .generator import _arena_path_length
 from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
     LocalAiSidecarGenerationError,
@@ -21,6 +20,7 @@ from .local_ai_sidecar_generator import (
 )
 from .scale_policy import ScalePolicy
 from .spec import ContentKind, ModSpec
+from .toolchain_contract import fabric_dependency_predicates
 
 
 @dataclass(frozen=True)
@@ -202,9 +202,6 @@ class ProjectValidator:
                 ko_path,
                 findings,
             )
-
-        if spec.arena is not None:
-            checks += self._validate_arena(root, spec, findings)
 
         fabric_path = root / "src/main/resources/fabric.mod.json"
         fabric = self._load_json(fabric_path, findings, root)
@@ -419,140 +416,6 @@ class ProjectValidator:
                 )
         return checks
 
-    def _validate_arena(
-        self,
-        root: Path,
-        spec: ModSpec,
-        findings: list[Finding],
-    ) -> int:
-        arena = spec.arena
-        assert arena is not None
-        checks = 0
-        function_path = (
-            root
-            / f"src/main/resources/data/{spec.mod_id}/functions/build_{arena.arena_id}.mcfunction"
-        )
-        world_ir_path = (
-            root / f".minecraft_ai/world/{arena.arena_id}.world_design.json"
-        )
-        preview_path = (
-            root / f".minecraft_ai/world/{arena.arena_id}_preview.png"
-        )
-        for path in (function_path, world_ir_path, preview_path):
-            checks += 1
-            if not path.is_file() or path.is_symlink():
-                findings.append(
-                    Finding(
-                        "MISSING_ARENA_ASSET",
-                        "error",
-                        self._rel(root, path),
-                        f"Arena artifact is missing for {arena.arena_id}.",
-                    )
-                )
-        function_text = (
-            function_path.read_text(encoding="utf-8", errors="replace")
-            if function_path.is_file()
-            else ""
-        )
-        checks += 1
-        if spec.boss is not None:
-            expected_summon = f"summon {spec.mod_id}:{spec.boss.entity_id}"
-            if expected_summon not in function_text:
-                findings.append(
-                    Finding(
-                        "ARENA_BOSS_MISSING",
-                        "error",
-                        self._rel(root, function_path),
-                        "Arena function does not summon the approved boss.",
-                    )
-                )
-        elif any(
-            line.strip().startswith("summon ")
-            for line in function_text.splitlines()
-        ):
-            findings.append(
-                Finding(
-                    "ARENA_UNAPPROVED_SUMMON",
-                    "error",
-                    self._rel(root, function_path),
-                    "A boss-free arena may not contain a summon command.",
-                )
-            )
-
-        expected_commands = {
-            (
-                f"fill ~-{arena.radius} ~-1 ~-{arena.radius} "
-                f"~{arena.radius} ~-1 ~{arena.radius} {arena.floor_block}"
-            ),
-            (
-                f"fill ~-{arena.radius} ~ ~-{arena.radius} "
-                f"~{arena.radius} ~{arena.wall_height} ~-{arena.radius} "
-                f"{arena.accent_block}"
-            ),
-            (
-                f"fill ~-{arena.radius} ~ ~{arena.radius} "
-                f"~{arena.radius} ~{arena.wall_height} ~{arena.radius} "
-                f"{arena.accent_block}"
-            ),
-            (
-                f"fill ~-{arena.radius} ~ ~-{arena.radius - 1} "
-                f"~-{arena.radius} ~{arena.wall_height} ~{arena.radius - 1} "
-                f"{arena.accent_block}"
-            ),
-            (
-                f"fill ~{arena.radius} ~ ~-{arena.radius - 1} "
-                f"~{arena.radius} ~{arena.wall_height} ~{arena.radius - 1} "
-                f"{arena.accent_block}"
-            ),
-            f"fill ~-2 ~ ~-{arena.radius} ~2 ~2 ~-{arena.radius} air",
-        }
-        actual_commands = set(function_text.splitlines())
-        for command in expected_commands:
-            checks += 1
-            if command not in actual_commands:
-                findings.append(
-                    Finding(
-                        "ARENA_GEOMETRY_MISMATCH",
-                        "error",
-                        self._rel(root, function_path),
-                        f"Required arena command is missing: {command}",
-                    )
-                )
-
-        world_ir = self._load_json(world_ir_path, findings, root)
-        navigation = world_ir.get("navigation", {})
-        expected_path_length = _arena_path_length(arena.radius)
-        center_zone = "boss_area" if spec.boss is not None else "map_center"
-        verification = (
-            navigation.get("verification", {})
-            if isinstance(navigation, dict)
-            else {}
-        )
-        checks += 1
-        if (
-            not isinstance(navigation, dict)
-            or navigation.get("critical_path_verified") is not True
-            or ["entry", center_zone]
-            not in navigation.get("required_paths", [])
-            or navigation.get("minimum_door_width") != 5
-            or not isinstance(verification, dict)
-            or verification.get("method") != "deterministic_grid_bfs"
-            or verification.get("result") is not True
-            or expected_path_length is None
-            or verification.get("path_length_blocks") != expected_path_length
-        ):
-            findings.append(
-                Finding(
-                    "ARENA_PATH_INVALID",
-                    "error",
-                    self._rel(root, world_ir_path),
-                    "WorldDesignIR does not prove the approved critical path.",
-                )
-            )
-        checks += 1
-        self._validate_png(root, preview_path, findings)
-        return checks
-
     def _validate_fabric_metadata(
         self,
         root: Path,
@@ -580,12 +443,7 @@ class ProjectValidator:
                     )
                 )
         depends = fabric.get("depends")
-        expected_depends = {
-            "fabricloader": f">={spec.platform.fabric_loader}",
-            "minecraft": f"~{spec.platform.minecraft_version}",
-            "java": ">=17",
-            "fabric-api": f">={spec.platform.fabric_api}",
-        }
+        expected_depends = fabric_dependency_predicates(spec.platform)
         checks += 1
         if not isinstance(depends, dict):
             findings.append(
@@ -809,18 +667,6 @@ class ProjectValidator:
                             "Approved audio registry/resource is missing.",
                         )
                     )
-        if complete.world_ir is not None:
-            checks += 1
-            manifest = root / ".minecraft_ai/mmm-world-manifest.json"
-            if not manifest.is_file():
-                findings.append(
-                    Finding(
-                        "COMPLETE_WORLD_MANIFEST_MISSING",
-                        "error",
-                        self._rel(root, manifest),
-                        "Compiled world manifest is missing.",
-                    )
-                )
         checks += self._validate_local_ai_sidecar_sources(
             root,
             spec,
@@ -1003,6 +849,7 @@ def _load_complete_project_proposal(
         if raw.get("schema_version") in {
             "mmm/complete-proposal-index-v1",
             "mmm/complete-proposal-index-v2",
+            "mmm/complete-proposal-index-v3",
         }:
             from .proposal_store import load_sharded_complete_proposal
 
@@ -1089,6 +936,7 @@ def _load_complete_jar_proposal(
         if raw.get("schema_version") in {
             "mmm/complete-proposal-index-v1",
             "mmm/complete-proposal-index-v2",
+            "mmm/complete-proposal-index-v3",
         }:
             from .proposal_store import load_sharded_complete_proposal_from_zip
 
@@ -1268,12 +1116,7 @@ def validate_jar(
                     )
                 )
         depends = metadata.get("depends")
-        expected_depends = {
-            "fabricloader": f">={spec.platform.fabric_loader}",
-            "minecraft": f"~{spec.platform.minecraft_version}",
-            "java": ">=17",
-            "fabric-api": f">={spec.platform.fabric_api}",
-        }
+        expected_depends = fabric_dependency_predicates(spec.platform)
         checks += 1
         if not isinstance(depends, dict):
             findings.append(
@@ -1398,10 +1241,6 @@ def validate_jar(
                     f"assets/{spec.mod_id}/models/item/{spec.boss.entity_id}_spawn_egg.json",
                     f"data/{spec.mod_id}/loot_tables/entities/{spec.boss.entity_id}.json",
                 }
-            )
-        if spec.arena is not None:
-            required_resources.add(
-                f"data/{spec.mod_id}/functions/build_{spec.arena.arena_id}.mcfunction"
             )
         for required in required_resources:
             checks += 1
@@ -1528,21 +1367,6 @@ def _validate_complete_jar(
                     "Approved complete support class is absent.",
                 )
             )
-    if complete.world_ir is not None:
-        for structure in complete.world_ir.get("structures", []):
-            structure_id = str(structure.get("id", ""))
-            checks += 1
-            direct = f"data/{spec.mod_id}/structures/{structure_id}.nbt"
-            prefix = f"data/{spec.mod_id}/structures/{structure_id}__p"
-            if direct not in names and not any(name.startswith(prefix) for name in names):
-                findings.append(
-                    Finding(
-                        "JAR_COMPLETE_WORLD_MISSING",
-                        "error",
-                        direct,
-                        "Approved world structure templates are absent.",
-                    )
-                )
     return checks
 
 

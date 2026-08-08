@@ -47,6 +47,8 @@ _CORE_TOOLS = frozenset(
         "revise_plan",
         "approve_plan",
         "approve_complete_plan",
+        "read_quality_contract",
+        "quality_status",
         "execute_complete_project",
         "apply_source_patch",
         "repair_project",

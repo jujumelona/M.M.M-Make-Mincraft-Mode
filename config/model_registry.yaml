@@ -38,13 +38,6 @@ profiles:
         max_context: 8192
         max_new_tokens: 1400
         min_free_vram_mb: 6500
-      world_planner:
-        model_id: Qwen/Qwen3.5-4B
-        adapter: transformers_multimodal
-        quantization: bnb_4bit
-        max_context: 8192
-        max_new_tokens: 2400
-        min_free_vram_mb: 6500
       embedding:
         model_id: Qwen/Qwen3-Embedding-0.6B
         adapter: embedding
@@ -118,14 +111,6 @@ profiles:
         api_key_env: MMM_VISION_API_KEY
         max_context: 65536
         max_new_tokens: 3000
-      world_planner:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_WORLD_MODEL
-        base_url_env: MMM_WORLD_BASE_URL
-        api_key_env: MMM_WORLD_API_KEY
-        max_context: 65536
-        max_new_tokens: 4500
       embedding:
         model_id: Qwen/Qwen3-Embedding-0.6B
         adapter: embedding

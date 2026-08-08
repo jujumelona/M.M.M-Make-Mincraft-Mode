@@ -37,6 +37,7 @@ def test_real_stdio_frontdoor_hides_specialist_mutators(tmp_path: Path) -> None:
     assert "read_complete_plan_section" not in tools
     assert "plan_game" not in tools
     assert "work_status" in tools
+    assert "quality_status" in tools
     assert "work_cancel_run" in tools
     assert "work_resume_run" in tools
     assert "execute_complete_project" not in tools
@@ -51,6 +52,8 @@ def test_real_stdio_quality_stage_is_narrow(tmp_path: Path) -> None:
     tools = asyncio.run(_handshake(tmp_path / "workspace", "quality"))
     assert "discover_mmm_capabilities" in tools
     assert "run_gametest" in tools
+    assert "quality_status" in tools
+    assert "read_quality_contract" in tools
     assert "java_diagnostics" in tools
     assert "plan_game" not in tools
     assert "runtime_start_server" not in tools
@@ -65,6 +68,7 @@ def test_real_stdio_planning_stage_exposes_paged_complete_plan(
     tools = asyncio.run(_handshake(tmp_path / "workspace", "planning"))
     assert "plan_complete_game" in tools
     assert "read_complete_plan_section" in tools
+    assert "read_quality_contract" in tools
     assert "approve_complete_plan" in tools
     assert "execute_complete_project" not in tools
     assert "build_technology_radar" in tools

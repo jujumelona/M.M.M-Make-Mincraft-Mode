@@ -36,7 +36,6 @@ profiles:
       researcher: {model_id: a/b, adapter: transformers_text}
       coder: {model_id: Qwen/Qwen2.5-Coder-3B-Instruct, adapter: transformers_text}
       visual_critic: {model_id: a/b, adapter: transformers_multimodal}
-      world_planner: {model_id: a/b, adapter: transformers_multimodal}
       image_generator: {model_id: a/b, adapter: image_diffusion}
       speech_recognition: {model_id: a/b, adapter: speech}
 """.strip(),

@@ -79,15 +79,14 @@ def test_different_prompts_produce_distinct_non_hardcoded_specs() -> None:
     assert frost.spec.platform == ember.spec.platform
 
 
-def test_boss_arena_and_3d_outputs_are_complete_and_deterministic(
+def test_boss_and_3d_outputs_are_complete_and_deterministic(
     tmp_path: Path,
 ) -> None:
     proposal = MinecraftModPipeline().plan(
-        "Create a frost boss arena with a 3D model, one item and one block"
+        "Create a frost boss with a 3D model, one item and one block"
     )
     spec = proposal.spec
     assert spec.boss is not None
-    assert spec.arena is not None
 
     first_root = tmp_path / "first"
     second_root = tmp_path / "second"
@@ -117,15 +116,10 @@ def test_boss_arena_and_3d_outputs_are_complete_and_deterministic(
         Path(f".minecraft_ai/art_sources/{spec.boss.entity_id}.bbmodel"),
         Path(f".minecraft_ai/art_sources/{spec.boss.entity_id}.obj"),
         Path(f".minecraft_ai/art_sources/{spec.boss.entity_id}.mtl"),
-        Path(
-            f"src/main/resources/data/{spec.mod_id}/functions/"
-            f"build_{spec.arena.arena_id}.mcfunction"
-        ),
-        Path(f".minecraft_ai/world/{spec.arena.arena_id}.world_design.json"),
-        Path(f".minecraft_ai/world/{spec.arena.arena_id}_preview.png"),
     }
     missing = sorted(path.as_posix() for path in expected_paths if not (first_root / path).is_file())
     assert missing == []
+    assert not list((first_root / "src/main/resources/data" / spec.mod_id).rglob("*.mcfunction"))
 
     bbmodel = json.loads(
         (first_root / f".minecraft_ai/art_sources/{spec.boss.entity_id}.bbmodel").read_text(

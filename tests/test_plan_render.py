@@ -10,7 +10,10 @@ def test_korean_plan_is_conversational_and_hides_internal_protocol() -> None:
             "pitch": "농작물을 길러 요리를 완성한다.",
             "core_loop": ["씨앗을 찾는다", "재배한다", "요리한다"],
             "progression": ["새 조리법을 연다"],
-            "world": {"regions": []},
+            "mod_context": {
+                "vanilla_integration": [],
+                "compatibility_targets": [],
+            },
             "modules": [
                 {
                     "plugin_id": "cooking",
@@ -40,7 +43,7 @@ def test_korean_plan_is_conversational_and_hides_internal_protocol() -> None:
     assert "mcp" not in text.lower()
 
 
-def test_plan_does_not_suggest_unrequested_world_or_encounter_shapes() -> None:
+def test_plan_does_not_suggest_unrequested_map_or_encounter_shapes() -> None:
     text = render_complete_plan(
         requested_prompt="Create a tiny decorative lantern mod.",
         game_design={
@@ -48,7 +51,10 @@ def test_plan_does_not_suggest_unrequested_world_or_encounter_shapes() -> None:
             "pitch": "Decorative lights with warm color variants.",
             "core_loop": ["Craft a lantern", "Place and recolor it"],
             "progression": [],
-            "world": {"regions": []},
+            "mod_context": {
+                "vanilla_integration": [],
+                "compatibility_targets": [],
+            },
             "modules": [],
         },
         modules=(ProductionModule("warm_lantern", "block"),),
@@ -69,7 +75,10 @@ def test_large_plan_preview_is_bounded_without_dropping_stored_scope() -> None:
             "pitch": "A large but paged production plan.",
             "core_loop": [f"Loop step {index}" for index in range(100)],
             "progression": [],
-            "world": {"regions": []},
+            "mod_context": {
+                "vanilla_integration": [],
+                "compatibility_targets": [],
+            },
             "modules": [],
         },
         modules=tuple(
@@ -84,3 +93,37 @@ def test_large_plan_preview_is_bounded_without_dropping_stored_scope() -> None:
     assert "76 more entries remain in the stored plan" in text
     assert "Acceptance test 99" not in text
     assert len(text) < 20_000
+
+
+def test_plan_explains_quality_contract_in_plain_language() -> None:
+    text = render_complete_plan(
+        requested_prompt="작은 나침반 모드를 만들어줘",
+        game_design={
+            "title": "날씨 나침반",
+            "pitch": "현재 날씨를 보여 준다.",
+            "core_loop": ["나침반을 확인한다"],
+            "progression": [],
+            "mod_context": {
+                "vanilla_integration": [],
+                "compatibility_targets": [],
+            },
+            "modules": [],
+            "_production_contract": {
+                "catalog_stats": {
+                    "requirements": 7,
+                    "acceptance_tests": 12,
+                },
+                "quality_dimension_catalog": [
+                    {"title": "Requirement correctness"},
+                    {"title": "Runtime behavior"},
+                ],
+            },
+        },
+        modules=(ProductionModule("weather_compass", "item"),),
+        acceptance_tests=("게임에서 날씨를 확인한다",),
+    )
+
+    assert "완성 기준" in text
+    assert "요구사항 7개" in text
+    assert "독립 검증 증거" in text
+    assert "sha256" not in text.casefold()

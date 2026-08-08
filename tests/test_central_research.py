@@ -164,6 +164,8 @@ def test_fallback_decomposes_explicit_ai_voice_research_only_when_requested() ->
         "latency_budget",
     } <= set(technology["evidence_kinds"])
     assert "huggingface_models" in technology["providers"]
+    assert "openalex_works" in technology["providers"]
+    assert "crossref_works" in technology["providers"]
 
     ordinary = normalize_research_brief(
         "계절 농사와 요리를 추가해줘.",

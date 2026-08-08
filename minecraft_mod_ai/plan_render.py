@@ -114,8 +114,8 @@ def render_complete_plan(
     )
     tests = _bounded_list(_strings(acceptance_tests), korean=korean)
     module_values = tuple(modules)
-    world_lines = _bounded_list(
-        _world_lines(game_design.get("world"), korean=korean),
+    integration_lines = _bounded_list(
+        _mod_context_lines(game_design.get("mod_context"), korean=korean),
         korean=korean,
     )
     system_lines = _bounded_list(
@@ -146,6 +146,10 @@ def render_complete_plan(
         ),
         korean=korean,
     )
+    quality_lines = _quality_lines(
+        game_design.get("_production_contract"),
+        korean=korean,
+    )
 
     if korean:
         lines = [f"“{title}”는 이런 게임으로 만들겠습니다."]
@@ -155,9 +159,9 @@ def render_complete_plan(
         lines.extend(_numbered(core_loop, empty="요청에 맞춰 핵심 플레이 흐름을 먼저 확정합니다."))
         lines.extend(("", "성장과 진행"))
         lines.extend(_numbered(progression, empty="별도 성장 시스템은 요청하지 않은 상태입니다."))
-        if world_lines:
-            lines.extend(("", "월드와 장소"))
-            lines.extend(f"- {value}" for value in world_lines)
+        if integration_lines:
+            lines.extend(("", "마인크래프트 연동 범위"))
+            lines.extend(f"- {value}" for value in integration_lines)
         lines.extend(("", "제작 범위"))
         lines.extend(f"- {value}" for value in system_lines)
         if research_lines:
@@ -166,6 +170,9 @@ def render_complete_plan(
         if technology_lines:
             lines.extend(("", "AI·음성 기술 설계"))
             lines.extend(f"- {value}" for value in technology_lines)
+        if quality_lines:
+            lines.extend(("", "완성 기준"))
+            lines.extend(f"- {value}" for value in quality_lines)
         lines.extend(("", "완성 확인"))
         lines.extend(f"- {value}" for value in (tests or ["요청한 기능을 게임 안에서 직접 확인합니다."]))
         lines.extend(
@@ -183,9 +190,9 @@ def render_complete_plan(
         lines.extend(_numbered(core_loop, empty="We will define the core loop from the request."))
         lines.extend(("", "Progression"))
         lines.extend(_numbered(progression, empty="No separate progression system was requested."))
-        if world_lines:
-            lines.extend(("", "World and places"))
-            lines.extend(f"- {value}" for value in world_lines)
+        if integration_lines:
+            lines.extend(("", "Minecraft integration scope"))
+            lines.extend(f"- {value}" for value in integration_lines)
         lines.extend(("", "Production scope"))
         lines.extend(f"- {value}" for value in system_lines)
         if research_lines:
@@ -194,6 +201,9 @@ def render_complete_plan(
         if technology_lines:
             lines.extend(("", "AI and speech architecture"))
             lines.extend(f"- {value}" for value in technology_lines)
+        if quality_lines:
+            lines.extend(("", "Completion standard"))
+            lines.extend(f"- {value}" for value in quality_lines)
         lines.extend(("", "Acceptance"))
         lines.extend(f"- {value}" for value in (tests or ["Verify every requested feature in game."]))
         lines.extend(
@@ -252,24 +262,17 @@ def _numbered(values: list[str], *, empty: str) -> list[str]:
     return [f"{index}. {value}" for index, value in enumerate(selected, start=1)]
 
 
-def _world_lines(value: Any, *, korean: bool) -> list[str]:
+def _mod_context_lines(value: Any, *, korean: bool) -> list[str]:
     if not isinstance(value, dict):
         return []
-    regions = value.get("regions")
     result: list[str] = []
-    if isinstance(regions, list):
-        for region in regions:
-            if not isinstance(region, dict):
-                continue
-            name = str(region.get("name") or region.get("id") or "").strip()
-            purpose = str(region.get("purpose", "")).strip()
-            if name and purpose:
-                result.append(f"{name}: {purpose}")
-            elif name:
-                result.append(name)
-    if result:
-        return result
-    return []
+    for key in ("vanilla_integration", "compatibility_targets"):
+        values = value.get(key)
+        if isinstance(values, list):
+            result.extend(
+                str(item).strip() for item in values if str(item).strip()
+            )
+    return list(dict.fromkeys(result))
 
 
 def _system_lines(
@@ -407,3 +410,31 @@ def _technology_lines(value: Any, *, korean: bool) -> list[str]:
                 line += f"; fallback: {fallback}"
         result.append(line)
     return list(dict.fromkeys(result))
+
+
+def _quality_lines(value: Any, *, korean: bool) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    stats = value.get("catalog_stats")
+    dimensions = value.get("quality_dimension_catalog")
+    if not isinstance(stats, dict) or not isinstance(dimensions, list):
+        return []
+    requirement_count = stats.get("requirements")
+    check_count = stats.get("acceptance_tests")
+    if type(requirement_count) is not int or type(check_count) is not int:
+        return []
+    titles = [
+        str(item.get("title") or "").strip()
+        for item in dimensions
+        if isinstance(item, dict) and str(item.get("title") or "").strip()
+    ]
+    if korean:
+        return [
+            f"요청에서 추적한 요구사항 {requirement_count}개와 관찰 가능한 확인 항목 {check_count}개를 끝까지 연결합니다.",
+            "관련 품질 영역마다 현재 결과에 묶인 독립 검증 증거가 있어야 완성으로 판정합니다.",
+        ]
+    return [
+        f"Trace all {requirement_count} request-derived requirements through {check_count} observable checks.",
+        "Completion requires fresh, artifact-bound independent evidence for every relevant quality dimension"
+        + (f": {', '.join(titles)}." if titles else "."),
+    ]

@@ -1,7 +1,7 @@
 # MCP and runtime security policy
 
 - Retrieved documents and model output can suggest work but cannot authorize it.
-- Project writes, world compilation, plugin generation and runtime preparation
+- Project writes, native-module generation, plugin generation and runtime preparation
   require the immutable proposal hash.
 - Runtime paths must stay below `MMM_WORKSPACE`.
 - Minecraft runtime operates only on disposable 1.20.1 instances.

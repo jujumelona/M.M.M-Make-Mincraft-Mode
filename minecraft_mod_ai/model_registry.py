@@ -11,7 +11,9 @@ from .config_paths import config_path
 from .model_adapters import AdapterConfig, ModelConfigurationError
 
 
-LEGACY_REQUIRED_ROLES = frozenset({"planner", "researcher", "coder", "visual_critic", "world_planner", "image_generator", "speech_recognition"})
+LEGACY_REQUIRED_ROLES = frozenset(
+    {"planner", "researcher", "coder", "visual_critic", "image_generator", "speech_recognition"}
+)
 REQUIRED_ROLES = frozenset(
     {
         "planner",
@@ -19,7 +21,6 @@ REQUIRED_ROLES = frozenset(
         "coder",
         "coder_safe",
         "visual_critic",
-        "world_planner",
         "embedding",
         "reranker",
         "image_generator",

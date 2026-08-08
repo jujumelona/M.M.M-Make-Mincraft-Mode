@@ -129,7 +129,6 @@ if MODEL_PROFILE == "remote_quality":
         "CODER",
         "CODER_SAFE",
         "VISION",
-        "WORLD",
     ):
         os.environ[f"MMM_{role}_BASE_URL"] = REMOTE_BASE_URL
         os.environ[f"MMM_{role}_MODEL"] = REMOTE_TEXT_MODEL
@@ -273,7 +272,9 @@ print("프로젝트:", BUILD_RESULT.project_root)
 print("결과 ZIP:", BUILD_RESULT.release_zip)
 if BUILD_RESULT.run_resumed:
     print("이전 실행에서 끝낸 작업을 이어서 사용했습니다.")
-if not SOURCE_ONLY and not BUILD_RESULT.release_ready:
+if BUILD_RESULT.quality_report:
+    print("품질 검증:", BUILD_RESULT.quality_report["overall_status"])
+if BUILD_RESULT.unresolved_gates:
     print("아직 확인할 항목:", ", ".join(BUILD_RESULT.unresolved_gates))
 """,
     ),

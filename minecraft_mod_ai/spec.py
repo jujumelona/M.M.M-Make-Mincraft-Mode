@@ -13,7 +13,6 @@ ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-BLOCK_ID_PATTERN = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
 JAVA_RESERVED_WORDS = frozenset(
     {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch",
@@ -49,7 +48,6 @@ BOSS_MODEL_KINDS = frozenset(
         "custom_geckolib",
     }
 )
-ARENA_MAP_MODES = frozenset({"in_mod_function", "partitioned_function", "jigsaw"})
 
 
 class SpecValidationError(ValueError):
@@ -167,34 +165,6 @@ class BossSpec:
 
 
 @dataclass(frozen=True)
-class ArenaSpec:
-    arena_id: str
-    display_name_en: str
-    display_name_ko: str
-    radius: int = 12
-    wall_height: int = 5
-    floor_block: str = "minecraft:deepslate_tiles"
-    accent_block: str = "minecraft:amethyst_block"
-    map_mode: str = "in_mod_function"
-
-    def validate(self) -> None:
-        if type(self.radius) is not int or type(self.wall_height) is not int:
-            raise SpecValidationError("Arena radius and wall_height must be JSON integers.")
-        if not ID_PATTERN.fullmatch(self.arena_id):
-            raise SpecValidationError(f"Invalid arena_id: {self.arena_id!r}.")
-        if self.radius < 1 or self.wall_height < 1:
-            raise SpecValidationError("Arena radius and wall_height must be positive.")
-        if not BLOCK_ID_PATTERN.fullmatch(self.floor_block) or not BLOCK_ID_PATTERN.fullmatch(
-            self.accent_block
-        ):
-            raise SpecValidationError("Arena palette entries must be namespaced block IDs.")
-        if self.map_mode not in ARENA_MAP_MODES:
-            raise SpecValidationError(
-                f"Unsupported arena map_mode {self.map_mode!r}; use one of {sorted(ARENA_MAP_MODES)}."
-            )
-
-
-@dataclass(frozen=True)
 class ModSpec:
     mod_id: str
     mod_name: str
@@ -203,7 +173,6 @@ class ModSpec:
     summary: str
     contents: tuple[ContentSpec, ...]
     boss: BossSpec | None = None
-    arena: ArenaSpec | None = None
     platform: PlatformLock = field(default_factory=PlatformLock)
 
     def validate(self) -> None:
@@ -253,12 +222,6 @@ class ModSpec:
                     f"Boss spawn egg ID collides with content ID: {spawn_egg_id}"
                 )
             seen.update((self.boss.entity_id, spawn_egg_id))
-        if self.arena is not None:
-            self.arena.validate()
-            if self.arena.arena_id in seen:
-                raise SpecValidationError(
-                    f"Arena ID collides with another generated ID: {self.arena.arena_id}"
-                )
 
 
 @dataclass(frozen=True)
@@ -450,6 +413,11 @@ class Proposal:
         content_data = spec_data.pop("contents")
         boss_data = spec_data.pop("boss", None)
         arena_data = spec_data.pop("arena", None)
+        if arena_data is not None:
+            raise SpecValidationError(
+                "Map and arena authoring have been removed. Use mod systems, assets, "
+                "entities, UI, audio, or explicit native Minecraft modules instead."
+            )
         platform = PlatformLock(**platform_data)
         contents = tuple(
             ContentSpec(
@@ -465,7 +433,6 @@ class Proposal:
         spec = ModSpec(
             contents=contents,
             boss=BossSpec(**boss_data) if boss_data else None,
-            arena=ArenaSpec(**arena_data) if arena_data else None,
             platform=platform,
             **spec_data,
         )

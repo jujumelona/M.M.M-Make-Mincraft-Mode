@@ -14,6 +14,11 @@ from minecraft_mod_ai.complete_spec import (
 from minecraft_mod_ai.mcp_tools import MMMToolService
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
+from minecraft_mod_ai.production_contract import (
+    compile_production_contract,
+    evaluate_quality_contract,
+    persist_quality_report,
+)
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import SpecValidationError
 
@@ -35,6 +40,26 @@ def _proposal(module_count: int = 73):
             for index in range(module_count)
         ),
         acceptance_tests=("Every requested frost module is registered.",),
+    )
+
+
+def _quality_proposal():
+    legacy = _proposal(2)
+    compiled = compile_production_contract(
+        requested_prompt=legacy.requested_prompt,
+        game_design=legacy.game_design,
+        modules=legacy.modules,
+        acceptance_tests=legacy.acceptance_tests,
+    )
+    return complete_proposal_from_parts(
+        requested_prompt=legacy.requested_prompt,
+        base_proposal=legacy.base_proposal,
+        game_design={
+            **legacy.game_design,
+            "_production_contract": compiled.contract,
+        },
+        modules=legacy.modules,
+        acceptance_tests=compiled.acceptance_tests,
     )
 
 
@@ -117,6 +142,47 @@ def test_complete_execution_accepts_ref_without_inline_payload(
     assert result == {"status": "captured"}
     assert captured["proposal"].calculate_hash() == proposal.calculate_hash()
     assert captured["approval_hash"] == proposal.calculate_hash()
+
+
+def test_quality_contract_and_run_status_are_bounded_read_only_views(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    service = MMMToolService(workspace_root=workspace)
+    proposal = _quality_proposal()
+    proposal_ref = service._store_complete_proposal(proposal)
+
+    summary = service.read_quality_contract(proposal_ref)
+
+    assert summary["catalog_stats"]["requirements"] >= 1
+    quality_dimension_ids = {
+        item["dimension_id"] for item in summary["quality_dimensions"]
+    }
+    assert {
+        "correctness",
+        "build",
+        "research",
+        "runtime",
+    } <= quality_dimension_ids
+    assert "contract_sha256" not in summary
+    contract = proposal.game_design["_production_contract"]
+    report = evaluate_quality_contract(
+        contract,
+        {},
+        proposal.calculate_hash(),
+    )
+    persist_quality_report(
+        workspace / "quality-run/.minecraft_ai/quality-convergence.json",
+        report,
+    )
+
+    status = service.quality_status("quality-run")
+
+    assert status["overall_status"] == "MISSING"
+    assert status["run_name"] == "quality-run"
+    assert set(status["unresolved_dimension_ids"]) == quality_dimension_ids
+    with pytest.raises(SpecValidationError, match="run_name"):
+        service.quality_status("../quality-run")
 
 
 @pytest.mark.parametrize(

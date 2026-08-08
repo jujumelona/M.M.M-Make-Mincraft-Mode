@@ -18,7 +18,6 @@ from .spec import Proposal, SpecValidationError
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
-_RESOURCE_ID = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
 
 MODULE_KINDS = frozenset(
     {
@@ -261,7 +260,6 @@ class CompleteProposal:
     base_proposal: Proposal
     game_design: dict[str, Any]
     modules: tuple[ProductionModule, ...]
-    world_ir: dict[str, Any] | None = None
     assets: tuple[AssetRequest, ...] = ()
     audio: tuple[AudioRequest, ...] = ()
     acceptance_tests: tuple[str, ...] = ()
@@ -272,7 +270,10 @@ class CompleteProposal:
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
         policy = policy or ScalePolicy.from_environment()
         policy.validate()
-        if self.schema_version != "mmm/complete-proposal-v1":
+        if self.schema_version not in {
+            "mmm/complete-proposal-v1",
+            "mmm/complete-proposal-v2",
+        }:
             raise SpecValidationError(
                 f"Unsupported complete proposal schema: {self.schema_version}"
             )
@@ -335,31 +336,6 @@ class CompleteProposal:
         if len({audio.sound_id for audio in self.audio}) != len(self.audio):
             raise SpecValidationError("Audio IDs must be unique.")
 
-        world_structure_ids: set[str] = set()
-        if self.world_ir is not None:
-            world_structure_ids = _validate_world_ir(
-                self.world_ir,
-                policy=policy,
-            )
-        custom_structure_ids = {
-            module.module_id
-            for module in self.modules
-            if (
-                module.kind == "custom_java"
-                and module.config.get("requested_kind") == "structure"
-            )
-            or (
-                module.kind == "structure"
-                and module.config.get("implementation") == "custom"
-            )
-        }
-        overlap = custom_structure_ids & world_structure_ids
-        if overlap:
-            raise SpecValidationError(
-                "Custom structures may not also appear in built-in world_ir: "
-                f"{sorted(overlap)}"
-            )
-
         if (
             not self.acceptance_tests
             or any(
@@ -372,6 +348,24 @@ class CompleteProposal:
             )
         if len(set(self.acceptance_tests)) != len(self.acceptance_tests):
             raise SpecValidationError("Acceptance tests must be unique.")
+        if self.schema_version == "mmm/complete-proposal-v2":
+            contract = self.game_design.get("_production_contract")
+            if not isinstance(contract, dict):
+                raise SpecValidationError(
+                    "Complete proposal v2 requires game_design._production_contract."
+                )
+            try:
+                from .production_contract import validate_production_contract
+
+                validate_production_contract(
+                    contract,
+                    [module.module_id for module in self.modules],
+                    self.acceptance_tests,
+                )
+            except ValueError as exc:
+                raise SpecValidationError(
+                    f"Invalid production contract: {exc}"
+                ) from exc
         if type(self.external_runtime_required) is not bool:
             raise SpecValidationError(
                 "external_runtime_required must be boolean."
@@ -435,7 +429,6 @@ class CompleteProposal:
                 "base_proposal": self.base_proposal,
                 "game_design": self.game_design,
                 "modules": self.modules,
-                "world_ir": self.world_ir,
                 "assets": self.assets,
                 "audio": self.audio,
                 "acceptance_tests": self.acceptance_tests,
@@ -495,7 +488,6 @@ class CompleteProposal:
             "base_proposal",
             "game_design",
             "modules",
-            "world_ir",
             "assets",
             "audio",
             "acceptance_tests",
@@ -535,11 +527,6 @@ class CompleteProposal:
                 game_design=dict(data["game_design"]),
                 modules=tuple(
                     _module_from_dict(item) for item in data["modules"]
-                ),
-                world_ir=(
-                    dict(data["world_ir"])
-                    if data["world_ir"] is not None
-                    else None
                 ),
                 assets=tuple(
                     _asset_from_dict(item) for item in data["assets"]
@@ -656,159 +643,6 @@ def _audio_from_dict(value: Any) -> AudioRequest:
     )
 
 
-def _validate_world_ir(
-    ir: dict[str, Any],
-    *,
-    policy: ScalePolicy,
-) -> set[str]:
-    required = {
-        "schema_version",
-        "regions",
-        "routes",
-        "structures",
-        "quests",
-        "constraints",
-    }
-    if set(ir) != required or ir.get("schema_version") != "mmm/world-ir-v1":
-        raise SpecValidationError("world_ir schema is invalid.")
-    try:
-        validate_canonical_json(ir)
-    except (CanonicalJsonError, RecursionError) as exc:
-        raise SpecValidationError(
-            "world_ir must contain finite JSON values."
-        ) from exc
-    for key in ("regions", "routes", "structures", "quests", "constraints"):
-        if not isinstance(ir[key], list):
-            raise SpecValidationError(f"world_ir.{key} must be a list.")
-
-    region_ids: set[str] = set()
-    for region in ir["regions"]:
-        if not isinstance(region, dict):
-            raise SpecValidationError("Every world region must be an object.")
-        region_id = str(region.get("id", ""))
-        if not _ID.fullmatch(region_id) or region_id in region_ids:
-            raise SpecValidationError(
-                f"Invalid or duplicate world region: {region_id!r}"
-            )
-        region_ids.add(region_id)
-
-    graph = {region_id: set() for region_id in region_ids}
-    route_pairs: set[tuple[str, str]] = set()
-    for route in ir["routes"]:
-        if not isinstance(route, dict):
-            raise SpecValidationError("Every world route must be an object.")
-        left = str(route.get("from", ""))
-        right = str(route.get("to", ""))
-        if left not in region_ids or right not in region_ids or left == right:
-            raise SpecValidationError(
-                f"World route references invalid regions: {left!r}, {right!r}"
-            )
-        pair = tuple(sorted((left, right)))
-        if pair in route_pairs:
-            raise SpecValidationError(
-                f"Duplicate world route: {pair[0]} <-> {pair[1]}"
-            )
-        route_pairs.add(pair)
-        graph[left].add(right)
-        graph[right].add(left)
-    if graph and not _connected(graph):
-        raise SpecValidationError("World region graph is disconnected.")
-
-    structure_ids: set[str] = set()
-    for structure in ir["structures"]:
-        if not isinstance(structure, dict):
-            raise SpecValidationError(
-                "Every world structure must be an object."
-            )
-        structure_id = str(structure.get("id", ""))
-        if not _ID.fullmatch(structure_id) or structure_id in structure_ids:
-            raise SpecValidationError(
-                f"Invalid or duplicate structure ID: {structure_id!r}"
-            )
-        structure_ids.add(structure_id)
-        if structure.get("region_id") not in region_ids:
-            raise SpecValidationError(
-                f"Structure {structure_id} references an unknown region."
-            )
-        size = structure.get("size", [9, 6, 9])
-        if (
-            not isinstance(size, list)
-            or len(size) != 3
-            or any(type(value) is not int or value < 1 for value in size)
-        ):
-            raise SpecValidationError(
-                f"Structure {structure_id} has an invalid size."
-            )
-        palette = structure.get(
-            "palette",
-            ["minecraft:stone_bricks", "minecraft:air"],
-        )
-        if not isinstance(palette, list) or not palette:
-            raise SpecValidationError(
-                f"Structure {structure_id} requires a palette."
-            )
-        for block in palette:
-            if not isinstance(block, str) or not _RESOURCE_ID.fullmatch(block):
-                raise SpecValidationError(
-                    f"Structure {structure_id} has an invalid palette block: {block!r}"
-                )
-        biomes = structure.get("biomes", ["minecraft:plains"])
-        if not isinstance(biomes, list) or not biomes:
-            raise SpecValidationError(
-                f"Structure {structure_id} requires at least one biome."
-            )
-        for biome in biomes:
-            if not isinstance(biome, str) or not _RESOURCE_ID.fullmatch(biome):
-                raise SpecValidationError(
-                    f"Structure {structure_id} has an invalid biome: {biome!r}"
-                )
-
-    quest_ids: set[str] = set()
-    for quest in ir["quests"]:
-        if not isinstance(quest, dict):
-            raise SpecValidationError(
-                "Every world quest must be an object."
-            )
-        quest_id = str(quest.get("id", ""))
-        if not _ID.fullmatch(quest_id) or quest_id in quest_ids:
-            raise SpecValidationError(
-                f"Invalid or duplicate world quest: {quest_id!r}"
-            )
-        quest_ids.add(quest_id)
-        for field_name in ("start_region", "end_region"):
-            region = quest.get(field_name)
-            if region not in region_ids:
-                raise SpecValidationError(
-                    f"World quest {quest_id} references unknown {field_name}."
-                )
-        if not str(quest.get("objective", "")).strip():
-            raise SpecValidationError(
-                f"World quest {quest_id} objective is empty."
-            )
-
-    for constraint in ir["constraints"]:
-        if not isinstance(constraint, (str, dict)):
-            raise SpecValidationError(
-                "World constraints must be strings or objects."
-            )
-    return structure_ids
-
-
-def _connected(graph: dict[str, set[str]]) -> bool:
-    if not graph:
-        return True
-    start = next(iter(graph))
-    seen = {start}
-    stack = [start]
-    while stack:
-        node = stack.pop()
-        for neighbor in graph[node]:
-            if neighbor not in seen:
-                seen.add(neighbor)
-                stack.append(neighbor)
-    return len(seen) == len(graph)
-
-
 def _strict_bool(value: Any, field_name: str) -> bool:
     if type(value) is not bool:
         raise SpecValidationError(
@@ -843,21 +677,23 @@ def complete_proposal_from_parts(
     base_proposal: Proposal,
     game_design: dict[str, Any],
     modules: tuple[ProductionModule, ...],
-    world_ir: dict[str, Any] | None = None,
     assets: tuple[AssetRequest, ...] = (),
     audio: tuple[AudioRequest, ...] = (),
     acceptance_tests: tuple[str, ...],
     existing_input_sha256: str = "",
 ) -> CompleteProposal:
     proposal = CompleteProposal(
-        schema_version="mmm/complete-proposal-v1",
+        schema_version=(
+            "mmm/complete-proposal-v2"
+            if isinstance(game_design.get("_production_contract"), dict)
+            else "mmm/complete-proposal-v1"
+        ),
         proposal_version=1,
         status=CompleteProposalStatus.AWAITING_APPROVAL,
         requested_prompt=requested_prompt,
         base_proposal=base_proposal,
         game_design=game_design,
         modules=modules,
-        world_ir=world_ir,
         assets=assets,
         audio=audio,
         acceptance_tests=acceptance_tests,

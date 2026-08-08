@@ -25,6 +25,8 @@ _PROVIDERS = frozenset(
         "openverse_audio",
         "wikipedia",
         "huggingface_models",
+        "openalex_works",
+        "crossref_works",
     }
 )
 _TARGET_PROFILES = frozenset(
@@ -199,18 +201,17 @@ class EcosystemDiscoveryClient:
             raise SpecValidationError(
                 "This release discovers dependencies for Minecraft 1.20.1 Fabric only."
             )
-        if provider == "huggingface_models":
+        if provider in {
+            "huggingface_models",
+            "openalex_works",
+            "crossref_works",
+        }:
             position_kind = "token"
             provider_cursor = _decode_token_cursor(
                 cursor,
                 provider=provider,
                 query=query,
                 target_profile=target_profile,
-            )
-            candidates, total, next_position = self._search_huggingface_models(
-                query,
-                cursor=provider_cursor,
-                limit=limit,
             )
         else:
             position_kind = (
@@ -223,7 +224,13 @@ class EcosystemDiscoveryClient:
                 position_kind=position_kind,
                 target_profile=target_profile,
             )
-        if provider == "modrinth":
+        if provider == "huggingface_models":
+            candidates, total, next_position = self._search_huggingface_models(
+                query,
+                cursor=provider_cursor,
+                limit=limit,
+            )
+        elif provider == "modrinth":
             candidates, total, next_position = self._search_modrinth(
                 query,
                 offset=position,
@@ -252,7 +259,23 @@ class EcosystemDiscoveryClient:
                 page=position or 1,
                 limit=limit,
             )
-        if provider == "huggingface_models":
+        elif provider == "openalex_works":
+            candidates, total, next_position = self._search_openalex_works(
+                query,
+                cursor=provider_cursor,
+                limit=limit,
+            )
+        elif provider == "crossref_works":
+            candidates, total, next_position = self._search_crossref_works(
+                query,
+                cursor=provider_cursor,
+                limit=limit,
+            )
+        if provider in {
+            "huggingface_models",
+            "openalex_works",
+            "crossref_works",
+        }:
             next_cursor = (
                 _encode_token_cursor(
                     provider=provider,
@@ -904,6 +927,213 @@ class EcosystemDiscoveryClient:
         next_cursor = _huggingface_cursor_from_next_url(next_url)
         return candidates, None, next_cursor
 
+    def _search_openalex_works(
+        self,
+        query: str,
+        *,
+        cursor: str,
+        limit: int,
+    ) -> tuple[list[EcosystemCandidate], int, str | None]:
+        """Search scholarly metadata; papers remain evidence, never authority."""
+
+        raw = self._get_json(
+            "https://api.openalex.org/works",
+            params={
+                "search": query,
+                "per-page": str(limit),
+                "cursor": cursor or "*",
+                "select": (
+                    "id,doi,display_name,publication_year,type,cited_by_count,"
+                    "authorships,primary_location,best_oa_location,open_access"
+                ),
+            },
+            provider="openalex",
+        )
+        results = raw.get("results") if isinstance(raw, dict) else None
+        meta = raw.get("meta") if isinstance(raw, dict) else None
+        if not isinstance(results, list) or not isinstance(meta, dict):
+            raise EcosystemDiscoveryUnavailable(
+                "OpenAlex returned an invalid works search response."
+            )
+        candidates: list[EcosystemCandidate] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            openalex_id = str(item.get("id") or "").strip()
+            work_key = openalex_id.rsplit("/", 1)[-1]
+            title = " ".join(str(item.get("display_name") or "").split())
+            if not re.fullmatch(r"W\d+", work_key) or not title:
+                continue
+            doi = _normalized_doi(item.get("doi"))
+            source_url = (
+                f"https://doi.org/{quote(doi, safe='/():._-')}"
+                if doi
+                else f"https://openalex.org/{work_key}"
+            )
+            authors = _openalex_authors(item.get("authorships"))
+            location = item.get("best_oa_location")
+            if not isinstance(location, dict):
+                location = item.get("primary_location")
+            location = location if isinstance(location, dict) else {}
+            paper_license = str(location.get("license") or "").strip()
+            metadata = {
+                "openalex_id": work_key,
+                "doi": doi,
+                "publication_year": _nonnegative_int(
+                    item.get("publication_year")
+                ),
+                "work_type": str(item.get("type") or ""),
+                "cited_by_count": _nonnegative_int(
+                    item.get("cited_by_count")
+                ),
+                "authors": authors,
+                "open_access": (
+                    dict(item.get("open_access"))
+                    if isinstance(item.get("open_access"), dict)
+                    else {}
+                ),
+                "asserted_paper_license": paper_license,
+            }
+            stable = {"title": title, **metadata}
+            candidates.append(
+                EcosystemCandidate(
+                    candidate_id=f"openalex:{work_key.lower()}",
+                    provider="openalex_works",
+                    resource_kind="scholarly_work",
+                    title=title,
+                    summary=_scholarly_summary(metadata),
+                    source_url=source_url,
+                    api_url=f"https://api.openalex.org/works/{work_key}",
+                    license_id=paper_license or "paper-license-unverified",
+                    license_url="",
+                    license_policy=(
+                        "bibliographic_metadata_only; inspect the paper license "
+                        "before full-text reuse"
+                    ),
+                    minecraft_version="not_applicable",
+                    loader="not_applicable",
+                    compatibility=(
+                        "research candidate only; translate claims to the pinned "
+                        "Minecraft target and reproduce relevant measurements"
+                    ),
+                    attribution="OpenAlex bibliographic metadata",
+                    preview_urls=(),
+                    reuse_status=(
+                        "research_evidence_only_not_implementation_authority"
+                    ),
+                    evidence_sha256=_sha256_text(canonical_json(stable)),
+                    metadata=metadata,
+                )
+            )
+        next_cursor = str(meta.get("next_cursor") or "").strip() or None
+        return candidates, _nonnegative_int(meta.get("count")), next_cursor
+
+    def _search_crossref_works(
+        self,
+        query: str,
+        *,
+        cursor: str,
+        limit: int,
+    ) -> tuple[list[EcosystemCandidate], int, str | None]:
+        """Cross-check scholarly metadata through a second independent index."""
+
+        raw = self._get_json(
+            "https://api.crossref.org/works",
+            params={
+                "query.bibliographic": query,
+                "rows": str(limit),
+                "cursor": cursor or "*",
+                "select": (
+                    "DOI,title,abstract,type,published,author,publisher,URL,"
+                    "is-referenced-by-count,license"
+                ),
+            },
+            provider="crossref",
+        )
+        message = raw.get("message") if isinstance(raw, dict) else None
+        items = message.get("items") if isinstance(message, dict) else None
+        if not isinstance(message, dict) or not isinstance(items, list):
+            raise EcosystemDiscoveryUnavailable(
+                "Crossref returned an invalid works search response."
+            )
+        candidates: list[EcosystemCandidate] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            doi = _normalized_doi(item.get("DOI"))
+            raw_title = item.get("title")
+            title = (
+                " ".join(str(raw_title[0]).split())
+                if isinstance(raw_title, list) and raw_title
+                else ""
+            )
+            if not doi or not title:
+                continue
+            license_items = item.get("license")
+            license_url = ""
+            if isinstance(license_items, list):
+                for license_item in license_items:
+                    if isinstance(license_item, dict):
+                        license_url = _safe_https_url(
+                            license_item.get("URL"),
+                            allow_empty=True,
+                        )
+                        if license_url:
+                            break
+            metadata = {
+                "doi": doi,
+                "published": _crossref_date(item.get("published")),
+                "work_type": str(item.get("type") or ""),
+                "publisher": str(item.get("publisher") or ""),
+                "cited_by_count": _nonnegative_int(
+                    item.get("is-referenced-by-count")
+                ),
+                "authors": _crossref_authors(item.get("author")),
+                "abstract": _plain_bounded_text(item.get("abstract"), 1200),
+            }
+            stable = {"title": title, "license_url": license_url, **metadata}
+            encoded_doi = quote(doi, safe="/():._-")
+            candidates.append(
+                EcosystemCandidate(
+                    candidate_id="crossref:" + _sha256_text(doi).split(":", 1)[1],
+                    provider="crossref_works",
+                    resource_kind="scholarly_work",
+                    title=title,
+                    summary=_scholarly_summary(metadata),
+                    source_url=f"https://doi.org/{encoded_doi}",
+                    api_url=f"https://api.crossref.org/works/{encoded_doi}",
+                    license_id=(
+                        "paper-license-link-present"
+                        if license_url
+                        else "paper-license-unverified"
+                    ),
+                    license_url=license_url,
+                    license_policy=(
+                        "bibliographic_metadata_only; inspect the paper license "
+                        "before full-text reuse"
+                    ),
+                    minecraft_version="not_applicable",
+                    loader="not_applicable",
+                    compatibility=(
+                        "research candidate only; translate claims to the pinned "
+                        "Minecraft target and reproduce relevant measurements"
+                    ),
+                    attribution="Crossref bibliographic metadata",
+                    preview_urls=(),
+                    reuse_status=(
+                        "research_evidence_only_not_implementation_authority"
+                    ),
+                    evidence_sha256=_sha256_text(canonical_json(stable)),
+                    metadata=metadata,
+                )
+            )
+        next_cursor = str(message.get("next-cursor") or "").strip() or None
+        return (
+            candidates,
+            _nonnegative_int(message.get("total-results")),
+            next_cursor,
+        )
+
     def _search_openverse(
         self,
         query: str,
@@ -1096,6 +1326,8 @@ class EcosystemDiscoveryClient:
             "en.wikipedia.org",
             "ko.wikipedia.org",
             "huggingface.co",
+            "api.openalex.org",
+            "api.crossref.org",
         }:
             raise SpecValidationError("Discovery request escaped the API allowlist.")
         if parsed.hostname == "huggingface.co" and not (
@@ -1104,6 +1336,18 @@ class EcosystemDiscoveryClient:
         ):
             raise SpecValidationError(
                 "Hugging Face discovery is restricted to metadata API paths."
+            )
+        if parsed.hostname == "api.openalex.org" and not (
+            parsed.path == "/works" or parsed.path.startswith("/works/")
+        ):
+            raise SpecValidationError(
+                "OpenAlex discovery is restricted to works metadata paths."
+            )
+        if parsed.hostname == "api.crossref.org" and not (
+            parsed.path == "/works" or parsed.path.startswith("/works/")
+        ):
+            raise SpecValidationError(
+                "Crossref discovery is restricted to works metadata paths."
             )
         headers = {
             "Accept": "application/json",
@@ -1833,6 +2077,84 @@ def _normalize_modrinth_version(
         "eligible_for_selection": not reasons,
         "unresolved_or_rejected_gates": list(dict.fromkeys(reasons)),
     }
+
+
+def _normalized_doi(value: Any) -> str:
+    doi = str(value or "").strip()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if doi.casefold().startswith(prefix):
+            doi = doi[len(prefix) :]
+            break
+    if not doi or len(doi.encode("utf-8")) > 512 or not doi.startswith("10."):
+        return ""
+    if any(character.isspace() or ord(character) < 32 for character in doi):
+        return ""
+    return doi
+
+
+def _openalex_authors(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    authors: list[str] = []
+    for authorship in value[:100]:
+        author = authorship.get("author") if isinstance(authorship, dict) else None
+        name = (
+            " ".join(str(author.get("display_name") or "").split())
+            if isinstance(author, dict)
+            else ""
+        )
+        if name and name not in authors:
+            authors.append(name[:256])
+    return authors
+
+
+def _crossref_authors(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    authors: list[str] = []
+    for author in value[:100]:
+        if not isinstance(author, dict):
+            continue
+        name = " ".join(
+            part.strip()
+            for part in (
+                str(author.get("given") or ""),
+                str(author.get("family") or ""),
+            )
+            if part.strip()
+        )
+        if name and name not in authors:
+            authors.append(name[:256])
+    return authors
+
+
+def _crossref_date(value: Any) -> str:
+    parts = value.get("date-parts") if isinstance(value, dict) else None
+    first = parts[0] if isinstance(parts, list) and parts else None
+    if not isinstance(first, list) or not first:
+        return ""
+    integers = [part for part in first[:3] if type(part) is int and part >= 1]
+    return "-".join(
+        str(part) if index == 0 else f"{part:02d}"
+        for index, part in enumerate(integers)
+    )
+
+
+def _plain_bounded_text(value: Any, limit: int) -> str:
+    text = html.unescape(re.sub(r"<[^>]*>", " ", str(value or "")))
+    text = " ".join(text.split())
+    return text[:limit]
+
+
+def _scholarly_summary(metadata: dict[str, Any]) -> str:
+    year = metadata.get("publication_year") or metadata.get("published") or "undated"
+    work_type = str(metadata.get("work_type") or "research work")
+    citations = _nonnegative_int(metadata.get("cited_by_count"))
+    abstract = str(metadata.get("abstract") or "").strip()
+    base = f"{work_type}, {year}; cited-by metadata: {citations}."
+    if abstract:
+        return (base + " " + abstract)[:1600]
+    return base
 
 
 def _code_license_policy(license_id: str) -> str:

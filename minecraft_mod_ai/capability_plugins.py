@@ -336,6 +336,23 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         ("every requested external gate",),
     ),
     PluginStatus(
+        "quality-convergence",
+        "implemented",
+        "request-derived production contract plus independent evidence evaluator",
+        (
+            "requirement-to-implementation coverage",
+            "conditional quality dimensions",
+            "fresh evidence report",
+            "plateau detection",
+        ),
+        ("mmm-planning", "mmm-quality", "mmm-runtime", "mmm-release"),
+        (
+            "proposal and artifact binding",
+            "independent verifier",
+            "all relevant dimensions pass",
+        ),
+    ),
+    PluginStatus(
         "distribution-publishing",
         "implemented",
         "Modrinth upload and reviewed CurseForge endpoint adapter",

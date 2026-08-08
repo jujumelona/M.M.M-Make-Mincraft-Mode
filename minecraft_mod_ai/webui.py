@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .importer import ExistingProjectReport, inspect_existing_project_archive
-from .intent import MAP_CASCADE_REMOVALS, latest_intent_event
+from .intent import latest_intent_event
 from .pipeline import MinecraftModPipeline
 from .planner import (
     HeuristicPlanner,
@@ -23,17 +23,12 @@ LOGGER = logging.getLogger(__name__)
 
 _START_MESSAGE = (
     "만들고 싶은 모드를 자유롭게 말해 주세요. 간단한 모드는 짧게, 대규모 모드는 "
-    "게임플레이·월드·시스템·제작 단계까지 계획합니다. 말하지 않은 콘텐츠는 "
+    "게임플레이·모드 시스템·리소스·제작 단계까지 계획합니다. 말하지 않은 콘텐츠는 "
     "임의로 추가하지 않고, 부족한 내용은 질문하겠습니다."
 )
 
 _FOCUS_LABELS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("스킬", "skill", "마법", "magic"), "스킬과 동작 표현"),
-    (("마을", "village", "town"), "마을"),
-    (("필드", "field", "open world", "open-world"), "필드"),
-    (("던전", "dungeon"), "던전"),
-    (("아레나", "arena", "투기장"), "아레나"),
-    (("맵", "map", "월드", "world"), "맵과 월드"),
     (("퀘스트", "quest"), "퀘스트"),
     (("직업", "class", "클래스"), "직업"),
     (("npc", "엔피시"), "NPC"),
@@ -51,15 +46,10 @@ _FOCUS_LABELS: tuple[tuple[tuple[str, ...], str], ...] = (
 
 _CAPABILITY_LABELS = {
     "skill_system": "스킬 시스템과 표현",
-    "village_map": "마을",
-    "field_map": "필드",
-    "dungeon_map": "던전",
-    "custom_map": "사용자 정의 맵",
     "general_3d_assets": "사용자 지정 3D 대상",
     "custom_entity": "몹과 엔티티",
     "unsupported_boss_shape": "요청한 보스 형태",
     "unsupported_boss_combat": "요청한 보스 전투 방식",
-    "unsupported_arena_dimensions": "아레나 크기",
     "item_count_limit": "아이템 수",
     "block_count_limit": "블록 수",
     "quest_system": "퀘스트",
@@ -75,15 +65,10 @@ _CAPABILITY_LABELS = {
 
 _CAPABILITY_FOCUS_LABELS = {
     "skill_system": "스킬과 동작 표현",
-    "village_map": "마을",
-    "field_map": "필드",
-    "dungeon_map": "던전",
-    "custom_map": "맵과 월드",
     "general_3d_assets": "3D 모델",
     "custom_entity": "몹과 엔티티",
     "unsupported_boss_shape": "보스",
     "unsupported_boss_combat": "보스",
-    "unsupported_arena_dimensions": "아레나",
     "item_count_limit": "아이템",
     "block_count_limit": "블록",
     "quest_system": "퀘스트",
@@ -168,11 +153,7 @@ def _explicit_focus(brief: str) -> tuple[str, ...]:
         event = latest_intent_event(
             brief,
             words,
-            cascade_removals=(
-                MAP_CASCADE_REMOVALS
-                if label in {"마을", "필드", "던전", "아레나"}
-                else ()
-            ),
+            cascade_removals=(),
         )
         if event is not None and event.requested:
             matches.append((event.start, label))
@@ -180,8 +161,6 @@ def _explicit_focus(brief: str) -> tuple[str, ...]:
     for _, label in sorted(matches):
         if label not in ordered:
             ordered.append(label)
-    if any(label in ordered for label in ("마을", "필드", "던전", "아레나")):
-        ordered = [label for label in ordered if label != "맵과 월드"]
     return tuple(ordered)
 
 
@@ -190,75 +169,6 @@ def _allows_defaults(brief: str) -> bool:
     return any(
         phrase in lowered
         for phrase in ("알아서", "추천해", "네가 정해", "ai가 정해", "auto decide")
-    )
-
-
-def _has_map_scale(brief: str) -> bool:
-    lowered = brief.lower()
-    return bool(
-        re.search(r"\b\d{2,3}\s*[x×]\s*\d{2,3}\b", lowered)
-        or re.search(r"(반경|radius)\s*\d+", lowered)
-        or any(
-            word in lowered
-            for word in ("소형", "중형", "대형", "작게", "크게", "넓게", "small", "large")
-        )
-    )
-
-
-_WORLD_ZONE_WORDS: dict[str, tuple[str, ...]] = {
-    "마을": ("마을", "village", "town"),
-    "필드": ("필드", "field", "open world", "open-world"),
-    "던전": ("던전", "dungeon"),
-    "아레나": ("아레나", "arena", "투기장"),
-    "맵과 월드": ("맵", "map", "월드", "world"),
-}
-
-
-def _zone_dimension(brief: str, label: str) -> str | None:
-    lowered = brief.lower()
-    words = _WORLD_ZONE_WORDS[label]
-    dimension = r"(\d{2,4})\s*[x×]\s*(\d{2,4})"
-    candidates: list[tuple[int, str]] = []
-    for word in words:
-        escaped = re.escape(word.lower())
-        patterns = (
-            rf"{dimension}\s*(?:블록|blocks?)?\s*{escaped}",
-            rf"{escaped}\s*(?:크기|size|는|은|:)?\s*{dimension}",
-        )
-        for pattern in patterns:
-            for match in re.finditer(pattern, lowered):
-                first, second = match.groups()
-                candidates.append((match.start(), f"{first}×{second} 블록"))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: item[0])[1]
-
-
-def _all_requested_world_scales_set(brief: str, focus: tuple[str, ...]) -> bool:
-    world_labels = [
-        label for label in focus if label in _WORLD_ZONE_WORDS
-    ]
-    return bool(world_labels) and all(
-        _zone_dimension(brief, label) is not None for label in world_labels
-    )
-
-
-def _has_world_connection(brief: str) -> bool:
-    lowered = brief.lower()
-    return any(
-        word in lowered
-        for word in (
-            "연결",
-            "이어",
-            "순서",
-            "동선",
-            "포털",
-            "입구",
-            "connect",
-            "route",
-            "portal",
-            "entrance",
-        )
     )
 
 
@@ -500,10 +410,6 @@ def _clarification_questions(brief: str, proposal: Proposal) -> tuple[str, ...]:
             label in focus
             for label in (
                 "스킬과 동작 표현",
-                "마을",
-                "필드",
-                "던전",
-                "맵과 월드",
                 "퀘스트",
                 "직업",
                 "NPC",
@@ -530,13 +436,6 @@ def _clarification_questions(brief: str, proposal: Proposal) -> tuple[str, ...]:
         )
     if "스킬과 동작 표현" in focus and not _has_skill_behavior(brief):
         questions.append("스킬이 실제 게임에서 어떻게 동작해야 하는지 말해 주세요.")
-    if any(label in focus for label in ("마을", "필드", "던전", "아레나", "맵과 월드")):
-        world_count = sum(label in _WORLD_ZONE_WORDS for label in focus)
-        if (
-            not _all_requested_world_scales_set(brief, focus)
-            or (world_count > 1 and not _has_world_connection(brief))
-        ):
-            questions.append("월드와 각 구역의 크기·연결 방식을 말해 주세요.")
     if "3D 모델" in focus and not any(
         label in focus
         for label in ("아이템", "블록", "몹과 엔티티", "보스", "NPC")
@@ -553,10 +452,6 @@ def _clarification_questions(brief: str, proposal: Proposal) -> tuple[str, ...]:
     deferred_capabilities = {
         request.capability for request in proposal.deferred_requests
     }
-    if "unsupported_arena_dimensions" in deferred_capabilities:
-        questions.append(
-            "아레나 크기는 13~65 사이의 홀수 정사각형으로 다시 정해 주세요."
-        )
     if "item_count_limit" in deferred_capabilities:
         questions.append("한 제작 단계의 아이템 수를 1~8개로 정해 주세요.")
     if "block_count_limit" in deferred_capabilities:
@@ -568,7 +463,6 @@ def _buildable(proposal: Proposal, questions: tuple[str, ...]) -> bool:
     has_generated_content = bool(
         proposal.spec.contents
         or proposal.spec.boss is not None
-        or proposal.spec.arena is not None
     )
     return has_generated_content and not proposal.deferred_requests and not questions
 
@@ -624,34 +518,6 @@ def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
         )
     )
 
-    if any(label in focus for label in ("마을", "필드", "던전", "아레나", "맵과 월드")):
-        world_labels = [
-            label
-            for label in focus
-            if label in ("마을", "필드", "던전", "아레나", "맵과 월드")
-        ]
-        lines.extend(
-            (
-                "",
-                "## 월드/레벨 설계",
-                "",
-                f"- 요청 구역: {', '.join(world_labels)}",
-                (
-                    "- 구역 연결과 진행 조건: 요청에서 확인됨"
-                    if _has_world_connection(proposal.requested_prompt)
-                    else "- 구역 연결과 진행 조건: 아직 정하지 않음"
-                ),
-            )
-        )
-        for label in world_labels:
-            dimension = _zone_dimension(proposal.requested_prompt, label)
-            lines.append(f"- {label} 규모: {dimension or '아직 정하지 않음'}")
-        if proposal.spec.arena is not None and _zone_dimension(
-            proposal.requested_prompt,
-            "아레나",
-        ):
-            lines.append(f"- 아레나 벽 높이: {proposal.spec.arena.wall_height} 블록")
-
     lines.extend(("", "## 시스템/콘텐츠", ""))
     if focus:
         lines.extend(
@@ -677,15 +543,6 @@ def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
             elif label == "블록":
                 detail = f"{block_count}개" if block_count else "수량·용도 미정"
                 implementation = "생성 가능" if block_count else "세부 정보 필요"
-            elif label == "아레나":
-                detail = (
-                    "크기 정보 확인"
-                    if _zone_dimension(proposal.requested_prompt, "아레나")
-                    else "크기·진행 방식 미정"
-                )
-                implementation = (
-                    "생성 가능" if proposal.spec.arena is not None else "세부 정보 필요"
-                )
             elif label == "보스":
                 detail = (
                     "형태·전투 정보 확인"

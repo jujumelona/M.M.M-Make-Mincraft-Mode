@@ -8,6 +8,36 @@ GRADLE_VERSION = "8.12"
 GRADLE_SHA256 = "7a00d51fb93147819aab76024feece20b6b84e420694101f276be952e08bef03"
 
 
+def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
+    """Return the runtime predicates covered by the immutable platform lock.
+
+    Fabric treats a standalone version as an exact version predicate.  Keeping
+    this policy in one code-owned function prevents generated metadata from
+    quietly advertising every future Loader or Fabric API release via ``>=``.
+    The build metadata in the Fabric API version is additionally bound by the
+    exact Gradle dependency in ``gradle.properties`` and by release provenance.
+    """
+
+    platform.validate()
+    values = {
+        "fabricloader": platform.fabric_loader,
+        "minecraft": platform.minecraft_version,
+        "java": platform.java_version,
+        "fabric-api": platform.fabric_api,
+    }
+    for dependency_id, value in values.items():
+        if (
+            type(value) is not str
+            or not value.strip()
+            or value != value.strip()
+            or any(ord(character) < 0x20 for character in value)
+        ):
+            raise ValueError(
+                f"Invalid locked version for Fabric dependency {dependency_id!r}."
+            )
+    return values
+
+
 def install(spec_module: Any, runner_module: Any) -> None:
     """Install one immutable Fabric 1.20.1 toolchain contract.
 

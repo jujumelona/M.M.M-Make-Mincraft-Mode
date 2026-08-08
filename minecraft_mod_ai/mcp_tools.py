@@ -28,6 +28,7 @@ from .proposal_store import (
     read_sharded_complete_proposal_section,
     write_sharded_complete_proposal,
 )
+from .production_contract import quality_contract_summary, quality_unresolved
 from .repair_engine import RepairEngine
 from .runner import GradleRunner
 from .scalable_pipeline import ScalableMinecraftModPipeline
@@ -51,6 +52,7 @@ _SAFE_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _PROPOSAL_REF = re.compile(
     r"^plan_([0-9a-f]{64})_([0-9a-f]{64})$"
 )
+_RUN_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 
 
 class MMMToolService:
@@ -318,6 +320,72 @@ class MMMToolService:
         return {
             **result,
             "proposal_ref": proposal_ref,
+        }
+
+    def read_quality_contract(self, proposal_ref: str) -> dict[str, Any]:
+        """Read the bounded completion contract for one stored proposal."""
+
+        proposal, stored_ref = self._resolve_complete_proposal(
+            complete_proposal=None,
+            proposal_ref=proposal_ref,
+        )
+        contract = proposal.game_design.get("_production_contract")
+        if not isinstance(contract, dict):
+            raise SpecValidationError(
+                "This legacy proposal has no production quality contract."
+            )
+        return {
+            "schema_version": "mmm/quality-contract-summary-v1",
+            "proposal_ref": stored_ref,
+            "summary": quality_contract_summary(contract),
+            "catalog_stats": dict(contract["catalog_stats"]),
+            "quality_dimensions": [
+                {
+                    "dimension_id": item["dimension_id"],
+                    "title": item["title"],
+                    "activation": item["activation"],
+                    "objective": item["objective"],
+                    "evidence_route_ref": item["evidence_route_ref"],
+                }
+                for item in contract["quality_dimension_catalog"]
+            ],
+            "completion_policy": dict(contract["completion_policy"]),
+        }
+
+    def quality_status(self, run_name: str) -> dict[str, Any]:
+        """Read and validate a persisted quality-convergence report."""
+
+        if not isinstance(run_name, str) or not _RUN_NAME.fullmatch(run_name):
+            raise SpecValidationError(
+                "run_name must use lowercase letters, numbers, underscore or hyphen."
+            )
+        run_root = (self.workspace_root / run_name).resolve()
+        try:
+            run_root.relative_to(self.workspace_root)
+        except ValueError as exc:
+            raise SpecValidationError("Run path escaped the workspace.") from exc
+        target = (run_root / ".minecraft_ai/quality-convergence.json").resolve()
+        try:
+            target.relative_to(run_root)
+        except ValueError as exc:
+            raise SpecValidationError("Quality report escaped the run directory.") from exc
+        if run_root.is_symlink() or target.is_symlink() or not target.is_file():
+            raise FileNotFoundError(
+                f"Quality report not found for run: {run_name}"
+            )
+        if target.stat().st_size > self.policy.mcp_page_bytes * 8:
+            raise SpecValidationError("Quality report exceeds the read size policy.")
+        try:
+            report = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SpecValidationError(f"Invalid quality report: {exc}") from exc
+        if not isinstance(report, dict):
+            raise SpecValidationError("Quality report must be an object.")
+        unresolved = quality_unresolved(report)
+        return {
+            **report,
+            "run_name": run_name,
+            "unresolved_dimension_ids": list(unresolved),
         }
 
     def apply_source_patch(
@@ -879,7 +947,6 @@ class MMMToolService:
     def _complete_proposal_counts(
         proposal: CompleteProposal,
     ) -> dict[str, int]:
-        world = proposal.world_ir or {}
         counts = {
             "production_batches": (
                 len(proposal.game_design.get("production_outline", ()))
@@ -894,16 +961,14 @@ class MMMToolService:
             "audio": len(proposal.audio),
             "acceptance_tests": len(proposal.acceptance_tests),
         }
-        for name in (
-            "regions",
-            "routes",
-            "structures",
-            "quests",
-            "constraints",
+        contract = proposal.game_design.get("_production_contract")
+        if isinstance(contract, dict) and isinstance(
+            contract.get("catalog_stats"), dict
         ):
-            value = world.get(name, ())
-            counts[f"world.{name}"] = (
-                len(value) if isinstance(value, list) else 0
+            stats = contract["catalog_stats"]
+            counts["requirements"] = int(stats.get("requirements", 0))
+            counts["quality_dimensions"] = int(
+                stats.get("quality_dimensions", 0)
             )
         return counts
 
@@ -983,65 +1048,6 @@ def _extract_json(text: str) -> dict[str, Any]:
     raise SpecValidationError(
         "Model output did not contain a JSON object."
     )
-
-
-def _validate_world_ir(ir: dict[str, Any]) -> None:
-    required = {
-        "schema_version",
-        "regions",
-        "routes",
-        "structures",
-        "quests",
-        "constraints",
-    }
-    if set(ir) != required or ir.get("schema_version") != "mmm/world-ir-v1":
-        raise SpecValidationError("World IR schema is invalid.")
-    for key in ("regions", "routes", "structures", "quests", "constraints"):
-        if not isinstance(ir[key], list):
-            raise SpecValidationError(
-                f"World IR field {key!r} must be a list."
-            )
-    region_ids: set[str] = set()
-    for region in ir["regions"]:
-        if (
-            not isinstance(region, dict)
-            or not _SAFE_ID.fullmatch(str(region.get("id", "")))
-        ):
-            raise SpecValidationError(
-                "World IR contains an invalid region id."
-            )
-        if region["id"] in region_ids:
-            raise SpecValidationError(
-                f"Duplicate region id: {region['id']}"
-            )
-        region_ids.add(region["id"])
-    graph = {region: set() for region in region_ids}
-    for route in ir["routes"]:
-        if (
-            not isinstance(route, dict)
-            or route.get("from") not in region_ids
-            or route.get("to") not in region_ids
-            or route.get("from") == route.get("to")
-        ):
-            raise SpecValidationError(
-                "World IR route references an invalid region."
-            )
-        graph[route["from"]].add(route["to"])
-        graph[route["to"]].add(route["from"])
-    if graph:
-        start = next(iter(graph))
-        seen = {start}
-        stack = [start]
-        while stack:
-            node = stack.pop()
-            for neighbor in graph[node]:
-                if neighbor not in seen:
-                    seen.add(neighbor)
-                    stack.append(neighbor)
-        if len(seen) != len(graph):
-            raise SpecValidationError(
-                "World IR region graph is disconnected."
-            )
 
 
 def _minecraft_texture(source: Path, target: Path) -> None:

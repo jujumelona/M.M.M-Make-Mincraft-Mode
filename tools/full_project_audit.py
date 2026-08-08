@@ -190,7 +190,10 @@ def audit_mod_only_surface() -> None:
         "minecraft_mod_ai/builder_contract_service.py",
         "minecraft_mod_ai/buildspec.py",
         "minecraft_mod_ai/config/buildspec_catalog.yaml",
+        "minecraft_mod_ai/scalable_world_compiler.py",
         "minecraft_mod_ai/skill_scope_contract.py",
+        "minecraft_mod_ai/world_compiler.py",
+        "minecraft_mod_ai/world_runtime_generator.py",
         "docs/BUILDER_CONTRACT.md",
     )
     for relative in removed_files:
@@ -219,6 +222,9 @@ def audit_obsolete_imports(files: list[Path]) -> None:
         "minecraft_mod_ai.builder_contract_service",
         "minecraft_mod_ai.buildspec",
         "minecraft_mod_ai.skill_scope_contract",
+        "minecraft_mod_ai.scalable_world_compiler",
+        "minecraft_mod_ai.world_compiler",
+        "minecraft_mod_ai.world_runtime_generator",
     }
     failures: list[str] = []
     for path in files:

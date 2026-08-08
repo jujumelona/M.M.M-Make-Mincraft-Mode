@@ -37,7 +37,6 @@ def test_natural_language_plan_and_revision_share_the_current_brief(
         "item"
     ]
     assert first.proposal.spec.boss is None
-    assert first.proposal.spec.arena is None
 
     revised = session.revise("Also add one block.")
     assert revised.buildable is True
@@ -47,13 +46,12 @@ def test_natural_language_plan_and_revision_share_the_current_brief(
         "block",
     }
     assert revised.proposal.spec.boss is None
-    assert revised.proposal.spec.arena is None
     assert "Create one frost item." in revised.proposal.requested_prompt
     assert "Also add one block." in revised.proposal.requested_prompt
     assert isinstance(revised.message, str) and revised.message
 
 
-def test_vague_skill_and_map_request_is_not_buildable_and_forces_no_boss(
+def test_vague_skill_request_is_not_buildable_and_ignores_map_authoring(
     tmp_path: Path,
 ) -> None:
     output_root = tmp_path / "must-remain-empty"
@@ -66,10 +64,9 @@ def test_vague_skill_and_map_request_is_not_buildable_and_forces_no_boss(
     assert reply.buildable is False
     assert reply.proposal.spec.contents == ()
     assert reply.proposal.spec.boss is None
-    assert reply.proposal.spec.arena is None
     assert {
         request.capability for request in reply.proposal.deferred_requests
-    } >= {"skill_system", "field_map"}
+    } == {"skill_system"}
     assert reply.questions or reply.proposal.deferred_requests
 
     with pytest.raises(ValueError, match="build|clarif|supported|ready|구현|계획"):
@@ -214,7 +211,6 @@ def test_openai_compatible_planner_filters_unrequested_content_and_never_leaks_k
         for content in reply.proposal.spec.contents
     ] == [("requested_block", "block")]
     assert reply.proposal.spec.boss is None
-    assert reply.proposal.spec.arena is None
     assert "custom_map" not in {
         request.capability for request in reply.proposal.deferred_requests
     }

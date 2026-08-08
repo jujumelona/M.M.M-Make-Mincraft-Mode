@@ -137,23 +137,6 @@ def build_production_work_plan(
         for module in members:
             module_node[module.module_id] = node_id
 
-    if proposal.world_ir is not None:
-        node_id = "generate-world"
-        world_dependencies = {
-            module_node[module.module_id]
-            for module in ordered
-            if module.kind in {"structure", "biome", "dimension", "world_event"}
-        }
-        nodes.append(
-            _node(
-                node_id,
-                "generate:world",
-                sorted(world_dependencies or {"prepare-project"}),
-                {"kind": "world-ir", "world_ir": proposal.world_ir},
-            )
-        )
-        generated_nodes.append(node_id)
-
     for index, assets in enumerate(
         _chunks(proposal.assets, max(1, policy.java_shard_size))
     ):
@@ -221,13 +204,42 @@ def build_production_work_plan(
                     "external_runtime_required": proposal.external_runtime_required,
                 },
             ),
-            _node(
-                "package-release",
-                "package",
-                ("runtime-playtest",),
-                {"kind": "release"},
-            ),
         ]
+    )
+    quality_nodes: list[str] = []
+    contract = proposal.game_design.get("_production_contract")
+    if proposal.schema_version == "mmm/complete-proposal-v2" and isinstance(
+        contract, dict
+    ):
+        for dimension in contract.get("quality_dimension_catalog", []):
+            dimension_id = str(dimension["dimension_id"])
+            node_id = "validate-quality-" + dimension_id.replace("_", "-")
+            quality_dependency = (
+                "validate-jar"
+                if dimension_id in {"correctness", "build", "research"}
+                else "runtime-playtest"
+            )
+            nodes.append(
+                _node(
+                    node_id,
+                    "validate:quality",
+                    (quality_dependency,),
+                    {
+                        "kind": "quality-validation",
+                        "dimension_id": dimension_id,
+                        "evidence_route_ref": dimension["evidence_route_ref"],
+                        "contract_sha256": contract["contract_sha256"],
+                    },
+                )
+            )
+            quality_nodes.append(node_id)
+    nodes.append(
+        _node(
+            "package-release",
+            "package",
+            tuple(quality_nodes or ["runtime-playtest"]),
+            {"kind": "release"},
+        )
     )
     graph_body = {
         "schema_version": "mmm/production-work-graph-v1",
@@ -1387,7 +1399,7 @@ def _module_stage(module: ProductionModule) -> str:
     }:
         return "system"
     if module.kind in {"structure", "biome", "dimension", "world_event"}:
-        return "world-binding"
+        return "custom"
     if module.kind == "audio":
         return "audio-binding"
     return "content"

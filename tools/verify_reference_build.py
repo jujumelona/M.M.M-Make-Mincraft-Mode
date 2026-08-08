@@ -13,7 +13,7 @@ from minecraft_mod_ai import MinecraftModPipeline
 
 
 REFERENCE_PROMPT = (
-    "Create a frost boss arena map with a 3D model, one item and one block"
+    "Create a frost boss with a 3D model, one item and one block"
 )
 
 

@@ -71,7 +71,7 @@ _CATALOG_RECORDS: tuple[_CatalogRecord, ...] = (
         version_scope="GameTest concepts applied to the pinned Minecraft 1.20.1 runtime",
         verified_on="2026-07-28",
         minecraft_versions=("1.20.1",),
-        topics=("test", "gametest", "boss", "entity", "arena", "runtime", "server"),
+        topics=("test", "gametest", "entity", "runtime", "server"),
     ),
     _CatalogRecord(
         source_id="fabric-mod-json",

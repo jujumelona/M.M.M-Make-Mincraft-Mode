@@ -10,6 +10,8 @@ World generation is treated as an ordinary mod capability, not as a separate map
 
 For each request, the central agent reclassifies the required systems, code, libraries, images, 3D, animation, audio, licensing, and test evidence, then searches exact-version RAG and compatible open-source or media candidates. It does not install or copy a search result before its origin license and immutable file hash are verified.
 
+Each request is kept as a traceable requirement connected to implementation and an observable test. Large jobs continue in resumable slices until every relevant quality check has fresh evidence, or the result names the real external input or runtime that is still missing. OpenAlex and Crossref searches can supply current research candidates, but papers and search results are never treated as proof that the mod works.
+
 If the request needs AI or voice, M.M.M dynamically searches current runtimes and model catalogs instead of fixing one product in the engine. It separates inference, ASR, VAD, TTS, translation, transport, and optional voice adaptation, then checks the exact Minecraft, Fabric, and Java boundary, immutable model revision, code, model, and data licenses, hardware and latency measurements, privacy, and fallback. The approved plan adds one bounded, token-authenticated asynchronous localhost bridge for the requested executable capabilities; it does not bundle a model before its gates pass or let model output mutate game state directly. Voice adaptation stays disabled unless the speaker is authorized and explicit consent, provenance, revocation, and deletion all pass.
 
 ## Mod development methods

@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .spec import ArenaSpec, BossSpec, ContentKind, ContentSpec, ModSpec
+from .spec import BossSpec, ContentKind, ContentSpec, ModSpec
+from .toolchain_contract import fabric_dependency_predicates
 
 
 class GenerationError(RuntimeError):
@@ -32,34 +33,6 @@ def _constant_name(content_id: str) -> str:
 
 def _json_text(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
-
-
-def _arena_path_length(radius: int) -> int | None:
-    start = (0, -radius)
-    goal = (0, 0)
-    blocked = {
-        (x, z)
-        for x in range(-radius, radius + 1)
-        for z in range(-radius, radius + 1)
-        if (abs(x) == radius or abs(z) == radius)
-        and not (z == -radius and -2 <= x <= 2)
-    }
-    frontier = [(start, 0)]
-    visited = {start}
-    for (x, z), distance in frontier:
-        if (x, z) == goal:
-            return distance
-        for candidate in ((x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)):
-            cx, cz = candidate
-            if (
-                -radius <= cx <= radius
-                and -radius <= cz <= radius
-                and candidate not in blocked
-                and candidate not in visited
-            ):
-                visited.add(candidate)
-                frontier.append((candidate, distance + 1))
-    return None
 
 
 class FabricProjectGenerator:
@@ -133,8 +106,6 @@ class FabricProjectGenerator:
 
         if spec.boss is not None:
             self._write_boss(root, spec, main_class, spec.boss)
-        if spec.arena is not None:
-            self._write_arena(root, spec, spec.arena)
         self._write_tags(root, spec)
         self._write_contract(root, spec)
         return GeneratedProject(
@@ -230,14 +201,6 @@ rootProject.name = '{spec.mod_id}'
                     f"src/main/resources/data/{spec.mod_id}/loot_tables/entities/{spec.boss.entity_id}.json",
                     f".minecraft_ai/art_sources/{spec.boss.entity_id}.bbmodel",
                     f".minecraft_ai/art_sources/{spec.boss.entity_id}.obj",
-                ]
-            )
-        if spec.arena is not None:
-            required_resources.extend(
-                [
-                    f"src/main/resources/data/{spec.mod_id}/functions/build_{spec.arena.arena_id}.mcfunction",
-                    f".minecraft_ai/world/{spec.arena.arena_id}.world_design.json",
-                    f".minecraft_ai/world/{spec.arena.arena_id}_preview.png",
                 ]
             )
         required_groovy = ",\n        ".join(f"'{path}'" for path in required_resources)
@@ -467,8 +430,6 @@ public final class {main_class} implements ModInitializer {{
         contract_ids = [content.content_id for content in spec.contents]
         if spec.boss is not None:
             contract_ids.append(spec.boss.entity_id)
-        if spec.arena is not None:
-            contract_ids.append(spec.arena.arena_id)
         ids = ", ".join(f'"{content_id}"' for content_id in contract_ids)
         generated_content = f"""package {spec.package_name};
 
@@ -541,42 +502,6 @@ final class GeneratedContractTest {{
                     "        boss.discard();",
                 ]
             )
-        arena_check = ""
-        if spec.arena is not None:
-            arena_entity_check = ""
-            if spec.boss is not None:
-                arena_entity_check = f"""
-        var arenaBosses = context.getWorld().getEntitiesByType(
-            {main_class}.{spec.boss.entity_id.upper()},
-            new net.minecraft.util.math.Box(origin).expand(2.0),
-            entity -> entity.isAlive()
-                && !entity.isRemoved()
-                && !entity.getUuid().equals(probeBossUuid)
-        );
-        require(!arenaBosses.isEmpty(), "arena did not summon the approved boss");
-        arenaBosses.forEach(entity -> entity.discard());
-"""
-            arena_check = f"""
-        require(Registries.BLOCK.containsId(new Identifier("{spec.arena.floor_block}")),
-            "arena floor palette block is not registered");
-        require(Registries.BLOCK.containsId(new Identifier("{spec.arena.accent_block}")),
-            "arena accent palette block is not registered");
-        var origin = context.getAbsolutePos(net.minecraft.util.math.BlockPos.ORIGIN);
-        var source = context.getWorld().getServer().getCommandSource()
-            .withWorld(context.getWorld())
-            .withPosition(net.minecraft.util.math.Vec3d.ofBottomCenter(origin))
-            .withLevel(4);
-        int functionResult = context.getWorld().getServer().getCommandManager()
-            .executeWithPrefix(source, "function {spec.mod_id}:build_{spec.arena.arena_id}");
-        require(functionResult > 0, "arena function did not execute");
-        var floor = Registries.BLOCK.get(new Identifier("{spec.arena.floor_block}"));
-        var accent = Registries.BLOCK.get(new Identifier("{spec.arena.accent_block}"));
-        require(context.getWorld().getBlockState(origin.down()).isOf(floor),
-            "arena floor was not placed");
-        require(context.getWorld().getBlockState(origin.add({spec.arena.radius}, 0, 0)).isOf(accent),
-            "arena wall was not placed");
-{arena_entity_check}
-"""
         checks = "\n".join((*registry_checks, *recipe_checks))
         return f"""package {spec.package_name};
 
@@ -590,7 +515,6 @@ public final class {main_class}GameTests {{
     @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)
     public void generatedRegistriesAreLive(TestContext context) {{
 {checks}
-{arena_check}
         context.complete();
     }}
 
@@ -621,12 +545,7 @@ public final class {main_class}GameTests {{
             "license": "MIT",
             "environment": "*",
             "entrypoints": entrypoints,
-            "depends": {
-                "fabricloader": f">={spec.platform.fabric_loader}",
-                "minecraft": f"~{spec.platform.minecraft_version}",
-                "java": ">=17",
-                "fabric-api": f">={spec.platform.fabric_api}",
-            },
+            "depends": fabric_dependency_predicates(spec.platform),
         }
 
     def _write_lang_files(self, root: Path, spec: ModSpec) -> None:
@@ -646,13 +565,6 @@ public final class {main_class}GameTests {{
             )
             korean[f"item.{spec.mod_id}.{boss.entity_id}_spawn_egg"] = (
                 f"{boss.display_name_ko} 생성 알"
-            )
-        if spec.arena is not None:
-            english[f"message.{spec.mod_id}.arena_built"] = (
-                f"{spec.arena.display_name_en} generated"
-            )
-            korean[f"message.{spec.mod_id}.arena_built"] = (
-                f"{spec.arena.display_name_ko} 생성 완료"
             )
         base = Path("src/main/resources/assets") / spec.mod_id / "lang"
         self._write_text(root, base / "en_us.json", _json_text(english), raw=True)
@@ -991,99 +903,6 @@ public final class {renderer_class}
             raw=True,
         )
 
-    def _write_arena(self, root: Path, spec: ModSpec, arena: ArenaSpec) -> None:
-        radius = arena.radius
-        inner = radius - 1
-        height = arena.wall_height
-        verified_path_length = _arena_path_length(radius)
-        if verified_path_length is None:
-            raise GenerationError("Arena entry-to-center path proof failed.")
-        summon_command = (
-            f"summon {spec.mod_id}:{spec.boss.entity_id} ~ ~ ~\n"
-            if spec.boss is not None
-            else ""
-        )
-        function_text = f"""# Generated arena: {arena.arena_id}
-# Explicit server-side action only: /function {spec.mod_id}:build_{arena.arena_id}
-fill ~-{radius} ~-1 ~-{radius} ~{radius} ~-1 ~{radius} {arena.floor_block}
-fill ~-{radius} ~ ~-{radius} ~{radius} ~{height} ~-{radius} {arena.accent_block}
-fill ~-{radius} ~ ~{radius} ~{radius} ~{height} ~{radius} {arena.accent_block}
-fill ~-{radius} ~ ~-{inner} ~-{radius} ~{height} ~{inner} {arena.accent_block}
-fill ~{radius} ~ ~-{inner} ~{radius} ~{height} ~{inner} {arena.accent_block}
-fill ~-2 ~ ~-{radius} ~2 ~2 ~-{radius} air
-setblock ~-{inner} ~ ~-{inner} minecraft:sea_lantern
-setblock ~{inner} ~ ~-{inner} minecraft:sea_lantern
-setblock ~-{inner} ~ ~{inner} minecraft:sea_lantern
-setblock ~{inner} ~ ~{inner} minecraft:sea_lantern
-{summon_command}\
-tellraw @a {{"translate":"message.{spec.mod_id}.arena_built","color":"aqua"}}
-"""
-        function_path = (
-            Path("src/main/resources/data")
-            / spec.mod_id
-            / "functions"
-            / f"build_{arena.arena_id}.mcfunction"
-        )
-        self._write_text(root, function_path, function_text, raw=True)
-
-        center_zone = "boss_area" if spec.boss is not None else "map_center"
-        world_ir = {
-            "schema_version": "minecraft-mod-ai/world-design-v1",
-            "arena_id": arena.arena_id,
-            "map_mode": arena.map_mode,
-            "footprint": [radius * 2 + 1, radius * 2 + 1],
-            "height": height + 1,
-            "origin_policy": "relative_to_function_executor",
-            "palette": {
-                "floor": arena.floor_block,
-                "accent": arena.accent_block,
-                "light": "minecraft:sea_lantern",
-            },
-            "zones": [
-                {"id": "entry", "position": [0, 0, -radius]},
-                {"id": center_zone, "position": [0, 0, 0]},
-            ],
-            "navigation": {
-                "required_paths": [["entry", center_zone]],
-                "minimum_door_width": 5,
-                "critical_path_verified": True,
-                "verification": {
-                    "method": "deterministic_grid_bfs",
-                    "path_length_blocks": verified_path_length,
-                    "blocked_cells": "perimeter_except_five_block_north_door",
-                    "result": True,
-                },
-            },
-            "spawn": (
-                {
-                    "entity": f"{spec.mod_id}:{spec.boss.entity_id}",
-                    "position": [0, 0, 0],
-                }
-                if spec.boss is not None
-                else None
-            ),
-            "safety": {
-                "writes_user_world_automatically": False,
-                "activation": f"/function {spec.mod_id}:build_{arena.arena_id}",
-                "permission": "Minecraft function permission level",
-            },
-        }
-        self._write_text(
-            root,
-            Path(".minecraft_ai/world") / f"{arena.arena_id}.world_design.json",
-            _json_text(world_ir),
-            raw=True,
-        )
-        self._write_bytes(
-            root,
-            Path(".minecraft_ai/world") / f"{arena.arena_id}_preview.png",
-            make_arena_preview_png(
-                arena.floor_block,
-                arena.accent_block,
-                radius=radius,
-            ),
-        )
-
     def _write_tags(self, root: Path, spec: ModSpec) -> None:
         blocks = [
             f"{spec.mod_id}:{content.content_id}"
@@ -1111,8 +930,6 @@ tellraw @a {{"translate":"message.{spec.mod_id}.arena_built","color":"aqua"}}
         contract_ids = [content.content_id for content in spec.contents]
         if spec.boss is not None:
             contract_ids.append(spec.boss.entity_id)
-        if spec.arena is not None:
-            contract_ids.append(spec.arena.arena_id)
         ids = ", ".join(f'"{content_id}"' for content_id in contract_ids)
         self._write_text(
             root,
@@ -1175,33 +992,10 @@ public final class GeneratedContent {{
                         ],
                         "world_placement": {
                             "status": "EXPLICIT_ONLY",
-                            "reason": "Spawn egg or approved arena function; no automatic natural spawn.",
+                            "reason": "Spawn egg only; no automatic natural spawn.",
                         },
                         "tests": [
                             f"src/main/java/{spec.package_name.replace('.', '/')}/{_java_class_name(spec.mod_id)}GameTests.java"
-                        ],
-                        "documentation": ["README.md"],
-                    },
-                }
-            )
-        if spec.arena is not None:
-            manifest_contents.append(
-                {
-                    "content_id": spec.arena.arena_id,
-                    "kind": "arena_map",
-                    "trace_edges": {
-                        "implementation": [
-                            f"src/main/resources/data/{spec.mod_id}/functions/build_{spec.arena.arena_id}.mcfunction"
-                        ],
-                        "assets": [
-                            f".minecraft_ai/world/{spec.arena.arena_id}_preview.png"
-                        ],
-                        "world_placement": {
-                            "status": "EXPLICIT_ONLY",
-                            "reason": f"User/admin runs /function {spec.mod_id}:build_{spec.arena.arena_id}.",
-                        },
-                        "tests": [
-                            f".minecraft_ai/world/{spec.arena.arena_id}.world_design.json"
                         ],
                         "documentation": ["README.md"],
                     },
@@ -1230,11 +1024,6 @@ public final class GeneratedContent {{
                 f"\n- `{spec.boss.entity_id}` (boss): "
                 f"{spec.boss.display_name_en} / {spec.boss.display_name_ko}; "
                 "server boss bar, loot, spawn egg, editable Blockbench/OBJ source"
-            )
-        if spec.arena is not None:
-            content_lines += (
-                f"\n- `{spec.arena.arena_id}` (arena): "
-                f"`/function {spec.mod_id}:build_{spec.arena.arena_id}`"
             )
         return f"""# {spec.mod_name}
 
@@ -1420,60 +1209,6 @@ def make_texture_png(color: str, seed: str, *, kind: str, size: int = 16) -> byt
                     255,
                 )
             )
-        rows.append(bytes(row))
-    raw = b"".join(rows)
-    signature = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
-    return (
-        signature
-        + _png_chunk(b"IHDR", ihdr)
-        + _png_chunk(b"IDAT", zlib.compress(raw, level=9))
-        + _png_chunk(b"IEND", b"")
-    )
-
-
-def make_arena_preview_png(
-    floor_block: str,
-    accent_block: str,
-    *,
-    radius: int,
-    size: int = 64,
-) -> bytes:
-    """Render a deterministic top-down arena proof image without Minecraft."""
-    icy = "ice" in floor_block or "ice" in accent_block
-    floor = (92, 106, 120) if not icy else (137, 220, 235)
-    accent = (124, 58, 237) if not icy else (36, 126, 189)
-    background = (24, 24, 32)
-    rows: list[bytes] = []
-    margin = 7
-    center = size // 2
-    for y in range(size):
-        row = bytearray([0])
-        for x in range(size):
-            inside = margin <= x < size - margin and margin <= y < size - margin
-            wall = inside and (
-                x < margin + 3
-                or x >= size - margin - 3
-                or y < margin + 3
-                or y >= size - margin - 3
-            )
-            entry = abs(x - center) <= 4 and y >= size - margin - 3
-            boss_marker = (x - center) ** 2 + (y - center) ** 2 <= 16
-            if boss_marker:
-                red, green, blue = (235, 76, 96)
-            elif entry:
-                red, green, blue = floor
-            elif wall:
-                red, green, blue = accent
-            elif inside:
-                checker = ((x // 5) + (y // 5) + radius) % 2
-                red, green, blue = tuple(
-                    max(0, min(255, value + (8 if checker else -8)))
-                    for value in floor
-                )
-            else:
-                red, green, blue = background
-            row.extend((red, green, blue, 255))
         rows.append(bytes(row))
     raw = b"".join(rows)
     signature = b"\x89PNG\r\n\x1a\n"

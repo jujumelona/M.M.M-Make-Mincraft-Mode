@@ -172,36 +172,6 @@ def build_reference(output: Path) -> dict:
         ),
     )
 
-    world_ir = {
-        "schema_version": "mmm/world-ir-v1",
-        "regions": [
-            {
-                "id": "spawn",
-                "purpose": "reference start",
-                "biome_hint": "minecraft:plains",
-                "entry_level": 0,
-            }
-        ],
-        "routes": [],
-        "structures": [
-            {
-                "id": "reference_hall",
-                "region_id": "spawn",
-                "kind": "village",
-                "brief": "Reference integration hall",
-                "size": [9, 7, 9],
-                "palette": [
-                    "minecraft:stone_bricks",
-                    "minecraft:oak_planks",
-                    "minecraft:air",
-                ],
-                "biomes": ["minecraft:plains"],
-            }
-        ],
-        "quests": [],
-        "constraints": ["spawn safe"],
-    }
-
     proposal = complete_proposal_from_parts(
         requested_prompt=(
             "Build a complete deterministic Fabric reference mod with an "
@@ -217,13 +187,12 @@ def build_reference(output: Path) -> dict:
                 "player_verbs": ["attack"],
                 "enemy_roles": ["guard"],
             },
-            "world": {"regions": [{"id": "spawn"}]},
+            "mod_context": {"vanilla_integration": ["server lifecycle"]},
             "modules": [{"plugin_id": "complete-orchestrator", "status": "implemented", "reason": "CI"}],
             "assets": [],
             "acceptance_tests": ["reference build compiles"],
         },
         modules=modules,
-        world_ir=world_ir,
         acceptance_tests=(
             "All generated registries load in GameTest",
             "All generated Java compiles on Fabric 1.20.1",

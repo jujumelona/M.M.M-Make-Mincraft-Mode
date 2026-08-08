@@ -60,7 +60,7 @@ def test_complete_proposal_storage_scales_by_adding_bounded_shards(
     )
     raw = json.loads(index.read_text(encoding="utf-8"))
 
-    assert raw["schema_version"] == "mmm/complete-proposal-index-v2"
+    assert raw["schema_version"] == "mmm/complete-proposal-index-v3"
     assert raw["modules"]["count"] == 103
     assert raw["modules"]["shard_count"] == 13
     assert raw["modules"]["manifest_count"] == 1
@@ -274,7 +274,7 @@ def test_nested_game_design_list_can_be_read_as_bounded_pages(
     assert page["next_cursor"]
 
 
-def test_v1_index_remains_readable() -> None:
+def test_pre_mapless_index_with_world_ir_is_rejected() -> None:
     proposal = _large_proposal(3)
     proposal_payload = proposal.to_dict()
     parts: dict[str, bytes] = {}
@@ -325,8 +325,8 @@ def test_v1_index_remains_readable() -> None:
         "world_ir": None,
     }
 
-    loaded = complete_proposal_from_index(raw, parts.__getitem__)
-    assert loaded.calculate_hash() == proposal.calculate_hash()
+    with pytest.raises(SpecValidationError, match="fields are invalid"):
+        complete_proposal_from_index(raw, parts.__getitem__)
 
 
 def test_v2_chunked_store_loads_from_release_zip(tmp_path: Path) -> None:

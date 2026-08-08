@@ -19,22 +19,6 @@ class CountIntent:
     overflow: int | None = None
 
 
-MAP_CASCADE_REMOVALS: tuple[str, ...] = (
-    "all maps",
-    "every map",
-    "all worlds",
-    "every world",
-    "모든 맵",
-    "전체 맵",
-    "맵 전체",
-    "맵 전부",
-    "모든 월드",
-    "전체 월드",
-    "월드 전체",
-    "월드 전부",
-)
-
-
 _ENGLISH_NUMBER_WORDS = {
     "one": 1,
     "two": 2,

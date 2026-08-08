@@ -508,7 +508,7 @@ def _classify_query(query: str) -> str:
     families: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("mcp", ("mcp", "tool", "resource", "prompt", "stdio", "프로토콜")),
         ("networking", ("network", "packet", "payload", "codec", "멀티플레이", "패킷")),
-        ("world", ("world", "map", "village", "field", "dungeon", "arena", "월드", "맵", "마을", "필드", "던전", "아레나")),
+        ("native_minecraft", ("structure", "biome", "dimension", "world_event", "구조물", "바이옴", "차원")),
         ("asset", ("3d", "model", "texture", "animation", "blockbench", "geckolib", "모델", "텍스처", "애니메이션")),
         ("entity", ("entity", "mob", "boss", "ai", "goal", "몹", "보스", "엔티티")),
         ("test", ("test", "gametest", "verify", "검증", "테스트")),
@@ -529,7 +529,7 @@ def _canonical_query(query: str, family: str) -> str:
     family_terms = {
         "mcp": ("mcp", "tools", "resources", "prompts", "security"),
         "networking": ("server", "validation", "packet", "codec"),
-        "world": ("worldgen", "structure", "path", "seed"),
+        "native_minecraft": ("fabric", "registry", "gametest", "compatibility"),
         "asset": ("model", "texture", "animation", "runtime"),
         "entity": ("entity", "attributes", "goals", "gametest"),
         "test": ("gametest", "report", "runtime", "evidence"),

@@ -21,7 +21,7 @@ def test_external_mcp_registry_is_version_locked() -> None:
 def test_canonical_skill_catalog_is_complete() -> None:
     report = validate_skill_catalog()
     assert report["passed"], report["findings"]
-    assert len(CANONICAL_SKILLS) == 26
+    assert len(CANONICAL_SKILLS) == 27
 
 
 def test_restricted_blockbench_tools_have_no_shell_or_script() -> None:

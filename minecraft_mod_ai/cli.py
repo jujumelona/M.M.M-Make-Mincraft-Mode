@@ -282,7 +282,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "validate-proposal":
             raw = _read_json(args.proposal)
-            if raw.get("schema_version") == "mmm/complete-proposal-v1":
+            if raw.get("schema_version") in {
+                "mmm/complete-proposal-v1",
+                "mmm/complete-proposal-v2",
+            }:
                 proposal = CompleteProposal.from_dict(raw)
                 result = {
                     "status": "PASS",

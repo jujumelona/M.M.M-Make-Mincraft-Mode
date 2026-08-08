@@ -1,6 +1,6 @@
 ---
 name: gather-adaptive-minecraft-evidence
-description: Gather exact-version Minecraft, Fabric, Yarn, dependency, and project evidence with adaptive retrieval and a corrective pass. Use before implementing uncertain APIs, world generation, datagen, networking, rendering, animation, Gradle dependencies, or cross-file behavior, and whenever initial retrieval is weak, conflicting, multi-hop, or project-wide.
+description: Gather exact-version Minecraft, Fabric, Yarn, dependency, and project evidence with adaptive retrieval and a corrective pass. Use before implementing uncertain APIs, native Minecraft module integration, datagen, networking, rendering, animation, Gradle dependencies, or cross-file behavior, and whenever initial retrieval is weak, conflicting, multi-hop, or project-wide.
 ---
 
 # Gather Adaptive Minecraft Evidence

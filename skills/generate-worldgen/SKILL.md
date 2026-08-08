@@ -1,7 +1,6 @@
 ---
 name: generate-worldgen
 description: Generate only explicitly requested mod-owned structures, biomes, dimensions and feature resources inside the Fabric project.
-schema_version: mmm/skill-v2
 ---
 
 activate_when:

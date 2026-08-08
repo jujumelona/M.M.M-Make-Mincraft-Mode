@@ -67,7 +67,7 @@ def test_evidence_search_is_version_scoped_deterministic_and_data_only() -> None
 
 def test_planner_routes_one_topical_official_source_into_the_snapshot() -> None:
     pipeline = MinecraftModPipeline()
-    boss = pipeline.plan("Create a frost boss arena")
+    boss = pipeline.plan("Create a frost boss with a spawn egg")
     items = pipeline.plan("Create a frost item and block with recipes")
 
     boss_ids = {source.source_id for source in boss.evidence_sources}

@@ -3,7 +3,7 @@ agents:
   GameDesignPlanner:
     model_role: planner
     skills: [intake-mod-brief, plan-game-design, freeze-approved-spec]
-    purpose: gameplay loop, progression, combat, quest, world and acceptance-test design
+    purpose: gameplay loop, progression, combat, quest, vanilla integration and acceptance-test design
     mcp_servers: [mmm-frontdoor, mmm-research, minecraft-dev, playwright]
   ResearchAgent:
     model_role: researcher
@@ -13,8 +13,8 @@ agents:
   MinecraftCoder:
     model_role: coder
     safe_model_role: coder_safe
-    skills: [generate-fabric-core, generate-datagen, generate-geckolib-entity, generate-worldgen, generate-quest-progression, generate-gui-networking, compile-and-repair]
-    purpose: Fabric Java, datagen, Jigsaw/NBT, GeckoLib, GameTest and minimal build repair
+    skills: [generate-fabric-core, generate-datagen, generate-worldgen, generate-geckolib-entity, generate-quest-progression, generate-gui-networking, compile-and-repair]
+    purpose: Fabric Java, datagen, GeckoLib, GameTest and minimal build repair
     mcp_servers: [mmm-generation, mmm-quality, minecraft-dev, jdtls, github]
   VisualCritic:
     model_role: visual_critic
@@ -26,11 +26,6 @@ agents:
     skills: [generate-textures, model-with-blockbench]
     purpose: original concept art and texture candidates; never shares T4 residency with an LLM
     mcp_servers: [mmm-generation, mmm-quality, blockbench]
-  WorldPlanner:
-    model_role: world_planner
-    skills: [plan-game-design, generate-worldgen]
-    purpose: region graph, terrain constraints, routes, structures, dungeon and quest movement
-    mcp_servers: [mmm-research, mmm-generation, minecraft-dev, minecraft-runtime-1201]
   RuntimeTester:
     model_role: coder_safe
     skills: [runtime-playtest, compile-and-repair, release-security]

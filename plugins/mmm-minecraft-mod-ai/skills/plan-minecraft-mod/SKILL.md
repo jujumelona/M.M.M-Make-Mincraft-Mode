@@ -6,7 +6,7 @@ description: Convert a user brief and reference images into a version-pinned gam
 # Plan Minecraft Mod
 
 ## activate_when
-Use when the user asks to create, redesign, or scope a Minecraft mod, game mode, map, progression loop, boss, item set, or content pack.
+Use when the user asks to create, redesign, or scope a Minecraft mod, mod system, progression loop, item set, entity, asset, or content pack.
 
 ## inputs
 - `prompt`: required natural-language brief.
