@@ -657,7 +657,9 @@ class CompleteGameDesignPlanner:
                 self.router,
                 system_prompt=(
                     "Continue the production outline. Return exactly one "
-                    "JSON object. Do not repeat a batch. Every batch scope "
+                    "JSON object. Keep each page compact (maximum 2 to 3 batches per page). "
+                    "If more batches remain, set complete=false and supply a next_cursor. "
+                    "Do not repeat a batch. Every batch scope "
                     "must be self-contained, and deliverables are an exact "
                     "completion checklist rather than examples."
                 ),
@@ -784,6 +786,8 @@ class CompleteGameDesignPlanner:
                 self.router,
                 system_prompt=(
                     "Return exactly one production-batch JSON page. "
+                    "Keep each page compact with a maximum of 2 to 3 modules per page. "
+                    "If deliverables or work remain, set complete=false and supply a next_cursor. "
                     "Implement output, not prose. completed_deliverables "
                     "must name only checklist entries fully covered by this "
                     "and prior pages. A complete page is valid only when no "
