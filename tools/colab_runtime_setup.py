@@ -229,7 +229,6 @@ def _install_project(*, local_profile: bool) -> None:
         "-m",
         "pip",
         "install",
-        "--no-build-isolation",
         "-e",
         target,
     ]
