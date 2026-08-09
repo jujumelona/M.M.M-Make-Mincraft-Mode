@@ -37,7 +37,7 @@ class LlamaCppAdapter(ModelAdapter):
         try:
             # Resolve GGUF model path
             repo_id = cfg.model_id
-            filename = getattr(cfg, "gguf_filename", "") or ""
+            filename = cfg.extra.get("gguf_filename", "") or ""
 
             if os.path.exists(repo_id) and repo_id.endswith(".gguf"):
                 model_path = repo_id
