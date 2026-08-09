@@ -198,17 +198,21 @@ class TransformersMultimodalAdapter(ModelAdapter):
                     "AutoModel",
                 ]
                 model_loaded = None
-                for name in candidate_names:
-                    auto_cls = getattr(transformers, name, None)
-                    if auto_cls is None:
-                        continue
-                    try:
-                        model_loaded = auto_cls.from_pretrained(cfg.model_id, **kwargs)
+                for trust_remote in (False, True):
+                    kwargs["trust_remote_code"] = trust_remote
+                    for name in candidate_names:
+                        auto_cls = getattr(transformers, name, None)
+                        if auto_cls is None:
+                            continue
+                        try:
+                            model_loaded = auto_cls.from_pretrained(cfg.model_id, **kwargs)
+                            break
+                        except Exception:
+                            continue
+                    if model_loaded is not None:
                         break
-                    except Exception:
-                        continue
                 if model_loaded is None:
-                    model_loaded = AutoModelForCausalLM.from_pretrained(cfg.model_id, **kwargs)
+                    model_loaded = AutoModelForCausalLM.from_pretrained(cfg.model_id, trust_remote_code=True, **{k: v for k, v in kwargs.items() if k != "trust_remote_code"})
                 self._model = model_loaded
             model = self._model
             device = next(model.parameters()).device
