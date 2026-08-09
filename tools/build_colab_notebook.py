@@ -71,6 +71,7 @@ REPO_DIR = Path("/content/M.M.M-Make-Mincraft-Mode")
 EXPECTED_REPOSITORY = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode.git"
 previous_commit = ""
 if (REPO_DIR / ".git").is_dir():
+    print("📥 Updating official M.M.M repository from GitHub main...", flush=True)
     origin_url = subprocess.check_output(
         ["git", "-C", str(REPO_DIR), "remote", "get-url", "origin"],
         text=True,
@@ -112,6 +113,7 @@ if (REPO_DIR / ".git").is_dir():
 elif REPO_DIR.exists():
     raise RuntimeError(f"Git 저장소가 아닌 경로가 이미 있습니다: {REPO_DIR}")
 else:
+    print("📥 Cloning official M.M.M repository from GitHub main...", flush=True)
     subprocess.run(
         [
             "git",

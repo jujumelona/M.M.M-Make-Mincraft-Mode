@@ -232,18 +232,19 @@ def _install_project(*, local_profile: bool) -> None:
         if local_profile
         else REMOTE_PROJECT_INSTALL_TARGET
     )
+    print(f"📦 Installing M.M.M project dependencies ({target})...", flush=True)
     subprocess.run(
         [
             sys.executable,
             "-m",
             "pip",
             "install",
-            "-q",
             "-e",
             target,
         ],
         check=True,
     )
+    print("✅ M.M.M project package installed successfully!", flush=True)
 
 
 def _verify_qwen_fastpath(*, torch: Any, transformers_was_loaded: bool) -> None:
