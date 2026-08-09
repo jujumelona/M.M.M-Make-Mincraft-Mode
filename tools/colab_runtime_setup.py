@@ -208,22 +208,13 @@ def _require_local_cuda() -> Any:
 
 
 def _install_qwen_fastpath() -> None:
+    """Check if Qwen fast-path kernels are already installed; skip compilation."""
     try:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--no-build-isolation",
-                QWEN_FASTPATH_REQUIREMENT,
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        from importlib.metadata import version as pkg_version
+        pkg_version("flash-linear-attention")
+        print("✅ Qwen3.5 fast-path kernels already installed.", flush=True)
     except Exception:
-        pass
+        print("ℹ️ Qwen3.5 fast-path kernels not pre-installed; using standard PyTorch path.", flush=True)
 
 
 def _install_project(*, local_profile: bool) -> None:
@@ -505,6 +496,7 @@ def setup_colab_runtime(
             raise ValueError("remote_quality requires a text model name.")
     checkout = Path(repo_dir).resolve()
     commit = used_commit.strip()
+    print("🔍 Validating checkout integrity...", flush=True)
     _validate_checkout(
         repo_dir=checkout,
         used_commit=commit,
@@ -516,12 +508,12 @@ def setup_colab_runtime(
 
     torch = None
     if profile in LOCAL_PROFILES:
+        print("🔧 Checking CUDA GPU availability...", flush=True)
         torch = _require_local_cuda()
-        # Install the compiled extension first without build isolation. This
-        # prevents the editable project's local-model extra from attempting an
-        # isolated FLA build before the runtime PyTorch ABI is visible.
         _install_qwen_fastpath()
+    print("=" * 60, flush=True)
     _install_project(local_profile=profile in LOCAL_PROFILES)
+    print("=" * 60, flush=True)
     if profile in LOCAL_PROFILES:
         _verify_qwen_fastpath(
             torch=torch,
