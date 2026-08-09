@@ -13,6 +13,8 @@ from .speech import SpeechAdapter
 from .transformers_multimodal import TransformersMultimodalAdapter
 from .transformers_text import TransformersTextAdapter
 
+from .vllm_adapter import VLLMAdapter
+
 __all__ = [
     "AdapterConfig",
     "EmbeddingAdapter",
@@ -26,4 +28,5 @@ __all__ = [
     "SpeechAdapter",
     "TransformersMultimodalAdapter",
     "TransformersTextAdapter",
+    "VLLMAdapter",
 ]

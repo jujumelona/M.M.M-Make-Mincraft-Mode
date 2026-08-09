@@ -59,8 +59,6 @@ class TransformersTextAdapter(ModelAdapter):
                 "attn_implementation": "sdpa",
                 "trust_remote_code": False,
             }
-            if cfg.cpu_offload:
-                kwargs["offload_folder"] = "offload_dir"
             qconfig = quantization_config(cfg)
             if qconfig is not None:
                 kwargs["quantization_config"] = qconfig
