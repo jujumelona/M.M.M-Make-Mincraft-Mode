@@ -30,6 +30,7 @@ REQUIRED_ROLES = frozenset(
 ALLOWED_ADAPTERS = frozenset(
     {
         "vllm",
+        "llama_cpp",
         "transformers_text",
         "transformers_multimodal",
         "openai_compatible",
