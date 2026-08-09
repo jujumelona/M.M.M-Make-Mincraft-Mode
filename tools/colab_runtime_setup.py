@@ -224,20 +224,28 @@ def _install_project(*, local_profile: bool) -> None:
         else REMOTE_PROJECT_INSTALL_TARGET
     )
     print(f"📦 Installing M.M.M project dependencies ({target})...", flush=True)
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--no-build-isolation",
-            "-e",
-            target,
-        ],
-        check=True,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--no-build-isolation",
+        "-e",
+        target,
+    ]
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+    if process.stdout is not None:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+    retcode = process.wait()
+    if retcode != 0:
+        raise subprocess.CalledProcessError(retcode, cmd)
     print("✅ M.M.M project package installed successfully!", flush=True)
 
 
