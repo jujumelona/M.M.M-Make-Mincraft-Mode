@@ -72,6 +72,25 @@ class LlamaCppAdapter(ModelAdapter):
                 print(f"⚙️ [llama.cpp] Initializing GGUF model: {model_path}", flush=True)
                 ctx_len = min(cfg.max_context, 16384)
                 gpu_layers = cfg.extra.get("n_gpu_layers", -1)
+
+                if gpu_layers == -1:
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            free_vram_mb = torch.cuda.mem_get_info()[0] / (1024 * 1024) - 2500
+                            file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+                            if file_size_mb > free_vram_mb and free_vram_mb > 0:
+                                total_layers = 40
+                                mb_per_layer = file_size_mb / total_layers
+                                gpu_layers = max(1, int(free_vram_mb // mb_per_layer))
+                                print(
+                                    f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers} layers "
+                                    f"(Free VRAM: {free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
+                                    flush=True,
+                                )
+                    except Exception:
+                        pass
+
                 LlamaCppAdapter._llm = Llama(
                     model_path=model_path,
                     n_gpu_layers=gpu_layers,
