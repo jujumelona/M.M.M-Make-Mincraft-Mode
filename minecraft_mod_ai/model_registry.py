@@ -128,15 +128,6 @@ class ModelRegistry:
             api_key = _required_env(raw, "api_key_env", role)
         elif not model_id:
             raise ModelConfigurationError(f"Local role {role!r} has no model_id.")
-        if model_id.startswith("Qwen/Qwen3.5-") and model_id.endswith("-Instruct"):
-            raise ModelConfigurationError(
-                f"Invalid Qwen3.5 repository ID for role {role!r}: {model_id!r}"
-            )
-        if role in {"coder", "coder_safe"} and provider == "local":
-            if "Coder" not in model_id:
-                raise ModelConfigurationError(
-                    f"Local coding role {role!r} must use a code-specialized model: {model_id!r}"
-                )
         known = {
             "model_id",
             "provider",
