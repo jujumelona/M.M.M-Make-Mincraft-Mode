@@ -30,7 +30,7 @@ class LlamaCppAdapter(ModelAdapter):
 
     def generate(self, request: GenerationRequest) -> str:
         cfg = self.config
-        require_package("llama_cpp")
+        require_package("llama-cpp-python")
         from llama_cpp import Llama
         from huggingface_hub import hf_hub_download
 
