@@ -45,17 +45,19 @@ class LlamaCppAdapter(ModelAdapter):
                 hub_repo = repo_id
                 if "/" not in hub_repo:
                     hub_repo = f"bartowski/{hub_repo}-GGUF"
+                elif not hub_repo.endswith("-GGUF") and "GGUF" not in hub_repo:
+                    repo_name = hub_repo.split('/')[-1]
+                    hub_repo = f"bartowski/{repo_name}-GGUF"
 
                 if not filename:
                     from huggingface_hub import list_repo_files
                     repo_files = list_repo_files(hub_repo)
                     gguf_files = [f for f in repo_files if f.endswith(".gguf")]
                     if gguf_files:
-                        # Prefer Q4_K_M or first gguf file
-                        q4_files = [f for f in gguf_files if "Q4_K_M" in f or "q4_k_m" in f]
+                        q4_files = [f for f in gguf_files if "Q4_K_M" in f or "q4_k_m" in f or "Q4_0" in f]
                         filename = q4_files[0] if q4_files else gguf_files[0]
                     else:
-                        filename = f"{repo_id.split('/')[-1]}.gguf"
+                        filename = f"{hub_repo.split('/')[-1]}.gguf"
 
                 print(f"🚀 [llama.cpp] Fetching GGUF: {hub_repo} / {filename}...", flush=True)
                 model_path = hf_hub_download(repo_id=hub_repo, filename=filename)

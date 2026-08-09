@@ -4,7 +4,7 @@ profiles:
     description: Single NVIDIA T4 profile with Qwen2.5-Coder-32B GGUF GPU/CPU offloading.
     roles:
       planner:
-        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        model_id: bartowski/Qwen2.5-Coder-32B-Instruct-GGUF
         adapter: llama_cpp
         quantization: gguf_q4_k_m
         torch_dtype: float16
@@ -22,7 +22,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
-        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        model_id: bartowski/Qwen2.5-Coder-32B-Instruct-GGUF
         adapter: llama_cpp
         quantization: gguf_q4_k_m
         torch_dtype: float16
@@ -79,7 +79,7 @@ profiles:
     description: Single NVIDIA T4 quality profile with Qwen2.5-Coder-32B GGUF GPU/CPU offloading.
     roles:
       planner:
-        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        model_id: bartowski/Qwen2.5-Coder-32B-Instruct-GGUF
         adapter: llama_cpp
         quantization: gguf_q4_k_m
         torch_dtype: float16
@@ -97,7 +97,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
-        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        model_id: bartowski/Qwen2.5-Coder-32B-Instruct-GGUF
         adapter: llama_cpp
         quantization: gguf_q4_k_m
         torch_dtype: float16
