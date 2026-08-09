@@ -17,7 +17,7 @@ class _Registry:
         self.configs = {
             role: AdapterConfig(
                 role=role,
-                adapter="transformers_multimodal",
+                adapter="vllm",
                 model_id=f"test/{role}",
             )
             for role in ("planner", "coder")
@@ -62,7 +62,7 @@ def _router(monkeypatch: pytest.MonkeyPatch) -> ModelRouter:
     _SessionAdapter.instances = []
     monkeypatch.setattr(
         router_module,
-        "TransformersMultimodalAdapter",
+        "VLLMAdapter",
         _SessionAdapter,
     )
     return ModelRouter(profile="test", registry=_Registry())

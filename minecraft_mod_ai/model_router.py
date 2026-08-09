@@ -13,8 +13,6 @@ from .model_adapters import (
     OpenAICompatibleAdapter,
     RerankerAdapter,
     SpeechAdapter,
-    TransformersMultimodalAdapter,
-    TransformersTextAdapter,
     VLLMAdapter,
 )
 from .model_registry import ModelRegistry
@@ -106,10 +104,6 @@ class ModelRouter:
     def _new_text_adapter(config, *, role: str):
         if config.adapter == "vllm":
             return VLLMAdapter(config)
-        if config.adapter == "transformers_text":
-            return TransformersTextAdapter(config)
-        if config.adapter == "transformers_multimodal":
-            return TransformersMultimodalAdapter(config)
         if config.adapter == "openai_compatible":
             return OpenAICompatibleAdapter(config)
         raise ModelConfigurationError(

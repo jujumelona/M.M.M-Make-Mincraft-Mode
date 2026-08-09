@@ -10,9 +10,6 @@ from .image_diffusion import ImageDiffusionAdapter
 from .openai_compatible import OpenAICompatibleAdapter
 from .reranker import RerankerAdapter
 from .speech import SpeechAdapter
-from .transformers_multimodal import TransformersMultimodalAdapter
-from .transformers_text import TransformersTextAdapter
-
 from .vllm_adapter import VLLMAdapter
 
 __all__ = [
@@ -26,7 +23,5 @@ __all__ = [
     "OpenAICompatibleAdapter",
     "RerankerAdapter",
     "SpeechAdapter",
-    "TransformersMultimodalAdapter",
-    "TransformersTextAdapter",
     "VLLMAdapter",
 ]
