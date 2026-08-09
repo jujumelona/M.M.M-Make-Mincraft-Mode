@@ -13,11 +13,11 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       researcher:
-        model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: transformers_text
-        quantization: bnb_4bit
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        adapter: llama_cpp
+        quantization: gguf_mxfp4
         torch_dtype: float16
-        max_context: 32768
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -40,14 +40,14 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       visual_critic:
-        model_id: Qwen/Qwen3.5-4B
-        adapter: transformers_multimodal
-        quantization: bnb_4bit
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        adapter: llama_cpp
+        quantization: gguf_mxfp4
         torch_dtype: float16
-        max_context: 262144
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
-        min_free_vram_mb: 2500
+        min_free_vram_mb: 2000
       embedding:
         model_id: Qwen/Qwen3-Embedding-0.6B
         adapter: embedding
@@ -88,11 +88,11 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       researcher:
-        model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: transformers_text
-        quantization: bnb_4bit
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        adapter: llama_cpp
+        quantization: gguf_mxfp4
         torch_dtype: float16
-        max_context: 32768
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -115,14 +115,14 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       visual_critic:
-        model_id: Qwen/Qwen3.5-9B
-        adapter: transformers_multimodal
-        quantization: bnb_4bit
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        adapter: llama_cpp
+        quantization: gguf_mxfp4
         torch_dtype: float16
-        max_context: 262144
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
-        min_free_vram_mb: 3000
+        min_free_vram_mb: 2000
       embedding:
         model_id: Qwen/Qwen3-Embedding-0.6B
         adapter: embedding
