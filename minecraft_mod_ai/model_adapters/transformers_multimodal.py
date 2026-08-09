@@ -61,18 +61,22 @@ def _normalize_messages(
         {"role": str(msg.get("role", "")), "content": str(msg.get("content", ""))}
         for msg in messages
     ]
-    if not normalized or normalized[-1]["role"] != "user":
+    if not normalized:
         raise ModelConfigurationError(
             "Transformers multimodal generation requires a user message payload."
         )
+    if not media_paths:
+        return normalized
+
     user_text = normalized[-1]["content"]
-    content: list[dict[str, str]] = []
+    content: list[dict[str, Any]] = []
     for path in media_paths:
         resolved = path.expanduser().resolve()
         if not resolved.is_file():
             raise ModelConfigurationError(f"Media file does not exist: {resolved}")
         content.append({"type": "image", "url": resolved.as_uri()})
-    content.append({"type": "text", "text": user_text})
+    if user_text:
+        content.append({"type": "text", "text": user_text})
     normalized[-1] = {"role": "user", "content": content}
     return normalized
 
@@ -113,40 +117,43 @@ class TransformersMultimodalAdapter(ModelAdapter):
             require_package("accelerate", minimum="1.0.0")
             import torch
             import transformers
-            from transformers import AutoProcessor, AutoModelForCausalLM, AutoModel
+            from transformers import AutoProcessor, AutoTokenizer, AutoModelForCausalLM, AutoModel
 
             torch_module = torch
             if _is_qwen35(cfg.model_id):
                 _qwen35_fast_path()
             phase = "processor_load"
             if self._processor is None:
-                self._processor = AutoProcessor.from_pretrained(
-                    cfg.model_id,
-                    trust_remote_code=False,
-                )
+                try:
+                    self._processor = AutoProcessor.from_pretrained(
+                        cfg.model_id,
+                        trust_remote_code=False,
+                    )
+                except Exception:
+                    self._processor = AutoTokenizer.from_pretrained(
+                        cfg.model_id,
+                        trust_remote_code=False,
+                    )
             processor = self._processor
             phase = "input_render"
             messages = _normalize_messages(list(request.messages), request.media_paths)
-            template_kwargs: dict[str, Any] = {
-                "add_generation_prompt": True,
-                "tokenize": True,
-                "return_dict": True,
-                "return_tensors": "pt",
-            }
-            # Qwen3.5 emits a separate <think> response by default.  That is
-            # useful for prose, but a structured planner response must begin
-            # with its contract JSON so a reasoning draft cannot be mistaken
-            # for the actual plan.  The flag is a documented Qwen3.5 chat
-            # template option, so do not pass it to unrelated models.
-            if (
-                request.response_format == "json"
-                and cfg.model_id.lower().startswith("qwen/qwen3.5")
-            ):
-                template_kwargs["enable_thinking"] = False
-            inputs = processor.apply_chat_template(
-                messages,
-                **template_kwargs,
-            )
+            
+            tokenizer_or_proc = getattr(processor, "tokenizer", processor)
+            try:
+                inputs = processor.apply_chat_template(
+                    messages,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                )
+            except Exception:
+                rendered = tokenizer_or_proc.apply_chat_template(
+                    messages,
+                    add_generation_prompt=True,
+                    tokenize=False,
+                )
+                inputs = tokenizer_or_proc(rendered, return_tensors="pt")
             input_tokens = int(inputs["input_ids"].shape[-1])
             requested_tokens = input_tokens + cfg.max_new_tokens
             if requested_tokens > cfg.max_context:
