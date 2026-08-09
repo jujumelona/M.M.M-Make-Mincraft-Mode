@@ -4,14 +4,15 @@ profiles:
     description: Single NVIDIA T4 profile. GPU-heavy roles are loaded only on demand and released after each task.
     roles:
       planner:
-        model_id: Qwen/Qwen3.5-4B
+        model_id: Qwen/Qwen3.5-9B
         adapter: transformers_multimodal
         quantization: bnb_4bit
+        cpu_offload: true
         torch_dtype: float16
         max_context: 262144
         max_input_tokens: 6144
         max_new_tokens: 2048
-        min_free_vram_mb: 6500
+        min_free_vram_mb: 5000
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
         adapter: transformers_text

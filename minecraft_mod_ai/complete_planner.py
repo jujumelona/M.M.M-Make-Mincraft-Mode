@@ -2271,15 +2271,14 @@ def _generate_json_page_with_repair(
         if isinstance(request, str)
         else json.dumps(request, ensure_ascii=False)
     )
-    for attempt in range(2):
+    for attempt in range(4):
         prompt = system_prompt
         if attempt:
             prompt += (
-                " The previous attempt for this exact page was incomplete or did "
-                "not match the contract. Regenerate only this same page with fewer "
-                "records. If work remains, set complete=false and return a new "
-                "non-empty next_cursor. Output only the complete JSON object; do "
-                "not quote or continue the broken response."
+                " CRITICAL: The previous attempt was missing valid JSON or did "
+                "not match the contract. Output ONLY a valid JSON object matching the contract. "
+                "Do NOT include markdown code blocks, reasoning text, or prose outside the JSON. "
+                "If work remains, set complete=false and return a next_cursor."
             )
         text = router.generate_text(
             "planner",
@@ -2293,10 +2292,10 @@ def _generate_json_page_with_repair(
         try:
             return _extract_json(text, expected_contracts=expected_contracts)
         except SpecValidationError as exc:
-            if attempt == 0:
+            if attempt < 3:
                 continue
             raise SpecValidationError(
-                f"{stage} failed after one page-local repair: {exc}"
+                f"{stage} failed after {attempt + 1} page-local repairs: {exc}"
             ) from exc
     raise AssertionError("unreachable page repair state")
 
