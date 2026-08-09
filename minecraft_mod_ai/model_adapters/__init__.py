@@ -14,7 +14,6 @@ from .transformers_multimodal import TransformersMultimodalAdapter
 from .transformers_text import TransformersTextAdapter
 
 from .vllm_adapter import VLLMAdapter
-from .llama_cpp_adapter import LlamaCppAdapter
 
 __all__ = [
     "AdapterConfig",
@@ -22,7 +21,6 @@ __all__ = [
     "GenerationRequest",
     "HardwarePreflightError",
     "ImageDiffusionAdapter",
-    "LlamaCppAdapter",
     "ModelBackendError",
     "ModelConfigurationError",
     "OpenAICompatibleAdapter",

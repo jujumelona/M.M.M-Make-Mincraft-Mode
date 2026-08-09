@@ -1,11 +1,12 @@
 """vLLM open-source inference engine adapter.
 
 Uses vLLM's production-grade PagedAttention engine for high-throughput,
-low-latency LLM inference. No custom model loading or generation code —
-everything is delegated to the vLLM library.
+low-latency LLM inference. Supports cpu_offload_gb for CPU RAM offloading
+and cleans up GPU VRAM on close.
 """
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Any
 
@@ -20,50 +21,60 @@ from .base import (
 
 
 class VLLMAdapter(ModelAdapter):
-    """Adapter that delegates all inference to the vLLM engine."""
+    """Adapter that delegates all LLM inference to the vLLM engine."""
 
     _llm: Any = None
-    _tokenizer: Any = None
+    _current_model_id: str | None = None
 
     def generate(self, request: GenerationRequest) -> str:
         cfg = self.config
         try:
             require_package("vllm")
             from vllm import LLM, SamplingParams
+            import torch
 
-            if VLLMAdapter._llm is None or VLLMAdapter._llm.llm_engine.model_config.model != cfg.model_id:
-                # Release previous engine if model changed
-                if VLLMAdapter._llm is not None:
-                    del VLLMAdapter._llm
-                    VLLMAdapter._llm = None
-                    import gc, torch
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
+            # Unload previous model from VRAM if model changed
+            if VLLMAdapter._llm is not None and VLLMAdapter._current_model_id != cfg.model_id:
+                print(f"🧹 [vLLM] Unloading previous model ({VLLMAdapter._current_model_id}) from VRAM...", flush=True)
+                del VLLMAdapter._llm
+                VLLMAdapter._llm = None
+                VLLMAdapter._current_model_id = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
 
-                print(f"🚀 [vLLM] Loading {cfg.model_id}...", flush=True)
+            # Initialize vLLM engine if not loaded
+            if VLLMAdapter._llm is None:
+                print(f"🚀 [vLLM Engine] Initializing and loading {cfg.model_id}...", flush=True)
 
                 vllm_kwargs: dict[str, Any] = {
                     "model": cfg.model_id,
                     "trust_remote_code": True,
                     "max_model_len": min(cfg.max_context, 8192),
-                    "gpu_memory_utilization": 0.90,
-                    "dtype": "half",
+                    "gpu_memory_utilization": 0.85,
+                    "dtype": "half" if cfg.torch_dtype == "float16" else "auto",
                 }
+
+                # Optional CPU offloading support in vLLM
+                if cfg.cpu_offload:
+                    vllm_kwargs["cpu_offload_gb"] = 4
+
                 if cfg.quantization == "bnb_4bit":
                     vllm_kwargs["quantization"] = "bitsandbytes"
                     vllm_kwargs["load_format"] = "bitsandbytes"
+                elif cfg.quantization:
+                    vllm_kwargs["quantization"] = cfg.quantization
 
                 VLLMAdapter._llm = LLM(**vllm_kwargs)
-                print(f"✅ [vLLM] {cfg.model_id} loaded.", flush=True)
+                VLLMAdapter._current_model_id = cfg.model_id
+                print(f"✅ [vLLM Engine] {cfg.model_id} loaded successfully into vLLM engine.", flush=True)
 
             llm = VLLMAdapter._llm
             tokenizer = llm.get_tokenizer()
 
-            # Build chat messages
+            # Format chat prompt
             messages = [dict(m) for m in request.messages]
-
-            # Apply chat template
             prompt = tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
@@ -76,10 +87,10 @@ class VLLMAdapter(ModelAdapter):
                 top_p=1.0,
             )
 
-            print(f"🤖 [vLLM] Generating (max_tokens={cfg.max_new_tokens})...", flush=True)
+            print(f"🤖 [vLLM Engine] Generating tokens (max_new_tokens={cfg.max_new_tokens})...", flush=True)
             outputs = llm.generate([prompt], sampling_params)
             result = outputs[0].outputs[0].text.strip()
-            print(f"✅ [vLLM] Generated {len(result)} chars.", flush=True)
+            print(f"✅ [vLLM Engine] Finished generation ({len(result)} chars).", flush=True)
             return result
 
         except ModelBackendError:
@@ -90,4 +101,14 @@ class VLLMAdapter(ModelAdapter):
             ) from exc
 
     def close(self) -> None:
-        pass
+        if VLLMAdapter._llm is not None:
+            del VLLMAdapter._llm
+            VLLMAdapter._llm = None
+            VLLMAdapter._current_model_id = None
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
