@@ -165,7 +165,7 @@ class TransformersMultimodalAdapter(ModelAdapter):
             )
             require_package("accelerate", minimum="1.0.0")
             import torch
-            from transformers import AutoModelForMultimodalLM, AutoProcessor
+            from transformers import AutoProcessor, AutoModelForVision2Seq, AutoModelForCausalLM, AutoModelForConditionalGeneration, AutoModel
 
             torch_module = torch
             if _is_qwen35(cfg.model_id):
@@ -242,10 +242,16 @@ class TransformersMultimodalAdapter(ModelAdapter):
                 qconfig = quantization_config(cfg)
                 if qconfig is not None:
                     kwargs["quantization_config"] = qconfig
-                self._model = AutoModelForMultimodalLM.from_pretrained(
-                    cfg.model_id,
-                    **kwargs,
-                )
+                model_loaded = None
+                for auto_cls in (AutoModelForVision2Seq, AutoModelForConditionalGeneration, AutoModelForCausalLM, AutoModel):
+                    try:
+                        model_loaded = auto_cls.from_pretrained(cfg.model_id, **kwargs)
+                        break
+                    except Exception:
+                        continue
+                if model_loaded is None:
+                    model_loaded = AutoModelForCausalLM.from_pretrained(cfg.model_id, **kwargs)
+                self._model = model_loaded
             model = self._model
             device = next(model.parameters()).device
             phase = "input_move"
