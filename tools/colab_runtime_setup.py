@@ -230,10 +230,13 @@ def _install_project(*, local_profile: bool) -> None:
             "-m",
             "pip",
             "install",
+            "--no-build-isolation",
             "-e",
             target,
         ],
         check=True,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
     )
     print("✅ M.M.M project package installed successfully!", flush=True)
 

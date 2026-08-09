@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["gradio>=6.0,<7"]
+ui = ["gradio>=5.0,<6"]
 local-model = [
   "accelerate>=1.0,<2",
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
@@ -34,11 +34,11 @@ qwen-fastpath = [
 ]
 rag = ["sentence-transformers>=3.0,<6"]
 image = ["diffusers>=0.35,<1", "sentencepiece>=0.2,<1"]
-speech = ["librosa>=0.10,<1", "soundfile>=0.12,<1"]
+speech = ["soundfile>=0.12,<1"]
 production-audio = ["numpy>=1.26,<3", "soundfile>=0.12,<1"]
-training = ["datasets>=3.0,<5", "peft>=0.14,<1", "trl>=0.15,<1"]
+training = ["peft>=0.14,<1"]
 dev = [
-  "gradio>=6.0,<7",
+  "gradio>=5.0,<6",
   "nbformat>=5.10,<6",
   "Pillow>=10.4,<13",
   "pytest>=8,<10",
