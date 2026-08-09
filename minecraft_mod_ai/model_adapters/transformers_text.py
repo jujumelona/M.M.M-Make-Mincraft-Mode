@@ -20,7 +20,7 @@ class TransformersTextAdapter(ModelAdapter):
         try:
             require_package(
                 "transformers",
-                minimum="4.48.0",
+                minimum="4.30.0",
                 maximum_exclusive="5.0.0",
             )
             require_package("accelerate", minimum="1.0.0")

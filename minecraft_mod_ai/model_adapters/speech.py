@@ -12,7 +12,7 @@ class SpeechAdapter:
     def transcribe(self, audio_path: Path) -> str:
         cfg = self.config
         try:
-            require_package("transformers", minimum="4.57.0")
+            require_package("transformers", minimum="4.30.0")
             preflight_cuda(cfg)
             import torch
             from transformers import pipeline
