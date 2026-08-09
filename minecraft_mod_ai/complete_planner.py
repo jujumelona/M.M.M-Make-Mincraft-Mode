@@ -757,12 +757,14 @@ class CompleteGameDesignPlanner:
         planning_context: dict[str, Any],
         planning_receipt: dict[str, Any],
         media_paths: Sequence[str | Path],
-    ) -> None:
+     ) -> None:
         remaining = list(batch.deliverables)
         cursor = ""
         seen_cursors: set[str] = set()
         first_page = True
-        while True:
+        page_count = 0
+        while remaining:
+            target_deliverable = remaining[0]
             request = {
                 "batch": {
                     "batch_id": batch.batch_id,
@@ -771,7 +773,9 @@ class CompleteGameDesignPlanner:
                     "deliverables": list(batch.deliverables),
                     "exports": list(batch.exports),
                 },
+                "current_target_deliverable": target_deliverable,
                 "remaining_deliverables": remaining,
+                "total_remaining": len(remaining),
                 "dependency_exports": dependency_exports,
                 "planning_context_receipt": planning_receipt,
                 "known_module_catalog": module_catalog.receipt(),
@@ -786,12 +790,13 @@ class CompleteGameDesignPlanner:
                 self.router,
                 system_prompt=(
                     "Return exactly one production-batch JSON page. "
-                    "Generate exactly 1 module per page for maximum implementation quality and detail. "
-                    "If deliverables or work remain, set complete=false and supply a next_cursor. "
-                    "Implement output, not prose. completed_deliverables "
-                    "must name only checklist entries fully covered by this "
-                    "and prior pages. A complete page is valid only when no "
-                    "deliverables remain. Never repeat an ID or path."
+                    f"Your ONLY task on this page is to implement the deliverable: \"{target_deliverable}\". "
+                    "Generate exactly 1 module that fulfills this specific deliverable. "
+                    f"Put [\"{target_deliverable}\"] in completed_deliverables. "
+                    f"There are {len(remaining)} deliverables remaining after this one. "
+                    f"Set complete={'true' if len(remaining) <= 1 else 'false'}. "
+                    f"{'Set next_cursor to any non-empty string.' if len(remaining) > 1 else 'Set next_cursor to empty string.'} "
+                    "Never repeat an ID or file path."
                 ),
                 request=request,
                 media_paths=media_paths if first_page else (),
@@ -801,6 +806,7 @@ class CompleteGameDesignPlanner:
                 stage=f"production batch {batch.batch_id!r} page",
             )
             first_page = False
+            page_count += 1
             if set(page) != set(_PRODUCTION_PAGE_CONTRACT):
                 raise SpecValidationError(
                     "Production batch page fields are invalid."
@@ -810,19 +816,8 @@ class CompleteGameDesignPlanner:
             raw_audio = _list(page, "audio")
             raw_tests = _list(page, "acceptance_tests")
             completed = page["completed_deliverables"]
-            complete = page["complete"]
-            next_cursor = page["next_cursor"]
-            if not isinstance(completed, list) or any(
-                not isinstance(value, str) for value in completed
-            ):
-                raise SpecValidationError(
-                    "completed_deliverables must be a string list."
-                )
-            if len(set(completed)) != len(completed):
-                raise SpecValidationError(
-                    "completed_deliverables contains duplicates."
-                )
-            completed_clean = [v for v in completed if v in remaining]
+            if not isinstance(completed, list):
+                completed = []
             page_modules = [_module(item) for item in raw_modules if isinstance(item, dict)]
             for module in page_modules:
                 module_catalog.add(module.module_id)
@@ -849,26 +844,11 @@ class CompleteGameDesignPlanner:
             parts.audio.extend(page_audio)
             parts.acceptance_tests.extend(tests)
             test_catalog.update(tests)
-            completed_set = set(completed_clean) or set(remaining[:1])
-            remaining = [
-                value for value in remaining if value not in completed_set
-            ]
-            if type(complete) is not bool or not isinstance(next_cursor, str):
-                raise SpecValidationError(
-                    "Production batch pagination contract is invalid."
-                )
-            if complete:
-                if remaining:
-                    complete = False
-                    next_cursor = f"page_{page_count + 1}"
-                else:
-                    break
-            if not next_cursor or next_cursor in seen_cursors:
-                raise SpecValidationError(
-                    "Production batch pagination did not advance."
-                )
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
+            # Host-driven completion: always pop the target deliverable
+            remaining.pop(0)
+            # Also pop any extras the model claims to have completed
+            completed_set = set(completed)
+            remaining = [v for v in remaining if v not in completed_set]
 
     def _expand_batches(
         self,
