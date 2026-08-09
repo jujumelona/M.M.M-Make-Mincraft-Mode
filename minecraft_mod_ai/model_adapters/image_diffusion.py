@@ -21,7 +21,7 @@ class ImageDiffusionAdapter:
         cfg = self.config
         try:
             require_package("diffusers", minimum="0.20.0")
-            require_package("transformers", minimum="4.30.0")
+            require_package("transformers", minimum="4.52.0")
             require_package("accelerate", minimum="1.0.0")
             preflight_cuda(cfg)
             import torch

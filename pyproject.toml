@@ -27,7 +27,7 @@ local-model = [
   "huggingface-hub>=0.28,<2",
   "Pillow>=10.4,<13",
   "safetensors>=0.4,<1",
-  "transformers>=4.48.0,<5",
+  "transformers>=4.52.0",
 ]
 qwen-fastpath = [
   "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6; sys_platform == 'linux'",

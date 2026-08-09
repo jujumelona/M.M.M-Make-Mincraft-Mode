@@ -32,7 +32,7 @@ class RerankerAdapter:
         if not query or not docs or any(not document for document in docs):
             raise ValueError("Reranker query and documents must be non-empty.")
         try:
-            require_package("transformers", minimum="4.30.0")
+            require_package("transformers", minimum="4.52.0")
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
