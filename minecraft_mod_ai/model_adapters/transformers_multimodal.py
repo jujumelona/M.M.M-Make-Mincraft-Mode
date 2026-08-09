@@ -218,12 +218,29 @@ class TransformersMultimodalAdapter(ModelAdapter):
             phase = "input_move"
             inputs = inputs.to(device)
             phase = "generate"
+            import re
+            gen_inputs = dict(inputs)
             with torch.inference_mode():
-                output = model.generate(
-                    **inputs,
-                    max_new_tokens=cfg.max_new_tokens,
-                    do_sample=False,
-                )
+                while True:
+                    try:
+                        output = model.generate(
+                            **gen_inputs,
+                            max_new_tokens=cfg.max_new_tokens,
+                            do_sample=False,
+                        )
+                        break
+                    except ValueError as ve:
+                        msg = str(ve)
+                        if "are not used by the model:" in msg:
+                            unused_keys = re.findall(r"'([^']+)'", msg)
+                            popped = False
+                            for key in unused_keys:
+                                if key in gen_inputs:
+                                    gen_inputs.pop(key, None)
+                                    popped = True
+                            if popped:
+                                continue
+                        raise
             generated = output[:, input_tokens:]
             phase = "decode"
             return processor.batch_decode(

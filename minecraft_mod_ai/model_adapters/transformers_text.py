@@ -66,13 +66,30 @@ class TransformersTextAdapter(ModelAdapter):
             try:
                 device = next(model.parameters()).device
                 inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
+                import re
+                gen_inputs = dict(inputs)
                 with torch.inference_mode():
-                    output = model.generate(
-                        **inputs,
-                        max_new_tokens=cfg.max_new_tokens,
-                        do_sample=False,
-                        pad_token_id=tokenizer.eos_token_id,
-                    )
+                    while True:
+                        try:
+                            output = model.generate(
+                                **gen_inputs,
+                                max_new_tokens=cfg.max_new_tokens,
+                                do_sample=False,
+                                pad_token_id=tokenizer.eos_token_id,
+                            )
+                            break
+                        except ValueError as ve:
+                            msg = str(ve)
+                            if "are not used by the model:" in msg:
+                                unused_keys = re.findall(r"'([^']+)'", msg)
+                                popped = False
+                                for key in unused_keys:
+                                    if key in gen_inputs:
+                                        gen_inputs.pop(key, None)
+                                        popped = True
+                                if popped:
+                                    continue
+                            raise
                 generated = output[0, inputs["input_ids"].shape[1] :]
                 return tokenizer.decode(generated, skip_special_tokens=True).strip()
             finally:
