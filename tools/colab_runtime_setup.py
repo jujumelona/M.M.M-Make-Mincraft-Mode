@@ -207,14 +207,7 @@ def _require_local_cuda() -> Any:
     return torch
 
 
-def _install_qwen_fastpath() -> None:
-    """Check if Qwen fast-path kernels are already installed; skip compilation."""
-    try:
-        from importlib.metadata import version as pkg_version
-        pkg_version("flash-linear-attention")
-        print("✅ Qwen3.5 fast-path kernels already installed.", flush=True)
-    except Exception:
-        print("ℹ️ Qwen3.5 fast-path kernels not pre-installed; using standard PyTorch path.", flush=True)
+
 
 
 def _install_llama_cpp() -> None:
@@ -546,16 +539,10 @@ def setup_colab_runtime(
     if profile in LOCAL_PROFILES:
         print("🔧 Checking CUDA GPU availability...", flush=True)
         torch = _require_local_cuda()
-        _install_qwen_fastpath()
     print("=" * 60, flush=True)
     _install_project(local_profile=profile in LOCAL_PROFILES)
     print("=" * 60, flush=True)
-    if profile in LOCAL_PROFILES:
-        _verify_qwen_fastpath(
-            torch=torch,
-            transformers_was_loaded=transformers_was_loaded,
-        )
-    else:
+    if profile not in LOCAL_PROFILES:
         try:
             import torch as installed_torch
         except ImportError:
