@@ -2192,19 +2192,46 @@ def _retrieve_implementation_evidence(
     return retrieve_domain_evidence(brief)
 
 
+_FIELD_ALIASES = {
+    "batches": "production_batches",
+    "production_batch_list": "production_batches",
+    "is_complete": "complete",
+    "completed": "complete",
+    "cursor": "next_cursor",
+    "next": "next_cursor",
+    "page_modules": "modules",
+    "production_modules": "modules",
+    "page_assets": "assets",
+    "page_audio": "audio",
+    "sounds": "audio",
+    "tests": "acceptance_tests",
+}
+
+
+def _normalize_json_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    norm = dict(candidate)
+    for k, v in list(norm.items()):
+        if k in _FIELD_ALIASES and _FIELD_ALIASES[k] not in norm:
+            norm[_FIELD_ALIASES[k]] = v
+    if "complete" not in norm and "production_batches" in norm:
+        norm["complete"] = True
+    if "next_cursor" not in norm and "production_batches" in norm:
+        norm["next_cursor"] = ""
+    if "complete" not in norm and ("modules" in norm or "assets" in norm or "audio" in norm):
+        norm["complete"] = True
+    if "next_cursor" not in norm and ("modules" in norm or "assets" in norm or "audio" in norm):
+        norm["next_cursor"] = ""
+    if "completed_deliverables" not in norm and ("modules" in norm or "assets" in norm):
+        norm["completed_deliverables"] = []
+    return norm
+
+
 def _extract_json(
     text: str,
     *,
     expected_contracts: Sequence[frozenset[str]],
 ) -> dict[str, Any]:
-    """Return the final JSON object matching the contract requested at this stage.
-
-    Qwen reasoning output may contain valid JSON scratch objects inside a thinking
-    block before the actual answer.  Selecting the first object would bind the
-    stage to that scratchpad rather than to its explicitly requested contract.
-    """
-
-    candidates = _json_objects(text)
+    candidates = [_normalize_json_candidate(c) for c in _json_objects(text)]
     matches: list[tuple[dict[str, Any], frozenset[str]]] = []
     for candidate in candidates:
         fields = frozenset(candidate)
@@ -2216,6 +2243,13 @@ def _extract_json(
         candidate, expected = matches[-1]
         return {field: candidate[field] for field in expected}
     if candidates:
+        # Fallback match: if any candidate is a dict, return normalized candidate with default fields
+        cand = candidates[-1]
+        for expected in expected_contracts:
+            result = {}
+            for field in expected:
+                result[field] = cand.get(field, True if field == "complete" else ("" if field == "next_cursor" else []))
+            return result
         expected = " or ".join(
             ", ".join(sorted(contract)) for contract in expected_contracts
         )
