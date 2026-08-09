@@ -45,7 +45,7 @@ AI나 음성이 필요한 요청이면 엔진에 특정 제품을 고정하지 �
 
 ## 로컬 모델 또는 원격 API
 
-`MODEL_PROFILE="t4_local"`은 Colab GPU에서 모델을 실행합니다. `remote_quality`로 바꾸고 HTTPS API 주소와 모델 이름을 입력하면 OpenAI 호환 원격 API를 사용합니다. API 키는 노트북에 저장하지 않고 실행할 때 숨김 입력으로 받습니다.
+`MODEL_PROFILE="t4_quality"`가 Colab 기본값이며 9B 기획 모델을 4비트로 실행합니다. 더 가벼운 4B 기획 모델은 `t4_local`을 선택합니다. `remote_quality`로 바꾸고 HTTPS API 주소와 모델 이름을 입력하면 OpenAI 호환 원격 API를 사용합니다. API 키는 노트북에 저장하지 않고 실행할 때 숨김 입력으로 받습니다.
 
 로컬 Python에서는 다음처럼 사용할 수 있습니다.
 

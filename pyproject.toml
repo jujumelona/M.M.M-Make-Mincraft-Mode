@@ -29,6 +29,9 @@ local-model = [
   "safetensors>=0.4,<1",
   "transformers>=4.57,<6",
 ]
+qwen-fastpath = [
+  "flash-linear-attention[cuda,conv1d]>=0.5.2,<0.6; sys_platform == 'linux'",
+]
 rag = ["sentence-transformers>=3.0,<6"]
 image = ["diffusers>=0.35,<1", "sentencepiece>=0.2,<1"]
 speech = ["librosa>=0.10,<1", "soundfile>=0.12,<1"]

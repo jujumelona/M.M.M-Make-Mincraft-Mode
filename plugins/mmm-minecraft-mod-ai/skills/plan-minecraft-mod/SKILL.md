@@ -11,7 +11,7 @@ Use when the user asks to create, redesign, or scope a Minecraft mod, mod system
 ## inputs
 - `prompt`: required natural-language brief.
 - `media_paths`: optional local reference images.
-- `profile`: `t4_local` or `remote_quality`.
+- `profile`: `t4_quality`, `t4_local`, or `remote_quality`.
 - Target is fixed to Minecraft Java 1.20.1/Fabric unless a separate validated platform profile exists.
 
 ## required_rag
@@ -34,7 +34,7 @@ Return `mmm/plan-result-v1` containing `game_design`, `proposal`, and `approval_
 - Proposal validation and immutable hash calculation both pass.
 
 ## retry_policy
-Retry model JSON repair at most twice. On the third failure, return the exact backend/schema error. Never switch to a heuristic planner.
+Generate the design spine and later production batches as separate bounded pages. Retry only the failed page once with the same request and cursor; never append the malformed response or restart completed pages. On the second failure, return the exact backend/schema error. Never replace the reader-facing design with a heuristic planner.
 
 ## approval_required
 Planning and revision do not write files. `approve_plan` requires the exact displayed hash before any generation tool is called.

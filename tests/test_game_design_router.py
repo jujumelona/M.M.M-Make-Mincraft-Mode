@@ -5,7 +5,9 @@ import pytest
 from minecraft_mod_ai.game_design import (
     GameDesignPlanner,
     _planner_plugin_manifest,
+    _repair_system_prompt,
     _system_prompt,
+    _validate_design,
 )
 from minecraft_mod_ai.spec import SpecValidationError
 
@@ -59,7 +61,7 @@ def test_multimodal_design_keeps_blocked_modules_visible() -> None:
         "달 결정 아이템과 퀘스트를 만들어줘"
     )
     assert any(module["status"] == "blocked" for module in design["modules"])
-    assert proposal.spec.mod_id == "moon_forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
     assert proposal.approval_hash == proposal.calculate_hash()
 
 
@@ -93,6 +95,28 @@ def _valid_planner_payload() -> dict:
     return json.loads(FakeRouter().generate_text("planner", []))
 
 
+def test_initial_stage_requests_only_a_bounded_design_spine() -> None:
+    payload = _valid_planner_payload()
+    del payload["build_slice"]
+    router = _SequenceTextRouter(json.dumps(payload))
+    prompt = "Create a moon crystal item and a quest system."
+
+    design, proposal = GameDesignPlanner(router).plan(
+        prompt,
+        media_paths=("reference.png",),
+    )
+
+    assert design["title"] == "Moon Forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
+    assert len(router.calls) == 1
+    messages, kwargs = router.calls[0]
+    assert messages[-1] == {"role": "user", "content": prompt}
+    assert '"build_slice"' not in messages[0]["content"]
+    assert '"research_brief"' not in messages[0]["content"]
+    assert '"game_design"' in messages[0]["content"]
+    assert kwargs["media_paths"] == ("reference.png",)
+
+
 def test_multimodal_design_skips_a_json_reasoning_draft_before_the_contract() -> None:
     """Local reasoning models can emit a valid JSON scratch object before the answer."""
 
@@ -109,7 +133,7 @@ def test_multimodal_design_skips_a_json_reasoning_draft_before_the_contract() ->
     )
 
     assert design["title"] == "Moon Forge"
-    assert proposal.spec.mod_id == "moon_forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
 
 
 def test_multimodal_design_skips_an_incomplete_contract_draft() -> None:
@@ -127,7 +151,7 @@ def test_multimodal_design_skips_an_incomplete_contract_draft() -> None:
     )
 
     assert design["title"] == "Moon Forge"
-    assert proposal.spec.mod_id == "moon_forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
 
 
 def test_multimodal_design_ignores_incidental_top_level_metadata() -> None:
@@ -162,7 +186,7 @@ def test_multimodal_design_unwraps_a_nested_response_data_envelope() -> None:
     ).plan("Create a moon crystal item.")
 
     assert design["title"] == "Moon Forge"
-    assert proposal.spec.mod_id == "moon_forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
 
 
 def test_multimodal_design_ignores_nested_model_metadata() -> None:
@@ -186,11 +210,11 @@ def test_multimodal_design_ignores_nested_model_metadata() -> None:
 
     assert design["art_direction"]["visual_tone"] == "cool moonlit blue"
     assert "model_trace" not in design
-    assert proposal.spec.mod_id == "moon_forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
 
 
-def test_multimodal_design_recovers_missing_bootstrap_without_second_model_call() -> None:
-    """A complete design can safely receive a deterministic bootstrap replacement."""
+def test_multimodal_design_ignores_model_bootstrap_without_second_model_call() -> None:
+    """A complete design never depends on the legacy model-authored bootstrap."""
 
     payload = _valid_planner_payload()
     del payload["build_slice"]["summary"]
@@ -203,35 +227,41 @@ def test_multimodal_design_recovers_missing_bootstrap_without_second_model_call(
 
     assert design["title"] == "Moon Forge"
     assert proposal.spec.summary
+    assert proposal.spec.mod_id == "moon_forge_mod"
     assert len(router.calls) == 1
 
 
-def test_multimodal_design_repairs_an_incomplete_response_once() -> None:
-    """A malformed first answer gets one format-only planner recovery attempt."""
+def test_multimodal_design_retries_without_reinjecting_large_malformed_output() -> None:
+    """Retry keeps the request intact but excludes the model's oversized output."""
 
     payload = _valid_planner_payload()
+    malformed = "MALFORMED_OUTPUT_SENTINEL" * 4_000
     router = _SequenceTextRouter(
-        json.dumps({"analysis": "The plan envelope was truncated."}),
+        malformed,
         json.dumps(payload),
     )
+    prompt = ("Create a moon crystal item. " + (
+        "Keep this exact user requirement in planner context. " * 50
+    )).strip()
 
     design, proposal = GameDesignPlanner(router).plan(
-        "Create a moon crystal item.",
+        prompt,
         media_paths=("reference.png",),
     )
 
     assert design["title"] == "Moon Forge"
-    assert proposal.spec.mod_id == "moon_forge"
+    assert proposal.spec.mod_id == "moon_forge_mod"
     assert len(router.calls) == 2
+    assert router.calls[0][0][-1]["content"] == prompt
     repair_messages, repair_kwargs = router.calls[1]
-    assert [message["role"] for message in repair_messages] == [
-        "system",
-        "user",
-        "assistant",
-        "user",
-    ]
-    assert "previous answer was incomplete" in repair_messages[-1]["content"]
-    assert repair_kwargs["media_paths"] == ()
+    assert [message["role"] for message in repair_messages] == ["system", "user"]
+    assert repair_messages[-1]["content"] == prompt
+    assert all(
+        "MALFORMED_OUTPUT_SENTINEL" not in message["content"]
+        for message in repair_messages
+    )
+    assert sum(len(message["content"]) for message in repair_messages) < len(malformed)
+    assert repair_kwargs["media_paths"] == ("reference.png",)
     assert "Current executable plugin manifest" not in repair_messages[0]["content"]
 
 
@@ -292,13 +322,13 @@ def test_multimodal_design_does_not_bootstrap_without_essential_design() -> None
     )
     router = _SequenceTextRouter(truncated, truncated)
 
-    with pytest.raises(SpecValidationError, match="essential game_design"):
+    with pytest.raises(SpecValidationError, match="complete game_design"):
         GameDesignPlanner(router).plan("Create a moon crystal item.")
 
     assert len(router.calls) == 2
 
 
-def test_game_design_system_prompt_keeps_manifest_compact_and_schema_ordered() -> None:
+def test_game_design_system_prompt_keeps_only_the_compact_design_contract() -> None:
     manifest = _planner_plugin_manifest()
     prompt = _system_prompt()
 
@@ -311,6 +341,28 @@ def test_game_design_system_prompt_keeps_manifest_compact_and_schema_ordered() -
         set(plugin) == {"plugin_id", "status"}
         for plugin in manifest["plugins"]
     )
-    assert len(prompt) < 8_500
-    assert prompt.index('"build_slice"') < prompt.index('"research_brief"')
+    assert len(prompt) < 5_000
+    assert '"game_design"' in prompt
+    assert '"build_slice"' not in prompt
+    assert '"research_brief"' not in prompt
+    assert "later paginated production" in prompt
     assert '"required_mcp"' not in prompt
+
+
+def test_game_design_prompts_define_strict_nested_collection_types() -> None:
+    for prompt in (_system_prompt(), _repair_system_prompt()):
+        assert (
+            "combat and mod_context must be JSON objects whose values, when present, "
+            "are arrays of\nnon-empty strings"
+        ) in prompt
+
+    invalid = _valid_planner_payload()["game_design"]
+    invalid["mod_context"] = {
+        "loader": "Fabric",
+        "minecraft_version": "1.20.1",
+    }
+    with pytest.raises(
+        SpecValidationError,
+        match="game_design.mod_context values must be lists",
+    ):
+        _validate_design(invalid)

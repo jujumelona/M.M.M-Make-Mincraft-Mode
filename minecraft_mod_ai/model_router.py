@@ -34,6 +34,44 @@ class ModelRouter:
         self.registry = registry or ModelRegistry()
         self.profile = profile
         self.registry.load_profile(profile)
+        self._generation_lock = threading.RLock()
+        self._active_generation_role: str | None = None
+        self._active_generation_adapter: Any | None = None
+
+    @contextmanager
+    def generation_session(self, role: str):
+        """Keep one text-generation backend alive for a bounded workflow.
+
+        Only one role can be pinned on a router at a time.  This avoids an
+        unbounded multi-model VRAM cache while allowing a paginated planner to
+        reuse the same processor and weights until its complete plan succeeds or
+        raises.  Direct ``generate_text`` calls outside this context retain their
+        existing load-generate-release lifetime.
+        """
+
+        config = self.registry.role(self.profile, role)
+        adapter = self._new_text_adapter(config, role=role)
+        with self._generation_lock:
+            if self._active_generation_adapter is not None:
+                raise ModelConfigurationError(
+                    "A generation session is already active for role "
+                    f"{self._active_generation_role!r}."
+                )
+            self._active_generation_role = role
+            self._active_generation_adapter = adapter
+            session_factory = getattr(adapter, "generation_session", None)
+            try:
+                if callable(session_factory):
+                    with session_factory():
+                        yield self
+                else:
+                    try:
+                        yield self
+                    finally:
+                        adapter.close()
+            finally:
+                self._active_generation_adapter = None
+                self._active_generation_role = None
 
     def generate_text(
         self,
@@ -43,24 +81,37 @@ class ModelRouter:
         media_paths: Sequence[str | Path] = (),
         response_format: str = "text",
     ) -> str:
-        config = self.registry.role(self.profile, role)
-        if config.adapter == "transformers_text":
-            adapter = TransformersTextAdapter(config)
-        elif config.adapter == "transformers_multimodal":
-            adapter = TransformersMultimodalAdapter(config)
-        elif config.adapter == "openai_compatible":
-            adapter = OpenAICompatibleAdapter(config)
-        else:
-            raise ModelConfigurationError(
-                f"Role {role!r} cannot generate text with adapter {config.adapter!r}."
+        with self._generation_lock:
+            config = self.registry.role(self.profile, role)
+            if self._active_generation_adapter is not None:
+                if role != self._active_generation_role:
+                    raise ModelConfigurationError(
+                        "Generation session for role "
+                        f"{self._active_generation_role!r} cannot serve role "
+                        f"{role!r}."
+                    )
+                adapter = self._active_generation_adapter
+            else:
+                adapter = self._new_text_adapter(config, role=role)
+            request = GenerationRequest(
+                messages=messages,
+                media_paths=tuple(Path(path) for path in media_paths),
+                response_format=response_format,
             )
-        request = GenerationRequest(
-            messages=messages,
-            media_paths=tuple(Path(path) for path in media_paths),
-            response_format=response_format,
+            with self._gpu_scope(config.exclusive_gpu):
+                return adapter.generate(request)
+
+    @staticmethod
+    def _new_text_adapter(config, *, role: str):
+        if config.adapter == "transformers_text":
+            return TransformersTextAdapter(config)
+        if config.adapter == "transformers_multimodal":
+            return TransformersMultimodalAdapter(config)
+        if config.adapter == "openai_compatible":
+            return OpenAICompatibleAdapter(config)
+        raise ModelConfigurationError(
+            f"Role {role!r} cannot generate text with adapter {config.adapter!r}."
         )
-        with self._gpu_scope(config.exclusive_gpu):
-            return adapter.generate(request)
 
     def embed(self, texts: Sequence[str], role: str = "embedding") -> list[list[float]]:
         config = self.registry.role(self.profile, role)

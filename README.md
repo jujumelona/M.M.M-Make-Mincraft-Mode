@@ -45,7 +45,7 @@ Google Drive storage is enabled by default, so rerunning the same `RUN_NAME` res
 
 ## Local or remote models
 
-`MODEL_PROFILE="t4_local"` runs the model roles on the Colab GPU. Set it to `remote_quality` and fill in the HTTPS API address and model fields to use OpenAI-compatible remote endpoints; the notebook asks for the API key without saving it in the notebook.
+`MODEL_PROFILE="t4_quality"` is the default Colab option and runs the 9B planner in 4-bit; choose `t4_local` for the lighter 4B planner. Set it to `remote_quality` and fill in the HTTPS API address and model fields to use OpenAI-compatible remote endpoints; the notebook asks for the API key without saving it in the notebook.
 
 For local Python:
 

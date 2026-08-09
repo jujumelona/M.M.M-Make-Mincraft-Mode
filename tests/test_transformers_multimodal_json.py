@@ -5,8 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
+import minecraft_mod_ai.model_adapters.base as adapter_base
 import minecraft_mod_ai.model_adapters.transformers_multimodal as multimodal_adapter
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
+from minecraft_mod_ai.model_adapters.base import (
+    ModelBackendError,
+    ModelConfigurationError,
+)
 
 
 class _FakeTensor:
@@ -26,17 +31,21 @@ class _FakeInputs(dict):
 
 class _FakeProcessor:
     instance: "_FakeProcessor | None" = None
+    load_count = 0
 
     def __init__(self) -> None:
         self.template_kwargs: dict[str, object] = {}
+        self.messages: list[dict[str, object]] = []
 
     @classmethod
     def from_pretrained(cls, *_args, **_kwargs):
+        cls.load_count += 1
         cls.instance = cls()
         return cls.instance
 
-    def apply_chat_template(self, _messages, **kwargs):
+    def apply_chat_template(self, messages, **kwargs):
         self.template_kwargs = dict(kwargs)
+        self.messages = [dict(message) for message in messages]
         return _FakeInputs()
 
     def batch_decode(self, _generated, *, skip_special_tokens: bool):
@@ -45,8 +54,11 @@ class _FakeProcessor:
 
 
 class _FakeModel:
+    load_count = 0
+
     @classmethod
     def from_pretrained(cls, *_args, **_kwargs):
+        cls.load_count += 1
         return cls()
 
     def parameters(self):
@@ -54,6 +66,12 @@ class _FakeModel:
 
     def generate(self, **_kwargs):
         return _FakeOutput()
+
+
+class _UnexpectedModel:
+    @classmethod
+    def from_pretrained(cls, *_args, **_kwargs):
+        raise AssertionError("overflow must fail before loading model weights")
 
 
 class _FakeOutput:
@@ -70,12 +88,20 @@ class _InferenceMode:
         return False
 
 
-def _install_fake_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_fake_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model=_FakeModel,
+) -> None:
+    _FakeProcessor.instance = None
+    _FakeProcessor.load_count = 0
+    if hasattr(model, "load_count"):
+        model.load_count = 0
     monkeypatch.setitem(
         sys.modules,
         "transformers",
         SimpleNamespace(
-            AutoModelForMultimodalLM=_FakeModel,
+            AutoModelForMultimodalLM=model,
             AutoProcessor=_FakeProcessor,
         ),
     )
@@ -163,3 +189,155 @@ def test_qwen35_text_generation_keeps_its_normal_template_mode(
     )
 
     assert "enable_thinking" not in kwargs
+
+
+def test_multimodal_context_overflow_fails_before_loading_model_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "FINAL_REQUIREMENT_MUST_SURVIVE"
+    monkeypatch.setattr(_FakeTensor, "shape", (1, 9))
+    _install_fake_runtime(monkeypatch, model=_UnexpectedModel)
+    adapter = multimodal_adapter.TransformersMultimodalAdapter(
+        AdapterConfig(
+            role="planner",
+            adapter="transformers_multimodal",
+            model_id="Qwen/Qwen3.5-4B",
+            max_context=10,
+            max_new_tokens=2,
+        )
+    )
+
+    with pytest.raises(ModelBackendError) as raised:
+        adapter.generate(
+            GenerationRequest(
+                messages=(
+                    {
+                        "role": "user",
+                        "content": f"Long request {sentinel}",
+                    },
+                ),
+                response_format="json",
+            )
+        )
+
+    assert isinstance(raised.value.cause, ModelConfigurationError)
+    assert "9 input + 2 reserved output > max_context=10" in str(raised.value)
+    processor = _FakeProcessor.instance
+    assert processor is not None
+    assert processor.messages[-1]["content"].endswith(sentinel)
+    assert "truncation" not in processor.template_kwargs
+
+
+def test_multimodal_generation_session_loads_once_and_releases_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_runtime(monkeypatch)
+    releases: list[str] = []
+    monkeypatch.setattr(
+        adapter_base,
+        "_release_cuda",
+        lambda: releases.append("released"),
+    )
+    adapter = multimodal_adapter.TransformersMultimodalAdapter(
+        AdapterConfig(
+            role="planner",
+            adapter="transformers_multimodal",
+            model_id="Qwen/Qwen3.5-9B",
+            max_context=8,
+            max_new_tokens=2,
+        )
+    )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "Return one page."},),
+        response_format="json",
+    )
+
+    with adapter.generation_session():
+        assert adapter.generate(request).startswith("{")
+        assert adapter.generate(request).startswith("{")
+        assert adapter._processor is not None
+        assert adapter._model is not None
+        assert releases == []
+
+    assert _FakeProcessor.load_count == 1
+    assert _FakeModel.load_count == 1
+    assert adapter._processor is None
+    assert adapter._model is None
+    assert releases == ["released"]
+
+
+def test_direct_multimodal_generate_keeps_auto_release_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_runtime(monkeypatch)
+    releases: list[str] = []
+    monkeypatch.setattr(
+        adapter_base,
+        "_release_cuda",
+        lambda: releases.append("released"),
+    )
+    adapter = multimodal_adapter.TransformersMultimodalAdapter(
+        AdapterConfig(
+            role="planner",
+            adapter="transformers_multimodal",
+            model_id="Qwen/Qwen3.5-9B",
+            max_context=8,
+            max_new_tokens=2,
+        )
+    )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "Return one page."},),
+        response_format="json",
+    )
+
+    adapter.generate(request)
+    adapter.generate(request)
+
+    assert _FakeProcessor.load_count == 2
+    assert _FakeModel.load_count == 2
+    assert adapter._processor is None
+    assert adapter._model is None
+    assert releases == ["released", "released"]
+
+
+class _FailingModel(_FakeModel):
+    def generate(self, **_kwargs):
+        raise RuntimeError("generation failed")
+
+
+def test_multimodal_generation_session_releases_after_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_runtime(monkeypatch, model=_FailingModel)
+    releases: list[str] = []
+    monkeypatch.setattr(
+        adapter_base,
+        "_release_cuda",
+        lambda: releases.append("released"),
+    )
+    adapter = multimodal_adapter.TransformersMultimodalAdapter(
+        AdapterConfig(
+            role="planner",
+            adapter="transformers_multimodal",
+            model_id="Qwen/Qwen3.5-9B",
+            max_context=8,
+            max_new_tokens=2,
+        )
+    )
+
+    with pytest.raises(ModelBackendError, match="generation failed"):
+        with adapter.generation_session():
+            adapter.generate(
+                GenerationRequest(
+                    messages=(
+                        {"role": "user", "content": "Return one page."},
+                    ),
+                    response_format="json",
+                )
+            )
+
+    assert _FakeProcessor.load_count == 1
+    assert _FailingModel.load_count == 1
+    assert adapter._processor is None
+    assert adapter._model is None
+    assert releases == ["released"]

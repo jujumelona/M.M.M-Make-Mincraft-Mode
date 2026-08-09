@@ -1,1 +1,3 @@
--e .[ui]
+# Base Colab environment. The notebook installs the Linux/CUDA-only
+# qwen-fastpath extra separately after checking the active GPU runtime.
+-e .[ui,local-model,rag,image,speech,production-audio,training]

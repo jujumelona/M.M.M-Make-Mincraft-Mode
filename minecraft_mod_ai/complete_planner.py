@@ -120,6 +120,27 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
+        session_factory = getattr(self.router, "generation_session", None)
+        if not callable(session_factory):
+            return self._plan_in_session(
+                prompt,
+                media_paths=media_paths,
+                existing_input_sha256=existing_input_sha256,
+            )
+        with session_factory("planner"):
+            return self._plan_in_session(
+                prompt,
+                media_paths=media_paths,
+                existing_input_sha256=existing_input_sha256,
+            )
+
+    def _plan_in_session(
+        self,
+        prompt: str,
+        *,
+        media_paths: Sequence[str | Path] = (),
+        existing_input_sha256: str = "",
+    ) -> CompleteProposal:
         game_design, base_proposal = GameDesignPlanner(self.router).plan(
             prompt,
             media_paths=media_paths,
@@ -151,17 +172,11 @@ class CompleteGameDesignPlanner:
             ),
         }
         implementation_prompt = _implementation_prompt(prompt, internal_design)
-        text = self.router.generate_text(
-            "planner",
-            [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": implementation_prompt},
-            ],
+        payload = _generate_json_page_with_repair(
+            self.router,
+            system_prompt=_SYSTEM_PROMPT,
+            request=implementation_prompt,
             media_paths=media_paths,
-            response_format="json",
-        )
-        payload = _extract_json(
-            text,
             expected_contracts=(
                 frozenset({"modules", "assets", "audio", "acceptance_tests"}),
                 frozenset(
@@ -169,6 +184,7 @@ class CompleteGameDesignPlanner:
                 ),
                 frozenset({"production_batches", "complete", "next_cursor"}),
             ),
+            stage="initial implementation outline page",
         )
         common = {"assets", "audio", "acceptance_tests"}
         if set(payload) == common | {"modules"}:
@@ -342,29 +358,20 @@ class CompleteGameDesignPlanner:
                 "cursor": next_cursor,
                 "contract": _PRODUCTION_OUTLINE_CONTRACT,
             }
-            text = self.router.generate_text(
-                "planner",
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Continue the production outline. Return exactly one "
-                            "JSON object. Do not repeat a batch. Every batch scope "
-                            "must be self-contained, and deliverables are an exact "
-                            "completion checklist rather than examples."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(request, ensure_ascii=False),
-                    },
-                ],
+            page = _generate_json_page_with_repair(
+                self.router,
+                system_prompt=(
+                    "Continue the production outline. Return exactly one "
+                    "JSON object. Do not repeat a batch. Every batch scope "
+                    "must be self-contained, and deliverables are an exact "
+                    "completion checklist rather than examples."
+                ),
+                request=request,
                 media_paths=(),
-                response_format="json",
-            )
-            page = _extract_json(
-                text,
-                expected_contracts=(frozenset(_PRODUCTION_OUTLINE_CONTRACT),),
+                expected_contracts=(
+                    frozenset(_PRODUCTION_OUTLINE_CONTRACT),
+                ),
+                stage="production outline continuation",
             )
         return _topological_production_batches(tuple(result))
 
@@ -457,32 +464,23 @@ class CompleteGameDesignPlanner:
             }
             if first_page:
                 request["planning_context"] = planning_context
-            text = self.router.generate_text(
-                "planner",
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Return exactly one production-batch JSON page. "
-                            "Implement output, not prose. completed_deliverables "
-                            "must name only checklist entries fully covered by this "
-                            "and prior pages. A complete page is valid only when no "
-                            "deliverables remain. Never repeat an ID or path."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(request, ensure_ascii=False),
-                    },
-                ],
+            page = _generate_json_page_with_repair(
+                self.router,
+                system_prompt=(
+                    "Return exactly one production-batch JSON page. "
+                    "Implement output, not prose. completed_deliverables "
+                    "must name only checklist entries fully covered by this "
+                    "and prior pages. A complete page is valid only when no "
+                    "deliverables remain. Never repeat an ID or path."
+                ),
+                request=request,
                 media_paths=media_paths if first_page else (),
-                response_format="json",
+                expected_contracts=(
+                    frozenset(_PRODUCTION_PAGE_CONTRACT),
+                ),
+                stage=f"production batch {batch.batch_id!r} page",
             )
             first_page = False
-            page = _extract_json(
-                text,
-                expected_contracts=(frozenset(_PRODUCTION_PAGE_CONTRACT),),
-            )
             if set(page) != set(_PRODUCTION_PAGE_CONTRACT):
                 raise SpecValidationError(
                     "Production batch page fields are invalid."
@@ -666,33 +664,26 @@ class CompleteGameDesignPlanner:
             }
             if include_full_context and not cursor:
                 request["planning_context"] = planning_context
-            text = self.router.generate_text(
-                "planner",
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Return exactly one JSON object with modules, complete and next_cursor. "
-                            "Cover the entire requested batch. If more output is required, set complete=false "
-                            "and return a new opaque cursor. The module-catalog count and hash commit to "
-                            "every prior ID; recent_ids is only a bounded reminder, not the full catalog. "
-                            "Never repeat a module ID."
-                        ),
-                    },
-                    {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
-                ],
+            page = _generate_json_page_with_repair(
+                self.router,
+                system_prompt=(
+                    "Return exactly one JSON object with modules, complete and "
+                    "next_cursor. Cover the entire requested batch. If more output "
+                    "is required, set complete=false and return a new opaque "
+                    "cursor. The module-catalog count and hash commit to every "
+                    "prior ID; recent_ids is only a bounded reminder, not the full "
+                    "catalog. Never repeat a module ID."
+                ),
+                request=request,
                 media_paths=(
                     media_paths
                     if include_full_context and not cursor
                     else ()
                 ),
-                response_format="json",
-            )
-            page = _extract_json(
-                text,
                 expected_contracts=(
                     frozenset({"modules", "complete", "next_cursor"}),
                 ),
+                stage=f"legacy module batch {batch_id!r} page",
             )
             if set(page) != {"modules", "complete", "next_cursor"}:
                 raise SpecValidationError("Module batch page fields are invalid.")
@@ -1258,6 +1249,57 @@ def _extract_json(
             f"contract ({expected}). Please retry the plan."
         )
     raise SpecValidationError("Complete planner did not return a JSON object.")
+
+
+def _generate_json_page_with_repair(
+    router: ModelRouter,
+    *,
+    system_prompt: str,
+    request: dict[str, Any] | str,
+    media_paths: Sequence[str | Path],
+    expected_contracts: Sequence[frozenset[str]],
+    stage: str,
+) -> dict[str, Any]:
+    """Generate one bounded page and repair that page once when JSON is cut.
+
+    The retry deliberately reuses the identical request, batch and cursor.  It does
+    not append the malformed response, grow the prompt, restart earlier pages, or
+    mutate any merged catalog before a contract-shaped JSON object exists.
+    """
+
+    request_text = (
+        request
+        if isinstance(request, str)
+        else json.dumps(request, ensure_ascii=False)
+    )
+    for attempt in range(2):
+        prompt = system_prompt
+        if attempt:
+            prompt += (
+                " The previous attempt for this exact page was incomplete or did "
+                "not match the contract. Regenerate only this same page with fewer "
+                "records. If work remains, set complete=false and return a new "
+                "non-empty next_cursor. Output only the complete JSON object; do "
+                "not quote or continue the broken response."
+            )
+        text = router.generate_text(
+            "planner",
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": request_text},
+            ],
+            media_paths=media_paths,
+            response_format="json",
+        )
+        try:
+            return _extract_json(text, expected_contracts=expected_contracts)
+        except SpecValidationError as exc:
+            if attempt == 0:
+                continue
+            raise SpecValidationError(
+                f"{stage} failed after one page-local repair: {exc}"
+            ) from exc
+    raise AssertionError("unreachable page repair state")
 
 
 def _json_objects(text: str) -> list[dict[str, Any]]:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 
+import minecraft_mod_ai.complete_planner as planner_module
 from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _ProductionBatch,
@@ -12,6 +14,8 @@ from minecraft_mod_ai.complete_planner import (
     _remove_bootstrap_duplicates,
 )
 from minecraft_mod_ai.complete_spec import ProductionModule
+from minecraft_mod_ai.pipeline import MinecraftModPipeline
+from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, SpecValidationError
 
 
@@ -133,6 +137,128 @@ class _ResponseRouter:
         return json.dumps(next(self.responses))
 
 
+class _RawResponseRouter:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = iter(responses)
+        self.requests: list[dict[str, object] | str] = []
+        self.messages: list[list[dict[str, str]]] = []
+        self.media_paths: list[tuple[str, ...]] = []
+
+    def generate_text(self, role, messages, **kwargs):
+        assert role == "planner"
+        user_content = messages[-1]["content"]
+        try:
+            request = json.loads(user_content)
+        except json.JSONDecodeError:
+            request = user_content
+        self.requests.append(request)
+        self.messages.append([dict(message) for message in messages])
+        self.media_paths.append(tuple(
+            str(path) for path in kwargs["media_paths"]
+        ))
+        return next(self.responses)
+
+
+class _SessionRawResponseRouter(_RawResponseRouter):
+    def __init__(self, responses: list[str]) -> None:
+        super().__init__(responses)
+        self.session_events: list[str] = []
+
+    @contextmanager
+    def generation_session(self, role: str):
+        self.session_events.append(f"enter:{role}")
+        try:
+            yield self
+        finally:
+            self.session_events.append(f"exit:{role}")
+
+
+def test_initial_outline_repairs_without_replanning_design_or_research(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(
+        "Create one repair anchor item"
+    )
+    counters = {"design": 0, "technology": 0, "evidence": 0, "ecosystem": 0}
+
+    def design(self, prompt, media_paths=()):
+        del self, prompt, media_paths
+        counters["design"] += 1
+        return (
+            {
+                "title": "Initial page repair",
+                "pitch": "Repair only the implementation outline.",
+                "_research_brief": {
+                    "schema_version": "minecraft-mod-ai/research-brief-v1",
+                    "domains": [],
+                },
+            },
+            base,
+        )
+
+    def technology(*args, **kwargs):
+        del args, kwargs
+        counters["technology"] += 1
+        return {"schema_version": "test/technology-v1", "requirements": []}
+
+    def evidence(*args, **kwargs):
+        del args, kwargs
+        counters["evidence"] += 1
+        return {"schema_version": "test/evidence-v1"}
+
+    def ecosystem(*args, **kwargs):
+        del args, kwargs
+        counters["ecosystem"] += 1
+        return {"schema_version": "test/ecosystem-v1", "pages": []}
+
+    monkeypatch.setattr(planner_module.GameDesignPlanner, "plan", design)
+    monkeypatch.setattr(planner_module, "collect_technology_radar", technology)
+    monkeypatch.setattr(
+        planner_module,
+        "_retrieve_implementation_evidence",
+        evidence,
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "collect_ecosystem_seed_bundle",
+        ecosystem,
+    )
+    router = _SessionRawResponseRouter(
+        [
+            '{"production_batches":[',
+            json.dumps(
+                {
+                    "modules": [],
+                    "assets": [],
+                    "audio": [],
+                    "acceptance_tests": ["repair anchor remains observable"],
+                }
+            ),
+        ]
+    )
+
+    proposal = CompleteGameDesignPlanner(router).plan(
+        "Create one repair anchor item.",
+        media_paths=("reference.png",),
+    )
+
+    assert proposal.game_design["title"] == "Initial page repair"
+    assert counters == {
+        "design": 1,
+        "technology": 1,
+        "evidence": 1,
+        "ecosystem": 1,
+    }
+    assert len(router.requests) == 2
+    assert router.messages[0][1]["content"] == router.messages[1][1]["content"]
+    assert router.media_paths == [
+        ("reference.png",),
+        ("reference.png",),
+    ]
+    assert "fewer records" in router.messages[1][0]["content"]
+    assert router.session_events == ["enter:planner", "exit:planner"]
+
+
 def test_complete_json_extractor_skips_qwen_scratch_before_final_contract() -> None:
     final = {
         "modules": [_module("final_module")],
@@ -195,6 +321,44 @@ def test_module_pagination_skips_qwen_scratch_before_final_page() -> None:
     )
 
     assert [module.module_id for module in modules] == ["final_module"]
+
+
+def test_legacy_module_batch_repairs_only_the_cut_page() -> None:
+    router = _RawResponseRouter(
+        [
+            '{"modules":[',
+            json.dumps(
+                {
+                    "modules": [_module("repaired_module")],
+                    "complete": True,
+                    "next_cursor": "",
+                }
+            ),
+        ]
+    )
+
+    modules = CompleteGameDesignPlanner(router)._expand_batches(
+        prompt="Create the repaired module.",
+        game_design={"title": "Legacy page repair"},
+        batches=[
+            {
+                "batch_id": "core",
+                "scope": "Create the repaired module.",
+                "depends_on_batches": [],
+            }
+        ],
+        media_paths=("reference.png",),
+    )
+
+    assert [module.module_id for module in modules] == ["repaired_module"]
+    assert len(router.requests) == 2
+    assert router.requests[0] == router.requests[1]
+    assert router.requests[0]["cursor"] == ""
+    assert router.media_paths == [
+        ("reference.png",),
+        ("reference.png",),
+    ]
+    assert "fewer records" in router.messages[1][0]["content"]
 
 
 def test_module_pagination_rejects_duplicate_ids_within_page() -> None:
@@ -390,6 +554,81 @@ def test_scalable_production_batches_track_explicit_remaining_work() -> None:
     }
 
 
+def test_production_batch_repairs_only_the_cut_page_with_same_cursor() -> None:
+    router = _RawResponseRouter(
+        [
+            '{"modules":[',
+            json.dumps(
+                {
+                    "modules": [_module("core_module")],
+                    "assets": [],
+                    "audio": [],
+                    "acceptance_tests": ["core loads"],
+                    "completed_deliverables": ["core"],
+                    "complete": True,
+                    "next_cursor": "",
+                }
+            ),
+        ]
+    )
+
+    parts = CompleteGameDesignPlanner(router)._expand_production_batches(
+        batches=(
+            _ProductionBatch(
+                "core",
+                "Implement core.",
+                (),
+                ("core",),
+                ("core_module",),
+            ),
+        ),
+        prompt="Build core.",
+        game_design={"title": "Page repair"},
+        media_paths=("reference.png",),
+    )
+
+    assert [item.module_id for item in parts.modules] == ["core_module"]
+    assert len(router.requests) == 2
+    assert router.requests[0] == router.requests[1]
+    assert router.requests[0]["cursor"] == ""
+    assert router.requests[0]["known_module_catalog"]["count"] == 0
+    assert router.media_paths == [
+        ("reference.png",),
+        ("reference.png",),
+    ]
+    assert all(
+        [message["role"] for message in attempt] == ["system", "user"]
+        for attempt in router.messages
+    )
+    assert "fewer records" in router.messages[1][0]["content"]
+
+
+def test_production_batch_stops_after_one_page_local_repair() -> None:
+    router = _RawResponseRouter(['{"modules":[', '{"modules":'])
+
+    with pytest.raises(
+        SpecValidationError,
+        match="failed after one page-local repair",
+    ):
+        CompleteGameDesignPlanner(router)._expand_production_batches(
+            batches=(
+                _ProductionBatch(
+                    "core",
+                    "Implement core.",
+                    (),
+                    ("core",),
+                    ("core_module",),
+                ),
+            ),
+            prompt="Build core.",
+            game_design={"title": "Bounded repair"},
+            media_paths=(),
+        )
+
+    assert len(router.requests) == 2
+    assert router.requests[0] == router.requests[1]
+
+
 def test_production_outline_paginates_without_repeating_full_evidence() -> None:
     router = _ResponseRouter(
         [
@@ -437,6 +676,59 @@ def test_production_outline_paginates_without_repeating_full_evidence() -> None:
         "game_design"
     ]
     assert router.media_paths == [()]
+
+
+def test_production_outline_repairs_only_the_cut_continuation_page() -> None:
+    router = _RawResponseRouter(
+        [
+            '{"production_batches":[',
+            json.dumps(
+                {
+                    "production_batches": [
+                        {
+                            "batch_id": "second",
+                            "scope": "Second implementation scope.",
+                            "depends_on_batches": ["first"],
+                            "deliverables": ["second work"],
+                            "exports": ["second_module"],
+                        }
+                    ],
+                    "complete": True,
+                    "next_cursor": "",
+                }
+            ),
+        ]
+    )
+
+    batches = CompleteGameDesignPlanner(router)._collect_production_batches(
+        first_page={
+            "production_batches": [
+                {
+                    "batch_id": "first",
+                    "scope": "First implementation scope.",
+                    "depends_on_batches": [],
+                    "deliverables": ["first work"],
+                    "exports": ["first_module"],
+                }
+            ],
+            "complete": False,
+            "next_cursor": "outline-page-2",
+        },
+        prompt="Build a large project.",
+        game_design={"title": "Outline repair"},
+        media_paths=(),
+    )
+
+    assert [item.batch_id for item in batches] == ["first", "second"]
+    assert len(router.requests) == 2
+    assert router.requests[0] == router.requests[1]
+    assert router.requests[0]["cursor"] == "outline-page-2"
+    assert router.requests[0]["known_batch_catalog"]["count"] == 1
+    assert all(
+        [message["role"] for message in attempt] == ["system", "user"]
+        for attempt in router.messages
+    )
+    assert "fewer records" in router.messages[1][0]["content"]
 
 
 def _bootstrap_base():

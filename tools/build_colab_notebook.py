@@ -27,7 +27,7 @@ CELL_SPECS = [
         "configuration",
         """# @title 1. 만들 모드 입력
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." # @param {type:"string"}
-MODEL_PROFILE = "t4_local" # @param ["t4_local", "remote_quality"]
+MODEL_PROFILE = "t4_quality" # @param ["t4_quality", "t4_local", "remote_quality"]
 REMOTE_BASE_URL = "" # @param {type:"string"}
 REMOTE_TEXT_MODEL = "" # @param {type:"string"}
 REMOTE_IMAGE_MODEL = "" # @param {type:"string"}
@@ -60,6 +60,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+transformers_was_loaded = "transformers" in sys.modules
 REPO_DIR = Path("/content/M.M.M-Make-Mincraft-Mode")
 if (REPO_DIR / ".git").is_dir():
     subprocess.run(["git", "-C", str(REPO_DIR), "fetch", "origin", "main"], check=True)
@@ -98,6 +99,151 @@ subprocess.run(
     ],
     check=True,
 )
+
+# Qwen3.5's optimized Transformers path needs both FLA's gated-delta
+# kernels and causal-conv1d. Keep this Linux/CUDA-only dependency out of
+# ordinary desktop installs, but require and verify it for local Colab runs.
+if MODEL_PROFILE in {"t4_quality", "t4_local"}:
+    import importlib
+    from importlib.metadata import version as package_version
+
+    import torch
+    from packaging.version import Version
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"{MODEL_PROFILE} requires a Colab GPU runtime; CUDA is unavailable."
+        )
+    if Version(torch.__version__.split("+", 1)[0]) < Version("2.7"):
+        raise RuntimeError(
+            "Qwen3.5 fast kernels require PyTorch >= 2.7. "
+            f"The runtime provides {torch.__version__}; select a current Colab GPU runtime."
+        )
+    capability = torch.cuda.get_device_capability(0)
+    if capability < (7, 5):
+        raise RuntimeError(
+            "Qwen3.5 fast kernels require an NVIDIA GPU with compute capability "
+            f">= 7.5; this runtime reports {capability[0]}.{capability[1]}."
+        )
+
+    qwen_fastpath_requirement = (
+        "flash-linear-attention[cuda,conv1d]>=0.5.2,<0.6"
+    )
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-build-isolation",
+                qwen_fastpath_requirement,
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "Qwen3.5 fast-kernel installation failed. The notebook will not "
+            "silently continue with the much slower torch fallback."
+        ) from exc
+
+    importlib.invalidate_caches()
+    try:
+        from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+        from fla.ops.gated_delta_rule import (
+            chunk_gated_delta_rule,
+            fused_recurrent_gated_delta_rule,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Qwen3.5 fast-kernel import verification failed after installation."
+        ) from exc
+
+    fast_kernel_functions = {
+        "causal_conv1d_fn": causal_conv1d_fn,
+        "causal_conv1d_update": causal_conv1d_update,
+        "chunk_gated_delta_rule": chunk_gated_delta_rule,
+        "fused_recurrent_gated_delta_rule": fused_recurrent_gated_delta_rule,
+    }
+    missing_fast_kernels = [
+        name for name, function in fast_kernel_functions.items() if not callable(function)
+    ]
+    if missing_fast_kernels:
+        raise RuntimeError(
+            "Qwen3.5 fast-kernel verification found non-callable functions: "
+            + ", ".join(missing_fast_kernels)
+        )
+
+    # Verify the exact import-time switch used by Transformers.  If an older
+    # failed run imported Transformers before the kernels were installed, its
+    # optional-backend flags stay stale until the Colab runtime is restarted.
+    from transformers.models.qwen3_5 import modeling_qwen3_5
+
+    if not getattr(modeling_qwen3_5, "is_fast_path_available", False):
+        restart_hint = (
+            " Transformers was already loaded before setup; restart the Colab "
+            "runtime and rerun from cell 1."
+            if transformers_was_loaded
+            else " Restart the Colab runtime and rerun from cell 1."
+        )
+        raise RuntimeError(
+            "Transformers did not activate the Qwen3.5 fast path after kernel "
+            "installation." + restart_hint
+        )
+
+    # Imports alone cannot detect a CUDA ABI, architecture, or Triton JIT
+    # mismatch.  Exercise the same prefill and cached-decode primitives Qwen3.5
+    # uses before any multi-gigabyte checkpoint is downloaded.
+    try:
+        with torch.inference_mode():
+            dtype = torch.float16
+            conv_x = torch.randn((1, 8, 16), device="cuda", dtype=dtype)
+            conv_weight = torch.randn((8, 4), device="cuda", dtype=dtype)
+            conv_out = causal_conv1d_fn(
+                conv_x, conv_weight, activation="silu"
+            )
+            conv_state = torch.zeros((1, 8, 4), device="cuda", dtype=dtype)
+            conv_step = causal_conv1d_update(
+                conv_x[:, :, -1], conv_state, conv_weight, activation="silu"
+            )
+
+            q = torch.randn((1, 16, 1, 16), device="cuda", dtype=dtype)
+            k = torch.nn.functional.normalize(
+                torch.randn((1, 16, 1, 16), device="cuda", dtype=torch.float32),
+                dim=-1,
+            ).to(dtype)
+            v = torch.randn((1, 16, 1, 16), device="cuda", dtype=dtype)
+            g = torch.nn.functional.logsigmoid(
+                torch.randn((1, 16, 1), device="cuda", dtype=torch.float32)
+            )
+            beta = torch.sigmoid(
+                torch.randn((1, 16, 1), device="cuda", dtype=dtype)
+            )
+            chunk_out, _ = chunk_gated_delta_rule(
+                q, k, v, g, beta, chunk_size=16
+            )
+            recurrent_out, _ = fused_recurrent_gated_delta_rule(
+                q[:, :1],
+                k[:, :1],
+                v[:, :1],
+                g=g[:, :1],
+                beta=beta[:, :1],
+            )
+            smoke_outputs = (conv_out, conv_step, chunk_out, recurrent_out)
+            if any(not torch.isfinite(output).all() for output in smoke_outputs):
+                raise RuntimeError("a Qwen3.5 fast kernel returned non-finite values")
+            torch.cuda.synchronize()
+    except Exception as exc:
+        raise RuntimeError(
+            "Qwen3.5 CUDA fast-kernel smoke test failed. The notebook will not "
+            "continue with an unverified slow fallback."
+        ) from exc
+    print(
+        "Qwen3.5 fast kernels:",
+        f"flash-linear-attention={package_version('flash-linear-attention')}",
+        f"causal-conv1d={package_version('causal-conv1d')}",
+    )
+
 USED_COMMIT = subprocess.check_output(
     ["git", "rev-parse", "HEAD"],
     text=True,
