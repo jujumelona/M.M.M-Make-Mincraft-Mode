@@ -217,7 +217,32 @@ def _install_qwen_fastpath() -> None:
         print("ℹ️ Qwen3.5 fast-path kernels not pre-installed; using standard PyTorch path.", flush=True)
 
 
+def _install_llama_cpp() -> None:
+    """Install pre-built llama-cpp-python CUDA wheel in seconds, avoiding source compilation."""
+    try:
+        from importlib.metadata import version as pkg_version
+        pkg_version("llama-cpp-python")
+        print("✅ Pre-built llama-cpp-python CUDA wheel already installed.", flush=True)
+    except Exception:
+        print("⚡ Installing pre-built llama-cpp-python CUDA wheel...", flush=True)
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "llama-cpp-python",
+                "--extra-index-url",
+                "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+                "--no-cache-dir",
+            ],
+            check=False,
+        )
+
+
 def _install_project(*, local_profile: bool) -> None:
+    if local_profile:
+        _install_llama_cpp()
     target = (
         LOCAL_PROJECT_INSTALL_TARGET
         if local_profile
