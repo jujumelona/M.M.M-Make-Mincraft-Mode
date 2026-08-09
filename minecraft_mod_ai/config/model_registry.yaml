@@ -5,7 +5,7 @@ profiles:
     roles:
       planner:
         model_id: Qwen/Qwen3.5-9B
-        adapter: transformers_multimodal
+        adapter: vllm
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
@@ -14,7 +14,7 @@ profiles:
         min_free_vram_mb: 6000
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: transformers_text
+        adapter: vllm
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 12288
@@ -22,7 +22,7 @@ profiles:
         min_free_vram_mb: 4300
       coder:
         model_id: Qwen/Qwen2.5-Coder-7B-Instruct
-        adapter: transformers_text
+        adapter: vllm
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 12288
@@ -30,7 +30,7 @@ profiles:
         min_free_vram_mb: 7200
       coder_safe:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: transformers_text
+        adapter: vllm
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 16384
@@ -38,7 +38,7 @@ profiles:
         min_free_vram_mb: 4300
       visual_critic:
         model_id: Qwen/Qwen3.5-4B
-        adapter: transformers_multimodal
+        adapter: vllm
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
