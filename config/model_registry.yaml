@@ -4,7 +4,7 @@ profiles:
     description: Single NVIDIA T4 profile with Qwen3.6-35B MoE GGUF GPU/CPU offloading.
     roles:
       planner:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -13,7 +13,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       researcher:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -22,7 +22,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -31,7 +31,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder_safe:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -40,7 +40,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       visual_critic:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -79,7 +79,7 @@ profiles:
     description: Single NVIDIA T4 quality profile with Qwen3.6-35B MoE GGUF GPU/CPU offloading.
     roles:
       planner:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -88,7 +88,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       researcher:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -97,7 +97,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -106,7 +106,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder_safe:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
@@ -115,7 +115,7 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       visual_critic:
-        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUFMXFP4_MOE
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         quantization: gguf_mxfp4
         torch_dtype: float16
