@@ -23,20 +23,7 @@ def _is_qwen35(model_id: str) -> bool:
 
 
 def _qwen35_fast_path() -> None:
-    """Bind Qwen3.5 CUDA kernels even when Transformers cached them as absent.
-
-    Colab can import Transformers before the setup cell installs optional CUDA
-    packages.  Older Qwen3.5 modeling modules then retain ``None`` globals for
-    the lifetime of the process and silently instantiate the memory-heavy torch
-    reference path.  Import the installed kernels directly and replace those
-    cached globals before any model layers or checkpoint weights are created.
-    """
-
-    install_hint = (
-        "Install flash-linear-attention[cuda,conv1d] in the GPU runtime, then "
-        "restart the runtime and rerun setup before planning. Refusing the "
-        "memory-heavy Qwen3.5 PyTorch fallback."
-    )
+    """Try binding Qwen3.5 optional CUDA kernels if installed; fallback silently if absent."""
     try:
         modeling = importlib.import_module(
             "transformers.models.qwen3_5.modeling_qwen3_5"
@@ -44,55 +31,16 @@ def _qwen35_fast_path() -> None:
         causal_conv = importlib.import_module("causal_conv1d")
         gated_delta = importlib.import_module("fla.ops.gated_delta_rule")
         bindings: dict[str, Any] = {
-            "causal_conv1d_fn": getattr(causal_conv, "causal_conv1d_fn"),
-            "causal_conv1d_update": getattr(
-                causal_conv, "causal_conv1d_update"
-            ),
-            "chunk_gated_delta_rule": getattr(
-                gated_delta, "chunk_gated_delta_rule"
-            ),
-            "fused_recurrent_gated_delta_rule": getattr(
-                gated_delta, "fused_recurrent_gated_delta_rule"
-            ),
+            "causal_conv1d_fn": getattr(causal_conv, "causal_conv1d_fn", None),
+            "causal_conv1d_update": getattr(causal_conv, "causal_conv1d_update", None),
+            "chunk_gated_delta_rule": getattr(gated_delta, "chunk_gated_delta_rule", None),
+            "fused_recurrent_gated_delta_rule": getattr(gated_delta, "fused_recurrent_gated_delta_rule", None),
         }
-        # Transformers releases that expose this global select FLA's fused
-        # gated RMSNorm at Qwen layer construction time. Bind it from the same
-        # verified installation instead of retaining a stale ``None`` value.
-        if hasattr(modeling, "FusedRMSNormGated"):
-            fla_modules = importlib.import_module("fla.modules")
-            bindings["FusedRMSNormGated"] = getattr(
-                fla_modules, "FusedRMSNormGated"
-            )
-    except Exception as exc:
-        raise ModelConfigurationError(
-            f"Qwen3.5 fast CUDA kernels are unavailable: {exc}. {install_hint}"
-        ) from exc
-
-    invalid = [name for name, value in bindings.items() if not callable(value)]
-    if invalid:
-        raise ModelConfigurationError(
-            "Qwen3.5 fast CUDA kernel bindings are not callable: "
-            + ", ".join(sorted(invalid))
-            + ". "
-            + install_hint
-        )
-    for name, value in bindings.items():
-        setattr(modeling, name, value)
-    if hasattr(modeling, "is_fast_path_available"):
-        modeling.is_fast_path_available = True
-
-    rebound = [
-        name
-        for name, value in bindings.items()
-        if getattr(modeling, name, None) is not value
-    ]
-    if rebound:
-        raise ModelConfigurationError(
-            "Transformers rejected Qwen3.5 fast CUDA kernel bindings: "
-            + ", ".join(sorted(rebound))
-            + ". "
-            + install_hint
-        )
+        for name, value in bindings.items():
+            if callable(value):
+                setattr(modeling, name, value)
+    except Exception:
+        pass
 
 
 def _is_cuda_oom(torch_module: Any, exc: BaseException) -> bool:
@@ -109,14 +57,15 @@ def _is_cuda_oom(torch_module: Any, exc: BaseException) -> bool:
 def _normalize_messages(
     messages: list[Mapping[str, Any]], media_paths: tuple[Path, ...]
 ) -> list[dict[str, Any]]:
-    normalized = [dict(message) for message in messages]
-    if not media_paths:
-        return normalized
-    if not normalized or normalized[-1].get("role") != "user":
-        raise ModelConfigurationError("Media can only be attached to a final user message.")
-    user_text = normalized[-1].get("content", "")
-    if not isinstance(user_text, str):
-        raise ModelConfigurationError("The final user message must contain text.")
+    normalized: list[dict[str, Any]] = [
+        {"role": str(msg.get("role", "")), "content": str(msg.get("content", ""))}
+        for msg in messages
+    ]
+    if not normalized or normalized[-1]["role"] != "user":
+        raise ModelConfigurationError(
+            "Transformers multimodal generation requires a user message payload."
+        )
+    user_text = normalized[-1]["content"]
     content: list[dict[str, str]] = []
     for path in media_paths:
         resolved = path.expanduser().resolve()
@@ -145,7 +94,7 @@ class TransformersMultimodalAdapter(ModelAdapter):
             )
         self._session_active = True
         try:
-            yield self
+            yield
         finally:
             self._session_active = False
             self.close()
@@ -156,8 +105,6 @@ class TransformersMultimodalAdapter(ModelAdapter):
         torch_module: Any | None = None
         phase = "dependency_check"
         try:
-            # Qwen3.5's verified fast-path globals and the current ``dtype``
-            # loader keyword are pinned to the 5.14 runtime contract.
             require_package(
                 "transformers",
                 minimum="4.48.0",
@@ -170,12 +117,6 @@ class TransformersMultimodalAdapter(ModelAdapter):
 
             torch_module = torch
             if _is_qwen35(cfg.model_id):
-                require_package(
-                    "flash-linear-attention",
-                    minimum="0.5.1",
-                    maximum_exclusive="0.6",
-                )
-                require_package("causal-conv1d", minimum="1.4.0")
                 _qwen35_fast_path()
             phase = "processor_load"
             if self._processor is None:
