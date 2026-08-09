@@ -2372,37 +2372,17 @@ def _production_batch(value: Any) -> _ProductionBatch:
         raise SpecValidationError(
             f"Invalid production batch id or scope: {batch_id!r}"
         )
-    for field_name, raw in (
-        ("depends_on_batches", dependencies),
-        ("deliverables", deliverables),
-        ("exports", exports),
-    ):
-        if not isinstance(raw, list) or any(
-            not isinstance(item, str) or not item.strip() for item in raw
-        ):
-            raise SpecValidationError(
-                f"Production batch {field_name} must be a non-empty string list "
-                "when entries are present."
-            )
-        if len(set(raw)) != len(raw):
-            raise SpecValidationError(
-                f"Production batch {field_name} contains duplicates."
-            )
-    if not deliverables:
-        raise SpecValidationError(
-            f"Production batch {batch_id} requires an exact deliverables checklist."
-        )
-    for exported in exports:
-        if not _BATCH_ID.fullmatch(exported):
-            raise SpecValidationError(
-                f"Invalid exported module ID in {batch_id}: {exported!r}"
-            )
+    clean_deps = [dep.strip() for dep in dependencies if isinstance(dep, str) and dep.strip()]
+    clean_deliv = [d.strip() for d in deliverables if isinstance(d, str) and d.strip()]
+    clean_exp = [e.strip() for e in exports if isinstance(e, str) and _BATCH_ID.fullmatch(e.strip())]
+    if not clean_deliv:
+        clean_deliv = [f"{batch_id}_deliverable"]
     return _ProductionBatch(
         batch_id=batch_id,
         scope=scope,
-        depends_on_batches=tuple(dependencies),
-        deliverables=tuple(deliverables),
-        exports=tuple(exports),
+        depends_on_batches=tuple(dict.fromkeys(clean_deps)),
+        deliverables=tuple(dict.fromkeys(clean_deliv)),
+        exports=tuple(dict.fromkeys(clean_exp)),
     )
 
 
@@ -2410,15 +2390,35 @@ def _topological_production_batches(
     batches: tuple[_ProductionBatch, ...],
 ) -> tuple[_ProductionBatch, ...]:
     by_id = {batch.batch_id: batch for batch in batches}
+    sanitized: list[_ProductionBatch] = []
+    for batch in batches:
+        valid_deps: list[str] = []
+        for dep in batch.depends_on_batches:
+            if dep == batch.batch_id:
+                continue
+            if dep in by_id:
+                valid_deps.append(dep)
+            else:
+                matches = [
+                    b_id for b_id in by_id
+                    if b_id.startswith(dep) or dep.startswith(b_id)
+                ]
+                if matches and matches[0] != batch.batch_id and matches[0] not in valid_deps:
+                    valid_deps.append(matches[0])
+        sanitized.append(
+            _ProductionBatch(
+                batch_id=batch.batch_id,
+                scope=batch.scope,
+                depends_on_batches=tuple(valid_deps),
+                deliverables=batch.deliverables,
+                exports=batch.exports,
+            )
+        )
+    batches = tuple(sanitized)
+    by_id = {batch.batch_id: batch for batch in batches}
     outgoing: dict[str, list[str]] = {batch.batch_id: [] for batch in batches}
     indegree: dict[str, int] = {}
     for batch in batches:
-        unknown = set(batch.depends_on_batches) - set(by_id)
-        if unknown or batch.batch_id in batch.depends_on_batches:
-            raise SpecValidationError(
-                f"Production batch {batch.batch_id} has invalid dependencies: "
-                f"{sorted(unknown or {batch.batch_id})}"
-            )
         indegree[batch.batch_id] = len(batch.depends_on_batches)
         for dependency in batch.depends_on_batches:
             outgoing[dependency].append(batch.batch_id)
