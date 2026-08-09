@@ -44,7 +44,7 @@ _ALLOWED_CONFIG_FIELDS = frozenset(
     }
 )
 _PACKAGE = re.compile(r"^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$")
-_MODULE_ID = re.compile(r"^[a-z][a-z0-9_]{1,127}$")
+_MODULE_ID = re.compile(r"^[a-z][a-z0-9_\-]{1,127}$")
 
 
 @dataclass(frozen=True)
