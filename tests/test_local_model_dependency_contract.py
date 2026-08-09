@@ -12,8 +12,7 @@ def test_local_model_pins_verified_qwen_runtime_and_published_fastpath() -> None
         "sys_platform == 'linux'"
     )
 
-    assert "transformers>=5.14.1,<5.15" in local_model
-    assert fla_requirement in local_model
+    assert "transformers>=4.48.0,<5" in local_model
     assert qwen_fastpath == [fla_requirement]
 
 

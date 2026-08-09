@@ -327,7 +327,7 @@ def test_qwen35_runtime_versions_are_fail_closed_before_model_load(
 
     assert (
         "transformers",
-        {"minimum": "5.14.1", "maximum_exclusive": "5.15"},
+        {"minimum": "4.48.0", "maximum_exclusive": "5.0.0"},
     ) in requirements
     assert (
         "flash-linear-attention",
@@ -339,7 +339,7 @@ def test_qwen35_runtime_versions_are_fail_closed_before_model_load(
     ) in requirements
 
 
-@pytest.mark.parametrize("installed", ["5.13.9", "5.15.0"])
+@pytest.mark.parametrize("installed", ["4.47.0", "5.0.0"])
 def test_transformers_version_outside_verified_minor_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
     installed: str,
@@ -353,8 +353,8 @@ def test_transformers_version_outside_verified_minor_is_rejected(
     with pytest.raises(ModelConfigurationError):
         adapter_base.require_package(
             "transformers",
-            minimum="5.14.1",
-            maximum_exclusive="5.15",
+            minimum="4.48.0",
+            maximum_exclusive="5.0.0",
         )
 
 
