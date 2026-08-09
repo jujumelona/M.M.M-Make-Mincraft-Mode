@@ -5,45 +5,48 @@ profiles:
     roles:
       planner:
         model_id: Qwen/Qwen3.5-9B
-        adapter: vllm
+        adapter: transformers_multimodal
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
-        max_input_tokens: 6144
-        max_new_tokens: 4096
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2500
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: vllm
+        adapter: transformers_text
         quantization: bnb_4bit
         torch_dtype: float16
-        max_context: 12288
-        max_new_tokens: 1800
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
         model_id: Qwen/Qwen2.5-Coder-7B-Instruct
-        adapter: vllm
+        adapter: transformers_text
         quantization: bnb_4bit
         torch_dtype: float16
-        max_context: 12288
-        max_new_tokens: 4096
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2500
       coder_safe:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: vllm
+        adapter: transformers_text
         quantization: bnb_4bit
         torch_dtype: float16
-        max_context: 16384
-        max_new_tokens: 3072
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2000
       visual_critic:
         model_id: Qwen/Qwen3.5-4B
-        adapter: vllm
+        adapter: transformers_multimodal
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
-        max_input_tokens: 6144
-        max_new_tokens: 1400
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2500
       embedding:
         model_id: Qwen/Qwen3-Embedding-0.6B
@@ -77,45 +80,48 @@ profiles:
     roles:
       planner:
         model_id: Qwen/Qwen3.5-9B
-        adapter: vllm
+        adapter: transformers_multimodal
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
-        max_input_tokens: 6144
-        max_new_tokens: 2048
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 3000
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: vllm
+        adapter: transformers_text
         quantization: bnb_4bit
         torch_dtype: float16
-        max_context: 12288
-        max_new_tokens: 1800
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
         model_id: Qwen/Qwen2.5-Coder-7B-Instruct
-        adapter: vllm
+        adapter: transformers_text
         quantization: bnb_4bit
         torch_dtype: float16
-        max_context: 12288
-        max_new_tokens: 4096
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2500
       coder_safe:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
-        adapter: vllm
+        adapter: transformers_text
         quantization: bnb_4bit
         torch_dtype: float16
-        max_context: 16384
-        max_new_tokens: 3072
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 2000
       visual_critic:
         model_id: Qwen/Qwen3.5-9B
-        adapter: vllm
+        adapter: transformers_multimodal
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
-        max_input_tokens: 6144
-        max_new_tokens: 1400
+        max_input_tokens: 0
+        max_new_tokens: 8192
         min_free_vram_mb: 3000
       embedding:
         model_id: Qwen/Qwen3-Embedding-0.6B
