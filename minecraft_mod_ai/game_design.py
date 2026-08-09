@@ -807,18 +807,50 @@ def _deterministic_bootstrap(
     }
 
 
+def _clean_json_text(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"```(?:json)?\s*", "", cleaned)
+    cleaned = cleaned.replace("```", "")
+    return cleaned.strip()
+
+
 def _json_objects(text: str) -> list[dict[str, Any]]:
-    decoder = json.JSONDecoder()
+    text = _clean_json_text(text)
+    decoder = json.JSONDecoder(strict=False)
     values: list[dict[str, Any]] = []
+    try:
+        val = json.loads(text, strict=False)
+        if isinstance(val, dict):
+            return [val]
+    except Exception:
+        pass
+
     for index, char in enumerate(text):
         if char != "{":
             continue
+        snippet = text[index:]
         try:
-            value, _ = decoder.raw_decode(text[index:])
+            value, _ = decoder.raw_decode(snippet)
+            if isinstance(value, dict):
+                values.append(value)
+                continue
         except json.JSONDecodeError:
+            pass
+
+        repaired = re.sub(
+            r'(?<=: ")(.*?)(?=")',
+            lambda m: m.group(1).replace("\n", "\\n").replace("\r", "").replace("\t", "\\t"),
+            snippet,
+            flags=re.DOTALL,
+        )
+        try:
+            value, _ = decoder.raw_decode(repaired)
+            if isinstance(value, dict):
+                values.append(value)
+        except Exception:
             continue
-        if isinstance(value, dict):
-            values.append(value)
     return values
 
 
