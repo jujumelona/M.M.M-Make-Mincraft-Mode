@@ -1,17 +1,17 @@
 schema_version: mmm/model-registry-v2
 profiles:
   t4_local:
-    description: Single NVIDIA T4 profile. GPU-heavy roles are loaded only on demand and released after each task.
+    description: Single NVIDIA T4 profile with Qwen2.5-Coder-32B GGUF GPU/CPU offloading.
     roles:
       planner:
-        model_id: Qwen/Qwen3.5-9B
-        adapter: transformers_multimodal
-        quantization: bnb_4bit
+        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        adapter: llama_cpp
+        quantization: gguf_q4_k_m
         torch_dtype: float16
-        max_context: 262144
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
-        min_free_vram_mb: 2500
+        min_free_vram_mb: 2000
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
         adapter: transformers_text
@@ -22,14 +22,14 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
-        model_id: Qwen/Qwen2.5-Coder-7B-Instruct
-        adapter: transformers_text
-        quantization: bnb_4bit
+        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        adapter: llama_cpp
+        quantization: gguf_q4_k_m
         torch_dtype: float16
-        max_context: 32768
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
-        min_free_vram_mb: 2500
+        min_free_vram_mb: 2000
       coder_safe:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
         adapter: transformers_text
@@ -76,17 +76,17 @@ profiles:
         min_free_vram_mb: 3000
 
   t4_quality:
-    description: Single NVIDIA T4 quality profile. Qwen3.5 9B planning and visual review are loaded in 4-bit only on demand and released after each task.
+    description: Single NVIDIA T4 quality profile with Qwen2.5-Coder-32B GGUF GPU/CPU offloading.
     roles:
       planner:
-        model_id: Qwen/Qwen3.5-9B
-        adapter: transformers_multimodal
-        quantization: bnb_4bit
+        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        adapter: llama_cpp
+        quantization: gguf_q4_k_m
         torch_dtype: float16
-        max_context: 262144
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
-        min_free_vram_mb: 3000
+        min_free_vram_mb: 2000
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
         adapter: transformers_text
@@ -97,14 +97,14 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
       coder:
-        model_id: Qwen/Qwen2.5-Coder-7B-Instruct
-        adapter: transformers_text
-        quantization: bnb_4bit
+        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        adapter: llama_cpp
+        quantization: gguf_q4_k_m
         torch_dtype: float16
-        max_context: 32768
+        max_context: 16384
         max_input_tokens: 0
         max_new_tokens: 8192
-        min_free_vram_mb: 2500
+        min_free_vram_mb: 2000
       coder_safe:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
         adapter: transformers_text

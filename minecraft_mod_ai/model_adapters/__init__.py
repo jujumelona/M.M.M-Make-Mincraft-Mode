@@ -7,6 +7,7 @@ from .base import (
 )
 from .embedding import EmbeddingAdapter
 from .image_diffusion import ImageDiffusionAdapter
+from .llama_cpp_adapter import LlamaCppAdapter
 from .openai_compatible import OpenAICompatibleAdapter
 from .reranker import RerankerAdapter
 from .speech import SpeechAdapter
@@ -19,6 +20,7 @@ __all__ = [
     "GenerationRequest",
     "HardwarePreflightError",
     "ImageDiffusionAdapter",
+    "LlamaCppAdapter",
     "ModelBackendError",
     "ModelConfigurationError",
     "OpenAICompatibleAdapter",

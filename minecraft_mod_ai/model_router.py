@@ -107,6 +107,9 @@ class ModelRouter:
             return TransformersTextAdapter(config)
         if config.adapter == "transformers_multimodal":
             return TransformersMultimodalAdapter(config)
+        if config.adapter in ("llama_cpp", "vllm"):
+            from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
+            return LlamaCppAdapter(config)
         if config.adapter == "openai_compatible":
             return OpenAICompatibleAdapter(config)
         raise ModelConfigurationError(

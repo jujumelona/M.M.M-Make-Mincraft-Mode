@@ -31,6 +31,8 @@ ALLOWED_ADAPTERS = frozenset(
     {
         "transformers_text",
         "transformers_multimodal",
+        "llama_cpp",
+        "vllm",
         "openai_compatible",
         "image_diffusion",
         "speech",
