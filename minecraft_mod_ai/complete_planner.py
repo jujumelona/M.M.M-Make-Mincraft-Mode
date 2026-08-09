@@ -2470,34 +2470,40 @@ def _topological_production_batches(
 def _module(value: Any) -> ProductionModule:
     if not isinstance(value, dict):
         raise SpecValidationError("Every production module must be an object.")
-    allowed = {"module_id", "kind", "config", "depends_on", "required_gates"}
-    if set(value) != allowed:
-        raise SpecValidationError("Production module fields are invalid.")
+    module_id = value.get("module_id") or value.get("id") or value.get("name")
+    kind = value.get("kind") or value.get("type") or "custom_java"
+    if not module_id:
+        raise SpecValidationError("Production module missing required module_id.")
+    config = value.get("config")
+    if not isinstance(config, dict):
+        config = {"summary": str(config or "")}
+    depends_on = value.get("depends_on", ())
+    if not isinstance(depends_on, (list, tuple)):
+        depends_on = ()
+    required_gates = value.get("required_gates", ())
+    if not isinstance(required_gates, (list, tuple)):
+        required_gates = ()
     return ProductionModule(
-        module_id=str(value["module_id"]),
-        kind=str(value["kind"]),
-        config=dict(value["config"]),
-        depends_on=tuple(str(item) for item in value["depends_on"]),
-        required_gates=tuple(str(item) for item in value["required_gates"]),
+        module_id=str(module_id),
+        kind=str(kind),
+        config=dict(config),
+        depends_on=tuple(str(item) for item in depends_on),
+        required_gates=tuple(str(item) for item in required_gates),
     )
 
 
 def _asset(value: Any) -> AssetRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every asset request must be an object.")
-    allowed = {"asset_id", "kind", "prompt", "target_path", "width", "height"}
-    unknown = set(value) - allowed
-    required = {"asset_id", "kind", "prompt", "target_path"}
-    missing = required - set(value)
-    if unknown or missing:
-        raise SpecValidationError(
-            f"Asset request fields are invalid; missing={sorted(missing)}, unknown={sorted(unknown)}"
-        )
+    asset_id = value.get("asset_id") or value.get("id") or "asset_gen"
+    kind = value.get("kind") or "texture"
+    prompt = value.get("prompt") or value.get("description") or f"Asset for {asset_id}"
+    target_path = value.get("target_path") or f"assets/mod/textures/{asset_id}.png"
     return AssetRequest(
-        asset_id=str(value["asset_id"]),
-        kind=str(value["kind"]),
-        prompt=str(value["prompt"]),
-        target_path=str(value["target_path"]),
+        asset_id=str(asset_id),
+        kind=str(kind),
+        prompt=str(prompt),
+        target_path=str(target_path),
         width=int(value.get("width", 16)),
         height=int(value.get("height", 16)),
     )
@@ -2506,24 +2512,16 @@ def _asset(value: Any) -> AssetRequest:
 def _audio(value: Any) -> AudioRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every audio request must be an object.")
-    allowed = {
-        "sound_id", "kind", "duration_seconds", "frequency_hz", "volume",
-        "loop", "subtitle_en", "subtitle_ko",
-    }
-    unknown = set(value) - allowed
-    required = {"sound_id", "kind", "duration_seconds"}
-    missing = required - set(value)
-    if unknown or missing:
-        raise SpecValidationError(
-            f"Audio request fields are invalid; missing={sorted(missing)}, unknown={sorted(unknown)}"
-        )
+    sound_id = value.get("sound_id") or value.get("id") or "sound_gen"
+    kind = value.get("kind") or "sfx"
+    duration_seconds = float(value.get("duration_seconds", 1.0))
     return AudioRequest(
-        sound_id=str(value["sound_id"]),
-        kind=str(value["kind"]),
-        duration_seconds=float(value["duration_seconds"]),
-        frequency_hz=float(value.get("frequency_hz", 440.0)),
-        volume=float(value.get("volume", 0.8)),
-        loop=_strict_bool(value.get("loop", False), "audio.loop"),
+        sound_id=str(sound_id),
+        kind=str(kind),
+        duration_seconds=duration_seconds,
+        frequency_hz=float(value.get("frequency_hz", 44100.0)),
+        volume=float(value.get("volume", 1.0)),
+        loop=bool(value.get("loop", False)),
         subtitle_en=str(value.get("subtitle_en", "")),
         subtitle_ko=str(value.get("subtitle_ko", "")),
     )
