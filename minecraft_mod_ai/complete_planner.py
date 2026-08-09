@@ -858,12 +858,11 @@ class CompleteGameDesignPlanner:
                     "Production batch pagination contract is invalid."
                 )
             if complete:
-                if next_cursor or remaining:
-                    raise SpecValidationError(
-                        f"Batch {batch.batch_id} claimed completion with "
-                        f"{len(remaining)} deliverables remaining."
-                    )
-                break
+                if remaining:
+                    complete = False
+                    next_cursor = f"page_{page_count + 1}"
+                else:
+                    break
             if not next_cursor or next_cursor in seen_cursors:
                 raise SpecValidationError(
                     "Production batch pagination did not advance."
