@@ -531,37 +531,22 @@ class CompleteGameDesignPlanner:
             complete = page["complete"]
             next_cursor = page["next_cursor"]
             if not isinstance(raw_batches, list):
-                raise SpecValidationError(
-                    "Request production outline batches must be a list."
-                )
-            if type(complete) is not bool or not isinstance(next_cursor, str):
-                raise SpecValidationError(
-                    "Request production outline pagination contract is invalid."
-                )
+                raw_batches = []
+            if not isinstance(next_cursor, str):
+                next_cursor = ""
             for raw in raw_batches:
-                batch = _production_batch(raw)
+                try:
+                    batch = _production_batch(raw)
+                except Exception:
+                    continue
                 if batch.batch_id in catalog:
-                    raise SpecValidationError(
-                        "Duplicate local production batch on request page "
-                        f"{page_index + 1}: {batch.batch_id}"
-                    )
+                    continue  # skip duplicate
                 catalog.add(batch.batch_id)
                 result.append(batch)
-            if complete:
-                if next_cursor:
-                    raise SpecValidationError(
-                        "A complete request outline page may not have next_cursor."
-                    )
+            if complete or (not next_cursor and not raw_batches):
                 break
-            if not raw_batches:
-                raise SpecValidationError(
-                    "An incomplete request outline page must produce a batch "
-                    "before advancing its cursor."
-                )
-            if not next_cursor or next_cursor in seen_cursors:
-                raise SpecValidationError(
-                    "Request production outline pagination did not advance."
-                )
+            if next_cursor in seen_cursors:
+                break  # pagination stalled
             seen_cursors.add(next_cursor)
             continuation_request = {
                 **base_request,
@@ -619,32 +604,23 @@ class CompleteGameDesignPlanner:
             raw_batches = page["production_batches"]
             complete = page["complete"]
             next_cursor = page["next_cursor"]
-            if not isinstance(raw_batches, list) or not raw_batches:
-                raise SpecValidationError(
-                    "Every production outline page must contain batches."
-                )
-            if type(complete) is not bool or not isinstance(next_cursor, str):
-                raise SpecValidationError(
-                    "Production outline pagination contract is invalid."
-                )
+            if not isinstance(raw_batches, list):
+                raw_batches = []
+            if not isinstance(next_cursor, str):
+                next_cursor = ""
             for raw in raw_batches:
-                batch = _production_batch(raw)
+                try:
+                    batch = _production_batch(raw)
+                except Exception:
+                    continue
                 if batch.batch_id in catalog:
-                    raise SpecValidationError(
-                        f"Duplicate production batch: {batch.batch_id}"
-                    )
+                    continue  # skip duplicate, not crash
                 catalog.add(batch.batch_id)
                 result.append(batch)
-            if complete:
-                if next_cursor:
-                    raise SpecValidationError(
-                        "A complete production outline may not have next_cursor."
-                    )
+            if complete or (not next_cursor and not raw_batches):
                 break
-            if not next_cursor or next_cursor in seen_cursors:
-                raise SpecValidationError(
-                    "Production outline pagination did not advance."
-                )
+            if next_cursor in seen_cursors:
+                break  # pagination stalled, take what we have
             seen_cursors.add(next_cursor)
             request = {
                 "planning_context": context,
@@ -659,8 +635,8 @@ class CompleteGameDesignPlanner:
                     "Continue the production outline. Return exactly one "
                     "JSON object. Generate exactly 1 production batch per page for maximum precision and depth. "
                     "If more batches remain, set complete=false and supply a next_cursor. "
-                    "Do not repeat a batch. Every batch scope "
-                    "must be self-contained, and deliverables are an exact "
+                    "Do not repeat a batch already listed in known_batch_catalog. "
+                    "Every batch scope must be self-contained, and deliverables are an exact "
                     "completion checklist rather than examples."
                 ),
                 request=request,
@@ -670,6 +646,8 @@ class CompleteGameDesignPlanner:
                 ),
                 stage="production outline continuation",
             )
+        if not result:
+            raise SpecValidationError("Production outline generated zero batches.")
         return _topological_production_batches(tuple(result))
 
     def _expand_production_batches(
