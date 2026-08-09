@@ -6,7 +6,7 @@ profiles:
       planner:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -15,7 +15,7 @@ profiles:
       researcher:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -24,7 +24,7 @@ profiles:
       coder:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -33,7 +33,7 @@ profiles:
       coder_safe:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -42,7 +42,7 @@ profiles:
       visual_critic:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -81,7 +81,7 @@ profiles:
       planner:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -90,7 +90,7 @@ profiles:
       researcher:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -99,7 +99,7 @@ profiles:
       coder:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -108,7 +108,7 @@ profiles:
       coder_safe:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
@@ -117,7 +117,7 @@ profiles:
       visual_critic:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
-        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
