@@ -539,8 +539,17 @@ class CompleteGameDesignPlanner:
                     batch = _production_batch(raw)
                 except Exception:
                     continue
-                if batch.batch_id in catalog:
-                    continue  # skip duplicate
+                original_id = batch.batch_id
+                suffix = 2
+                while batch.batch_id in catalog:
+                    batch = _ProductionBatch(
+                        batch_id=f"{original_id}_{suffix}",
+                        scope=batch.scope,
+                        depends_on_batches=batch.depends_on_batches,
+                        deliverables=batch.deliverables,
+                        exports=batch.exports,
+                    )
+                    suffix += 1
                 catalog.add(batch.batch_id)
                 result.append(batch)
             if complete or (not next_cursor and not raw_batches):
@@ -613,19 +622,31 @@ class CompleteGameDesignPlanner:
                     batch = _production_batch(raw)
                 except Exception:
                     continue
-                if batch.batch_id in catalog:
-                    continue  # skip duplicate, not crash
+                # Auto-rename duplicate IDs to preserve content
+                original_id = batch.batch_id
+                suffix = 2
+                while batch.batch_id in catalog:
+                    batch = _ProductionBatch(
+                        batch_id=f"{original_id}_{suffix}",
+                        scope=batch.scope,
+                        depends_on_batches=batch.depends_on_batches,
+                        deliverables=batch.deliverables,
+                        exports=batch.exports,
+                    )
+                    suffix += 1
                 catalog.add(batch.batch_id)
                 result.append(batch)
             if complete or (not next_cursor and not raw_batches):
                 break
             if next_cursor in seen_cursors:
-                break  # pagination stalled, take what we have
+                break
             seen_cursors.add(next_cursor)
+            existing_ids = sorted(catalog._ids) if hasattr(catalog, '_ids') else sorted(b.batch_id for b in result)
             request = {
                 "planning_context": context,
                 "planning_context_receipt": context_receipt,
                 "known_batch_catalog": catalog.receipt(),
+                "already_generated_batch_ids": existing_ids,
                 "cursor": next_cursor,
                 "contract": _PRODUCTION_OUTLINE_CONTRACT,
             }
@@ -633,9 +654,10 @@ class CompleteGameDesignPlanner:
                 self.router,
                 system_prompt=(
                     "Continue the production outline. Return exactly one "
-                    "JSON object. Generate exactly 1 production batch per page for maximum precision and depth. "
+                    "JSON object. Generate exactly 1 NEW production batch. "
+                    f"These batch IDs are ALREADY GENERATED and must NOT be reused: {existing_ids}. "
+                    "Pick a completely different batch_id. "
                     "If more batches remain, set complete=false and supply a next_cursor. "
-                    "Do not repeat a batch already listed in known_batch_catalog. "
                     "Every batch scope must be self-contained, and deliverables are an exact "
                     "completion checklist rather than examples."
                 ),
