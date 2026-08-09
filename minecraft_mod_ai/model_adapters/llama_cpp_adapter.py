@@ -69,16 +69,35 @@ class LlamaCppAdapter(ModelAdapter):
                 gc.collect()
 
             if LlamaCppAdapter._llm is None:
-                print(f"⚙️ [llama.cpp] Initializing GGUF model with GPU offloading (n_gpu_layers=-1)...", flush=True)
+                print(f"⚙️ [llama.cpp] Initializing GGUF model: {model_path}", flush=True)
                 ctx_len = min(cfg.max_context, 16384)
-                LlamaCppAdapter._llm = Llama(
-                    model_path=model_path,
-                    n_gpu_layers=-1,  # Offload max possible layers to T4 GPU VRAM
-                    n_ctx=ctx_len,
-                    verbose=False,
-                )
+
+                requested_gpu_layers = cfg.extra.get("n_gpu_layers", -1)
+                attempts = [requested_gpu_layers]
+                for fallback in [24, 16, 8, 0]:
+                    if fallback not in attempts:
+                        attempts.append(fallback)
+
+                last_err = None
+                for gpu_layers in attempts:
+                    try:
+                        print(f"⚙️ [llama.cpp] Attempting load with n_gpu_layers={gpu_layers}...", flush=True)
+                        LlamaCppAdapter._llm = Llama(
+                            model_path=model_path,
+                            n_gpu_layers=gpu_layers,
+                            n_ctx=ctx_len,
+                            verbose=True,
+                        )
+                        print(f"✅ [llama.cpp] Model successfully loaded (n_gpu_layers={gpu_layers}).", flush=True)
+                        break
+                    except Exception as err:
+                        print(f"⚠️ [llama.cpp] Failed to load with n_gpu_layers={gpu_layers}: {err}", flush=True)
+                        last_err = err
+
+                if LlamaCppAdapter._llm is None:
+                    raise last_err or RuntimeError("Failed to load GGUF model with any GPU offload setting.")
+
                 LlamaCppAdapter._current_model_path = model_path
-                print(f"✅ [llama.cpp] Model successfully loaded.", flush=True)
 
             llm = LlamaCppAdapter._llm
             messages = [dict(m) for m in request.messages]
