@@ -29,7 +29,8 @@ REQUIRED_ROLES = frozenset(
 )
 ALLOWED_ADAPTERS = frozenset(
     {
-        "vllm",
+        "transformers_text",
+        "transformers_multimodal",
         "openai_compatible",
         "image_diffusion",
         "speech",
@@ -111,8 +112,6 @@ class ModelRegistry:
         if not isinstance(raw, dict):
             raise ModelConfigurationError(f"Role {role!r} must be a mapping.")
         adapter = str(raw.get("adapter", "")).strip()
-        if adapter in ("transformers_multimodal", "transformers_text"):
-            adapter = "vllm"
         if adapter not in ALLOWED_ADAPTERS:
             raise ModelConfigurationError(
                 f"Role {role!r} uses unsupported adapter {adapter!r}."

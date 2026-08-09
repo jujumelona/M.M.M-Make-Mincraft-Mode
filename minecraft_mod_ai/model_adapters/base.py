@@ -112,13 +112,8 @@ def preflight_cuda(config: AdapterConfig) -> None:
             model_id=config.model_id,
             cause="CUDA is required by this local profile but no CUDA device is available.",
         )
-    _release_cuda()
     free_bytes, _ = torch.cuda.mem_get_info()
     free_mb = int(free_bytes / (1024 * 1024))
-    if free_mb < config.min_free_vram_mb:
-        _release_cuda()
-        free_bytes, _ = torch.cuda.mem_get_info()
-        free_mb = int(free_bytes / (1024 * 1024))
     if free_mb < config.min_free_vram_mb:
         raise HardwarePreflightError(
             role=config.role,

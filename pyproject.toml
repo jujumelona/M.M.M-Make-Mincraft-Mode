@@ -28,7 +28,6 @@ local-model = [
   "Pillow>=10.4,<13",
   "safetensors>=0.4,<1",
   "transformers>=4.52.0",
-  "vllm>=0.6.0; sys_platform == 'linux'",
 ]
 qwen-fastpath = [
   "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6; sys_platform == 'linux'",
