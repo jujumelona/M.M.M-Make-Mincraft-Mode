@@ -22,6 +22,7 @@ from .local_ai_sidecar_generator import (
 from .model_router import ModelRouter
 from .project_edit import ProjectEditError, inspect_fabric_project
 from .project_index import ProjectIndex
+from .research_ledger import is_research_shard, write_research_shard
 from .production_contract import (
     evaluate_quality_contract,
     persist_quality_report,
@@ -68,6 +69,7 @@ _REQUIRED_GATE_TO_EVIDENCE = {
     "runtime animation review": "runtime_visual",
     "visual review": "visual",
     "client gui and validated network action test": "playtest_visual",
+    "research ledger integrity": "research_ledger",
 }
 
 
@@ -567,6 +569,7 @@ class CompleteProductionOrchestrator:
                     asset_receipt,
                     audio_receipt,
                 ),
+                project_root=project_root,
                 source_validation=source_report,
                 jdt_receipt=jdt_receipt,
                 build_report=build,
@@ -820,6 +823,9 @@ class CompleteProductionOrchestrator:
 
         spec = approved.base_proposal.spec
         module_lookup = {module.module_id: module for module in ordered}
+        research_modules = tuple(
+            module for module in ordered if is_research_shard(module)
+        )
         asset_lookup = {item.asset_id: item for item in approved.assets}
         audio_lookup = {item.sound_id: item for item in approved.audio}
         extended_kinds = {
@@ -856,6 +862,7 @@ class CompleteProductionOrchestrator:
             ).generate(
                 project_root,
                 module=module,
+                research_modules=research_modules,
                 minecraft_version=spec.platform.minecraft_version,
                 loader=spec.platform.loader,
                 mappings=spec.platform.yarn_mappings,
@@ -868,10 +875,21 @@ class CompleteProductionOrchestrator:
             stage = str(node.payload.get("generation_stage", ""))
             receipts: list[dict[str, Any]] = []
             if stage == "content":
+                research_shards = [
+                    module for module in members if is_research_shard(module)
+                ]
+                # Research pages are code-owned data. Materialize them before
+                # any model-backed module in this work node, and never ask a
+                # coder model to invent Java from an evidence ledger.
+                receipts.extend(
+                    write_research_shard(project_root, module=module)
+                    for module in research_shards
+                )
                 deterministic = [
                     module
                     for module in members
                     if module.kind in extended_kinds
+                    and module not in research_shards
                 ]
                 if deterministic:
                     receipts.append(
@@ -905,6 +923,7 @@ class CompleteProductionOrchestrator:
                     for module in members
                     if module.kind not in extended_kinds
                     and module not in sidecars
+                    and module not in research_shards
                 )
             elif stage == "system":
                 for pack_id, pack_modules in _system_groups(members).items():
@@ -1549,9 +1568,15 @@ class CompleteProductionOrchestrator:
         if receipt.get("status") == "SKIPPED":
             return True
         raw_paths: list[str] = []
+        research_outputs: list[dict[str, Any]] = []
 
         def collect(value: Any) -> None:
             if isinstance(value, dict):
+                if (
+                    value.get("schema_version")
+                    == "mmm/research-ledger-write-receipt-v1"
+                ):
+                    research_outputs.append(value)
                 for key, nested in value.items():
                     if key in {"files", "generated_files"} and isinstance(nested, list):
                         raw_paths.extend(
@@ -1564,6 +1589,20 @@ class CompleteProductionOrchestrator:
                     collect(nested)
 
         collect(receipt)
+        for research in research_outputs:
+            raw = research.get("target_path")
+            expected = research.get("sha256")
+            if not isinstance(raw, str) or not isinstance(expected, str):
+                return False
+            path = (project_root / raw).resolve()
+            try:
+                path.relative_to(project_root.resolve())
+            except ValueError:
+                return False
+            if not path.is_file() or path.is_symlink():
+                return False
+            if CompleteProductionOrchestrator._file_hash(path) != expected:
+                return False
         if not raw_paths:
             return CompleteProductionOrchestrator._valid_project_root(project_root)
         for raw in raw_paths:
@@ -1604,6 +1643,7 @@ class CompleteProductionOrchestrator:
         proposal: CompleteProposal,
         *,
         generated_receipts: Iterable[Any],
+        project_root: Path | None = None,
         source_validation: dict[str, Any] | None,
         jdt_receipt: dict[str, Any] | None,
         build_report: dict[str, Any] | None,
@@ -1619,6 +1659,7 @@ class CompleteProductionOrchestrator:
         ``required_gates`` string is never treated as proof that the gate ran.
         """
 
+        receipt_values = tuple(generated_receipts)
         requirements: set[tuple[str, str]] = {
             (module.module_id, gate.strip())
             for module in proposal.modules
@@ -1626,8 +1667,15 @@ class CompleteProductionOrchestrator:
             if gate.strip()
         }
 
+        research_ledger_receipts: list[dict[str, Any]] = []
+
         def collect(value: Any, owner: str = "generated") -> None:
             if isinstance(value, dict):
+                if (
+                    value.get("schema_version")
+                    == "mmm/research-ledger-write-receipt-v1"
+                ):
+                    research_ledger_receipts.append(value)
                 local_owner = next(
                     (
                         str(value[key])
@@ -1650,8 +1698,48 @@ class CompleteProductionOrchestrator:
                 for nested in value:
                     collect(nested, owner)
 
-        for receipt in generated_receipts:
+        for receipt in receipt_values:
             collect(receipt)
+
+        expected_research = {
+            module.module_id: (
+                str(module.config.get("receipt", {}).get("shard_sha256", "")),
+                str(module.config.get("receipt", {}).get("facts_sha256", "")),
+            )
+            for module in proposal.modules
+            if (
+                module.kind == "integration"
+                and module.config.get("integration_type")
+                == "mmm_research_shard"
+            )
+        }
+        def research_file_matches(receipt: dict[str, Any]) -> bool:
+            if project_root is None:
+                return False
+            raw = receipt.get("target_path")
+            expected = receipt.get("sha256")
+            if not isinstance(raw, str) or not isinstance(expected, str):
+                return False
+            path = (project_root / raw).resolve()
+            try:
+                path.relative_to(project_root.resolve())
+            except ValueError:
+                return False
+            return (
+                path.is_file()
+                and not path.is_symlink()
+                and CompleteProductionOrchestrator._file_hash(path) == expected
+            )
+
+        passed_research = {
+            str(receipt.get("module_id")): (
+                str(receipt.get("shard_sha256", "")),
+                str(receipt.get("corpus_sha256", "")),
+            )
+            for receipt in research_ledger_receipts
+            if receipt.get("status") in {"WRITTEN", "VERIFIED_EXISTING"}
+            and research_file_matches(receipt)
+        }
 
         gradle_passed = (
             isinstance(build_report, dict)
@@ -1700,6 +1788,11 @@ class CompleteProductionOrchestrator:
             "visual": (
                 isinstance(visual_receipt, dict)
                 and visual_receipt.get("status") == "PASS"
+            ),
+            "research_ledger": bool(expected_research)
+            and all(
+                passed_research.get(module_id) == hashes
+                for module_id, hashes in expected_research.items()
             ),
         }
         evidence["runtime_visual"] = (

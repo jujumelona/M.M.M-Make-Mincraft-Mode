@@ -369,8 +369,7 @@ def _fallback_domains(
                 "gameplay_reference",
                 "minecraft_api",
                 "dependency",
-                "visual_reference",
-                "audio",
+                "compatibility",
                 "license",
             ),
             (
@@ -378,12 +377,31 @@ def _fallback_domains(
                 "project_rag",
                 "modrinth",
                 "github",
-                "openverse_images",
-                "openverse_audio",
                 "wikipedia",
             ),
         )
     ]
+    media = _requested_media_routes(prompt, game_design)
+    for index, statement in enumerate(media["visual"]):
+        entries.append(
+            (
+                "requested_visual" if index == 0 else f"requested_visual_{index + 1}",
+                "Resolve only the visual media explicitly requested by the design.",
+                "Requested visual direction: " + statement,
+                _visual_evidence_kinds(statement),
+                ("project_rag", "github", "openverse_images"),
+            )
+        )
+    for index, statement in enumerate(media["audio"]):
+        entries.append(
+            (
+                "requested_audio" if index == 0 else f"requested_audio_{index + 1}",
+                "Resolve only the sound, music or voice media explicitly requested by the design.",
+                "Requested audio direction: " + statement,
+                ("audio", "compatibility", "license"),
+                ("official_docs", "project_rag", "github", "openverse_audio"),
+            )
+        )
     technology_kinds = _requested_technology_kinds(prompt)
     if technology_kinds:
         entries.append(
@@ -458,13 +476,14 @@ def _fallback_domains(
         if not isinstance(value, dict):
             continue
         statement = str(value.get("brief") or value.get("id") or "")
+        asset_kind = str(value.get("kind") or "")
         entries.append(
             (
                 f"visual_{index + 1}",
                 "Resolve one requested visual, model or interface family.",
                 statement,
-                ("visual_reference", "texture", "model_3d", "animation", "license"),
-                ("project_rag", "github", "openverse_images", "blockbench"),
+                _visual_evidence_kinds(statement, asset_kind=asset_kind),
+                ("project_rag", "github", "openverse_images"),
             )
         )
     for index, value in enumerate(game_design.get("acceptance_tests", [])):
@@ -497,6 +516,141 @@ def _fallback_domains(
             )
         )
     return tuple(domains)
+
+
+def _requested_media_routes(
+    prompt: str,
+    game_design: dict[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    """Return explicit media requests without inventing presentation categories.
+
+    The generic request domain must stay media-neutral.  Otherwise words injected
+    by the research router itself (for example ``audio`` or
+    ``openverse_audio``) activate downstream quality gates even when a user only
+    asked for a simple item.  Asset entries are routed independently below, so
+    this helper considers the prompt plus non-asset design text.
+    """
+
+    sources = [prompt.strip()]
+    sources.extend(
+        value
+        for path, value in _leaf_strings(game_design, "game_design")
+        if not path.startswith("game_design.assets[")
+    )
+    routed: dict[str, tuple[str, ...]] = {}
+    for family in ("visual", "audio"):
+        matching = tuple(
+            dict.fromkeys(
+                source
+                for source in sources
+                if source and _contains_requested_media(source, family=family)
+            )
+        )
+        routed[family] = matching
+    return routed
+
+
+def _contains_requested_media(text: str, *, family: str) -> bool:
+    folded = text.casefold()
+    terms = {
+        "visual": (
+            "visual",
+            "texture",
+            "sprite",
+            "image",
+            "icon",
+            "pixel art",
+            "art style",
+            "3d model",
+            "3d-model",
+            "animation",
+            "shader",
+            "particle",
+            "render",
+            "gui",
+            "ui",
+            "시각",
+            "텍스처",
+            "이미지",
+            "아이콘",
+            "픽셀 아트",
+            "아트 스타일",
+            "3d 모델",
+            "3d모델",
+            "애니메이션",
+            "셰이더",
+            "파티클",
+        ),
+        "audio": (
+            "audio",
+            "sound",
+            "soundtrack",
+            "music",
+            "voice",
+            "speech",
+            "spoken",
+            "microphone",
+            "asr",
+            "stt",
+            "tts",
+            "음향",
+            "소리",
+            "효과음",
+            "음악",
+            "음성",
+            "목소리",
+            "마이크",
+            "보이스",
+        ),
+    }[family]
+    return any(_contains_term(folded, term) for term in terms)
+
+
+def _contains_term(text: str, term: str) -> bool:
+    """Match ASCII identifiers as tokens while retaining natural CJK matching."""
+
+    if term.isascii() and re.fullmatch(r"[a-z0-9_]+", term):
+        return bool(re.search(rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])", text))
+    return term in text
+
+
+def _visual_evidence_kinds(
+    statement: str,
+    *,
+    asset_kind: str = "",
+) -> tuple[str, ...]:
+    """Select visual evidence families from the requested asset, not a template."""
+
+    folded = statement.casefold()
+    kind = asset_kind.casefold().strip()
+    evidence: list[str] = ["visual_reference"]
+    if kind in {"item", "block", "gui", "environment"} or any(
+        _contains_term(folded, term)
+        for term in (
+            "texture",
+            "sprite",
+            "image",
+            "icon",
+            "pixel art",
+            "텍스처",
+            "이미지",
+            "아이콘",
+            "픽셀 아트",
+        )
+    ):
+        evidence.append("texture")
+    if kind == "entity" or any(
+        _contains_term(folded, term)
+        for term in ("model", "3d", "mesh", "모델", "메시", "3차원")
+    ):
+        evidence.append("model_3d")
+    if any(
+        _contains_term(folded, term)
+        for term in ("animation", "animated", "animate", "애니메이션", "움직임")
+    ):
+        evidence.append("animation")
+    evidence.append("license")
+    return tuple(dict.fromkeys(evidence))
 
 
 def _validate_domain_graph(domains: tuple[ResearchDomain, ...]) -> None:

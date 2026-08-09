@@ -7,7 +7,7 @@ import pytest
 import minecraft_mod_ai.complete_planner as planner_module
 from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
-    _implementation_design_view,
+    _implementation_prompt,
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
@@ -394,7 +394,7 @@ def test_planner_sidecar_uses_capability_from_later_technology_page(
     assert "late_speech_synthesis" in router.prompt
 
 
-def test_model_planning_view_is_bounded_but_reports_full_aggregate_counts() -> None:
+def test_actual_planning_prompt_is_bounded_but_reports_full_aggregate_counts() -> None:
     requirements = [
         {
             "requirement_id": f"same_kind_{index}",
@@ -412,7 +412,8 @@ def test_model_planning_view_is_bounded_but_reports_full_aggregate_counts() -> N
         }
         for index in range(500)
     ]
-    view = _implementation_design_view(
+    rendered = _implementation_prompt(
+        "Build every requested large-system capability.",
         {
             "title": "Large",
             "_technology_radar": {
@@ -425,16 +426,23 @@ def test_model_planning_view_is_bounded_but_reports_full_aggregate_counts() -> N
                 "pages": pages,
                 "errors": [],
             },
-        }
+        },
     )
+    encoded_context = rendered.split(
+        "Compact authoritative planning context:\n", 1
+    )[1].split("\n\nCreate only the paginated production outline.", 1)[0]
+    view = json.loads(encoded_context)["research_outline"]
 
-    technology = view["_technology_radar"]
-    ecosystem = view["_ecosystem_discovery"]
+    technology = view["technology_radar"]
+    ecosystem = view["ecosystem"]
     assert technology["requirement_count"] == 500
     assert technology["capability_counts"] == {"ai_inference": 500}
     assert len(technology["requirements"]) == 1
     assert technology["requirement_view_complete"] is False
-    assert ecosystem["page_count"] == 500
-    assert len(ecosystem["representative_pages"]) == 1
-    assert ecosystem["page_view_complete"] is False
-    assert "github:owner/repo-499" not in json.dumps(view)
+    assert technology["requirements_receipt"]["byte_length"] > 0
+    assert len(technology["requirements_receipt"]["sha256"]) == 64
+    assert ecosystem["route_count"] == 500
+    assert ecosystem["representative_candidate_count"] == 1
+    assert "github:owner/repo-0" in rendered
+    assert "github:owner/repo-499" not in rendered
+    assert len(rendered.encode("utf-8")) < 12_000

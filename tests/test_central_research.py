@@ -9,6 +9,7 @@ from minecraft_mod_ai.central_research import (
     normalize_research_brief,
     retrieve_domain_evidence,
 )
+from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.retrieval import RetrievalHit, RetrievalReceipt
 from minecraft_mod_ai.spec import SpecValidationError
 
@@ -139,6 +140,100 @@ def test_fallback_is_request_derived_without_genre_content_injection(
     assert all(system.casefold() in serialized for system in systems)
     assert not {"boss", "arena", "village", "dungeon"} & set(
         serialized.replace(".", "").replace(",", "").split()
+    )
+
+
+def test_simple_decorative_item_does_not_invent_audio_research_or_quality() -> None:
+    prompt = "Add one decorative copper lantern item."
+    design = {
+        "title": "Copper lantern",
+        "pitch": "A decorative inventory item.",
+        "core_loop": ["Craft and display the lantern."],
+        "progression": [],
+        "combat": {},
+        "mod_context": {},
+        "modules": [],
+        "assets": [
+            {
+                "id": "copper_lantern",
+                "kind": "item",
+                "brief": "Original copper lantern item texture.",
+            }
+        ],
+        "acceptance_tests": ["The lantern item renders in the inventory."],
+    }
+
+    brief = normalize_research_brief(prompt, design)
+    providers = {
+        provider
+        for domain in brief["domains"]
+        for provider in domain["providers"]
+    }
+    evidence_kinds = {
+        evidence_kind
+        for domain in brief["domains"]
+        for evidence_kind in domain["evidence_kinds"]
+    }
+
+    assert "requested_audio" not in {
+        domain["domain_id"] for domain in brief["domains"]
+    }
+    assert "openverse_audio" not in providers
+    assert "audio" not in evidence_kinds
+    assert "openverse_images" in providers  # the declared item texture is visual
+
+    compiled = compile_production_contract(
+        requested_prompt=prompt,
+        game_design=design,
+        research_brief=brief,
+        modules=[
+            {
+                "module_id": "copper_lantern",
+                "kind": "item",
+                "config": {},
+                "depends_on": [],
+                "required_gates": [],
+            }
+        ],
+        acceptance_tests=[],
+    )
+    dimensions = {
+        item["dimension_id"]
+        for item in compiled.contract["quality_dimension_catalog"]
+    }
+    assert "audio" not in dimensions
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Add an original bell sound effect when the item is used.",
+        "Add original background music for the requested feature.",
+        "Add an original voice for the companion.",
+    ],
+)
+def test_explicit_sound_music_and_voice_keep_audio_research(prompt: str) -> None:
+    brief = normalize_research_brief(prompt, {})
+    audio_domain = next(
+        domain
+        for domain in brief["domains"]
+        if domain["domain_id"] == "requested_audio"
+    )
+
+    assert "audio" in audio_domain["evidence_kinds"]
+    assert "openverse_audio" in audio_domain["providers"]
+
+
+def test_generic_request_does_not_invent_visual_media_provider() -> None:
+    brief = normalize_research_brief(
+        "Add a server command that reports the current tick count.",
+        {"assets": []},
+    )
+
+    assert all(
+        "openverse_images" not in domain["providers"]
+        and "visual_reference" not in domain["evidence_kinds"]
+        for domain in brief["domains"]
     )
 
 

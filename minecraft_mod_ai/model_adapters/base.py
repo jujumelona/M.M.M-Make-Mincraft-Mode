@@ -37,6 +37,11 @@ class AdapterConfig:
     quantization: str | None = None
     torch_dtype: str = "auto"
     max_context: int = 8192
+    # Hardware-safe prefill budget for one paginated request. Zero means the
+    # native context window is the only bound. This is deliberately separate
+    # from max_context: projects grow through pages instead of one quadratic
+    # attention allocation.
+    max_input_tokens: int = 0
     max_new_tokens: int = 1200
     min_free_vram_mb: int = 0
     exclusive_gpu: bool = False
@@ -65,7 +70,12 @@ class ModelAdapter(ABC):
         _release_cuda()
 
 
-def require_package(distribution: str, *, minimum: str | None = None) -> None:
+def require_package(
+    distribution: str,
+    *,
+    minimum: str | None = None,
+    maximum_exclusive: str | None = None,
+) -> None:
     try:
         installed = importlib.metadata.version(distribution)
     except importlib.metadata.PackageNotFoundError as exc:
@@ -75,6 +85,13 @@ def require_package(distribution: str, *, minimum: str | None = None) -> None:
     if minimum is not None and Version(installed) < Version(minimum):
         raise ModelConfigurationError(
             f"{distribution}>={minimum} is required; found {installed}."
+        )
+    if (
+        maximum_exclusive is not None
+        and Version(installed) >= Version(maximum_exclusive)
+    ):
+        raise ModelConfigurationError(
+            f"{distribution}<{maximum_exclusive} is required; found {installed}."
         )
 
 

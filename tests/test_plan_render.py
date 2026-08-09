@@ -67,6 +67,35 @@ def test_plan_does_not_suggest_unrequested_map_or_encounter_shapes() -> None:
     assert "arena" not in text.lower()
 
 
+def test_internal_research_shards_do_not_advertise_mod_integration() -> None:
+    text = render_complete_plan(
+        requested_prompt="Create a tiny decorative lantern mod.",
+        game_design={
+            "title": "Warm Lanterns",
+            "pitch": "Decorative lights only.",
+            "core_loop": ["Craft and place a lantern"],
+            "progression": [],
+            "mod_context": {
+                "vanilla_integration": [],
+                "compatibility_targets": [],
+            },
+            "modules": [],
+        },
+        modules=(
+            ProductionModule("warm_lantern", "block"),
+            ProductionModule(
+                "mmm_research_ledger",
+                "integration",
+                {"integration_type": "mmm_research_shard"},
+            ),
+        ),
+        acceptance_tests=("The lantern is placeable.",),
+    )
+
+    assert "blocks" in text
+    assert "integration with other mods" not in text
+
+
 def test_plan_surfaces_requested_art_direction_without_inventing_gameplay() -> None:
     text = render_complete_plan(
         requested_prompt="Create a moon relic visual mod.",

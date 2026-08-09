@@ -9,6 +9,7 @@ from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _SIDECAR_EXECUTION_CAPABILITIES,
     _ensure_technology_sidecar,
+    _implementation_prompt,
 )
 from minecraft_mod_ai.complete_spec import CompleteProposal, ProductionModule
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
@@ -79,6 +80,86 @@ def test_radar_capabilities_create_one_strict_sidecar_and_derived_gates() -> Non
         in sidecar.required_gates
     )
     assert not any("voice_transport" in gate for gate in sidecar.required_gates)
+
+
+def test_prompt_bounds_duplicate_capability_details_but_sidecar_keeps_all_gates() -> None:
+    radar = {
+        "schema_version": "mmm/technology-radar-aggregate-v1",
+        "radar_sha256": "sha256:" + "a" * 64,
+        "target": {"minecraft_version": "1.20.1", "loader": "fabric"},
+        "target_evidence_policy": {
+            "official_exact_version_receipt_required": True,
+            "receipt_schema": "mmm/official-target-evidence-v1",
+        },
+        "classification": {"ai_requested": True},
+        "voice_contract": {"activated": False},
+        "collection_receipt": {
+            "schema_version": "mmm/technology-page-collection-receipt-v1",
+            "page_count": 2,
+            "pages_sha256": "sha256:" + "b" * 64,
+        },
+        "requirements": [
+            {
+                "requirement_id": "npc_ai_inference",
+                "domain_id": "npc_dialogue",
+                "capability_kind": "ai_inference",
+                "allowed_topologies": ["local_sidecar"],
+                "authority": {"game_state_mutation": "server_only"},
+                "hardware": {"benchmark_on_declared_target": True},
+                "latency": {"real_time_required": True},
+                "privacy": {"raw_input_sensitive": False},
+                "offline_required": False,
+                "required_gates": ["npc_gate"],
+                "required_tests": ["npc_test"],
+                "deterministic_fallback": "Use scripted NPC dialogue.",
+            },
+            {
+                "requirement_id": "quest_ai_inference",
+                "domain_id": "quest_generation",
+                "capability_kind": "ai_inference",
+                "allowed_topologies": ["local_sidecar"],
+                "authority": {"game_state_mutation": "server_only"},
+                "hardware": {"benchmark_on_declared_target": True},
+                "latency": {"real_time_required": False},
+                "privacy": {"raw_input_sensitive": False},
+                "offline_required": True,
+                "required_gates": ["quest_gate"],
+                "required_tests": ["quest_test"],
+                "deterministic_fallback": "Use authored quest templates.",
+            },
+        ],
+    }
+
+    rendered = _implementation_prompt(
+        "Add NPC dialogue and generated quests.",
+        {"title": "Two AI systems", "_technology_radar": radar},
+    )
+    encoded_context = rendered.split(
+        "Compact authoritative planning context:\n", 1
+    )[1].split("\n\nCreate only the paginated production outline.", 1)[0]
+    technology = json.loads(encoded_context)["research_outline"][
+        "technology_radar"
+    ]
+
+    assert technology["capability_counts"] == {"ai_inference": 2}
+    assert technology["requirement_count"] == 2
+    assert technology["representative_requirement_count"] == 1
+    assert technology["requirement_view_complete"] is False
+    assert technology["collection_receipt"]["page_count"] == 2
+    assert technology["requirements"][0]["requirement_id"] == "npc_ai_inference"
+    assert "quest_ai_inference" not in rendered
+    assert len(radar["requirements"]) == 2
+
+    sidecar = _sidecars(
+        _ensure_technology_sidecar((), radar, _base_proposal())
+    )[0]
+    assert "technology:ai_inference:gate:npc_gate" in sidecar.required_gates
+    assert "technology:ai_inference:gate:quest_gate" in sidecar.required_gates
+    assert "technology:ai_inference:test:quest_test" in sidecar.required_gates
+    assert (
+        "technology:ai_inference:fallback:Use authored quest templates."
+        in sidecar.required_gates
+    )
 
 
 def test_existing_duplicate_sidecars_collapse_and_dependencies_are_remapped() -> None:

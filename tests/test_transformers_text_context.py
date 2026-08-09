@@ -74,8 +74,11 @@ class _FakeOutput:
 
 
 class _FakeModel:
+    load_kwargs: dict[str, object] = {}
+
     @classmethod
-    def from_pretrained(cls, *_args, **_kwargs):
+    def from_pretrained(cls, *_args, **kwargs):
+        cls.load_kwargs = dict(kwargs)
         return cls()
 
     def parameters(self):
@@ -154,7 +157,7 @@ def test_text_adapter_rejects_context_overflow_without_losing_sentinel(
         )
 
     assert isinstance(raised.value.cause, ModelConfigurationError)
-    assert "exceeds max_context=8 (9 tokens)" in str(raised.value)
+    assert "9 input + 2 reserved output > max_context=8" in str(raised.value)
     tokenizer = _FakeTokenizer.instance
     assert tokenizer is not None
     assert tokenizer.rendered.endswith(sentinel)
@@ -165,7 +168,7 @@ def test_text_adapter_rejects_context_overflow_without_losing_sentinel(
 def test_text_adapter_accepts_a_bounded_page_at_context_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _FakeTokenizer.token_count = 8
+    _FakeTokenizer.token_count = 6
     _install_fake_runtime(monkeypatch, model=_FakeModel)
     adapter = text_adapter.TransformersTextAdapter(
         AdapterConfig(
@@ -192,3 +195,6 @@ def test_text_adapter_accepts_a_bounded_page_at_context_limit(
         "return_tensors": "pt",
         "truncation": False,
     }
+    assert _FakeModel.load_kwargs["dtype"] == "auto"
+    assert _FakeModel.load_kwargs["attn_implementation"] == "sdpa"
+    assert "torch_dtype" not in _FakeModel.load_kwargs

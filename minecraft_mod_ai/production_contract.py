@@ -22,14 +22,6 @@ _MAX_DIRECT_IMPLEMENTATION_REFS = 8
 _MAX_MATCH_TERMS = 16
 _MAX_POSTING_SCAN = 32
 _PLATEAU_THRESHOLD = 3
-_UNBOUND_GAME_DESIGN_KEYS = frozenset(
-    {
-        "_production_contract",
-        "_mod_development_methods",
-        "_product_scope",
-    }
-)
-
 _BASELINE_DIMENSIONS = (
     "correctness",
     "build",
@@ -258,7 +250,7 @@ def bound_game_design(game_design: Mapping[str, Any]) -> dict[str, Any]:
     return {
         str(key): value
         for key, value in game_design.items()
-        if str(key) not in _UNBOUND_GAME_DESIGN_KEYS
+        if not str(key).startswith("_")
     }
 
 
@@ -328,7 +320,16 @@ def compile_production_contract(
         requested_prompt=requested_prompt,
         game_design=design_snapshot,
         research_brief=research_snapshot,
-        modules=normalized_modules,
+        modules=[
+            item
+            for item in normalized_modules
+            if not (
+                item["kind"] == "integration"
+                and isinstance(item.get("config"), Mapping)
+                and item["config"].get("integration_type")
+                == "mmm_research_shard"
+            )
+        ],
         assets=normalized_assets,
         audio=normalized_audio,
     )
@@ -1185,7 +1186,15 @@ def _implementation_catalog(
     catalog: list[dict[str, str]] = []
     search: dict[str, set[str]] = {}
 
-    def add(ref: str, source_kind: str, identity: str, kind: str, value: Any) -> None:
+    def add(
+        ref: str,
+        source_kind: str,
+        identity: str,
+        kind: str,
+        value: Any,
+        *,
+        searchable: bool = True,
+    ) -> None:
         catalog.append(
             {
                 "implementation_ref": ref,
@@ -1195,9 +1204,11 @@ def _implementation_catalog(
                 "content_sha256": _canonical_sha256(value),
             }
         )
-        search[ref] = _tokens(
-            f"{source_kind} {identity} {kind} " + " ".join(_scalar_text(value))
-        )
+        if searchable:
+            search[ref] = _tokens(
+                f"{source_kind} {identity} {kind} "
+                + " ".join(_scalar_text(value))
+            )
 
     for item in modules:
         add(
@@ -1206,6 +1217,12 @@ def _implementation_catalog(
             item["module_id"],
             item["kind"],
             item,
+            searchable=not (
+                item["kind"] == "integration"
+                and isinstance(item.get("config"), Mapping)
+                and item["config"].get("integration_type")
+                == "mmm_research_shard"
+            ),
         )
     for item in assets:
         add(

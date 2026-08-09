@@ -9,7 +9,8 @@ profiles:
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
-        max_new_tokens: 4096
+        max_input_tokens: 6144
+        max_new_tokens: 2048
         min_free_vram_mb: 6500
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
@@ -41,6 +42,7 @@ profiles:
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
+        max_input_tokens: 6144
         max_new_tokens: 1400
         min_free_vram_mb: 6500
       embedding:
@@ -79,7 +81,8 @@ profiles:
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
-        max_new_tokens: 4096
+        max_input_tokens: 6144
+        max_new_tokens: 2048
         min_free_vram_mb: 10500
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
@@ -111,6 +114,7 @@ profiles:
         quantization: bnb_4bit
         torch_dtype: float16
         max_context: 262144
+        max_input_tokens: 6144
         max_new_tokens: 1400
         min_free_vram_mb: 10500
       embedding:

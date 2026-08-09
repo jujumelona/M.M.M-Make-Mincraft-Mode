@@ -27,7 +27,7 @@ CELL_SPECS = [
         "configuration",
         """# @title 1. 만들 모드 입력
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." # @param {type:"string"}
-MODEL_PROFILE = "t4_quality" # @param ["t4_quality", "t4_local", "remote_quality"]
+MODEL_PROFILE = "t4_local" # @param ["t4_local", "t4_quality", "remote_quality"]
 REMOTE_BASE_URL = "" # @param {type:"string"}
 REMOTE_TEXT_MODEL = "" # @param {type:"string"}
 REMOTE_IMAGE_MODEL = "" # @param {type:"string"}
@@ -55,18 +55,58 @@ if RUN_RUNTIME and not ACCEPT_EULA:
         "code",
         "setup",
         """# @title 2. GitHub 최신 main 설치
-import os
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 transformers_was_loaded = "transformers" in sys.modules
+engine_was_loaded = any(
+    name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai.")
+    for name in sys.modules
+)
+loaded_engine_module = sys.modules.get("minecraft_mod_ai")
+engine_module_file = getattr(loaded_engine_module, "__file__", "") or ""
 REPO_DIR = Path("/content/M.M.M-Make-Mincraft-Mode")
+EXPECTED_REPOSITORY = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode.git"
+previous_commit = ""
 if (REPO_DIR / ".git").is_dir():
-    subprocess.run(["git", "-C", str(REPO_DIR), "fetch", "origin", "main"], check=True)
+    origin_url = subprocess.check_output(
+        ["git", "-C", str(REPO_DIR), "remote", "get-url", "origin"],
+        text=True,
+    ).strip()
+    normalized_origin = origin_url.rstrip("/").removesuffix(".git")
+    normalized_expected = EXPECTED_REPOSITORY.removesuffix(".git")
+    if normalized_origin != normalized_expected:
+        raise RuntimeError(
+            "Existing Colab checkout is not the official M.M.M GitHub repository. "
+            "Remove that checkout and rerun setup cell 2."
+        )
+    previous_commit = subprocess.check_output(
+        ["git", "-C", str(REPO_DIR), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_DIR),
+            "fetch",
+            "origin",
+            "+main:refs/remotes/origin/main",
+        ],
+        check=True,
+    )
     subprocess.run(["git", "-C", str(REPO_DIR), "checkout", "main"], check=True)
     subprocess.run(
-        ["git", "-C", str(REPO_DIR), "pull", "--ff-only", "origin", "main"],
+        [
+            "git",
+            "-C",
+            str(REPO_DIR),
+            "merge",
+            "--ff-only",
+            "refs/remotes/origin/main",
+        ],
         check=True,
     )
 elif REPO_DIR.exists():
@@ -80,225 +120,68 @@ else:
             "1",
             "--branch",
             "main",
-            "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode.git",
+            EXPECTED_REPOSITORY,
             str(REPO_DIR),
         ],
         check=True,
     )
 
-os.chdir(REPO_DIR)
-subprocess.run(
-    [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "-q",
-        "-e",
-        ".[ui,local-model,rag,image,speech,production-audio,training]",
-    ],
-    check=True,
-)
-
-# Qwen3.5's optimized Transformers path needs both FLA's gated-delta
-# kernels and causal-conv1d. Keep this Linux/CUDA-only dependency out of
-# ordinary desktop installs, but require and verify it for local Colab runs.
-if MODEL_PROFILE in {"t4_quality", "t4_local"}:
-    import importlib
-    from importlib.metadata import version as package_version
-
-    import torch
-    from packaging.version import Version
-
-    if not torch.cuda.is_available():
-        raise RuntimeError(
-            f"{MODEL_PROFILE} requires a Colab GPU runtime; CUDA is unavailable."
-        )
-    if Version(torch.__version__.split("+", 1)[0]) < Version("2.7"):
-        raise RuntimeError(
-            "Qwen3.5 fast kernels require PyTorch >= 2.7. "
-            f"The runtime provides {torch.__version__}; select a current Colab GPU runtime."
-        )
-    capability = torch.cuda.get_device_capability(0)
-    if capability < (7, 5):
-        raise RuntimeError(
-            "Qwen3.5 fast kernels require an NVIDIA GPU with compute capability "
-            f">= 7.5; this runtime reports {capability[0]}.{capability[1]}."
-        )
-
-    qwen_fastpath_requirement = (
-        "flash-linear-attention[cuda,conv1d]>=0.5.2,<0.6"
-    )
-    try:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--no-build-isolation",
-                qwen_fastpath_requirement,
-            ],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            "Qwen3.5 fast-kernel installation failed. The notebook will not "
-            "silently continue with the much slower torch fallback."
-        ) from exc
-
-    importlib.invalidate_caches()
-    try:
-        from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
-        from fla.ops.gated_delta_rule import (
-            chunk_gated_delta_rule,
-            fused_recurrent_gated_delta_rule,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Qwen3.5 fast-kernel import verification failed after installation."
-        ) from exc
-
-    fast_kernel_functions = {
-        "causal_conv1d_fn": causal_conv1d_fn,
-        "causal_conv1d_update": causal_conv1d_update,
-        "chunk_gated_delta_rule": chunk_gated_delta_rule,
-        "fused_recurrent_gated_delta_rule": fused_recurrent_gated_delta_rule,
-    }
-    missing_fast_kernels = [
-        name for name, function in fast_kernel_functions.items() if not callable(function)
-    ]
-    if missing_fast_kernels:
-        raise RuntimeError(
-            "Qwen3.5 fast-kernel verification found non-callable functions: "
-            + ", ".join(missing_fast_kernels)
-        )
-
-    # Verify the exact import-time switch used by Transformers.  If an older
-    # failed run imported Transformers before the kernels were installed, its
-    # optional-backend flags stay stale until the Colab runtime is restarted.
-    from transformers.models.qwen3_5 import modeling_qwen3_5
-
-    if not getattr(modeling_qwen3_5, "is_fast_path_available", False):
-        restart_hint = (
-            " Transformers was already loaded before setup; restart the Colab "
-            "runtime and rerun from cell 1."
-            if transformers_was_loaded
-            else " Restart the Colab runtime and rerun from cell 1."
-        )
-        raise RuntimeError(
-            "Transformers did not activate the Qwen3.5 fast path after kernel "
-            "installation." + restart_hint
-        )
-
-    # Imports alone cannot detect a CUDA ABI, architecture, or Triton JIT
-    # mismatch.  Exercise the same prefill and cached-decode primitives Qwen3.5
-    # uses before any multi-gigabyte checkpoint is downloaded.
-    try:
-        with torch.inference_mode():
-            dtype = torch.float16
-            conv_x = torch.randn((1, 8, 16), device="cuda", dtype=dtype)
-            conv_weight = torch.randn((8, 4), device="cuda", dtype=dtype)
-            conv_out = causal_conv1d_fn(
-                conv_x, conv_weight, activation="silu"
-            )
-            conv_state = torch.zeros((1, 8, 4), device="cuda", dtype=dtype)
-            conv_step = causal_conv1d_update(
-                conv_x[:, :, -1], conv_state, conv_weight, activation="silu"
-            )
-
-            q = torch.randn((1, 16, 1, 16), device="cuda", dtype=dtype)
-            k = torch.nn.functional.normalize(
-                torch.randn((1, 16, 1, 16), device="cuda", dtype=torch.float32),
-                dim=-1,
-            ).to(dtype)
-            v = torch.randn((1, 16, 1, 16), device="cuda", dtype=dtype)
-            g = torch.nn.functional.logsigmoid(
-                torch.randn((1, 16, 1), device="cuda", dtype=torch.float32)
-            )
-            beta = torch.sigmoid(
-                torch.randn((1, 16, 1), device="cuda", dtype=dtype)
-            )
-            chunk_out, _ = chunk_gated_delta_rule(
-                q, k, v, g, beta, chunk_size=16
-            )
-            recurrent_out, _ = fused_recurrent_gated_delta_rule(
-                q[:, :1],
-                k[:, :1],
-                v[:, :1],
-                g=g[:, :1],
-                beta=beta[:, :1],
-            )
-            smoke_outputs = (conv_out, conv_step, chunk_out, recurrent_out)
-            if any(not torch.isfinite(output).all() for output in smoke_outputs):
-                raise RuntimeError("a Qwen3.5 fast kernel returned non-finite values")
-            torch.cuda.synchronize()
-    except Exception as exc:
-        raise RuntimeError(
-            "Qwen3.5 CUDA fast-kernel smoke test failed. The notebook will not "
-            "continue with an unverified slow fallback."
-        ) from exc
-    print(
-        "Qwen3.5 fast kernels:",
-        f"flash-linear-attention={package_version('flash-linear-attention')}",
-        f"causal-conv1d={package_version('causal-conv1d')}",
-    )
-
 USED_COMMIT = subprocess.check_output(
-    ["git", "rev-parse", "HEAD"],
+    ["git", "-C", str(REPO_DIR), "rev-parse", "HEAD"],
     text=True,
 ).strip()
-
-if SAVE_TO_GOOGLE_DRIVE:
-    from google.colab import drive
-
-    drive.mount("/content/drive")
-    OUTPUT_ROOT = "/content/drive/MyDrive/M.M.M-output"
-else:
-    OUTPUT_ROOT = "/content/mmm-output"
-
-os.environ["MMM_BLOCKBENCH_WORKSPACE_ROOT"] = "/content"
-os.environ["MMM_ECOSYSTEM_DISCOVERY"] = "auto"
-if MODEL_PROFILE == "remote_quality":
-    from getpass import getpass
-
-    if not REMOTE_BASE_URL.startswith("https://"):
-        raise ValueError("remote_quality에는 HTTPS API 기본 주소가 필요합니다.")
-    if not REMOTE_TEXT_MODEL.strip():
-        raise ValueError("remote_quality에는 텍스트 모델 이름이 필요합니다.")
-    remote_key = getpass("원격 모델 API 키: ").strip()
-    if not remote_key:
-        raise ValueError("원격 모델 API 키가 비어 있습니다.")
-    for role in (
-        "PLANNER",
-        "RESEARCH",
-        "CODER",
-        "CODER_SAFE",
-        "VISION",
-    ):
-        os.environ[f"MMM_{role}_BASE_URL"] = REMOTE_BASE_URL
-        os.environ[f"MMM_{role}_MODEL"] = REMOTE_TEXT_MODEL
-        os.environ[f"MMM_{role}_API_KEY"] = remote_key
-    os.environ["MMM_IMAGE_BASE_URL"] = REMOTE_BASE_URL
-    os.environ["MMM_IMAGE_MODEL"] = (
-        REMOTE_IMAGE_MODEL.strip() or REMOTE_TEXT_MODEL
+REMOTE_COMMIT = subprocess.check_output(
+    ["git", "-C", str(REPO_DIR), "rev-parse", "refs/remotes/origin/main"],
+    text=True,
+).strip()
+if USED_COMMIT != REMOTE_COMMIT:
+    raise RuntimeError(
+        "The checkout is not exactly GitHub origin/main. Remove the Colab "
+        "checkout and rerun setup cell 2."
     )
-    os.environ["MMM_IMAGE_API_KEY"] = remote_key
-    os.environ["MMM_SPEECH_BASE_URL"] = REMOTE_BASE_URL
-    os.environ["MMM_SPEECH_MODEL"] = (
-        REMOTE_SPEECH_MODEL.strip() or REMOTE_TEXT_MODEL
+tracked_changes = subprocess.check_output(
+    ["git", "-C", str(REPO_DIR), "status", "--porcelain", "--untracked-files=no"],
+    text=True,
+).strip()
+if tracked_changes:
+    raise RuntimeError(
+        "The Colab engine checkout contains tracked local changes. Remove the "
+        "checkout and rerun setup cell 2 instead of executing mixed source."
     )
-    os.environ["MMM_SPEECH_API_KEY"] = remote_key
+print("GitHub commit:", USED_COMMIT, flush=True)
 
-import torch
+# This bootstrap stays intentionally small. Every setup policy below comes from
+# the just-pulled commit, so a stale open Colab tab cannot keep running an old
+# dependency or CUDA preflight cell.
+setup_script = REPO_DIR / "tools" / "colab_runtime_setup.py"
+if not setup_script.is_file():
+    raise FileNotFoundError(f"Pulled commit has no Colab setup script: {setup_script}")
+setup_module_name = f"_mmm_colab_runtime_setup_{USED_COMMIT[:12]}"
+setup_spec = importlib.util.spec_from_file_location(setup_module_name, setup_script)
+if setup_spec is None or setup_spec.loader is None:
+    raise RuntimeError(f"Cannot load Colab setup script: {setup_script}")
+COLAB_SETUP_MODULE = importlib.util.module_from_spec(setup_spec)
+sys.modules[setup_module_name] = COLAB_SETUP_MODULE
+setup_spec.loader.exec_module(COLAB_SETUP_MODULE)
 
-print("GitHub commit:", USED_COMMIT)
-print("Python:", sys.version.split()[0])
-print("CUDA:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    free_bytes, total_bytes = torch.cuda.mem_get_info()
-    print("GPU:", torch.cuda.get_device_name(0))
-    print(f"VRAM free/total: {free_bytes / 2**30:.2f}/{total_bytes / 2**30:.2f} GiB")
+SETUP_STATE = COLAB_SETUP_MODULE.setup_colab_runtime(
+    repo_dir=REPO_DIR,
+    used_commit=USED_COMMIT,
+    model_profile=MODEL_PROFILE,
+    save_to_google_drive=SAVE_TO_GOOGLE_DRIVE,
+    remote_base_url=REMOTE_BASE_URL,
+    remote_text_model=REMOTE_TEXT_MODEL,
+    remote_image_model=REMOTE_IMAGE_MODEL,
+    remote_speech_model=REMOTE_SPEECH_MODEL,
+    transformers_was_loaded=transformers_was_loaded,
+    engine_was_loaded=engine_was_loaded,
+    engine_module_file=engine_module_file,
+    previous_commit=previous_commit,
+)
+REPO_DIR = Path(SETUP_STATE["repo_dir"])
+OUTPUT_ROOT = SETUP_STATE["output_root"]
+SETUP_RECEIPT = SETUP_STATE["receipt"]
+SETUP_FINGERPRINT = SETUP_STATE["setup_fingerprint"]
 """,
     ),
     (
@@ -350,14 +233,43 @@ else:
         """# @title 4. 설치 확인
 from minecraft_mod_ai import ModelRegistry
 
+def assert_current_colab_setup():
+    COLAB_SETUP_MODULE.assert_setup_state(
+        SETUP_STATE,
+        repo_dir=REPO_DIR,
+        used_commit=USED_COMMIT,
+        model_profile=MODEL_PROFILE,
+        save_to_google_drive=SAVE_TO_GOOGLE_DRIVE,
+        remote_base_url=REMOTE_BASE_URL,
+        remote_text_model=REMOTE_TEXT_MODEL,
+        remote_image_model=REMOTE_IMAGE_MODEL,
+        remote_speech_model=REMOTE_SPEECH_MODEL,
+    )
+
+
+assert_current_colab_setup()
 REGISTRY_PATH = REPO_DIR / "config/model_registry.yaml"
 if not REGISTRY_PATH.is_file():
     raise FileNotFoundError(REGISTRY_PATH)
-registry = ModelRegistry().to_public_dict()
+registry_manager = ModelRegistry()
+registry = registry_manager.to_public_dict()
 if MODEL_PROFILE not in registry["profiles"]:
     raise ValueError(f"지원하지 않는 모델 프로필: {MODEL_PROFILE}")
+planner_config = registry_manager.role(MODEL_PROFILE, "planner")
 print("모델 레지스트리:", REGISTRY_PATH)
 print("모델 프로필:", MODEL_PROFILE)
+print("기획 모델:", planner_config.model_id)
+print("기획 백엔드:", planner_config.provider, "/", planner_config.adapter)
+print("기획 양자화:", planner_config.quantization or "none")
+print("기획 native context:", f"{planner_config.max_context:,} tokens")
+print(
+    "기획 page input:",
+    f"{planner_config.max_input_tokens:,} tokens"
+    if planner_config.max_input_tokens
+    else "native-context bound (no separate page cap)",
+)
+print("기획 page output:", f"{planner_config.max_new_tokens:,} tokens")
+print("설치 commit/fingerprint:", USED_COMMIT, "/", SETUP_FINGERPRINT)
 print("결과 저장 위치:", OUTPUT_ROOT)
 """,
     ),
@@ -367,6 +279,7 @@ print("결과 저장 위치:", OUTPUT_ROOT)
         """# @title 5. 게임 기획 만들기
 from minecraft_mod_ai import CompleteModAISession
 
+assert_current_colab_setup()
 session = CompleteModAISession(
     output_root=OUTPUT_ROOT,
     minecraft_version="1.20.1",
@@ -383,6 +296,7 @@ print(reply.message)
         """# @title 6. 계획 수정 대화 (선택)
 REVISION = "" # @param {type:"string"}
 if REVISION.strip():
+    assert_current_colab_setup()
     reply = session.revise(REVISION)
     print(reply.message)
 else:
@@ -395,6 +309,7 @@ else:
         """# @title 7. 이 계획으로 만들기
 from minecraft_mod_ai import CompleteExecutionOptions
 
+assert_current_colab_setup()
 options = CompleteExecutionOptions(
     source_only=SOURCE_ONLY,
     run_blockbench=RUN_BLOCKBENCH,

@@ -142,6 +142,7 @@ class ModelRegistry:
             "quantization",
             "torch_dtype",
             "max_context",
+            "max_input_tokens",
             "max_new_tokens",
             "min_free_vram_mb",
             "exclusive_gpu",
@@ -158,6 +159,9 @@ class ModelRegistry:
             quantization=(str(raw["quantization"]) if raw.get("quantization") else None),
             torch_dtype=str(raw.get("torch_dtype", "auto")),
             max_context=_positive_int(raw.get("max_context", 8192), f"{role}.max_context"),
+            max_input_tokens=_nonnegative_int(
+                raw.get("max_input_tokens", 0), f"{role}.max_input_tokens"
+            ),
             max_new_tokens=_positive_int(
                 raw.get("max_new_tokens", 1200), f"{role}.max_new_tokens"
             ),

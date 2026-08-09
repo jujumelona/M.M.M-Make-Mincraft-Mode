@@ -37,6 +37,8 @@ The full method matrix is in [docs/MOD_DEVELOPMENT_METHODS.md](docs/MOD_DEVELOPM
 
 The notebook does not require an engine ZIP. On every setup run it clones or fast-forwards GitHub `main` and prints the exact commit it used.
 
+If a Colab tab was already open before an engine/setup update, reopen the notebook from the badge and restart the runtime once before running all cells. The pulled setup then verifies the Qwen CUDA kernels before downloading model weights and refuses the memory-heavy fallback.
+
 - New mod: leave `PATCH_EXISTING=False`. Nothing is uploaded.
 - Modify an existing mod: set `PATCH_EXISTING=True`, then upload one source/release ZIP that you own or may modify. It must contain source code and a Gradle project.
 - A JAR by itself can be inspected, but it is not presented as editable source.
@@ -45,7 +47,7 @@ Google Drive storage is enabled by default, so rerunning the same `RUN_NAME` res
 
 ## Local or remote models
 
-`MODEL_PROFILE="t4_quality"` is the default Colab option and runs the 9B planner in 4-bit; choose `t4_local` for the lighter 4B planner. Set it to `remote_quality` and fill in the HTTPS API address and model fields to use OpenAI-compatible remote endpoints; the notebook asks for the API key without saving it in the notebook.
+`MODEL_PROFILE="t4_local"` is the safe Colab T4 default and runs the 4B planner in 4-bit. Choose `t4_quality` only when you want the optional 9B planner and the runtime passes its stricter VRAM preflight. Set it to `remote_quality` and fill in the HTTPS API address and model fields to use OpenAI-compatible remote endpoints; the notebook asks for the API key without saving it in the notebook.
 
 For local Python:
 

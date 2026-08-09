@@ -18,7 +18,11 @@ class TransformersTextAdapter(ModelAdapter):
     def generate(self, request: GenerationRequest) -> str:
         cfg = self.config
         try:
-            require_package("transformers", minimum="4.57.0")
+            require_package(
+                "transformers",
+                minimum="5.14.1",
+                maximum_exclusive="5.15",
+            )
             require_package("accelerate", minimum="1.0.0")
             preflight_cuda(cfg)
             import torch
@@ -34,17 +38,26 @@ class TransformersTextAdapter(ModelAdapter):
                 truncation=False,
             )
             input_tokens = int(inputs["input_ids"].shape[-1])
-            if input_tokens > cfg.max_context:
+            if input_tokens + cfg.max_new_tokens > cfg.max_context:
                 raise ModelConfigurationError(
-                    "Rendered text prompt exceeds "
-                    f"max_context={cfg.max_context} ({input_tokens} tokens). "
+                    "Rendered text request exceeds the model context: "
+                    f"{input_tokens} input + {cfg.max_new_tokens} reserved output "
+                    f"> max_context={cfg.max_context}. "
                     "Split the request into bounded, verifiable pages instead of "
                     "discarding prompt tokens."
+                )
+            if cfg.max_input_tokens > 0 and input_tokens > cfg.max_input_tokens:
+                raise ModelConfigurationError(
+                    "Rendered text page exceeds this hardware profile's per-call "
+                    f"input budget: {input_tokens} input tokens > "
+                    f"max_input_tokens={cfg.max_input_tokens}. Split this stage "
+                    "into additional pages."
                 )
             kwargs: dict[str, Any] = {
                 "device_map": "auto",
                 "low_cpu_mem_usage": True,
-                "torch_dtype": torch_dtype(cfg.torch_dtype),
+                "dtype": torch_dtype(cfg.torch_dtype),
+                "attn_implementation": "sdpa",
                 "trust_remote_code": False,
             }
             qconfig = quantization_config(cfg)

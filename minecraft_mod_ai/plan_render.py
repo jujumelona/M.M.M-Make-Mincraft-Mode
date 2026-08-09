@@ -117,7 +117,15 @@ def render_complete_plan(
         korean=korean,
     )
     tests = _bounded_list(_strings(acceptance_tests), korean=korean)
-    module_values = tuple(modules)
+    module_values = tuple(
+        module
+        for module in modules
+        if not (
+            module.kind == "integration"
+            and module.config.get("integration_type")
+            == "mmm_research_shard"
+        )
+    )
     integration_lines = _bounded_list(
         _mod_context_lines(game_design.get("mod_context"), korean=korean),
         korean=korean,

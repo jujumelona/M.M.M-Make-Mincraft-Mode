@@ -21,7 +21,8 @@ def test_t4_registry_has_role_specific_real_model_ids() -> None:
     assert profile.roles["planner"].model_id == "Qwen/Qwen3.5-4B"
     assert profile.roles["planner"].adapter == "transformers_multimodal"
     assert profile.roles["planner"].max_context == 262144
-    assert profile.roles["planner"].max_new_tokens == 4096
+    assert profile.roles["planner"].max_input_tokens == 6144
+    assert profile.roles["planner"].max_new_tokens == 2048
     assert profile.roles["coder"].model_id == "Qwen/Qwen2.5-Coder-7B-Instruct"
     assert profile.roles["coder_safe"].model_id == "Qwen/Qwen2.5-Coder-3B-Instruct"
     assert profile.roles["coder"].adapter == "transformers_text"
@@ -45,7 +46,8 @@ def test_t4_quality_uses_quantized_qwen35_9b_with_bounded_context() -> None:
     assert planner.quantization == "bnb_4bit"
     assert planner.torch_dtype == "float16"
     assert planner.max_context == 262144
-    assert planner.max_new_tokens == 4096
+    assert planner.max_input_tokens == 6144
+    assert planner.max_new_tokens == 2048
     assert planner.min_free_vram_mb == 10500
     assert set(profile.roles) == {
         "planner",
@@ -71,6 +73,7 @@ def test_t4_quality_non_planner_roles_match_t4_local_except_visual_critic() -> N
     assert quality.roles["visual_critic"].quantization == "bnb_4bit"
     assert quality.roles["visual_critic"].torch_dtype == "float16"
     assert quality.roles["visual_critic"].max_context == 262144
+    assert quality.roles["visual_critic"].max_input_tokens == 6144
 
 
 @pytest.mark.parametrize(
@@ -139,7 +142,8 @@ def test_repository_and_packaged_planner_budgets_stay_in_sync() -> None:
     ).role("t4_local", "planner")
 
     assert repository.max_context == packaged.max_context == 262144
-    assert repository.max_new_tokens == packaged.max_new_tokens == 4096
+    assert repository.max_input_tokens == packaged.max_input_tokens == 6144
+    assert repository.max_new_tokens == packaged.max_new_tokens == 2048
 
     repository_quality = ModelRegistry("config/model_registry.yaml").role(
         "t4_quality", "planner"

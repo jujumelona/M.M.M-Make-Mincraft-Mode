@@ -11,6 +11,7 @@ from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _ProductionBatch,
     _extract_json,
+    _implementation_prompt,
     _remove_bootstrap_duplicates,
 )
 from minecraft_mod_ai.complete_spec import ProductionModule
@@ -251,10 +252,9 @@ def test_initial_outline_repairs_without_replanning_design_or_research(
     }
     assert len(router.requests) == 2
     assert router.messages[0][1]["content"] == router.messages[1][1]["content"]
-    assert router.media_paths == [
-        ("reference.png",),
-        ("reference.png",),
-    ]
+    # The bounded design stage already consumed the reference. Retrying the
+    # implementation outline must not duplicate its vision-token allocation.
+    assert router.media_paths == [(), ()]
     assert "fewer records" in router.messages[1][0]["content"]
     assert router.session_events == ["enter:planner", "exit:planner"]
 
@@ -666,6 +666,7 @@ def test_production_outline_paginates_without_repeating_full_evidence() -> None:
         game_design={
             "title": "Large",
             "_technical_evidence": {"huge": "not-forwarded" * 1000},
+            "_research_brief": {"huge": "brief-not-forwarded" * 1000},
         },
         media_paths=("reference.png",),
     )
@@ -675,7 +676,154 @@ def test_production_outline_paginates_without_repeating_full_evidence() -> None:
     assert "_technical_evidence" not in router.requests[0]["planning_context"][
         "game_design"
     ]
+    assert all(
+        not key.startswith("_")
+        for key in router.requests[0]["planning_context"]["game_design"]
+    )
+    assert "brief-not-forwarded" not in json.dumps(router.requests[0])
     assert router.media_paths == [()]
+
+
+def test_initial_outline_uses_compact_research_facts_and_full_receipt() -> None:
+    candidates = [
+        {
+            "candidate_id": f"huggingface:owner/model-{index}",
+            "provider": "huggingface_models",
+            "resource_kind": "ai_model",
+            "license_id": "apache-2.0",
+            "license_policy": "reviewable_model_license",
+            "compatibility": "unverified",
+            "reuse_status": "candidate_only_metadata_not_weights",
+            "evidence_sha256": "sha256:" + "f" * 64,
+            "metadata": {
+                "revision_sha": f"{index:040x}",
+                "pipeline_tag": "text-generation",
+                "library_name": "transformers",
+                "private": False,
+                "gated": False,
+                "disabled": False,
+                "card": {
+                    "license_evidence": "model_card",
+                    "datasets": [
+                        f"owner/dataset-{index}",
+                        "bounded-dataset-" + "x" * 2_048,
+                    ],
+                    "languages": ["ko", "en-" + "y" * 2_048],
+                },
+                "format_inventory": {
+                    "has_safetensors": True,
+                    "has_gguf": False,
+                    "has_onnx": False,
+                    "unsafe_serialization_files": ["weights.bin", "model.pkl"],
+                    "repository_code_files": ["modeling.py"],
+                },
+                "untrusted_description": "never-forward-this-" * 1_000,
+            },
+        }
+        for index in range(200)
+    ]
+    design = {
+        "title": "Large researched mod",
+        "pitch": "Preserve all requested systems through pages.",
+        "_research_brief": {
+            "internal": "PRIVATE_RESEARCH_BRIEF_MUST_NOT_DUPLICATE-" * 1_000
+        },
+        "_ecosystem_discovery": {
+            "schema_version": "mmm/ecosystem-seed-bundle-v1",
+            "status": "available",
+            "route_sha256": "a" * 64,
+            "route_count": 200,
+            "coverage": "complete",
+            "pages": [
+                {
+                    "provider": "huggingface_models",
+                    "candidates": candidates,
+                }
+            ],
+        },
+    }
+
+    rendered = _implementation_prompt("Build the researched mod.", design)
+
+    assert "huggingface:owner/model-0" in rendered
+    assert "huggingface:owner/model-199" not in rendered
+    assert "never-forward-this" not in rendered
+    assert "PRIVATE_RESEARCH_BRIEF_MUST_NOT_DUPLICATE" not in rendered
+    assert "candidate_only_metadata_not_weights" in rendered
+    assert '"evidence": "model_card"' in rendered
+    assert '"has_safetensors": true' in rendered
+    assert '"unsafe_serialization_file_count": 2' in rendered
+    assert '"repository_code_file_count": 1' in rendered
+    assert "x" * 300 not in rendered
+    assert "y" * 300 not in rendered
+    assert "full_context_receipt" in rendered
+    assert len(rendered.encode("utf-8")) < 12_000
+
+
+def test_initial_outline_keeps_one_typed_technical_query_per_domain() -> None:
+    design = {
+        "title": "Evidence-backed systems",
+        "_technical_evidence": {
+            "schema_version": "mmm/central-evidence-graph-v1",
+            "brief_sha256": "sha256:" + "a" * 64,
+            "evidence_sha256": "sha256:" + "b" * 64,
+            "unresolved_official_domains": ["unresolved_runtime"],
+            "domains": [
+                {
+                    "domain_id": "fabric_runtime",
+                    "strategy": "adaptive_per_query",
+                    "queries": [
+                        {
+                            "query_sha256": "sha256:" + "c" * 64,
+                            "strategy": "corrective_multi_hop",
+                            "primary": {
+                                "query_hash": "sha256:" + "d" * 64,
+                                "corpus_snapshot_hash": "sha256:" + "e" * 64,
+                                "quality": "strong",
+                                "coverage": 0.875,
+                                "correction_required": True,
+                                "hits": [
+                                    {
+                                        "document_id": "fabric-api-events",
+                                        "excerpt": "UNTRUSTED EXCERPT MUST NOT PASS",
+                                    },
+                                    {"document_id": "fabric-networking"},
+                                ],
+                            },
+                            "corrections": [{"quality": "strong"}],
+                        },
+                        {
+                            "query_sha256": "SECOND_QUERY_MUST_STAY_OUT",
+                            "primary": {"quality": "weak", "hits": []},
+                            "corrections": [],
+                        },
+                    ],
+                }
+            ],
+        },
+    }
+
+    rendered = _implementation_prompt("Build the evidence-backed mod.", design)
+    encoded_context = rendered.split(
+        "Compact authoritative planning context:\n", 1
+    )[1].split("\n\nCreate only the paginated production outline.", 1)[0]
+    technical = json.loads(encoded_context)["research_outline"][
+        "technical_evidence"
+    ]
+    domain = technical["domains"][0]
+    query = domain["representative_query"]
+
+    assert technical["domain_count"] == 1
+    assert technical["unresolved_official_domain_count"] == 1
+    assert domain["query_count"] == 2
+    assert query["quality"] == "strong"
+    assert query["coverage"] == 0.875
+    assert query["correction_required"] is True
+    assert query["correction_count"] == 1
+    assert query["hit_ids"] == ["fabric-api-events", "fabric-networking"]
+    assert "SECOND_QUERY_MUST_STAY_OUT" not in rendered
+    assert "UNTRUSTED EXCERPT MUST NOT PASS" not in rendered
+    assert len(rendered.encode("utf-8")) < 12_000
 
 
 def test_production_outline_repairs_only_the_cut_continuation_page() -> None:
