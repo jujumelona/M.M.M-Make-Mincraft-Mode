@@ -2320,9 +2320,28 @@ def _clean_json_text(text: str) -> str:
     if not text:
         return ""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    if "</think>" in cleaned:
+        cleaned = cleaned.split("</think>")[-1]
+    elif "<think>" in cleaned:
+        if "{" in cleaned:
+            cleaned = cleaned[cleaned.find("{"):]
+        else:
+            cleaned = ""
     cleaned = re.sub(r"```(?:json)?\s*", "", cleaned)
     cleaned = cleaned.replace("```", "")
     return cleaned.strip()
+
+
+def _repair_truncated_json(snippet: str) -> str:
+    open_braces = snippet.count("{") - snippet.count("}")
+    open_brackets = snippet.count("[") - snippet.count("]")
+    quote_count = snippet.count('"') - snippet.count('\\"')
+    repaired = snippet
+    if quote_count % 2 != 0:
+        repaired += '"'
+    repaired += "]" * max(0, open_brackets)
+    repaired += "}" * max(0, open_braces)
+    return repaired
 
 
 def _json_objects(text: str) -> list[dict[str, Any]]:
@@ -2358,8 +2377,18 @@ def _json_objects(text: str) -> list[dict[str, Any]]:
             value, _ = decoder.raw_decode(repaired)
             if isinstance(value, dict):
                 values.append(value)
+                continue
         except Exception:
-            continue
+            pass
+
+        # Try auto-repairing truncated JSON (closing brackets/braces)
+        repaired_truncated = _repair_truncated_json(snippet)
+        try:
+            value = json.loads(repaired_truncated, strict=False)
+            if isinstance(value, dict):
+                values.append(value)
+        except Exception:
+            pass
     return values
 
 

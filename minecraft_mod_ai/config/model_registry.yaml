@@ -10,7 +10,7 @@ profiles:
         torch_dtype: float16
         max_context: 262144
         max_input_tokens: 6144
-        max_new_tokens: 1536
+        max_new_tokens: 4096
         min_free_vram_mb: 2500
       researcher:
         model_id: Qwen/Qwen2.5-Coder-3B-Instruct
