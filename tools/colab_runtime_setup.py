@@ -213,24 +213,29 @@ def _require_local_cuda() -> Any:
 def _install_llama_cpp() -> None:
     """Install pre-built llama-cpp-python CUDA wheel in seconds, avoiding source compilation."""
     try:
-        from importlib.metadata import version as pkg_version
-        pkg_version("llama-cpp-python")
-        print("✅ Pre-built llama-cpp-python CUDA wheel already installed.", flush=True)
+        import llama_cpp
+        if hasattr(llama_cpp, "llama_supports_gpu") and llama_cpp.llama_supports_gpu():
+            print("✅ Pre-built llama-cpp-python CUDA wheel with GPU support verified.", flush=True)
+            return
     except Exception:
-        print("⚡ Installing pre-built llama-cpp-python CUDA wheel...", flush=True)
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "llama-cpp-python",
-                "--extra-index-url",
-                "https://abetlen.github.io/llama-cpp-python/whl/cu124",
-                "--no-cache-dir",
-            ],
-            check=False,
-        )
+        pass
+
+    print("⚡ Installing pre-built llama-cpp-python CUDA wheel...", flush=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "--force-reinstall",
+            "llama-cpp-python",
+            "--extra-index-url",
+            "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+            "--no-cache-dir",
+        ],
+        check=False,
+    )
 
 
 def _install_project(*, local_profile: bool) -> None:
