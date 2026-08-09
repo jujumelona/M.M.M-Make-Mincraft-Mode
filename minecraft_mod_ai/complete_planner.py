@@ -720,12 +720,10 @@ class CompleteGameDesignPlanner:
                     parts.modules.append(
                         ProductionModule(
                             module_id=missing_id,
-                            title=f"{missing_id.replace('_', ' ').replace('-', ' ').title()} Module",
-                            summary=f"Auto-generated implementation for declared export {missing_id}",
-                            source_path=f"src/main/java/com/example/mod/{missing_id.replace('-', '_')}.java",
-                            depends_on_modules=(),
-                            capability_requirements=(),
-                            capability_proposals=(),
+                            kind="custom_java",
+                            config={"summary": f"Auto-generated implementation for declared export {missing_id}"},
+                            depends_on=(),
+                            required_gates=(),
                         )
                     )
             if enforce_batch_dependencies and batch.depends_on_batches:
