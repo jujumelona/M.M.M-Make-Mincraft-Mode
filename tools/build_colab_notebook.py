@@ -28,6 +28,7 @@ CELL_SPECS = [
         """# @title 1. 만들 모드 입력 및 설정
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
 MODEL_PROFILE = "Gemma4-12B_7GB" #@param ["Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "Qwen3.5-9B_6GB", "mini_mod", "fast_test"]
+KV_CACHE_QUANT = "q4_0" #@param ["q4_0", "q8_0", "f16"]
 FAST_MODE = False #@param {type:"boolean"}
 SAVE_TO_GOOGLE_DRIVE = True #@param {type:"boolean"}
 RESUME_MODE = False #@param {type:"boolean"}
@@ -284,6 +285,7 @@ session = CompleteModAISession(
     model_profile=MODEL_PROFILE,
     existing_input=EXISTING_INPUT,
     fast_mode=FAST_MODE,
+    kv_cache_quant=KV_CACHE_QUANT,
 )
 output_dir = Path(OUTPUT_ROOT)
 custom_plan_path = Path(RESUME_PLAN_FILE.strip()) if RESUME_PLAN_FILE.strip() else None

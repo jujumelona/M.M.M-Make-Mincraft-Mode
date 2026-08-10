@@ -118,18 +118,42 @@ class LlamaCppAdapter(ModelAdapter):
                 # Cap initial active_ctx to 16384 to protect Colab 12.7GB System RAM from OS SIGKILL
                 active_ctx = min(cfg.max_context, 16384)
 
+                # KV cache quantization setup (q4_0 default for maximum VRAM savings)
+                kv_quant = os.environ.get("MMM_KV_CACHE_QUANT", getattr(cfg, "kv_cache_quant", "q4_0")).lower()
+                type_k_val = None
+                type_v_val = None
+                try:
+                    import llama_cpp.llama_cpp as ggml
+                    quant_map = {
+                        "q4_0": ggml.GGML_TYPE_Q4_0,
+                        "q8_0": ggml.GGML_TYPE_Q8_0,
+                        "f16": ggml.GGML_TYPE_F16,
+                    }
+                    type_k_val = quant_map.get(kv_quant)
+                    type_v_val = quant_map.get(kv_quant)
+                    print(f"⚡ [llama.cpp] KV Cache Quantization: {kv_quant.upper()} (type_k={type_k_val}, type_v={type_v_val})", flush=True)
+                except Exception as quant_err:
+                    print(f"⚠️ [llama.cpp] KV quant map fallback: {quant_err}", flush=True)
+
                 while True:
                     try:
-                        LlamaCppAdapter._llm = Llama(
-                            model_path=model_path,
-                            n_gpu_layers=current_layers,
-                            n_ctx=active_ctx,
-                            n_batch=512,
-                            use_mmap=False,   # Prevents Colab OS System RAM OOM Kernel Crash (SIGKILL 9)
-                            use_mlock=False,  # Prevents RAM lock allocation crash
-                            flash_attn=True,
-                            verbose=True,
-                        )
+                        llama_kwargs = {
+                            "model_path": model_path,
+                            "n_gpu_layers": current_layers,
+                            "n_ctx": active_ctx,
+                            "n_batch": 512,
+                            "n_ubatch": 512,
+                            "use_mmap": False,   # Prevents Colab OS System RAM OOM Kernel Crash (SIGKILL 9)
+                            "use_mlock": False,  # Prevents RAM lock allocation crash
+                            "flash_attn": True,
+                            "verbose": True,
+                        }
+                        if type_k_val is not None:
+                            llama_kwargs["type_k"] = type_k_val
+                        if type_v_val is not None:
+                            llama_kwargs["type_v"] = type_v_val
+
+                        LlamaCppAdapter._llm = Llama(**llama_kwargs)
                         print(
                             f"✅ [llama.cpp] Model initialized successfully (n_ctx={active_ctx}, n_gpu_layers={current_layers})",
                             flush=True,

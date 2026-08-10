@@ -252,7 +252,9 @@ class CompleteModAISession:
         model_profile: str = "t4_local",
         existing_input: str | Path | None = None,
         fast_mode: bool = False,
+        kv_cache_quant: str = "q4_0",
     ) -> None:
+        import os
         from .complete_orchestrator import CompleteProductionOrchestrator
         from .complete_planner import CompleteGameDesignPlanner
         from .model_router import ModelRouter
@@ -264,6 +266,8 @@ class CompleteModAISession:
         self.output_root = Path(output_root)
         self.model_profile = model_profile
         self.fast_mode = fast_mode
+        self.kv_cache_quant = kv_cache_quant
+        os.environ["MMM_KV_CACHE_QUANT"] = kv_cache_quant
         self.existing_input = (
             Path(existing_input) if existing_input is not None else None
         )
