@@ -24,6 +24,8 @@ MODEL_LAYER_COUNTS = {
     "unsloth/Qwen3.5-9B-MTP-GGUF": 32,
     "unsloth/gemma-4-26B-A4B-it-GGUF": 30,
     "unsloth/gemma-4-12b-it-GGUF": 48,
+    "google/gemma-4-26B-A4B-it-qat-q4_0-gguf": 30,
+    "google/gemma-4-12B-it-qat-q4_0-gguf": 48,
 }
 
 
@@ -74,7 +76,7 @@ class LlamaCppAdapter(ModelAdapter):
                 hub_repo = repo_id
                 if "/" not in hub_repo:
                     hub_repo = f"bartowski/{hub_repo}-GGUF"
-                elif not hub_repo.endswith("-GGUF") and "GGUF" not in hub_repo:
+                elif not hub_repo.endswith("-GGUF") and "GGUF" not in hub_repo and "gguf" not in hub_repo:
                     repo_name = hub_repo.split('/')[-1]
                     hub_repo = f"bartowski/{repo_name}-GGUF"
 

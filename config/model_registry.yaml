@@ -100,12 +100,12 @@ profiles:
       speech_recognition: *shared_speech
 
   Gemma4-26B_14GB:
-    description: "unsloth/gemma-4-26B-A4B-it-GGUF UD-IQ4_NL (13.6GB) — Native 256k Context"
+    description: "google/gemma-4-26B-A4B-it-qat-q4_0-gguf — Official Google QAT (Native 256k Context)"
     roles:
       planner: &gemma4_26b
-        model_id: unsloth/gemma-4-26B-A4B-it-GGUF
+        model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
         adapter: llama_cpp
-        gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
+        gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
         torch_dtype: float16
         max_context: 262144
         max_input_tokens: 0
@@ -121,12 +121,12 @@ profiles:
       speech_recognition: *shared_speech
 
   Gemma4-12B_7GB:
-    description: "unsloth/gemma-4-12b-it-GGUF UD-Q4_K_XL (7.37GB) — Native 256k Context"
+    description: "google/gemma-4-12B-it-qat-q4_0-gguf — Official Google QAT (Native 256k Context)"
     roles:
       planner: &gemma4_12b
-        model_id: unsloth/gemma-4-12b-it-GGUF
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
         adapter: llama_cpp
-        gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
         torch_dtype: float16
         max_context: 262144
         max_input_tokens: 0
