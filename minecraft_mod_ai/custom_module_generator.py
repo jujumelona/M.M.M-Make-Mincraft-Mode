@@ -303,7 +303,25 @@ class CustomModuleGenerator:
             if p and p not in seen_paths:
                 seen_paths.add(p)
                 deduped_operations.append(op)
-        operations = list(reversed(deduped_operations))
+        if not operations:
+            print(f"⚠️ [CustomModule] {module.module_id!r} 모듈 패치 작업이 비어있어 안전 폴백 스텁을 생성합니다.", flush=True)
+            class_name = "".join(word.capitalize() for word in module.module_id.replace("-", "_").split("_")) + "Module"
+            path = f"src/main/java/net/fabricmc/example/module/{class_name}.java"
+            operations = [
+                {
+                    "operation": "create",
+                    "path": path,
+                    "content": (
+                        "package net.fabricmc.example.module;\n\n"
+                        f"// Synthetic fallback stub for module: {module.module_id} ({module.kind})\n"
+                        f"public class {class_name} {{\n"
+                        f"    public static void initialize() {{\n"
+                        f"        // Module bootstrap placeholder for {module.module_id}\n"
+                        "    }\n"
+                        "}\n"
+                    ),
+                }
+            ]
 
         if not runtime_tests:
             runtime_tests = ["Verify mod functionality and compilation without crash."]
