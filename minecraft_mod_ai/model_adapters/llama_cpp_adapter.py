@@ -84,9 +84,10 @@ class LlamaCppAdapter(ModelAdapter):
                             vram_for_weights = total_free_vram_mb - dynamic_kv_mb
 
                             if file_size_mb > vram_for_weights and vram_for_weights > 0:
-                                total_layers = 40
-                                mb_per_layer = file_size_mb / total_layers
-                                gpu_layers = max(1, int(vram_for_weights // mb_per_layer))
+                                # Standard GGUF architecture layer count (Gemma4/Qwen2/Qwen3 ~30-36 layers)
+                                estimated_total_layers = 30
+                                weight_ratio = min(0.95, vram_for_weights / file_size_mb)
+                                gpu_layers = max(1, int(estimated_total_layers * weight_ratio))
                                 print(
                                     f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers} layers "
                                     f"(Free VRAM: {total_free_vram_mb:.0f}MB / Dynamic KV-Cache: {dynamic_kv_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
@@ -114,11 +115,11 @@ class LlamaCppAdapter(ModelAdapter):
                         )
                         break
                     except Exception as init_err:
-                        if current_layers != 0 and "llama_context" in str(init_err).lower():
-                            # Reduce offloaded layers dynamically if KV cache fails
-                            new_layers = max(0, (current_layers if current_layers > 0 else 35) - 3)
+                        if current_layers != 0 and ("llama_context" in str(init_err).lower() or "cuda" in str(init_err).lower()):
+                            # Reduce offloaded layers dynamically if KV cache or CUDA allocation fails
+                            new_layers = max(0, (current_layers if (current_layers > 0 and current_layers <= 30) else 25) - 3)
                             print(
-                                f"⚠️ [llama.cpp] Context OOM detected with {current_layers} layers. "
+                                f"⚠️ [llama.cpp] Context/CUDA allocation warning with {current_layers} layers. "
                                 f"Auto-adjusting to {new_layers} layers...",
                                 flush=True,
                             )
