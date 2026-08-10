@@ -22,10 +22,10 @@ from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
     generate_local_ai_sidecar,
 )
+from .java_lsp import JavaLanguageService
 from .project_index import ProjectIndex
 from .model_router import ModelRouter
 from .project_edit import ProjectEditError, inspect_fabric_project
-from .project_index import ProjectIndex
 from .research_ledger import is_research_shard, write_research_shard
 from .production_contract import (
     evaluate_quality_contract,
@@ -1069,6 +1069,7 @@ class CompleteProductionOrchestrator:
                     node,
                     action=lambda node=node, members=members: module_node_action(node, members),
                     validate_cached=lambda value: self._receipt_outputs_exist(value, project_root=project_root),
+                    shared_index=shared_project_index,
                 )
                 children = [
                     item for item in receipt.get("receipts", []) if isinstance(item, dict)
@@ -1149,6 +1150,7 @@ class CompleteProductionOrchestrator:
                             Path(str(item.get("target", ""))).is_file()
                             for item in cached.get("assets", [])
                         ),
+                        shared_index=shared_project_index,
                     )
                 )
             elif kind == "audio-synth":
@@ -1180,6 +1182,7 @@ class CompleteProductionOrchestrator:
                                 project_root=project_root,
                             )
                         ),
+                        shared_index=shared_project_index,
                     )
                 )
             elif kind == "audio-finalize":
@@ -1199,6 +1202,7 @@ class CompleteProductionOrchestrator:
                             project_root=project_root,
                         )
                     ),
+                    shared_index=shared_project_index,
                 )
                 audio_shards.append(fin_receipt)
             elif kind == "audio-shard":
@@ -1230,6 +1234,7 @@ class CompleteProductionOrchestrator:
                                 project_root=project_root,
                             )
                         ),
+                        shared_index=shared_project_index,
                     )
                 )
             else:
@@ -1251,6 +1256,17 @@ class CompleteProductionOrchestrator:
         llm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm")
         image_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image_gpu")
         commit_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="commit")
+
+        import threading
+        _path_locks: dict[str, threading.Lock] = {}
+        _path_locks_guard = threading.Lock()
+
+        def _acquire_path_lock(path: str) -> threading.Lock:
+            """Return a per-path lock for shared file concurrency safety."""
+            with _path_locks_guard:
+                if path not in _path_locks:
+                    _path_locks[path] = threading.Lock()
+                return _path_locks[path]
 
         _node_futures: dict[str, Future] = {}
 
@@ -1324,10 +1340,10 @@ class CompleteProductionOrchestrator:
                     import time
                     time.sleep(0.05)
         finally:
-            cpu_pool.shutdown(wait=False)
-            llm_pool.shutdown(wait=False)
-            image_pool.shutdown(wait=False)
-            commit_pool.shutdown(wait=False)
+            cpu_pool.shutdown(wait=True, cancel_futures=True)
+            llm_pool.shutdown(wait=True, cancel_futures=True)
+            image_pool.shutdown(wait=True, cancel_futures=True)
+            commit_pool.shutdown(wait=True, cancel_futures=True)
 
         asset_receipt = (
             {

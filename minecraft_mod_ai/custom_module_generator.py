@@ -47,13 +47,14 @@ class CustomModuleGenerator:
         *,
         policy: ScalePolicy | None = None,
         fast_mode: bool = False,
+        project_index: ProjectIndex | None = None,
     ) -> None:
         self.router = router
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
         self.fast_mode = fast_mode
-        self._cached_index: ProjectIndex | None = None
-        self._cached_root: Path | None = None
+        self._cached_index: ProjectIndex | None = project_index
+        self._cached_root: Path | None = project_index.root if project_index is not None else None
 
     def generate(
         self,
@@ -98,7 +99,7 @@ class CustomModuleGenerator:
                 self.policy.model_context_bytes,
                 12 * 1024,
             )
-            observation_ledger = _collect_source_observations(
+            observation_ledger = _collect_initial_observations(
                 self.router,
                 index,
                 query=query,
@@ -435,7 +436,7 @@ def _extract_json(text: str) -> dict[str, Any]:
     }
 
 
-def _collect_source_observations(
+def _collect_initial_observations(
     router: ModelRouter,
     index: ProjectIndex,
     *,
@@ -443,71 +444,55 @@ def _collect_source_observations(
     byte_budget: int,
     diagnostic_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Exhaust source pagination into exact, provenance-bound observations."""
+    """Retrieve top-K exact source observations for the target query or diagnostic paths."""
 
-    cursor = ""
-    seen_cursors: set[str] = set()
     records: list[dict[str, Any]] = []
     record_keys: set[tuple[str, int, int]] = set()
     source_page_digest = hashlib.sha256()
-    source_page_count = 0
-    project_sha256 = ""
-    query_sha256 = ""
 
-    while True:
-        page = index.select_page(
-            query=query,
-            diagnostic_paths=diagnostic_paths,
-            byte_budget=byte_budget,
-            cursor=cursor,
+    page = index.select_page(
+        query=query,
+        diagnostic_paths=diagnostic_paths,
+        byte_budget=byte_budget,
+        cursor="",
+    )
+    if _json_size(page) > byte_budget:
+        raise CustomModuleGenerationError(
+            "Host project context page exceeded its byte budget."
         )
-        if _json_size(page) > byte_budget:
-            raise CustomModuleGenerationError(
-                "Host project context page exceeded its byte budget."
-            )
-        if page["page_index"] != source_page_count:
-            raise CustomModuleGenerationError(
-                "Host project context page sequence is not contiguous."
-            )
-        project_sha256 = str(page["project_sha256"])
-        query_sha256 = str(page["query_sha256"])
-        page_commitment = {
-            "page_index": page["page_index"],
-            "project_sha256": project_sha256,
-            "query_sha256": query_sha256,
-            "start_position": page["start_position"],
-            "start_offset": page["start_offset"],
-            "next_cursor": page["next_cursor"],
-            "files": [
-                {
-                    "path": item["path"],
-                    "sha256": item["sha256"],
-                    "content_start_bytes": item["content_start_bytes"],
-                    "content_end_bytes": item["content_end_bytes"],
-                }
-                for item in page["files"]
-            ],
-        }
-        _update_digest(source_page_digest, page_commitment)
+    project_sha256 = str(page["project_sha256"])
+    query_sha256 = str(page["query_sha256"])
+    page_commitment = {
+        "page_index": page["page_index"],
+        "project_sha256": project_sha256,
+        "query_sha256": query_sha256,
+        "start_position": page["start_position"],
+        "start_offset": page["start_offset"],
+        "next_cursor": page["next_cursor"],
+        "files": [
+            {
+                "path": item["path"],
+                "sha256": item["sha256"],
+                "content_start_bytes": item["content_start_bytes"],
+                "content_end_bytes": item["content_end_bytes"],
+            }
+            for item in page["files"]
+        ],
+    }
+    _update_digest(source_page_digest, page_commitment)
 
-        # Host-side Top-K exact observation extraction (no LLM inspection overhead)
-        for item in page.get("files", []):
-            if isinstance(item, dict) and "path" in item and ("content" in item or "text" in item):
-                content_str = str(item.get("content", item.get("text", "")))
-                record = _exact_observation(
-                    path=str(item["path"]),
-                    sha256=str(item.get("sha256", "")),
-                    start=int(item.get("content_start_bytes", 0)),
-                    content=content_str.encode("utf-8"),
-                    source_page=int(page.get("page_index", 0)),
-                )
-                _append_observation(records, record_keys, record)
-
-        source_page_count += 1
-        cursor = str(page.get("next_cursor", ""))
-        if not cursor or cursor in seen_cursors:
-            break
-        seen_cursors.add(cursor)
+    # Host-side Top-K exact observation extraction (no LLM inspection overhead)
+    for item in page.get("files", []):
+        if isinstance(item, dict) and "path" in item and ("content" in item or "text" in item):
+            content_str = str(item.get("content", item.get("text", "")))
+            record = _exact_observation(
+                path=str(item["path"]),
+                sha256=str(item.get("sha256", "")),
+                start=int(item.get("content_start_bytes", 0)),
+                content=content_str.encode("utf-8"),
+                source_page=int(page.get("page_index", 0)),
+            )
+            _append_observation(records, record_keys, record)
 
     observation_digest = hashlib.sha256()
     for record in records:
@@ -516,14 +501,13 @@ def _collect_source_observations(
         "schema_version": "mmm/source-observation-receipt-v1",
         "project_sha256": project_sha256,
         "query_sha256": query_sha256,
-        "source_page_count": source_page_count,
+        "source_page_count": 1,
         "observation_count": len(records),
         "source_pages_sha256": "sha256:" + source_page_digest.hexdigest(),
         "observations_sha256": "sha256:" + observation_digest.hexdigest(),
         "policy": {
             "exact_source_quotes": True,
             "path_sha256_byte_range_bound": True,
-            "all_host_source_pages_exhausted_before_patch": True,
         },
     }
     return {

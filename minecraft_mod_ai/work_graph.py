@@ -15,6 +15,7 @@ from .complete_spec import (
     CompleteProposal,
     ProductionModule,
 )
+from .research_ledger import is_research_shard
 from .scale_policy import ScalePolicy
 from .spec import canonical_json
 
@@ -39,6 +40,7 @@ class WorkNode:
     input_hash: str
     dependencies: tuple[str, ...]
     payload: dict[str, Any]
+    resource_class: str = "cpu_io"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1372,19 +1374,37 @@ def _node(
     dependencies: Iterable[str],
     payload: dict[str, Any],
 ) -> WorkNode:
+    kind = str(payload.get("kind", ""))
+    gen_stage = str(payload.get("generation_stage", ""))
+    if "resource_class" in payload:
+        res_class = payload["resource_class"]
+    elif kind == "asset-shard":
+        res_class = "image_gpu"
+    elif kind == "audio-finalize":
+        res_class = "commit"
+    elif kind == "module-shard" and gen_stage == "custom":
+        res_class = "llm"
+    elif stage.startswith("validate:"):
+        res_class = "commit"
+    else:
+        res_class = "cpu_io"
+
+    payload_copy = dict(payload)
+    payload_copy["resource_class"] = res_class
     normalized_dependencies = tuple(sorted(set(dependencies)))
     body = {
         "node_id": node_id,
         "stage": stage,
         "dependencies": normalized_dependencies,
-        "payload": payload,
+        "payload": payload_copy,
     }
     return WorkNode(
         node_id=node_id,
         stage=stage,
         input_hash=_hash_json(body),
         dependencies=normalized_dependencies,
-        payload=payload,
+        payload=payload_copy,
+        resource_class=res_class,
     )
 
 
@@ -1399,6 +1419,8 @@ def _module_payload(module: ProductionModule) -> dict[str, Any]:
 
 
 def _module_stage(module: ProductionModule) -> str:
+    if is_research_shard(module) or module.kind == "research_shard" or module.kind == "integration":
+        return "content"
     if module.kind == "custom_java" or module.config.get("implementation") == "custom":
         return "custom"
     if module.kind in {"entity", "boss", "npc"}:
@@ -1415,11 +1437,16 @@ def _module_stage(module: ProductionModule) -> str:
         "guild",
     }:
         return "system"
-    if module.kind in {"structure", "biome", "dimension", "world_event"}:
-        return "custom"
     if module.kind == "audio":
         return "audio-binding"
-    return "content"
+    _extended_kinds = {
+        "item", "block", "fluid", "status_effect", "effect",
+        "enchantment", "command", "recipe", "advancement", "loot",
+        "tool", "weapon", "armor", "food", "crop", "machine",
+    }
+    if module.kind in _extended_kinds:
+        return "content"
+    return "custom"
 
 
 def _module_shards(

@@ -171,6 +171,7 @@ def generate_extended_content(
         call_line="GeneratedExtendedContent.register()",
         marker="extended:content",
     )
+    written_paths = [str(info.root / path) for path in files] + generated_binary
     return {
         "schema_version": "mmm/extended-content-v2",
         "status": "GENERATED",
@@ -179,7 +180,8 @@ def generate_extended_content(
         "shard_count": len(java_items),
         "shard_size": policy.java_shard_size,
         "registrar_dispatch_count": 0,
-        "files": [str(info.root / path) for path in files] + generated_binary,
+        "files": written_paths,
+        "touched_paths": written_paths,
         "source_receipt": receipt,
         "binding_receipt": binding,
         "required_gates": ["JDT", "Gradle", "GameTest", "runtime interaction tests"],

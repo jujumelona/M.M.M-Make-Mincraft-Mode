@@ -870,8 +870,7 @@ class CompleteGameDesignPlanner:
                     if mod_ids or asset_ids or audio_ids or test_ids:
                         completed_set.add(deliv_name)
 
-            # 2. Check explicit implements_deliverables / ID matches on produced items
-            completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]
+            # 2. Check explicit implements_deliverables or ID matches on produced items
             for raw_item in raw_modules + raw_assets + raw_audio:
                 if isinstance(raw_item, dict):
                     item_id = str(raw_item.get("module_id") or raw_item.get("asset_id") or raw_item.get("sound_id") or "").strip()
@@ -884,16 +883,13 @@ class CompleteGameDesignPlanner:
                     if item_id and item_id in target_deliverables:
                         completed_set.add(item_id)
 
-            for c in completed_list:
-                if c in target_deliverables and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests or c in completed_set):
-                    completed_set.add(c)
-
-            # If model produced items matching target_deliverables directly, bind them
+            # Direct output ID match or model completed_deliverables fallback
             if not completed_set:
+                completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]
                 for deliv in target_deliverables:
-                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids:
+                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids or deliv in page_tests:
                         completed_set.add(deliv)
-                    elif page_modules and len(target_deliverables) == 1:
+                    elif deliv in completed_list and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests):
                         completed_set.add(deliv)
 
             remaining = [v for v in remaining if v not in completed_set]
