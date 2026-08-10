@@ -77,34 +77,58 @@ class LlamaCppAdapter(ModelAdapter):
                     try:
                         import torch
                         if torch.cuda.is_available():
-                            # Reserve 4500MB for 16k context KV-cache + PyTorch context overhead
-                            free_vram_mb = (torch.cuda.mem_get_info()[0] / (1024 * 1024)) - 4500
+                            total_free_vram_mb = torch.cuda.mem_get_info()[0] / (1024 * 1024)
                             file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
-                            if file_size_mb > free_vram_mb and free_vram_mb > 0:
+                            # Dynamic KV cache calculation based on context length
+                            dynamic_kv_mb = max(512.0, (ctx_len / 1024.0) * 128.0 + 512.0)
+                            vram_for_weights = total_free_vram_mb - dynamic_kv_mb
+
+                            if file_size_mb > vram_for_weights and vram_for_weights > 0:
                                 total_layers = 40
                                 mb_per_layer = file_size_mb / total_layers
-                                gpu_layers = max(1, int(free_vram_mb // mb_per_layer))
+                                gpu_layers = max(1, int(vram_for_weights // mb_per_layer))
                                 print(
                                     f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers} layers "
-                                    f"(Free VRAM for weights: {free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB / Reserve KV-Cache: 4500MB)",
+                                    f"(Free VRAM: {total_free_vram_mb:.0f}MB / Dynamic KV-Cache: {dynamic_kv_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
                                     flush=True,
                                 )
-                            elif file_size_mb <= free_vram_mb:
+                            else:
                                 gpu_layers = -1
                                 print(
                                     f"⚡ [llama.cpp] Full GPU load: All layers on GPU "
-                                    f"(Model: {file_size_mb:.0f}MB <= Free VRAM for weights: {free_vram_mb:.0f}MB)",
+                                    f"(Free VRAM: {total_free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
                                     flush=True,
                                 )
                     except Exception:
                         pass
 
-                LlamaCppAdapter._llm = Llama(
-                    model_path=model_path,
-                    n_gpu_layers=gpu_layers,
-                    n_ctx=ctx_len,
-                    verbose=True,
-                )
+                # Retry loop to automatically handle edge-case VRAM pressure
+                current_layers = gpu_layers
+                while True:
+                    try:
+                        LlamaCppAdapter._llm = Llama(
+                            model_path=model_path,
+                            n_gpu_layers=current_layers,
+                            n_ctx=ctx_len,
+                            verbose=True,
+                        )
+                        break
+                    except Exception as init_err:
+                        if current_layers != 0 and "llama_context" in str(init_err).lower():
+                            # Reduce offloaded layers dynamically if KV cache fails
+                            new_layers = max(0, (current_layers if current_layers > 0 else 35) - 3)
+                            print(
+                                f"⚠️ [llama.cpp] Context OOM detected with {current_layers} layers. "
+                                f"Auto-adjusting to {new_layers} layers...",
+                                flush=True,
+                            )
+                            current_layers = new_layers
+                            gc.collect()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        else:
+                            raise init_err
+
                 LlamaCppAdapter._current_model_path = model_path
                 print(f"✅ [llama.cpp] Model successfully loaded.", flush=True)
 
