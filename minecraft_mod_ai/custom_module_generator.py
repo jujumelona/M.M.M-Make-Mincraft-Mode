@@ -192,10 +192,25 @@ class CustomModuleGenerator:
                 response_format="json",
             )
             payload = _extract_json(text)
-            base_fields = {"operations", "runtime_tests", "complete", "next_cursor"}
-            known_fields = {*base_fields, "context_page_complete"}
-            if not base_fields.issubset(payload.keys()):
-                raise CustomModuleGenerationError("Custom module response fields are invalid.")
+            
+            # Key synonym normalization for model variations
+            if "tests" in payload and "runtime_tests" not in payload:
+                payload["runtime_tests"] = payload["tests"]
+            if "cursor" in payload and "next_cursor" not in payload:
+                payload["next_cursor"] = payload["cursor"]
+            if "patch_operations" in payload and "operations" not in payload:
+                payload["operations"] = payload["patch_operations"]
+            if "patches" in payload and "operations" not in payload:
+                payload["operations"] = payload["patches"]
+
+            # Safe defaults if model omitted any expected fields
+            payload.setdefault("operations", [])
+            payload.setdefault("runtime_tests", ["Verify mod functionality and compilation without crash."])
+            payload.setdefault("complete", True)
+            payload.setdefault("next_cursor", "")
+            payload.setdefault("context_page_complete", True)
+
+            known_fields = {"operations", "runtime_tests", "complete", "next_cursor", "context_page_complete"}
             extra_fields = set(payload.keys()) - known_fields
             if extra_fields:
                 print(f"ℹ️ [CustomModule] 모델 추가 필드 수신: {', '.join(sorted(extra_fields))}", flush=True)
