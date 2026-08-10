@@ -61,6 +61,31 @@ class LlamaCppAdapter(ModelAdapter):
 
     def generate(self, request: GenerationRequest) -> str:
         cfg = self.config
+        
+        # 1. Check if llama-server (C++ binary with MTP / Draft Speculative Decoding) is active on local HTTP port
+        server_url = os.environ.get("LLAMA_SERVER_URL", "http://localhost:8910/v1").rstrip("/")
+        try:
+            import requests
+            check_resp = requests.get(f"{server_url}/models", timeout=0.3)
+            if check_resp.status_code == 200:
+                print(f"🚀 [llama-server MTP] C++ MTP 백엔드 연동 중 ({server_url})...", flush=True)
+                messages = [dict(m) for m in request.messages]
+                payload = {
+                    "model": "local",
+                    "messages": messages,
+                    "max_tokens": cfg.max_new_tokens,
+                    "temperature": 0.0,
+                }
+                if getattr(request, "response_format", None) == "json":
+                    payload["response_format"] = {"type": "json_object"}
+                
+                resp = requests.post(f"{server_url}/chat/completions", json=payload, timeout=300)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"].strip()
+        except Exception:
+            pass  # Fallback to in-memory python llama-cpp-python adapter below
+
         require_package("llama-cpp-python")
         from llama_cpp import Llama
         from huggingface_hub import hf_hub_download
