@@ -286,6 +286,8 @@ class CompleteModAISession:
             profile=model_profile,
             router_factory=lambda: self.router,
         )
+        if fast_mode:
+            setattr(self.orchestrator.policy, "fast_mode", True)
         self.brief = ""
         self.complete_proposal: "CompleteProposal | None" = None
 

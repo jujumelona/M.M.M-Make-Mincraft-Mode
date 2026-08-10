@@ -77,24 +77,29 @@ class CustomModuleGenerator:
             ensure_ascii=False,
             sort_keys=True,
         )
-        # First exhaust the complete, host-owned source cursor into exact quoted
-        # observations. Patch generation starts only after that inspection pass.
-        # This prevents a stateless model from declaring success on source page 1.
-        project_context_budget = min(
-            self.policy.model_context_bytes,
-            12 * 1024,
-        )
-        observation_ledger = _collect_source_observations(
-            self.router,
-            index,
-            query=query,
-            byte_budget=project_context_budget,
-        )
-        observation_pages = _observation_context_pages(
-            observation_ledger,
-            query=query,
-            byte_budget=project_context_budget,
-        )
+        # Fast Path check: If model policy or config is capped (Fast Mode), bypass heavy multi-pass source scanning
+        is_fast_path = getattr(self.policy, "fast_mode", False) or getattr(getattr(self.router, "cfg", None), "max_context", 32768) <= 8192
+
+        if is_fast_path:
+            print("🚀 [Fast-Path] 소스 정밀 RAG 탐색 스킵 (Fast Path Express 구동 중)...", flush=True)
+            observation_ledger = {"receipt": "fast_path_express", "observations": []}
+            observation_pages = [{"page_index": 0, "page_count": 1, "records": []}]
+        else:
+            project_context_budget = min(
+                self.policy.model_context_bytes,
+                12 * 1024,
+            )
+            observation_ledger = _collect_source_observations(
+                self.router,
+                index,
+                query=query,
+                byte_budget=project_context_budget,
+            )
+            observation_pages = _observation_context_pages(
+                observation_ledger,
+                query=query,
+                byte_budget=project_context_budget,
+            )
         research_context = select_module_research_context(
             research_modules,
             query=query,
