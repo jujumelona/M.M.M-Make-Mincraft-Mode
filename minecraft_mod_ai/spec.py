@@ -71,7 +71,7 @@ class PlatformLock:
     minecraft_version: str = "1.20.1"
     java_version: str = "17"
     yarn_mappings: str = "1.20.1+build.1"
-    fabric_loader: str = "0.16.10"
+    fabric_loader: str = "0.17.2"
     fabric_api: str = "0.92.11+1.20.1"
     fabric_loom: str = "1.5.4"
     gradle: str = "8.5"
@@ -85,7 +85,7 @@ class PlatformLock:
             "minecraft_version": "1.20.1",
             "java_version": "17",
             "yarn_mappings": "1.20.1+build.1",
-            "fabric_loader": "0.16.10",
+            "fabric_loader": "0.17.2",
             "fabric_api": "0.92.11+1.20.1",
             "fabric_loom": "1.5.4",
             "gradle": "8.5",
@@ -258,226 +258,41 @@ class Proposal:
     evidence_sources: tuple[EvidenceSource, ...]
     evidence_snapshot_hash: str = ""
     capability_manifest_hash: str = ""
-    imported_source_snapshot_hash: str = ""
-    risk_approvals: tuple[str, ...] = ()
     approval_hash: str = ""
 
-    _TOP_LEVEL_KEYS = frozenset(
-        {
-            "schema_version",
-            "proposal_version",
-            "status",
-            "requested_prompt",
-            "spec",
-            "assumptions",
-            "exclusions",
-            "deferred_requests",
-            "acceptance_tests",
-            "evidence_sources",
-            "evidence_snapshot_hash",
-            "capability_manifest_hash",
-            "imported_source_snapshot_hash",
-            "risk_approvals",
-            "approval_hash",
-        }
-    )
-    _BACKWARD_COMPATIBLE_KEYS = frozenset(
-        {
-            "evidence_snapshot_hash",
-            "capability_manifest_hash",
-            "imported_source_snapshot_hash",
-        }
-    )
-
-    def validate(self) -> None:
-        if self.schema_version != "minecraft-mod-ai/proposal-v1":
-            raise SpecValidationError(f"Unsupported schema_version: {self.schema_version}")
-        if type(self.proposal_version) is not int or self.proposal_version < 1:
-            raise SpecValidationError("proposal_version must be a positive JSON integer.")
-        if not self.requested_prompt.strip():
-            raise SpecValidationError("requested_prompt must not be empty.")
-        self.spec.validate()
-        if not self.acceptance_tests:
-            raise SpecValidationError("At least one acceptance test is required.")
-        if not self.evidence_sources:
-            raise SpecValidationError("At least one authoritative evidence source is required.")
-        from .knowledge import evidence_snapshot_hash, validate_trusted_evidence
-
-        validate_trusted_evidence(self.evidence_sources)
-        if not SHA256_PATTERN.fullmatch(self.evidence_snapshot_hash):
-            raise SpecValidationError(
-                "evidence_snapshot_hash must be a lowercase sha256 digest."
-            )
-        if self.evidence_snapshot_hash != evidence_snapshot_hash(self.evidence_sources):
-            raise SpecValidationError(
-                "evidence_snapshot_hash does not match the trusted evidence records."
-            )
-        if not SHA256_PATTERN.fullmatch(self.capability_manifest_hash):
-            raise SpecValidationError(
-                "capability_manifest_hash must be a lowercase sha256 digest."
-            )
-        if self.imported_source_snapshot_hash and not SHA256_PATTERN.fullmatch(
-            self.imported_source_snapshot_hash
-        ):
-            raise SpecValidationError(
-                "imported_source_snapshot_hash must be empty or a lowercase sha256 digest."
-            )
-        if self.approval_hash:
-            if not SHA256_PATTERN.fullmatch(self.approval_hash):
-                raise SpecValidationError("approval_hash must be a lowercase sha256 digest.")
-            if self.approval_hash != self.calculate_hash():
-                raise SpecValidationError(
-                    "approval_hash does not match the immutable proposal payload."
-                )
-
-    def _hash_payload(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "proposal_version": self.proposal_version,
-            "status": ProposalStatus.AWAITING_APPROVAL.value,
-            "requested_prompt": self.requested_prompt,
-            "spec": self.spec,
-            "assumptions": self.assumptions,
-            "exclusions": self.exclusions,
-            "deferred_requests": self.deferred_requests,
-            "acceptance_tests": self.acceptance_tests,
-            "evidence_sources": self.evidence_sources,
-            "evidence_snapshot_hash": self.evidence_snapshot_hash,
-            "capability_manifest_hash": self.capability_manifest_hash,
-            "imported_source_snapshot_hash": self.imported_source_snapshot_hash,
-            "risk_approvals": self.risk_approvals,
-            "approval_hash": "",
-        }
+    def to_dict(self, *, include_approval: bool = True) -> dict[str, Any]:
+        value = asdict(self)
+        value["status"] = self.status.value
+        value["spec"]["contents"] = [
+            {**entry, "kind": entry["kind"].value if isinstance(entry["kind"], Enum) else entry["kind"]}
+            for entry in value["spec"]["contents"]
+        ]
+        if not include_approval:
+            value["approval_hash"] = ""
+        return value
 
     def calculate_hash(self) -> str:
-        return canonical_json_sha256(self._hash_payload())
+        payload = self.to_dict(include_approval=False)
+        return canonical_json_sha256(payload)
 
     def with_hash(self) -> "Proposal":
-        from .capabilities import capability_manifest_hash
-        from .knowledge import evidence_snapshot_hash
+        return Proposal(**{**self.__dict__, "approval_hash": self.calculate_hash()})
 
-        proposal = Proposal(
-            schema_version=self.schema_version,
-            proposal_version=self.proposal_version,
-            status=ProposalStatus.AWAITING_APPROVAL,
-            requested_prompt=self.requested_prompt,
-            spec=self.spec,
-            assumptions=self.assumptions,
-            exclusions=self.exclusions,
-            deferred_requests=self.deferred_requests,
-            acceptance_tests=self.acceptance_tests,
-            evidence_sources=self.evidence_sources,
-            evidence_snapshot_hash=(
-                self.evidence_snapshot_hash or evidence_snapshot_hash(self.evidence_sources)
-            ),
-            capability_manifest_hash=(
-                self.capability_manifest_hash or capability_manifest_hash()
-            ),
-            imported_source_snapshot_hash=self.imported_source_snapshot_hash,
-            risk_approvals=self.risk_approvals,
-            approval_hash="",
-        )
-        return Proposal(**{**proposal.__dict__, "approval_hash": proposal.calculate_hash()})
-
-    def approve(self, supplied_hash: str) -> "Proposal":
-        self.validate()
+    def approve(self, approval_hash: str) -> "Proposal":
         expected = self.calculate_hash()
-        if supplied_hash != expected:
-            raise SpecValidationError(
-                "Approval hash mismatch. The displayed proposal changed or the wrong hash was used."
-            )
-        return Proposal(**{**self.__dict__, "status": ProposalStatus.APPROVED})
+        if approval_hash != expected:
+            raise SpecValidationError("Proposal approval hash does not match the approved payload.")
+        return Proposal(**{**self.__dict__, "status": ProposalStatus.APPROVED, "approval_hash": approval_hash})
 
-    def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["status"] = self.status.value
-        for content in data["spec"]["contents"]:
-            content["kind"] = (
-                content["kind"].value
-                if isinstance(content["kind"], Enum)
-                else content["kind"]
-            )
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Proposal":
-        unknown = set(data) - cls._TOP_LEVEL_KEYS
-        missing = (cls._TOP_LEVEL_KEYS - cls._BACKWARD_COMPATIBLE_KEYS) - set(data)
-        if unknown:
-            raise SpecValidationError(f"Unknown proposal fields: {sorted(unknown)}")
-        if missing:
-            raise SpecValidationError(f"Missing proposal fields: {sorted(missing)}")
-
-        spec_data = dict(data["spec"])
-        platform_data = spec_data.pop("platform")
-        content_data = spec_data.pop("contents")
-        boss_data = spec_data.pop("boss", None)
-        arena_data = spec_data.pop("arena", None)
-        if arena_data is not None:
-            raise SpecValidationError(
-                "Map and arena authoring have been removed. Use mod systems, assets, "
-                "entities, UI, audio, or explicit native Minecraft modules instead."
-            )
-        platform = PlatformLock(**platform_data)
-        contents = tuple(
-            ContentSpec(
-                content_id=item["content_id"],
-                kind=ContentKind(item["kind"]),
-                display_name_en=item["display_name_en"],
-                display_name_ko=item["display_name_ko"],
-                color=item.get("color", "#74c7ec"),
-                recipe=_json_bool(item.get("recipe", True), "contents[].recipe"),
-            )
-            for item in content_data
-        )
-        spec = ModSpec(
-            contents=contents,
-            boss=BossSpec(**boss_data) if boss_data else None,
-            platform=platform,
-            **spec_data,
-        )
-        evidence_sources = tuple(
-            EvidenceSource(**item) for item in data["evidence_sources"]
-        )
-        from .capabilities import capability_manifest_hash
-        from .knowledge import evidence_snapshot_hash
-
-        proposal = cls(
-            schema_version=data["schema_version"],
-            proposal_version=data["proposal_version"],
-            status=ProposalStatus(data["status"]),
-            requested_prompt=data["requested_prompt"],
-            spec=spec,
-            assumptions=tuple(data["assumptions"]),
-            exclusions=tuple(data["exclusions"]),
-            deferred_requests=tuple(
-                DeferredRequest(**item) for item in data["deferred_requests"]
-            ),
-            acceptance_tests=tuple(data["acceptance_tests"]),
-            evidence_sources=evidence_sources,
-            evidence_snapshot_hash=data.get(
-                "evidence_snapshot_hash", evidence_snapshot_hash(evidence_sources)
-            ),
-            capability_manifest_hash=data.get(
-                "capability_manifest_hash", capability_manifest_hash()
-            ),
-            imported_source_snapshot_hash=data.get(
-                "imported_source_snapshot_hash", ""
-            ),
-            risk_approvals=tuple(data["risk_approvals"]),
-            approval_hash=data["approval_hash"],
-        )
-        proposal.validate()
-        return proposal
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-
-
-def _json_bool(value: Any, field_name: str) -> bool:
-    if type(value) is not bool:
-        raise SpecValidationError(f"{field_name} must be a JSON boolean.")
-    return value
+    def validate(self) -> None:
+        self.spec.validate()
+        if self.proposal_version < 1:
+            raise SpecValidationError("proposal_version must be positive.")
+        if not self.requested_prompt.strip():
+            raise SpecValidationError("requested_prompt must not be empty.")
+        if not self.acceptance_tests:
+            raise SpecValidationError("At least one acceptance test is required.")
+        if any(not value.strip() for value in self.acceptance_tests):
+            raise SpecValidationError("Acceptance tests must be non-empty strings.")
+        if self.status is ProposalStatus.APPROVED and self.approval_hash != self.calculate_hash():
+            raise SpecValidationError("Approved proposal hash does not match its immutable payload.")
