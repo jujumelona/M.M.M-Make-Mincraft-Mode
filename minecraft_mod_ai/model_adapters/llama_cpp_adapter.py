@@ -111,35 +111,47 @@ class LlamaCppAdapter(ModelAdapter):
                     cfg.model_id, _get_gguf_layer_count(model_path)
                 )
 
-                # Attempt 100% GPU offload first with full 16k context
+                # Attempt maximum GPU layer offloading first
                 current_layers = 99
+                active_ctx = ctx_len
 
                 while True:
                     try:
                         LlamaCppAdapter._llm = Llama(
                             model_path=model_path,
                             n_gpu_layers=current_layers,
-                            n_ctx=ctx_len,
+                            n_ctx=active_ctx,
                             n_batch=512,
                             flash_attn=True,
                             verbose=True,
                         )
                         print(
-                            f"✅ [llama.cpp] Model initialized successfully (n_ctx={ctx_len}, n_gpu_layers={current_layers})",
+                            f"✅ [llama.cpp] Model initialized successfully (n_ctx={active_ctx}, n_gpu_layers={current_layers})",
                             flush=True,
                         )
                         break
                     except Exception as init_err:
                         err_msg = str(init_err).lower()
-                        if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg or "failed to" in err_msg):
+                        if "llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg or "failed to" in err_msg or "alloc" in err_msg:
                             base = actual_total_layers if current_layers in (-1, 99) else current_layers
-                            # Step down layers by 5 to rapidly find stable CPU offloading boundary
-                            new_layers = max(0, base - 5)
-                            print(
-                                f"💡 [llama.cpp] Offloading layers to CPU ({current_layers} -> {new_layers}/{actual_total_layers} layers) to fit context ({ctx_len})...",
-                                flush=True,
-                            )
-                            current_layers = new_layers
+                            if base > 0:
+                                new_layers = max(0, base - 5)
+                                print(
+                                    f"💡 [llama.cpp] VRAM/RAM memory tight. Offloading layers: {base} -> {new_layers}/{actual_total_layers} (ctx={active_ctx})...",
+                                    flush=True,
+                                )
+                                current_layers = new_layers
+                            elif active_ctx > 4096:
+                                # If layers hit 0, reduce context memory footprint to fit system RAM
+                                new_ctx = max(4096, active_ctx // 2)
+                                print(
+                                    f"⚠️ [llama.cpp] System RAM limits hit. Adjusting active context footprint: {active_ctx} -> {new_ctx}...",
+                                    flush=True,
+                                )
+                                active_ctx = new_ctx
+                                current_layers = 99
+                            else:
+                                raise init_err
                             gc.collect()
                             if torch is not None and torch.cuda.is_available():
                                 torch.cuda.empty_cache()
