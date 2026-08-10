@@ -20,6 +20,14 @@ from .mod_scope_contract import install as _install_mod_scope_contract
 
 _install_mod_scope_contract(_complete_spec_module, _complete_planner_module)
 
+# Current module generators write shared project files directly. Route every
+# module-shard through the single mutation/commit lane until generation is split
+# into pure intent creation plus path-aware commit application.
+from . import work_graph as _work_graph_module
+from .work_graph_mutation_contract import install as _install_work_graph_mutation_contract
+
+_install_work_graph_mutation_contract(_work_graph_module)
+
 from .api import (
     ChatReply,
     CompleteChatReply,
