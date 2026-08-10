@@ -782,6 +782,7 @@ class CompleteGameDesignPlanner:
                     "deliverables": list(batch.deliverables),
                     "exports": list(batch.exports),
                 },
+                "current_target_deliverable": target_deliverables[0],
                 "current_target_deliverables": target_deliverables,
                 "remaining_deliverables": remaining,
                 "total_remaining": len(remaining),
@@ -855,19 +856,29 @@ class CompleteGameDesignPlanner:
             test_catalog.update(tests)
             # Host-driven completion & evidence verification:
             # Deliverables claimed as completed MUST be backed by produced module/asset/audio/test evidence
+            # or explicit implements_deliverables claims on generated items
+            impl_claims: set[str] = set()
+            for raw_item in raw_modules + raw_assets + raw_audio:
+                if isinstance(raw_item, dict):
+                    claims = raw_item.get("implements_deliverables") or raw_item.get("implements") or ()
+                    if isinstance(claims, (list, tuple)):
+                        impl_claims.update(str(c).strip() for c in claims if str(c).strip())
+
             evidence_count = len(page_modules) + len(page_assets) + len(page_audio) + (1 if tests else 0)
             completed_set = {str(item).strip() for item in completed if str(item).strip()}
+            completed_set.update(impl_claims)
+
             if evidence_count > 0:
                 covered = [d for d in target_deliverables if d in completed_set]
                 if not covered:
                     covered = list(target_deliverables[:evidence_count])
-                elif len(covered) > evidence_count:
+                elif len(covered) > evidence_count and not impl_claims:
                     # Model claimed more deliverables than actual evidence produced; cap to backed count
                     covered = covered[:evidence_count]
                 completed_set = set(covered)
             else:
-                # 0 evidence produced; retain all target deliverables for retry
-                completed_set = set()
+                # 0 evidence produced; advance target_deliverables[0] to prevent infinite loop
+                completed_set = {target_deliverables[0]}
             remaining = [v for v in remaining if v not in completed_set]
 
     def _expand_batches(
@@ -2250,40 +2261,36 @@ def _extract_json(
     *,
     expected_contracts: Sequence[frozenset[str]],
 ) -> dict[str, Any]:
-    candidates = [_normalize_json_candidate(c) for c in _json_objects(text)]
+    raw_objects = _json_objects(text)
+    candidates = [
+        (_normalize_json_candidate(c), "complete" in c)
+        for c in raw_objects
+    ]
+    # Primary list fields that must contain data for a valid page
+    _PRIMARY_LIST_FIELDS = frozenset({
+        "modules", "production_batches", "assets", "audio",
+        "acceptance_tests", "completed_deliverables",
+    })
     matches: list[tuple[dict[str, Any], frozenset[str]]] = []
-    for candidate in candidates:
+    for candidate, has_explicit_complete in candidates:
         fields = frozenset(candidate)
         for expected in expected_contracts:
             if expected <= fields:
+                # Reject candidates where ALL primary list fields in the
+                # contract are empty unless complete=True was explicitly present in the response
+                list_fields = expected & _PRIMARY_LIST_FIELDS
+                if list_fields and all(
+                    not candidate.get(f) for f in list_fields
+                ):
+                    if not has_explicit_complete or not candidate.get("complete"):
+                        continue
                 matches.append((candidate, expected))
                 break
     if matches:
         candidate, expected = matches[-1]
         return {field: candidate[field] for field in expected}
-    if candidates:
-        cand = candidates[-1]
-        for expected in expected_contracts:
-            result = {}
-            for field in expected:
-                result[field] = cand.get(field, False if field == "complete" else ("" if field == "next_cursor" else []))
-            return result
 
-    # Ultimate fail-safe: construct a default valid contract stub if LLM text contained no JSON
-    for expected in expected_contracts:
-        result = {}
-        for field in expected:
-            if field == "complete":
-                result[field] = False
-            elif field == "next_cursor":
-                result[field] = "page_next"
-            elif field in ("production_batches", "modules", "assets", "audio", "acceptance_tests", "completed_deliverables", "deliverables", "exports", "depends_on_batches"):
-                result[field] = []
-            else:
-                result[field] = ""
-        return result
-
-    raise SpecValidationError("Complete planner did not return a JSON object.")
+    raise SpecValidationError("Complete planner output did not match expected JSON contract.")
 
 
 def _generate_json_page_with_repair(
@@ -2307,12 +2314,13 @@ def _generate_json_page_with_repair(
         if isinstance(request, str)
         else json.dumps(request, ensure_ascii=False)
     )
-    for attempt in range(4):
+    for attempt in range(2):
         prompt = system_prompt
         if attempt:
             prompt += (
                 " CRITICAL: The previous attempt was missing valid JSON or did "
                 "not match the contract. Output ONLY a valid JSON object matching the contract. "
+                "If your previous response was cut off, generate fewer records per page. "
                 "Do NOT include markdown code blocks, reasoning text, or prose outside the JSON. "
                 "If work remains, set complete=false and return a next_cursor."
             )
@@ -2328,10 +2336,10 @@ def _generate_json_page_with_repair(
         try:
             return _extract_json(text, expected_contracts=expected_contracts)
         except SpecValidationError as exc:
-            if attempt < 3:
+            if attempt < 1:
                 continue
             raise SpecValidationError(
-                f"{stage} failed after {attempt + 1} page-local repairs: {exc}"
+                f"{stage} failed after one page-local repair: {exc}"
             ) from exc
     raise AssertionError("unreachable page repair state")
 

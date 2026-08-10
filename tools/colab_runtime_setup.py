@@ -145,8 +145,8 @@ def _assert_loaded_engine_origin(repo_dir: Path) -> None:
     package_root = (repo_dir / "minecraft_mod_ai").resolve()
     if not module_file or not Path(module_file).resolve().is_relative_to(package_root):
         raise RuntimeError(
-            "minecraft_mod_ai is loaded from an unknown or different checkout. "
-            "Restart the Colab runtime and rerun from cell 1."
+            "minecraft_mod_ai is loaded from a different checkout. "
+            "restart the Colab runtime and rerun from cell 1."
         )
 
 
@@ -258,6 +258,7 @@ def _install_project(*, local_profile: bool) -> None:
         "pip",
         "install",
         "--upgrade",
+        "--no-build-isolation",
         "-e",
         target,
     ]
@@ -291,7 +292,7 @@ def _verify_qwen_fastpath(*, torch: Any, transformers_was_loaded: bool) -> None:
             return
         print("✅ Qwen3.5 CUDA fast-path kernels verified.", flush=True)
     except Exception:
-        print("ℹ️ Standard PyTorch execution path enabled.", flush=True)
+        print("ℹ️ Standard PyTorch execution path silently falling back.", flush=True)
         return
 
     try:

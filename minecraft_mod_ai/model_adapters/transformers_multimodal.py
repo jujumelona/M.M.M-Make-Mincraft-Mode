@@ -30,15 +30,22 @@ def _qwen35_fast_path() -> None:
         )
         causal_conv = importlib.import_module("causal_conv1d")
         gated_delta = importlib.import_module("fla.ops.gated_delta_rule")
+        fla_modules = importlib.import_module("fla.modules")
         bindings: dict[str, Any] = {
             "causal_conv1d_fn": getattr(causal_conv, "causal_conv1d_fn", None),
             "causal_conv1d_update": getattr(causal_conv, "causal_conv1d_update", None),
             "chunk_gated_delta_rule": getattr(gated_delta, "chunk_gated_delta_rule", None),
             "fused_recurrent_gated_delta_rule": getattr(gated_delta, "fused_recurrent_gated_delta_rule", None),
+            "FusedRMSNormGated": getattr(fla_modules, "FusedRMSNormGated", None),
         }
+        all_bound = True
         for name, value in bindings.items():
-            if callable(value):
+            if value is not None:
                 setattr(modeling, name, value)
+            else:
+                all_bound = False
+        if all_bound:
+            setattr(modeling, "is_fast_path_available", True)
     except Exception:
         pass
 
@@ -74,18 +81,17 @@ def _normalize_messages(
         resolved = path.expanduser().resolve()
         if not resolved.is_file():
             raise ModelConfigurationError(f"Media file does not exist: {resolved}")
-        content.append({"type": "image", "url": resolved.as_uri()})
-    if user_text:
-        content.append({"type": "text", "text": user_text})
-    normalized[-1] = {"role": "user", "content": content}
+        content.append({"type": "image", "image": str(resolved)})
+    content.append({"type": "text", "text": user_text})
+    normalized[-1]["content"] = content
     return normalized
 
 
 class TransformersMultimodalAdapter(ModelAdapter):
     def __init__(self, config: AdapterConfig) -> None:
         super().__init__(config)
-        self._processor: Any | None = None
-        self._model: Any | None = None
+        self._processor: Any = None
+        self._model: Any = None
         self._session_active = False
 
     @contextmanager
@@ -111,12 +117,25 @@ class TransformersMultimodalAdapter(ModelAdapter):
         try:
             require_package(
                 "transformers",
-                minimum="4.52.0",
+                minimum="4.48.0",
+                maximum_exclusive="5.0.0",
             )
             require_package("accelerate", minimum="1.0.0")
+            if _is_qwen35(cfg.model_id):
+                require_package(
+                    "flash-linear-attention",
+                    minimum="0.5.1",
+                    maximum_exclusive="0.6",
+                )
+                require_package("causal-conv1d", minimum="1.4.0")
             import torch
             import transformers
-            from transformers import AutoProcessor, AutoTokenizer, AutoModelForCausalLM, AutoModel
+
+            AutoProcessor = getattr(transformers, "AutoProcessor", None)
+            AutoTokenizer = getattr(transformers, "AutoTokenizer", None)
+            AutoModelForCausalLM = getattr(transformers, "AutoModelForCausalLM", None)
+            AutoModel = getattr(transformers, "AutoModel", None)
+            AutoModelForMultimodalLM = getattr(transformers, "AutoModelForMultimodalLM", None)
 
             torch_module = torch
             if _is_qwen35(cfg.model_id):
@@ -138,6 +157,9 @@ class TransformersMultimodalAdapter(ModelAdapter):
             messages = _normalize_messages(list(request.messages), request.media_paths)
             
             tokenizer_or_proc = getattr(processor, "tokenizer", processor)
+            extra_template_kwargs: dict[str, Any] = {}
+            if _is_qwen35(cfg.model_id) and request.response_format == "json":
+                extra_template_kwargs["enable_thinking"] = False
             try:
                 inputs = processor.apply_chat_template(
                     messages,
@@ -145,12 +167,14 @@ class TransformersMultimodalAdapter(ModelAdapter):
                     tokenize=True,
                     return_dict=True,
                     return_tensors="pt",
+                    **extra_template_kwargs,
                 )
             except Exception:
                 rendered = tokenizer_or_proc.apply_chat_template(
                     messages,
                     add_generation_prompt=True,
                     tokenize=False,
+                    **extra_template_kwargs,
                 )
                 inputs = tokenizer_or_proc(rendered, return_tensors="pt")
             input_tokens = int(inputs["input_ids"].shape[-1])
@@ -193,6 +217,7 @@ class TransformersMultimodalAdapter(ModelAdapter):
                 if qconfig is not None:
                     kwargs["quantization_config"] = qconfig
                 candidate_names = [
+                    "AutoModelForMultimodalLM",
                     "AutoModelForVision2Seq",
                     "AutoModelForCausalLM",
                     "AutoModelForSeq2SeqLM",
@@ -213,7 +238,9 @@ class TransformersMultimodalAdapter(ModelAdapter):
                     if model_loaded is not None:
                         break
                 if model_loaded is None:
-                    model_loaded = AutoModelForCausalLM.from_pretrained(cfg.model_id, trust_remote_code=True, **{k: v for k, v in kwargs.items() if k != "trust_remote_code"})
+                    fallback_cls = getattr(transformers, "AutoModelForMultimodalLM", None) or getattr(transformers, "AutoModelForCausalLM", None)
+                    if fallback_cls is not None:
+                        model_loaded = fallback_cls.from_pretrained(cfg.model_id, trust_remote_code=True, **{k: v for k, v in kwargs.items() if k != "trust_remote_code"})
                 self._model = model_loaded
             model = self._model
             device = next(model.parameters()).device

@@ -885,9 +885,8 @@ def _string_list(value: Any, field: str, *, allow_empty: bool = False) -> tuple[
     result: list[str] = []
     for item in value:
         text = _text(item, field)
-        if text in result:
-            raise SpecValidationError(f"{field} contains a duplicate value.")
-        result.append(text)
+        if text not in result:
+            result.append(text)
     return tuple(result)
 
 
@@ -898,8 +897,9 @@ def _text(value: Any, field: str) -> str:
 
 
 def _bounded_text(value: str, *, field: str = "research text") -> str:
-    if len(value.encode("utf-8")) > _MAX_TEXT_BYTES:
-        raise SpecValidationError(f"{field} exceeds the per-item byte policy.")
+    raw_bytes = value.encode("utf-8")
+    if len(raw_bytes) > _MAX_TEXT_BYTES:
+        return raw_bytes[:_MAX_TEXT_BYTES].decode("utf-8", errors="ignore").strip()
     return value
 
 

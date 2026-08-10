@@ -635,24 +635,18 @@ def _system_prompt() -> str:
     return f"""
 You are GameDesignPlanner for a Minecraft Java 1.20.1 Fabric production system.
 Return exactly one small JSON object with one top-level game_design field and no
-markdown or analysis. Use reference images when provided. This is a readable design
-overview, not the complete implementation catalog. State the player fantasy, core
-loop, progression, requested systems, vanilla integration boundaries, art direction
-when requested, and observable quality goals. Preserve every distinct requested
-system, but group large repeated catalogs into named families instead of enumerating
-every member. The unchanged original request is passed to a later paginated production
-planner, so project scale must not make this response grow without bound.
+markdown or analysis. Use reference images when provided. State the player fantasy,
+core loop, progression, requested systems, vanilla integration, art direction when
+requested, and observable quality goals. Preserve every distinct requested system,
+grouping large repeated catalogs into named families. The unchanged request is
+passed to a later paginated production planner.
 
 Do not create build_slice, research_brief, production modules, code, or implementation
-pages in this response. Those are separate deterministic or paginated stages.
-Do not insert combat, bosses, maps, villages, dungeons, voice, AI, or any other content
-merely to fill a category. Empty combat lists are correct for a non-combat request.
-Treat a named commercial game as a request to understand mechanics and experience,
-not as permission to copy its proprietary code, characters, logos, textures, models,
-audio, writing, maps, or other protected material. Plan original assets unless the
-user supplies authorized material or a third-party artifact passes the origin license.
+pages in this response. Do not insert combat, bosses, maps, dungeons, or voice merely
+to fill a category. Empty combat lists are correct for non-combat requests.
+Treat commercial games as requests for mechanics; plan original assets unless authorized.
 
-Current planner plugin catalog (the executable registry retains full details):
+Current planner plugin catalog:
 {manifest}
 
 Output contract:
@@ -670,21 +664,16 @@ Output contract:
     "acceptance_tests": ["observable test"]
   }}
 }}
-If combat or mod integration details are not requested, keep those lists empty; their
-presence in this JSON shape is not permission to invent them. modules describes broad
-requested systems only, not every implementation unit. assets describes grouped asset
-families needed to communicate the design, not a project-wide manifest.
+If combat/mod details are not requested, keep those lists empty.
+modules describes broad requested systems only. assets describes grouped asset families.
 combat and mod_context must be JSON objects whose values, when present, are arrays of
-non-empty strings. Use an empty object when the request has no relevant details; never
-replace an array with a scalar string or a nested object.
-art_direction is optional: include it only for requested visual direction, and omit it otherwise.
+non-empty strings. Use an empty object when the request has no relevant details.
+art_direction is optional: include only for requested visual direction.
 
-CRITICAL language rule: Write all user-facing text fields (title, pitch, core_loop items,
-progression items, acceptance_tests, asset briefs, module reasons, combat descriptions,
-art_direction guidance) in the SAME language as the user's prompt. If the user writes in
-Korean, all descriptive text must be in Korean. If in English, use English. If in Japanese,
-use Japanese. Code identifiers (module_id, plugin_id, asset id, field keys) must always
-remain in English snake_case regardless of prompt language.
+CRITICAL language rule: Write all user-facing text fields (title, pitch, core_loop,
+progression, acceptance_tests, asset briefs, module reasons) in the SAME language as
+the user's prompt. Code identifiers (module_id, plugin_id, asset id, field keys) must
+always remain in English snake_case regardless of prompt language.
 """.strip()
 
 
@@ -721,12 +710,17 @@ def _extract_valid_game_design(text: str) -> dict[str, Any]:
 
     candidates = tuple(_json_objects(text))
     for candidate in reversed(candidates):
+        if "response" in candidate and isinstance(candidate["response"], dict):
+            resp = candidate["response"]
+            if "data" in resp and isinstance(resp["data"], dict):
+                candidate = resp["data"]
         nested = candidate.get("game_design")
         possible = nested if isinstance(nested, dict) else candidate
         if not isinstance(possible, dict):
             continue
         if set(possible) & set(_GAME_DESIGN_FIELDS):
             _validate_design(possible)
+            return possible
     if candidates:
         raise SpecValidationError(
             "Planner response is incomplete. Include one complete game_design "

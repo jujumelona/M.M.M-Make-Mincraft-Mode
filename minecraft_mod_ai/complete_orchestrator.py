@@ -1180,56 +1180,92 @@ class CompleteProductionOrchestrator:
                     f"Unsupported work node payload kind: {kind}"
                 )
 
-        # Resource-aware DAG Wave Scheduler with true parallel execution:
-        # 1. Non-LLM I/O and deterministic nodes (assets, audio) execute concurrently via ThreadPoolExecutor
-        # 2. LLM generation nodes (module-shard) execute serially in 1 stream to protect GPU VRAM & model lock
+        # ── Pipeline DAG Scheduler ────────────────────────────────────
+        # CPU/IO pool and LLM 1-lane run CONCURRENTLY, each consuming
+        # ready nodes from the DAG as soon as their dependencies are met.
+        # This eliminates the "non-LLM waits → LLM waits" phase gap.
         import os
-        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, Future
 
         max_io_workers = min(4, os.cpu_count() or 2)
-        with ThreadPoolExecutor(max_workers=max_io_workers) as executor:
+        _llm_lane_lock = threading.Lock()
+        _node_futures: dict[str, Future] = {}
+
+        def _is_llm_node(node) -> bool:
+            return str(node.payload.get("kind", "")) == "module-shard"
+
+        def _run_llm_serial(node):
+            """LLM nodes run under a dedicated lock — 1-lane GPU stream."""
+            with _llm_lane_lock:
+                process_node(node)
+
+        with ThreadPoolExecutor(max_workers=max_io_workers + 1) as pool:
+            # +1 for the LLM thread (it blocks on _llm_lane_lock anyway)
             while True:
                 ledger.raise_if_cancelled()
-                # Batch claim ready nodes for the current DAG wave
+
+                # Harvest completed futures and propagate exceptions
+                done_ids = [
+                    nid for nid, fut in _node_futures.items() if fut.done()
+                ]
+                for nid in done_ids:
+                    fut = _node_futures.pop(nid)
+                    exc = fut.exception()
+                    if exc is not None:
+                        # Node failure is already recorded in the ledger by
+                        # process_node; log but don't crash the scheduler.
+                        print(
+                            f"⚠️ [Pipeline] Node {nid} raised: {exc}",
+                            flush=True,
+                        )
+
+                # Claim every ready node the DAG currently offers
                 claimed_batch: list[dict[str, Any]] = []
                 while len(claimed_batch) < 8:
-                    claimed = ledger.claim_ready(worker_id="mmm-orchestrator", lease_seconds=900)
+                    claimed = ledger.claim_ready(
+                        worker_id="mmm-orchestrator", lease_seconds=900,
+                    )
                     if claimed is None:
                         break
                     claimed_batch.append(claimed)
 
-                if not claimed_batch:
-                    # Check if all generation nodes are completed
-                    unclaimed = [
+                # Submit all newly claimed nodes to the appropriate lane
+                for claim in claimed_batch:
+                    node = next(
+                        (n for n in work_plan.nodes
+                         if n.node_id == str(claim["node_id"])),
+                        None,
+                    )
+                    if node is None or not node.stage.startswith("generate:"):
+                        continue
+                    if _is_llm_node(node):
+                        fut = pool.submit(_run_llm_serial, node)
+                    else:
+                        fut = pool.submit(process_node, node)
+                    _node_futures[node.node_id] = fut
+
+                # If nothing is in-flight AND nothing was claimed, we're done
+                # or stuck. Check for truly un-finished generation nodes.
+                if not _node_futures and not claimed_batch:
+                    uncompleted = [
                         n for n in work_plan.nodes
-                        if n.stage.startswith("generate:") and ledger.task(n.node_id)["state"] not in ("succeeded", "completed")
+                        if n.stage.startswith("generate:")
+                        and ledger.task(n.node_id)["state"]
+                        not in ("succeeded", "completed")
                     ]
-                    if not unclaimed:
+                    if not uncompleted:
                         break
-                    # Fallback for unclaimed nodes
-                    for n in unclaimed:
+                    # Safety fallback: run remaining nodes sequentially
+                    for n in uncompleted:
                         process_node(n)
                     break
 
-                # Separate ready nodes by resource class
-                ready_nodes = [
-                    next((n for n in work_plan.nodes if n.node_id == str(c["node_id"])), None)
-                    for c in claimed_batch
-                ]
-                valid_ready = [n for n in ready_nodes if n is not None and n.stage.startswith("generate:")]
-
-                llm_nodes = [n for n in valid_ready if str(n.payload.get("kind", "")) == "module-shard"]
-                non_llm_nodes = [n for n in valid_ready if str(n.payload.get("kind", "")) != "module-shard"]
-
-                # 1. Run non-LLM I/O/asset/audio nodes concurrently in ThreadPool
-                if non_llm_nodes:
-                    futures = [executor.submit(process_node, n) for n in non_llm_nodes]
-                    for f in futures:
-                        f.result()
-
-                # 2. Run LLM generation nodes serially in 1 stream
-                for n in llm_nodes:
-                    process_node(n)
+                # If we claimed nothing new but futures are still running,
+                # wait for at least one to finish before polling again.
+                if not claimed_batch and _node_futures:
+                    import time
+                    time.sleep(0.05)
 
         asset_receipt = (
             {

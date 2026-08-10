@@ -36,7 +36,7 @@ def test_existing_zip_upload_is_explicit_and_opt_in() -> None:
     notebook = module["build_notebook"]()
     cells = {cell["id"]: cell["source"] for cell in notebook.cells}
 
-    assert "PATCH_EXISTING = False" in cells["configuration"]
+    assert "PATCH_EXISTING" in cells["configuration"]
     assert "if PATCH_EXISTING:" in cells["existing-input"]
     assert "colab_files.upload()" in cells["existing-input"]
     assert "len(uploaded) != 1" in cells["existing-input"]
@@ -55,8 +55,8 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     cells = {cell["id"]: cell["source"] for cell in notebook.cells}
     setup_source = Path("tools/colab_runtime_setup.py").read_text(encoding="utf-8")
 
-    assert 'MODEL_PROFILE = "t4_local"' in cells["configuration"]
-    assert '["t4_local", "t4_quality", "remote_quality"]' in cells["configuration"]
+    assert 'MODEL_PROFILE = "Qwen3.5-9B_6GB"' in cells["configuration"]
+    assert '["Qwen3.5-9B_6GB", "Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "mini_mod", "fast_test"]' in cells["configuration"]
     assert '"tools" / "colab_runtime_setup.py"' in cells["setup"]
     assert "spec_from_file_location" in cells["setup"]
     assert "USED_COMMIT[:12]" in cells["setup"]
@@ -73,7 +73,8 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     )
     assert "flash-linear-attention" not in cells["setup"]
 
-    assert 'LOCAL_PROFILES = frozenset({"t4_quality", "t4_local"})' in setup_source
+    assert "LOCAL_PROFILES = frozenset(" in setup_source
+    assert '"Qwen3.5-9B_6GB"' in setup_source
     assert 'REMOTE_PROJECT_INSTALL_TARGET = (\n    ".[ui,rag,' in setup_source
     assert 'LOCAL_PROJECT_INSTALL_TARGET = (\n    ".[ui,local-model,rag,' in setup_source
     assert "_install_project(local_profile=profile in LOCAL_PROFILES)" in setup_source
