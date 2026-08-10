@@ -121,22 +121,22 @@ class LlamaCppAdapter(ModelAdapter):
                             n_gpu_layers=current_layers,
                             n_ctx=ctx_len,
                             n_batch=512,
-                            offload_kqv=True,
                             flash_attn=True,
                             verbose=True,
                         )
                         print(
-                            f"✅ [llama.cpp] Model loaded with FULL context (n_ctx={ctx_len}, n_gpu_layers={current_layers})",
+                            f"✅ [llama.cpp] Model initialized successfully (n_ctx={ctx_len}, n_gpu_layers={current_layers})",
                             flush=True,
                         )
                         break
                     except Exception as init_err:
                         err_msg = str(init_err).lower()
-                        if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg):
+                        if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg or "failed to" in err_msg):
                             base = actual_total_layers if current_layers in (-1, 99) else current_layers
-                            new_layers = max(0, base - 2)
+                            # Step down layers by 5 to rapidly find stable CPU offloading boundary
+                            new_layers = max(0, base - 5)
                             print(
-                                f"💡 [llama.cpp] VRAM tight for 16k context. Adjusting GPU offload: {new_layers}/{actual_total_layers} layers (Keeping full n_ctx={ctx_len})...",
+                                f"💡 [llama.cpp] Offloading layers to CPU ({current_layers} -> {new_layers}/{actual_total_layers} layers) to fit context ({ctx_len})...",
                                 flush=True,
                             )
                             current_layers = new_layers
