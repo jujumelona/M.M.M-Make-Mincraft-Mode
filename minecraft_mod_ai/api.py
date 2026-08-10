@@ -270,10 +270,15 @@ class CompleteModAISession:
         self.router = ModelRouter(profile=model_profile)
         if fast_mode:
             print("⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다 (1~2분 완주).", flush=True)
-            for role_name, adapter in self.router.adapters.items():
-                if hasattr(adapter, "cfg"):
-                    adapter.cfg.max_context = min(getattr(adapter.cfg, "max_context", 8192), 8192)
-                    adapter.cfg.max_new_tokens = min(getattr(adapter.cfg, "max_new_tokens", 1024), 1024)
+            for role_name in ("planner", "coder", "researcher", "coder_safe", "visual_critic"):
+                try:
+                    cfg = self.router.registry.role(model_profile, role_name)
+                    if hasattr(cfg, "max_context"):
+                        cfg.max_context = min(cfg.max_context, 8192)
+                    if hasattr(cfg, "max_new_tokens"):
+                        cfg.max_new_tokens = min(cfg.max_new_tokens, 1024)
+                except Exception:
+                    pass
 
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
