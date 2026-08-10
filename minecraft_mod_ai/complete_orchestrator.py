@@ -1180,32 +1180,56 @@ class CompleteProductionOrchestrator:
                     f"Unsupported work node payload kind: {kind}"
                 )
 
-        # Resource-aware DAG Wave Scheduler:
-        # Non-LLM I/O and deterministic nodes (assets, audio) execute in parallelThreadPool
-        # LLM nodes (module generation) execute strictly in 1 stream to protect GPU VRAM/lock
+        # Resource-aware DAG Wave Scheduler with true parallel execution:
+        # 1. Non-LLM I/O and deterministic nodes (assets, audio) execute concurrently via ThreadPoolExecutor
+        # 2. LLM generation nodes (module-shard) execute serially in 1 stream to protect GPU VRAM & model lock
+        import os
         from concurrent.futures import ThreadPoolExecutor
 
-        while True:
-            ledger.raise_if_cancelled()
-            # Claim ready node from durable ledger
-            claimed = ledger.claim_ready(worker_id="mmm-orchestrator", lease_seconds=900)
-            if claimed is None:
-                # Check if all generation nodes are completed
-                unclaimed = [
-                    n for n in work_plan.nodes
-                    if n.stage.startswith("generate:") and ledger.task(n.node_id)["state"] not in ("succeeded", "completed")
-                ]
-                if not unclaimed:
+        max_io_workers = min(4, os.cpu_count() or 2)
+        with ThreadPoolExecutor(max_workers=max_io_workers) as executor:
+            while True:
+                ledger.raise_if_cancelled()
+                # Batch claim ready nodes for the current DAG wave
+                claimed_batch: list[dict[str, Any]] = []
+                while len(claimed_batch) < 8:
+                    claimed = ledger.claim_ready(worker_id="mmm-orchestrator", lease_seconds=900)
+                    if claimed is None:
+                        break
+                    claimed_batch.append(claimed)
+
+                if not claimed_batch:
+                    # Check if all generation nodes are completed
+                    unclaimed = [
+                        n for n in work_plan.nodes
+                        if n.stage.startswith("generate:") and ledger.task(n.node_id)["state"] not in ("succeeded", "completed")
+                    ]
+                    if not unclaimed:
+                        break
+                    # Fallback for unclaimed nodes
+                    for n in unclaimed:
+                        process_node(n)
                     break
-                # Process remaining unclaimed nodes in topological order if claim_ready returned None
-                for n in unclaimed:
+
+                # Separate ready nodes by resource class
+                ready_nodes = [
+                    next((n for n in work_plan.nodes if n.node_id == str(c["node_id"])), None)
+                    for c in claimed_batch
+                ]
+                valid_ready = [n for n in ready_nodes if n is not None and n.stage.startswith("generate:")]
+
+                llm_nodes = [n for n in valid_ready if str(n.payload.get("kind", "")) == "module-shard"]
+                non_llm_nodes = [n for n in valid_ready if str(n.payload.get("kind", "")) != "module-shard"]
+
+                # 1. Run non-LLM I/O/asset/audio nodes concurrently in ThreadPool
+                if non_llm_nodes:
+                    futures = [executor.submit(process_node, n) for n in non_llm_nodes]
+                    for f in futures:
+                        f.result()
+
+                # 2. Run LLM generation nodes serially in 1 stream
+                for n in llm_nodes:
                     process_node(n)
-                break
-            
-            node_id = str(claimed["node_id"])
-            target_node = next((n for n in work_plan.nodes if n.node_id == node_id), None)
-            if target_node is not None and target_node.stage.startswith("generate:"):
-                process_node(target_node)
 
         asset_receipt = (
             {
@@ -1261,8 +1285,10 @@ class CompleteProductionOrchestrator:
         current = ledger.task(node.node_id)
         if current["state"] in {"failed", "input_required", "cancelled"}:
             ledger.retry(node.node_id)
+            current = ledger.task(node.node_id)
         ledger.raise_if_cancelled()
-        ledger.begin(node.node_id, worker_id="complete-orchestrator")
+        if current["state"] != "running":
+            ledger.begin(node.node_id, worker_id="complete-orchestrator")
         try:
             receipt = action()
             if not isinstance(receipt, dict):

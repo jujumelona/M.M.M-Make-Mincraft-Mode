@@ -853,13 +853,21 @@ class CompleteGameDesignPlanner:
             parts.audio.extend(page_audio)
             parts.acceptance_tests.extend(tests)
             test_catalog.update(tests)
-            # Host-driven completion & coverage binding: only pop deliverables that were reported completed or covered by generated modules
+            # Host-driven completion & evidence verification:
+            # Deliverables claimed as completed MUST be backed by produced module/asset/audio/test evidence
+            evidence_count = len(page_modules) + len(page_assets) + len(page_audio) + (1 if tests else 0)
             completed_set = {str(item).strip() for item in completed if str(item).strip()}
-            if page_modules or page_assets or page_audio:
-                covered = {d for d in target_deliverables if d in completed_set}
+            if evidence_count > 0:
+                covered = [d for d in target_deliverables if d in completed_set]
                 if not covered:
-                    covered = set(target_deliverables[:max(1, len(page_modules))])
-                completed_set.update(covered)
+                    covered = list(target_deliverables[:evidence_count])
+                elif len(covered) > evidence_count:
+                    # Model claimed more deliverables than actual evidence produced; cap to backed count
+                    covered = covered[:evidence_count]
+                completed_set = set(covered)
+            else:
+                # 0 evidence produced; retain all target deliverables for retry
+                completed_set = set()
             remaining = [v for v in remaining if v not in completed_set]
 
     def _expand_batches(
