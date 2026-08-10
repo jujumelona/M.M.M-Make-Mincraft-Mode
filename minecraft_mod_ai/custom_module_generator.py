@@ -186,11 +186,7 @@ class CustomModuleGenerator:
             )
             payload = _extract_json(text)
             base_fields = {"operations", "runtime_tests", "complete", "next_cursor"}
-            allowed_shapes = {
-                frozenset(base_fields),
-                frozenset({*base_fields, "context_page_complete"}),
-            }
-            if frozenset(payload) not in allowed_shapes:
+            if not base_fields.issubset(payload.keys()):
                 raise CustomModuleGenerationError("Custom module response fields are invalid.")
             page_operations = payload["operations"]
             page_tests = payload["runtime_tests"]
