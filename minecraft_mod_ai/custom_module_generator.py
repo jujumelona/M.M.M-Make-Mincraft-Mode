@@ -186,8 +186,16 @@ class CustomModuleGenerator:
             )
             payload = _extract_json(text)
             base_fields = {"operations", "runtime_tests", "complete", "next_cursor"}
+            known_fields = {*base_fields, "context_page_complete"}
             if not base_fields.issubset(payload.keys()):
                 raise CustomModuleGenerationError("Custom module response fields are invalid.")
+            extra_fields = set(payload.keys()) - known_fields
+            if extra_fields:
+                print(f"ℹ️ [CustomModule] 모델 추가 필드 수신: {', '.join(sorted(extra_fields))}", flush=True)
+                for ef in sorted(extra_fields):
+                    val = payload[ef]
+                    preview = str(val)[:200] if isinstance(val, str) else str(val)[:200]
+                    print(f"   └ {ef}: {preview}", flush=True)
             page_operations = payload["operations"]
             page_tests = payload["runtime_tests"]
             complete = payload["complete"]
