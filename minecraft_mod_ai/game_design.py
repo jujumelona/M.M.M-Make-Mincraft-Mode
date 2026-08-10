@@ -234,7 +234,17 @@ class GameDesignPlanner:
         return design, proposal
 
 
-def _authoritative_request_pages(prompt: str) -> tuple[str, ...]:
+def _request_page_bytes(router: ModelRouter | None = None) -> int:
+    if router is not None:
+        try:
+            ctx = router.adapter.policy.model_context_bytes
+            return max(4 * 1024, min(32 * 1024, (ctx - 2048) // 2))
+        except Exception:
+            pass
+    return 32 * 1024
+
+
+def _authoritative_request_pages(prompt: str, router: ModelRouter | None = None) -> tuple[str, ...]:
     """Split text losslessly by its JSON-encoded byte cost.
 
     Whitespace is preferred as a boundary, but never removed or inserted. There is
@@ -244,7 +254,7 @@ def _authoritative_request_pages(prompt: str) -> tuple[str, ...]:
 
     return _lossless_request_pages(
         prompt,
-        max_json_text_bytes=_REQUEST_PAGE_JSON_TEXT_BYTES,
+        max_json_text_bytes=_request_page_bytes(router),
     )
 
 

@@ -855,12 +855,20 @@ class CompleteProductionOrchestrator:
             router = router or self.router_factory()
             return router
 
+        custom_generator: CustomModuleGenerator | None = None
+
+        def get_custom_generator() -> CustomModuleGenerator:
+            nonlocal custom_generator
+            if custom_generator is None:
+                custom_generator = CustomModuleGenerator(
+                    get_router(),
+                    policy=self.policy,
+                    fast_mode=getattr(self, "_fast_mode", False),
+                )
+            return custom_generator
+
         def generate_custom(module: ProductionModule) -> dict[str, Any]:
-            return CustomModuleGenerator(
-                get_router(),
-                policy=self.policy,
-                fast_mode=getattr(self, "_fast_mode", False),
-            ).generate(
+            return get_custom_generator().generate(
                 project_root,
                 module=module,
                 research_modules=research_modules,

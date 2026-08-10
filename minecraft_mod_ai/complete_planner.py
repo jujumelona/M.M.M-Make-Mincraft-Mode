@@ -853,10 +853,13 @@ class CompleteGameDesignPlanner:
             parts.audio.extend(page_audio)
             parts.acceptance_tests.extend(tests)
             test_catalog.update(tests)
-            # Host-driven completion: pop all target deliverables we requested
-            remaining = remaining[batch_size:]
-            # Also pop any extras the model claims to have completed
-            completed_set = set(completed)
+            # Host-driven completion & coverage binding: only pop deliverables that were reported completed or covered by generated modules
+            completed_set = {str(item).strip() for item in completed if str(item).strip()}
+            if page_modules or page_assets or page_audio:
+                covered = {d for d in target_deliverables if d in completed_set}
+                if not covered:
+                    covered = set(target_deliverables[:max(1, len(page_modules))])
+                completed_set.update(covered)
             remaining = [v for v in remaining if v not in completed_set]
 
     def _expand_batches(

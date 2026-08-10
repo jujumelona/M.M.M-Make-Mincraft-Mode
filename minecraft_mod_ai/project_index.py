@@ -121,6 +121,54 @@ class ProjectIndex:
             )
         return tuple(indexed)
 
+    def update_files(self, touched_paths: Iterable[str | Path]) -> None:
+        """Incrementally update index for touched relative or absolute paths."""
+        by_path = dict(self._by_path)
+        for raw_path in touched_paths:
+            path = Path(raw_path)
+            if path.is_absolute():
+                try:
+                    relative = path.relative_to(self.root)
+                except ValueError:
+                    continue
+            else:
+                relative = path
+            norm_path = relative.as_posix()
+            abs_path = self.root / relative
+            if not abs_path.is_file() or abs_path.is_symlink():
+                by_path.pop(norm_path, None)
+                continue
+            if any(part in _IGNORED_PARTS for part in relative.parts):
+                by_path.pop(norm_path, None)
+                continue
+            suffix = abs_path.suffix.lower()
+            if suffix not in _TEXT_SUFFIXES and abs_path.name not in {
+                "build.gradle",
+                "settings.gradle",
+                "gradle.properties",
+                "fabric.mod.json",
+            }:
+                by_path.pop(norm_path, None)
+                continue
+            size = abs_path.stat().st_size
+            if size > self.policy.max_single_file_bytes:
+                tokens: tuple[str, ...] = ()
+                digest = self._sha256(abs_path)
+            else:
+                raw = abs_path.read_bytes()
+                digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+                text = raw.decode("utf-8", errors="replace")
+                tokens = tuple(sorted({token.lower() for token in _TOKEN.findall(text)}))
+            by_path[norm_path] = IndexedFile(
+                path=norm_path,
+                size_bytes=size,
+                sha256=digest,
+                suffix=suffix,
+                tokens=tokens,
+            )
+        self.files = tuple(sorted(by_path.values(), key=lambda f: f.path))
+        self._by_path = by_path
+
     @staticmethod
     def _sha256(path: Path) -> str:
         digest = hashlib.sha256()

@@ -281,7 +281,8 @@ class CustomModuleGenerator:
 
             runtime_tests.extend(str(value) for value in page_tests if str(value).strip())
             
-            if complete or is_last_observation_page:
+            is_last_observation_page = (observation_page_index >= len(observation_pages) - 1)
+            if complete and is_last_observation_page:
                 break
                 
             cursor_key = (observation_page_index, next_cursor)
@@ -307,7 +308,12 @@ class CustomModuleGenerator:
         if not runtime_tests:
             runtime_tests = ["Verify mod functionality and compilation without crash."]
         receipt = TransactionalSourcePatcher(root).apply(operations)
-        self._cached_index = ProjectIndex(root, policy=self.policy)
+        # Fast incremental index update for touched files
+        touched_paths = [op.get("path") for op in operations if isinstance(op, dict) and op.get("path")]
+        if self._cached_index is not None:
+            self._cached_index.update_files(touched_paths)
+        else:
+            self._cached_index = ProjectIndex(root, policy=self.policy)
         self._cached_index.write_manifest()
         return {
             "schema_version": "mmm/custom-module-result-v2",
@@ -466,19 +472,21 @@ def _collect_source_observations(
         # Direct exact observation creation from ProjectIndex source page files
         # Bypasses expensive M x P LLM page-inspection calls while maintaining exact byte-range & SHA256 quotes
         for item in page.get("files", []):
-            if isinstance(item, dict) and "path" in item and "text" in item:
+            if isinstance(item, dict) and "path" in item and ("content" in item or "text" in item):
+                content_str = str(item.get("content", item.get("text", "")))
                 record = {
                     "path": str(item["path"]),
                     "sha256": str(item.get("sha256", "")),
                     "content_start_bytes": int(item.get("content_start_bytes", 0)),
-                    "content_end_bytes": int(item.get("content_end_bytes", len(str(item.get("text", "")).encode("utf-8")))),
-                    "text": str(item["text"]),
+                    "content_end_bytes": int(item.get("content_end_bytes", len(content_str.encode("utf-8")))),
+                    "text": content_str,
                 }
                 _append_observation(records, record_keys, record)
 
         source_page_count += 1
         cursor = str(page.get("next_cursor", ""))
-        if not cursor or cursor in seen_cursors:
+        # Cap observation pages to top 3 relevance-ordered pages to avoid full disk scans on large projects
+        if not cursor or cursor in seen_cursors or source_page_count >= 3:
             break
         seen_cursors.add(cursor)
 
