@@ -202,6 +202,7 @@ class CustomModuleGenerator:
             # Auto-Repair & Feedback Retry Loop (Up to 3 attempts for model self-correction)
             repair_attempts = 0
             payload = {}
+            error_reason = ""
             while repair_attempts <= 3:
                 try:
                     payload = _extract_json(text)
@@ -216,26 +217,43 @@ class CustomModuleGenerator:
                         payload["operations"] = payload["patches"]
                     
                     ops = payload.get("operations")
-                    if ops is not None and isinstance(ops, list):
+                    if ops is None or not isinstance(ops, list) or len(ops) == 0:
+                        if isinstance(payload, dict) and payload:
+                            keys_str = ", ".join(payload.keys())
+                            error_reason = f"received object with keys [{keys_str}] but no non-empty 'operations' list"
+                        else:
+                            error_reason = "response did not contain a valid non-empty 'operations' list"
+                    else:
+                        # Validate operations early to catch path or structural errors
+                        self._validate_operations(ops)
                         break
                 except Exception as parse_err:
-                    print(f"⚠️ [CustomModule Auto-Repair] JSON 파싱 피드백 재시도 준비: {parse_err}", flush=True)
+                    error_reason = str(parse_err)
+                    print(f"⚠️ [CustomModule Auto-Repair] 검증/파싱 피드백 준비: {error_reason}", flush=True)
 
                 if repair_attempts >= 3:
                     break
 
                 repair_attempts += 1
-                print(f"🔄 [CustomModule Auto-Repair] 모델 응답 규격 보정 피드백 재시도 ({repair_attempts}/3)...", flush=True)
+                print(f"🔄 [CustomModule Auto-Repair] 모델 응답 및 상태 피드백 기반 재시도 ({repair_attempts}/3) - 원인: {error_reason}", flush=True)
                 repair_messages = [
                     {
                         "role": "system",
-                        "content": "Return exactly one JSON object with valid 'operations' array for Minecraft Java 1.20.1 Fabric source patch.",
+                        "content": (
+                            "You are an expert Minecraft 1.20.1 Fabric Java mod developer. "
+                            "Return exactly one valid JSON object containing a non-empty 'operations' list "
+                            "with create/replace patch operations for Java source files."
+                        ),
                     },
                     {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
                     {"role": "assistant", "content": text},
                     {
                         "role": "user",
-                        "content": "Your previous response did not contain a valid 'operations' patch array. Please correct your JSON and output the exact 'operations' list.",
+                        "content": (
+                            f"Execution & Validation Failure: Your previous response failed with reason: \"{error_reason}\". "
+                            "Inspect this error trace and state, correct your patch response, and output a valid JSON "
+                            "object with a non-empty 'operations' array containing exact Java source file patches under 'src/main/java/'."
+                        ),
                     },
                 ]
                 text = self.router.generate_text("coder", repair_messages, response_format="json")
