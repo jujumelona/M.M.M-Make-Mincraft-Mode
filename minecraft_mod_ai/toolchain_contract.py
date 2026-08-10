@@ -9,18 +9,22 @@ GRADLE_SHA256 = "7a00d51fb93147819aab76024feece20b6b84e420694101f276be952e08bef0
 
 
 def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
-    """Return the runtime predicates covered by the immutable platform lock.
+    """Return runtime predicates covered by the verified platform contract.
 
-    Fabric treats a standalone version as an exact version predicate.  Keeping
-    this policy in one code-owned function prevents generated metadata from
-    quietly advertising every future Loader or Fabric API release via ``>=``.
-    The build metadata in the Fabric API version is additionally bound by the
-    exact Gradle dependency in ``gradle.properties`` and by release provenance.
+    The build remains pinned to the verified Fabric Loader baseline in
+    ``gradle.properties``. Runtime metadata advertises that baseline as a minimum,
+    because Loom/Fabric dependency resolution may legitimately select a newer
+    compatible Loader. An exact predicate here makes an otherwise successful build
+    fail at launch when the resolved Loader is newer than the compile-time baseline.
+
+    Minecraft, Java and Fabric API stay exact because they are part of the generated
+    version adapter and resource/API surface. The Loader predicate alone is a lower
+    bound over the verified baseline.
     """
 
     platform.validate()
     values = {
-        "fabricloader": platform.fabric_loader,
+        "fabricloader": f">={platform.fabric_loader}",
         "minecraft": platform.minecraft_version,
         "java": platform.java_version,
         "fabric-api": platform.fabric_api,
@@ -39,12 +43,14 @@ def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
 
 
 def install(spec_module: Any, runner_module: Any) -> None:
-    """Install one immutable Fabric 1.20.1 toolchain contract.
+    """Install one verified Fabric 1.20.1 toolchain contract.
 
     GeckoLib 4.8.2 is published with Loom 1.10.5 metadata. Loom 1.5.4 refuses
     that dependency before Java compilation. Loom 1.10 targets Gradle 8.12,
-    so generation, validation, wrapper creation and downloads must use this
-    exact pair and the official binary distribution checksum.
+    so generation, validation, wrapper creation and downloads use this exact pair
+    and the official binary distribution checksum. The generated build still pins
+    Fabric Loader 0.16.10 as its verified baseline, while runtime metadata accepts
+    compatible newer Loader releases.
     """
 
     def platform_init(
