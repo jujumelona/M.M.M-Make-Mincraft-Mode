@@ -297,26 +297,41 @@ default_plan_path = output_dir / "proposal.json"
 target_plan_file = custom_plan_path if (custom_plan_path and custom_plan_path.is_file()) else default_plan_path
 
 if RESUME_MODE and target_plan_file.is_file():
-    print(f"🔄 [Resume Mode] 기획서({target_plan_file})를 로드하여 진행합니다...", flush=True)
+    print(f"🔄 [Resume Mode] 기존 기획서({target_plan_file})를 로드하여 진행합니다...", flush=True)
     reply = session.load_plan(target_plan_file)
 else:
     if RESUME_MODE:
         print("⚠️ [Resume Mode] 로드할 기획서 JSON 파일이 없어 새 기획서를 생성합니다...", flush=True)
     reply = session.plan(PROMPT)
+
 print(reply.message)
+print("\\n" + "="*60)
+print("💡 [기획서 초안 완성] 위 작성된 기획 내용을 확인하세요!")
+print("👉 수정하고 싶은 내용이 있다면 바로 아래 6번 셀 REVISION 칸에 적고 6번 셀을 실행하세요.")
+print("👉 이 기획 그대로 모드를 만들려면 7번 셀로 이동하여 실행하세요.")
+print("="*60)
 """,
     ),
     (
         "code",
         "revise",
-        """# @title 6. 계획 수정 대화 (선택)
+        """# @title 6. 계획 수정 대화 (원할 때까지 반복 가능)
 REVISION = "" # @param {type:"string"}
 if REVISION.strip():
     assert_current_colab_setup()
+    if 'session' not in globals():
+        raise RuntimeError("5번 셀을 먼저 실행하여 기획 세션을 생성해야 합니다.")
+    print(f"💬 [수정 요청 중]: {REVISION}", flush=True)
     reply = session.revise(REVISION)
+    print("\\n✨ [수정 반영된 최신 기획서]:")
     print(reply.message)
+    print("\\n" + "="*60)
+    print("🔄 기획을 더 수정하고 싶으시면 REVISION 칸에 새 요청을 적고 6번 셀을 다시 실행하세요!")
+    print("✅ 기획 완성이 마음에 드시면 7번 셀을 실행하여 모드 제작을 시작하세요.")
+    print("="*60)
 else:
-    print("수정할 내용이 없으면 이 셀은 건너뛰세요.")
+    print("💡 REVISION 폼에 수정할 내용을 텍스트로 적고 6번 셀을 실행하면 기획이 수정됩니다.")
+    print("수정할 내용이 없으면 다음 7번 셀로 바로 이동하세요.")
 """,
     ),
     (
@@ -326,6 +341,10 @@ else:
 from minecraft_mod_ai import CompleteExecutionOptions
 
 assert_current_colab_setup()
+if 'reply' not in globals() or 'session' not in globals():
+    raise RuntimeError("5번 셀(또는 6번 셀)을 먼저 실행하여 기획서를 완성해야 합니다.")
+
+print("🚀 [최종 기획서 반영] 확정된 기획 내용으로 모드 생성을 시작합니다...", flush=True)
 options = CompleteExecutionOptions(
     source_only=SOURCE_ONLY,
     run_blockbench=RUN_BLOCKBENCH,
