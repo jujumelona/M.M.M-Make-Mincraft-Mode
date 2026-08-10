@@ -768,9 +768,7 @@ def _append_observation(
         record["content_end_bytes"],
     )
     if key in keys:
-        raise CustomModuleGenerationError(
-            "Host source observation range was repeated."
-        )
+        return  # Gracefully deduplicate repeated observation range instead of raising fatal error
     keys.add(key)
     records.append(record)
 
