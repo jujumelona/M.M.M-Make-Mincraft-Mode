@@ -251,6 +251,7 @@ class CompleteModAISession:
         minecraft_version: str = "1.20.1",
         model_profile: str = "t4_local",
         existing_input: str | Path | None = None,
+        fast_mode: bool = False,
     ) -> None:
         from .complete_orchestrator import CompleteProductionOrchestrator
         from .complete_planner import CompleteGameDesignPlanner
@@ -262,10 +263,18 @@ class CompleteModAISession:
             )
         self.output_root = Path(output_root)
         self.model_profile = model_profile
+        self.fast_mode = fast_mode
         self.existing_input = (
             Path(existing_input) if existing_input is not None else None
         )
         self.router = ModelRouter(profile=model_profile)
+        if fast_mode:
+            print("⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다 (1~2분 완주).", flush=True)
+            for role_name, adapter in self.router.adapters.items():
+                if hasattr(adapter, "cfg"):
+                    adapter.cfg.max_context = min(getattr(adapter.cfg, "max_context", 8192), 8192)
+                    adapter.cfg.max_new_tokens = min(getattr(adapter.cfg, "max_new_tokens", 1024), 1024)
+
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
             workspace_root=self.output_root,

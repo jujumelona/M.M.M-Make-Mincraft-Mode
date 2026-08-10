@@ -27,7 +27,8 @@ CELL_SPECS = [
         "configuration",
         """# @title 1. 만들 모드 입력
 PROMPT = "사과를 먹으면 이동 속도가 빨라지는 신속의 사과 아이템 모드를 만들어줘." #@param {type:"string"}
-MODEL_PROFILE = "mini_mod" #@param ["mini_mod", "Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "Qwen3.5-9B_6GB", "fast_test", "t4_local", "t4_quality", "remote_quality"]
+MODEL_PROFILE = "Gemma4-12B_7GB" #@param ["Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "Qwen3.5-9B_6GB", "mini_mod", "fast_test", "t4_local", "t4_quality", "remote_quality"]
+FAST_MODE = True #@param {type:"boolean"}
 RESUME_MODE = False #@param {type:"boolean"}
 RESUME_PLAN_FILE = "" #@param {type:"string"}
 REMOTE_BASE_URL = "" #@param {type:"string"}
@@ -296,6 +297,7 @@ session = CompleteModAISession(
     minecraft_version="1.20.1",
     model_profile=MODEL_PROFILE,
     existing_input=EXISTING_INPUT,
+    fast_mode=FAST_MODE,
 )
 output_dir = Path(OUTPUT_ROOT)
 custom_plan_path = Path(RESUME_PLAN_FILE.strip()) if RESUME_PLAN_FILE.strip() else None
