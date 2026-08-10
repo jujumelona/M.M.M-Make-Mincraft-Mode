@@ -29,6 +29,7 @@ CELL_SPECS = [
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
 MODEL_PROFILE = "qwen36_35b_ud_q4" #@param ["qwen36_35b_ud_q4", "qwen36_27b_ud_q4", "qwen36_27b_q3_km", "qwen35_9b_ud_q4", "gemma4_26b_ud_iq4_nl", "gemma4_12b_ud_q4", "t4_local", "t4_quality", "remote_quality"]
 RESUME_MODE = False #@param {type:"boolean"}
+RESUME_PLAN_FILE = "" #@param {type:"string"}
 REMOTE_BASE_URL = "" #@param {type:"string"}
 REMOTE_TEXT_MODEL = "" #@param {type:"string"}
 REMOTE_IMAGE_MODEL = "" #@param {type:"string"}
@@ -280,6 +281,7 @@ print("결과 저장 위치:", OUTPUT_ROOT)
         "code",
         "plan",
         """# @title 5. 게임 기획 만들기
+from pathlib import Path
 from minecraft_mod_ai import CompleteModAISession
 
 assert_current_colab_setup()
@@ -289,13 +291,17 @@ session = CompleteModAISession(
     model_profile=MODEL_PROFILE,
     existing_input=EXISTING_INPUT,
 )
-saved_plan_file = OUTPUT_ROOT / "proposal.json"
-if RESUME_MODE and saved_plan_file.is_file():
-    print(f"🔄 [Resume Mode] 이전 기획서({saved_plan_file})를 로드합니다...", flush=True)
-    reply = session.load_plan(saved_plan_file)
+output_dir = Path(OUTPUT_ROOT)
+custom_plan_path = Path(RESUME_PLAN_FILE.strip()) if RESUME_PLAN_FILE.strip() else None
+default_plan_path = output_dir / "proposal.json"
+target_plan_file = custom_plan_path if (custom_plan_path and custom_plan_path.is_file()) else default_plan_path
+
+if RESUME_MODE and target_plan_file.is_file():
+    print(f"🔄 [Resume Mode] 기획서({target_plan_file})를 로드하여 진행합니다...", flush=True)
+    reply = session.load_plan(target_plan_file)
 else:
     if RESUME_MODE:
-        print("⚠️ [Resume Mode] 저장된 이전 기획서가 없어 새로 생성합니다...", flush=True)
+        print("⚠️ [Resume Mode] 로드할 기획서 JSON 파일이 없어 새 기획서를 생성합니다...", flush=True)
     reply = session.plan(PROMPT)
 print(reply.message)
 """,
