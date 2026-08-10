@@ -280,6 +280,7 @@ class CompleteModAISession:
                 except Exception:
                     pass
 
+        from dataclasses import replace
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
             workspace_root=self.output_root,
@@ -287,7 +288,7 @@ class CompleteModAISession:
             router_factory=lambda: self.router,
         )
         if fast_mode:
-            setattr(self.orchestrator.policy, "fast_mode", True)
+            self.orchestrator.policy = replace(self.orchestrator.policy, fast_mode=True)
         self.brief = ""
         self.complete_proposal: "CompleteProposal | None" = None
 

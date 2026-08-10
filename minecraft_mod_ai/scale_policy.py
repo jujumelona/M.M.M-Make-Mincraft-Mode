@@ -42,6 +42,7 @@ class ScalePolicy:
     gradle_max_heap_mb: int = 12288
     runtime_min_heap_mb: int = 3072
     runtime_max_heap_mb: int = 16384
+    fast_mode: bool = False
 
     def validate(self) -> None:
         positive = {
