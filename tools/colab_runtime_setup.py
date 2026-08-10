@@ -14,7 +14,18 @@ from urllib.parse import urlsplit, urlunsplit
 
 SETUP_API_VERSION = "mmm/colab-runtime-setup-v1"
 RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v1"
-LOCAL_PROFILES = frozenset({"t4_quality", "t4_local"})
+LOCAL_PROFILES = frozenset(
+    {
+        "t4_quality",
+        "t4_local",
+        "qwen36_35b_ud_q4",
+        "qwen36_27b_ud_q4",
+        "qwen36_27b_q3_km",
+        "qwen35_9b_ud_q4",
+        "gemma4_26b_ud_iq4_nl",
+        "gemma4_12b_ud_q4",
+    }
+)
 SUPPORTED_PROFILES = LOCAL_PROFILES | {"remote_quality"}
 REMOTE_TEXT_ROLES = ("PLANNER", "RESEARCH", "CODER", "CODER_SAFE", "VISION")
 REMOTE_PROJECT_INSTALL_TARGET = (
