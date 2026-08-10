@@ -136,14 +136,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Gemma4-26B_14GB:
-    description: "google/gemma-4-26B-A4B-it-qat-q4_0-gguf — Official Google QAT (32k VRAM Optimized Context)"
+    description: "google/gemma-4-26B-A4B-it-qat-q4_0-gguf — Official Google QAT (64k High Context)"
     roles:
       planner: &gemma4_26b
         model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
         adapter: llama_cpp
         gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
         torch_dtype: float16
-        max_context: 32768
+        max_context: 65536
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -157,14 +157,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Gemma4-12B_7GB:
-    description: "google/gemma-4-12B-it-qat-q4_0-gguf — Official Google QAT (32k VRAM Optimized Context)"
+    description: "google/gemma-4-12B-it-qat-q4_0-gguf — Official Google QAT (128k High Context)"
     roles:
       planner: &gemma4_12b
         model_id: google/gemma-4-12B-it-qat-q4_0-gguf
         adapter: llama_cpp
         gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
         torch_dtype: float16
-        max_context: 32768
+        max_context: 131072
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 1000
