@@ -661,6 +661,13 @@ combat and mod_context must be JSON objects whose values, when present, are arra
 non-empty strings. Use an empty object when the request has no relevant details; never
 replace an array with a scalar string or a nested object.
 art_direction is optional: include it only for requested visual direction, and omit it otherwise.
+
+CRITICAL language rule: Write all user-facing text fields (title, pitch, core_loop items,
+progression items, acceptance_tests, asset briefs, module reasons, combat descriptions,
+art_direction guidance) in the SAME language as the user's prompt. If the user writes in
+Korean, all descriptive text must be in Korean. If in English, use English. If in Japanese,
+use Japanese. Code identifiers (module_id, plugin_id, asset id, field keys) must always
+remain in English snake_case regardless of prompt language.
 """.strip()
 
 

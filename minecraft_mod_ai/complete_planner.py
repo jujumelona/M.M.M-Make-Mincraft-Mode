@@ -1076,6 +1076,11 @@ Minecraft structures, biomes, dimensions, and world events are mod modules only 
 explicitly requested, and must be implemented as version-locked mod code with their
 own runtime evidence. Asset width/height are positive integer pixels and are controlled
 by host resource policy rather than a fixed enum.
+
+CRITICAL language rule: Write all user-facing text (module scope descriptions,
+acceptance_tests, asset briefs, batch scope descriptions, deliverable names) in the
+SAME language as the user's prompt. Code identifiers (module_id, batch_id, kind,
+field keys) must always remain in English snake_case regardless of prompt language.
 """.strip()
 
 
@@ -1102,6 +1107,9 @@ list with complete=true instead of inventing a feature.
 If the complete page cannot fit in one response, set complete=false and return a new
 non-empty opaque next_cursor. Do not emit modules, assets, audio, code, markdown, or
 analysis in this stage.
+
+CRITICAL language rule: Write all user-facing text (batch scope, deliverable names) in
+the SAME language as the user's prompt. Code identifiers must remain in English snake_case.
 """.strip()
 
 
