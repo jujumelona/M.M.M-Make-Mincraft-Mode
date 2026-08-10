@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator
 
@@ -39,8 +41,19 @@ _CATALOG_SCHEMA = "mmm/extended-module-catalog-v1"
 _DIRECTORY_CATALOG_SCHEMA = "mmm/extended-module-directory-v1"
 _CATALOG_NODE_SCHEMA = "mmm/extended-module-catalog-node-v1"
 _CATALOG_SHARD_SCHEMA = "mmm/extended-module-shard-v1"
+_EXTENDED_CONTENT_LOCK = threading.RLock()
 
 
+def _serialized_extended_content(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with _EXTENDED_CONTENT_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapped
+
+
+@_serialized_extended_content
 def generate_extended_content(
     *,
     project_root: str | Path,
