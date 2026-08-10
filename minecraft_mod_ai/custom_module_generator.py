@@ -46,10 +46,12 @@ class CustomModuleGenerator:
         router: ModelRouter,
         *,
         policy: ScalePolicy | None = None,
+        fast_mode: bool = False,
     ) -> None:
         self.router = router
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
+        self.fast_mode = fast_mode
 
     def generate(
         self,
@@ -77,8 +79,8 @@ class CustomModuleGenerator:
             ensure_ascii=False,
             sort_keys=True,
         )
-        # Fast Path check: If model policy or config is capped (Fast Mode), bypass heavy multi-pass source scanning
-        is_fast_path = getattr(self.policy, "fast_mode", False) or getattr(getattr(self.router, "cfg", None), "max_context", 32768) <= 8192
+        # Fast Path check: bypass heavy multi-pass source scanning in Fast Mode
+        is_fast_path = self.fast_mode
 
         if is_fast_path:
             print("🚀 [Fast-Path] 소스 정밀 RAG 탐색 스킵 (Fast Path Express 구동 중)...", flush=True)

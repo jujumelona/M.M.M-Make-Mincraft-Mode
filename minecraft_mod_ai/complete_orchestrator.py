@@ -859,6 +859,7 @@ class CompleteProductionOrchestrator:
             return CustomModuleGenerator(
                 get_router(),
                 policy=self.policy,
+                fast_mode=getattr(self, "_fast_mode", False),
             ).generate(
                 project_root,
                 module=module,
