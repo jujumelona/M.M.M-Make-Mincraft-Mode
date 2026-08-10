@@ -100,63 +100,51 @@ class LlamaCppAdapter(ModelAdapter):
             if LlamaCppAdapter._llm is None:
                 print(f"⚙️ [llama.cpp] Initializing GGUF model: {model_path}", flush=True)
                 ctx_len = min(cfg.max_context, 8192)
-                
                 file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
-                actual_total_layers = MODEL_LAYER_COUNTS.get(
-                    cfg.model_id, _get_gguf_layer_count(model_path)
-                )
 
-                # Models under 15GB VRAM: DISABLE CPU OFF LOADING COMPLETELY (100% Full GPU Load)
                 if file_size_mb <= 15000:
-                    current_layers = -1
-                    print(
-                        f"⚡ [llama.cpp] Model size ({file_size_mb:.0f}MB) <= 15GB VRAM limit. CPU Offloading DISABLED -> 100% Full GPU Load (All {actual_total_layers} layers on CUDA0)!",
-                        flush=True,
+                    # ━━━ 15GB 이하: 오프로딩 옵션 자체 없음. GPU 올인. 끝. ━━━
+                    LlamaCppAdapter._llm = Llama(
+                        model_path=model_path,
+                        n_gpu_layers=-1,
+                        n_ctx=ctx_len,
+                        verbose=True,
                     )
                 else:
-                    user_layers = cfg.extra.get("n_gpu_layers", -1)
-                    if user_layers != -1:
-                        current_layers = user_layers
-                    else:
-                        current_layers = 99
-                    print(
-                        f"💡 [llama.cpp] Model size ({file_size_mb:.0f}MB) > 15GB VRAM. Enabling dynamic GPU offload (Starting layers: {current_layers})...",
-                        flush=True,
+                    # ━━━ 15GB 초과 모델만 오프로딩 허용 ━━━
+                    actual_total_layers = MODEL_LAYER_COUNTS.get(
+                        cfg.model_id, _get_gguf_layer_count(model_path)
                     )
-
-                # Instantiation loop with fallback retry for oversized models
-                while True:
-                    try:
-                        LlamaCppAdapter._llm = Llama(
-                            model_path=model_path,
-                            n_gpu_layers=current_layers,
-                            n_ctx=ctx_len,
-                            verbose=True,
-                        )
-                        print(
-                            f"✅ [llama.cpp] Model initialized successfully on GPU (n_gpu_layers={current_layers}, ctx={ctx_len})",
-                            flush=True,
-                        )
-                        break
-                    except Exception as init_err:
-                        err_msg = str(init_err).lower()
-                        if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg):
-                            base = actual_total_layers if current_layers in (-1, 99) else current_layers
-                            new_layers = max(0, base - 2)
-                            print(
-                                f"⚠️ [llama.cpp] VRAM pressure during context init ({current_layers} layers). "
-                                f"Adjusting offload layers to {new_layers}/{actual_total_layers}...",
-                                flush=True,
+                    current_layers = 99
+                    while True:
+                        try:
+                            LlamaCppAdapter._llm = Llama(
+                                model_path=model_path,
+                                n_gpu_layers=current_layers,
+                                n_ctx=ctx_len,
+                                verbose=True,
                             )
-                            current_layers = new_layers
-                            gc.collect()
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                        else:
-                            raise init_err
+                            break
+                        except Exception as init_err:
+                            err_msg = str(init_err).lower()
+                            if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg):
+                                base = actual_total_layers if current_layers in (-1, 99) else current_layers
+                                new_layers = max(0, base - 2)
+                                print(
+                                    f"⚠️ [llama.cpp] VRAM pressure ({current_layers} layers). "
+                                    f"Adjusting to {new_layers}/{actual_total_layers}...",
+                                    flush=True,
+                                )
+                                current_layers = new_layers
+                                gc.collect()
+                                import torch
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                            else:
+                                raise init_err
 
                 LlamaCppAdapter._current_model_path = model_path
-                print(f"✅ [llama.cpp] Model successfully loaded.", flush=True)
+                print(f"✅ [llama.cpp] Model loaded.", flush=True)
 
             llm = LlamaCppAdapter._llm
             messages = [dict(m) for m in request.messages]
