@@ -32,9 +32,24 @@ _shared_speech: &shared_speech
   min_free_vram_mb: 3000
 
 profiles:
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Each model tuned with its exact native maximum architecture context length
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  fast_test:
+    description: "⚡ Fast Test Mode — 10초 만에 1번~8번 셀 전체 파이프라인 무결성을 검증하고 모드 ZIP을 생성"
+    roles:
+      planner: &fast_test_mock
+        model_id: mock/fast-test-engine
+        adapter: mock
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 2048
+        min_free_vram_mb: 0
+      researcher: *fast_test_mock
+      coder: *fast_test_mock
+      coder_safe: *fast_test_mock
+      visual_critic: *fast_test_mock
+      embedding: *shared_embedding
+      reranker: *shared_reranker
+      image_generator: *shared_image_gen
+      speech_recognition: *shared_speech
 
   Qwen3.6-35B_23GB:
     description: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF UD-Q4_K_XL (22.9GB) — Native 32k Context"
