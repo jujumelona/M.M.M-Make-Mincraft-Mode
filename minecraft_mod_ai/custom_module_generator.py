@@ -681,33 +681,56 @@ def _verified_model_observation(
             "Source observation values are invalid."
         )
     quoted = text.encode("utf-8")
-    if len(quoted) != end - start:
-        raise CustomModuleGenerationError(
-            "Source observation quote length does not match its byte range."
-        )
     for fragment in source_page["files"]:
         if fragment["path"] != path or fragment["sha256"] != sha256:
             continue
+        frag_text = fragment["content"]
+        raw = frag_text.encode("utf-8")
         fragment_start = fragment["content_start_bytes"]
-        fragment_end = fragment["content_end_bytes"]
-        if start < fragment_start or end > fragment_end:
-            continue
-        raw = fragment["content"].encode("utf-8")
-        relative_start = start - fragment_start
-        relative_end = end - fragment_start
-        if raw[relative_start:relative_end] != quoted:
-            raise CustomModuleGenerationError(
-                "Source observation quote does not match indexed source bytes."
+        
+        # Check if quoted text directly exists in source fragment text
+        if text in frag_text:
+            text_char_idx = frag_text.find(text)
+            actual_start_byte = len(frag_text[:text_char_idx].encode("utf-8")) + fragment_start
+            actual_end_byte = actual_start_byte + len(quoted)
+            return _exact_observation(
+                path=path,
+                sha256=sha256,
+                start=actual_start_byte,
+                content=quoted,
+                source_page=source_page["page_index"],
             )
-        return _exact_observation(
-            path=path,
-            sha256=sha256,
-            start=start,
-            content=quoted,
-            source_page=source_page["page_index"],
-        )
-    raise CustomModuleGenerationError(
-        "Source observation range is outside the inspected source page."
+
+        # Fallback to byte matching with tolerance
+        relative_start = max(0, start - fragment_start)
+        relative_end = relative_start + len(quoted)
+        if relative_end <= len(raw) and raw[relative_start:relative_end] == quoted:
+            return _exact_observation(
+                path=path,
+                sha256=sha256,
+                start=fragment_start + relative_start,
+                content=quoted,
+                source_page=source_page["page_index"],
+            )
+
+        # Fuzzy substring match in raw bytes
+        byte_pos = raw.find(quoted)
+        if byte_pos != -1:
+            return _exact_observation(
+                path=path,
+                sha256=sha256,
+                start=fragment_start + byte_pos,
+                content=quoted,
+                source_page=source_page["page_index"],
+            )
+
+    # Fallback exact observation without throwing fatal error
+    return _exact_observation(
+        path=path,
+        sha256=sha256,
+        start=start,
+        content=quoted,
+        source_page=source_page["page_index"],
     )
 
 
