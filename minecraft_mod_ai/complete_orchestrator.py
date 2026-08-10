@@ -919,13 +919,25 @@ class CompleteProductionOrchestrator:
                     )
                     for module in sidecars
                 )
-                receipts.extend(
-                    generate_custom(module)
+                custom_targets = [
+                    module
                     for module in members
                     if module.kind not in extended_kinds
                     and module not in sidecars
                     and module not in research_shards
-                )
+                ]
+                if custom_targets:
+                    import os
+                    from concurrent.futures import ThreadPoolExecutor
+                    # Parallel execution for independent custom modules to eliminate sequential bottleneck
+                    max_workers = min(len(custom_targets), os.cpu_count() or 4)
+                    if max_workers > 1:
+                        print(f"⚡ [Parallel Engine] {len(custom_targets)}개 커스텀 모듈 병렬 동시 생성 실행 중 ({max_workers} 스레드)...", flush=True)
+                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                            results = list(executor.map(generate_custom, custom_targets))
+                        receipts.extend(results)
+                    else:
+                        receipts.extend(generate_custom(m) for m in custom_targets)
             elif stage == "system":
                 for pack_id, pack_modules in _system_groups(members).items():
                     receipts.append(
@@ -1007,7 +1019,16 @@ class CompleteProductionOrchestrator:
                         )
                     )
             elif stage == "custom":
-                receipts.extend(generate_custom(module) for module in members)
+                if members:
+                    import os
+                    from concurrent.futures import ThreadPoolExecutor
+                    max_workers = min(len(members), os.cpu_count() or 4)
+                    if max_workers > 1:
+                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                            results = list(executor.map(generate_custom, members))
+                        receipts.extend(results)
+                    else:
+                        receipts.extend(generate_custom(module) for module in members)
             elif stage == "audio-binding":
                 for module in members:
                     if module.module_id in audio_lookup:
