@@ -107,11 +107,14 @@ class LlamaCppAdapter(ModelAdapter):
                     torch = None
 
                 if file_size_mb <= 15000:
-                    # ━━━ 15GB 이하 모델: 순정 max_context 최대치 유지 & n_gpu_layers=-1 ━━━
+                    # ━━━ 15GB 이하 모델: 순정 max_context 최대치 유지 + Flash Attention KV-Cache 순환 ━━━
                     LlamaCppAdapter._llm = Llama(
                         model_path=model_path,
                         n_gpu_layers=-1,
                         n_ctx=cfg.max_context,
+                        n_batch=512,
+                        offload_kqv=True,
+                        flash_attn=True,
                         verbose=True,
                     )
                 else:
