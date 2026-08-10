@@ -171,11 +171,15 @@ class LlamaCppAdapter(ModelAdapter):
 
             # Format messages into chat prompt
             try:
-                response = llm.create_chat_completion(
-                    messages=messages,
-                    max_tokens=cfg.max_new_tokens,
-                    temperature=0.0,
-                )
+                kwargs = {
+                    "messages": messages,
+                    "max_tokens": cfg.max_new_tokens,
+                    "temperature": 0.0,
+                }
+                if getattr(request, "response_format", None) == "json":
+                    kwargs["response_format"] = {"type": "json_object"}
+
+                response = llm.create_chat_completion(**kwargs)
                 return response["choices"][0]["message"]["content"].strip()
             except Exception:
                 # Fallback to direct raw prompt format
