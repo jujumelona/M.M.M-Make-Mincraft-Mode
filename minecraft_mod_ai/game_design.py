@@ -31,7 +31,7 @@ _OPTIONAL_GAME_DESIGN_FIELDS = ("art_direction",)
 # string escaping so control-character-heavy input cannot turn a nominally small
 # request chunk into an unexpectedly large model call. The host creates as many
 # pages as required and processes every page.
-_REQUEST_PAGE_JSON_TEXT_BYTES = 4 * 1024
+_REQUEST_PAGE_JSON_TEXT_BYTES = 32 * 1024
 _RESEARCH_PAGE_JSON_TEXT_BYTES = 1024
 _REQUEST_INGESTION_SCHEMA = "mmm/authoritative-request-ingestion-v1"
 _REQUEST_PAGE_SCHEMA = "mmm/authoritative-request-page-v1"

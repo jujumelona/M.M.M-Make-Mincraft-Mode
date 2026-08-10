@@ -654,9 +654,10 @@ class CompleteGameDesignPlanner:
                 self.router,
                 system_prompt=(
                     "Continue the production outline. Return exactly one "
-                    "JSON object. Generate exactly 1 NEW production batch. "
+                    "JSON object containing 'production_batches', 'complete', and 'next_cursor'. "
+                    "Generate up to 4 NEW production batches in one response to complete the plan efficiently. "
                     f"These batch IDs are ALREADY GENERATED and must NOT be reused: {existing_ids}. "
-                    "Pick a completely different batch_id. "
+                    "Pick completely different, descriptive snake_case batch_ids. "
                     "If more batches remain, set complete=false and supply a next_cursor. "
                     "Every batch scope must be self-contained, and deliverables are an exact "
                     "completion checklist rather than examples."
@@ -769,7 +770,10 @@ class CompleteGameDesignPlanner:
         first_page = True
         page_count = 0
         while remaining:
-            target_deliverable = remaining[0]
+            # Batch multiple deliverables per LLM call to minimize total calls
+            batch_size = min(len(remaining), 4)
+            target_deliverables = remaining[:batch_size]
+            target_list_str = ", ".join(f'"{d}"' for d in target_deliverables)
             request = {
                 "batch": {
                     "batch_id": batch.batch_id,
@@ -778,7 +782,7 @@ class CompleteGameDesignPlanner:
                     "deliverables": list(batch.deliverables),
                     "exports": list(batch.exports),
                 },
-                "current_target_deliverable": target_deliverable,
+                "current_target_deliverables": target_deliverables,
                 "remaining_deliverables": remaining,
                 "total_remaining": len(remaining),
                 "dependency_exports": dependency_exports,
@@ -795,12 +799,12 @@ class CompleteGameDesignPlanner:
                 self.router,
                 system_prompt=(
                     "Return exactly one production-batch JSON page. "
-                    f"Your ONLY task on this page is to implement the deliverable: \"{target_deliverable}\". "
-                    "Generate exactly 1 module that fulfills this specific deliverable. "
-                    f"Put [\"{target_deliverable}\"] in completed_deliverables. "
-                    f"There are {len(remaining)} deliverables remaining after this one. "
-                    f"Set complete={'true' if len(remaining) <= 1 else 'false'}. "
-                    f"{'Set next_cursor to any non-empty string.' if len(remaining) > 1 else 'Set next_cursor to empty string.'} "
+                    f"Your task is to implement ALL of these deliverables in one response: [{target_list_str}]. "
+                    f"Generate one module per deliverable ({batch_size} modules total). "
+                    f"Put all completed deliverable names in completed_deliverables. "
+                    f"There are {len(remaining)} deliverables total remaining. "
+                    f"Set complete={'true' if len(remaining) <= batch_size else 'false'}. "
+                    f"{'Set next_cursor to any non-empty string.' if len(remaining) > batch_size else 'Set next_cursor to empty string.'} "
                     "Never repeat an ID or file path."
                 ),
                 request=request,
@@ -849,8 +853,8 @@ class CompleteGameDesignPlanner:
             parts.audio.extend(page_audio)
             parts.acceptance_tests.extend(tests)
             test_catalog.update(tests)
-            # Host-driven completion: always pop the target deliverable
-            remaining.pop(0)
+            # Host-driven completion: pop all target deliverables we requested
+            remaining = remaining[batch_size:]
             # Also pop any extras the model claims to have completed
             completed_set = set(completed)
             remaining = [v for v in remaining if v not in completed_set]
