@@ -6,25 +6,22 @@ from typing import Any
 LOOM_VERSION = "1.10.5"
 GRADLE_VERSION = "8.12"
 GRADLE_SHA256 = "7a00d51fb93147819aab76024feece20b6b84e420694101f276be952e08bef03"
+FABRIC_LOADER_VERSION = "0.17.2"
 
 
 def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
-    """Return runtime predicates covered by the verified platform contract.
+    """Return the exact runtime predicates covered by the verified platform lock.
 
-    The build remains pinned to the verified Fabric Loader baseline in
-    ``gradle.properties``. Runtime metadata advertises that baseline as a minimum,
-    because Loom/Fabric dependency resolution may legitimately select a newer
-    compatible Loader. An exact predicate here makes an otherwise successful build
-    fail at launch when the resolved Loader is newer than the compile-time baseline.
-
-    Minecraft, Java and Fabric API stay exact because they are part of the generated
-    version adapter and resource/API surface. The Loader predicate alone is a lower
-    bound over the verified baseline.
+    Distribution metadata must advertise only versions that the generated project
+    actually verifies. The Loader version therefore stays exact, like Minecraft,
+    Java and Fabric API. The current Loom 1.10.5 GameTest runtime resolves Fabric
+    Loader 0.17.2, so the platform lock and generated Gradle dependency are aligned
+    to that verified runtime instead of claiming the older 0.16.10 loader.
     """
 
     platform.validate()
     values = {
-        "fabricloader": f">={platform.fabric_loader}",
+        "fabricloader": platform.fabric_loader,
         "minecraft": platform.minecraft_version,
         "java": platform.java_version,
         "fabric-api": platform.fabric_api,
@@ -43,14 +40,13 @@ def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
 
 
 def install(spec_module: Any, runner_module: Any) -> None:
-    """Install one verified Fabric 1.20.1 toolchain contract.
+    """Install one immutable verified Fabric 1.20.1 toolchain contract.
 
     GeckoLib 4.8.2 is published with Loom 1.10.5 metadata. Loom 1.5.4 refuses
     that dependency before Java compilation. Loom 1.10 targets Gradle 8.12,
     so generation, validation, wrapper creation and downloads use this exact pair
-    and the official binary distribution checksum. The generated build still pins
-    Fabric Loader 0.16.10 as its verified baseline, while runtime metadata accepts
-    compatible newer Loader releases.
+    and the official binary distribution checksum. Fabric Loader 0.17.2 is pinned
+    because that is the Loader exercised by the Loom 1.10.5 GameTest runtime.
     """
 
     def platform_init(
@@ -60,7 +56,7 @@ def install(spec_module: Any, runner_module: Any) -> None:
         minecraft_version: str = "1.20.1",
         java_version: str = "17",
         yarn_mappings: str = "1.20.1+build.1",
-        fabric_loader: str = "0.16.10",
+        fabric_loader: str = FABRIC_LOADER_VERSION,
         fabric_api: str = "0.92.11+1.20.1",
         fabric_loom: str = LOOM_VERSION,
         gradle: str = GRADLE_VERSION,
@@ -85,7 +81,7 @@ def install(spec_module: Any, runner_module: Any) -> None:
             "minecraft_version": "1.20.1",
             "java_version": "17",
             "yarn_mappings": "1.20.1+build.1",
-            "fabric_loader": "0.16.10",
+            "fabric_loader": FABRIC_LOADER_VERSION,
             "fabric_api": "0.92.11+1.20.1",
             "fabric_loom": LOOM_VERSION,
             "gradle": GRADLE_VERSION,
