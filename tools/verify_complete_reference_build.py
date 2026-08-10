@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteExecutionOptions,
@@ -17,6 +19,68 @@ from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.runner import GradleRunner
 from minecraft_mod_ai.scalable_pipeline import ScalableMinecraftModPipeline
 from minecraft_mod_ai.validator import validate_jar
+
+
+class _ReferenceCoderRouter:
+    """Deterministic CI coder that exercises the real custom-patch pipeline.
+
+    The reference workflow verifies orchestration, source patching, Gradle,
+    GameTest and JAR validation. It must not download or depend on a production
+    7-23GB local coding model merely to prove those host-side contracts. Real model
+    backends are covered by their own configuration/runtime contracts.
+    """
+
+    def generate_text(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        media_paths: Sequence[str | Path] = (),
+        response_format: str = "text",
+    ) -> str:
+        if role != "coder":
+            raise RuntimeError(
+                f"Reference coder received unexpected model role: {role}"
+            )
+        if media_paths:
+            raise RuntimeError("Reference coder does not accept media inputs.")
+        if not messages:
+            raise RuntimeError("Reference coder received no request messages.")
+
+        request = json.loads(str(messages[-1]["content"]))
+        module = request.get("module", {})
+        module_id = str(module.get("module_id", "reference_custom"))
+        digest = hashlib.sha256(module_id.encode("utf-8")).hexdigest()[:16]
+        class_name = "ReferenceCustom" + digest.upper()
+        path = f"src/main/java/mmm/reference/generated/{class_name}.java"
+        java_module_id = json.dumps(module_id, ensure_ascii=False)
+        content = (
+            "package mmm.reference.generated;\n\n"
+            f"public final class {class_name} {{\n"
+            f"    private {class_name}() {{}}\n\n"
+            "    public static String moduleId() {\n"
+            f"        return {java_module_id};\n"
+            "    }\n"
+            "}\n"
+        )
+        return json.dumps(
+            {
+                "operations": [
+                    {
+                        "operation": "create",
+                        "path": path,
+                        "content": content,
+                    }
+                ],
+                "runtime_tests": [
+                    f"Reference custom module {module_id} compiles in the generated Fabric project"
+                ],
+                "complete": True,
+                "next_cursor": "",
+                "context_page_complete": True,
+            },
+            ensure_ascii=False,
+        )
 
 
 def build_reference(output: Path) -> dict:
@@ -201,7 +265,8 @@ def build_reference(output: Path) -> dict:
     )
 
     source_result = CompleteProductionOrchestrator(
-        workspace_root=output / "orchestrator"
+        workspace_root=output / "orchestrator",
+        router_factory=_ReferenceCoderRouter,
     ).execute(
         proposal,
         approval_hash=proposal.calculate_hash(),
