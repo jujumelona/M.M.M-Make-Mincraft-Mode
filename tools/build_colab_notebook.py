@@ -26,24 +26,24 @@ CELL_SPECS = [
         "code",
         "configuration",
         """# @title 1. 만들 모드 입력
-PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." # @param {type:"string"}
-MODEL_PROFILE = "qwen36_35b_ud_q4" # @param ["qwen36_35b_ud_q4", "qwen36_27b_ud_q4", "qwen36_27b_q3_km", "qwen35_9b_ud_q4", "gemma4_26b_ud_iq4_nl", "gemma4_12b_ud_q4", "t4_local", "t4_quality", "remote_quality"] {type:"string"}
-RESUME_MODE = False # @param {type:"boolean"}
-REMOTE_BASE_URL = "" # @param {type:"string"}
-REMOTE_TEXT_MODEL = "" # @param {type:"string"}
-REMOTE_IMAGE_MODEL = "" # @param {type:"string"}
-REMOTE_SPEECH_MODEL = "" # @param {type:"string"}
-SOURCE_ONLY = True # @param {type:"boolean"}
-PATCH_EXISTING = False # @param {type:"boolean"}
-RUN_BLOCKBENCH = False # @param {type:"boolean"}
-RUN_RUNTIME = False # @param {type:"boolean"}
-RUN_CLIENT = False # @param {type:"boolean"}
-RUN_MINEFLAYER = False # @param {type:"boolean"}
-RUN_VISUAL_REVIEW = False # @param {type:"boolean"}
-ACCEPT_EULA = False # @param {type:"boolean"}
-SERVER_LAUNCHER = "" # @param {type:"string"}
-SAVE_TO_GOOGLE_DRIVE = True # @param {type:"boolean"}
-RUN_NAME = "complete-colab-run" # @param {type:"string"}
+PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
+MODEL_PROFILE = "qwen36_35b_ud_q4" #@param ["qwen36_35b_ud_q4", "qwen36_27b_ud_q4", "qwen36_27b_q3_km", "qwen35_9b_ud_q4", "gemma4_26b_ud_iq4_nl", "gemma4_12b_ud_q4", "t4_local", "t4_quality", "remote_quality"]
+RESUME_MODE = False #@param {type:"boolean"}
+REMOTE_BASE_URL = "" #@param {type:"string"}
+REMOTE_TEXT_MODEL = "" #@param {type:"string"}
+REMOTE_IMAGE_MODEL = "" #@param {type:"string"}
+REMOTE_SPEECH_MODEL = "" #@param {type:"string"}
+SOURCE_ONLY = True #@param {type:"boolean"}
+PATCH_EXISTING = False #@param {type:"boolean"}
+RUN_BLOCKBENCH = False #@param {type:"boolean"}
+RUN_RUNTIME = False #@param {type:"boolean"}
+RUN_CLIENT = False #@param {type:"boolean"}
+RUN_MINEFLAYER = False #@param {type:"boolean"}
+RUN_VISUAL_REVIEW = False #@param {type:"boolean"}
+ACCEPT_EULA = False #@param {type:"boolean"}
+SERVER_LAUNCHER = "" #@param {type:"string"}
+SAVE_TO_GOOGLE_DRIVE = True #@param {type:"boolean"}
+RUN_NAME = "complete-colab-run" #@param {type:"string"}
 SCREENSHOTS = []
 
 if not PROMPT.strip():
