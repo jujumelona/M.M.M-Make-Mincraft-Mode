@@ -32,6 +32,27 @@ _shared_speech: &shared_speech
   min_free_vram_mb: 3000
 
 profiles:
+  mini_mod:
+    description: "⚡ Mini Mod Test — 실제 Gemma4 LLM으로 초소형 간이 모드를 1분 만에 완벽 검증 및 생성"
+    roles:
+      planner: &mini_mod_gemma
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 8192
+        max_input_tokens: 0
+        max_new_tokens: 1024
+        min_free_vram_mb: 1000
+      researcher: *mini_mod_gemma
+      coder: *mini_mod_gemma
+      coder_safe: *mini_mod_gemma
+      visual_critic: *mini_mod_gemma
+      embedding: *shared_embedding
+      reranker: *shared_reranker
+      image_generator: *shared_image_gen
+      speech_recognition: *shared_speech
+
   fast_test:
     description: "⚡ Fast Test Mode — 10초 만에 1번~8번 셀 전체 파이프라인 무결성을 검증하고 모드 ZIP을 생성"
     roles:
