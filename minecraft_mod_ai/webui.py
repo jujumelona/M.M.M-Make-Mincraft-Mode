@@ -947,19 +947,17 @@ def create_demo(
             result_status,
             release_file,
         ]
-        send_button.click(
-            send_message,
-            inputs=event_inputs,
-            outputs=event_outputs,
-            api_visibility="private",
-        )
-        message.submit(
-            send_message,
-            inputs=event_inputs,
-            outputs=event_outputs,
-            api_visibility="private",
-        )
-        build_button.click(
+        def _bind_event(event_target, fn, **kwargs):
+            import inspect
+            sig = inspect.signature(event_target)
+            if "api_visibility" in sig.parameters:
+                kwargs["api_visibility"] = "private"
+            return event_target(fn, **kwargs)
+
+        _bind_event(send_button.click, send_message, inputs=event_inputs, outputs=event_outputs)
+        _bind_event(message.submit, send_message, inputs=event_inputs, outputs=event_outputs)
+        _bind_event(
+            build_button.click,
             approve_current,
             inputs=[proposal_state, chatbot, source_only],
             outputs=[
@@ -969,14 +967,8 @@ def create_demo(
                 result_status,
                 release_file,
             ],
-            api_visibility="private",
         )
-        reset_button.click(
-            reset_conversation,
-            inputs=[],
-            outputs=event_outputs,
-            api_visibility="private",
-        )
+        _bind_event(reset_button.click, reset_conversation, inputs=[], outputs=event_outputs)
     return demo
 
 

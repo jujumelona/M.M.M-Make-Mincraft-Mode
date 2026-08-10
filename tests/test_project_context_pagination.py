@@ -67,50 +67,12 @@ def test_project_context_pages_reconstruct_large_utf8_source_within_budget(
 class _ContextPagingRouter:
     def __init__(self) -> None:
         self.requests: list[dict] = []
-        self.inspection_pages: list[int] = []
-        self.first_observation_page = -1
-        self.late_observation_page = -1
         self.consumed_joint_contract = False
 
     def generate_text(self, role, messages, **kwargs):
         assert role == "coder"
         assert kwargs["response_format"] == "json"
         request = json.loads(messages[-1]["content"])
-        if request["phase"] == "inspect_project_source":
-            context = request["source_context"]
-            self.inspection_pages.append(context["page_index"])
-            observations = []
-            for item in context["files"]:
-                raw = item["content"].encode("utf-8")
-                for marker in (
-                    b"required contract FIRST_PAGE_SOURCE_FACT",
-                    b"required contract HIGH_INDEX_SOURCE_SENTINEL",
-                ):
-                    relative = raw.find(marker)
-                    if relative < 0:
-                        continue
-                    start = item["content_start_bytes"] + relative
-                    observations.append(
-                        {
-                            "path": item["path"],
-                            "sha256": item["sha256"],
-                            "content_start_bytes": start,
-                            "content_end_bytes": start + len(marker),
-                            "text": marker.decode("utf-8"),
-                        }
-                    )
-                    if b"FIRST_PAGE" in marker:
-                        self.first_observation_page = context["page_index"]
-                    else:
-                        self.late_observation_page = context["page_index"]
-            return json.dumps(
-                {
-                    "observations": observations,
-                    "complete": True,
-                    "next_cursor": "",
-                }
-            )
-
         assert request["phase"] == "generate_patch"
         self.requests.append(request)
         context = request["relevant_context"]
@@ -229,11 +191,11 @@ def test_custom_generator_consumes_relevant_source_beyond_first_context_page(
     generated = source / "GeneratedHook.java"
     assert result["status"] == "SOURCE_GENERATED"
     assert router.consumed_joint_contract is True
-    assert router.first_observation_page == 0
-    assert router.late_observation_page > router.first_observation_page
-    assert router.inspection_pages == list(range(len(router.inspection_pages)))
-    assert len(router.inspection_pages) > 1
     assert router.requests
+    assert all(
+        _serialized_size(request["relevant_context"]) <= budget
+        for request in router.requests
+    )
     assert [
         request["relevant_context"]["page_index"]
         for request in router.requests

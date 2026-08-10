@@ -839,46 +839,63 @@ class CompleteGameDesignPlanner:
                 audio_catalog.add(audio.sound_id)
             tests = [str(value).strip() for value in raw_tests if str(value).strip()]
             unique_tests = [t for t in tests if t not in test_catalog]
-            if not (
-                page_modules
-                or page_assets
-                or page_audio
-                or unique_tests
-            ):
-                fallback_test = f"Verify {batch.batch_id} production implementation."
-                if fallback_test not in test_catalog:
-                    unique_tests.append(fallback_test)
             tests = unique_tests
             parts.modules.extend(page_modules)
             parts.assets.extend(page_assets)
             parts.audio.extend(page_audio)
             parts.acceptance_tests.extend(tests)
             test_catalog.update(tests)
+
             # Host-driven completion & evidence verification:
-            # Deliverables claimed as completed MUST be backed by produced module/asset/audio/test evidence
-            # or explicit implements_deliverables claims on generated items
-            impl_claims: set[str] = set()
+            # Deliverables are completed ONLY if backed by host-verified evidence IDs actually produced
+            raw_evidence = page.get("deliverable_evidence")
+            if not isinstance(raw_evidence, dict):
+                raw_evidence = {}
+
+            completed_set: set[str] = set()
+            page_mod_ids = {m.module_id for m in page_modules}
+            page_asset_ids = {a.asset_id for a in page_assets}
+            page_audio_ids = {au.sound_id for au in page_audio}
+            page_tests = set(tests)
+
+            # 1. Check deliverable_evidence mapping
+            for deliv_name, ev_data in raw_evidence.items():
+                if deliv_name not in target_deliverables:
+                    continue
+                if isinstance(ev_data, dict):
+                    mod_ids = [str(x) for x in ev_data.get("module_ids", []) if str(x) in page_mod_ids or str(x) in module_catalog]
+                    asset_ids = [str(x) for x in ev_data.get("asset_ids", []) if str(x) in page_asset_ids or str(x) in asset_catalog]
+                    audio_ids = [str(x) for x in ev_data.get("audio_ids", []) if str(x) in page_audio_ids or str(x) in audio_catalog]
+                    test_ids = [str(x) for x in ev_data.get("acceptance_tests", []) if str(x) in page_tests or str(x) in test_catalog]
+                    if mod_ids or asset_ids or audio_ids or test_ids:
+                        completed_set.add(deliv_name)
+
+            # 2. Check explicit implements_deliverables / ID matches on produced items
+            completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]
             for raw_item in raw_modules + raw_assets + raw_audio:
                 if isinstance(raw_item, dict):
+                    item_id = str(raw_item.get("module_id") or raw_item.get("asset_id") or raw_item.get("sound_id") or "").strip()
                     claims = raw_item.get("implements_deliverables") or raw_item.get("implements") or ()
                     if isinstance(claims, (list, tuple)):
-                        impl_claims.update(str(c).strip() for c in claims if str(c).strip())
+                        for claim in claims:
+                            c = str(claim).strip()
+                            if c in target_deliverables and item_id:
+                                completed_set.add(c)
+                    if item_id and item_id in target_deliverables:
+                        completed_set.add(item_id)
 
-            evidence_count = len(page_modules) + len(page_assets) + len(page_audio) + (1 if tests else 0)
-            completed_set = {str(item).strip() for item in completed if str(item).strip()}
-            completed_set.update(impl_claims)
+            for c in completed_list:
+                if c in target_deliverables and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests or c in completed_set):
+                    completed_set.add(c)
 
-            if evidence_count > 0:
-                covered = [d for d in target_deliverables if d in completed_set]
-                if not covered:
-                    covered = list(target_deliverables[:evidence_count])
-                elif len(covered) > evidence_count and not impl_claims:
-                    # Model claimed more deliverables than actual evidence produced; cap to backed count
-                    covered = covered[:evidence_count]
-                completed_set = set(covered)
-            else:
-                # 0 evidence produced; advance target_deliverables[0] to prevent infinite loop
-                completed_set = {target_deliverables[0]}
+            # If model produced items matching target_deliverables directly, bind them
+            if not completed_set:
+                for deliv in target_deliverables:
+                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids:
+                        completed_set.add(deliv)
+                    elif page_modules and len(target_deliverables) == 1:
+                        completed_set.add(deliv)
+
             remaining = [v for v in remaining if v not in completed_set]
 
     def _expand_batches(

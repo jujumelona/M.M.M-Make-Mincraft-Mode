@@ -154,22 +154,39 @@ def build_production_work_plan(
         )
         generated_nodes.append(node_id)
 
+    synth_nodes: list[str] = []
     for index, audio in enumerate(
         _chunks(proposal.audio, max(1, policy.function_shard_size))
     ):
-        node_id = f"generate-audio-{index:08d}"
+        node_id = f"generate-audio-synth-{index:08d}"
         nodes.append(
             _node(
                 node_id,
-                "generate:audio",
+                "generate:audio-synth",
                 ("prepare-project",),
                 {
-                    "kind": "audio-shard",
+                    "kind": "audio-synth",
+                    "resource_class": "cpu_io",
                     "members": [asdict(request) for request in audio],
                 },
             )
         )
-        generated_nodes.append(node_id)
+        synth_nodes.append(node_id)
+
+    if synth_nodes:
+        finalize_id = "generate-audio-finalize"
+        nodes.append(
+            _node(
+                finalize_id,
+                "generate:audio-finalize",
+                tuple(synth_nodes),
+                {
+                    "kind": "audio-finalize",
+                    "resource_class": "commit",
+                },
+            )
+        )
+        generated_nodes.append(finalize_id)
 
     validation_dependencies = tuple(generated_nodes or ["prepare-project"])
     nodes.extend(

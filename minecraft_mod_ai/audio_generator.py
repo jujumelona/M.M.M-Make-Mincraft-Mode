@@ -20,7 +20,7 @@ class AudioGenerationError(RuntimeError):
     pass
 
 
-def generate_audio_assets(
+def synthesize_audio_files(
     *,
     project_root: str | Path,
     mod_id: str,
@@ -30,11 +30,7 @@ def generate_audio_assets(
     chunk_frames: int = 65_536,
     policy: ScalePolicy | None = None,
 ) -> dict[str, Any]:
-    """Stream deterministic OGG assets and shard Fabric SoundEvent registration.
-
-    Audio duration and sound count no longer force one in-memory waveform or one giant
-    Java class. Existing ``sounds.json`` entries are preserved and merged.
-    """
+    """Synthesize standalone .ogg sound files in parallel without modifying shared manifests/registries."""
 
     policy = policy or ScalePolicy.from_environment()
     policy.validate()
@@ -49,9 +45,9 @@ def generate_audio_assets(
     items = tuple(requests)
     if not items:
         return {
-            "schema_version": "mmm/audio-generation-v2",
             "status": "SKIPPED",
-            "sounds": [],
+            "synthesized": [],
+            "touched_paths": [],
         }
     for item in items:
         item.validate(policy=policy)
@@ -69,13 +65,8 @@ def generate_audio_assets(
     assets_root = f"src/main/resources/assets/{mod_id}"
     sound_dir = info.root / assets_root / "sounds"
     sound_dir.mkdir(parents=True, exist_ok=True)
-    sounds_path = info.root / assets_root / "sounds.json"
-    sounds_json = _load_object(sounds_path)
-    english: dict[str, str] = {}
-    korean: dict[str, str] = {}
-    generated: list[dict[str, Any]] = []
-
-    manifest_entries, directory_manifest = _load_audio_manifest(info.root)
+    synthesized: list[dict[str, Any]] = []
+    touched: list[str] = []
 
     for request in items:
         target = sound_dir / f"{request.sound_id}.ogg"
@@ -92,24 +83,8 @@ def generate_audio_assets(
                 f"OGG encoder did not produce a valid asset: {target}"
             )
         subtitle_key = f"subtitles.{mod_id}.{request.sound_id}"
-        sounds_json[request.sound_id] = {
-            "subtitle": subtitle_key,
-            "sounds": [
-                {
-                    "name": f"{mod_id}:{request.sound_id}",
-                    "stream": request.kind in {"ambient", "music"},
-                    "volume": request.volume,
-                    "pitch": 1.0,
-                    "preload": request.kind == "ui",
-                    "weight": 1,
-                }
-            ],
-        }
-        english[subtitle_key] = (
-            request.subtitle_en
-            or request.sound_id.replace("_", " ").title()
-        )
-        korean[subtitle_key] = request.subtitle_ko or english[subtitle_key]
+        sub_en = request.subtitle_en or request.sound_id.replace("_", " ").title()
+        sub_ko = request.subtitle_ko or sub_en
         entry = {
             "sound_id": request.sound_id,
             "kind": request.kind,
@@ -118,9 +93,71 @@ def generate_audio_assets(
             "sample_rate": sample_rate,
             "path": str(target),
             "size_bytes": target.stat().st_size,
+            "subtitle_key": subtitle_key,
+            "subtitle_en": sub_en,
+            "subtitle_ko": sub_ko,
+            "volume": request.volume,
         }
-        manifest_entries[request.sound_id] = entry
-        generated.append(entry)
+        synthesized.append(entry)
+        touched.append(str(target))
+
+    return {
+        "status": "SYNTHESIZED",
+        "synthesized": synthesized,
+        "touched_paths": touched,
+    }
+
+
+def finalize_audio_registry(
+    *,
+    project_root: str | Path,
+    mod_id: str,
+    package_name: str,
+    synthesized_batches: Iterable[dict[str, Any]],
+    policy: ScalePolicy | None = None,
+) -> dict[str, Any]:
+    """Single-threaded merge of synthesized audio entries into sounds.json, lang files, GeneratedSounds.java, and manifests."""
+
+    policy = policy or ScalePolicy.from_environment()
+    info = inspect_fabric_project(project_root)
+    assets_root = f"src/main/resources/assets/{mod_id}"
+    sounds_path = info.root / assets_root / "sounds.json"
+    sounds_json = _load_object(sounds_path)
+    english: dict[str, str] = {}
+    korean: dict[str, str] = {}
+    generated: list[dict[str, Any]] = []
+    manifest_entries, directory_manifest = _load_audio_manifest(info.root)
+
+    for batch in synthesized_batches:
+        for item in batch.get("synthesized", []):
+            sound_id = item["sound_id"]
+            subtitle_key = item["subtitle_key"]
+            sounds_json[sound_id] = {
+                "subtitle": subtitle_key,
+                "sounds": [
+                    {
+                        "name": f"{mod_id}:{sound_id}",
+                        "stream": item["kind"] in {"ambient", "music"},
+                        "volume": item.get("volume", 1.0),
+                        "pitch": 1.0,
+                        "preload": item["kind"] == "ui",
+                        "weight": 1,
+                    }
+                ],
+            }
+            english[subtitle_key] = item["subtitle_en"]
+            korean[subtitle_key] = item["subtitle_ko"]
+            entry = {
+                "sound_id": sound_id,
+                "kind": item["kind"],
+                "loop": item["loop"],
+                "duration_seconds": item["duration_seconds"],
+                "sample_rate": item["sample_rate"],
+                "path": item["path"],
+                "size_bytes": item["size_bytes"],
+            }
+            manifest_entries[sound_id] = entry
+            generated.append(entry)
 
     all_ids = sorted(sounds_json)
     manifest_records = (
@@ -166,7 +203,7 @@ def generate_audio_assets(
         )
     )
     emitted_sound_ids = (
-        [item.sound_id for item in items]
+        [item["sound_id"] for item in generated]
         if incremental_registrar
         else all_ids
     )
@@ -198,14 +235,51 @@ def generate_audio_assets(
         "sounds": generated,
         "sound_count": len(all_ids),
         "registrar_shards": len(emitted_sound_ids),
-        "source_receipt": receipt,
-        "binding_receipt": binding,
-        "required_gates": [
-            "Gradle",
-            "client sound playback",
-            "volume and loop review",
-        ],
+        "file_count": receipt["file_count"],
+        "written_files": receipt["written_files"],
+        "touched_paths": receipt["written_files"],
+        "initializer_binding": binding,
     }
+
+
+def generate_audio_assets(
+    *,
+    project_root: str | Path,
+    mod_id: str,
+    package_name: str,
+    requests: Iterable[AudioRequest],
+    sample_rate: int = 44_100,
+    chunk_frames: int = 65_536,
+    policy: ScalePolicy | None = None,
+) -> dict[str, Any]:
+    """Stream deterministic OGG assets and shard Fabric SoundEvent registration.
+
+    Audio duration and sound count no longer force one in-memory waveform or one giant
+    Java class. Existing ``sounds.json`` entries are preserved and merged.
+    """
+
+    synth_res = synthesize_audio_files(
+        project_root=project_root,
+        mod_id=mod_id,
+        package_name=package_name,
+        requests=requests,
+        sample_rate=sample_rate,
+        chunk_frames=chunk_frames,
+        policy=policy,
+    )
+    if synth_res.get("status") == "SKIPPED":
+        return {
+            "schema_version": "mmm/audio-generation-v2",
+            "status": "SKIPPED",
+            "sounds": [],
+        }
+    return finalize_audio_registry(
+        project_root=project_root,
+        mod_id=mod_id,
+        package_name=package_name,
+        synthesized_batches=[synth_res],
+        policy=policy,
+    )
 
 
 def register_existing_ogg(

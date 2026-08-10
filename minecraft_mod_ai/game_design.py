@@ -59,12 +59,14 @@ class GameDesignPlanner:
         if not prompt.strip():
             raise SpecValidationError("프롬프트를 입력해 주세요.")
 
-        request_pages = _authoritative_request_pages(prompt, self.router)
+        page_budget = _request_page_bytes(self.router)
+        request_pages = _lossless_request_pages(prompt, max_json_text_bytes=page_budget)
         if len(request_pages) > 1:
             return self._plan_sharded_request(
                 prompt,
                 request_pages=request_pages,
                 media_paths=media_paths,
+                page_budget=page_budget,
             )
 
         messages = [
@@ -122,6 +124,7 @@ class GameDesignPlanner:
         *,
         request_pages: tuple[str, ...],
         media_paths: Sequence[str | Path],
+        page_budget: int | None = None,
     ) -> tuple[dict[str, Any], Proposal]:
         """Interpret every bounded page of an arbitrarily large user request.
 
@@ -131,6 +134,7 @@ class GameDesignPlanner:
         once in isolation and then fails the whole plan closed.
         """
 
+        page_budget = page_budget or _request_page_bytes(self.router)
         prompt_bytes = prompt.encode("utf-8")
         prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
         page_designs: list[dict[str, Any]] = []
@@ -204,7 +208,7 @@ class GameDesignPlanner:
             "prompt_sha256": prompt_sha256,
             "prompt_byte_length": len(prompt_bytes),
             "page_count": len(request_pages),
-            "page_json_text_max_bytes": _REQUEST_PAGE_JSON_TEXT_BYTES,
+            "page_json_text_max_bytes": page_budget,
             "pages": [
                 {**receipt, "game_design": page_designs[index]}
                 for index, receipt in enumerate(page_receipts)

@@ -6,7 +6,11 @@ import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
-from .audio_generator import generate_audio_assets
+from .audio_generator import (
+    finalize_audio_registry,
+    generate_audio_assets,
+    synthesize_audio_files,
+)
 from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
 from .complete_orchestrator_support import CompleteProductionError, _external_gates, _jar_path, _locate_existing_fabric_root, _module_dict, _normalize_modules, _system_groups
 from .custom_module_generator import CustomModuleGenerator
@@ -14,11 +18,11 @@ from .extended_content_generator import generate_extended_content
 from .scalable_generator import ScalableFabricProjectGenerator as FabricProjectGenerator
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
-from .java_lsp import JavaLanguageService
 from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
     generate_local_ai_sidecar,
 )
+from .project_index import ProjectIndex
 from .model_router import ModelRouter
 from .project_edit import ProjectEditError, inspect_fabric_project
 from .project_index import ProjectIndex
@@ -849,12 +853,14 @@ class CompleteProductionOrchestrator:
         unresolved: list[str] = []
         asset_shards: list[dict[str, Any]] = []
         audio_shards: list[dict[str, Any]] = []
+        audio_synth_results: list[dict[str, Any]] = []
 
         def get_router() -> ModelRouter:
             nonlocal router
             router = router or self.router_factory()
             return router
 
+        shared_project_index = ProjectIndex(project_root, policy=self.policy)
         custom_generator: CustomModuleGenerator | None = None
 
         def get_custom_generator() -> CustomModuleGenerator:
@@ -864,6 +870,7 @@ class CompleteProductionOrchestrator:
                     get_router(),
                     policy=self.policy,
                     fast_mode=getattr(self, "_fast_mode", False),
+                    project_index=shared_project_index,
                 )
             return custom_generator
 
@@ -1144,6 +1151,56 @@ class CompleteProductionOrchestrator:
                         ),
                     )
                 )
+            elif kind == "audio-synth":
+                ids = [
+                    str(item.get("sound_id"))
+                    for item in node.payload.get("members", [])
+                    if isinstance(item, dict)
+                ]
+                if not ids or any(item not in audio_lookup for item in ids):
+                    raise CompleteProductionError(
+                        f"Work node {node.node_id} has invalid audio."
+                    )
+                audio_synth_results.append(
+                    self._run_work_node(
+                        ledger,
+                        node,
+                        action=lambda ids=ids: synthesize_audio_files(
+                            project_root=project_root,
+                            mod_id=spec.mod_id,
+                            package_name=spec.package_name,
+                            requests=tuple(
+                                audio_lookup[item] for item in ids
+                            ),
+                            policy=self.policy,
+                        ),
+                        validate_cached=lambda cached: (
+                            self._receipt_outputs_exist(
+                                cached,
+                                project_root=project_root,
+                            )
+                        ),
+                    )
+                )
+            elif kind == "audio-finalize":
+                fin_receipt = self._run_work_node(
+                    ledger,
+                    node,
+                    action=lambda: finalize_audio_registry(
+                        project_root=project_root,
+                        mod_id=spec.mod_id,
+                        package_name=spec.package_name,
+                        synthesized_batches=audio_synth_results,
+                        policy=self.policy,
+                    ),
+                    validate_cached=lambda cached: (
+                        self._receipt_outputs_exist(
+                            cached,
+                            project_root=project_root,
+                        )
+                    ),
+                )
+                audio_shards.append(fin_receipt)
             elif kind == "audio-shard":
                 ids = [
                     str(item.get("sound_id"))
@@ -1181,91 +1238,96 @@ class CompleteProductionOrchestrator:
                 )
 
         # ── Pipeline DAG Scheduler ────────────────────────────────────
-        # CPU/IO pool and LLM 1-lane run CONCURRENTLY, each consuming
-        # ready nodes from the DAG as soon as their dependencies are met.
-        # This eliminates the "non-LLM waits → LLM waits" phase gap.
+        # Specialized multi-executor pools dispatch work nodes by resource_class:
+        # - cpu_pool: content, system, entity, audio-synth (N workers)
+        # - llm_pool: custom LLM modules (1 worker)
+        # - image_pool: asset generation (1 worker)
+        # - commit_pool: audio finalize / path commit (1 worker)
         import os
-        import threading
         from concurrent.futures import ThreadPoolExecutor, Future
 
         max_io_workers = min(4, os.cpu_count() or 2)
-        _llm_lane_lock = threading.Lock()
+        cpu_pool = ThreadPoolExecutor(max_workers=max_io_workers, thread_name_prefix="cpu_io")
+        llm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm")
+        image_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image_gpu")
+        commit_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="commit")
+
         _node_futures: dict[str, Future] = {}
 
-        def _is_llm_node(node) -> bool:
-            return str(node.payload.get("kind", "")) == "module-shard"
+        def dispatch_node(node: WorkNode) -> Future:
+            res_class = getattr(node, "resource_class", "") or str(node.payload.get("resource_class", "cpu_io"))
+            if res_class == "llm":
+                return llm_pool.submit(process_node, node)
+            elif res_class == "image_gpu":
+                return image_pool.submit(process_node, node)
+            elif res_class == "commit":
+                return commit_pool.submit(process_node, node)
+            else:
+                return cpu_pool.submit(process_node, node)
 
-        def _run_llm_serial(node):
-            """LLM nodes run under a dedicated lock — 1-lane GPU stream."""
-            with _llm_lane_lock:
-                process_node(node)
+        generation_stages = tuple(sorted({
+            n.stage
+            for n in work_plan.nodes
+            if n.stage.startswith("generate:")
+        }))
 
-        with ThreadPoolExecutor(max_workers=max_io_workers + 1) as pool:
-            # +1 for the LLM thread (it blocks on _llm_lane_lock anyway)
+        try:
             while True:
                 ledger.raise_if_cancelled()
 
-                # Harvest completed futures and propagate exceptions
-                done_ids = [
-                    nid for nid, fut in _node_futures.items() if fut.done()
-                ]
+                # Harvest finished futures
+                done_ids = [nid for nid, fut in _node_futures.items() if fut.done()]
                 for nid in done_ids:
                     fut = _node_futures.pop(nid)
                     exc = fut.exception()
                     if exc is not None:
-                        # Node failure is already recorded in the ledger by
-                        # process_node; log but don't crash the scheduler.
-                        print(
-                            f"⚠️ [Pipeline] Node {nid} raised: {exc}",
-                            flush=True,
-                        )
+                        print(f"⚠️ [Pipeline] Node {nid} raised: {exc}", flush=True)
 
-                # Claim every ready node the DAG currently offers
+                gen_nodes = [n for n in work_plan.nodes if n.stage.startswith("generate:")]
+                states = {n.node_id: ledger.task(n.node_id)["state"] for n in gen_nodes}
+
+                if any(s in ("failed", "cancelled") for s in states.values()):
+                    failed_ids = [nid for nid, s in states.items() if s in ("failed", "cancelled")]
+                    raise CompleteProductionError(f"Pipeline generation failed on nodes: {failed_ids}")
+
+                if all(s in ("succeeded", "completed") for s in states.values()):
+                    break
+
                 claimed_batch: list[dict[str, Any]] = []
                 while len(claimed_batch) < 8:
                     claimed = ledger.claim_ready(
-                        worker_id="mmm-orchestrator", lease_seconds=900,
+                        worker_id="mmm-orchestrator",
+                        stages=generation_stages,
+                        lease_seconds=900,
                     )
                     if claimed is None:
                         break
                     claimed_batch.append(claimed)
 
-                # Submit all newly claimed nodes to the appropriate lane
                 for claim in claimed_batch:
                     node = next(
-                        (n for n in work_plan.nodes
-                         if n.node_id == str(claim["node_id"])),
+                        (n for n in work_plan.nodes if n.node_id == str(claim["node_id"])),
                         None,
                     )
-                    if node is None or not node.stage.startswith("generate:"):
-                        continue
-                    if _is_llm_node(node):
-                        fut = pool.submit(_run_llm_serial, node)
-                    else:
-                        fut = pool.submit(process_node, node)
-                    _node_futures[node.node_id] = fut
+                    if node is not None:
+                        _node_futures[node.node_id] = dispatch_node(node)
 
-                # If nothing is in-flight AND nothing was claimed, we're done
-                # or stuck. Check for truly un-finished generation nodes.
                 if not _node_futures and not claimed_batch:
-                    uncompleted = [
-                        n for n in work_plan.nodes
-                        if n.stage.startswith("generate:")
-                        and ledger.task(n.node_id)["state"]
-                        not in ("succeeded", "completed")
-                    ]
-                    if not uncompleted:
-                        break
-                    # Safety fallback: run remaining nodes sequentially
-                    for n in uncompleted:
-                        process_node(n)
+                    pending_ids = [nid for nid, s in states.items() if s not in ("succeeded", "completed")]
+                    if pending_ids:
+                        raise CompleteProductionError(
+                            f"WorkGraph DAG deadlock: pending nodes remain but no ready nodes available: {pending_ids}"
+                        )
                     break
 
-                # If we claimed nothing new but futures are still running,
-                # wait for at least one to finish before polling again.
                 if not claimed_batch and _node_futures:
                     import time
                     time.sleep(0.05)
+        finally:
+            cpu_pool.shutdown(wait=False)
+            llm_pool.shutdown(wait=False)
+            image_pool.shutdown(wait=False)
+            commit_pool.shutdown(wait=False)
 
         asset_receipt = (
             {
@@ -1309,6 +1371,7 @@ class CompleteProductionOrchestrator:
         *,
         action: Callable[[], dict[str, Any]],
         validate_cached: Callable[[dict[str, Any]], bool],
+        shared_index: ProjectIndex | None = None,
     ) -> dict[str, Any]:
         cached = ledger.cached_receipt(
             node.node_id,
@@ -1333,6 +1396,14 @@ class CompleteProductionOrchestrator:
                 )
             ledger.raise_if_cancelled()
             ledger.succeed(node.node_id, receipt)
+            if shared_index is not None:
+                touched = receipt.get("touched_paths") or receipt.get("written_files") or []
+                if touched:
+                    try:
+                        shared_index.update_files(touched)
+                        shared_index.write_manifest()
+                    except Exception:
+                        pass
             return receipt
         except BaseException as exc:
             try:
