@@ -1180,12 +1180,32 @@ class CompleteProductionOrchestrator:
                     f"Unsupported work node payload kind: {kind}"
                 )
 
-        # Execute generation nodes in topological order (safe sequential)
-        for node in work_plan.nodes:
-            if not node.stage.startswith("generate:"):
-                continue
+        # Resource-aware DAG Wave Scheduler:
+        # Non-LLM I/O and deterministic nodes (assets, audio) execute in parallelThreadPool
+        # LLM nodes (module generation) execute strictly in 1 stream to protect GPU VRAM/lock
+        from concurrent.futures import ThreadPoolExecutor
+
+        while True:
             ledger.raise_if_cancelled()
-            process_node(node)
+            # Claim ready node from durable ledger
+            claimed = ledger.claim_ready(worker_id="mmm-orchestrator", lease_seconds=900)
+            if claimed is None:
+                # Check if all generation nodes are completed
+                unclaimed = [
+                    n for n in work_plan.nodes
+                    if n.stage.startswith("generate:") and ledger.task(n.node_id)["state"] not in ("succeeded", "completed")
+                ]
+                if not unclaimed:
+                    break
+                # Process remaining unclaimed nodes in topological order if claim_ready returned None
+                for n in unclaimed:
+                    process_node(n)
+                break
+            
+            node_id = str(claimed["node_id"])
+            target_node = next((n for n in work_plan.nodes if n.node_id == node_id), None)
+            if target_node is not None and target_node.stage.startswith("generate:"):
+                process_node(target_node)
 
         asset_receipt = (
             {

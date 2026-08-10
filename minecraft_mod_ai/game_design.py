@@ -59,7 +59,7 @@ class GameDesignPlanner:
         if not prompt.strip():
             raise SpecValidationError("프롬프트를 입력해 주세요.")
 
-        request_pages = _authoritative_request_pages(prompt)
+        request_pages = _authoritative_request_pages(prompt, self.router)
         if len(request_pages) > 1:
             return self._plan_sharded_request(
                 prompt,
@@ -234,11 +234,18 @@ class GameDesignPlanner:
         return design, proposal
 
 
-def _request_page_bytes(router: ModelRouter | None = None) -> int:
+def _request_page_bytes(router: ModelRouter | None = None, role: str = "planner") -> int:
     if router is not None:
         try:
-            ctx = router.adapter.policy.model_context_bytes
-            return max(4 * 1024, min(32 * 1024, (ctx - 2048) // 2))
+            config = router.registry.role(router.profile, role)
+            ctx = getattr(config, "max_context", None) or getattr(config, "context_window", None)
+            if not ctx and hasattr(config, "extra") and isinstance(config.extra, dict):
+                ctx = config.extra.get("max_context") or config.extra.get("context_window")
+            if ctx and isinstance(ctx, int) and ctx > 0:
+                # Page budget: bounded byte size scaled from context window
+                # Reserve 2048 tokens for response/overhead, converted to JSON byte estimate (1 token ~ 3.5 bytes)
+                available_tokens = max(1024, ctx - 2048)
+                return max(4 * 1024, min(64 * 1024, int(available_tokens * 3.5)))
         except Exception:
             pass
     return 32 * 1024

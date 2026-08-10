@@ -474,13 +474,13 @@ def _collect_source_observations(
         for item in page.get("files", []):
             if isinstance(item, dict) and "path" in item and ("content" in item or "text" in item):
                 content_str = str(item.get("content", item.get("text", "")))
-                record = {
-                    "path": str(item["path"]),
-                    "sha256": str(item.get("sha256", "")),
-                    "content_start_bytes": int(item.get("content_start_bytes", 0)),
-                    "content_end_bytes": int(item.get("content_end_bytes", len(content_str.encode("utf-8")))),
-                    "text": content_str,
-                }
+                record = _exact_observation(
+                    path=str(item["path"]),
+                    sha256=str(item.get("sha256", "")),
+                    start=int(item.get("content_start_bytes", 0)),
+                    content=content_str.encode("utf-8"),
+                    source_page=int(page.get("page_index", 0)),
+                )
                 _append_observation(records, record_keys, record)
 
         source_page_count += 1
@@ -504,7 +504,9 @@ def _collect_source_observations(
         "policy": {
             "exact_source_quotes": True,
             "path_sha256_byte_range_bound": True,
-            "all_host_source_pages_exhausted_before_patch": True,
+            "retrieval_mode": "ranked_top_k_initial",
+            "initial_page_limit": 3,
+            "source_pages_exhausted": not bool(cursor),
         },
     }
     return {
