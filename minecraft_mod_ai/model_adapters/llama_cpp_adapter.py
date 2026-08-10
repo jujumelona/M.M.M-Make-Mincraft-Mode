@@ -112,8 +112,8 @@ class LlamaCppAdapter(ModelAdapter):
                 )
 
                 # Attempt maximum GPU layer offloading first
-                current_layers = 99
-                active_ctx = ctx_len
+                # Cap initial active_ctx to 16384 to protect Colab 12.7GB System RAM from OS SIGKILL
+                active_ctx = min(cfg.max_context, 16384)
 
                 while True:
                     try:
@@ -122,6 +122,8 @@ class LlamaCppAdapter(ModelAdapter):
                             n_gpu_layers=current_layers,
                             n_ctx=active_ctx,
                             n_batch=512,
+                            use_mmap=False,   # Prevents Colab OS System RAM OOM Kernel Crash (SIGKILL 9)
+                            use_mlock=False,  # Prevents RAM lock allocation crash
                             flash_attn=True,
                             verbose=True,
                         )
