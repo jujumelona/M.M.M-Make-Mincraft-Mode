@@ -27,25 +27,27 @@ CELL_SPECS = [
         "configuration",
         """# @title 1. 만들 모드 입력
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
-MODEL_PROFILE = "Gemma4-12B_7GB" #@param ["Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "Qwen3.5-9B_6GB", "mini_mod", "fast_test", "t4_local", "t4_quality", "remote_quality"]
+MODEL_PROFILE = "Gemma4-12B_7GB" #@param ["Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "Qwen3.5-9B_6GB", "mini_mod", "fast_test"]
 FAST_MODE = False #@param {type:"boolean"}
-RESUME_MODE = False #@param {type:"boolean"}
-RESUME_PLAN_FILE = "" #@param {type:"string"}
-REMOTE_BASE_URL = "" #@param {type:"string"}
-REMOTE_TEXT_MODEL = "" #@param {type:"string"}
-REMOTE_IMAGE_MODEL = "" #@param {type:"string"}
-REMOTE_SPEECH_MODEL = "" #@param {type:"string"}
-SOURCE_ONLY = True #@param {type:"boolean"}
-PATCH_EXISTING = False #@param {type:"boolean"}
-RUN_BLOCKBENCH = False #@param {type:"boolean"}
-RUN_RUNTIME = False #@param {type:"boolean"}
-RUN_CLIENT = False #@param {type:"boolean"}
-RUN_MINEFLAYER = False #@param {type:"boolean"}
-RUN_VISUAL_REVIEW = False #@param {type:"boolean"}
-ACCEPT_EULA = False #@param {type:"boolean"}
-SERVER_LAUNCHER = "" #@param {type:"string"}
-SAVE_TO_GOOGLE_DRIVE = True #@param {type:"boolean"}
-RUN_NAME = "complete-colab-run" #@param {type:"string"}
+
+# ─── 내부 자동 설정 (수정할 필요 없음) ───
+RESUME_MODE = False
+RESUME_PLAN_FILE = ""
+REMOTE_BASE_URL = ""
+REMOTE_TEXT_MODEL = ""
+REMOTE_IMAGE_MODEL = ""
+REMOTE_SPEECH_MODEL = ""
+SOURCE_ONLY = True
+PATCH_EXISTING = False
+RUN_BLOCKBENCH = False
+RUN_RUNTIME = False
+RUN_CLIENT = False
+RUN_MINEFLAYER = False
+RUN_VISUAL_REVIEW = False
+ACCEPT_EULA = False
+SERVER_LAUNCHER = ""
+SAVE_TO_GOOGLE_DRIVE = True
+RUN_NAME = "complete-colab-run"
 SCREENSHOTS = []
 
 if not PROMPT.strip():
