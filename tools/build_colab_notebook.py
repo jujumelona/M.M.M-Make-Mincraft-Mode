@@ -315,23 +315,28 @@ print("="*60)
     (
         "code",
         "revise",
-        """# @title 6. 계획 수정 대화 (원할 때까지 반복 가능)
+        """# @title 6. 계획 수정 대화 (현재 계획 확인 및 자유 수정)
 REVISION = "" # @param {type:"string"}
+assert_current_colab_setup()
+if 'session' not in globals() or 'reply' not in globals():
+    raise RuntimeError("5번 셀을 먼저 실행하여 기획 세션을 생성해야 합니다.")
+
 if REVISION.strip():
-    assert_current_colab_setup()
-    if 'session' not in globals():
-        raise RuntimeError("5번 셀을 먼저 실행하여 기획 세션을 생성해야 합니다.")
-    print(f"💬 [수정 요청 중]: {REVISION}", flush=True)
+    print(f"💬 [수정 요청 진행 중]: {REVISION}", flush=True)
     reply = session.revise(REVISION)
-    print("\\n✨ [수정 반영된 최신 기획서]:")
+    print("\\n✨ [수정 반영된 최신 게임 기획서]:")
     print(reply.message)
     print("\\n" + "="*60)
-    print("🔄 기획을 더 수정하고 싶으시면 REVISION 칸에 새 요청을 적고 6번 셀을 다시 실행하세요!")
-    print("✅ 기획 완성이 마음에 드시면 7번 셀을 실행하여 모드 제작을 시작하세요.")
+    print("🔄 기획을 더 수정하고 싶으시면 위 REVISION 칸에 추가 요청을 적고 6번 셀을 다시 실행하세요.")
+    print("✅ 기획 완성이 마음에 드시면 다음 7번 셀을 실행하여 모드 제작을 진행하세요.")
     print("="*60)
 else:
-    print("💡 REVISION 폼에 수정할 내용을 텍스트로 적고 6번 셀을 실행하면 기획이 수정됩니다.")
-    print("수정할 내용이 없으면 다음 7번 셀로 바로 이동하세요.")
+    print("📋 [현재 확정된 게임 기획서 내용]:")
+    print(reply.message)
+    print("\\n" + "="*60)
+    print("💬 이 기획을 수정하고 싶으시면 위 REVISION 칸에 수정 요청사항을 입력하고 6번 셀을 실행하세요!")
+    print("🚀 이 기획 그대로 진행하시려면 바로 아래 7번 셀[이 계획으로 만들기]을 실행하세요.")
+    print("="*60)
 """,
     ),
     (
