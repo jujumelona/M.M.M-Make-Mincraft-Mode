@@ -18,6 +18,35 @@ from .base import (
 )
 
 
+MODEL_LAYER_COUNTS = {
+    "unsloth/Qwen3.6-35B-A3B-MTP-GGUF": 40,
+    "unsloth/Qwen3.6-27B-MTP-GGUF": 64,
+    "unsloth/Qwen3.5-9B-MTP-GGUF": 32,
+    "unsloth/gemma-4-26B-A4B-it-GGUF": 30,
+    "unsloth/gemma-4-12b-it-GGUF": 48,
+}
+
+
+def _get_gguf_layer_count(model_path: str) -> int:
+    """Read actual block_count / layer_count from GGUF binary header."""
+    import struct
+    try:
+        with open(model_path, "rb") as f:
+            header = f.read(4 * 1024 * 1024)
+            pos = header.find(b".block_count")
+            if pos != -1:
+                for offset in range(pos + len(b".block_count"), min(len(header) - 8, pos + len(b".block_count") + 16)):
+                    try:
+                        val_type, val = struct.unpack("<II", header[offset:offset + 8])
+                        if val_type in (4, 5, 8, 9, 10) and 4 <= val <= 128:
+                            return val
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return 32
+
+
 class LlamaCppAdapter(ModelAdapter):
     """Adapter: llama-cpp-python GGUF engine with GPU layer offloading."""
 
@@ -73,6 +102,10 @@ class LlamaCppAdapter(ModelAdapter):
                 ctx_len = min(cfg.max_context, 16384)
                 gpu_layers = cfg.extra.get("n_gpu_layers", -1)
 
+                actual_total_layers = MODEL_LAYER_COUNTS.get(
+                    cfg.model_id, _get_gguf_layer_count(model_path)
+                )
+
                 if gpu_layers == -1:
                     try:
                         import torch
@@ -84,19 +117,17 @@ class LlamaCppAdapter(ModelAdapter):
                             vram_for_weights = total_free_vram_mb - dynamic_kv_mb
 
                             if file_size_mb > vram_for_weights and vram_for_weights > 0:
-                                # Standard GGUF architecture layer count (Gemma4/Qwen2/Qwen3 ~30-36 layers)
-                                estimated_total_layers = 30
-                                weight_ratio = min(0.95, vram_for_weights / file_size_mb)
-                                gpu_layers = max(1, int(estimated_total_layers * weight_ratio))
+                                weight_ratio = max(0.1, min(0.92, vram_for_weights / file_size_mb))
+                                gpu_layers = max(1, int(actual_total_layers * weight_ratio))
                                 print(
-                                    f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers} layers "
+                                    f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers}/{actual_total_layers} layers "
                                     f"(Free VRAM: {total_free_vram_mb:.0f}MB / Dynamic KV-Cache: {dynamic_kv_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
                                     flush=True,
                                 )
                             else:
                                 gpu_layers = -1
                                 print(
-                                    f"⚡ [llama.cpp] Full GPU load: All layers on GPU "
+                                    f"⚡ [llama.cpp] Full GPU load: All {actual_total_layers} layers on GPU "
                                     f"(Free VRAM: {total_free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
                                     flush=True,
                                 )
@@ -115,12 +146,13 @@ class LlamaCppAdapter(ModelAdapter):
                         )
                         break
                     except Exception as init_err:
-                        if current_layers != 0 and ("llama_context" in str(init_err).lower() or "cuda" in str(init_err).lower()):
-                            # Reduce offloaded layers dynamically if KV cache or CUDA allocation fails
-                            new_layers = max(0, (current_layers if (current_layers > 0 and current_layers <= 30) else 25) - 3)
+                        err_msg = str(init_err).lower()
+                        if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg):
+                            base = actual_total_layers if current_layers == -1 else current_layers
+                            new_layers = max(0, int(base * 0.85) - 1)
                             print(
-                                f"⚠️ [llama.cpp] Context/CUDA allocation warning with {current_layers} layers. "
-                                f"Auto-adjusting to {new_layers} layers...",
+                                f"⚠️ [llama.cpp] VRAM pressure detected with {current_layers} layers. "
+                                f"Auto-reducing offload to {new_layers}/{actual_total_layers} layers and retrying...",
                                 flush=True,
                             )
                             current_layers = new_layers
