@@ -18,12 +18,12 @@ LOCAL_PROFILES = frozenset(
     {
         "t4_quality",
         "t4_local",
-        "qwen36_35b_ud_q4",
-        "qwen36_27b_ud_q4",
-        "qwen36_27b_q3_km",
-        "qwen35_9b_ud_q4",
-        "gemma4_26b_ud_iq4_nl",
-        "gemma4_12b_ud_q4",
+        "Qwen3.6-35B_23GB",
+        "Qwen3.6-27B_18GB",
+        "Qwen3.6-27B_14GB",
+        "Qwen3.5-9B_6GB",
+        "Gemma4-26B_14GB",
+        "Gemma4-12B_7GB",
     }
 )
 SUPPORTED_PROFILES = LOCAL_PROFILES | {"remote_quality"}

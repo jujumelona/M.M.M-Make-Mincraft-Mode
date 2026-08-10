@@ -27,7 +27,7 @@ CELL_SPECS = [
         "configuration",
         """# @title 1. 만들 모드 입력
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
-MODEL_PROFILE = "qwen36_35b_ud_q4" #@param ["qwen36_35b_ud_q4", "qwen36_27b_ud_q4", "qwen36_27b_q3_km", "qwen35_9b_ud_q4", "gemma4_26b_ud_iq4_nl", "gemma4_12b_ud_q4", "t4_local", "t4_quality", "remote_quality"]
+MODEL_PROFILE = "Qwen3.6-35B_23GB" #@param ["Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "Qwen3.5-9B_6GB", "Gemma4-26B_14GB", "Gemma4-12B_7GB", "t4_local", "t4_quality", "remote_quality"]
 RESUME_MODE = False #@param {type:"boolean"}
 RESUME_PLAN_FILE = "" #@param {type:"string"}
 REMOTE_BASE_URL = "" #@param {type:"string"}

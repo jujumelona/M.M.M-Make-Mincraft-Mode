@@ -77,7 +77,8 @@ class LlamaCppAdapter(ModelAdapter):
                     try:
                         import torch
                         if torch.cuda.is_available():
-                            free_vram_mb = torch.cuda.mem_get_info()[0] / (1024 * 1024) - 2500
+                            # Reserve 4500MB for 16k context KV-cache + PyTorch context overhead
+                            free_vram_mb = (torch.cuda.mem_get_info()[0] / (1024 * 1024)) - 4500
                             file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
                             if file_size_mb > free_vram_mb and free_vram_mb > 0:
                                 total_layers = 40
@@ -85,7 +86,14 @@ class LlamaCppAdapter(ModelAdapter):
                                 gpu_layers = max(1, int(free_vram_mb // mb_per_layer))
                                 print(
                                     f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers} layers "
-                                    f"(Free VRAM: {free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
+                                    f"(Free VRAM for weights: {free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB / Reserve KV-Cache: 4500MB)",
+                                    flush=True,
+                                )
+                            elif file_size_mb <= free_vram_mb:
+                                gpu_layers = -1
+                                print(
+                                    f"⚡ [llama.cpp] Full GPU load: All layers on GPU "
+                                    f"(Model: {file_size_mb:.0f}MB <= Free VRAM for weights: {free_vram_mb:.0f}MB)",
                                     flush=True,
                                 )
                     except Exception:
