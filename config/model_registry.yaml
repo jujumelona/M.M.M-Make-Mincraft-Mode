@@ -33,18 +33,18 @@ _shared_speech: &shared_speech
 
 profiles:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Full 16k (16384) Context Length profiles for maximum planning depth
+  # Each model tuned with its exact native maximum architecture context length
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Qwen3.6-35B_23GB:
-    description: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF UD-Q4_K_XL (22.9GB) — 16k Context + Smart Offload"
+    description: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF UD-Q4_K_XL (22.9GB) — Native 32k Context"
     roles:
       planner: &qwen36_35b
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
         torch_dtype: float16
-        max_context: 16384
+        max_context: 32768
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -58,14 +58,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Qwen3.6-27B_18GB:
-    description: "unsloth/Qwen3.6-27B-MTP-GGUF UD-Q4_K_XL (17.9GB) — 16k Context + Smart Offload"
+    description: "unsloth/Qwen3.6-27B-MTP-GGUF UD-Q4_K_XL (17.9GB) — Native 32k Context"
     roles:
       planner: &qwen36_27b_q4
         model_id: unsloth/Qwen3.6-27B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
         torch_dtype: float16
-        max_context: 16384
+        max_context: 32768
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -79,14 +79,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Qwen3.6-27B_14GB:
-    description: "unsloth/Qwen3.6-27B-MTP-GGUF Q3_K_M (13.8GB) — 16k Context"
+    description: "unsloth/Qwen3.6-27B-MTP-GGUF Q3_K_M (13.8GB) — Native 32k Context"
     roles:
       planner: &qwen36_27b_q3
         model_id: unsloth/Qwen3.6-27B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
         torch_dtype: float16
-        max_context: 16384
+        max_context: 32768
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -100,14 +100,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Gemma4-26B_14GB:
-    description: "unsloth/gemma-4-26B-A4B-it-GGUF UD-IQ4_NL (13.6GB) — 16k Context"
+    description: "unsloth/gemma-4-26B-A4B-it-GGUF UD-IQ4_NL (13.6GB) — Native 256k Context"
     roles:
       planner: &gemma4_26b
         model_id: unsloth/gemma-4-26B-A4B-it-GGUF
         adapter: llama_cpp
         gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
         torch_dtype: float16
-        max_context: 16384
+        max_context: 262144
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 2000
@@ -121,14 +121,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Gemma4-12B_7GB:
-    description: "unsloth/gemma-4-12b-it-GGUF UD-Q4_K_XL (7.37GB) — 16k Context"
+    description: "unsloth/gemma-4-12b-it-GGUF UD-Q4_K_XL (7.37GB) — Native 256k Context"
     roles:
       planner: &gemma4_12b
         model_id: unsloth/gemma-4-12b-it-GGUF
         adapter: llama_cpp
         gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
         torch_dtype: float16
-        max_context: 16384
+        max_context: 262144
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 1000
@@ -142,14 +142,14 @@ profiles:
       speech_recognition: *shared_speech
 
   Qwen3.5-9B_6GB:
-    description: "unsloth/Qwen3.5-9B-MTP-GGUF UD-Q4_K_XL (6.14GB) — 16k Context"
+    description: "unsloth/Qwen3.5-9B-MTP-GGUF UD-Q4_K_XL (6.14GB) — Native 32k Context"
     roles:
       planner: &qwen35_9b
         model_id: unsloth/Qwen3.5-9B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
         torch_dtype: float16
-        max_context: 16384
+        max_context: 32768
         max_input_tokens: 0
         max_new_tokens: 8192
         min_free_vram_mb: 1000
