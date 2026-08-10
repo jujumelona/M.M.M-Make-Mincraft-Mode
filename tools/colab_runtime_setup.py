@@ -181,24 +181,18 @@ def _validate_checkout(
     if engine_was_loaded and (
         not previous_commit or previous_commit.strip() != used_commit
     ):
-        raise RuntimeError(
-            "minecraft_mod_ai was already imported from an older or unknown "
-            "checkout. Restart the Colab runtime and rerun from cell 1 so the "
-            "pulled commit is actually loaded."
+        print(
+            f"🔄 Automatically reloading engine modules (commit {previous_commit[:7] if previous_commit else 'old'} -> {used_commit[:7]})...",
+            flush=True,
         )
-    if engine_was_loaded:
-        package_root = (repo_dir / "minecraft_mod_ai").resolve()
-        if not engine_module_file:
-            raise RuntimeError(
-                "minecraft_mod_ai is already loaded but its source path is "
-                "unknown. Restart the Colab runtime and rerun from cell 1."
-            )
-        loaded_path = Path(engine_module_file).resolve()
-        if not loaded_path.is_relative_to(package_root):
-            raise RuntimeError(
-                "minecraft_mod_ai is already loaded from a different checkout. "
-                "Restart the Colab runtime and rerun from cell 1."
-            )
+        to_purge = [
+            name
+            for name in list(sys.modules.keys())
+            if name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai.")
+        ]
+        for name in to_purge:
+            sys.modules.pop(name, None)
+        importlib.invalidate_caches()
 
 
 def _require_local_cuda() -> Any:
