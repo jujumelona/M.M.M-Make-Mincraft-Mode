@@ -99,43 +99,25 @@ class LlamaCppAdapter(ModelAdapter):
 
             if LlamaCppAdapter._llm is None:
                 print(f"⚙️ [llama.cpp] Initializing GGUF model: {model_path}", flush=True)
-                ctx_len = min(cfg.max_context, 16384)
-                gpu_layers = cfg.extra.get("n_gpu_layers", -1)
+                # Optimize context length to 8k to save KV cache VRAM so 100% model layers fit on GPU
+                ctx_len = min(cfg.max_context, 8192)
+                gpu_layers = cfg.extra.get("n_gpu_layers", 99)
 
                 actual_total_layers = MODEL_LAYER_COUNTS.get(
                     cfg.model_id, _get_gguf_layer_count(model_path)
                 )
 
-                if gpu_layers == -1:
-                    try:
-                        import torch
-                        if torch.cuda.is_available():
-                            total_free_vram_mb = torch.cuda.mem_get_info()[0] / (1024 * 1024)
-                            file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
-                            # Dynamic KV cache calculation based on context length
-                            dynamic_kv_mb = max(512.0, (ctx_len / 1024.0) * 128.0 + 512.0)
-                            vram_for_weights = total_free_vram_mb - dynamic_kv_mb
+                if gpu_layers == -1 or gpu_layers == 99:
+                    # Default: Attempt 100% FULL GPU offloading first!
+                    current_layers = 99
+                    print(
+                        f"🚀 [llama.cpp] Attempting 100% Full GPU Load for all {actual_total_layers} layers...",
+                        flush=True,
+                    )
+                else:
+                    current_layers = gpu_layers
 
-                            if file_size_mb > vram_for_weights and vram_for_weights > 0:
-                                weight_ratio = max(0.1, min(0.92, vram_for_weights / file_size_mb))
-                                gpu_layers = max(1, int(actual_total_layers * weight_ratio))
-                                print(
-                                    f"💡 [llama.cpp] Dynamic GPU offload calculated: {gpu_layers}/{actual_total_layers} layers "
-                                    f"(Free VRAM: {total_free_vram_mb:.0f}MB / Dynamic KV-Cache: {dynamic_kv_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
-                                    flush=True,
-                                )
-                            else:
-                                gpu_layers = -1
-                                print(
-                                    f"⚡ [llama.cpp] Full GPU load: All {actual_total_layers} layers on GPU "
-                                    f"(Free VRAM: {total_free_vram_mb:.0f}MB / Model: {file_size_mb:.0f}MB)",
-                                    flush=True,
-                                )
-                    except Exception:
-                        pass
-
-                # Retry loop to automatically handle edge-case VRAM pressure
-                current_layers = gpu_layers
+                # Retry loop: Start with 100% GPU offload, gently adjust layers down only if CUDA OOM occurs
                 while True:
                     try:
                         LlamaCppAdapter._llm = Llama(
@@ -144,15 +126,19 @@ class LlamaCppAdapter(ModelAdapter):
                             n_ctx=ctx_len,
                             verbose=True,
                         )
+                        print(
+                            f"⚡ [llama.cpp] Model initialized on GPU with n_gpu_layers={current_layers} (ctx={ctx_len})",
+                            flush=True,
+                        )
                         break
                     except Exception as init_err:
                         err_msg = str(init_err).lower()
                         if current_layers != 0 and ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg):
-                            base = actual_total_layers if current_layers == -1 else current_layers
-                            new_layers = max(0, int(base * 0.85) - 1)
+                            base = actual_total_layers if current_layers in (-1, 99) else current_layers
+                            new_layers = max(0, base - 2)
                             print(
-                                f"⚠️ [llama.cpp] VRAM pressure detected with {current_layers} layers. "
-                                f"Auto-reducing offload to {new_layers}/{actual_total_layers} layers and retrying...",
+                                f"⚠️ [llama.cpp] VRAM pressure during context init ({current_layers} layers). "
+                                f"Gently adjusting offload to {new_layers}/{actual_total_layers} layers...",
                                 flush=True,
                             )
                             current_layers = new_layers
