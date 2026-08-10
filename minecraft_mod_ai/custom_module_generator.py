@@ -191,19 +191,49 @@ class CustomModuleGenerator:
                 ],
                 response_format="json",
             )
-            payload = _extract_json(text)
             
-            # Key synonym normalization for model variations
-            if "tests" in payload and "runtime_tests" not in payload:
-                payload["runtime_tests"] = payload["tests"]
-            if "cursor" in payload and "next_cursor" not in payload:
-                payload["next_cursor"] = payload["cursor"]
-            if "patch_operations" in payload and "operations" not in payload:
-                payload["operations"] = payload["patch_operations"]
-            if "patches" in payload and "operations" not in payload:
-                payload["operations"] = payload["patches"]
+            # Auto-Repair & Feedback Retry Loop (Up to 3 attempts for model self-correction)
+            repair_attempts = 0
+            payload = {}
+            while repair_attempts <= 3:
+                try:
+                    payload = _extract_json(text)
+                    # Synonym normalization
+                    if "tests" in payload and "runtime_tests" not in payload:
+                        payload["runtime_tests"] = payload["tests"]
+                    if "cursor" in payload and "next_cursor" not in payload:
+                        payload["next_cursor"] = payload["cursor"]
+                    if "patch_operations" in payload and "operations" not in payload:
+                        payload["operations"] = payload["patch_operations"]
+                    if "patches" in payload and "operations" not in payload:
+                        payload["operations"] = payload["patches"]
+                    
+                    ops = payload.get("operations")
+                    if ops is not None and isinstance(ops, list):
+                        break
+                except Exception as parse_err:
+                    print(f"⚠️ [CustomModule Auto-Repair] JSON 파싱 피드백 재시도 준비: {parse_err}", flush=True)
 
-            # Safe defaults if model omitted any expected fields
+                if repair_attempts >= 3:
+                    break
+
+                repair_attempts += 1
+                print(f"🔄 [CustomModule Auto-Repair] 모델 응답 규격 보정 피드백 재시도 ({repair_attempts}/3)...", flush=True)
+                repair_messages = [
+                    {
+                        "role": "system",
+                        "content": "Return exactly one JSON object with valid 'operations' array for Minecraft Java 1.20.1 Fabric source patch.",
+                    },
+                    {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+                    {"role": "assistant", "content": text},
+                    {
+                        "role": "user",
+                        "content": "Your previous response did not contain a valid 'operations' patch array. Please correct your JSON and output the exact 'operations' list.",
+                    },
+                ]
+                text = self.router.generate_text("coder", repair_messages, response_format="json")
+
+            # Safe defaults if model omitted any expected fields after repair
             payload.setdefault("operations", [])
             payload.setdefault("runtime_tests", ["Verify mod functionality and compilation without crash."])
             payload.setdefault("complete", True)
