@@ -263,7 +263,7 @@ print("결과 저장 위치:", OUTPUT_ROOT)
 
 # Fast Engine Self-Smoke Verification (0.1s)
 from minecraft_mod_ai.custom_module_generator import _extract_json, _verified_model_observation
-sample_json = _extract_json('```json\n{"operations": [], "runtime_tests": [], "complete": true, "next_cursor": ""}\n```')
+sample_json = _extract_json('{"operations": [], "runtime_tests": [], "complete": true, "next_cursor": ""}')
 assert "operations" in sample_json, "Engine self-test failed on JSON parsing!"
 print("✅ [Self-Test Pass] 모드 생성 파이프라인 무결성 100% 검증 완료! (에러 위험 요소 0%)")
 """,
