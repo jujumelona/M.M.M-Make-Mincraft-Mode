@@ -112,6 +112,7 @@ class LlamaCppAdapter(ModelAdapter):
                 )
 
                 # Attempt maximum GPU layer offloading first
+                current_layers = 99
                 # Cap initial active_ctx to 16384 to protect Colab 12.7GB System RAM from OS SIGKILL
                 active_ctx = min(cfg.max_context, 16384)
 
