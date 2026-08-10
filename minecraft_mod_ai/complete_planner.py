@@ -690,7 +690,12 @@ class CompleteGameDesignPlanner:
             prompt,
             game_design,
         )
-        for batch in batches:
+        total_batches = len(batches)
+        for idx, batch in enumerate(batches):
+            print(
+                f"📋 [Planner] Expanding batch {idx + 1}/{total_batches}: '{batch.batch_id}' ({batch.scope})...",
+                flush=True,
+            )
             before = len(parts.modules)
             self._expand_one_production_batch(
                 batch=batch,

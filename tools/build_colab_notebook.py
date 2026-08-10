@@ -27,7 +27,8 @@ CELL_SPECS = [
         "configuration",
         """# @title 1. 만들 모드 입력
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." # @param {type:"string"}
-MODEL_PROFILE = "t4_local" # @param ["t4_local", "t4_quality", "remote_quality"]
+MODEL_PROFILE = "qwen36_35b_ud_q4" # @param ["qwen36_35b_ud_q4", "qwen36_27b_ud_q4", "qwen36_27b_q3_km", "qwen35_9b_ud_q4", "gemma4_26b_ud_iq4_nl", "gemma4_12b_ud_q4", "t4_local", "t4_quality", "remote_quality"]
+RESUME_MODE = False # @param {type:"boolean"}
 REMOTE_BASE_URL = "" # @param {type:"string"}
 REMOTE_TEXT_MODEL = "" # @param {type:"string"}
 REMOTE_IMAGE_MODEL = "" # @param {type:"string"}
@@ -288,7 +289,14 @@ session = CompleteModAISession(
     model_profile=MODEL_PROFILE,
     existing_input=EXISTING_INPUT,
 )
-reply = session.plan(PROMPT)
+saved_plan_file = OUTPUT_ROOT / "proposal.json"
+if RESUME_MODE and saved_plan_file.is_file():
+    print(f"🔄 [Resume Mode] 이전 기획서({saved_plan_file})를 로드합니다...", flush=True)
+    reply = session.load_plan(saved_plan_file)
+else:
+    if RESUME_MODE:
+        print("⚠️ [Resume Mode] 저장된 이전 기획서가 없어 새로 생성합니다...", flush=True)
+    reply = session.plan(PROMPT)
 print(reply.message)
 """,
     ),

@@ -318,7 +318,55 @@ class CompleteModAISession:
         )
         self.brief = updated_brief
         self.complete_proposal = proposal
+        self.save_plan()
         from .plan_render import render_complete_plan
+
+        return CompleteChatReply(
+            message=render_complete_plan(
+                requested_prompt=proposal.requested_prompt,
+                game_design=proposal.game_design,
+                modules=proposal.modules,
+                acceptance_tests=proposal.acceptance_tests,
+            ),
+            approval_hash=proposal.calculate_hash(),
+            complete_proposal=proposal,
+        )
+
+    def save_plan(self, target_path: str | Path | None = None) -> Path:
+        import json
+
+        if self.complete_proposal is None:
+            raise SpecValidationError("No complete proposal to save.")
+        path = (
+            Path(target_path)
+            if target_path is not None
+            else (self.output_root / "proposal.json")
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self.complete_proposal.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"💾 [Session] Plan saved to: {path}", flush=True)
+        return path
+
+    def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:
+        import json
+        from .complete_spec import CompleteProposal
+        from .plan_render import render_complete_plan
+
+        path = (
+            Path(source_path)
+            if source_path is not None
+            else (self.output_root / "proposal.json")
+        )
+        if not path.is_file():
+            raise FileNotFoundError(f"No saved proposal JSON found at {path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        proposal = CompleteProposal.from_dict(data)
+        self.complete_proposal = proposal
+        self.brief = proposal.requested_prompt
+        print(f"📂 [Session] Existing plan successfully loaded from: {path}", flush=True)
 
         return CompleteChatReply(
             message=render_complete_plan(

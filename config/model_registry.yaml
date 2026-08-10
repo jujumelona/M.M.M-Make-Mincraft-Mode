@@ -1,7 +1,82 @@
 schema_version: mmm/model-registry-v2
 profiles:
+  qwen36_35b_ud_q4:
+    description: unsloth/Qwen3.6-35B-A3B-MTP-GGUF (Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf ~ 22.9GB)
+    roles:
+      planner:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      researcher:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder_safe:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      visual_critic:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-4B
+        adapter: image_diffusion
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 12500
+      speech_recognition:
+        model_id: openai/whisper-small
+        adapter: speech
+        torch_dtype: float16
+        exclusive_gpu: true
+        min_free_vram_mb: 3000
+
   t4_local:
-    description: Single NVIDIA T4 profile with Qwen3.6-35B MoE GGUF GPU/CPU offloading.
+    description: Single NVIDIA T4 profile (Alias to qwen36_35b_ud_q4).
     roles:
       planner:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
@@ -76,7 +151,7 @@ profiles:
         min_free_vram_mb: 3000
 
   t4_quality:
-    description: Single NVIDIA T4 quality profile with Qwen3.6-35B MoE GGUF GPU/CPU offloading.
+    description: Single NVIDIA T4 quality profile (Alias to qwen36_35b_ud_q4).
     roles:
       planner:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
@@ -118,6 +193,381 @@ profiles:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-4B
+        adapter: image_diffusion
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 12500
+      speech_recognition:
+        model_id: openai/whisper-small
+        adapter: speech
+        torch_dtype: float16
+        exclusive_gpu: true
+        min_free_vram_mb: 3000
+
+  qwen36_27b_ud_q4:
+    description: unsloth/Qwen3.6-27B-MTP-GGUF (Qwen3.6-27B-UD-Q4_K_XL.gguf ~ 17.9GB)
+    roles:
+      planner:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      researcher:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder_safe:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      visual_critic:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-4B
+        adapter: image_diffusion
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 12500
+      speech_recognition:
+        model_id: openai/whisper-small
+        adapter: speech
+        torch_dtype: float16
+        exclusive_gpu: true
+        min_free_vram_mb: 3000
+
+  qwen36_27b_q3_km:
+    description: unsloth/Qwen3.6-27B-MTP-GGUF (Qwen3.6-27B-Q3_K_M.gguf ~ 13.8GB)
+    roles:
+      planner:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      researcher:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder_safe:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      visual_critic:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-4B
+        adapter: image_diffusion
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 12500
+      speech_recognition:
+        model_id: openai/whisper-small
+        adapter: speech
+        torch_dtype: float16
+        exclusive_gpu: true
+        min_free_vram_mb: 3000
+
+  qwen35_9b_ud_q4:
+    description: unsloth/Qwen3.5-9B-MTP-GGUF (Qwen3.5-9B-UD-Q4_K_XL.gguf ~ 6.14GB)
+    roles:
+      planner:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      researcher:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder_safe:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      visual_critic:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-4B
+        adapter: image_diffusion
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 12500
+      speech_recognition:
+        model_id: openai/whisper-small
+        adapter: speech
+        torch_dtype: float16
+        exclusive_gpu: true
+        min_free_vram_mb: 3000
+
+  gemma4_26b_ud_iq4_nl:
+    description: unsloth/gemma-4-26B-A4B-it-GGUF (gemma-4-26B-A4B-it-UD-IQ4_NL.gguf ~ 13.6GB)
+    roles:
+      planner:
+        model_id: unsloth/gemma-4-26B-A4B-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      researcher:
+        model_id: unsloth/gemma-4-26B-A4B-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder:
+        model_id: unsloth/gemma-4-26B-A4B-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder_safe:
+        model_id: unsloth/gemma-4-26B-A4B-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      visual_critic:
+        model_id: unsloth/gemma-4-26B-A4B-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-UD-IQ4_NL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-4B
+        adapter: image_diffusion
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 12500
+      speech_recognition:
+        model_id: openai/whisper-small
+        adapter: speech
+        torch_dtype: float16
+        exclusive_gpu: true
+        min_free_vram_mb: 3000
+
+  gemma4_12b_ud_q4:
+    description: unsloth/gemma-4-12b-it-GGUF (gemma-4-12b-it-UD-Q4_K_XL.gguf ~ 7.37GB)
+    roles:
+      planner:
+        model_id: unsloth/gemma-4-12b-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      researcher:
+        model_id: unsloth/gemma-4-12b-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder:
+        model_id: unsloth/gemma-4-12b-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      coder_safe:
+        model_id: unsloth/gemma-4-12b-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 16384
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+      visual_critic:
+        model_id: unsloth/gemma-4-12b-it-GGUF
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-UD-Q4_K_XL.gguf
         torch_dtype: float16
         max_context: 16384
         max_input_tokens: 0
