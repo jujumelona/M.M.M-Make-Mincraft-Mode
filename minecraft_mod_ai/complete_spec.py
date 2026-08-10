@@ -64,6 +64,16 @@ class CompleteProposalStatus(str, Enum):
     APPROVED = "approved"
 
 
+def _normalize_id(identifier: str) -> str:
+    s = str(identifier).strip()
+    if not s:
+        return "unnamed_module"
+    s = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', s)
+    s = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s).lower()
+    normalized = re.sub(r'[^a-z0-9_]', '_', s).strip('_')
+    return normalized or "unnamed_module"
+
+
 @dataclass(frozen=True)
 class ProductionModule:
     module_id: str
@@ -72,12 +82,18 @@ class ProductionModule:
     depends_on: tuple[str, ...] = ()
     required_gates: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "module_id", _normalize_id(self.module_id))
+        object.__setattr__(
+            self,
+            "depends_on",
+            tuple(_normalize_id(d) for d in self.depends_on if d),
+        )
+
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
         policy = policy or ScalePolicy.from_environment()
         if not _ID.fullmatch(self.module_id):
-            raise SpecValidationError(
-                f"Invalid production module id: {self.module_id!r}"
-            )
+            object.__setattr__(self, "module_id", _normalize_id(self.module_id))
         if self.kind not in MODULE_KINDS:
             raise SpecValidationError(
                 f"Unsupported production module kind: {self.kind!r}"
