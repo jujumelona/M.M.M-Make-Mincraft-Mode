@@ -99,22 +99,42 @@ class LlamaCppAdapter(ModelAdapter):
 
             if LlamaCppAdapter._llm is None:
                 print(f"⚙️ [llama.cpp] Initializing GGUF model: {model_path}", flush=True)
-                ctx_len = min(cfg.max_context, 8192)
                 file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
 
+                try:
+                    import torch
+                except ImportError:
+                    torch = None
+
                 if file_size_mb <= 15000:
-                    # ━━━ 15GB 이하: 오프로딩 옵션 자체 없음. GPU 올인. 끝. ━━━
-                    LlamaCppAdapter._llm = Llama(
-                        model_path=model_path,
-                        n_gpu_layers=-1,
-                        n_ctx=ctx_len,
-                        verbose=True,
-                    )
+                    # ━━━ 15GB 이하: 오프로딩 완전 차단 (n_gpu_layers = -1 고정) ━━━
+                    # VRAM 부족 시 모델 레이어를 CPU로 내리지 않고, KV cache n_ctx 조절로 해결
+                    ctx_attempts = [min(cfg.max_context, 8192), 4096, 2048, 1024]
+                    for attempt_ctx in ctx_attempts:
+                        try:
+                            print(f"⚡ [llama.cpp] 100% GPU Load (n_gpu_layers=-1, n_ctx={attempt_ctx})...", flush=True)
+                            LlamaCppAdapter._llm = Llama(
+                                model_path=model_path,
+                                n_gpu_layers=-1,
+                                n_ctx=attempt_ctx,
+                                verbose=True,
+                            )
+                            break
+                        except Exception as init_err:
+                            err_msg = str(init_err).lower()
+                            if ("llama_context" in err_msg or "cuda" in err_msg or "out of memory" in err_msg) and attempt_ctx != ctx_attempts[-1]:
+                                print(f"⚠️ [llama.cpp] KV cache VRAM tight with n_ctx={attempt_ctx}. Retrying with n_ctx={attempt_ctx // 2}...", flush=True)
+                                gc.collect()
+                                if torch is not None and torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                            else:
+                                raise init_err
                 else:
                     # ━━━ 15GB 초과 모델만 오프로딩 허용 ━━━
                     actual_total_layers = MODEL_LAYER_COUNTS.get(
                         cfg.model_id, _get_gguf_layer_count(model_path)
                     )
+                    ctx_len = min(cfg.max_context, 8192)
                     current_layers = 99
                     while True:
                         try:
@@ -137,14 +157,13 @@ class LlamaCppAdapter(ModelAdapter):
                                 )
                                 current_layers = new_layers
                                 gc.collect()
-                                import torch
-                                if torch.cuda.is_available():
+                                if torch is not None and torch.cuda.is_available():
                                     torch.cuda.empty_cache()
                             else:
                                 raise init_err
 
                 LlamaCppAdapter._current_model_path = model_path
-                print(f"✅ [llama.cpp] Model loaded.", flush=True)
+                print(f"✅ [llama.cpp] Model successfully loaded.", flush=True)
 
             llm = LlamaCppAdapter._llm
             messages = [dict(m) for m in request.messages]
