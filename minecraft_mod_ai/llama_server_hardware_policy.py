@@ -180,6 +180,31 @@ def install(autotune_module: Any) -> None:
         guarded_probe._mmm_correctness_sentinel = True
         autotune_module._probe_server = guarded_probe
 
+    original_ensure = autotune_module.ensure_tuned_server
+    if not getattr(original_ensure, "_mmm_colab_mtp_restart", False):
+
+        @wraps(original_ensure)
+        def ensure_with_colab_mtp(config: Any, request: Any) -> str | None:
+            try:
+                from .colab_mtp_server import (
+                    colab_mtp_server_enabled,
+                    start_colab_mtp_server,
+                )
+
+                if colab_mtp_server_enabled():
+                    try:
+                        return start_colab_mtp_server(config)
+                    except Exception:
+                        # The normal in-process/native route remains available if the
+                        # explicitly enabled Colab MTP server cannot restart.
+                        pass
+            except Exception:
+                pass
+            return original_ensure(config, request)
+
+        ensure_with_colab_mtp._mmm_colab_mtp_restart = True
+        autotune_module.ensure_tuned_server = ensure_with_colab_mtp
+
     from . import complete_orchestrator_services as services
 
     original_assets = services.generate_assets
@@ -201,19 +226,28 @@ def install(autotune_module: Any) -> None:
                 except Exception:
                     local_exclusive_image = False
 
-            process = getattr(autotune_module, "_MANAGED_PROCESS", None)
-            if (
-                local_exclusive_image
-                and process is not None
-                and process.poll() is None
-            ):
-                managed_url = getattr(autotune_module, "_MANAGED_URL", None)
-                autotune_module._shutdown_managed_server()
-                if managed_url and os.environ.get("LLAMA_SERVER_URL") == managed_url:
-                    os.environ.pop("LLAMA_SERVER_URL", None)
-                autotune_module._ATTEMPTED_KEYS.clear()
+            if local_exclusive_image:
+                try:
+                    from .colab_mtp_server import (
+                        colab_mtp_server_enabled,
+                        stop_colab_mtp_server,
+                    )
+
+                    if colab_mtp_server_enabled():
+                        stop_colab_mtp_server(keep_enabled=True)
+                except Exception:
+                    pass
+
+                process = getattr(autotune_module, "_MANAGED_PROCESS", None)
+                if process is not None and process.poll() is None:
+                    managed_url = getattr(autotune_module, "_MANAGED_URL", None)
+                    autotune_module._shutdown_managed_server()
+                    if managed_url and os.environ.get("LLAMA_SERVER_URL") == managed_url:
+                        os.environ.pop("LLAMA_SERVER_URL", None)
+                    autotune_module._ATTEMPTED_KEYS.clear()
 
             return original_assets(router, *args, **kwargs)
 
         assets_with_llama_release._mmm_releases_managed_llama = True
+        assets_with_llama_release._mmm_releases_colab_mtp = True
         services.generate_assets = assets_with_llama_release
