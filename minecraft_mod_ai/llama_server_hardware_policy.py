@@ -27,7 +27,6 @@ def _existing_built_server() -> str | None:
     candidates: list[Path] = []
     if explicit_source:
         candidates.append(Path(explicit_source).expanduser() / "build" / "bin" / "llama-server")
-    # Reuse the legacy optional Colab cell build if it already exists.
     candidates.append(Path("/content/llama.cpp/build/bin/llama-server"))
     candidates.append(Path.home() / ".cache" / "mmm" / "llama.cpp" / "build" / "bin" / "llama-server")
     for candidate in candidates:
@@ -89,7 +88,6 @@ def _bootstrap_native_server() -> str | None:
         source.parent.mkdir(parents=True, exist_ok=True)
 
         if source.exists() and not (source / ".git").is_dir():
-            # Never delete or overwrite an unrelated user directory.
             return None
         if not source.exists():
             subprocess.run(
@@ -154,6 +152,17 @@ def _bootstrap_native_server() -> str | None:
 def install(autotune_module: Any) -> None:
     """Keep managed llama-server tuning hardware-adaptive and correctness-gated."""
 
+    # llama_server_autotune wraps the already installed prefill-tuned generate()
+    # method. Preserve that semantic marker on the outer wrapper so introspection
+    # and contracts describe the actual call chain rather than only the last layer.
+    from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
+
+    if (
+        getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
+        and not getattr(LlamaCppAdapter.generate, "_mmm_prefill_tuned", False)
+    ):
+        LlamaCppAdapter.generate._mmm_prefill_tuned = True
+
     original_server_binary = autotune_module._server_binary
     if not getattr(original_server_binary, "_mmm_native_bootstrap", False):
 
@@ -165,8 +174,6 @@ def install(autotune_module: Any) -> None:
             try:
                 return _bootstrap_native_server()
             except Exception:
-                # Native server acceleration is optional. A compiler/network failure
-                # must preserve the already verified llama-cpp-python backend.
                 return None
 
         bootstrapped_server_binary._mmm_native_bootstrap = True
