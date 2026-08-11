@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import atomic_requirement_contract as _atomic_module
+from .atomic_efficiency_contract import install as _install_atomic_efficiency
+from .atomic_quality_binding_contract import install as _install_atomic_quality
 from .atomic_requirement_contract import install as _install_atomic_requirements
 from .clean_room_verification_contract import install as _install_clean_room
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
@@ -17,9 +20,14 @@ def install(
 ) -> None:
     """Install MMM's final deterministic-control / narrow-agent architecture."""
 
+    _install_atomic_efficiency(_atomic_module)
     _install_atomic_requirements(
         complete_planner_module,
         orchestrator_module,
+    )
+    _install_atomic_quality(
+        _atomic_module,
+        quality_evidence_module,
     )
     _install_repair_diagnostics(
         repair_module,
