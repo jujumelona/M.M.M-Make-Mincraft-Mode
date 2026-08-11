@@ -9,6 +9,13 @@ def start(model_registry_module: Any) -> None:
 
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
+
+    # A seed page carries at most twelve independent ecosystem routes. Start all
+    # twelve by default in Colab instead of leaving four queued behind an 8-worker
+    # pool. Explicit user/runtime overrides remain authoritative.
+    os.environ.setdefault("MMM_DISCOVERY_WORKERS", "12")
+    os.environ.setdefault("MMM_RESEARCH_WORKERS", "8")
+
     try:
         import __main__
 
