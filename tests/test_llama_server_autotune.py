@@ -8,6 +8,7 @@ from minecraft_mod_ai.llama_server_autotune import (
     _base_args,
     _candidate_variants,
     _choose_variant,
+    _probe_server,
     _variant_args,
 )
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
@@ -41,6 +42,7 @@ def test_server_autotune_contract_is_installed() -> None:
     assert getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
+    assert getattr(_probe_server, "_mmm_correctness_sentinel", False)
 
 
 def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
