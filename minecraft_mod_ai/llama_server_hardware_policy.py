@@ -242,21 +242,18 @@ def install(autotune_module: Any) -> None:
 
         @wraps(original_ensure)
         def ensure_with_colab_mtp(config: Any, request: Any) -> str | None:
-            try:
-                from .colab_mtp_server import (
-                    SERVER_API_URL,
-                    colab_mtp_server_enabled,
-                    colab_mtp_server_running,
-                    start_colab_mtp_server,
-                )
+            from .colab_mtp_server import (
+                SERVER_API_URL,
+                colab_mtp_server_enabled,
+                colab_mtp_server_running,
+                start_colab_mtp_server,
+            )
 
-                if colab_mtp_server_enabled():
-                    if colab_mtp_server_running():
-                        os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
-                        return SERVER_API_URL
-                    return start_colab_mtp_server(config)
-            except Exception:
-                pass
+            if colab_mtp_server_enabled():
+                if colab_mtp_server_running():
+                    os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
+                    return SERVER_API_URL
+                return start_colab_mtp_server(config)
             return original_ensure(config, request)
 
         ensure_with_colab_mtp._mmm_colab_mtp_restart = True
@@ -269,16 +266,17 @@ def install(autotune_module: Any) -> None:
         def strict_selected_server_generate(self: Any, request: Any) -> str:
             explicit = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
             if not explicit:
-                try:
-                    from .colab_mtp_server import colab_mtp_server_enabled
+                from .colab_mtp_server import colab_mtp_server_enabled
 
-                    if colab_mtp_server_enabled():
-                        explicit = (
-                            autotune_module.ensure_tuned_server(self.config, request)
-                            or ""
-                        ).strip().rstrip("/")
-                except Exception:
-                    explicit = ""
+                if colab_mtp_server_enabled():
+                    explicit = (
+                        autotune_module.ensure_tuned_server(self.config, request)
+                        or ""
+                    ).strip().rstrip("/")
+                    if not explicit:
+                        raise RuntimeError(
+                            "MTP server is enabled but no server URL was produced."
+                        )
             if explicit:
                 return _strict_server_generate(self, request, explicit)
             return current_generate(self, request)
