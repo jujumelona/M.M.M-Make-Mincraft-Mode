@@ -75,6 +75,35 @@ def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
         assert token not in text
 
 
+def test_colab_mtp_startup_is_fail_fast_and_bounded() -> None:
+    text = MTP_LAUNCHER.read_text(encoding="utf-8")
+    assert 'START_TIMEOUT_ENV = "MMM_COLAB_MTP_SERVER_START_TIMEOUT"' in text
+    assert '"-u"' in text
+    assert "_PROCESS.poll()" in text
+    assert "exited during startup" in text
+    assert "startup timed out" in text
+    assert "Port 8910 is already serving a different unmanaged process" in text
+    assert "llama-cpp-python CUDA backend is unavailable" in text
+    assert "model loading" not in text
+
+
+def test_colab_mtp_ready_requires_expected_model_alias(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+
+        def __init__(self, model_id: str) -> None:
+            self.model_id = model_id
+
+        def json(self):
+            return {"data": [{"id": self.model_id}]}
+
+    monkeypatch.setattr(colab_mtp_server.httpx, "get", lambda *args, **kwargs: Response("other"))
+    assert colab_mtp_server._ready() is False
+
+    monkeypatch.setattr(colab_mtp_server.httpx, "get", lambda *args, **kwargs: Response("local"))
+    assert colab_mtp_server._ready() is True
+
+
 def test_colab_mtp_stop_releases_process_and_preserves_restart_intent(monkeypatch) -> None:
     class Process:
         def __init__(self) -> None:
@@ -144,24 +173,25 @@ def test_external_server_probe_accepts_new_server_endpoints() -> None:
     assert '"/health"' in source
 
 
-def test_colab_status_text_has_no_absolute_integrity_or_zero_risk_claims() -> None:
+def test_colab_runtime_status_is_plain_and_factual() -> None:
     forbidden = (
-        "무결성 100%",
-        "에러 위험 요소 0%",
+        "100%",
+        "0%",
         "폭속",
         "속도 극대화",
         "풀옵션",
+        "3배",
+        "80토큰",
     )
+    decorative = ("✅", "⚡", "🔍", "🔧", "ℹ️", "🔄", "🎉", "🚀", "🔨")
     for path in (*NOTEBOOKS, SETUP_SCRIPT, LLAMA_ADAPTER, MTP_LAUNCHER):
         text = path.read_text(encoding="utf-8")
-        for token in forbidden:
+        for token in (*forbidden, *decorative):
             assert token not in text
 
 
 def test_colab_setup_status_is_plain_and_factual() -> None:
     text = SETUP_SCRIPT.read_text(encoding="utf-8")
-    for token in ("✅", "⚡", "🔍", "🔧", "ℹ️", "🔄"):
-        assert token not in text
     assert 'print("checkout: validating"' in text
     assert 'print("CUDA: checking"' in text
     assert 'print("project dependencies: installing"' in text
