@@ -118,11 +118,18 @@ def _install_static_registration(extended_module: Any) -> None:
         else:
             registration_receipt = {"status": "UNCHANGED"}
 
+        dispatch_paths = [str(root / relative) for relative in sorted(dispatch_files)]
         result = dict(receipt)
         result["registrar_dispatch_count"] = len(dispatch_files)
         result["static_registration_unit_count"] = len(leaf_names)
         result["static_registration_root"] = dispatch_root
         result["static_registration_receipt"] = registration_receipt
+        result["files"] = list(
+            dict.fromkeys([*receipt.get("files", []), *dispatch_paths])
+        )
+        result["touched_paths"] = list(
+            dict.fromkeys([*receipt.get("touched_paths", []), *dispatch_paths])
+        )
         if dispatch_receipt is not None:
             result["registrar_dispatch_receipt"] = dispatch_receipt
         return result
