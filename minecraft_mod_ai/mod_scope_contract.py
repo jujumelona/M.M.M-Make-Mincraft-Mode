@@ -17,12 +17,12 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
     if getattr(complete_spec_module, _INSTALL_MARKER, False):
         return
 
-    # Platform selection must happen before complete planning research so RAG,
-    # technology discovery and production validation all consume the same exact target.
     from . import central_research as central_research_module
+    from . import ecosystem_discovery as ecosystem_module
     from . import game_design as game_design_module
     from . import retrieval as retrieval_module
     from . import technology_radar as technology_module
+    from .platform_ecosystem_contract import install as install_platform_ecosystem
     from .platform_planning_contract import install as install_platform_planning
 
     install_platform_planning(
@@ -32,13 +32,10 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         retrieval_module=retrieval_module,
         technology_module=technology_module,
     )
+    install_platform_ecosystem(ecosystem_module, complete_planner_module)
 
-    original_prompt: Callable[..., str] = (
-        complete_planner_module._implementation_prompt
-    )
-    original_builder: Callable[..., Any] = (
-        complete_spec_module.complete_proposal_from_parts
-    )
+    original_prompt: Callable[..., str] = complete_planner_module._implementation_prompt
+    original_builder: Callable[..., Any] = complete_spec_module.complete_proposal_from_parts
 
     def scoped_implementation_prompt(
         prompt: str,
