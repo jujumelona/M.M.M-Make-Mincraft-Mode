@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +12,12 @@ from minecraft_mod_ai.atomic_requirement_contract import (
     semantic_review,
     validate_ir,
 )
-from minecraft_mod_ai.clean_room_verification_contract import SCHEMA as CLEAN_ROOM_SCHEMA
+from minecraft_mod_ai.clean_room_verification_contract import (
+    SCHEMA as CLEAN_ROOM_SCHEMA,
+    jar_content_sha256,
+)
+import minecraft_mod_ai.atomic_requirement_contract as atomic_requirement_contract
+import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai import quality_evidence
@@ -69,6 +75,21 @@ def test_atomic_ir_never_fabricates_coverage() -> None:
     assert ir["unresolved_atom_ids"] == [ir["atoms"][0]["atom_id"]]
     assert ir["atoms"][0]["implementation_refs"] == []
     assert ir["atoms"][0]["status"] == "REVIEW_REQUIRED"
+
+
+def test_enumerated_request_items_become_separate_atoms() -> None:
+    proposal = _proposal(
+        "Add a frost sword, add a lunar portal, add a frost shield.",
+        related=True,
+    )
+    ir = compile_ir(proposal)
+    assert ir["atom_count"] == 3
+    assert [atom["text"] for atom in ir["atoms"]] == [
+        "Add a frost sword",
+        "add a lunar portal",
+        "add a frost shield.",
+    ]
+    assert len(ir["unresolved_atom_ids"]) >= 1
 
 
 def test_semantic_reviewer_cannot_invent_implementation_ids() -> None:
@@ -187,11 +208,27 @@ def test_clean_room_proof_is_required_for_build_quality(tmp_path) -> None:
             "jar_validation": {"status": "PASS", "checks_run": 7},
             "jar_path": str(jar),
             "jar_sha256": digest,
+            "live_jar_content_sha256": "sha256:" + "1" * 64,
+            "clean_jar_content_sha256": "sha256:" + "1" * 64,
         },
     }
     evidence = quality_evidence._clean_build_evidence(proven)
     assert evidence is not None
     assert any(ref.startswith("clean-room-build:") for ref in evidence[0])
+
+
+def test_jar_content_hash_ignores_zip_metadata(tmp_path) -> None:
+    first = tmp_path / "first.jar"
+    second = tmp_path / "second.jar"
+
+    info_a = zipfile.ZipInfo("example/Foo.class", date_time=(2020, 1, 1, 0, 0, 0))
+    info_b = zipfile.ZipInfo("example/Foo.class", date_time=(2025, 1, 1, 0, 0, 0))
+    with zipfile.ZipFile(first, "w") as archive:
+        archive.writestr(info_a, b"same-bytecode")
+    with zipfile.ZipFile(second, "w") as archive:
+        archive.writestr(info_b, b"same-bytecode")
+
+    assert jar_content_sha256(first) == jar_content_sha256(second)
 
 
 def test_incremental_inner_build_alias_does_not_replace_clean_room_quality() -> None:
@@ -228,3 +265,22 @@ def test_final_architecture_contracts_are_installed() -> None:
     )
     assert getattr(RepairEngine._signature, "_mmm_flattened_jdt", False)
     assert getattr(RepairEngine._context, "_mmm_flattened_jdt", False)
+    assert getattr(
+        atomic_requirement_contract._implementations,
+        "_mmm_compact_catalog",
+        False,
+    )
+    assert getattr(
+        atomic_requirement_contract._atom_ranges,
+        "_mmm_enumeration_atomizer",
+        False,
+    )
+    assert getattr(
+        quality_evidence.compile_quality_evidence,
+        "_mmm_atomic_correctness_evidence",
+        False,
+    )
+    assert (
+        orchestrator_module.compile_quality_evidence
+        is quality_evidence.compile_quality_evidence
+    )
