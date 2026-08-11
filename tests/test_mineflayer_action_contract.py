@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from minecraft_mod_ai.mineflayer_bridge import MineflayerBridge
 
 
-def _bridge_source() -> str:
+def _bridge_path() -> Path:
     return (
         Path(__file__).resolve().parents[1]
         / "integrations"
         / "mineflayer-1201"
         / "bridge.mjs"
-    ).read_text(encoding="utf-8")
+    )
+
+
+def _bridge_source() -> str:
+    return _bridge_path().read_text(encoding="utf-8")
 
 
 def test_every_python_allowlisted_action_has_node_dispatch_case() -> None:
@@ -38,3 +46,17 @@ def test_required_runtime_assertion_is_real_and_bounded() -> None:
         "window_open",
     ):
         assert f'type === "{condition}"' in source
+
+
+def test_mineflayer_bridge_javascript_parses_when_node_is_available() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed on this test host")
+    completed = subprocess.run(
+        [node, "--check", str(_bridge_path())],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
