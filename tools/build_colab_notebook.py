@@ -17,26 +17,40 @@ CELL_SPECS = [
         "title",
         """# M.M.M Make Mincraft Mode
 
-원하는 모드를 말하면 먼저 실제 게임 기획서처럼 정리하고, 다음 셀에서 제작합니다.
-작은 모드부터 장기 제작이 필요한 대형 모드까지 같은 방식으로 실행하며,
-중단되면 완료한 작업부터 이어서 진행합니다.
+`모두 실행`을 기준으로 실행합니다.
+
+- **풀모드**: 새 플랜 생성 → 사용자와 반복 수정/보완 → 확정 → 제작
+- **플랜모드**: 새 플랜 생성 → 사용자와 반복 수정/보완 → 확정 → 플랜 저장
+- **이미 만들어진 모드 수정보안모드**: 기존 source/release ZIP 업로드 → 수정 플랜 대화 → 확정 → 기존 모드 수정 제작
+- **이미 있는 플랜을 만드는모드**: 저장된 플랜 전체 확인 → 필요하면 추가 수정 → 사용자 승인 → 제작
+
+플랜을 새로 만들거나 불러온 뒤에는 반드시 사용자 입력을 기다립니다. 수정 내용을 입력할 때마다 새 플랜 전체를 다시 보여주며, 사용자가 직접 확정하거나 제작을 승인하기 전에는 다음 단계로 넘어가지 않습니다.
 """,
     ),
     (
         "code",
         "configuration",
-        """# @title 1. 만들 모드 입력 및 설정
+        """# @title 1. 실행 모드 및 설정
+RUN_MODE = "풀모드" #@param ["플랜모드", "풀모드", "이미 만들어진 모드 수정보안모드", "이미 있는 플랜을 만드는모드"]
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
+PLAN_FILE = "" #@param {type:"string"}
 MODEL_PROFILE = "Qwen3.5-9B_6GB" #@param ["Qwen3.5-9B_6GB", "Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "mini_mod", "fast_test"]
 KV_CACHE_QUANT = "q4_0" #@param ["q4_0", "q8_0", "f16"]
 FAST_MODE = False #@param {type:"boolean"}
 SAVE_TO_GOOGLE_DRIVE = True #@param {type:"boolean"}
-RESUME_MODE = False #@param {type:"boolean"}
 
-RESUME_PLAN_FILE, REMOTE_BASE_URL, REMOTE_TEXT_MODEL, REMOTE_IMAGE_MODEL, REMOTE_SPEECH_MODEL, SOURCE_ONLY, PATCH_EXISTING, RUN_BLOCKBENCH, RUN_RUNTIME, RUN_CLIENT, RUN_MINEFLAYER, RUN_VISUAL_REVIEW, ACCEPT_EULA, SERVER_LAUNCHER, RUN_NAME, SCREENSHOTS = "", "", "", "", "", True, False, False, False, False, False, False, False, "", "complete-colab-run", []
+REMOTE_BASE_URL, REMOTE_TEXT_MODEL, REMOTE_IMAGE_MODEL, REMOTE_SPEECH_MODEL, SOURCE_ONLY, RUN_BLOCKBENCH, RUN_RUNTIME, RUN_CLIENT, RUN_MINEFLAYER, RUN_VISUAL_REVIEW, ACCEPT_EULA, SERVER_LAUNCHER, RUN_NAME, SCREENSHOTS = "", "", "", "", True, False, False, False, False, False, False, "", "complete-colab-run", []
 
-if not PROMPT.strip():
-    raise ValueError("PROMPT를 입력해 주세요.")
+VALID_RUN_MODES = {
+    "플랜모드",
+    "풀모드",
+    "이미 만들어진 모드 수정보안모드",
+    "이미 있는 플랜을 만드는모드",
+}
+if RUN_MODE not in VALID_RUN_MODES:
+    raise ValueError(f"지원하지 않는 실행 모드: {RUN_MODE}")
+if RUN_MODE != "이미 있는 플랜을 만드는모드" and not PROMPT.strip():
+    raise ValueError("선택한 실행 모드에서는 PROMPT를 입력해야 합니다.")
 if RUN_RUNTIME and not ACCEPT_EULA:
     raise ValueError("Minecraft 실행 검증에는 EULA 동의가 필요합니다.")
 """,
@@ -176,44 +190,11 @@ SETUP_FINGERPRINT = SETUP_STATE["setup_fingerprint"]
     (
         "code",
         "existing-input",
-        """# @title 3. 기존 모드 수정 파일 (선택)
-EXISTING_INPUT = None
-if PATCH_EXISTING:
-    from google.colab import files as colab_files
+        """# @title 3. 기존 모드 입력
+from minecraft_mod_ai.colab_run_modes import prepare_existing_mod_input
 
-    print(
-        "본인이 소유하거나 수정 권한이 있는 source/release ZIP 하나만 "
-        "선택해 주세요."
-    )
-    uploaded = colab_files.upload()
-    if len(uploaded) != 1:
-        raise ValueError("기존 모드 수정에는 ZIP 파일을 정확히 하나만 선택해야 합니다.")
-    uploaded_name, uploaded_bytes = next(iter(uploaded.items()))
-    safe_name = Path(uploaded_name).name
-    if (
-        safe_name != uploaded_name
-        or "/" in uploaded_name
-        or "\\\\" in uploaded_name
-        or Path(safe_name).suffix.lower() != ".zip"
-    ):
-        raise ValueError("기존 모드 입력은 경로가 없는 .zip 파일이어야 합니다.")
-    existing_dir = Path("/content/mmm-existing-input")
-    existing_dir.mkdir(parents=True, exist_ok=True)
-    EXISTING_INPUT = existing_dir / safe_name
-    EXISTING_INPUT.write_bytes(uploaded_bytes)
-    from minecraft_mod_ai.importer import inspect_existing_project_archive
-
-    existing_report = inspect_existing_project_archive(EXISTING_INPUT)
-    if not existing_report.has_sources or not existing_report.has_gradle_project:
-        raise ValueError(
-            "수정에는 소스와 Gradle 프로젝트가 들어 있는 source/release ZIP이 필요합니다."
-        )
-    print(
-        "기존 모드 수정 준비:",
-        existing_report.mod_name or existing_report.mod_id or safe_name,
-    )
-else:
-    print("새 모드: 업로드 없음")
+assert_setup_state = COLAB_SETUP_MODULE.assert_setup_state
+EXISTING_INPUT = prepare_existing_mod_input(RUN_MODE)
 """,
     ),
     (
@@ -221,6 +202,7 @@ else:
         "registry",
         """# @title 4. 설치 확인
 from minecraft_mod_ai import ModelRegistry
+
 
 def assert_current_colab_setup():
     COLAB_SETUP_MODULE.assert_setup_state(
@@ -279,9 +261,9 @@ print("llama MTP server:", LLAMA_SERVER_URL)
     (
         "code",
         "plan",
-        """# @title 5. 게임 기획 만들기
-from pathlib import Path
+        """# @title 5. 플랜 생성/불러오기 및 대화 확정
 from minecraft_mod_ai import CompleteModAISession
+from minecraft_mod_ai.colab_run_modes import resolve_plan_path, run_plan_dialog
 
 assert_current_colab_setup()
 session = CompleteModAISession(
@@ -292,85 +274,84 @@ session = CompleteModAISession(
     fast_mode=FAST_MODE,
     kv_cache_quant=KV_CACHE_QUANT,
 )
-output_dir = Path(OUTPUT_ROOT)
-custom_plan_path = Path(RESUME_PLAN_FILE.strip()) if RESUME_PLAN_FILE.strip() else None
-default_plan_path = output_dir / "proposal.json"
-target_plan_file = custom_plan_path if (custom_plan_path and custom_plan_path.is_file()) else default_plan_path
-
-if RESUME_MODE and target_plan_file.is_file():
-    print(f"기획 재개: {target_plan_file}", flush=True)
-    reply = session.load_plan(target_plan_file)
-else:
-    if RESUME_MODE:
-        print("기획 재개 파일 없음: 새 기획 생성", flush=True)
-    reply = session.plan(PROMPT)
-
-print(reply.message)
-""",
-    ),
-    (
-        "code",
-        "revise",
-        """# @title 6. 계획 수정 대화 (현재 계획 확인 및 자유 수정)
-REVISION = "" # @param {type:"string"}
-assert_current_colab_setup()
-if 'session' not in globals() or 'reply' not in globals():
-    raise RuntimeError("5번 셀을 먼저 실행하여 기획 세션을 생성해야 합니다.")
-
-if REVISION.strip():
-    print("기획 수정 요청:", REVISION, flush=True)
-    reply = session.revise(REVISION)
-    print(reply.message)
-else:
-    print(reply.message)
+PLAN_PATH = resolve_plan_path(
+    run_mode=RUN_MODE,
+    output_root=OUTPUT_ROOT,
+    configured_path=PLAN_FILE,
+)
+PLAN_DIALOG = run_plan_dialog(
+    session=session,
+    run_mode=RUN_MODE,
+    prompt=PROMPT,
+    plan_path=PLAN_PATH,
+)
+reply = PLAN_DIALOG.reply
+FINAL_PLAN_PATH = PLAN_DIALOG.plan_path
+PLAN_APPROVED = PLAN_DIALOG.approved
+print("플랜 확정:", FINAL_PLAN_PATH)
 """,
     ),
     (
         "code",
         "build",
-        """# @title 7. 이 계획으로 만들기
+        """# @title 6. 확정된 플랜으로 제작
 from minecraft_mod_ai import CompleteExecutionOptions
+from minecraft_mod_ai.colab_run_modes import should_build
 
 assert_current_colab_setup()
-if 'reply' not in globals() or 'session' not in globals():
-    raise RuntimeError("5번 셀(또는 6번 셀)을 먼저 실행하여 기획서를 완성해야 합니다.")
+if not PLAN_APPROVED:
+    raise RuntimeError("플랜이 사용자에게 확정되지 않았습니다.")
 
-print("모드 생성: 시작", flush=True)
-options = CompleteExecutionOptions(
-    source_only=SOURCE_ONLY,
-    run_blockbench=RUN_BLOCKBENCH,
-    run_runtime=RUN_RUNTIME,
-    run_client=RUN_CLIENT,
-    run_mineflayer=RUN_MINEFLAYER,
-    run_visual_review=RUN_VISUAL_REVIEW,
-    eula_accepted=ACCEPT_EULA,
-    server_launcher=SERVER_LAUNCHER or None,
-    screenshot_paths=tuple(SCREENSHOTS),
-    resume=True,
-)
-BUILD_RESULT = session.build(
-    reply,
-    run_name=RUN_NAME,
-    source_only=SOURCE_ONLY,
-    options=options,
-)
-print("제작 상태:", BUILD_RESULT.status)
-print("프로젝트:", BUILD_RESULT.project_root)
-print("결과 ZIP:", BUILD_RESULT.release_zip)
-if BUILD_RESULT.run_resumed:
-    print("재개 실행: 예")
-if BUILD_RESULT.quality_report:
-    print("품질 검증:", BUILD_RESULT.quality_report["overall_status"])
-if BUILD_RESULT.unresolved_gates:
-    print("미해결 항목:", ", ".join(BUILD_RESULT.unresolved_gates))
+BUILD_RESULT = None
+if not should_build(RUN_MODE):
+    print("플랜모드: 제작 생략")
+else:
+    print("모드 생성: 시작", flush=True)
+    options = CompleteExecutionOptions(
+        source_only=SOURCE_ONLY,
+        run_blockbench=RUN_BLOCKBENCH,
+        run_runtime=RUN_RUNTIME,
+        run_client=RUN_CLIENT,
+        run_mineflayer=RUN_MINEFLAYER,
+        run_visual_review=RUN_VISUAL_REVIEW,
+        eula_accepted=ACCEPT_EULA,
+        server_launcher=SERVER_LAUNCHER or None,
+        screenshot_paths=tuple(SCREENSHOTS),
+        resume=True,
+    )
+    BUILD_RESULT = session.build(
+        reply,
+        run_name=RUN_NAME,
+        source_only=SOURCE_ONLY,
+        options=options,
+    )
+    print("제작 상태:", BUILD_RESULT.status)
+    print("프로젝트:", BUILD_RESULT.project_root)
+    print("결과 ZIP:", BUILD_RESULT.release_zip)
+    if BUILD_RESULT.run_resumed:
+        print("재개 실행: 예")
+    if BUILD_RESULT.quality_report:
+        print("품질 검증:", BUILD_RESULT.quality_report["overall_status"])
+    if BUILD_RESULT.unresolved_gates:
+        print("미해결 항목:", ", ".join(BUILD_RESULT.unresolved_gates))
 """,
     ),
     (
         "code",
         "download",
-        """# @title 8. 결과 다운로드
-if BUILD_RESULT is None or not BUILD_RESULT.release_zip:
-    print("다운로드할 결과가 없습니다.")
+        """# @title 7. 결과 다운로드
+if RUN_MODE == "플랜모드":
+    plan_path = Path(FINAL_PLAN_PATH)
+    if not plan_path.is_file():
+        raise FileNotFoundError(plan_path)
+    print("플랜 파일:", plan_path)
+    try:
+        from google.colab import files as colab_files
+        colab_files.download(str(plan_path))
+    except ImportError:
+        print("로컬 경로:", plan_path.resolve())
+elif BUILD_RESULT is None or not BUILD_RESULT.release_zip:
+    print("다운로드할 제작 결과가 없습니다.")
 else:
     release_zip = Path(BUILD_RESULT.release_zip)
     if not release_zip.is_file():
@@ -379,7 +360,6 @@ else:
     print("size:", release_zip.stat().st_size, "bytes")
     try:
         from google.colab import files as colab_files
-
         colab_files.download(str(release_zip))
     except ImportError:
         print("로컬 경로:", release_zip.resolve())
@@ -388,13 +368,15 @@ else:
     (
         "markdown",
         "boundaries",
-        """## 참고
+        """## 실행 모드
 
-`SOURCE_ONLY=True`는 소스 프로젝트와 리소스 ZIP을 만듭니다.
-새 모드는 `PATCH_EXISTING=False` 그대로 실행하며 파일을 업로드하지 않습니다.
-본인이 소유하거나 수정 권한이 있는 기존 source/release ZIP을 수정할 때만 `PATCH_EXISTING=True`로 바꾸세요.
-실행까지 확인하려면 필요한 Fabric 서버 파일과 EULA 동의를 설정한 뒤 실행 검증 옵션을 켜세요.
-Google Drive 저장을 사용하면 Colab 세션이 끊겨도 같은 실행 이름으로 이어서 만들 수 있습니다.
+기본값은 **풀모드**입니다.
+
+플랜모드와 풀모드는 5번 셀에서 플랜을 만든 뒤 사용자 입력을 기다립니다. 수정/보완 내용을 입력하면 다시 기획하고 전체 플랜을 다시 표시하며, `확정`을 입력해야 다음 단계로 진행합니다.
+
+이미 만들어진 모드 수정보안모드는 3번 셀에서 기존 source/release ZIP 업로드를 요구합니다. 이후 수정 요구를 기준으로 플랜을 만들고 같은 대화 확정 과정을 거친 뒤 기존 프로젝트를 수정합니다.
+
+이미 있는 플랜을 만드는모드는 `PLAN_FILE` 경로의 플랜을 사용합니다. 경로가 비어 있고 기본 `proposal.json`도 없으면 JSON 업로드를 요청합니다. 전체 플랜을 보여준 뒤 `제작`을 입력해야 제작하며, 그 전에 수정 내용을 입력하면 플랜을 다시 보완할 수 있습니다.
 """,
     ),
 ]
