@@ -26,6 +26,13 @@ from .work_graph_mutation_contract import install as _install_work_graph_mutatio
 
 _install_work_graph_mutation_contract(_work_graph_module)
 
+# Local GPU-backed text roles must participate in the same GPU exclusion contract
+# as image/speech roles. Remote model roles remain independently concurrent.
+from . import model_registry as _model_registry_module
+from .gpu_resource_contract import install as _install_gpu_resource_contract
+
+_install_gpu_resource_contract(_model_registry_module)
+
 # Install isolated custom-generation staging plus the short, hash-guarded live
 # project commit contract before public API users construct an orchestrator.
 from . import complete_orchestrator as _complete_orchestrator_module
