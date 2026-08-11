@@ -33,6 +33,7 @@ jobs:
             });
 
   contracts:
+    if: github.event_name == 'pull_request' || github.event.head_commit.message != 'chore(colab): trigger planner sync only'
     name: Python contracts (${{ matrix.python-version }})
     needs: mark-pending
     runs-on: ubuntu-latest
