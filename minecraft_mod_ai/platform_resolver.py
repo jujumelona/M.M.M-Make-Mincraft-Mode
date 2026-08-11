@@ -14,18 +14,15 @@ from .spec import PlatformLock, Proposal, SpecValidationError
 
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?)(?!\d)")
-_FABRIC_RE = re.compile(r"\bfabric\b|패브릭", re.IGNORECASE)
-_NEOFORGE_RE = re.compile(r"\bneoforge\b|네오포지", re.IGNORECASE)
-_FORGE_RE = re.compile(r"(?<!neo)\bforge\b|(?<!네오)포지", re.IGNORECASE)
+_FABRIC_RE = re.compile(r"(?<![A-Za-z0-9_])fabric(?![A-Za-z0-9_])|패브릭", re.IGNORECASE)
+_NEOFORGE_RE = re.compile(r"(?<![A-Za-z0-9_])neoforge(?![A-Za-z0-9_])|네오포지", re.IGNORECASE)
+_FORGE_RE = re.compile(r"(?<![A-Za-z0-9_])forge(?![A-Za-z0-9_])|(?<!네오)포지", re.IGNORECASE)
 _MIGRATION_RE = re.compile(
     r"마이그레이션|버전\s*(?:변경|업|올려|내려)|업데이트\s*해|포팅|이식|"
     r"migrat|port\s+(?:to|from)|upgrade\s+to|downgrade\s+to",
     re.IGNORECASE,
 )
 
-# These deterministic generators still emit the mature 1.20.1 source family. A
-# request containing one of them defaults to 1.20.1 until that source family has a
-# reviewed 1.21.1 adapter. Explicit 1.21.1 never silently falls back.
 _LEGACY_SOURCE_TERMS = (
     "보스", "boss", "몹", "mob", "entity", "npc", "엔피시", "작물", "crop",
     "농사", "farming", "무기", "weapon", "도구", "tool", "방어구", "armor",
@@ -33,6 +30,11 @@ _LEGACY_SOURCE_TERMS = (
     "enchant", "차원", "dimension", "바이옴", "biome", "월드젠", "worldgen",
     "구조물", "structure", "gui", "network", "네트워크", "quest", "퀘스트",
     "skill", "스킬", "party", "파티", "guild", "길드",
+)
+_SIMPLE_1211_TERMS = (
+    "아이템", "item", "장식 블록", "decorative block", "block", "블록",
+    "recipe", "레시피", "advancement", "발전과제", "loot", "루트",
+    "command", "명령어",
 )
 
 
@@ -114,12 +116,9 @@ def resolve_platform(
         return PlatformSelection(
             adapter=adapter,
             source="user_explicit_target",
-            reason=(
-                f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다."
-            ),
+            reason=f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다.",
             explicit_version=True,
             explicit_loader=bool(explicit_loader),
-            preserved_existing_target=False,
         )
 
     if existing_version and not _MIGRATION_RE.search(text):
@@ -144,22 +143,24 @@ def resolve_platform(
         )
 
     requested_kinds = {str(value).strip() for value in module_kinds if str(value).strip()}
+    newest = newest_adapter(loader="fabric")
     advanced = _requires_mature_source_family(text, design) or bool(
-        requested_kinds - newest_adapter().deterministic_module_kinds
+        requested_kinds - newest.deterministic_module_kinds
     )
-    if advanced:
+    simple_proven = _is_proven_simple_1211_request(text, design, requested_kinds)
+    if advanced or not simple_proven:
         adapter = adapter_for_target("1.20.1", "fabric")
         _require_supported_kinds(adapter, requested_kinds, explicit=False)
         reason = (
-            "요청 기능에 현재 1.20.1 소스 어댑터에서만 검증된 API 계열이 포함되어 "
-            "가장 최신 버전이라는 이유만으로 1.21.1을 강제하지 않습니다."
+            "요구 기능이 1.21.1 단순 생성 어댑터 범위로 확정되지 않아, 현재 더 넓게 "
+            "검증된 Minecraft 1.20.1 어댑터를 선택했습니다."
         )
     else:
-        adapter = newest_adapter(loader="fabric")
+        adapter = newest
         _require_supported_kinds(adapter, requested_kinds, explicit=False)
         reason = (
-            "특정 버전 제약이나 레거시 전용 API 요구가 없어, 현재 검토된 어댑터 중 "
-            f"가장 최신인 Minecraft {adapter.minecraft_version}을 선택했습니다."
+            "요구 기능이 현재 1.21.1에서 검증된 단순 생성 범위에 들어가므로 "
+            f"Minecraft {adapter.minecraft_version}을 선택했습니다."
         )
     return PlatformSelection(
         adapter=adapter,
@@ -167,13 +168,10 @@ def resolve_platform(
         reason=reason,
         explicit_version=False,
         explicit_loader=bool(explicit_loader),
-        preserved_existing_target=False,
     )
 
 
 def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Proposal:
-    """Bind a proposal and its authoritative evidence to one selected target."""
-
     from .knowledge import evidence_for_target, evidence_snapshot_hash
 
     spec = replace(proposal.spec, platform=selection.lock)
@@ -189,10 +187,8 @@ def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Propo
             or "Minecraft " in value and "Fabric" in value
         )
     ) + (
-        (
-            f"Target: Minecraft Java {selection.adapter.minecraft_version}, "
-            f"Fabric, Java {selection.adapter.java_version}. {selection.reason}"
-        ),
+        f"Target: Minecraft Java {selection.adapter.minecraft_version}, Fabric, "
+        f"Java {selection.adapter.java_version}. {selection.reason}",
     )
     updated = replace(
         proposal,
@@ -220,10 +216,7 @@ def _explicit_minecraft_version(prompt: str) -> str | None:
     matches = _VERSION_RE.findall(prompt)
     if not matches:
         return None
-    unique = list(dict.fromkeys(matches))
-    # A migration request can mention source and destination versions. Prefer the
-    # final version because natural requests overwhelmingly phrase it as A -> B.
-    return unique[-1]
+    return list(dict.fromkeys(matches))[-1]
 
 
 def _explicit_loader(prompt: str) -> str | None:
@@ -232,20 +225,15 @@ def _explicit_loader(prompt: str) -> str | None:
         found.append("fabric")
     if _NEOFORGE_RE.search(prompt):
         found.append("neoforge")
-    if _FORGE_RE.search(prompt):
+    if _FORGE_RE.search(prompt) and not _NEOFORGE_RE.search(prompt):
         found.append("forge")
     unique = list(dict.fromkeys(found))
     if len(unique) > 1:
-        raise SpecValidationError(
-            f"하나의 프로젝트에 여러 로더가 동시에 명시되었습니다: {unique}"
-        )
+        raise SpecValidationError(f"하나의 프로젝트에 여러 로더가 동시에 명시되었습니다: {unique}")
     return unique[0] if unique else None
 
 
-def _requires_mature_source_family(
-    prompt: str,
-    design: dict[str, Any] | None,
-) -> bool:
+def _requires_mature_source_family(prompt: str, design: dict[str, Any] | None) -> bool:
     lowered = prompt.casefold()
     if any(term.casefold() in lowered for term in _LEGACY_SOURCE_TERMS):
         return True
@@ -259,6 +247,26 @@ def _requires_mature_source_family(
         }
     ).casefold()
     return any(term.casefold() in serialized for term in _LEGACY_SOURCE_TERMS)
+
+
+def _is_proven_simple_1211_request(
+    prompt: str,
+    design: dict[str, Any] | None,
+    module_kinds: set[str],
+) -> bool:
+    newest = newest_adapter(loader="fabric")
+    if module_kinds and not module_kinds <= newest.deterministic_module_kinds:
+        return False
+    lowered = prompt.casefold()
+    if not any(term.casefold() in lowered for term in _SIMPLE_1211_TERMS):
+        return False
+    if not isinstance(design, dict):
+        return True
+    modules = design.get("modules", [])
+    if not isinstance(modules, list):
+        return False
+    serialized = repr(modules).casefold()
+    return not any(term.casefold() in serialized for term in _LEGACY_SOURCE_TERMS)
 
 
 def _require_supported_kinds(
