@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 from .config_paths import config_path
+from .platform_catalog import supported_minecraft_versions
 
 
 class ExternalMCPRegistry:
@@ -31,13 +32,24 @@ class ExternalMCPRegistry:
             "configuration_required",
             "incompatible_by_default",
         }
+        reviewed_versions = set(supported_minecraft_versions(loader="fabric"))
         for name, entry in self.servers.items():
             if not isinstance(entry, dict) or entry.get("status") not in statuses:
                 raise ValueError(f"Invalid MCP registry entry: {name}")
             versions = entry.get("target_versions", [])
-            if name in {"minecraft-dev", "minecraft-runtime-1201", "mineflayer-1201"}:
-                if "1.20.1" not in versions:
-                    raise ValueError(f"{name} must explicitly include Minecraft 1.20.1.")
+            if versions:
+                if not isinstance(versions, list) or any(
+                    not isinstance(value, str) or not value.strip() for value in versions
+                ):
+                    raise ValueError(f"Invalid target_versions for MCP server {name}.")
+                unknown = sorted(set(versions) - reviewed_versions)
+                if unknown and entry.get("status") != "incompatible_by_default":
+                    raise ValueError(
+                        f"MCP server {name} advertises unreviewed Minecraft targets: {unknown}"
+                    )
+            if name.startswith("minecraft-runtime-") or name.startswith("mineflayer-"):
+                if entry.get("status") != "incompatible_by_default" and not versions:
+                    raise ValueError(f"{name} must declare an exact Minecraft target.")
             if entry.get("status") == "enabled" and not (
                 entry.get("command") or entry.get("default_url")
             ):
