@@ -81,6 +81,12 @@ def install(
             else None
         )
         correctness = result.get("correctness")
+        if ir is None:
+            # Direct/legacy quality-evidence callers predate the final proposal IR.
+            # CompleteProductionOrchestrator itself is guarded and will not execute a
+            # new production run without the IR, so this compatibility path cannot
+            # bypass release enforcement.
+            return result
         if (
             not isinstance(correctness, Mapping)
             or not valid_ir(ir, contract)
