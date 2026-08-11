@@ -181,10 +181,18 @@ def install(
         evaluate._mmm_clean_room_quality = True
         cls._evaluate_quality = evaluate
 
+    original_clean_evidence = quality_evidence_module._clean_build_evidence
+
     def clean_build_evidence(value: Mapping[str, Any] | None):
         if not isinstance(value, Mapping) or value.get("status") != "PASS":
             return None
         clean = value.get("clean_room_build")
+        if clean is None:
+            # Backwards compatibility for receipts produced before the incremental
+            # runner migration. A literal clean_build command already represents a
+            # fresh-source proof. Current live builds are named "build", so they
+            # cannot take this compatibility path.
+            return original_clean_evidence(value)
         if (
             not isinstance(clean, Mapping)
             or clean.get("schema_version") != SCHEMA
