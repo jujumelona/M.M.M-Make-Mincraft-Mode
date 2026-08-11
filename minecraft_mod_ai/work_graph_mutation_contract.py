@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 
 _LOCAL_AI_SIDECAR = "mmm_local_ai_sidecar"
+_LLM_CAPABLE_STAGES = frozenset({"custom", "audio-binding"})
 
 
 def install(work_graph_module: Any) -> None:
@@ -55,7 +56,9 @@ def install(work_graph_module: Any) -> None:
 
         if kind == "module-shard":
             normalized["resource_class"] = (
-                "llm" if generation_stage == "custom" else "commit"
+                "llm"
+                if generation_stage in _LLM_CAPABLE_STAGES
+                else "commit"
             )
         elif kind == "asset-shard":
             normalized["resource_class"] = "image_gpu"
