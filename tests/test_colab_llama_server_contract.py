@@ -4,6 +4,7 @@ import inspect
 import json
 from pathlib import Path
 
+from minecraft_mod_ai import colab_mtp_server
 from minecraft_mod_ai import llama_server_autotune
 from minecraft_mod_ai import llama_server_hardware_policy
 
@@ -15,6 +16,7 @@ NOTEBOOKS = (
 )
 SETUP_SCRIPT = ROOT / "tools" / "colab_runtime_setup.py"
 LLAMA_ADAPTER = ROOT / "minecraft_mod_ai" / "model_adapters" / "llama_cpp_adapter.py"
+MTP_LAUNCHER = ROOT / "minecraft_mod_ai" / "colab_mtp_server.py"
 
 
 def _cell_source(path: Path, cell_id: str) -> str:
@@ -25,7 +27,7 @@ def _cell_source(path: Path, cell_id: str) -> str:
     raise AssertionError(f"missing cell {cell_id!r} in {path.name}")
 
 
-def test_colab_llama_server_uses_installed_cuda_python_server_without_source_build() -> None:
+def test_colab_mtp_cell_uses_pinned_launcher_without_source_build() -> None:
     forbidden = (
         "git clone",
         "cmake",
@@ -38,11 +40,25 @@ def test_colab_llama_server_uses_installed_cuda_python_server_without_source_bui
     )
     for notebook in NOTEBOOKS:
         source = _cell_source(notebook, "mtp-server")
-        assert "llama_cpp.server" in source
+        assert "start_colab_mtp_server" in source
         assert "LLAMA_SERVER_URL" in source
-        assert "n_gpu_layers" in source
         for token in forbidden:
             assert token not in source
+
+
+def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
+    text = MTP_LAUNCHER.read_text(encoding="utf-8")
+    assert colab_mtp_server.LLAMA_CPP_PYTHON_VERSION == "0.3.34"
+    assert (
+        colab_mtp_server.SERVER_SOURCE_GIT_BLOB_SHA1
+        == "72adc790598eac9574aec6fc0bf6e994a9cfe732"
+    )
+    assert "examples/server/server.py" in colab_mtp_server.SERVER_SOURCE_URL
+    assert '"draft_model": "draft-mtp"' in text
+    assert '"draft_model_num_pred_tokens": width' in text
+    assert "_git_blob_sha1(data)" in text
+    for token in ("git clone", "cmake", "nvcc", "make -j"):
+        assert token not in text
 
 
 def test_colab_status_text_has_no_absolute_integrity_or_zero_risk_claims() -> None:
@@ -53,7 +69,7 @@ def test_colab_status_text_has_no_absolute_integrity_or_zero_risk_claims() -> No
         "속도 극대화",
         "풀옵션",
     )
-    for path in (*NOTEBOOKS, SETUP_SCRIPT, LLAMA_ADAPTER):
+    for path in (*NOTEBOOKS, SETUP_SCRIPT, LLAMA_ADAPTER, MTP_LAUNCHER):
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in text
