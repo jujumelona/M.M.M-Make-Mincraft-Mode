@@ -2,14 +2,47 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
 
-class _JsonParseFallback(Exception):
-    pass
+_STAGE_TEXT_SUFFIXES = frozenset(
+    {
+        ".java",
+        ".json",
+        ".mcmeta",
+        ".gradle",
+        ".properties",
+        ".accesswidener",
+        ".mixins",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".md",
+        ".txt",
+    }
+)
+_STAGE_TEXT_NAMES = frozenset(
+    {
+        "build.gradle",
+        "settings.gradle",
+        "gradle.properties",
+        "fabric.mod.json",
+    }
+)
+_STAGE_IGNORED_DIRS = frozenset(
+    {
+        ".git",
+        ".gradle",
+        ".cache",
+        ".minecraft_ai",
+        "build",
+        "logs",
+        "node_modules",
+        "run",
+    }
+)
 
 
 def install(performance_module: Any) -> None:
@@ -24,20 +57,18 @@ def install(performance_module: Any) -> None:
         stage = Path(
             tempfile.mkdtemp(prefix="custom-", dir=parent)
         ).resolve()
-        stage.rmdir()
 
-        skip_dirs = set(performance_module._SKIP_STAGE_DIRS)
-        skip_suffixes = set(performance_module._SKIP_STAGE_SUFFIXES)
-
-        # Walk only the tree that will actually be copied. In particular, do not
-        # descend through Gradle/build/runtime output just to discover that copytree
-        # will ignore it. This keeps snapshot setup proportional to source size.
+        # Custom generation reads ProjectIndex source context, not compiled output,
+        # textures, audio, caches or audit metadata. Mirror the indexable text tree
+        # only. This turns staging setup from project-size copying into source-size
+        # copying and avoids recursively scanning Gradle/runtime output.
         for directory, dirnames, filenames in os.walk(
             live_root,
             topdown=True,
             followlinks=False,
         ):
             base = Path(directory)
+            relative_dir = base.relative_to(live_root)
             retained: list[str] = []
             for name in dirnames:
                 candidate = base / name
@@ -45,33 +76,27 @@ def install(performance_module: Any) -> None:
                     raise performance_module.StagedCommitConflict(
                         f"Staging refused project symlink: {candidate}"
                     )
-                if name not in skip_dirs:
+                if name not in _STAGE_IGNORED_DIRS:
                     retained.append(name)
             dirnames[:] = retained
+
             for name in filenames:
-                candidate = base / name
-                if candidate.is_symlink():
+                source = base / name
+                if source.is_symlink():
                     raise performance_module.StagedCommitConflict(
-                        f"Staging refused project symlink: {candidate}"
+                        f"Staging refused project symlink: {source}"
                     )
-
-        def ignore(directory: str, names: list[str]) -> set[str]:
-            ignored: set[str] = set()
-            base = Path(directory)
-            for name in names:
-                path = base / name
-                if name in skip_dirs and path.is_dir():
-                    ignored.add(name)
-                elif path.is_file() and path.suffix.lower() in skip_suffixes:
-                    ignored.add(name)
-            return ignored
-
-        shutil.copytree(
-            live_root,
-            stage,
-            copy_function=performance_module._reflink_or_copy,
-            ignore=ignore,
-        )
+                if (
+                    source.suffix.lower() not in _STAGE_TEXT_SUFFIXES
+                    and name not in _STAGE_TEXT_NAMES
+                ):
+                    continue
+                target = stage / relative_dir / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                performance_module._reflink_or_copy(
+                    str(source),
+                    str(target),
+                )
         return stage
 
     def three_way_merge(
