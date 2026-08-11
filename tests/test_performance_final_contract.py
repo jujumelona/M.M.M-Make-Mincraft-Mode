@@ -5,13 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.performance_final_contract import (
     StagedCommitConflict,
     _clone_source_snapshot,
     _three_way_merge,
 )
-from minecraft_mod_ai.work_graph import _node
+from minecraft_mod_ai.work_graph import _module_stage, _node
 
 
 def test_generation_nodes_use_resource_specific_lanes() -> None:
@@ -26,6 +27,12 @@ def test_generation_nodes_use_resource_specific_lanes() -> None:
         "generate:content",
         (),
         {"kind": "module-shard", "generation_stage": "content"},
+    )
+    audio_binding = _node(
+        "audio-binding",
+        "generate:audio-binding",
+        (),
+        {"kind": "module-shard", "generation_stage": "audio-binding"},
     )
     asset = _node(
         "asset",
@@ -48,9 +55,26 @@ def test_generation_nodes_use_resource_specific_lanes() -> None:
 
     assert custom.resource_class == "llm"
     assert deterministic.resource_class == "commit"
+    assert audio_binding.resource_class == "llm"
     assert asset.resource_class == "image_gpu"
     assert audio.resource_class == "cpu_io"
     assert finalize.resource_class == "commit"
+
+
+def test_generic_integration_is_not_hidden_in_content_commit_lane() -> None:
+    generic = ProductionModule(
+        "custom_bridge",
+        "integration",
+        {"integration_type": "third_party_bridge"},
+    )
+    sidecar = ProductionModule(
+        "local_sidecar",
+        "integration",
+        {"integration_type": "mmm_local_ai_sidecar"},
+    )
+
+    assert _module_stage(generic) == "custom"
+    assert _module_stage(sidecar) == "content"
 
 
 def test_local_gpu_text_role_participates_in_gpu_exclusion() -> None:
