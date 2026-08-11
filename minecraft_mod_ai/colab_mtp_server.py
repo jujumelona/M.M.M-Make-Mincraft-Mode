@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -26,6 +27,7 @@ SERVER_CONFIG_PATH = Path("/content/mmm_llama_mtp_server_v0_3_34.json")
 SERVER_LOG_PATH = Path("/content/mmm_llama_mtp_server.log")
 SERVER_ORIGIN = "http://127.0.0.1:8910"
 SERVER_API_URL = f"{SERVER_ORIGIN}/v1"
+ENABLED_ENV = "MMM_COLAB_MTP_SERVER_ENABLED"
 
 _PROCESS: subprocess.Popen[str] | None = None
 _LOG_HANDLE: Any = None
@@ -75,6 +77,17 @@ def _stop_process(process: subprocess.Popen[str] | None) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
+
+
+def _close_log() -> None:
+    global _LOG_HANDLE
+    if _LOG_HANDLE is None:
+        return
+    try:
+        _LOG_HANDLE.close()
+    except Exception:
+        pass
+    _LOG_HANDLE = None
 
 
 def _log_tail(lines: int = 60) -> str:
@@ -133,6 +146,28 @@ def _write_config(config: Any, model_path: str) -> int:
     return width
 
 
+def colab_mtp_server_enabled() -> bool:
+    raw = os.environ.get(ENABLED_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def colab_mtp_server_running() -> bool:
+    return _PROCESS is not None and _PROCESS.poll() is None and _ready()
+
+
+def stop_colab_mtp_server(*, keep_enabled: bool = True) -> None:
+    """Release the MTP server process and its GPU allocation."""
+
+    global _PROCESS
+    _stop_process(_PROCESS)
+    _PROCESS = None
+    _close_log()
+    if os.environ.get("LLAMA_SERVER_URL", "").rstrip("/") == SERVER_API_URL:
+        os.environ.pop("LLAMA_SERVER_URL", None)
+    if not keep_enabled:
+        os.environ.pop(ENABLED_ENV, None)
+
+
 def start_colab_mtp_server(config: Any) -> str:
     """Start the pinned low-level MTP server using the installed CUDA wheel.
 
@@ -142,19 +177,13 @@ def start_colab_mtp_server(config: Any) -> str:
 
     global _PROCESS, _LOG_HANDLE
 
+    os.environ[ENABLED_ENV] = "1"
     if _ready():
         os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
         print("llama MTP server: ready", SERVER_API_URL, flush=True)
         return SERVER_API_URL
 
-    _stop_process(_PROCESS)
-    _PROCESS = None
-    if _LOG_HANDLE is not None:
-        try:
-            _LOG_HANDLE.close()
-        except Exception:
-            pass
-        _LOG_HANDLE = None
+    stop_colab_mtp_server(keep_enabled=True)
 
     server_script = _server_source()
     model_path = _resolve_model_path(config)
@@ -198,7 +227,11 @@ def start_colab_mtp_server(config: Any) -> str:
         except Exception:
             pass
     tail = _log_tail()
+    _close_log()
     raise RuntimeError(
         "llama MTP server failed to become ready."
         + ("\n" + tail if tail else "")
     )
+
+
+atexit.register(lambda: stop_colab_mtp_server(keep_enabled=False))
