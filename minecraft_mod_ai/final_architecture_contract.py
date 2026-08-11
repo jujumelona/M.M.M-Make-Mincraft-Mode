@@ -4,6 +4,7 @@ from typing import Any
 
 from . import atomic_requirement_contract as _atomic_module
 from .atomic_efficiency_contract import install as _install_atomic_efficiency
+from .atomic_playtest_evidence_contract import install as _install_atomic_playtest
 from .atomic_quality_binding_contract import install as _install_atomic_quality
 from .atomic_requirement_contract import install as _install_atomic_requirements
 from .build_input_scope_contract import install as _install_build_input_scope
@@ -30,6 +31,11 @@ def install(
         orchestrator_module,
     )
     _install_atomic_quality(
+        _atomic_module,
+        quality_evidence_module,
+        orchestrator_module,
+    )
+    _install_atomic_playtest(
         _atomic_module,
         quality_evidence_module,
         orchestrator_module,
