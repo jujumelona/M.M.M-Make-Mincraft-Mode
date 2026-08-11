@@ -132,6 +132,18 @@ _install_performance_final_contract(
     _source_patch_module,
 )
 
+# Runtime, server/client playtest and Mineflayer use the same approved platform lock.
+# A 1.21.1 plan can never be certified by a 1.20.1 runtime profile.
+from . import mineflayer_bridge as _mineflayer_bridge_module
+from . import runtime_manager as _runtime_manager_module
+from .platform_runtime_contract import install as _install_platform_runtime_contract
+
+_install_platform_runtime_contract(
+    orchestrator_module=_complete_orchestrator_module,
+    runtime_manager_module=_runtime_manager_module,
+    mineflayer_module=_mineflayer_bridge_module,
+)
+
 # Public sessions no longer interpret the historical default 1.20.1 parameter as a
 # global target. Omitted target means auto-selection; Revise preserves the imported
 # project's target unless the user explicitly requests a migration.
