@@ -151,3 +151,21 @@ def install(performance_module: Any) -> None:
     performance_module._clone_source_snapshot = clone_source_snapshot
     performance_module._three_way_merge = three_way_merge
     performance_module._mmm_final_tuning_installed = True
+
+    # The complete orchestrator is already imported at this point in package
+    # initialization. Install final request-coverage, repair-diagnostic and
+    # clean-room release gates without rebinding deterministic generators early.
+    from . import complete_orchestrator as _orchestrator
+    from . import complete_planner as _complete_planner
+    from . import quality_evidence as _quality_evidence
+    from . import repair_engine as _repair_engine
+    from . import validation_execution_contract as _validation_execution
+    from .final_architecture_contract import install as _install_final_architecture
+
+    _install_final_architecture(
+        complete_planner_module=_complete_planner,
+        orchestrator_module=_orchestrator,
+        repair_module=_repair_engine,
+        quality_evidence_module=_quality_evidence,
+        validation_module=_validation_execution,
+    )
