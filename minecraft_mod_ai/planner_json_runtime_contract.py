@@ -4,7 +4,7 @@ import json
 import os
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 
 _JSON_SCHEMA: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -77,17 +77,19 @@ def _extract_with_safe_empty_defaults(
     *,
     expected_contracts: Sequence[frozenset[str]],
 ) -> dict[str, Any]:
+    failure: BaseException | None = None
     try:
         return module._extract_json(text, expected_contracts=expected_contracts)
-    except module.SpecValidationError as original_error:
-        pass
+    except module.SpecValidationError as exc:
+        failure = exc
 
+    assert failure is not None
     if len(expected_contracts) != 1:
-        raise original_error
+        raise failure
     expected = expected_contracts[0]
     production_expected = frozenset(module._PRODUCTION_PAGE_CONTRACT)
     if expected != production_expected:
-        raise original_error
+        raise failure
 
     # Empty asset/audio/test collections carry no semantics. A model that omitted
     # one of those empty lists still has a recoverable production page. Completion
@@ -103,7 +105,7 @@ def _extract_with_safe_empty_defaults(
         candidate.setdefault("acceptance_tests", [])
         if expected <= frozenset(candidate):
             return {field: candidate[field] for field in expected}
-    raise original_error
+    raise failure
 
 
 def _validate_production_progress(
