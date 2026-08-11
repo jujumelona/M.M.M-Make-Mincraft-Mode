@@ -64,7 +64,15 @@ jobs:
           python tools/package_skills.py
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
       - name: Unit and contract tests
-        run: python -m pytest -q
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee pytest-${{ matrix.python-version }}.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-${{ matrix.python-version }}
+          path: pytest-${{ matrix.python-version }}.log
+          if-no-files-found: error
 
   repository-audit:
     name: Repository, package and wheel audit
