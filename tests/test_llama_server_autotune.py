@@ -10,6 +10,7 @@ from minecraft_mod_ai.llama_server_autotune import (
     _choose_variant,
     _variant_args,
 )
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
 def _probe(
@@ -36,6 +37,12 @@ def _probe(
     )
 
 
+def test_server_autotune_contract_is_installed() -> None:
+    assert getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
+    assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
+    assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
+
+
 def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_MTP_WIDTHS", raising=False)
     values = _candidate_variants()
@@ -44,7 +51,7 @@ def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -
     assert [value.draft_n_max for value in values[1:]] == [1, 2, 3]
 
 
-def test_autotune_requires_exact_output_match_before_speed(monkeypatch) -> None:
+def test_autotune_requires_exact_output_match_before_speed() -> None:
     decision = _choose_variant(
         (
             _probe("baseline", tps=20.0, output_sha256="baseline"),
@@ -91,7 +98,7 @@ def test_autotune_fails_closed_without_valid_baseline() -> None:
     assert decision is None
 
 
-def test_server_args_match_existing_quality_neutral_runtime_defaults(monkeypatch) -> None:
+def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
     monkeypatch.delenv("MMM_LLAMA_BATCH", raising=False)
     monkeypatch.delenv("MMM_LLAMA_UBATCH", raising=False)
@@ -101,7 +108,7 @@ def test_server_args_match_existing_quality_neutral_runtime_defaults(monkeypatch
     assert args[args.index("--ctx-size") + 1] == "16384"
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
-    assert args[args.index("--gpu-layers") + 1] == "all"
+    assert args[args.index("--gpu-layers") + 1] == "auto"
     assert args[args.index("--flash-attn") + 1] == "on"
     assert args[args.index("--cache-type-k") + 1] == "q4_0"
     assert args[args.index("--cache-type-v") + 1] == "q4_0"
@@ -118,5 +125,5 @@ def test_mtp_variant_uses_server_startup_flags_not_request_mutation() -> None:
         "--spec-draft-n-min",
         "0",
         "--spec-draft-ngl",
-        "all",
+        "auto",
     ]
