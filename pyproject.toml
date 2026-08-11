@@ -8,8 +8,7 @@ version = "0.8.0"
 description = "Minecraft Fabric mod production system with immutable planning, request-resolved implementation methods, sharded generation, indexed repair, runtime playtests and distribution"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+license = { text = "MIT" }
 authors = [{ name = "M.M.M Make Mincraft Mode contributors" }]
 dependencies = [
   "PyYAML>=6.0.2,<7",
