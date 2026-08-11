@@ -152,9 +152,6 @@ def _bootstrap_native_server() -> str | None:
 def install(autotune_module: Any) -> None:
     """Keep managed llama-server tuning hardware-adaptive and correctness-gated."""
 
-    # llama_server_autotune wraps the already installed prefill-tuned generate()
-    # method. Preserve that semantic marker on the outer wrapper so introspection
-    # and contracts describe the actual call chain rather than only the last layer.
     from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
     if (
@@ -195,9 +192,12 @@ def install(autotune_module: Any) -> None:
                 args[index + 1] = "auto"
             except (ValueError, IndexError):
                 pass
+            if "--parallel" not in args and "-np" not in args:
+                args.extend(["--parallel", "1"])
             return args
 
         adaptive_base_args._mmm_auto_gpu_layers = True
+        adaptive_base_args._mmm_single_decode_slot = True
         autotune_module._base_args = adaptive_base_args
 
     original_variant = autotune_module._variant_args
