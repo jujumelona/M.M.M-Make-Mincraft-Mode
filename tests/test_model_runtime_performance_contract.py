@@ -39,8 +39,11 @@ def test_llama_generation_session_keeps_shared_gguf_runtime_resident() -> None:
             model_id="local/test.gguf",
         )
     )
-    session = getattr(adapter, "generation_session")
-    assert getattr(session, "_mmm_resident_llama_session", False)
+    assert getattr(
+        LlamaCppAdapter.generation_session,
+        "_mmm_resident_llama_session",
+        False,
+    )
 
     # Entering and leaving the bounded router session must not call close(), because
     # planner/researcher/coder commonly point at the same GGUF and can reuse it.
