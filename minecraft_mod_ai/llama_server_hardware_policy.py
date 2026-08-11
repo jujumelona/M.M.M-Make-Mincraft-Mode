@@ -1,17 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from functools import wraps
+from types import SimpleNamespace
 from typing import Any
 
 
 def install(autotune_module: Any) -> None:
-    """Keep managed llama-server benchmarking runnable across VRAM sizes.
-
-    The in-process adapter already degrades GPU layer offload when memory is tight.
-    The managed server should not hard-fail before benchmarking merely because the
-    selected GGUF is larger than available VRAM, so target and MTP draft placement
-    both use llama.cpp's native ``auto`` policy.
-    """
+    """Keep managed llama-server tuning hardware-adaptive and correctness-gated."""
 
     original_base = autotune_module._base_args
     if not getattr(original_base, "_mmm_auto_gpu_layers", False):
@@ -49,3 +45,77 @@ def install(autotune_module: Any) -> None:
 
         adaptive_variant_args._mmm_auto_draft_layers = True
         autotune_module._variant_args = adaptive_variant_args
+
+    original_probe = autotune_module._probe_server
+    if not getattr(original_probe, "_mmm_correctness_sentinel", False):
+
+        @wraps(original_probe)
+        def guarded_probe(
+            base_url: str,
+            request: Any,
+            *,
+            max_tokens: int,
+            variant: Any,
+        ) -> Any:
+            measured = original_probe(
+                base_url,
+                request,
+                max_tokens=max_tokens,
+                variant=variant,
+            )
+            if max_tokens <= 1 or not measured.ok:
+                return measured
+
+            # MTP has had prompt-dependent deterministic divergence. The real first
+            # workflow request remains the performance measurement, while this short
+            # code-generation sentinel makes selection depend on a second independent
+            # greedy token stream. Only candidates matching baseline on both survive.
+            sentinel_request = SimpleNamespace(
+                messages=(
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a deterministic Java 17 code generator. "
+                            "Output only valid Java code and no explanation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Write exactly one static int clamp(int value, int min, "
+                            "int max) method using Math.min and Math.max."
+                        ),
+                    },
+                ),
+                response_format="text",
+            )
+            sentinel = original_probe(
+                base_url,
+                sentinel_request,
+                max_tokens=min(max_tokens, 64),
+                variant=variant,
+            )
+            combined = hashlib.sha256(
+                f"{measured.output_sha256}:{sentinel.output_sha256}".encode("utf-8")
+            ).hexdigest()
+            return autotune_module.ProbeResult(
+                variant=measured.variant,
+                ok=bool(measured.ok and sentinel.ok),
+                output_sha256=combined,
+                predicted_tokens=measured.predicted_tokens,
+                predicted_tps=measured.predicted_tps,
+                prompt_tps=measured.prompt_tps,
+                elapsed_seconds=measured.elapsed_seconds,
+                error=(
+                    measured.error
+                    if sentinel.ok
+                    else "; ".join(
+                        value
+                        for value in (measured.error, f"sentinel: {sentinel.error}")
+                        if value
+                    )
+                ),
+            )
+
+        guarded_probe._mmm_correctness_sentinel = True
+        autotune_module._probe_server = guarded_probe
