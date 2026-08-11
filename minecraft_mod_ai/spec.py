@@ -66,6 +66,8 @@ class ProposalStatus(str, Enum):
 
 @dataclass(frozen=True)
 class PlatformLock:
+    # Defaults retain backwards compatibility for saved 1.20.1 proposals. New plans
+    # are retargeted by PlatformResolver before approval.
     edition: str = "java"
     loader: str = "fabric"
     minecraft_version: str = "1.20.1"
@@ -73,30 +75,18 @@ class PlatformLock:
     yarn_mappings: str = "1.20.1+build.1"
     fabric_loader: str = "0.17.2"
     fabric_api: str = "0.92.11+1.20.1"
-    fabric_loom: str = "1.5.4"
-    gradle: str = "8.5"
+    fabric_loom: str = "1.10.5"
+    gradle: str = "8.12"
 
     def validate(self) -> None:
-        # This is a compatibility lock, not a project-size limit. Supporting another
-        # target requires a separate version adapter rather than mixed mappings.
-        expected = {
-            "edition": "java",
-            "loader": "fabric",
-            "minecraft_version": "1.20.1",
-            "java_version": "17",
-            "yarn_mappings": "1.20.1+build.1",
-            "fabric_loader": "0.17.2",
-            "fabric_api": "0.92.11+1.20.1",
-            "fabric_loom": "1.5.4",
-            "gradle": "8.5",
-        }
-        for field_name, expected_value in expected.items():
-            actual = getattr(self, field_name)
-            if actual != expected_value:
-                raise SpecValidationError(
-                    f"Unsupported platform adapter: {field_name}={actual!r}; "
-                    f"this adapter targets {expected_value!r}."
-                )
+        # A target is valid only as one exact code-owned adapter tuple. This prevents
+        # accidental mixtures such as 1.21.1 Minecraft with Java 17 or 1.20.1 Yarn.
+        from .platform_catalog import adapter_for_lock_values
+
+        try:
+            adapter_for_lock_values(self)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -303,7 +293,10 @@ class Proposal:
             raise SpecValidationError("At least one authoritative evidence source is required.")
         from .knowledge import evidence_snapshot_hash, validate_trusted_evidence
 
-        validate_trusted_evidence(self.evidence_sources)
+        validate_trusted_evidence(
+            self.evidence_sources,
+            minecraft_version=self.spec.platform.minecraft_version,
+        )
         if not SHA256_PATTERN.fullmatch(self.evidence_snapshot_hash):
             raise SpecValidationError(
                 "evidence_snapshot_hash must be a lowercase sha256 digest."
