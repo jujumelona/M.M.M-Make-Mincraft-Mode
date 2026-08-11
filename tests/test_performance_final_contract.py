@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai.performance_final_contract import _three_way_merge
+import pytest
+
+from minecraft_mod_ai.performance_final_contract import (
+    StagedCommitConflict,
+    _three_way_merge,
+)
 from minecraft_mod_ai.work_graph import _node
 
 
@@ -86,3 +91,17 @@ def test_staged_json_merge_preserves_parallel_additions() -> None:
         "example.System",
         "example.Custom",
     ]
+
+
+def test_staged_json_merge_rejects_same_key_semantic_conflict() -> None:
+    base = json.dumps({"loader": "base"}) + "\n"
+    staged = json.dumps({"loader": "custom"}) + "\n"
+    live = json.dumps({"loader": "system"}) + "\n"
+
+    with pytest.raises(StagedCommitConflict, match="Concurrent JSON merge conflict"):
+        _three_way_merge(
+            "src/main/resources/fabric.mod.json",
+            base_text=base,
+            staged_text=staged,
+            live_text=live,
+        )
