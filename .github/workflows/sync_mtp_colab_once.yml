@@ -1,0 +1,73 @@
+name: Sync pinned MTP Colab once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync_mtp_colab_once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'nbformat>=5.10,<6'
+      - name: Replace server cell in canonical builder
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/build_colab_notebook.py')
+          text = path.read_text(encoding='utf-8')
+          start_marker = '    (\n        "code",\n        "mtp-server",'
+          end_marker = '    (\n        "code",\n        "plan",'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          block = '''    (
+        "code",
+        "mtp-server",
+        """# @title 4-1. [선택] 로컬 CUDA MTP 서버 실행
+from minecraft_mod_ai.colab_mtp_server import start_colab_mtp_server
+
+assert_current_colab_setup()
+LLAMA_SERVER_URL = start_colab_mtp_server(planner_config)
+print("llama MTP server:", LLAMA_SERVER_URL)
+""",
+    ),
+'''
+          path.write_text(text[:start] + block + text[end:], encoding='utf-8')
+          PY
+      - run: python tools/build_colab_notebook.py
+      - name: Verify no source-build or unsupported claims remain
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          paths = [
+              Path('tools/build_colab_notebook.py'),
+              Path('M.M.M_Make_Mincraft_Mode_Colab.ipynb'),
+              Path('Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb'),
+          ]
+          banned = ('git clone', 'cmake', 'nvcc', '약 1분', '3배', '80토큰', '무결성 100%', '에러 위험 요소 0%')
+          for path in paths:
+              text = path.read_text(encoding='utf-8')
+              for token in banned:
+                  if token in text:
+                      raise SystemExit(f'{path}: banned token remains: {token}')
+              if path.suffix == '.ipynb' and 'start_colab_mtp_server' not in text:
+                  raise SystemExit(f'{path}: pinned MTP launcher missing')
+          PY
+      - name: Commit generated notebooks
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/build_colab_notebook.py M.M.M_Make_Mincraft_Mode_Colab.ipynb Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb
+          git commit -m 'fix(colab): use pinned prebuilt MTP server launcher'
+          git push origin HEAD:main
