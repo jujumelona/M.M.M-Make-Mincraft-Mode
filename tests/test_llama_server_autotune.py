@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai.llama_server_autotune import (
     ProbeResult,
     ServerVariant,
@@ -43,6 +44,11 @@ def test_server_autotune_contract_is_installed() -> None:
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
     assert getattr(_probe_server, "_mmm_correctness_sentinel", False)
+    assert getattr(
+        complete_orchestrator_services.generate_assets,
+        "_mmm_releases_managed_llama",
+        False,
+    )
 
 
 def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
