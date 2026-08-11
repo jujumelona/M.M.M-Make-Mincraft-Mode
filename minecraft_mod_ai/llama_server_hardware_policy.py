@@ -23,8 +23,14 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _existing_built_server() -> str | None:
+    explicit_binary = os.environ.get("MMM_LLAMA_SERVER_BIN", "").strip()
     explicit_source = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
     candidates: list[Path] = []
+    if explicit_binary:
+        candidates.append(Path(explicit_binary).expanduser())
+    discovered = shutil.which("llama-server")
+    if discovered:
+        candidates.append(Path(discovered))
     if explicit_source:
         candidates.append(Path(explicit_source).expanduser() / "build" / "bin" / "llama-server")
     candidates.append(Path("/content/llama.cpp/build/bin/llama-server"))
@@ -57,7 +63,9 @@ def _source_dir() -> Path:
 
 
 def _can_build_native_server() -> bool:
-    if not _env_bool("MMM_LLAMA_SERVER_AUTO_BUILD", True):
+    # Native source compilation is never part of the normal Colab/runtime path.
+    # It is available only when an operator explicitly opts in.
+    if not _env_bool("MMM_LLAMA_SERVER_AUTO_BUILD", False):
         return False
     if not sys.platform.startswith("linux"):
         return False
@@ -67,7 +75,7 @@ def _can_build_native_server() -> bool:
 
 
 def _bootstrap_native_server() -> str | None:
-    """Build the official CUDA llama-server on first use when no binary exists."""
+    """Use an existing llama-server or explicitly build one when opted in."""
 
     existing = _existing_built_server()
     if existing is not None:
@@ -100,6 +108,7 @@ def _bootstrap_native_server() -> str | None:
                     str(source),
                 ],
                 check=True,
+                timeout=120,
             )
 
         architecture = _cuda_architecture()
@@ -118,6 +127,7 @@ def _bootstrap_native_server() -> str | None:
                 "-DCMAKE_BUILD_TYPE=Release",
             ],
             check=True,
+            timeout=120,
         )
         subprocess.run(
             [
@@ -132,6 +142,7 @@ def _bootstrap_native_server() -> str | None:
                 str(max(1, os.cpu_count() or 1)),
             ],
             check=True,
+            timeout=600,
         )
         if not binary.is_file() or not os.access(binary, os.X_OK):
             return None
