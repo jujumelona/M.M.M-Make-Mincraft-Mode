@@ -34,6 +34,19 @@ def _matched_acceptance_refs(playtest: Any) -> set[str]:
     return refs
 
 
+def _visual_acceptance_refs(visual: Any) -> set[str]:
+    if not isinstance(visual, Mapping) or visual.get("status") != "PASS":
+        return set()
+    values = visual.get("atomic_acceptance_refs")
+    if not isinstance(values, list):
+        return set()
+    return {
+        str(value)
+        for value in values
+        if isinstance(value, str) and value.startswith("acceptance:")
+    }
+
+
 def install(
     atomic_module: Any,
     quality_evidence_module: Any,
@@ -72,6 +85,9 @@ def install(
         matched_runtime = _matched_acceptance_refs(
             kwargs.get("playtest_receipt")
         )
+        matched_visual = _visual_acceptance_refs(
+            kwargs.get("visual_receipt")
+        )
         atoms = ir.get("atoms")
         if not isinstance(atoms, list) or not atoms:
             result.pop("correctness", None)
@@ -101,6 +117,14 @@ def install(
                         break
                     evidence_refs.update(
                         "atomic-runtime:" + value for value in matched
+                    )
+                elif route == "visual_3d":
+                    matched = acceptance_refs & matched_visual
+                    if not matched or not isinstance(result.get("visual_3d"), Mapping):
+                        atom_ok = False
+                        break
+                    evidence_refs.update(
+                        "atomic-visual:" + value for value in matched
                     )
                 else:
                     receipt = result.get(str(route))
@@ -132,6 +156,7 @@ def install(
             observed_sources=[
                 correctness,
                 kwargs.get("playtest_receipt"),
+                kwargs.get("visual_receipt"),
                 *(
                     result[route]
                     for route in sorted(
