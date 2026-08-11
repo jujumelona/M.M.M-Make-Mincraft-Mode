@@ -5,57 +5,57 @@ servers:
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: frontdoor}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   mmm-research:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: research}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   mmm-generation:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: generation}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   mmm-quality:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: quality}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   mmm-runtime:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: runtime}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   mmm-release:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: release}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   mmm-training:
     status: enabled
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: training}
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: first_party
   minecraft-dev:
     status: enabled
     transport: stdio
     command: [npx, -y, "@mcdxai/minecraft-dev-mcp@1.2.4"]
-    target_versions: ["1.20.1"]
+    target_versions: ["1.20.1", "1.21.1"]
     trust: reviewed_open_source
-    purpose: source decompilation, mappings, symbol search and JAR inspection
+    purpose: source decompilation, mappings, symbol search and JAR inspection for the selected target
   playwright:
     status: enabled
     transport: stdio
@@ -91,20 +91,34 @@ servers:
     transport: stdio_lsp
     command_env: MMM_JDTLS_CMD
     trust: official_eclipse
-    required_runtime: Java 21 for the language server; generated project remains Java 17
+    required_runtime: Java 21 for the language server; generated project uses the selected target Java version
   minecraft-runtime-1201:
     status: configuration_required
     transport: first_party_process
     trust: first_party
     target_versions: ["1.20.1"]
-    purpose: disposable server/client lifecycle, logs, commands and screenshots
+    purpose: disposable server/client lifecycle, logs, commands and screenshots for Minecraft 1.20.1
+  minecraft-runtime-1211:
+    status: configuration_required
+    transport: first_party_process
+    trust: first_party
+    target_versions: ["1.21.1"]
+    purpose: disposable server/client lifecycle, logs, commands and screenshots for Minecraft 1.21.1
   mineflayer-1201:
     status: configuration_required
     transport: first_party_jsonl
     command: [node, integrations/mineflayer-1201/bridge.mjs]
+    env: {MMM_MINEFLAYER_MC_VERSION: "1.20.1"}
     target_versions: ["1.20.1"]
+    trust: first_party_wrapper_over_mineflayer
+  mineflayer-1211:
+    status: configuration_required
+    transport: first_party_jsonl
+    command: [node, integrations/mineflayer-1201/bridge.mjs]
+    env: {MMM_MINEFLAYER_MC_VERSION: "1.21.1"}
+    target_versions: ["1.21.1"]
     trust: first_party_wrapper_over_mineflayer
   gdmc:
     status: incompatible_by_default
     target_versions: ["1.20.2"]
-    reason: upstream target does not match the pinned 1.20.1 release
+    reason: upstream target is outside the currently reviewed MMM platform adapter catalog
