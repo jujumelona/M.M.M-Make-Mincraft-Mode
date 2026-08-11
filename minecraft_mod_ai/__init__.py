@@ -31,8 +31,11 @@ _install_work_graph_mutation_contract(_work_graph_module)
 from . import complete_orchestrator as _complete_orchestrator_module
 from . import custom_module_generator as _custom_module_generator_module
 from . import source_patch as _source_patch_module
+from . import performance_final_contract as _performance_final_contract_module
+from .performance_final_tuning import install as _install_performance_final_tuning
 from .performance_final_contract import install as _install_performance_final_contract
 
+_install_performance_final_tuning(_performance_final_contract_module)
 _install_performance_final_contract(
     _complete_orchestrator_module,
     _custom_module_generator_module,
