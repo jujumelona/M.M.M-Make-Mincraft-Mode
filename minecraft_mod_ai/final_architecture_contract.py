@@ -28,6 +28,7 @@ def install(
     _install_atomic_quality(
         _atomic_module,
         quality_evidence_module,
+        orchestrator_module,
     )
     _install_repair_diagnostics(
         repair_module,
