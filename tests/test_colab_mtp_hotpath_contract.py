@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +10,23 @@ from minecraft_mod_ai.model_adapters import ModelBackendError
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "minecraft_mod_ai" / "llama_server_hardware_policy.py"
+
+
+class _Adapter:
+    _reported_server_url: str | None = None
+
+    def __init__(self) -> None:
+        class Config:
+            role = "planner"
+            model_id = "model"
+            max_new_tokens = 64
+
+        self.config = Config()
+
+
+class _Request:
+    messages = ({"role": "user", "content": "hello"},)
+    response_format = "text"
 
 
 def test_colab_mtp_hot_path_skips_repeated_restart_and_local_fallback() -> None:
@@ -33,18 +49,11 @@ def test_strict_server_generate_returns_openai_message(monkeypatch) -> None:
     import httpx
 
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
-    adapter = SimpleNamespace(
-        config=SimpleNamespace(role="planner", model_id="model", max_new_tokens=64)
-    )
-    adapter.__class__._reported_server_url = None
-    request = SimpleNamespace(
-        messages=({"role": "user", "content": "hello"},),
-        response_format="text",
-    )
+    adapter = _Adapter()
     assert (
         llama_server_hardware_policy._strict_server_generate(
             adapter,
-            request,
+            _Request(),
             "http://127.0.0.1:8910/v1",
         )
         == "ok"
@@ -63,16 +72,9 @@ def test_strict_server_generate_surfaces_server_failure(monkeypatch) -> None:
     import httpx
 
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
-    adapter = SimpleNamespace(
-        config=SimpleNamespace(role="planner", model_id="model", max_new_tokens=64)
-    )
-    request = SimpleNamespace(
-        messages=({"role": "user", "content": "hello"},),
-        response_format="text",
-    )
     with pytest.raises(ModelBackendError):
         llama_server_hardware_policy._strict_server_generate(
-            adapter,
-            request,
+            _Adapter(),
+            _Request(),
             "http://127.0.0.1:8910/v1",
         )
