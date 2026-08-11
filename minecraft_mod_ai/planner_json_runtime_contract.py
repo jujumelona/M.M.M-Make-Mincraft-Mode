@@ -137,36 +137,33 @@ def _extract_with_safe_empty_defaults(
     *,
     expected_contracts: Sequence[frozenset[str]],
 ) -> dict[str, Any]:
-    failure: BaseException | None = None
-    try:
-        return module._extract_json(text, expected_contracts=expected_contracts)
-    except module.SpecValidationError as exc:
-        failure = exc
-
-    assert failure is not None
-    if len(expected_contracts) != 1:
-        raise failure
-    expected = expected_contracts[0]
     production_expected = frozenset(module._PRODUCTION_PAGE_CONTRACT)
-    if expected != production_expected:
-        raise failure
+    if len(expected_contracts) != 1 or expected_contracts[0] != production_expected:
+        return module._extract_json(text, expected_contracts=expected_contracts)
 
-    # Only semantically empty collections may be supplied by the host. Completion,
-    # cursor and completed-deliverable fields must exist in the model response; they
-    # are never inferred here.
+    # Production pages intentionally bypass the legacy generic extractor because it
+    # may synthesize complete/next_cursor/completed_deliverables. Only semantically
+    # empty asset/audio/test collections may be supplied by the host here.
     for raw in reversed(module._json_objects(text)):
         if not isinstance(raw, dict):
             continue
         candidate = _alias_only(module, raw)
-        required_semantic = {"modules", "completed_deliverables", "complete", "next_cursor"}
+        required_semantic = {
+            "modules",
+            "completed_deliverables",
+            "complete",
+            "next_cursor",
+        }
         if not required_semantic <= frozenset(candidate):
             continue
         candidate.setdefault("assets", [])
         candidate.setdefault("audio", [])
         candidate.setdefault("acceptance_tests", [])
-        if expected <= frozenset(candidate):
-            return {field: candidate[field] for field in expected}
-    raise failure
+        if production_expected <= frozenset(candidate):
+            return {field: candidate[field] for field in production_expected}
+    raise module.SpecValidationError(
+        "Production page did not contain all host-required semantic fields."
+    )
 
 
 def _validate_production_progress(
