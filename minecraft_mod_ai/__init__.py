@@ -144,6 +144,14 @@ _install_platform_runtime_contract(
     mineflayer_module=_mineflayer_bridge_module,
 )
 
+# MCP service methods are target-bound too. Standalone research requires an explicit
+# target; proposal-bound runtime/playtest derives the target from the approved spec.
+from . import mcp_tools as _mcp_tools_module
+from . import production_tools as _production_tools_module
+from .platform_mcp_contract import install as _install_platform_mcp_contract
+
+_install_platform_mcp_contract(_mcp_tools_module, _production_tools_module)
+
 # Public sessions no longer interpret the historical default 1.20.1 parameter as a
 # global target. Omitted target means auto-selection; Revise preserves the imported
 # project's target unless the user explicitly requests a migration.
