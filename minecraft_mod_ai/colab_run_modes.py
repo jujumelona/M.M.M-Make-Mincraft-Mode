@@ -17,6 +17,16 @@ RUN_MODES = (
     EXISTING_PLAN_MODE,
 )
 
+# Backward compatibility for already-open Colab notebooks and saved notebook copies
+# created before the UI labels were renamed to concise English names. These values
+# are accepted as input only; all runtime branching uses the canonical English mode.
+LEGACY_RUN_MODE_ALIASES = {
+    "플랜모드": PLAN_MODE,
+    "풀모드": FULL_MODE,
+    "이미 만들어진 모드 수정보안모드": EXISTING_MOD_MODE,
+    "이미 있는 플랜을 만드는모드": EXISTING_PLAN_MODE,
+}
+
 
 @dataclass(frozen=True)
 class PlanDialogResult:
@@ -27,9 +37,10 @@ class PlanDialogResult:
 
 def validate_run_mode(run_mode: str) -> str:
     value = run_mode.strip()
-    if value not in RUN_MODES:
+    canonical = LEGACY_RUN_MODE_ALIASES.get(value, value)
+    if canonical not in RUN_MODES:
         raise ValueError(f"지원하지 않는 실행 모드: {value!r}")
-    return value
+    return canonical
 
 
 def needs_prompt(run_mode: str) -> bool:
@@ -185,6 +196,7 @@ __all__ = [
     "EXISTING_MOD_MODE",
     "EXISTING_PLAN_MODE",
     "FULL_MODE",
+    "LEGACY_RUN_MODE_ALIASES",
     "PLAN_MODE",
     "RUN_MODES",
     "PlanDialogResult",
