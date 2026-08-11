@@ -150,4 +150,4 @@ print("llama MTP server:", LLAMA_SERVER_URL)
           git commit -m 'fix(colab): run MTP from pinned prebuilt CUDA binding'
           git push origin HEAD:main
 
-# Triggered after the workflow existed on main.
+# Trigger with one CI matrix runner reserved.
