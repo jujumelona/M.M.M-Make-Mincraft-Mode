@@ -4,29 +4,13 @@ from functools import wraps
 from typing import Any, Iterable
 
 
-_PROJECT_ROOT_MUTATING_KINDS = frozenset(
-    {
-        "module-shard",
-        "asset-shard",
-        "audio-synth",
-        "audio-finalize",
-    }
-)
-
-
 def install(work_graph_module: Any) -> None:
-    """Route every direct project-root writer through the single commit lane.
+    """Assign generation work to the narrowest safe execution lane.
 
-    Current module, asset and audio generators write directly into the generated
-    Fabric project. Those writes invalidate ProjectIndex snapshots and can collide
-    on shared files even when the logical work items are independent. Until these
-    generators are split into parallel staging/intent creation followed by a
-    path-aware commit phase, all direct project-tree mutation must be serialized.
-
-    This is deliberately narrower than globally serializing the pipeline: planning,
-    retrieval, validation outside the generation scheduler and other non-mutating
-    work remain unaffected. A future staging contract can move image/audio synthesis
-    back to their dedicated lanes without reintroducing filesystem races.
+    Custom LLM generation is isolated by ``performance_final_contract`` and therefore
+    may run in the LLM lane while shared deterministic project mutations use the short
+    commit lane. Asset targets and synthesized OGG files are disjoint by contract, so
+    their expensive generation can overlap safely with both LLM and commit work.
     """
 
     original = work_graph_module._node
@@ -41,8 +25,20 @@ def install(work_graph_module: Any) -> None:
         payload: dict[str, Any],
     ):
         normalized = dict(payload)
-        if str(normalized.get("kind", "")) in _PROJECT_ROOT_MUTATING_KINDS:
+        kind = str(normalized.get("kind", ""))
+        generation_stage = str(normalized.get("generation_stage", ""))
+
+        if kind == "module-shard":
+            normalized["resource_class"] = (
+                "llm" if generation_stage == "custom" else "commit"
+            )
+        elif kind == "asset-shard":
+            normalized["resource_class"] = "image_gpu"
+        elif kind == "audio-synth":
+            normalized["resource_class"] = "cpu_io"
+        elif kind in {"audio-finalize", "audio-shard"}:
             normalized["resource_class"] = "commit"
+
         return original(node_id, stage, dependencies, normalized)
 
     mutation_safe_node._mmm_module_mutation_contract = True
