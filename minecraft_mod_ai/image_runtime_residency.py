@@ -22,9 +22,6 @@ def _full_gpu_threshold_mb(config: Any) -> int:
             value = 0
         if value > 0:
             return value
-    # FLUX.2 Klein 4B is documented around the 13 GB VRAM class. Keep additional
-    # headroom above the configured preflight floor rather than attempting a full
-    # residency move at the exact minimum.
     return max(14_000, int(config.min_free_vram_mb) + 1_000)
 
 
@@ -101,7 +98,6 @@ def _install_adaptive_image_generation(
                     "Image dimensions must be 256-1024 and divisible by 16."
                 )
 
-            # Router owns the exclusive GPU lock before entering this method.
             runtime._evict_llama(llama_cls, base_module._release_cuda)
             base_module.preflight_cuda(cfg)
 
@@ -136,9 +132,6 @@ def _install_adaptive_image_generation(
             def activate_cpu_offload(
                 pipeline: Any,
             ) -> tuple[Any, str, tuple[Any, ...]]:
-                # Keep a single Python pipeline object. Loading a second FLUX while
-                # the failed full-GPU object is still referenced can transiently
-                # double host/GPU memory and defeat the fallback itself.
                 try:
                     pipeline.to("cpu")
                 finally:
@@ -265,9 +258,6 @@ def _finish_image_shard(runtime: Any, base_module: Any) -> None:
                 pipeline.to("cpu")
                 setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
         else:
-            # Default: cache across every overview/detail call in this shard, then
-            # release before the next local LLM. This keeps the major speedup while
-            # avoiding a large FLUX CPU copy co-resident with the GGUF in host RAM.
             runtime._IMAGE_PIPELINE = None
             runtime._IMAGE_PIPELINE_KEY = None
             setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
@@ -287,7 +277,11 @@ def _install_pipeline_parking(
 
     @wraps(original)
     def adaptive_asset_session(router: Any, *args: Any, **kwargs: Any):
-        config = router.registry.role(router.profile, "image_generator")
+        registry = getattr(router, "registry", None)
+        profile = getattr(router, "profile", None)
+        if registry is None or profile is None:
+            return original(router, *args, **kwargs)
+        config = registry.role(profile, "image_generator")
         local_exclusive = (
             config.provider == "local"
             and config.adapter == "image_diffusion"
@@ -296,9 +290,6 @@ def _install_pipeline_parking(
         if not local_exclusive:
             return original(router, *args, **kwargs)
 
-        # Keep one GPU lease across overview + detail tiles. Individual image calls
-        # reuse the same pipeline, and cleanup happens before a local LLM can acquire
-        # the GPU again.
         with router_module._GPU_EXCLUSIVE_LOCK:
             try:
                 return original(router, *args, **kwargs)
