@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from functools import wraps
 from types import SimpleNamespace
 from typing import Any
@@ -119,3 +120,48 @@ def install(autotune_module: Any) -> None:
 
         guarded_probe._mmm_correctness_sentinel = True
         autotune_module._probe_server = guarded_probe
+
+    # A managed llama-server is a separate GPU process. The existing image runtime
+    # can evict an in-process llama_cpp.Llama object, but it cannot free this external
+    # process. Release it before a local FLUX shard acquires the GPU; the cached
+    # autotune decision is then reused to restart the winner on the next LLM call.
+    from . import complete_orchestrator_services as services
+
+    original_assets = services.generate_assets
+    if not getattr(original_assets, "_mmm_releases_managed_llama", False):
+
+        @wraps(original_assets)
+        def assets_with_llama_release(router: Any, *args: Any, **kwargs: Any):
+            registry = getattr(router, "registry", None)
+            profile = getattr(router, "profile", None)
+            local_exclusive_image = False
+            if registry is not None and profile is not None:
+                try:
+                    config = registry.role(profile, "image_generator")
+                    local_exclusive_image = (
+                        config.provider == "local"
+                        and config.adapter == "image_diffusion"
+                        and config.exclusive_gpu
+                    )
+                except Exception:
+                    local_exclusive_image = False
+
+            process = getattr(autotune_module, "_MANAGED_PROCESS", None)
+            if (
+                local_exclusive_image
+                and process is not None
+                and process.poll() is None
+            ):
+                managed_url = getattr(autotune_module, "_MANAGED_URL", None)
+                autotune_module._shutdown_managed_server()
+                if managed_url and os.environ.get("LLAMA_SERVER_URL") == managed_url:
+                    os.environ.pop("LLAMA_SERVER_URL", None)
+                # Permit ensure_tuned_server() to enter again. Because the successful
+                # decision is already fingerprint-cached, this restarts the selected
+                # variant without rerunning baseline/MTP probes.
+                autotune_module._ATTEMPTED_KEYS.clear()
+
+            return original_assets(router, *args, **kwargs)
+
+        assets_with_llama_release._mmm_releases_managed_llama = True
+        services.generate_assets = assets_with_llama_release
