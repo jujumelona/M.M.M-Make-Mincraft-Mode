@@ -16,6 +16,22 @@ def _positive_env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _is_memory_pressure(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "out of memory",
+            "failed to allocate",
+            "allocation failed",
+            "cannot allocate memory",
+            "not enough memory",
+            "cudnn_status_alloc_failed",
+            "cublas_status_alloc_failed",
+        )
+    )
+
+
 def _tuned_constructor_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     tuned = dict(kwargs)
     logical_batch = _positive_env_int("MMM_LLAMA_BATCH", 2048)
@@ -61,7 +77,17 @@ def install() -> None:
 
         @wraps(original_ctor)
         def tuned_ctor(*args: Any, **kwargs: Any):
-            return original_ctor(*args, **_tuned_constructor_kwargs(kwargs))
+            tuned = _tuned_constructor_kwargs(kwargs)
+            try:
+                return original_ctor(*args, **tuned)
+            except Exception as exc:
+                # Logical batch 2048 is a throughput optimization, not a functional
+                # requirement. If the host cannot absorb its extra bookkeeping,
+                # retry the exact original 512/512 constructor before the adapter's
+                # heavier layer/context degradation logic runs.
+                if tuned != kwargs and _is_memory_pressure(exc):
+                    return original_ctor(*args, **kwargs)
+                raise
 
         # LLM work is already serialized by ModelRouter and the dedicated LLM lane,
         # so this short constructor substitution cannot race another local text load.
