@@ -61,7 +61,7 @@ REPO_DIR = Path("/content/M.M.M-Make-Mincraft-Mode")
 EXPECTED_REPOSITORY = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode.git"
 previous_commit = ""
 if (REPO_DIR / ".git").is_dir():
-    print("📥 Updating official M.M.M repository from GitHub main...", flush=True)
+    print("Updating M.M.M repository from GitHub main...", flush=True)
     origin_url = subprocess.check_output(
         ["git", "-C", str(REPO_DIR), "remote", "get-url", "origin"],
         text=True,
@@ -103,7 +103,7 @@ if (REPO_DIR / ".git").is_dir():
 elif REPO_DIR.exists():
     raise RuntimeError(f"Git 저장소가 아닌 경로가 이미 있습니다: {REPO_DIR}")
 else:
-    print("📥 Cloning official M.M.M repository from GitHub main...", flush=True)
+    print("Cloning M.M.M repository from GitHub main...", flush=True)
     subprocess.run(
         [
             "git",
@@ -142,9 +142,6 @@ if tracked_changes:
     )
 print("GitHub commit:", USED_COMMIT, flush=True)
 
-# This bootstrap stays intentionally small. Every setup policy below comes from
-# the just-pulled commit, so a stale open Colab tab cannot keep running an old
-# dependency or CUDA preflight cell.
 setup_script = REPO_DIR / "tools" / "colab_runtime_setup.py"
 if not setup_script.is_file():
     raise FileNotFoundError(f"Pulled commit has no Colab setup script: {setup_script}")
@@ -216,7 +213,7 @@ if PATCH_EXISTING:
         existing_report.mod_name or existing_report.mod_id or safe_name,
     )
 else:
-    print("새 모드: 업로드 없이 시작합니다.")
+    print("새 모드: 업로드 없음")
 """,
     ),
     (
@@ -248,82 +245,113 @@ registry = registry_manager.to_public_dict()
 if MODEL_PROFILE not in registry["profiles"]:
     raise ValueError(f"지원하지 않는 모델 프로필: {MODEL_PROFILE}")
 planner_config = registry_manager.role(MODEL_PROFILE, "planner")
-print("모델 레지스트리:", REGISTRY_PATH)
 print("모델 프로필:", MODEL_PROFILE)
 print("기획 모델:", planner_config.model_id)
 print("기획 백엔드:", planner_config.provider, "/", planner_config.adapter)
 print("기획 양자화:", planner_config.quantization or "none")
 print("기획 native context:", f"{planner_config.max_context:,} tokens")
-print(
-    "기획 page input:",
-    f"{planner_config.max_input_tokens:,} tokens"
-    if planner_config.max_input_tokens
-    else "native-context bound (no separate page cap)",
-)
-print("기획 page output:", f"{planner_config.max_new_tokens:,} tokens")
-print("설치 commit/fingerprint:", USED_COMMIT, "/", SETUP_FINGERPRINT)
 print("결과 저장 위치:", OUTPUT_ROOT)
 
-# Fast Engine Self-Smoke Verification (0.1s)
-from minecraft_mod_ai.custom_module_generator import _extract_json, _verified_model_observation
+from minecraft_mod_ai.custom_module_generator import _extract_json
 sample_json = _extract_json('{"operations": [], "runtime_tests": [], "complete": true, "next_cursor": ""}')
-assert "operations" in sample_json, "Engine self-test failed on JSON parsing!"
-print("✅ [Self-Test Pass] 모드 생성 파이프라인 무결성 100% 검증 완료! (에러 위험 요소 0%)")
+assert "operations" in sample_json, "Engine JSON parser self-check failed."
+print("설치 확인: 완료")
 """,
     ),
     (
         "code",
         "mtp-server",
-        """# @title 4-1. [선택] Qwen3.5 MTP 3배 폭속 C++ 서버 구동 (실행 시 속도 극대화 ⚡)
-# @markdown 이 셀을 실행하면 C++ llama-server (MTP Speculative Decoding)가 백그라운드에서 구동되어 모드 생성 속도가 3배 빨라집니다.
-import os, subprocess, time
+        """# @title 4-1. [선택] 로컬 CUDA llama 서버 실행
+import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
-# 1. Compile llama-server for T4 GPU if not present
-LLAMA_DIR = Path("/content/llama.cpp")
-LLAMA_SERVER_BIN = LLAMA_DIR / "build/bin/llama-server"
+import httpx
+from minecraft_mod_ai.llama_server_autotune import _resolve_model_path
 
-if not LLAMA_SERVER_BIN.is_file():
-    print("🔨 [llama.cpp] T4 GPU 전용 C++ MTP 서버 컴파일 중 (최초 1회만 약 1분 소요)...", flush=True)
-    subprocess.run(["git", "clone", "--depth", "1", "https://github.com/ggml-org/llama.cpp", str(LLAMA_DIR)], check=True)
-    subprocess.run(["cmake", "-B", str(LLAMA_DIR / "build"), "-DGGML_CUDA=ON", "-DGGML_NATIVE=OFF", '-DCMAKE_CUDA_ARCHITECTURES=75'], check=True, cwd=LLAMA_DIR)
-    subprocess.run(["cmake", "--build", str(LLAMA_DIR / "build"), "--config", "Release", "-j", str(os.cpu_count() or 4), "--target", "llama-server"], check=True, cwd=LLAMA_DIR)
-    print("✅ [llama.cpp] C++ 바이너리 컴파일 완료!", flush=True)
+SERVER_ORIGIN = "http://127.0.0.1:8910"
+SERVER_API = SERVER_ORIGIN + "/v1"
 
-# 2. Download Qwen3.5-9B MTP Model
-print("📥 [MTP] Qwen3.5-9B-MTP-GGUF 가중치 다운로드 중...", flush=True)
-from huggingface_hub import hf_hub_download
-mtp_model_path = hf_hub_download(
-    repo_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-    filename="Qwen3.5-9B-UD-Q4_K_XL.gguf"
-)
 
-# 3. Launch llama-server with Full Speed Options
-print("🚀 [MTP Server] 풀옵션 C++ 백그라운드 서버 구동 중 (-ngl 99, --spec-type draft-mtp, --spec-draft-n-max 3, -fa on, -b 2048, -ub 512, -np 1, --metrics)...", flush=True)
-cmd = [
-    str(LLAMA_SERVER_BIN),
-    "-m", mtp_model_path,
-    "-ngl", "99",               # 1순위: 전 레이어 GPU 오프로딩
-    "--spec-type", "draft-mtp",  # 1순위: MTP 스펙큘레이티브 디코딩
-    "--spec-draft-n-max", "3",   # 1순위: MTP 3토큰 동시 예측 (1.5~2배 속도)
-    "-fa", "on",                # 1순위: FlashAttention 활성화
-    "-b", "2048",               # 2순위: 논리 배치 2048
-    "-ub", "512",               # 2순위: 물리 유배치 512 (PP 가속)
-    "-np", "1",                 # 2순위: 단일 슬롯 몰아주기 (최대 속도)
-    "--metrics",                # 실시간 tok/s 모니터링
-    "--host", "0.0.0.0",
-    "--port", "8910"
-]
-subprocess.Popen(cmd)
-time.sleep(6)
+def _server_ready():
+    try:
+        return httpx.get(SERVER_API + "/models", timeout=1.0).status_code == 200
+    except Exception:
+        return False
 
-import requests
-try:
-    r = requests.get("http://localhost:8910/v1/models", timeout=3)
-    if r.status_code == 200:
-        print("🎉 [MTP Server Ready] C++ MTP 서버 구동 성공! 5번/7번 셀 실행 시 초당 80토큰 폭속 가속이 적용됩니다.")
-except Exception as e:
-    print(f"⚠️ [MTP Server Note] 서버 준비 대기 중... ({e})")
+
+if _server_ready():
+    os.environ["LLAMA_SERVER_URL"] = SERVER_API
+    print("llama server: already running", SERVER_API)
+else:
+    old_process = globals().get("MMM_LLAMA_SERVER_PROCESS")
+    if old_process is not None and old_process.poll() is None:
+        old_process.terminate()
+        try:
+            old_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            old_process.kill()
+            old_process.wait(timeout=5)
+
+    model_path = _resolve_model_path(planner_config)
+    server_config_path = Path("/content/mmm_llama_server.json")
+    server_log_path = Path("/content/mmm_llama_server.log")
+    server_config = {
+        "host": "127.0.0.1",
+        "port": 8910,
+        "models": [
+            {
+                "model": model_path,
+                "model_alias": "local",
+                "n_gpu_layers": -1,
+                "offload_kqv": True,
+                "n_threads": max(1, min(8, os.cpu_count() or 1)),
+                "n_batch": 512,
+                "n_ctx": min(int(planner_config.max_context), 16384),
+            }
+        ],
+    }
+    server_config_path.write_text(
+        json.dumps(server_config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    server_log = server_log_path.open("w", encoding="utf-8")
+    cmd = [
+        sys.executable,
+        "-m",
+        "llama_cpp.server",
+        "--config_file",
+        str(server_config_path),
+    ]
+    print("llama server: starting")
+    MMM_LLAMA_SERVER_PROCESS = subprocess.Popen(
+        cmd,
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        if MMM_LLAMA_SERVER_PROCESS.poll() is not None:
+            break
+        if _server_ready():
+            os.environ["LLAMA_SERVER_URL"] = SERVER_API
+            print("llama server: ready", SERVER_API)
+            break
+        time.sleep(1)
+    else:
+        MMM_LLAMA_SERVER_PROCESS.terminate()
+
+    if not _server_ready():
+        server_log.flush()
+        tail = server_log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
+        raise RuntimeError(
+            "llama server failed to start.\n" + "\n".join(tail)
+        )
 """,
     ),
     (
@@ -348,19 +376,14 @@ default_plan_path = output_dir / "proposal.json"
 target_plan_file = custom_plan_path if (custom_plan_path and custom_plan_path.is_file()) else default_plan_path
 
 if RESUME_MODE and target_plan_file.is_file():
-    print(f"🔄 [Resume Mode] 기존 기획서({target_plan_file})를 로드하여 진행합니다...", flush=True)
+    print(f"기획 재개: {target_plan_file}", flush=True)
     reply = session.load_plan(target_plan_file)
 else:
     if RESUME_MODE:
-        print("⚠️ [Resume Mode] 로드할 기획서 JSON 파일이 없어 새 기획서를 생성합니다...", flush=True)
+        print("기획 재개 파일 없음: 새 기획 생성", flush=True)
     reply = session.plan(PROMPT)
 
 print(reply.message)
-print("\\n" + "="*60)
-print("💡 [기획서 초안 완성] 위 작성된 기획 내용을 확인하세요!")
-print("👉 수정하고 싶은 내용이 있다면 바로 아래 6번 셀 REVISION 칸에 적고 6번 셀을 실행하세요.")
-print("👉 이 기획 그대로 모드를 만들려면 7번 셀로 이동하여 실행하세요.")
-print("="*60)
 """,
     ),
     (
@@ -373,21 +396,11 @@ if 'session' not in globals() or 'reply' not in globals():
     raise RuntimeError("5번 셀을 먼저 실행하여 기획 세션을 생성해야 합니다.")
 
 if REVISION.strip():
-    print(f"💬 [수정 요청 진행 중]: {REVISION}", flush=True)
+    print("기획 수정 요청:", REVISION, flush=True)
     reply = session.revise(REVISION)
-    print("\\n✨ [수정 반영된 최신 게임 기획서]:")
     print(reply.message)
-    print("\\n" + "="*60)
-    print("🔄 기획을 더 수정하고 싶으시면 위 REVISION 칸에 추가 요청을 적고 6번 셀을 다시 실행하세요.")
-    print("✅ 기획 완성이 마음에 드시면 다음 7번 셀을 실행하여 모드 제작을 진행하세요.")
-    print("="*60)
 else:
-    print("📋 [현재 확정된 게임 기획서 내용]:")
     print(reply.message)
-    print("\\n" + "="*60)
-    print("💬 이 기획을 수정하고 싶으시면 위 REVISION 칸에 수정 요청사항을 입력하고 6번 셀을 실행하세요!")
-    print("🚀 이 기획 그대로 진행하시려면 바로 아래 7번 셀[이 계획으로 만들기]을 실행하세요.")
-    print("="*60)
 """,
     ),
     (
@@ -400,7 +413,7 @@ assert_current_colab_setup()
 if 'reply' not in globals() or 'session' not in globals():
     raise RuntimeError("5번 셀(또는 6번 셀)을 먼저 실행하여 기획서를 완성해야 합니다.")
 
-print("🚀 [최종 기획서 반영] 확정된 기획 내용으로 모드 생성을 시작합니다...", flush=True)
+print("모드 생성: 시작", flush=True)
 options = CompleteExecutionOptions(
     source_only=SOURCE_ONLY,
     run_blockbench=RUN_BLOCKBENCH,
@@ -423,11 +436,11 @@ print("제작 상태:", BUILD_RESULT.status)
 print("프로젝트:", BUILD_RESULT.project_root)
 print("결과 ZIP:", BUILD_RESULT.release_zip)
 if BUILD_RESULT.run_resumed:
-    print("이전 실행에서 끝낸 작업을 이어서 사용했습니다.")
+    print("재개 실행: 예")
 if BUILD_RESULT.quality_report:
     print("품질 검증:", BUILD_RESULT.quality_report["overall_status"])
 if BUILD_RESULT.unresolved_gates:
-    print("아직 확인할 항목:", ", ".join(BUILD_RESULT.unresolved_gates))
+    print("미해결 항목:", ", ".join(BUILD_RESULT.unresolved_gates))
 """,
     ),
     (
