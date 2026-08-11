@@ -133,4 +133,4 @@ print("결과 저장 위치:", OUTPUT_ROOT)
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
 
-# Triggered after CI runner reservation.
+# Dedicated trigger with CI contracts skipped.
