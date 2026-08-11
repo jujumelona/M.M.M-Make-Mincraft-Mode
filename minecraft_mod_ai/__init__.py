@@ -68,6 +68,26 @@ from .image_runtime_residency import install as _install_image_runtime_residency
 
 _install_image_runtime_residency()
 
+# Verification is staged from cheap deterministic/JDT checks to Gradle/GameTest.
+# Preserve Gradle incremental/build-cache state, reuse only exact-input evidence in
+# process, and fail GameTest when generated-namespace resources did not load.
+from . import java_lsp as _java_lsp_module
+from . import repair_engine as _repair_engine_module
+from .validation_execution_contract import install as _install_validation_execution_contract
+
+_install_validation_execution_contract(
+    _runner_module,
+    _java_lsp_module,
+    _repair_engine_module,
+)
+
+# Generated content registrars are connected through a bounded compile-time tree.
+# This avoids runtime classpath enumeration while keeping the root registrar bounded.
+from . import extended_content_generator as _extended_content_generator_module
+from .extended_registration_contract import install as _install_extended_registration_contract
+
+_install_extended_registration_contract(_extended_content_generator_module)
+
 # Install isolated custom-generation staging plus the short, hash-guarded live
 # project commit contract before public API users construct an orchestrator.
 from . import complete_orchestrator as _complete_orchestrator_module
