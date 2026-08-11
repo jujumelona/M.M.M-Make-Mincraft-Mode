@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
+import time
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
@@ -58,40 +60,116 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
 
 
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
-    """Use an explicitly selected server without silently loading a second GGUF."""
+    """Stream an explicitly selected server without silently loading a second GGUF.
+
+    The local llama server can legitimately spend longer than five minutes on a
+    large bounded planner page. A fixed read timeout cannot distinguish active
+    generation from a stalled request because the old non-streaming call exposed no
+    intermediate output. The pinned llama-cpp-python server supports OpenAI SSE
+    streaming, so consume its actual generated deltas and keep no arbitrary overall
+    generation deadline. Connection/write/pool setup remains bounded.
+    """
 
     from .model_adapters import ModelBackendError
 
     try:
         import httpx
 
-        response = httpx.post(
-            f"{server_url.rstrip('/')}/chat/completions",
-            json=_server_payload(adapter, request),
-            timeout=300,
+        payload = _server_payload(adapter, request)
+        payload["stream"] = True
+        timeout = httpx.Timeout(
+            connect=30.0,
+            read=None,
+            write=30.0,
+            pool=30.0,
         )
-        if response.status_code != 200:
-            body = response.text.strip().replace("\n", " ")
-            if len(body) > 1200:
-                body = body[:1200] + "..."
+        endpoint = f"{server_url.rstrip('/')}/chat/completions"
+        pieces: list[str] = []
+        generated_chars = 0
+        last_progress_report = time.monotonic()
+        saw_done = False
+
+        with httpx.stream(
+            "POST",
+            endpoint,
+            json=payload,
+            timeout=timeout,
+        ) as response:
+            if response.status_code != 200:
+                response.read()
+                body = response.text.strip().replace("\n", " ")
+                if len(body) > 1200:
+                    body = body[:1200] + "..."
+                raise RuntimeError(
+                    f"llama server returned HTTP {response.status_code}"
+                    + (f": {body}" if body else "")
+                )
+
+            if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
+                print("llama server: connected", server_url, flush=True)
+                adapter.__class__._reported_server_url = server_url
+            print("llama server: request accepted; streaming", flush=True)
+
+            for raw_line in response.iter_lines():
+                line = raw_line.strip()
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data:
+                    continue
+                if data == "[DONE]":
+                    saw_done = True
+                    break
+
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        "llama server returned malformed SSE JSON."
+                    ) from exc
+                choices = chunk.get("choices") if isinstance(chunk, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                content: Any = None
+                if isinstance(delta, dict):
+                    content = delta.get("content")
+                if content is None:
+                    content = choice.get("text")
+                if not isinstance(content, str) or not content:
+                    continue
+
+                pieces.append(content)
+                generated_chars += len(content)
+                now = time.monotonic()
+                if now - last_progress_report >= 15.0:
+                    print(
+                        "llama server: generated_chars=",
+                        generated_chars,
+                        sep="",
+                        flush=True,
+                    )
+                    last_progress_report = now
+
+        if not saw_done:
             raise RuntimeError(
-                f"llama server returned HTTP {response.status_code}"
-                + (f": {body}" if body else "")
+                "llama server stream ended before the [DONE] marker."
             )
-        payload = response.json()
-        choices = payload.get("choices") if isinstance(payload, dict) else None
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("llama server response has no choices.")
-        message = choices[0].get("message")
-        if not isinstance(message, dict):
-            raise RuntimeError("llama server response has no message object.")
-        content = message.get("content")
-        if not isinstance(content, str):
-            raise RuntimeError("llama server response content is not text.")
-        if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
-            print("llama server: connected", server_url, flush=True)
-            adapter.__class__._reported_server_url = server_url
-        return content.strip()
+        content = "".join(pieces).strip()
+        if not content:
+            raise RuntimeError("llama server stream produced no text content.")
+        print(
+            "llama server: generation complete chars=",
+            generated_chars,
+            sep="",
+            flush=True,
+        )
+        return content
     except Exception as exc:
         if isinstance(exc, ModelBackendError):
             raise
