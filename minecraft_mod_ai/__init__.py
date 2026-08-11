@@ -13,7 +13,7 @@ from .validator_boss_contract import install as _install_validator_boss_contract
 
 _install_validator_boss_contract(_validator_module)
 
-# Apply the mod-only scope to every complete planner path before public API import.
+# Apply the mod-only scope and target-aware planning research before public API import.
 from . import complete_planner as _complete_planner_module
 from . import complete_spec as _complete_spec_module
 from .mod_scope_contract import install as _install_mod_scope_contract
@@ -131,6 +131,15 @@ _install_performance_final_contract(
     _custom_module_generator_module,
     _source_patch_module,
 )
+
+# Public sessions no longer interpret the historical default 1.20.1 parameter as a
+# global target. Omitted target means auto-selection; Revise preserves the imported
+# project's target unless the user explicitly requests a migration.
+from . import api as _api_module
+from . import plan_render as _plan_render_module
+from .platform_api_contract import install as _install_platform_api_contract
+
+_install_platform_api_contract(_api_module, _plan_render_module)
 
 from .api import (
     ChatReply,
