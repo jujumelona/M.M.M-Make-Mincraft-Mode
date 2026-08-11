@@ -3,6 +3,12 @@ import mineflayer from "mineflayer";
 import { pathfinder, Movements, goals } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
 
+const SUPPORTED_MINECRAFT_VERSIONS = new Set(["1.20.1", "1.21.1"]);
+const TARGET_VERSION = String(process.env.MMM_MINEFLAYER_MC_VERSION || "1.20.1").trim();
+if (!SUPPORTED_MINECRAFT_VERSIONS.has(TARGET_VERSION)) {
+  throw new Error(`Unsupported MMM Mineflayer target: ${TARGET_VERSION}`);
+}
+
 let bot = null;
 
 function requireBot() {
@@ -47,7 +53,7 @@ async function connect(params) {
   const port = Number(params.port || 25565);
   const username = String(params.username || "MMMTestBot");
   if (!["127.0.0.1", "localhost"].includes(host)) {
-    throw new Error("The T4/local profile permits Mineflayer only on localhost");
+    throw new Error("The local MMM profile permits Mineflayer only on localhost");
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("Invalid Minecraft server port");
@@ -59,7 +65,7 @@ async function connect(params) {
     host,
     port,
     username,
-    version: "1.20.1",
+    version: TARGET_VERSION,
     auth: "offline"
   });
   bot.loadPlugin(pathfinder);
@@ -74,11 +80,14 @@ async function connect(params) {
     bot.once("error", reject);
     bot.once("kicked", reason => reject(new Error(`kicked: ${reason}`)));
   });
+  if (bot.version !== TARGET_VERSION) {
+    throw new Error(`Mineflayer connected as ${bot.version}, expected ${TARGET_VERSION}`);
+  }
   return status();
 }
 
 function status() {
-  if (!bot) return { connected: false, version: "1.20.1" };
+  if (!bot) return { connected: false, version: TARGET_VERSION };
   return {
     connected: true,
     version: bot.version,
@@ -181,163 +190,87 @@ async function openContainer(params) {
   return {
     opened: block.name,
     position: { x, y, z },
-    title: String(window.title || ""),
-    slotCount: Number(window.slots?.length || 0)
+    window: {
+      title: String(window.title || ""),
+      slots: window.slots.length
+    }
   };
 }
 
 async function clickSlot(params) {
   const current = requireBot();
   if (!current.currentWindow) throw new Error("No container window is open");
-  const slot = boundedInteger(params.slot, "window slot", 0, Math.max(0, current.currentWindow.slots.length - 1));
+  const slot = boundedInteger(params.slot, "slot", 0, current.currentWindow.slots.length - 1);
   const mouseButton = boundedInteger(params.mouse_button ?? 0, "mouse button", 0, 1);
-  const mode = boundedInteger(params.mode ?? 0, "click mode", 0, 0);
+  const mode = boundedInteger(params.mode ?? 0, "click mode", 0, 6);
   await current.clickWindow(slot, mouseButton, mode);
-  const item = current.currentWindow?.slots?.[slot] || null;
-  return {
-    slot,
-    mouseButton,
-    mode,
-    item: item ? { name: item.name, count: item.count } : null
-  };
-}
-
-function observeCondition(current, condition) {
-  if (!condition || typeof condition !== "object" || Array.isArray(condition)) {
-    throw new Error("wait_for condition must be an object");
-  }
-  const type = String(condition.type || "");
-  if (type === "inventory_contains") {
-    const name = safeRegistryName(condition.item, "inventory item");
-    const shortName = name.includes(":") ? name.split(":", 2)[1] : name;
-    const minCount = boundedInteger(condition.min_count ?? 1, "inventory min_count", 1, 4096);
-    const count = current.inventory.items()
-      .filter(item => item.name === shortName || item.name === name)
-      .reduce((sum, item) => sum + item.count, 0);
-    return { matched: count >= minCount, observation: { type, item: name, count, minCount } };
-  }
-  if (type === "held_item") {
-    const name = safeRegistryName(condition.item, "held item");
-    const shortName = name.includes(":") ? name.split(":", 2)[1] : name;
-    const held = current.heldItem?.name || null;
-    return { matched: held === name || held === shortName, observation: { type, expected: name, held } };
-  }
-  if (type === "health") {
-    const comparison = String(condition.comparison || "gte");
-    const value = finiteNumber(condition.value, "health value");
-    if (!["gte", "lte", "eq"].includes(comparison)) throw new Error("Invalid health comparison");
-    const actual = Number(current.health);
-    const matched = comparison === "gte" ? actual >= value : comparison === "lte" ? actual <= value : actual === value;
-    return { matched, observation: { type, comparison, value, actual } };
-  }
-  if (type === "food") {
-    const comparison = String(condition.comparison || "gte");
-    const value = finiteNumber(condition.value, "food value");
-    if (!["gte", "lte", "eq"].includes(comparison)) throw new Error("Invalid food comparison");
-    const actual = Number(current.food);
-    const matched = comparison === "gte" ? actual >= value : comparison === "lte" ? actual <= value : actual === value;
-    return { matched, observation: { type, comparison, value, actual } };
-  }
-  if (type === "position_near") {
-    const x = finiteNumber(condition.x, "position x");
-    const y = finiteNumber(condition.y, "position y");
-    const z = finiteNumber(condition.z, "position z");
-    const range = Math.max(0, Math.min(16, finiteNumber(condition.range ?? 1, "position range")));
-    const distance = current.entity.position.distanceTo(new Vec3(x, y, z));
-    return { matched: distance <= range, observation: { type, x, y, z, range, distance } };
-  }
-  if (type === "block_at") {
-    const { block, x, y, z } = blockAtParams(current, condition);
-    const expected = safeRegistryName(condition.name, "block name");
-    const shortName = expected.includes(":") ? expected.split(":", 2)[1] : expected;
-    return {
-      matched: block.name === expected || block.name === shortName,
-      observation: { type, expected, actual: block.name, x, y, z }
-    };
-  }
-  if (type === "entity_present") {
-    const expected = safeRegistryName(condition.name, "entity name");
-    const maxDistance = Math.max(1, Math.min(64, finiteNumber(condition.max_distance ?? 16, "entity max_distance")));
-    const entity = current.nearestEntity(candidate => {
-      const name = String(candidate.name || candidate.mobType || "").toLowerCase();
-      return name === expected.toLowerCase() && candidate.position.distanceTo(current.entity.position) <= maxDistance;
-    });
-    return {
-      matched: Boolean(entity),
-      observation: { type, expected, maxDistance, entityId: entity?.id ?? null }
-    };
-  }
-  if (type === "window_open") {
-    const matched = Boolean(current.currentWindow);
-    return {
-      matched,
-      observation: { type, title: matched ? String(current.currentWindow.title || "") : "" }
-    };
-  }
-  throw new Error(`Unsupported wait_for condition: ${type}`);
+  return { clicked: slot, mouseButton, mode };
 }
 
 async function waitFor(params) {
   const current = requireBot();
-  const timeoutMs = boundedInteger(params.timeout_ms ?? 10000, "wait_for timeout_ms", 100, 30000);
-  const condition = params.condition;
-  const deadline = Date.now() + timeoutMs;
-  let last = null;
-  while (Date.now() <= deadline) {
-    last = observeCondition(current, condition);
-    if (last.matched) {
-      return { matched: true, condition, observation: last.observation, timeoutMs };
+  const condition = String(params.condition || "");
+  const timeoutMs = boundedInteger(params.timeout_ms ?? 10000, "wait timeout", 1, 60000);
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (condition === "spawned" && current.entity) {
+      return { matched: true, condition };
     }
-    await current.waitForTicks(2);
+    if (condition === "window_open" && current.currentWindow) {
+      return { matched: true, condition };
+    }
+    if (condition === "window_closed" && !current.currentWindow) {
+      return { matched: true, condition };
+    }
+    if (condition === "healthy" && current.health > 0) {
+      return { matched: true, condition, health: current.health };
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
-  return {
-    matched: false,
-    condition,
-    observation: last?.observation || null,
-    timeoutMs
-  };
+  return { matched: false, condition };
 }
 
-function disconnect() {
-  if (bot) {
-    bot.quit("MMM test complete");
-    bot = null;
-  }
-  return { connected: false };
+async function disconnect() {
+  if (!bot) return { disconnected: true };
+  const current = bot;
+  bot = null;
+  current.quit("MMM test complete");
+  return { disconnected: true };
 }
 
-async function dispatch(action, params) {
-  switch (action) {
-    case "connect": return await connect(params);
-    case "status": return status();
-    case "walk_to": return await walkTo(params);
-    case "interact_block": return await interactBlock(params);
-    case "use_item": return await useItem(params);
-    case "attack_entity": return await attackEntity(params);
-    case "inventory": return inventory();
-    case "chat": return chat(params);
-    case "craft": return await craft(params);
-    case "wait_for": return await waitFor(params);
-    case "open_container": return await openContainer(params);
-    case "click_slot": return await clickSlot(params);
-    case "disconnect": return disconnect();
-    default: throw new Error(`Unknown action: ${action}`);
-  }
-}
+const actions = {
+  connect,
+  status,
+  walk_to: walkTo,
+  interact_block: interactBlock,
+  use_item: useItem,
+  attack_entity: attackEntity,
+  inventory,
+  chat,
+  craft,
+  wait_for: waitFor,
+  open_container: openContainer,
+  click_slot: clickSlot,
+  disconnect
+};
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of rl) {
   if (!line.trim()) continue;
-  let request;
+  let request = null;
   try {
     request = JSON.parse(line);
-    const result = await dispatch(request.action, request.params || {});
+    const action = String(request.action || "");
+    if (!Object.prototype.hasOwnProperty.call(actions, action)) {
+      throw new Error(`Unsupported action: ${action}`);
+    }
+    const result = await actions[action](request.params || {});
     process.stdout.write(JSON.stringify({ id: request.id, ok: true, result }) + "\n");
   } catch (error) {
     process.stdout.write(JSON.stringify({
       id: request?.id ?? null,
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: String(error?.message || error)
     }) + "\n");
   }
 }
