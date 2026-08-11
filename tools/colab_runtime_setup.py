@@ -212,31 +212,87 @@ def _require_local_cuda() -> Any:
     return torch
 
 
-
-
-
 LLAMA_CPP_CUDA_WHEEL_VERSION = "0.3.34"
 LLAMA_CPP_CUDA_WHEEL_URL = (
     "https://github.com/abetlen/llama-cpp-python/releases/download/"
     "v0.3.34-cu124/llama_cpp_python-0.3.34-py3-none-manylinux_2_35_x86_64.whl"
 )
 
+_LLAMA_CPP_CUDA_PROBE = r'''
+import json
+from pathlib import Path
+
+try:
+    import llama_cpp
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": f"import failed: {type(exc).__name__}: {exc}"}))
+    raise SystemExit(0)
+
+version = str(getattr(llama_cpp, "__version__", ""))
+package_dir = Path(llama_cpp.__file__).resolve().parent
+patterns = ("libggml-cuda.so*", "ggml-cuda.dll", "libggml-cuda*.dylib")
+backends = []
+for pattern in patterns:
+    backends.extend(package_dir.rglob(pattern))
+backends = sorted({str(path.resolve()) for path in backends if path.is_file()})
+if not backends:
+    print(json.dumps({
+        "ok": False,
+        "version": version,
+        "error": "CUDA backend library is missing from the installed wheel",
+        "package_dir": str(package_dir),
+    }))
+else:
+    print(json.dumps({
+        "ok": True,
+        "version": version,
+        "backend": backends[0],
+    }))
+'''
+
+
+def _llama_cpp_cuda_probe() -> tuple[bool, str]:
+    """Check the installed wheel in a fresh process without relying on removed APIs."""
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", _LLAMA_CPP_CUDA_PROBE],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except Exception as exc:
+        return False, f"probe failed: {type(exc).__name__}: {exc}"
+
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if completed.returncode != 0:
+        return False, f"probe exited with code {completed.returncode}: {' | '.join(lines[-4:])}"
+    if not lines:
+        return False, "probe produced no output"
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return False, "probe output was not valid JSON: " + " | ".join(lines[-4:])
+    if bool(payload.get("ok")):
+        version = str(payload.get("version") or "unknown")
+        backend = Path(str(payload.get("backend") or "")).name
+        return True, f"version={version} backend={backend}"
+    return False, str(payload.get("error") or "CUDA backend check failed")
+
 
 def _llama_cpp_gpu_available() -> bool:
-    try:
-        import llama_cpp
-        return bool(
-            hasattr(llama_cpp, "llama_supports_gpu")
-            and llama_cpp.llama_supports_gpu()
-        )
-    except Exception:
-        return False
+    ok, _ = _llama_cpp_cuda_probe()
+    return ok
 
 
 def _install_llama_cpp() -> None:
     """Install and verify the pinned pre-built CUDA wheel without source builds."""
-    if _llama_cpp_gpu_available():
-        print("llama-cpp-python CUDA wheel: available", flush=True)
+
+    available, detail = _llama_cpp_cuda_probe()
+    if available:
+        print("llama-cpp-python CUDA wheel: available", detail, flush=True)
         return
 
     print("llama-cpp-python CUDA wheel: installing", flush=True)
@@ -257,13 +313,17 @@ def _install_llama_cpp() -> None:
         if name == "llama_cpp" or name.startswith("llama_cpp."):
             sys.modules.pop(name, None)
     importlib.invalidate_caches()
-    if not _llama_cpp_gpu_available():
+
+    available, detail = _llama_cpp_cuda_probe()
+    if not available:
         raise RuntimeError(
-            "Installed llama-cpp-python wheel does not report CUDA GPU support."
+            "Installed llama-cpp-python CUDA wheel failed backend verification: "
+            + detail
         )
     print(
         "llama-cpp-python CUDA wheel: installed",
         LLAMA_CPP_CUDA_WHEEL_VERSION,
+        detail,
         flush=True,
     )
 
