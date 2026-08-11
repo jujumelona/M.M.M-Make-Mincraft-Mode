@@ -71,6 +71,10 @@ def _cell_source(path: Path, cell_id: str) -> str:
 
 
 def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
+    assert PLAN_MODE == "Plan"
+    assert FULL_MODE == "Full"
+    assert EXISTING_MOD_MODE == "Revise"
+    assert EXISTING_PLAN_MODE == "Execute"
     assert RUN_MODES == (
         PLAN_MODE,
         FULL_MODE,
@@ -84,15 +88,18 @@ def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
 
 
 def test_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() -> None:
-    expected = (
-        'RUN_MODE = "풀모드" #@param '
-        '["플랜모드", "풀모드", "이미 만들어진 모드 수정보안모드", '
-        '"이미 있는 플랜을 만드는모드"]'
+    expected = 'RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute"]'
+    legacy_labels = (
+        "플랜모드",
+        "풀모드",
+        "이미 만들어진 모드 수정보안모드",
+        "이미 있는 플랜을 만드는모드",
     )
     for notebook in NOTEBOOKS:
         source = _cell_source(notebook, "configuration")
         assert expected in source
         assert "PATCH_EXISTING" not in source
+        assert all(label not in source for label in legacy_labels)
         payload = json.loads(notebook.read_text(encoding="utf-8"))
         assert not any(cell.get("id") == "revise" for cell in payload["cells"])
 
