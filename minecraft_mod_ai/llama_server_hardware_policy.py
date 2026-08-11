@@ -45,6 +45,63 @@ def _bootstrap_native_server() -> str | None:
     return existing
 
 
+def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": "local",
+        "messages": [dict(message) for message in request.messages],
+        "max_tokens": int(adapter.config.max_new_tokens),
+        "temperature": 0.0,
+    }
+    if getattr(request, "response_format", None) == "json":
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
+    """Use an explicitly selected server without silently loading a second GGUF."""
+
+    from .model_adapters import ModelBackendError
+
+    try:
+        import httpx
+
+        response = httpx.post(
+            f"{server_url.rstrip('/')}/chat/completions",
+            json=_server_payload(adapter, request),
+            timeout=300,
+        )
+        if response.status_code != 200:
+            body = response.text.strip().replace("\n", " ")
+            if len(body) > 1200:
+                body = body[:1200] + "..."
+            raise RuntimeError(
+                f"llama server returned HTTP {response.status_code}"
+                + (f": {body}" if body else "")
+            )
+        payload = response.json()
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("llama server response has no choices.")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("llama server response has no message object.")
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError("llama server response content is not text.")
+        if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
+            print("llama server: connected", server_url, flush=True)
+            adapter.__class__._reported_server_url = server_url
+        return content.strip()
+    except Exception as exc:
+        if isinstance(exc, ModelBackendError):
+            raise
+        raise ModelBackendError(
+            role=adapter.config.role,
+            model_id=adapter.config.model_id,
+            cause=exc,
+        ) from exc
+
+
 def install(autotune_module: Any) -> None:
     """Keep managed llama-server tuning hardware-adaptive and correctness-gated."""
 
@@ -187,23 +244,47 @@ def install(autotune_module: Any) -> None:
         def ensure_with_colab_mtp(config: Any, request: Any) -> str | None:
             try:
                 from .colab_mtp_server import (
+                    SERVER_API_URL,
                     colab_mtp_server_enabled,
+                    colab_mtp_server_running,
                     start_colab_mtp_server,
                 )
 
                 if colab_mtp_server_enabled():
-                    try:
-                        return start_colab_mtp_server(config)
-                    except Exception:
-                        # The normal in-process/native route remains available if the
-                        # explicitly enabled Colab MTP server cannot restart.
-                        pass
+                    if colab_mtp_server_running():
+                        os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
+                        return SERVER_API_URL
+                    return start_colab_mtp_server(config)
             except Exception:
                 pass
             return original_ensure(config, request)
 
         ensure_with_colab_mtp._mmm_colab_mtp_restart = True
         autotune_module.ensure_tuned_server = ensure_with_colab_mtp
+
+    current_generate = LlamaCppAdapter.generate
+    if not getattr(current_generate, "_mmm_explicit_server_strict", False):
+
+        @wraps(current_generate)
+        def strict_selected_server_generate(self: Any, request: Any) -> str:
+            explicit = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
+            if not explicit:
+                try:
+                    from .colab_mtp_server import colab_mtp_server_enabled
+
+                    if colab_mtp_server_enabled():
+                        explicit = (
+                            autotune_module.ensure_tuned_server(self.config, request)
+                            or ""
+                        ).strip().rstrip("/")
+                except Exception:
+                    explicit = ""
+            if explicit:
+                return _strict_server_generate(self, request, explicit)
+            return current_generate(self, request)
+
+        strict_selected_server_generate._mmm_explicit_server_strict = True
+        LlamaCppAdapter.generate = strict_selected_server_generate
 
     from . import complete_orchestrator_services as services
 
