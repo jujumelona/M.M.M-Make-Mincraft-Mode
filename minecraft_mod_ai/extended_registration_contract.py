@@ -134,6 +134,12 @@ def _install_static_registration(extended_module: Any) -> None:
             result["registrar_dispatch_receipt"] = dispatch_receipt
         return result
 
+    # The original generator already uses this RLock. Reapplying the serializer at
+    # the outer layer extends the same re-entrant critical section through the
+    # static-tree commit, so direct concurrent API calls cannot interleave catalogs.
+    generated_with_static_registrar = extended_module._serialized_extended_content(
+        generated_with_static_registrar
+    )
     generated_with_static_registrar._mmm_static_registrar_tree = True
     extended_module.generate_extended_content = generated_with_static_registrar
 
