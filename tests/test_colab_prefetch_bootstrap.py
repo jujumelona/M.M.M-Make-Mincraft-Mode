@@ -15,9 +15,13 @@ def test_selected_colab_profile_is_resolved_on_first_import(monkeypatch) -> None
             return object()
 
     monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", "receipt")
+    monkeypatch.setenv("MMM_DISCOVERY_WORKERS", "17")
+    monkeypatch.setenv("MMM_RESEARCH_WORKERS", "9")
     monkeypatch.setattr(__main__, "MODEL_PROFILE", "Qwen3.5-9B_6GB", raising=False)
     start(SimpleNamespace(ModelRegistry=Registry))
     assert loaded == ["Qwen3.5-9B_6GB"]
+    assert __import__("os").environ["MMM_DISCOVERY_WORKERS"] == "17"
+    assert __import__("os").environ["MMM_RESEARCH_WORKERS"] == "9"
 
 
 def test_prefetch_bootstrap_is_inert_without_colab_setup(monkeypatch) -> None:
