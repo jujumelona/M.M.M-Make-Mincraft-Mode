@@ -121,22 +121,30 @@ def _install_adaptive_image_generation(
                     progress(disable=True)
                 return pipeline
 
-            def reset_cached_pipeline() -> None:
+            def clear_runtime_cache() -> None:
                 runtime._IMAGE_PIPELINE = None
                 runtime._IMAGE_PIPELINE_KEY = None
                 setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
-                base_module._release_cuda()
 
-            def activate_cpu_offload() -> tuple[Any, str, tuple[Any, ...]]:
-                reset_cached_pipeline()
-                pipeline = load_pipeline()
+            def activate_cpu_offload(
+                pipeline: Any,
+            ) -> tuple[Any, str, tuple[Any, ...]]:
+                # Keep a single Python pipeline object. Loading a second FLUX while
+                # the failed full-GPU object is still referenced can transiently
+                # double host/GPU memory and defeat the fallback itself.
+                try:
+                    pipeline.to("cpu")
+                finally:
+                    setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
+                    base_module._release_cuda()
                 pipeline.enable_model_cpu_offload()
                 selected = "cpu_offload"
                 selected_key = (cfg.model_id, cfg.torch_dtype, selected)
-                setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
                 if cache_enabled:
                     runtime._IMAGE_PIPELINE = pipeline
                     runtime._IMAGE_PIPELINE_KEY = selected_key
+                else:
+                    clear_runtime_cache()
                 return pipeline, selected, selected_key
 
             with runtime._IMAGE_LOCK:
@@ -148,7 +156,8 @@ def _install_adaptive_image_generation(
                 )
                 if pipeline is None:
                     if runtime._IMAGE_PIPELINE is not None:
-                        reset_cached_pipeline()
+                        clear_runtime_cache()
+                        base_module._release_cuda()
                     pipeline = load_pipeline()
                     if residency == "full_gpu":
                         try:
@@ -159,11 +168,10 @@ def _install_adaptive_image_generation(
                                 placement_error
                             ):
                                 raise
-                            # Borderline free-VRAM readings can still lose to
-                            # fragmentation or transient allocations. Recreate the
-                            # exact same pipeline under CPU offload rather than
-                            # failing a valid generation request.
-                            pipeline, residency, key = activate_cpu_offload()
+                            # A free-VRAM snapshot can be optimistic because of
+                            # fragmentation/transient allocations. Preserve the
+                            # exact same pipeline and switch execution residency.
+                            pipeline, residency, key = activate_cpu_offload(pipeline)
                     else:
                         pipeline.enable_model_cpu_offload()
                         setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
@@ -182,7 +190,7 @@ def _install_adaptive_image_generation(
                             placement_error
                         ):
                             raise
-                        pipeline, residency, key = activate_cpu_offload()
+                        pipeline, residency, key = activate_cpu_offload(pipeline)
 
                 def infer(current_pipeline: Any) -> Any:
                     generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -205,10 +213,10 @@ def _install_adaptive_image_generation(
                         or not _is_cuda_memory_pressure(inference_error)
                     ):
                         raise
-                    # Retry once with the same model, prompt, dimensions and seed.
-                    # Recreating the generator from the same seed prevents a failed
-                    # partial inference from advancing the successful random stream.
-                    pipeline, residency, key = activate_cpu_offload()
+                    # Retry once with identical model/prompt/dimensions/seed. The
+                    # generator is reconstructed from the seed so a failed partial
+                    # inference cannot alter the successful random stream.
+                    pipeline, residency, key = activate_cpu_offload(pipeline)
                     result = infer(pipeline)
 
                 output = output_path.expanduser().resolve()
