@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-PLAN_MODE = "플랜모드"
-FULL_MODE = "풀모드"
-EXISTING_MOD_MODE = "이미 만들어진 모드 수정보안모드"
-EXISTING_PLAN_MODE = "이미 있는 플랜을 만드는모드"
+PLAN_MODE = "Plan"
+FULL_MODE = "Full"
+EXISTING_MOD_MODE = "Revise"
+EXISTING_PLAN_MODE = "Execute"
 RUN_MODES = (
     PLAN_MODE,
     FULL_MODE,
@@ -69,23 +69,23 @@ def _uploaded_file(*, suffix: str, destination: Path, purpose: str) -> Path:
 
 def prepare_existing_mod_input(run_mode: str) -> Path | None:
     if not needs_existing_mod(run_mode):
-        print("기존 모드 입력: 사용 안 함", flush=True)
+        print("Revise input: 사용 안 함", flush=True)
         return None
 
     source = _uploaded_file(
         suffix=".zip",
         destination=Path("/content/mmm-existing-input"),
-        purpose="기존 모드 수정보안",
+        purpose="Revise",
     )
     from .importer import inspect_existing_project_archive
 
     report = inspect_existing_project_archive(source)
     if not report.has_sources or not report.has_gradle_project:
         raise ValueError(
-            "기존 모드 수정보안에는 소스와 Gradle 프로젝트가 포함된 source/release ZIP이 필요합니다."
+            "Revise에는 소스와 Gradle 프로젝트가 포함된 source/release ZIP이 필요합니다."
         )
     print(
-        "기존 모드 확인:",
+        "Revise target:",
         report.mod_name or report.mod_id or source.name,
         flush=True,
     )
@@ -111,13 +111,13 @@ def resolve_plan_path(
         return path
 
     if configured:
-        raise FileNotFoundError(f"기존 플랜 파일을 찾을 수 없습니다: {path}")
+        raise FileNotFoundError(f"플랜 파일을 찾을 수 없습니다: {path}")
 
     print(f"기본 플랜 파일 없음: {path}", flush=True)
     return _uploaded_file(
         suffix=".json",
         destination=Path("/content/mmm-existing-plan"),
-        purpose="기존 플랜 제작",
+        purpose="Execute plan",
     )
 
 
