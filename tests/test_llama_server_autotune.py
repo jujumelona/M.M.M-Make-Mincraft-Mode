@@ -10,8 +10,10 @@ from minecraft_mod_ai.llama_server_autotune import (
     _candidate_variants,
     _choose_variant,
     _probe_server,
+    _server_binary,
     _variant_args,
 )
+from minecraft_mod_ai.llama_server_hardware_policy import _source_dir
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
@@ -41,6 +43,7 @@ def _probe(
 
 def test_server_autotune_contract_is_installed() -> None:
     assert getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
+    assert getattr(_server_binary, "_mmm_native_bootstrap", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
     assert getattr(_probe_server, "_mmm_correctness_sentinel", False)
@@ -49,6 +52,12 @@ def test_server_autotune_contract_is_installed() -> None:
         "_mmm_releases_managed_llama",
         False,
     )
+
+
+def test_native_server_source_directory_can_be_overridden(monkeypatch, tmp_path) -> None:
+    target = tmp_path / "llama.cpp"
+    monkeypatch.setenv("MMM_LLAMA_SERVER_SOURCE_DIR", str(target))
+    assert _source_dir() == target.resolve()
 
 
 def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
