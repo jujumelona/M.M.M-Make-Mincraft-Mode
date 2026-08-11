@@ -40,6 +40,13 @@ from .model_runtime_performance import install as _install_model_runtime_perform
 
 _install_model_runtime_performance()
 
+# On hosts with enough free VRAM, keep FLUX.2 Klein fully resident for the whole
+# asset shard; otherwise retain its documented CPU-offload path. The cached pipeline
+# is parked back on CPU before the local LLM can reacquire the GPU.
+from .image_runtime_residency import install as _install_image_runtime_residency
+
+_install_image_runtime_residency()
+
 # Install isolated custom-generation staging plus the short, hash-guarded live
 # project commit contract before public API users construct an orchestrator.
 from . import complete_orchestrator as _complete_orchestrator_module
