@@ -2,24 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
+from .platform_catalog import FABRIC_1201, adapter_for_lock_values
 
-LOOM_VERSION = "1.10.5"
-GRADLE_VERSION = "8.12"
-GRADLE_SHA256 = "7a00d51fb93147819aab76024feece20b6b84e420694101f276be952e08bef03"
-FABRIC_LOADER_VERSION = "0.17.2"
+
+# Backward-compatible exports. Runtime execution no longer uses these globals as the
+# source of truth; it resolves the selected project's adapter instead.
+LOOM_VERSION = FABRIC_1201.fabric_loom
+GRADLE_VERSION = FABRIC_1201.gradle
+GRADLE_SHA256 = FABRIC_1201.gradle_sha256
+FABRIC_LOADER_VERSION = FABRIC_1201.fabric_loader
 
 
 def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
-    """Return the exact runtime predicates covered by the verified platform lock.
-
-    Distribution metadata must advertise only versions that the generated project
-    actually verifies. The Loader version therefore stays exact, like Minecraft,
-    Java and Fabric API. The current Loom 1.10.5 GameTest runtime resolves Fabric
-    Loader 0.17.2, so the platform lock and generated Gradle dependency are aligned
-    to that verified runtime instead of claiming the older 0.16.10 loader.
-    """
+    """Return exact dependency predicates from one reviewed platform lock."""
 
     platform.validate()
+    adapter_for_lock_values(platform)
     values = {
         "fabricloader": platform.fabric_loader,
         "minecraft": platform.minecraft_version,
@@ -40,62 +38,14 @@ def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
 
 
 def install(spec_module: Any, runner_module: Any) -> None:
-    """Install one immutable verified Fabric 1.20.1 toolchain contract.
+    """Install compatibility aliases without replacing per-plan PlatformLock logic.
 
-    GeckoLib 4.8.2 is published with Loom 1.10.5 metadata. Loom 1.5.4 refuses
-    that dependency before Java compilation. Loom 1.10 targets Gradle 8.12,
-    so generation, validation, wrapper creation and downloads use this exact pair
-    and the official binary distribution checksum. Fabric Loader 0.17.2 is pinned
-    because that is the Loader exercised by the Loom 1.10.5 GameTest runtime.
+    Older MMM builds monkeypatched ``PlatformLock`` here and therefore forced every
+    plan to Minecraft 1.20.1. Platform validation is now owned by the adapter catalog.
+    Runner globals remain only as legacy import aliases; ``GradleRunner`` resolves the
+    actual project's adapter before wrapper/build execution.
     """
 
-    def platform_init(
-        self: Any,
-        edition: str = "java",
-        loader: str = "fabric",
-        minecraft_version: str = "1.20.1",
-        java_version: str = "17",
-        yarn_mappings: str = "1.20.1+build.1",
-        fabric_loader: str = FABRIC_LOADER_VERSION,
-        fabric_api: str = "0.92.11+1.20.1",
-        fabric_loom: str = LOOM_VERSION,
-        gradle: str = GRADLE_VERSION,
-    ) -> None:
-        for field_name, value in {
-            "edition": edition,
-            "loader": loader,
-            "minecraft_version": minecraft_version,
-            "java_version": java_version,
-            "yarn_mappings": yarn_mappings,
-            "fabric_loader": fabric_loader,
-            "fabric_api": fabric_api,
-            "fabric_loom": fabric_loom,
-            "gradle": gradle,
-        }.items():
-            object.__setattr__(self, field_name, value)
-
-    def platform_validate(self: Any) -> None:
-        expected = {
-            "edition": "java",
-            "loader": "fabric",
-            "minecraft_version": "1.20.1",
-            "java_version": "17",
-            "yarn_mappings": "1.20.1+build.1",
-            "fabric_loader": FABRIC_LOADER_VERSION,
-            "fabric_api": "0.92.11+1.20.1",
-            "fabric_loom": LOOM_VERSION,
-            "gradle": GRADLE_VERSION,
-        }
-        for field_name, expected_value in expected.items():
-            actual = getattr(self, field_name)
-            if actual != expected_value:
-                raise spec_module.SpecValidationError(
-                    f"Unsupported platform adapter: {field_name}={actual!r}; "
-                    f"the verified Fabric 1.20.1 toolchain is pinned to {expected_value!r}."
-                )
-
-    spec_module.PlatformLock.__init__ = platform_init
-    spec_module.PlatformLock.validate = platform_validate
     runner_module.GRADLE_VERSION = GRADLE_VERSION
     runner_module.GRADLE_URL = (
         f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip"
