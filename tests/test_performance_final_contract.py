@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.performance_final_contract import (
     StagedCommitConflict,
+    _clone_source_snapshot,
     _three_way_merge,
 )
 from minecraft_mod_ai.work_graph import _node
@@ -71,6 +73,30 @@ def test_local_gpu_text_role_participates_in_gpu_exclusion() -> None:
 
     assert config.exclusive_gpu is True
     assert cpu_config.exclusive_gpu is False
+
+
+def test_custom_staging_clones_only_indexable_source_text(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    java = project / "src/main/java/example/Example.java"
+    metadata = project / "src/main/resources/fabric.mod.json"
+    image = project / "src/main/resources/assets/example/textures/item/icon.png"
+    build_output = project / "build/generated/generated.txt"
+    ai_receipt = project / ".minecraft_ai/large-receipt.json"
+    for path in (java, metadata, image, build_output, ai_receipt):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    java.write_text("class Example {}\n", encoding="utf-8")
+    metadata.write_text('{"id":"example"}\n', encoding="utf-8")
+    image.write_bytes(b"not-needed-binary")
+    build_output.write_text("not source\n", encoding="utf-8")
+    ai_receipt.write_text('{"ignored":true}\n', encoding="utf-8")
+
+    stage = _clone_source_snapshot(project)
+
+    assert (stage / java.relative_to(project)).is_file()
+    assert (stage / metadata.relative_to(project)).is_file()
+    assert not (stage / image.relative_to(project)).exists()
+    assert not (stage / build_output.relative_to(project)).exists()
+    assert not (stage / ai_receipt.relative_to(project)).exists()
 
 
 def test_staged_java_merge_preserves_independent_insertions() -> None:
