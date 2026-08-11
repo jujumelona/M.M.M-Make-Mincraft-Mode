@@ -13,6 +13,8 @@ NOTEBOOKS = (
     ROOT / "M.M.M_Make_Mincraft_Mode_Colab.ipynb",
     ROOT / "Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb",
 )
+SETUP_SCRIPT = ROOT / "tools" / "colab_runtime_setup.py"
+LLAMA_ADAPTER = ROOT / "minecraft_mod_ai" / "model_adapters" / "llama_cpp_adapter.py"
 
 
 def _cell_source(path: Path, cell_id: str) -> str:
@@ -51,10 +53,27 @@ def test_colab_status_text_has_no_absolute_integrity_or_zero_risk_claims() -> No
         "속도 극대화",
         "풀옵션",
     )
-    for notebook in NOTEBOOKS:
-        text = notebook.read_text(encoding="utf-8")
+    for path in (*NOTEBOOKS, SETUP_SCRIPT, LLAMA_ADAPTER):
+        text = path.read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in text
+
+
+def test_colab_setup_status_is_plain_and_factual() -> None:
+    text = SETUP_SCRIPT.read_text(encoding="utf-8")
+    for token in ("✅", "⚡", "🔍", "🔧", "ℹ️", "🔄"):
+        assert token not in text
+    assert 'print("checkout: validating"' in text
+    assert 'print("CUDA: checking"' in text
+    assert 'print("project dependencies: installing"' in text
+    assert 'print("project dependencies: installed"' in text
+
+
+def test_llama_adapter_does_not_label_generic_server_as_cpp_mtp() -> None:
+    text = LLAMA_ADAPTER.read_text(encoding="utf-8")
+    assert "C++ MTP" not in text
+    assert "llama-server MTP" not in text
+    assert 'print("llama server: connected"' in text
 
 
 def test_engine_native_server_discovery_never_compiles_source() -> None:
