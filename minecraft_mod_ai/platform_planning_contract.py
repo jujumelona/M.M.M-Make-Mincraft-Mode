@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Iterable
+from typing import Any
 
 from .platform_catalog import adapter_for_target, supported_minecraft_versions
 from .platform_resolver import resolve_platform, retarget_proposal
@@ -88,7 +88,18 @@ def _install_game_design_target(module: Any) -> None:
             existing_loader=existing_loader,
         )
         proposal = retarget_proposal(proposal, selection)
-        design = {**design, "_platform_selection": selection.to_dict()}
+        selection_dict = selection.to_dict()
+        research_brief = design.get("_research_brief")
+        if isinstance(research_brief, dict):
+            research_brief = {
+                **research_brief,
+                "_mmm_platform_target": dict(selection_dict["target"]),
+            }
+        design = {
+            **design,
+            "_platform_selection": selection_dict,
+            **({"_research_brief": research_brief} if isinstance(research_brief, dict) else {}),
+        }
         return design, proposal
 
     plan_with_target._mmm_dynamic_platform_resolution = True
@@ -179,8 +190,6 @@ def _install_complete_planner_target(
     retrieve_implementation_evidence._mmm_dynamic_platform_target = True
     module._retrieve_implementation_evidence = retrieve_implementation_evidence
 
-    # Wrap collection calls already imported into complete_planner so the exact target
-    # reaches technology and ecosystem research without changing the public APIs.
     original_tech = module.collect_technology_radar
     if not getattr(original_tech, "_mmm_dynamic_platform_target", False):
         @wraps(original_tech)
@@ -198,9 +207,6 @@ def _install_complete_planner_target(
 
     @wraps(original_plan)
     def plan_in_session(self: Any, prompt: str, *, media_paths=(), existing_input_sha256=""):
-        # GameDesignPlanner wrapper establishes the target before this method's research
-        # phase. We expose the target to imported coordinator functions through a
-        # short-lived router attribute so nested calls cannot invent a second target.
         router = self.router
         setattr(router, "_mmm_platform_selection_active", True)
         try:
@@ -231,10 +237,6 @@ def _install_complete_planner_target(
     plan_in_session._mmm_dynamic_platform_target = True
     module.CompleteGameDesignPlanner._plan_in_session = plan_in_session
 
-    # The original method itself calls collect_technology_radar without a target. Patch
-    # the imported function with a target lookup from the design-bearing research brief.
-    # normalize_research_brief output receives this host-only key through the wrapper
-    # below; it is ignored by domain parsing and removed from public hashing inputs.
     original_normalize = module.normalize_research_brief
     if not getattr(original_normalize, "_mmm_dynamic_platform_target", False):
         @wraps(original_normalize)
@@ -346,9 +348,6 @@ def _target_retrieve(retrieval: Any, query: str, *, adapter: Any, limit: int):
                 mappings=adapter.yarn_mappings,
                 limit=limit,
             )
-        # The legacy index has one obsolete hard-coded mappings guard. Pass its guard
-        # value only inside the index, then replace all receipt semantics with the
-        # selected adapter. Eligible documents and ranking still use 1.21.1.
         receipt = index.retrieve(
             query,
             minecraft_version=adapter.minecraft_version,
