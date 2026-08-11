@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.performance_final_contract import (
     StagedCommitConflict,
     _three_way_merge,
@@ -48,6 +49,28 @@ def test_generation_nodes_use_resource_specific_lanes() -> None:
     assert asset.resource_class == "image_gpu"
     assert audio.resource_class == "cpu_io"
     assert finalize.resource_class == "commit"
+
+
+def test_local_gpu_text_role_participates_in_gpu_exclusion() -> None:
+    config = ModelRegistry._resolve_role(
+        "coder",
+        {
+            "model_id": "local/test-model",
+            "adapter": "llama_cpp",
+            "exclusive_gpu": False,
+        },
+    )
+    cpu_config = ModelRegistry._resolve_role(
+        "embedding",
+        {
+            "model_id": "local/test-embedding",
+            "adapter": "embedding",
+            "exclusive_gpu": False,
+        },
+    )
+
+    assert config.exclusive_gpu is True
+    assert cpu_config.exclusive_gpu is False
 
 
 def test_staged_java_merge_preserves_independent_insertions() -> None:
