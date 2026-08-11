@@ -250,6 +250,13 @@ print("기획 모델:", planner_config.model_id)
 print("기획 백엔드:", planner_config.provider, "/", planner_config.adapter)
 print("기획 양자화:", planner_config.quantization or "none")
 print("기획 native context:", f"{planner_config.max_context:,} tokens")
+print(
+    "기획 page input:",
+    f"{planner_config.max_input_tokens:,} tokens"
+    if planner_config.max_input_tokens
+    else "native-context bound (no separate page cap)",
+)
+print("기획 page output:", f"{planner_config.max_new_tokens:,} tokens")
 print("결과 저장 위치:", OUTPUT_ROOT)
 
 from minecraft_mod_ai.custom_module_generator import _extract_json
