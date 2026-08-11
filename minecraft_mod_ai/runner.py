@@ -13,10 +13,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .platform_catalog import FABRIC_1201, adapter_from_project
 
-GRADLE_VERSION = "8.5"
+
+# Legacy import aliases. Build execution resolves the project's adapter and does not
+# use these globals as its target source of truth.
+GRADLE_VERSION = FABRIC_1201.gradle
 GRADLE_URL = f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip"
-GRADLE_SHA256 = "9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026"
+GRADLE_SHA256 = FABRIC_1201.gradle_sha256
 
 
 class BuildRunnerError(RuntimeError):
@@ -86,10 +90,18 @@ class GradleRunner:
         project_root = project_root.resolve()
         if not (project_root / "build.gradle").is_file():
             raise BuildRunnerError(f"Not a generated Gradle project: {project_root}")
+        try:
+            adapter = adapter_from_project(project_root)
+        except ValueError as exc:
+            raise BuildRunnerError(
+                f"Project platform lock is missing, mixed, or unsupported: {exc}"
+            ) from exc
+        gradle_version = adapter.gradle
+        gradle_sha256 = adapter.gradle_sha256
         logs = project_root / ".minecraft_ai" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
 
-        gradle = self._ensure_gradle()
+        gradle = self._ensure_gradle(gradle_version, gradle_sha256)
         commands: list[CommandResult] = []
         environment = os.environ.copy()
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
@@ -102,9 +114,9 @@ class GradleRunner:
                 "--no-daemon",
                 "wrapper",
                 "--gradle-version",
-                GRADLE_VERSION,
+                gradle_version,
                 "--gradle-distribution-sha256-sum",
-                GRADLE_SHA256,
+                gradle_sha256,
                 "--stacktrace",
             ),
             cwd=project_root,
@@ -115,7 +127,7 @@ class GradleRunner:
         if wrapper_result.exit_code != 0:
             return BuildReport(
                 status="FAIL",
-                gradle_version=GRADLE_VERSION,
+                gradle_version=gradle_version,
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=None,
@@ -134,7 +146,7 @@ class GradleRunner:
         if build_result.exit_code != 0:
             return BuildReport(
                 status="FAIL",
-                gradle_version=GRADLE_VERSION,
+                gradle_version=gradle_version,
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=None,
@@ -154,7 +166,7 @@ class GradleRunner:
             if gametest_result.exit_code != 0:
                 return BuildReport(
                     status="FAIL",
-                    gradle_version=GRADLE_VERSION,
+                    gradle_version=gradle_version,
                     commands=tuple(commands),
                     jar_path=self._find_release_jar(project_root),
                     gametest_report=self._gametest_report(project_root),
@@ -165,7 +177,7 @@ class GradleRunner:
         if jar_path is None:
             return BuildReport(
                 status="FAIL",
-                gradle_version=GRADLE_VERSION,
+                gradle_version=gradle_version,
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=self._gametest_report(project_root),
@@ -173,28 +185,32 @@ class GradleRunner:
             )
         return BuildReport(
             status="PASS",
-            gradle_version=GRADLE_VERSION,
+            gradle_version=gradle_version,
             commands=tuple(commands),
             jar_path=jar_path,
             gametest_report=self._gametest_report(project_root),
             error=None,
         )
 
-    def _ensure_gradle(self) -> Path:
-        distribution_dir = self.cache_dir / f"gradle-{GRADLE_VERSION}"
+    def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+        distribution_dir = self.cache_dir / f"gradle-{gradle_version}"
         executable = distribution_dir / "bin" / (
             "gradle.bat" if os.name == "nt" else "gradle"
         )
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        archive = self.cache_dir / f"gradle-{GRADLE_VERSION}-bin.zip"
-        if archive.is_file() and _sha256(archive) != GRADLE_SHA256:
+        archive = self.cache_dir / f"gradle-{gradle_version}-bin.zip"
+        if archive.is_file() and _sha256(archive) != gradle_sha256:
             archive.unlink()
         if not archive.is_file():
             temporary = archive.with_suffix(".zip.part")
+            url = (
+                "https://services.gradle.org/distributions/"
+                f"gradle-{gradle_version}-bin.zip"
+            )
             request = urllib.request.Request(
-                GRADLE_URL,
-                headers={"User-Agent": "minecraft-mod-ai/0.1"},
+                url,
+                headers={"User-Agent": "minecraft-mod-ai/0.8"},
             )
             try:
                 with urllib.request.urlopen(
@@ -205,19 +221,19 @@ class GradleRunner:
                 if temporary.exists():
                     temporary.unlink()
                 raise
-            if _sha256(temporary) != GRADLE_SHA256:
+            if _sha256(temporary) != gradle_sha256:
                 temporary.unlink(missing_ok=True)
                 raise BuildRunnerError("Gradle distribution SHA-256 verification failed.")
             temporary.replace(archive)
 
-        extraction_root = self.cache_dir / f".extract-gradle-{GRADLE_VERSION}"
+        extraction_root = self.cache_dir / f".extract-gradle-{gradle_version}"
         if extraction_root.exists():
             shutil.rmtree(extraction_root)
         extraction_root.mkdir(parents=True)
         try:
             with zipfile.ZipFile(archive) as zipped:
                 _safe_extract(zipped, extraction_root)
-            extracted = extraction_root / f"gradle-{GRADLE_VERSION}"
+            extracted = extraction_root / f"gradle-{gradle_version}"
             if not extracted.is_dir():
                 raise BuildRunnerError("Gradle archive did not contain the expected directory.")
             if distribution_dir.exists():
