@@ -94,7 +94,7 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     assert "loaded from a different checkout" in setup_source
     assert "restart the Colab " in setup_source
     assert "runtime and rerun from cell 1" in setup_source
-    assert "silently" in setup_source
+    assert "Qwen3.5 fast path: unavailable; using standard PyTorch" in setup_source
 
 
 def test_notebook_checks_setup_fingerprint_and_prints_resolved_planner() -> None:
