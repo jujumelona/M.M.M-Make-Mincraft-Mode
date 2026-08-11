@@ -40,6 +40,12 @@ from .model_runtime_performance import install as _install_model_runtime_perform
 
 _install_model_runtime_performance()
 
+# Increase llama.cpp logical prompt batching while retaining the existing physical
+# microbatch ceiling and deterministic sampling parameters.
+from .llama_runtime_tuning import install as _install_llama_runtime_tuning
+
+_install_llama_runtime_tuning()
+
 # On hosts with enough free VRAM, keep FLUX.2 Klein fully resident for the whole
 # asset shard; otherwise retain its documented CPU-offload path. The cached pipeline
 # is parked back on CPU before the local LLM can reacquire the GPU.
