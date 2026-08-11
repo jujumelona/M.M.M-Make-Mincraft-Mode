@@ -15,7 +15,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def install(atomic_module: Any, orchestrator_module: Any) -> None:
-    """Order immutable input checks before IR and reserve strict IR for binaries."""
+    """Order approval/input checks before IR and reserve strict IR for binaries."""
 
     cls = orchestrator_module.CompleteProductionOrchestrator
     current = cls.execute
@@ -30,6 +30,12 @@ def install(atomic_module: Any, orchestrator_module: Any) -> None:
             if isinstance(proposal, orchestrator_module.CompleteProposal)
             else orchestrator_module.CompleteProposal.from_dict(proposal)
         )
+        # Preserve the original authority ordering: first validate the complete
+        # proposal and the exact user-supplied approval hash, then inspect bound
+        # external input, then enforce the final binary-only Atomic IR gate.
+        supplied_approval = kwargs.get("approval_hash")
+        parsed.approve(supplied_approval, policy=self.policy)
+
         existing_input = kwargs.get("existing_input")
         bound = str(getattr(parsed, "existing_input_sha256", ""))
         supplied = existing_input is not None
