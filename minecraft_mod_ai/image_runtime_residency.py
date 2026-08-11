@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Any
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _full_gpu_threshold_mb(config: Any) -> int:
     raw = os.environ.get("MMM_IMAGE_FULL_GPU_MIN_FREE_MB", "").strip()
     if raw:
@@ -168,9 +175,6 @@ def _install_adaptive_image_generation(
                                 placement_error
                             ):
                                 raise
-                            # A free-VRAM snapshot can be optimistic because of
-                            # fragmentation/transient allocations. Preserve the
-                            # exact same pipeline and switch execution residency.
                             pipeline, residency, key = activate_cpu_offload(pipeline)
                     else:
                         pipeline.enable_model_cpu_offload()
@@ -213,9 +217,6 @@ def _install_adaptive_image_generation(
                         or not _is_cuda_memory_pressure(inference_error)
                     ):
                         raise
-                    # Retry once with identical model/prompt/dimensions/seed. The
-                    # generator is reconstructed from the seed so a failed partial
-                    # inference cannot alter the successful random stream.
                     pipeline, residency, key = activate_cpu_offload(pipeline)
                     result = infer(pipeline)
 
@@ -246,18 +247,31 @@ def _install_adaptive_image_generation(
     cls.generate_image = adaptive_generate_image
 
 
-def _park_cached_image_pipeline(runtime: Any, base_module: Any) -> None:
+def _finish_image_shard(runtime: Any, base_module: Any) -> None:
+    keep_across_shards = _env_bool("MMM_IMAGE_CACHE_ACROSS_SHARDS", False)
     with runtime._IMAGE_LOCK:
         pipeline = runtime._IMAGE_PIPELINE
         key = runtime._IMAGE_PIPELINE_KEY
-        if (
-            pipeline is not None
-            and key is not None
-            and key[-1] == "full_gpu"
-            and bool(getattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False))
-        ):
-            pipeline.to("cpu")
+        if pipeline is None:
+            base_module._release_cuda()
+            return
+
+        if keep_across_shards:
+            if (
+                key is not None
+                and key[-1] == "full_gpu"
+                and bool(getattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False))
+            ):
+                pipeline.to("cpu")
+                setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
+        else:
+            # Default: cache across every overview/detail call in this shard, then
+            # release before the next local LLM. This keeps the major speedup while
+            # avoiding a large FLUX CPU copy co-resident with the GGUF in host RAM.
+            runtime._IMAGE_PIPELINE = None
+            runtime._IMAGE_PIPELINE_KEY = None
             setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
+            del pipeline
     base_module._release_cuda()
 
 
@@ -282,13 +296,14 @@ def _install_pipeline_parking(
         if not local_exclusive:
             return original(router, *args, **kwargs)
 
-        # Keep the outer lock across the already-installed asset-session wrapper so
-        # cached full-GPU weights are parked before a local LLM can acquire the GPU.
+        # Keep one GPU lease across overview + detail tiles. Individual image calls
+        # reuse the same pipeline, and cleanup happens before a local LLM can acquire
+        # the GPU again.
         with router_module._GPU_EXCLUSIVE_LOCK:
             try:
                 return original(router, *args, **kwargs)
             finally:
-                _park_cached_image_pipeline(runtime, base_module)
+                _finish_image_shard(runtime, base_module)
 
     adaptive_asset_session._mmm_adaptive_image_gpu_session = True
     services.generate_assets = adaptive_asset_session
