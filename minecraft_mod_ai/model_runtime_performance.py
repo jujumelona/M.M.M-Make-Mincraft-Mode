@@ -201,9 +201,7 @@ def _install_cached_image_runtime(
                     _IMAGE_PIPELINE_KEY = None
             base_module._release_cuda()
             raise base_module.ModelBackendError(
-                role=cfg.role,
-                model_id=cfg.model_id,
-                cause=exc,
+                role=cfg.role, model_id=cfg.model_id, cause=exc
             ) from exc
 
     cached_generate_image._mmm_cached_image_pipeline = True
@@ -412,7 +410,14 @@ def _install_asset_gpu_session(
 
     @wraps(original)
     def image_gpu_session(router: Any, *args: Any, **kwargs: Any):
-        config = router.registry.role(router.profile, "image_generator")
+        registry = getattr(router, "registry", None)
+        profile = getattr(router, "profile", None)
+        if registry is None or profile is None:
+            # Unit-test/lightweight routers intentionally implement only
+            # generate_image(). They have no model registry and must keep the
+            # original deterministic asset-generation contract.
+            return original(router, *args, **kwargs)
+        config = registry.role(profile, "image_generator")
         local_exclusive = (
             config.provider == "local"
             and config.adapter == "image_diffusion"
