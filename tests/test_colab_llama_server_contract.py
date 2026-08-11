@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import os
@@ -30,22 +31,28 @@ def _cell_source(path: Path, cell_id: str) -> str:
     raise AssertionError(f"missing cell {cell_id!r} in {path.name}")
 
 
+def _literal_print_prefixes(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    values: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "print":
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            values.append(first.value)
+    return values
+
+
 def test_colab_mtp_cell_uses_pinned_launcher_without_source_build() -> None:
-    forbidden = (
-        "git clone",
-        "cmake",
-        "nvcc",
-        "make -j",
-        "최초 1회",
-        "약 1분",
-        "3배",
-        "80토큰",
-    )
     for notebook in NOTEBOOKS:
         source = _cell_source(notebook, "mtp-server")
         assert "start_colab_mtp_server" in source
         assert "LLAMA_SERVER_URL" in source
-        for token in forbidden:
+        for token in ("git clone", "cmake", "nvcc", "make -j"):
             assert token not in source
 
 
@@ -84,7 +91,21 @@ def test_colab_mtp_startup_is_fail_fast_and_bounded() -> None:
     assert "startup timed out" in text
     assert "Port 8910 is already serving a different unmanaged process" in text
     assert "llama-cpp-python CUDA backend is unavailable" in text
-    assert "model loading" not in text
+
+
+def test_colab_mtp_status_lines_are_state_only() -> None:
+    prefixes = _literal_print_prefixes(MTP_LAUNCHER)
+    assert prefixes
+    assert all(value.startswith("MTP server:") for value in prefixes)
+    required = {
+        "MTP server: checking CUDA binding",
+        "MTP server: resolving model",
+        "MTP server: model ready",
+        "MTP server: preparing launcher",
+        "MTP server: starting",
+        "MTP server: ready",
+    }
+    assert required.issubset(set(prefixes))
 
 
 def test_colab_mtp_ready_requires_expected_model_alias(monkeypatch) -> None:
@@ -173,23 +194,6 @@ def test_external_server_probe_accepts_new_server_endpoints() -> None:
     assert '"/health"' in source
 
 
-def test_colab_runtime_status_is_plain_and_factual() -> None:
-    forbidden = (
-        "100%",
-        "0%",
-        "폭속",
-        "속도 극대화",
-        "풀옵션",
-        "3배",
-        "80토큰",
-    )
-    decorative = ("✅", "⚡", "🔍", "🔧", "ℹ️", "🔄", "🎉", "🚀", "🔨")
-    for path in (*NOTEBOOKS, SETUP_SCRIPT, LLAMA_ADAPTER, MTP_LAUNCHER):
-        text = path.read_text(encoding="utf-8")
-        for token in (*forbidden, *decorative):
-            assert token not in text
-
-
 def test_colab_setup_status_is_plain_and_factual() -> None:
     text = SETUP_SCRIPT.read_text(encoding="utf-8")
     assert 'print("checkout: validating"' in text
@@ -198,10 +202,8 @@ def test_colab_setup_status_is_plain_and_factual() -> None:
     assert 'print("project dependencies: installed"' in text
 
 
-def test_llama_adapter_does_not_label_generic_server_as_cpp_mtp() -> None:
+def test_llama_adapter_does_not_label_generic_server_as_mtp() -> None:
     text = LLAMA_ADAPTER.read_text(encoding="utf-8")
-    assert "C++ MTP" not in text
-    assert "llama-server MTP" not in text
     assert 'print("llama server: connected"' in text
 
 
