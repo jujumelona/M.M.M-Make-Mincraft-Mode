@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Any
 
 
 _PREVIEW_BYTES = 2048
+_CONJUNCTION = re.compile(
+    r"(?<!\S)(?:and|then|plus|그리고|또한|및)(?=\s)",
+    re.IGNORECASE,
+)
 
 
 def _preview(text: str) -> str:
@@ -56,6 +61,37 @@ def install(atomic_module: Any) -> None:
     cached_features = lru_cache(maxsize=2048)(original_features)
     cached_features._mmm_bounded_feature_cache = True
 
+    def _segments(prompt: str, start: int, end: int) -> list[tuple[int, int]]:
+        boundaries: list[tuple[int, int]] = []
+        for index in range(start, end):
+            if prompt[index] in {",", "，", "、"}:
+                boundaries.append((index, index + 1))
+        for match in _CONJUNCTION.finditer(prompt, start, end):
+            boundaries.append((match.start(), match.start()))
+        boundaries.sort()
+
+        result: list[tuple[int, int]] = []
+        cursor = start
+        for cut, next_start in boundaries:
+            if cut < cursor:
+                continue
+            left, right = cursor, cut
+            while left < right and prompt[left].isspace():
+                left += 1
+            while right > left and prompt[right - 1].isspace():
+                right -= 1
+            if left < right:
+                result.append((left, right))
+            cursor = max(cursor, next_start)
+        left, right = cursor, end
+        while left < right and prompt[left].isspace():
+            left += 1
+        while right > left and prompt[right - 1].isspace():
+            right -= 1
+        if left < right:
+            result.append((left, right))
+        return result
+
     def atom_ranges(prompt: str) -> list[tuple[int, int]]:
         result: list[tuple[int, int]] = []
         for match in atomic_module._SENTENCE.finditer(prompt):
@@ -67,27 +103,7 @@ def install(atomic_module: Any) -> None:
             if start >= end:
                 continue
 
-            cuts: list[tuple[int, int]] = []
-            cursor = start
-            for index in range(start, end):
-                if prompt[index] not in {",", "，", "、"}:
-                    continue
-                left, right = cursor, index
-                while left < right and prompt[left].isspace():
-                    left += 1
-                while right > left and prompt[right - 1].isspace():
-                    right -= 1
-                if left < right:
-                    cuts.append((left, right))
-                cursor = index + 1
-            left, right = cursor, end
-            while left < right and prompt[left].isspace():
-                left += 1
-            while right > left and prompt[right - 1].isspace():
-                right -= 1
-            if left < right:
-                cuts.append((left, right))
-
+            cuts = _segments(prompt, start, end)
             if len(cuts) < 2:
                 result.extend(atomic_module._split_range(prompt, start, end))
             else:
@@ -103,6 +119,7 @@ def install(atomic_module: Any) -> None:
         return result
 
     atom_ranges._mmm_enumeration_atomizer = True
+    atom_ranges._mmm_conjunction_atomizer = True
     implementations._mmm_compact_catalog = True
     acceptances._mmm_compact_catalog = True
     atomic_module._features = cached_features
