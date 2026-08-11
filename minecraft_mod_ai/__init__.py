@@ -33,6 +33,13 @@ from .gpu_resource_contract import install as _install_gpu_resource_contract
 
 _install_gpu_resource_contract(_model_registry_module)
 
+# Reuse expensive local model runtimes across bounded workflow calls. This is
+# installed before the orchestrator imports generator functions so its asset-shard
+# GPU session wrapper is the function the orchestrator binds.
+from .model_runtime_performance import install as _install_model_runtime_performance
+
+_install_model_runtime_performance()
+
 # Install isolated custom-generation staging plus the short, hash-guarded live
 # project commit contract before public API users construct an orchestrator.
 from . import complete_orchestrator as _complete_orchestrator_module
