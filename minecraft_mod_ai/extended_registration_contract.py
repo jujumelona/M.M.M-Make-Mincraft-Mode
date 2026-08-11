@@ -8,6 +8,7 @@ from typing import Any
 def _render_static_registration(root_name: str | None) -> str:
     lines = [
         '    private static List<Block> registerGeneratedUnits() {',
+        '        // GeneratedContentUnit registrations use the bounded static tree; Files.list(directory) is not executed.',
         '        List<Block> machineBlocks = new ArrayList<>();',
     ]
     if root_name:
