@@ -1,0 +1,74 @@
+name: Restore planner status once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/restore_planner_status_once.yml'
+
+permissions:
+  contents: write
+  statuses: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'nbformat>=5.10,<6'
+      - name: Restore factual planner limits
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/build_colab_notebook.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''print("기획 native context:", f"{planner_config.max_context:,} tokens")
+print("결과 저장 위치:", OUTPUT_ROOT)
+'''
+          new = '''print("기획 native context:", f"{planner_config.max_context:,} tokens")
+print(
+    "기획 page input:",
+    f"{planner_config.max_input_tokens:,} tokens"
+    if planner_config.max_input_tokens
+    else "native-context bound (no separate page cap)",
+)
+print("기획 page output:", f"{planner_config.max_new_tokens:,} tokens")
+print("결과 저장 위치:", OUTPUT_ROOT)
+'''
+          if old not in text:
+              raise SystemExit('planner status block not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Regenerate notebooks
+        run: python tools/build_colab_notebook.py
+      - name: Verify factual status and banned claims
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          paths = [
+              Path('tools/build_colab_notebook.py'),
+              Path('M.M.M_Make_Mincraft_Mode_Colab.ipynb'),
+              Path('Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb'),
+          ]
+          for path in paths:
+              text = path.read_text(encoding='utf-8')
+              assert 'planner_config.max_input_tokens' in text
+              assert 'planner_config.max_new_tokens' in text
+              assert '기획 page input:' in text
+              assert '기획 page output:' in text
+              for token in ('무결성 100%', '에러 위험 요소 0%', '약 1분', '3배', '80토큰', '폭속', '풀옵션'):
+                  assert token not in text, (path, token)
+          PY
+      - name: Remove one-shot workflow and commit
+        run: |
+          git rm .github/workflows/restore_planner_status_once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/build_colab_notebook.py M.M.M_Make_Mincraft_Mode_Colab.ipynb Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb
+          git commit -m 'fix(colab): restore factual planner limit status'
+          git push origin HEAD:main
