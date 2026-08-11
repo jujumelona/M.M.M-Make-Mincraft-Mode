@@ -50,9 +50,16 @@ _install_llama_runtime_tuning()
 # workflow prompt against non-speculative and MTP variants. Only exact-output
 # matches are eligible, and the hardware/model/server-fingerprinted winner is
 # reused on subsequent runs.
+from . import llama_server_autotune as _llama_server_autotune_module
 from .llama_server_autotune import install as _install_llama_server_autotune
 
 _install_llama_server_autotune()
+
+# Let llama.cpp choose target/draft layer placement for the actual host rather than
+# requiring every layer to fit in VRAM before the benchmark can run.
+from .llama_server_hardware_policy import install as _install_llama_server_hardware_policy
+
+_install_llama_server_hardware_policy(_llama_server_autotune_module)
 
 # On hosts with enough free VRAM, keep FLUX.2 Klein fully resident for the whole
 # asset shard; otherwise retain its documented CPU-offload path. The cached pipeline
