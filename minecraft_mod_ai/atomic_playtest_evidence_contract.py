@@ -39,14 +39,14 @@ def install(
     quality_evidence_module: Any,
     orchestrator_module: Any | None = None,
 ) -> None:
-    """Require every authoritative atom to be backed by a matched runtime assertion."""
+    """Bind each atom to the objective verifier appropriate for that requirement."""
 
     original = quality_evidence_module.compile_quality_evidence
     if getattr(original, "_mmm_atomic_playtest_evidence", False):
         return
 
     @wraps(original)
-    def compile_with_playtest_coverage(
+    def compile_with_atomic_evidence(
         contract: Mapping[str, Any],
         proposal_hash: str,
         *args: Any,
@@ -69,27 +69,52 @@ def install(
             result.pop("correctness", None)
             return result
 
-        matched = _matched_acceptance_refs(kwargs.get("playtest_receipt"))
+        matched_runtime = _matched_acceptance_refs(
+            kwargs.get("playtest_receipt")
+        )
         atoms = ir.get("atoms")
         if not isinstance(atoms, list) or not atoms:
             result.pop("correctness", None)
             return result
 
         uncovered: list[str] = []
-        used_refs: set[str] = set()
+        evidence_refs: set[str] = set()
         for atom in atoms:
             if not isinstance(atom, Mapping):
                 uncovered.append("invalid")
                 continue
-            refs = {
+            routes = atom.get("evidence_dimensions")
+            if not isinstance(routes, list) or not routes:
+                uncovered.append(str(atom.get("atom_id", "invalid")))
+                continue
+            acceptance_refs = {
                 str(value)
                 for value in atom.get("acceptance_refs", [])
                 if isinstance(value, str)
             }
-            evidence_refs = refs & matched
-            if not evidence_refs:
+            atom_ok = True
+            for route in routes:
+                if route == "runtime":
+                    matched = acceptance_refs & matched_runtime
+                    if not matched:
+                        atom_ok = False
+                        break
+                    evidence_refs.update(
+                        "atomic-runtime:" + value for value in matched
+                    )
+                else:
+                    receipt = result.get(str(route))
+                    if not isinstance(receipt, Mapping):
+                        atom_ok = False
+                        break
+                    evidence_refs.add(
+                        "atomic-dimension:"
+                        + str(atom.get("atom_id", ""))
+                        + ":"
+                        + str(route)
+                    )
+            if not atom_ok:
                 uncovered.append(str(atom.get("atom_id", "invalid")))
-            used_refs.update(evidence_refs)
 
         correctness = result.get("correctness")
         if uncovered or not isinstance(correctness, Mapping):
@@ -102,16 +127,29 @@ def install(
             proposal_hash=proposal_hash,
             evidence_refs=[
                 *correctness.get("evidence_refs", []),
+                *sorted(evidence_refs),
+            ],
+            observed_sources=[
+                correctness,
+                kwargs.get("playtest_receipt"),
                 *(
-                    "atomic-playtest:" + value
-                    for value in sorted(used_refs)
+                    result[route]
+                    for route in sorted(
+                        {
+                            str(route)
+                            for atom in atoms
+                            if isinstance(atom, Mapping)
+                            for route in atom.get("evidence_dimensions", [])
+                            if route != "runtime" and route in result
+                        }
+                    )
                 ),
             ],
-            observed_sources=[correctness, kwargs.get("playtest_receipt")],
         )
         return result
 
-    compile_with_playtest_coverage._mmm_atomic_playtest_evidence = True
-    quality_evidence_module.compile_quality_evidence = compile_with_playtest_coverage
+    compile_with_atomic_evidence._mmm_atomic_playtest_evidence = True
+    compile_with_atomic_evidence._mmm_atomic_routed_evidence = True
+    quality_evidence_module.compile_quality_evidence = compile_with_atomic_evidence
     if orchestrator_module is not None:
-        orchestrator_module.compile_quality_evidence = compile_with_playtest_coverage
+        orchestrator_module.compile_quality_evidence = compile_with_atomic_evidence
