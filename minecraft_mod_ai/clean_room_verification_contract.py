@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+import zipfile
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
@@ -37,6 +39,40 @@ def _copy_source(
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
+
+
+def jar_content_sha256(path: Path) -> str:
+    """Hash sorted JAR entry names and uncompressed bytes, ignoring ZIP metadata."""
+
+    path = path.expanduser()
+    if path.is_symlink():
+        return ""
+    try:
+        path = path.resolve(strict=True)
+    except OSError:
+        return ""
+    if not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            entries = sorted(
+                info.filename
+                for info in archive.infolist()
+                if not info.is_dir()
+            )
+            for name in entries:
+                encoded = name.encode("utf-8")
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
+                digest.update(b"\0")
+                with archive.open(name, "r") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                digest.update(b"\0")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return ""
+    return "sha256:" + digest.hexdigest()
 
 
 def _receipt_path(run_root: Path, fingerprint: str) -> Path:
@@ -77,8 +113,24 @@ def clean_room_build(
             and cached.get("source_fingerprint") == fingerprint
             and cached.get("status") == "PASS"
         ):
-            jar = Path(str(cached.get("jar_path", "")))
-            if jar.is_file() and not jar.is_symlink():
+            clean_jar = Path(str(cached.get("jar_path", "")))
+            live_raw = build_report.get("jar_path")
+            live_jar = (
+                Path(live_raw).expanduser()
+                if isinstance(live_raw, str) and live_raw
+                else None
+            )
+            if (
+                clean_jar.is_file()
+                and not clean_jar.is_symlink()
+                and live_jar is not None
+                and jar_content_sha256(clean_jar)
+                == cached.get("clean_jar_content_sha256")
+                and jar_content_sha256(live_jar)
+                == cached.get("live_jar_content_sha256")
+                and cached.get("clean_jar_content_sha256")
+                == cached.get("live_jar_content_sha256")
+            ):
                 return cached
 
     clean_root = (
@@ -100,6 +152,8 @@ def clean_room_build(
     jar_validation: dict[str, Any] | None = None
     jar_path = ""
     jar_sha256 = ""
+    live_jar_content_sha256 = ""
+    clean_jar_content_sha256 = ""
     if report.get("status") == "PASS":
         raw = report.get("jar_path")
         if isinstance(raw, str):
@@ -110,13 +164,30 @@ def clean_room_build(
                     approved.base_proposal.spec,
                 ).to_dict()
                 if jar_validation.get("status") == "PASS":
-                    status = "PASS"
-                    jar_path = str(jar)
-                    jar_sha256 = (
-                        orchestrator_module.CompleteProductionOrchestrator._file_hash(
-                            jar
-                        )
+                    live_raw = build_report.get("jar_path")
+                    live_jar = (
+                        Path(live_raw).expanduser()
+                        if isinstance(live_raw, str) and live_raw
+                        else None
                     )
+                    clean_jar_content_sha256 = jar_content_sha256(jar)
+                    live_jar_content_sha256 = (
+                        jar_content_sha256(live_jar)
+                        if live_jar is not None
+                        else ""
+                    )
+                    if (
+                        clean_jar_content_sha256
+                        and clean_jar_content_sha256
+                        == live_jar_content_sha256
+                    ):
+                        status = "PASS"
+                        jar_path = str(jar)
+                        jar_sha256 = (
+                            orchestrator_module.CompleteProductionOrchestrator._file_hash(
+                                jar
+                            )
+                        )
 
     receipt = {
         "schema_version": SCHEMA,
@@ -127,6 +198,8 @@ def clean_room_build(
         "jar_validation": jar_validation,
         "jar_path": jar_path,
         "jar_sha256": jar_sha256,
+        "live_jar_content_sha256": live_jar_content_sha256,
+        "clean_jar_content_sha256": clean_jar_content_sha256,
     }
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(
@@ -230,10 +303,19 @@ def install(
         digest = quality_evidence_module._regular_file_sha256(Path(raw_path))
         if digest is None or digest != clean.get("jar_sha256"):
             return None
+        live_semantic = clean.get("live_jar_content_sha256")
+        clean_semantic = clean.get("clean_jar_content_sha256")
+        if (
+            not isinstance(live_semantic, str)
+            or not live_semantic
+            or live_semantic != clean_semantic
+        ):
+            return None
         facts = {
             "schema_version": SCHEMA,
             "source_fingerprint": clean["source_fingerprint"],
             "jar_sha256": digest,
+            "jar_content_sha256": clean_semantic,
             "build_command_count": len(builds),
             "jar_checks": jar_validation.get("checks_run", 0),
         }
