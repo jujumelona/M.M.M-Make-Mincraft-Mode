@@ -73,6 +73,7 @@ _install_image_runtime_residency()
 # process, and fail GameTest when generated-namespace resources did not load.
 from . import java_lsp as _java_lsp_module
 from . import repair_engine as _repair_engine_module
+from . import validation_execution_contract as _validation_execution_contract_module
 from .validation_execution_contract import install as _install_validation_execution_contract
 
 _install_validation_execution_contract(
@@ -80,6 +81,12 @@ _install_validation_execution_contract(
     _java_lsp_module,
     _repair_engine_module,
 )
+
+# JDT LS returns diagnostics as URI -> list[diagnostic]. Make the fail-fast repair
+# gate consume that exact shape instead of silently iterating URI strings.
+from .validation_diagnostic_contract import install as _install_validation_diagnostic_contract
+
+_install_validation_diagnostic_contract(_validation_execution_contract_module)
 
 # Generated content registrars are connected through a bounded compile-time tree.
 # This avoids runtime classpath enumeration while keeping the root registrar bounded.
