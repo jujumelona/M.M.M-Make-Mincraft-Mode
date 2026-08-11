@@ -8,6 +8,7 @@ from .atomic_quality_binding_contract import install as _install_atomic_quality
 from .atomic_requirement_contract import install as _install_atomic_requirements
 from .clean_room_verification_contract import install as _install_clean_room
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
+from .semantic_reviewer_role_contract import install as _install_reviewer_role
 
 
 def install(
@@ -21,6 +22,7 @@ def install(
     """Install MMM's final deterministic-control / narrow-agent architecture."""
 
     _install_atomic_efficiency(_atomic_module)
+    _install_reviewer_role(_atomic_module)
     _install_atomic_requirements(
         complete_planner_module,
         orchestrator_module,
