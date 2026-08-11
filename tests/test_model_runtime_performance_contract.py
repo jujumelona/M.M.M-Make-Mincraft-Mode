@@ -9,7 +9,10 @@ from minecraft_mod_ai.image_runtime_residency import (
     _full_gpu_threshold_mb,
     _is_cuda_memory_pressure,
 )
-from minecraft_mod_ai.llama_runtime_tuning import _tuned_constructor_kwargs
+from minecraft_mod_ai.llama_runtime_tuning import (
+    _is_memory_pressure as _is_llama_memory_pressure,
+    _tuned_constructor_kwargs,
+)
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
 from minecraft_mod_ai.model_adapters.image_diffusion import ImageDiffusionAdapter
@@ -156,6 +159,12 @@ def test_llama_prefill_tuning_respects_environment(monkeypatch) -> None:
     assert tuned["verbose"] is False
 
 
+def test_llama_prefill_fallback_only_matches_memory_pressure() -> None:
+    assert _is_llama_memory_pressure(RuntimeError("failed to allocate buffer"))
+    assert _is_llama_memory_pressure(RuntimeError("CUDA out of memory"))
+    assert not _is_llama_memory_pressure(RuntimeError("invalid model architecture"))
+
+
 def test_llama_generation_session_keeps_shared_gguf_runtime_resident() -> None:
     adapter = LlamaCppAdapter(
         AdapterConfig(
@@ -170,8 +179,6 @@ def test_llama_generation_session_keeps_shared_gguf_runtime_resident() -> None:
         False,
     )
 
-    # Entering and leaving the bounded router session must not call close(), because
-    # planner/researcher/coder commonly point at the same GGUF and can reuse it.
     called = False
 
     def fail_close() -> None:
