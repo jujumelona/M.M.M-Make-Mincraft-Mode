@@ -61,6 +61,20 @@ from .llama_server_hardware_policy import install as _install_llama_server_hardw
 
 _install_llama_server_hardware_policy(_llama_server_autotune_module)
 
+# Start the selected GGUF download as soon as the model profile is resolved, overlap
+# independent research/discovery I/O, and preserve deterministic result ordering.
+# Local one-slot GPU decoding remains serialized; this contract only overlaps work
+# that can execute independently without competing for that decode slot.
+from . import colab_mtp_server as _colab_mtp_server_module
+from .parallel_runtime_contract import install as _install_parallel_runtime_contract
+
+_install_parallel_runtime_contract(
+    complete_planner_module=_complete_planner_module,
+    model_registry_module=_model_registry_module,
+    llama_server_autotune_module=_llama_server_autotune_module,
+    colab_mtp_server_module=_colab_mtp_server_module,
+)
+
 # On hosts with enough free VRAM, keep FLUX.2 Klein fully resident for the whole
 # asset shard; otherwise retain its documented CPU-offload path. The cached pipeline
 # is parked back on CPU before the local LLM can reacquire the GPU.
