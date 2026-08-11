@@ -43,8 +43,10 @@ def _probe(
 
 def test_server_autotune_contract_is_installed() -> None:
     assert getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
+    assert getattr(LlamaCppAdapter.generate, "_mmm_prefill_tuned", False)
     assert getattr(_server_binary, "_mmm_native_bootstrap", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
+    assert getattr(_base_args, "_mmm_single_decode_slot", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
     assert getattr(_probe_server, "_mmm_correctness_sentinel", False)
     assert getattr(
@@ -126,6 +128,7 @@ def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
     assert args[args.index("--gpu-layers") + 1] == "auto"
+    assert args[args.index("--parallel") + 1] == "1"
     assert args[args.index("--flash-attn") + 1] == "on"
     assert args[args.index("--cache-type-k") + 1] == "q4_0"
     assert args[args.index("--cache-type-v") + 1] == "q4_0"
