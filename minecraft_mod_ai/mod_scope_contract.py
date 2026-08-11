@@ -24,6 +24,7 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
     from . import technology_radar as technology_module
     from .platform_ecosystem_contract import install as install_platform_ecosystem
     from .platform_planning_contract import install as install_platform_planning
+    from .platform_prompt_contract import install as install_platform_prompts
     from .platform_technology_contract import install as install_platform_technology
 
     install_platform_planning(
@@ -35,6 +36,7 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
     )
     install_platform_technology(technology_module)
     install_platform_ecosystem(ecosystem_module, complete_planner_module)
+    install_platform_prompts(complete_planner_module)
 
     original_prompt: Callable[..., str] = complete_planner_module._implementation_prompt
     original_builder: Callable[..., Any] = complete_spec_module.complete_proposal_from_parts
