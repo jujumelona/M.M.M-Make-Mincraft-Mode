@@ -6,15 +6,12 @@ from typing import Any
 
 
 def install(module: Any) -> None:
-    """Install the corrected boss validator on the policy-native validator class.
-
-    Legacy boss generation intentionally names runtime classes ``*ModEntity`` and
-    ``*ModRenderer``. The validator previously searched for the unrelated complete-
-    entity names ``*Entity`` and ``*Renderer``. This replaces only that contract;
-    every remaining source, JSON, PNG, OBJ and translation check is unchanged.
-    """
+    """Install corrected boss and selected-platform validator contracts."""
 
     module.ProjectValidator._validate_boss = _validate_boss
+    from .platform_validation_contract import install as install_platform_validation
+
+    install_platform_validation(module)
 
 
 def _validate_boss(
