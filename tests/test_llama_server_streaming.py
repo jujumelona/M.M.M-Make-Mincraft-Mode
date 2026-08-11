@@ -7,6 +7,15 @@ import httpx
 from minecraft_mod_ai.llama_server_hardware_policy import _strict_server_generate
 
 
+class _Adapter:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(
+            role="planner",
+            model_id="test/model",
+            max_new_tokens=8192,
+        )
+
+
 class _StreamingResponse:
     status_code = 200
     text = ""
@@ -40,13 +49,7 @@ def test_local_mtp_generation_uses_sse_without_fixed_read_timeout(monkeypatch) -
 
     monkeypatch.setattr(httpx, "stream", fake_stream)
 
-    adapter = SimpleNamespace(
-        config=SimpleNamespace(
-            role="planner",
-            model_id="test/model",
-            max_new_tokens=8192,
-        )
-    )
+    adapter = _Adapter()
     request = SimpleNamespace(
         messages=({"role": "user", "content": "return json"},),
         response_format="json",
@@ -77,13 +80,7 @@ def test_local_mtp_stream_requires_done_marker(monkeypatch) -> None:
 
     monkeypatch.setattr(httpx, "stream", lambda *args, **kwargs: _BrokenResponse())
 
-    adapter = SimpleNamespace(
-        config=SimpleNamespace(
-            role="planner",
-            model_id="test/model",
-            max_new_tokens=8192,
-        )
-    )
+    adapter = _Adapter()
     request = SimpleNamespace(
         messages=({"role": "user", "content": "x"},),
         response_format="text",
