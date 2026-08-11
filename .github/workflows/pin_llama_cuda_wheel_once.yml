@@ -1,0 +1,116 @@
+name: Pin llama CUDA wheel once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pin_llama_cuda_wheel_once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pin binary-only CUDA wheel
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/colab_runtime_setup.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def _install_llama_cpp() -> None:
+    """Install pre-built llama-cpp-python CUDA wheel in seconds, avoiding source compilation."""
+    try:
+        import llama_cpp
+        if hasattr(llama_cpp, "llama_supports_gpu") and llama_cpp.llama_supports_gpu():
+            print("llama-cpp-python CUDA wheel: available", flush=True)
+            return
+    except Exception:
+        pass
+
+    print("llama-cpp-python CUDA wheel: installing", flush=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "--force-reinstall",
+            "llama-cpp-python",
+            "--extra-index-url",
+            "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+            "--no-cache-dir",
+        ],
+        check=False,
+    )
+'''
+          new = '''LLAMA_CPP_CUDA_WHEEL_VERSION = "0.3.34"
+LLAMA_CPP_CUDA_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cu124"
+
+
+def _llama_cpp_gpu_available() -> bool:
+    try:
+        import llama_cpp
+        return bool(
+            hasattr(llama_cpp, "llama_supports_gpu")
+            and llama_cpp.llama_supports_gpu()
+        )
+    except Exception:
+        return False
+
+
+def _install_llama_cpp() -> None:
+    """Install and verify the pinned pre-built CUDA wheel without source builds."""
+    if _llama_cpp_gpu_available():
+        print("llama-cpp-python CUDA wheel: available", flush=True)
+        return
+
+    print("llama-cpp-python CUDA wheel: installing", flush=True)
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--only-binary=:all:",
+        f"llama-cpp-python=={LLAMA_CPP_CUDA_WHEEL_VERSION}",
+        "--extra-index-url",
+        LLAMA_CPP_CUDA_WHEEL_INDEX,
+        "--no-cache-dir",
+    ]
+    subprocess.run(cmd, check=True)
+
+    for name in tuple(sys.modules):
+        if name == "llama_cpp" or name.startswith("llama_cpp."):
+            sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+    if not _llama_cpp_gpu_available():
+        raise RuntimeError(
+            "Installed llama-cpp-python wheel does not report CUDA GPU support."
+        )
+    print(
+        "llama-cpp-python CUDA wheel: installed",
+        LLAMA_CPP_CUDA_WHEEL_VERSION,
+        flush=True,
+    )
+'''
+          if old not in text:
+              raise SystemExit('expected _install_llama_cpp block not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Commit change
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/colab_runtime_setup.py
+          git commit -m 'fix(colab): require binary-only CUDA llama wheel'
+          git push origin HEAD:main
