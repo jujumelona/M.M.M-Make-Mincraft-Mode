@@ -553,7 +553,13 @@ def _external_server_is_ready() -> bool:
         import httpx
 
         origin = explicit.removesuffix("/v1").rstrip("/")
-        return httpx.get(f"{origin}/health", timeout=0.5).status_code == 200
+        for endpoint in ("/v1/models", "/healthz", "/health"):
+            try:
+                if httpx.get(f"{origin}{endpoint}", timeout=0.5).status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
     except Exception:
         return False
 

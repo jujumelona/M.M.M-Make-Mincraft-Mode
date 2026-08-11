@@ -261,97 +261,12 @@ print("설치 확인: 완료")
     (
         "code",
         "mtp-server",
-        """# @title 4-1. [선택] 로컬 CUDA llama 서버 실행
-import json
-import os
-import subprocess
-import sys
-import time
-from pathlib import Path
+        """# @title 4-1. [선택] 로컬 CUDA MTP 서버 실행
+from minecraft_mod_ai.colab_mtp_server import start_colab_mtp_server
 
-import httpx
-from minecraft_mod_ai.llama_server_autotune import _resolve_model_path
-
-SERVER_ORIGIN = "http://127.0.0.1:8910"
-SERVER_API = SERVER_ORIGIN + "/v1"
-
-
-def _server_ready():
-    try:
-        return httpx.get(SERVER_API + "/models", timeout=1.0).status_code == 200
-    except Exception:
-        return False
-
-
-if _server_ready():
-    os.environ["LLAMA_SERVER_URL"] = SERVER_API
-    print("llama server: already running", SERVER_API)
-else:
-    old_process = globals().get("MMM_LLAMA_SERVER_PROCESS")
-    if old_process is not None and old_process.poll() is None:
-        old_process.terminate()
-        try:
-            old_process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            old_process.kill()
-            old_process.wait(timeout=5)
-
-    model_path = _resolve_model_path(planner_config)
-    server_config_path = Path("/content/mmm_llama_server.json")
-    server_log_path = Path("/content/mmm_llama_server.log")
-    server_config = {
-        "host": "127.0.0.1",
-        "port": 8910,
-        "models": [
-            {
-                "model": model_path,
-                "model_alias": "local",
-                "n_gpu_layers": -1,
-                "offload_kqv": True,
-                "n_threads": max(1, min(8, os.cpu_count() or 1)),
-                "n_batch": 512,
-                "n_ctx": min(int(planner_config.max_context), 16384),
-            }
-        ],
-    }
-    server_config_path.write_text(
-        json.dumps(server_config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    server_log = server_log_path.open("w", encoding="utf-8")
-    cmd = [
-        sys.executable,
-        "-m",
-        "llama_cpp.server",
-        "--config_file",
-        str(server_config_path),
-    ]
-    print("llama server: starting")
-    MMM_LLAMA_SERVER_PROCESS = subprocess.Popen(
-        cmd,
-        stdout=server_log,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    deadline = time.monotonic() + 300
-    while time.monotonic() < deadline:
-        if MMM_LLAMA_SERVER_PROCESS.poll() is not None:
-            break
-        if _server_ready():
-            os.environ["LLAMA_SERVER_URL"] = SERVER_API
-            print("llama server: ready", SERVER_API)
-            break
-        time.sleep(1)
-    else:
-        MMM_LLAMA_SERVER_PROCESS.terminate()
-
-    if not _server_ready():
-        server_log.flush()
-        tail = server_log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
-        raise RuntimeError(
-            "llama server failed to start.\n" + "\n".join(tail)
-        )
+assert_current_colab_setup()
+LLAMA_SERVER_URL = start_colab_mtp_server(planner_config)
+print("llama MTP server:", LLAMA_SERVER_URL)
 """,
     ),
     (

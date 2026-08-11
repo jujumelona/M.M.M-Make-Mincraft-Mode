@@ -215,31 +215,56 @@ def _require_local_cuda() -> Any:
 
 
 
-def _install_llama_cpp() -> None:
-    """Install pre-built llama-cpp-python CUDA wheel in seconds, avoiding source compilation."""
+LLAMA_CPP_CUDA_WHEEL_VERSION = "0.3.34"
+LLAMA_CPP_CUDA_WHEEL_URL = (
+    "https://github.com/abetlen/llama-cpp-python/releases/download/"
+    "v0.3.34-cu124/llama_cpp_python-0.3.34-py3-none-manylinux_2_35_x86_64.whl"
+)
+
+
+def _llama_cpp_gpu_available() -> bool:
     try:
         import llama_cpp
-        if hasattr(llama_cpp, "llama_supports_gpu") and llama_cpp.llama_supports_gpu():
-            print("llama-cpp-python CUDA wheel: available", flush=True)
-            return
+        return bool(
+            hasattr(llama_cpp, "llama_supports_gpu")
+            and llama_cpp.llama_supports_gpu()
+        )
     except Exception:
-        pass
+        return False
+
+
+def _install_llama_cpp() -> None:
+    """Install and verify the pinned pre-built CUDA wheel without source builds."""
+    if _llama_cpp_gpu_available():
+        print("llama-cpp-python CUDA wheel: available", flush=True)
+        return
 
     print("llama-cpp-python CUDA wheel: installing", flush=True)
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            "--force-reinstall",
-            "llama-cpp-python",
-            "--extra-index-url",
-            "https://abetlen.github.io/llama-cpp-python/whl/cu124",
-            "--no-cache-dir",
-        ],
-        check=False,
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--only-binary=:all:",
+        LLAMA_CPP_CUDA_WHEEL_URL,
+        "--no-cache-dir",
+    ]
+    subprocess.run(cmd, check=True)
+
+    for name in tuple(sys.modules):
+        if name == "llama_cpp" or name.startswith("llama_cpp."):
+            sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+    if not _llama_cpp_gpu_available():
+        raise RuntimeError(
+            "Installed llama-cpp-python wheel does not report CUDA GPU support."
+        )
+    print(
+        "llama-cpp-python CUDA wheel: installed",
+        LLAMA_CPP_CUDA_WHEEL_VERSION,
+        flush=True,
     )
 
 
