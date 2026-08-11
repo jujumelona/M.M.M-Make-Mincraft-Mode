@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from minecraft_mod_ai.llama_server_autotune import (
+    ProbeResult,
+    ServerVariant,
+    _base_args,
+    _candidate_variants,
+    _choose_variant,
+    _variant_args,
+)
+
+
+def _probe(
+    name: str,
+    *,
+    tps: float,
+    output_sha256: str = "same",
+    ok: bool = True,
+    width: int = 0,
+) -> ProbeResult:
+    variant = (
+        ServerVariant("baseline")
+        if name == "baseline"
+        else ServerVariant(name, "draft-mtp", width)
+    )
+    return ProbeResult(
+        variant=variant,
+        ok=ok,
+        output_sha256=output_sha256,
+        predicted_tokens=192 if ok else 0,
+        predicted_tps=tps,
+        prompt_tps=100.0,
+        elapsed_seconds=1.0,
+    )
+
+
+def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_MTP_WIDTHS", raising=False)
+    values = _candidate_variants()
+    assert [value.name for value in values] == ["baseline", "mtp-1", "mtp-2", "mtp-3"]
+    assert values[0].spec_type == "none"
+    assert [value.draft_n_max for value in values[1:]] == [1, 2, 3]
+
+
+def test_autotune_requires_exact_output_match_before_speed(monkeypatch) -> None:
+    decision = _choose_variant(
+        (
+            _probe("baseline", tps=20.0, output_sha256="baseline"),
+            _probe("mtp-1", tps=40.0, output_sha256="different", width=1),
+            _probe("mtp-2", tps=26.0, output_sha256="baseline", width=2),
+        ),
+        minimum_speedup=1.03,
+    )
+    assert decision is not None
+    assert decision.selected.name == "mtp-2"
+    assert decision.selected_tps == 26.0
+    assert decision.speedup == 1.3
+
+
+def test_autotune_keeps_baseline_when_gain_is_below_threshold() -> None:
+    decision = _choose_variant(
+        (
+            _probe("baseline", tps=20.0),
+            _probe("mtp-1", tps=20.4, width=1),
+        ),
+        minimum_speedup=1.03,
+    )
+    assert decision is not None
+    assert decision.selected.name == "baseline"
+
+
+def test_autotune_ignores_failed_fast_candidate() -> None:
+    decision = _choose_variant(
+        (
+            _probe("baseline", tps=20.0),
+            _probe("mtp-1", tps=999.0, ok=False, width=1),
+        ),
+        minimum_speedup=1.01,
+    )
+    assert decision is not None
+    assert decision.selected.name == "baseline"
+
+
+def test_autotune_fails_closed_without_valid_baseline() -> None:
+    decision = _choose_variant(
+        (_probe("baseline", tps=0.0, ok=False),),
+        minimum_speedup=1.03,
+    )
+    assert decision is None
+
+
+def test_server_args_match_existing_quality_neutral_runtime_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_BATCH", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_UBATCH", raising=False)
+    monkeypatch.delenv("MMM_KV_CACHE_QUANT", raising=False)
+    config = SimpleNamespace(max_context=32768)
+    args = _base_args("llama-server", "/tmp/model.gguf", config, 8910)
+    assert args[args.index("--ctx-size") + 1] == "16384"
+    assert args[args.index("--batch-size") + 1] == "2048"
+    assert args[args.index("--ubatch-size") + 1] == "512"
+    assert args[args.index("--gpu-layers") + 1] == "all"
+    assert args[args.index("--flash-attn") + 1] == "on"
+    assert args[args.index("--cache-type-k") + 1] == "q4_0"
+    assert args[args.index("--cache-type-v") + 1] == "q4_0"
+    assert args[args.index("--load-mode") + 1] == "none"
+
+
+def test_mtp_variant_uses_server_startup_flags_not_request_mutation() -> None:
+    args = _variant_args(ServerVariant("mtp-2", "draft-mtp", 2))
+    assert args == [
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "2",
+        "--spec-draft-n-min",
+        "0",
+        "--spec-draft-ngl",
+        "all",
+    ]
