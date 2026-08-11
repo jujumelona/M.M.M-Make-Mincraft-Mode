@@ -4,6 +4,9 @@ from functools import wraps
 from typing import Any, Iterable
 
 
+_LOCAL_AI_SIDECAR = "mmm_local_ai_sidecar"
+
+
 def install(work_graph_module: Any) -> None:
     """Assign generation work to the narrowest safe execution lane.
 
@@ -12,6 +15,28 @@ def install(work_graph_module: Any) -> None:
     commit lane. Asset targets and synthesized OGG files are disjoint by contract, so
     their expensive generation can overlap safely with both LLM and commit work.
     """
+
+    original_stage = work_graph_module._module_stage
+    if not getattr(original_stage, "_mmm_final_stage_contract", False):
+
+        @wraps(original_stage)
+        def final_module_stage(module: Any) -> str:
+            stage = original_stage(module)
+            # Research shards and the code-owned local AI sidecar are deterministic.
+            # Every other integration is model-backed in module_node_action; route it
+            # to the LLM lane up front instead of hiding a long coder call inside the
+            # serialized commit lane.
+            if (
+                getattr(module, "kind", "") == "integration"
+                and not work_graph_module.is_research_shard(module)
+                and getattr(module, "config", {}).get("integration_type")
+                != _LOCAL_AI_SIDECAR
+            ):
+                return "custom"
+            return stage
+
+        final_module_stage._mmm_final_stage_contract = True
+        work_graph_module._module_stage = final_module_stage
 
     original = work_graph_module._node
     if getattr(original, "_mmm_module_mutation_contract", False):
