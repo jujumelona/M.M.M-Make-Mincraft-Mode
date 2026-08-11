@@ -53,6 +53,18 @@ def _module(module_id: str = "entity_runtime") -> dict[str, object]:
     }
 
 
+def _complete_page() -> dict[str, object]:
+    return {
+        "modules": [_module()],
+        "assets": [],
+        "audio": [],
+        "acceptance_tests": [],
+        "completed_deliverables": ["entity_runtime"],
+        "complete": True,
+        "next_cursor": "",
+    }
+
+
 def test_production_page_recovers_only_semantically_empty_collections() -> None:
     router = _Router(
         json.dumps(
@@ -83,6 +95,35 @@ def test_production_page_recovers_only_semantically_empty_collections() -> None:
     assert len(router.calls) == 1
 
 
+def test_production_page_never_infers_semantic_completion_fields() -> None:
+    first = json.dumps(
+        {
+            "modules": [_module()],
+            "assets": [],
+            "audio": [],
+            "acceptance_tests": [],
+        }
+    )
+    router = _Router(first, json.dumps(_complete_page()))
+
+    page = complete_planner._generate_json_page_with_repair(
+        router,
+        system_prompt="Return the production page.",
+        request=_request(),
+        media_paths=(),
+        expected_contracts=(
+            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
+        ),
+        stage="unit production page",
+    )
+
+    assert page["complete"] is True
+    assert page["completed_deliverables"] == ["entity_runtime"]
+    assert len(router.calls) == 2
+    repair_prompt = router.calls[1]["messages"][0]["content"]
+    assert "did not contain all host-required semantic fields" in repair_prompt
+
+
 def test_production_page_repairs_zero_progress_with_exact_host_diagnostic() -> None:
     first = json.dumps(
         {
@@ -95,18 +136,7 @@ def test_production_page_repairs_zero_progress_with_exact_host_diagnostic() -> N
             "next_cursor": "",
         }
     )
-    second = json.dumps(
-        {
-            "modules": [_module()],
-            "assets": [],
-            "audio": [],
-            "acceptance_tests": [],
-            "completed_deliverables": ["entity_runtime"],
-            "complete": True,
-            "next_cursor": "",
-        }
-    )
-    router = _Router(first, second)
+    router = _Router(first, json.dumps(_complete_page()))
 
     page = complete_planner._generate_json_page_with_repair(
         router,
