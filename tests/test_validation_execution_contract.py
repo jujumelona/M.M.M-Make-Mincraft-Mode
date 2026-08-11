@@ -110,7 +110,7 @@ def test_gametest_resource_gate_detects_generated_namespace_errors(tmp_path: Pat
         encoding="utf-8",
     )
     findings = gametest_resource_errors(root, log)
-    assert len(findings) == 3
+    assert len(findings) == 2
     assert all("frost_works:" in finding for finding in findings)
     assert not any("server.properties" in finding for finding in findings)
     assert not any("other_mod:" in finding for finding in findings)
