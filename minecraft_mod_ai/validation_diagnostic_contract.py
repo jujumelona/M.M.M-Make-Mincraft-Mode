@@ -17,7 +17,9 @@ def diagnostic_errors(receipt: dict[str, Any]) -> list[dict[str, Any]]:
         values = [item for item in raw if isinstance(item, dict)]
     else:
         values = []
-    return [item for item in values if int(item.get("severity", 1)) <= 2]
+    # JDT-LS/LSP severity 1 is Error and 2 is Warning. Warnings remain in the
+    # diagnostic receipt but must not trigger an expensive repair/build deferral.
+    return [item for item in values if int(item.get("severity", 1)) == 1]
 
 
 def install(validation_module: Any) -> None:
