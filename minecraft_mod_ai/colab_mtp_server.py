@@ -128,6 +128,13 @@ def _start_timeout() -> int:
     return min(900, max(30, value))
 
 
+def _cuda_backend_files(package_dir: Path) -> list[Path]:
+    values: set[Path] = set()
+    for pattern in ("libggml-cuda.so*", "ggml-cuda.dll", "libggml-cuda*.dylib"):
+        values.update(path.resolve() for path in package_dir.rglob(pattern) if path.is_file())
+    return sorted(values)
+
+
 def _validate_cuda_binding() -> None:
     try:
         import llama_cpp
@@ -140,9 +147,15 @@ def _validate_cuda_binding() -> None:
             "llama-cpp-python version mismatch: "
             f"expected {LLAMA_CPP_PYTHON_VERSION}, found {version}."
         )
-    supports_gpu = getattr(llama_cpp, "llama_supports_gpu", None)
-    if not callable(supports_gpu) or not bool(supports_gpu()):
-        raise RuntimeError("llama-cpp-python CUDA backend is unavailable.")
+
+    package_file = getattr(llama_cpp, "__file__", "") or ""
+    if not package_file:
+        raise RuntimeError("llama-cpp-python package path is unavailable.")
+    backends = _cuda_backend_files(Path(package_file).resolve().parent)
+    if not backends:
+        raise RuntimeError(
+            "llama-cpp-python CUDA backend library is missing from the installed wheel."
+        )
 
 
 def _write_config(config: Any, model_path: str) -> int:
