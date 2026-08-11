@@ -4,9 +4,11 @@ import argparse
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from minecraft_mod_ai.atomic_requirement_contract import compile_ir, validate_ir
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteExecutionOptions,
     CompleteProductionOrchestrator,
@@ -81,6 +83,24 @@ class _ReferenceCoderRouter:
             },
             ensure_ascii=False,
         )
+
+
+def _bind_atomic_reference_ir(proposal: Any) -> Any:
+    ir = compile_ir(proposal)
+    if ir["unresolved_atom_ids"]:
+        raise RuntimeError(
+            "Reference fixture does not deterministically cover its authoritative "
+            f"request atoms: {ir['unresolved_atom_ids']}"
+        )
+    game_design = dict(proposal.game_design)
+    game_design["_atomic_requirement_ir"] = ir
+    bound = replace(
+        proposal,
+        game_design=game_design,
+        approval_hash="",
+    ).with_hash()
+    validate_ir(bound)
+    return bound
 
 
 def build_reference(output: Path) -> dict:
@@ -258,11 +278,13 @@ def build_reference(output: Path) -> dict:
         },
         modules=modules,
         acceptance_tests=(
+            "The explicit village structure is generated in the reference mod",
             "All generated registries load in GameTest",
             "All generated Java compiles on Fabric 1.20.1",
             "The built JAR passes independent validation",
         ),
     )
+    proposal = _bind_atomic_reference_ir(proposal)
 
     source_result = CompleteProductionOrchestrator(
         workspace_root=output / "orchestrator",
