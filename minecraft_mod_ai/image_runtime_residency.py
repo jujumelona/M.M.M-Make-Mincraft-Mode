@@ -21,6 +21,21 @@ def _full_gpu_threshold_mb(config: Any) -> int:
     return max(14_000, int(config.min_free_vram_mb) + 1_000)
 
 
+def _is_cuda_memory_pressure(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "out of memory",
+            "cuda oom",
+            "cudnn_status_alloc_failed",
+            "cublas_status_alloc_failed",
+            "allocation failed",
+            "not enough memory",
+        )
+    )
+
+
 def install() -> None:
     from . import complete_orchestrator_services as services
     from . import model_router as router_module
@@ -93,13 +108,39 @@ def _install_adaptive_image_generation(
                 or free_mb >= _full_gpu_threshold_mb(cfg)
             )
             residency = "full_gpu" if use_full_gpu else "cpu_offload"
-            cache_enabled = runtime._env_bool(
-                "MMM_IMAGE_PIPELINE_CACHE",
-                True,
-            )
-            key = (cfg.model_id, cfg.torch_dtype, residency)
+            cache_enabled = runtime._env_bool("MMM_IMAGE_PIPELINE_CACHE", True)
+
+            def load_pipeline() -> Any:
+                pipeline = DiffusionPipeline.from_pretrained(
+                    cfg.model_id,
+                    torch_dtype=base_module.torch_dtype(cfg.torch_dtype),
+                    trust_remote_code=False,
+                )
+                progress = getattr(pipeline, "set_progress_bar_config", None)
+                if callable(progress):
+                    progress(disable=True)
+                return pipeline
+
+            def reset_cached_pipeline() -> None:
+                runtime._IMAGE_PIPELINE = None
+                runtime._IMAGE_PIPELINE_KEY = None
+                setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
+                base_module._release_cuda()
+
+            def activate_cpu_offload() -> tuple[Any, str, tuple[Any, ...]]:
+                reset_cached_pipeline()
+                pipeline = load_pipeline()
+                pipeline.enable_model_cpu_offload()
+                selected = "cpu_offload"
+                selected_key = (cfg.model_id, cfg.torch_dtype, selected)
+                setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
+                if cache_enabled:
+                    runtime._IMAGE_PIPELINE = pipeline
+                    runtime._IMAGE_PIPELINE_KEY = selected_key
+                return pipeline, selected, selected_key
 
             with runtime._IMAGE_LOCK:
+                key = (cfg.model_id, cfg.torch_dtype, residency)
                 pipeline = (
                     runtime._IMAGE_PIPELINE
                     if cache_enabled and runtime._IMAGE_PIPELINE_KEY == key
@@ -107,47 +148,69 @@ def _install_adaptive_image_generation(
                 )
                 if pipeline is None:
                     if runtime._IMAGE_PIPELINE is not None:
-                        runtime._IMAGE_PIPELINE = None
-                        runtime._IMAGE_PIPELINE_KEY = None
-                        setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
-                        base_module._release_cuda()
-                    pipeline = DiffusionPipeline.from_pretrained(
-                        cfg.model_id,
-                        torch_dtype=base_module.torch_dtype(cfg.torch_dtype),
-                        trust_remote_code=False,
-                    )
+                        reset_cached_pipeline()
+                    pipeline = load_pipeline()
                     if residency == "full_gpu":
-                        pipeline.to("cuda")
-                        setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", True)
+                        try:
+                            pipeline.to("cuda")
+                            setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", True)
+                        except Exception as placement_error:
+                            if not cfg.cpu_offload or not _is_cuda_memory_pressure(
+                                placement_error
+                            ):
+                                raise
+                            # Borderline free-VRAM readings can still lose to
+                            # fragmentation or transient allocations. Recreate the
+                            # exact same pipeline under CPU offload rather than
+                            # failing a valid generation request.
+                            pipeline, residency, key = activate_cpu_offload()
                     else:
                         pipeline.enable_model_cpu_offload()
                         setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False)
-                    progress = getattr(pipeline, "set_progress_bar_config", None)
-                    if callable(progress):
-                        progress(disable=True)
-                    if cache_enabled:
+                    if cache_enabled and runtime._IMAGE_PIPELINE is None:
                         runtime._IMAGE_PIPELINE = pipeline
                         runtime._IMAGE_PIPELINE_KEY = key
                 elif (
                     residency == "full_gpu"
                     and not bool(getattr(runtime, "_IMAGE_PIPELINE_ON_GPU", False))
                 ):
-                    # The previous asset shard parked the cached weights on CPU.
-                    # Moving an already-instantiated pipeline is far cheaper than
-                    # rebuilding it from safetensors and reconstructing modules.
-                    pipeline.to("cuda")
-                    setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", True)
+                    try:
+                        pipeline.to("cuda")
+                        setattr(runtime, "_IMAGE_PIPELINE_ON_GPU", True)
+                    except Exception as placement_error:
+                        if not cfg.cpu_offload or not _is_cuda_memory_pressure(
+                            placement_error
+                        ):
+                            raise
+                        pipeline, residency, key = activate_cpu_offload()
 
-                generator = torch.Generator(device="cpu").manual_seed(seed)
-                with torch.inference_mode():
-                    result = pipeline(
-                        prompt=prompt,
-                        width=width,
-                        height=height,
-                        generator=generator,
-                        num_inference_steps=4,
-                        guidance_scale=1.0,
-                    )
+                def infer(current_pipeline: Any) -> Any:
+                    generator = torch.Generator(device="cpu").manual_seed(seed)
+                    with torch.inference_mode():
+                        return current_pipeline(
+                            prompt=prompt,
+                            width=width,
+                            height=height,
+                            generator=generator,
+                            num_inference_steps=4,
+                            guidance_scale=1.0,
+                        )
+
+                try:
+                    result = infer(pipeline)
+                except Exception as inference_error:
+                    if (
+                        residency != "full_gpu"
+                        or not cfg.cpu_offload
+                        or not _is_cuda_memory_pressure(inference_error)
+                    ):
+                        raise
+                    # Retry once with the same model, prompt, dimensions and seed.
+                    # Recreating the generator from the same seed prevents a failed
+                    # partial inference from advancing the successful random stream.
+                    pipeline, residency, key = activate_cpu_offload()
+                    result = infer(pipeline)
+
                 output = output_path.expanduser().resolve()
                 output.parent.mkdir(parents=True, exist_ok=True)
                 result.images[0].save(output)
