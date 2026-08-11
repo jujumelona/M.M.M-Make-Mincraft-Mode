@@ -149,3 +149,5 @@ print("llama MTP server:", LLAMA_SERVER_URL)
           git add tools/colab_runtime_setup.py tools/build_colab_notebook.py M.M.M_Make_Mincraft_Mode_Colab.ipynb Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb
           git commit -m 'fix(colab): run MTP from pinned prebuilt CUDA binding'
           git push origin HEAD:main
+
+# Triggered after the workflow existed on main.
