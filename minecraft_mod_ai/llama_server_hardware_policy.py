@@ -2,13 +2,175 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import subprocess
+import sys
+import threading
 from functools import wraps
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 
+_BOOTSTRAP_LOCK = threading.RLock()
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _existing_built_server() -> str | None:
+    explicit_source = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
+    candidates: list[Path] = []
+    if explicit_source:
+        candidates.append(Path(explicit_source).expanduser() / "build" / "bin" / "llama-server")
+    # Reuse the legacy optional Colab cell build if it already exists.
+    candidates.append(Path("/content/llama.cpp/build/bin/llama-server"))
+    candidates.append(Path.home() / ".cache" / "mmm" / "llama.cpp" / "build" / "bin" / "llama-server")
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+    return None
+
+
+def _cuda_architecture() -> str | None:
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        major, minor = torch.cuda.get_device_capability(0)
+        if major <= 0 or minor < 0:
+            return None
+        return f"{major}{minor}"
+    except Exception:
+        return None
+
+
+def _source_dir() -> Path:
+    raw = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (Path.home() / ".cache" / "mmm" / "llama.cpp").resolve()
+
+
+def _can_build_native_server() -> bool:
+    if not _env_bool("MMM_LLAMA_SERVER_AUTO_BUILD", True):
+        return False
+    if not sys.platform.startswith("linux"):
+        return False
+    if _cuda_architecture() is None:
+        return False
+    return all(shutil.which(tool) for tool in ("git", "cmake", "nvcc"))
+
+
+def _bootstrap_native_server() -> str | None:
+    """Build the official CUDA llama-server on first use when no binary exists."""
+
+    existing = _existing_built_server()
+    if existing is not None:
+        os.environ["MMM_LLAMA_SERVER_BIN"] = existing
+        return existing
+    if not _can_build_native_server():
+        return None
+
+    with _BOOTSTRAP_LOCK:
+        existing = _existing_built_server()
+        if existing is not None:
+            os.environ["MMM_LLAMA_SERVER_BIN"] = existing
+            return existing
+
+        source = _source_dir()
+        build = source / "build"
+        binary = build / "bin" / "llama-server"
+        source.parent.mkdir(parents=True, exist_ok=True)
+
+        if source.exists() and not (source / ".git").is_dir():
+            # Never delete or overwrite an unrelated user directory.
+            return None
+        if not source.exists():
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "https://github.com/ggml-org/llama.cpp.git",
+                    str(source),
+                ],
+                check=True,
+            )
+
+        architecture = _cuda_architecture()
+        if architecture is None:
+            return None
+        subprocess.run(
+            [
+                "cmake",
+                "-S",
+                str(source),
+                "-B",
+                str(build),
+                "-DGGML_CUDA=ON",
+                "-DGGML_NATIVE=OFF",
+                f"-DCMAKE_CUDA_ARCHITECTURES={architecture}",
+                "-DCMAKE_BUILD_TYPE=Release",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "cmake",
+                "--build",
+                str(build),
+                "--config",
+                "Release",
+                "--target",
+                "llama-server",
+                "-j",
+                str(max(1, os.cpu_count() or 1)),
+            ],
+            check=True,
+        )
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            return None
+        verify = subprocess.run(
+            [str(binary), "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=15,
+        )
+        if verify.returncode != 0:
+            return None
+        resolved = str(binary.resolve())
+        os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
+        return resolved
+
+
 def install(autotune_module: Any) -> None:
     """Keep managed llama-server tuning hardware-adaptive and correctness-gated."""
+
+    original_server_binary = autotune_module._server_binary
+    if not getattr(original_server_binary, "_mmm_native_bootstrap", False):
+
+        @wraps(original_server_binary)
+        def bootstrapped_server_binary() -> str | None:
+            discovered = original_server_binary()
+            if discovered is not None:
+                return discovered
+            try:
+                return _bootstrap_native_server()
+            except Exception:
+                # Native server acceleration is optional. A compiler/network failure
+                # must preserve the already verified llama-cpp-python backend.
+                return None
+
+        bootstrapped_server_binary._mmm_native_bootstrap = True
+        autotune_module._server_binary = bootstrapped_server_binary
 
     original_base = autotune_module._base_args
     if not getattr(original_base, "_mmm_auto_gpu_layers", False):
@@ -67,10 +229,6 @@ def install(autotune_module: Any) -> None:
             if max_tokens <= 1 or not measured.ok:
                 return measured
 
-            # MTP has had prompt-dependent deterministic divergence. The real first
-            # workflow request remains the performance measurement, while this short
-            # code-generation sentinel makes selection depend on a second independent
-            # greedy token stream. Only candidates matching baseline on both survive.
             sentinel_request = SimpleNamespace(
                 messages=(
                     {
@@ -121,10 +279,6 @@ def install(autotune_module: Any) -> None:
         guarded_probe._mmm_correctness_sentinel = True
         autotune_module._probe_server = guarded_probe
 
-    # A managed llama-server is a separate GPU process. The existing image runtime
-    # can evict an in-process llama_cpp.Llama object, but it cannot free this external
-    # process. Release it before a local FLUX shard acquires the GPU; the cached
-    # autotune decision is then reused to restart the winner on the next LLM call.
     from . import complete_orchestrator_services as services
 
     original_assets = services.generate_assets
@@ -156,9 +310,6 @@ def install(autotune_module: Any) -> None:
                 autotune_module._shutdown_managed_server()
                 if managed_url and os.environ.get("LLAMA_SERVER_URL") == managed_url:
                     os.environ.pop("LLAMA_SERVER_URL", None)
-                # Permit ensure_tuned_server() to enter again. Because the successful
-                # decision is already fingerprint-cached, this restarts the selected
-                # variant without rerunning baseline/MTP probes.
                 autotune_module._ATTEMPTED_KEYS.clear()
 
             return original_assets(router, *args, **kwargs)
