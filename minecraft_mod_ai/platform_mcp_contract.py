@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from functools import wraps
-from pathlib import Path
 from typing import Any
 
 from .platform_catalog import adapter_for_lock_values, adapter_for_target
@@ -19,13 +18,32 @@ def _required_adapter(module: Any, minecraft_version: str, loader: str = "fabric
     selected_loader = str(loader or "fabric").strip().lower()
     if not version:
         raise module.SpecValidationError(
-            "This standalone research tool requires minecraft_version. "
-            "When called from a plan, use the selected platform target from the proposal."
+            "This standalone research tool requires a Minecraft target. "
+            "Run/resolve a plan first or configure MMM_MCP_MINECRAFT_VERSION."
         )
     try:
         return adapter_for_target(version, selected_loader)
     except ValueError as exc:
         raise module.SpecValidationError(str(exc)) from exc
+
+
+def _service_adapter(
+    self: Any,
+    module: Any,
+    minecraft_version: str = "",
+    loader: str = "fabric",
+):
+    active = getattr(self, "_mmm_last_platform_adapter", None)
+    # Once this MCP service has produced a plan, every plan-bound research call must
+    # stay on that immutable target. This deliberately overrides historical wrapper
+    # defaults such as search_project_rag(..., minecraft_version="1.20.1").
+    if active is not None:
+        return active
+    configured = os.environ.get("MMM_MCP_MINECRAFT_VERSION", "").strip()
+    configured_loader = os.environ.get("MMM_MCP_LOADER", loader).strip() or loader
+    if configured:
+        return _required_adapter(module, configured, configured_loader)
+    return _required_adapter(module, minecraft_version, loader)
 
 
 def _install_core_tools(module: Any) -> None:
@@ -41,7 +59,7 @@ def _install_core_tools(module: Any) -> None:
         minecraft_version: str = "",
         loader: str = "fabric",
     ) -> dict[str, Any]:
-        adapter = _required_adapter(module, minecraft_version, loader)
+        adapter = _service_adapter(self, module, minecraft_version, loader)
         return self.discovery_client_factory().search(
             provider,
             query,
@@ -58,7 +76,7 @@ def _install_core_tools(module: Any) -> None:
         minecraft_version: str = "",
         loader: str = "fabric",
     ) -> dict[str, Any]:
-        adapter = _required_adapter(module, minecraft_version, loader)
+        adapter = _service_adapter(self, module, minecraft_version, loader)
         return self.discovery_client_factory().inspect_modrinth_project(
             project_id,
             minecraft_version=adapter.minecraft_version,
@@ -74,7 +92,7 @@ def _install_core_tools(module: Any) -> None:
         minecraft_version: str = "",
         loader: str = "fabric",
     ) -> dict[str, Any]:
-        adapter = _required_adapter(module, minecraft_version, loader)
+        adapter = _service_adapter(self, module, minecraft_version, loader)
         return module.create_technology_radar(
             prompt,
             research_brief,
@@ -98,7 +116,7 @@ def _install_core_tools(module: Any) -> None:
         limit: int = 6,
         loader: str = "fabric",
     ) -> dict[str, Any]:
-        adapter = _required_adapter(module, minecraft_version, loader)
+        adapter = _service_adapter(self, module, minecraft_version, loader)
         if type(limit) is not int or limit < 1:
             raise module.SpecValidationError("limit must be a positive integer.")
         sources = module.AuthoritativeEvidenceRetriever().search(
@@ -127,6 +145,7 @@ def _install_core_tools(module: Any) -> None:
     cls.search_project_rag = search_project_rag
 
     original_plan_complete = cls.plan_complete_game
+
     @wraps(original_plan_complete)
     def plan_complete_game(
         self: Any,
@@ -156,6 +175,10 @@ def _install_core_tools(module: Any) -> None:
             media_paths=self._scoped_media_paths(media_paths),
             existing_input_sha256=existing_input_sha256,
         )
+        adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
+        self._mmm_last_platform_adapter = adapter
+        os.environ["MMM_MCP_MINECRAFT_VERSION"] = adapter.minecraft_version
+        os.environ["MMM_MCP_LOADER"] = adapter.loader
         proposal_ref = self._store_complete_proposal(proposal)
         return {
             "schema_version": "mmm/complete-plan-result-v4",
@@ -175,6 +198,41 @@ def _install_core_tools(module: Any) -> None:
 
     plan_complete_game._mmm_platform_bound = True
     cls.plan_complete_game = plan_complete_game
+
+    original_revise = cls.revise_complete_plan
+
+    @wraps(original_revise)
+    def revise_complete_plan(
+        self: Any,
+        original_prompt: str,
+        revision: str,
+        media_paths=(),
+        existing_input_sha256: str = "",
+        minecraft_version: str = "",
+        loader: str = "fabric",
+        existing_minecraft_version: str = "",
+        existing_loader: str = "",
+    ) -> dict[str, Any]:
+        try:
+            merged = module.merge_design_brief(original_prompt, revision)
+        except ValueError as exc:
+            raise module.SpecValidationError("revision must not be empty.") from exc
+        active = getattr(self, "_mmm_last_platform_adapter", None)
+        return self.plan_complete_game(
+            merged,
+            media_paths=media_paths,
+            existing_input_sha256=existing_input_sha256,
+            minecraft_version=(
+                minecraft_version
+                or (active.minecraft_version if active is not None else "")
+            ),
+            loader=(loader or (active.loader if active is not None else "fabric")),
+            existing_minecraft_version=existing_minecraft_version,
+            existing_loader=existing_loader,
+        )
+
+    revise_complete_plan._mmm_platform_bound = True
+    cls.revise_complete_plan = revise_complete_plan
 
 
 def _install_production_tools(module: Any) -> None:
@@ -258,6 +316,7 @@ def _install_production_tools(module: Any) -> None:
     cls.runtime_prepare_instance = runtime_prepare_instance
 
     original_connect = cls.mineflayer_connect
+
     @wraps(original_connect)
     def mineflayer_connect(self: Any, *args: Any, **kwargs: Any):
         adapter = getattr(self, "_mmm_runtime_adapter", None)
