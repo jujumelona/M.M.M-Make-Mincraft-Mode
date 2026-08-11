@@ -132,3 +132,5 @@ print("결과 저장 위치:", OUTPUT_ROOT)
               description: 'Planner status synchronization failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
+
+# Triggered after CI runner reservation.
