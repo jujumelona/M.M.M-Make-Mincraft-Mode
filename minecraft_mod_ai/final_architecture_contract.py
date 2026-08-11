@@ -3,14 +3,20 @@ from __future__ import annotations
 from typing import Any
 
 from . import atomic_requirement_contract as _atomic_module
+from . import production_contract as _production_contract_module
 from .atomic_efficiency_contract import install as _install_atomic_efficiency
+from .atomic_evidence_routing_contract import install as _install_atomic_routes
+from .atomic_execution_policy_contract import install as _install_atomic_execution
+from .atomic_planner_policy_contract import install as _install_atomic_planner_policy
 from .atomic_playtest_evidence_contract import install as _install_atomic_playtest
 from .atomic_quality_binding_contract import install as _install_atomic_quality
 from .atomic_requirement_contract import install as _install_atomic_requirements
 from .build_input_scope_contract import install as _install_build_input_scope
 from .clean_room_verification_contract import install as _install_clean_room
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
+from .required_gate_compatibility_contract import install as _install_gate_compatibility
 from .semantic_reviewer_role_contract import install as _install_reviewer_role
+from .visual_acceptance_scope_contract import install as _install_visual_scope
 
 
 def install(
@@ -25,9 +31,21 @@ def install(
 
     _install_build_input_scope(validation_module)
     _install_atomic_efficiency(_atomic_module)
+    _install_atomic_routes(
+        _atomic_module,
+        _production_contract_module,
+    )
     _install_reviewer_role(_atomic_module)
     _install_atomic_requirements(
         complete_planner_module,
+        orchestrator_module,
+    )
+    _install_atomic_planner_policy(
+        _atomic_module,
+        complete_planner_module,
+    )
+    _install_atomic_execution(
+        _atomic_module,
         orchestrator_module,
     )
     _install_atomic_quality(
@@ -49,3 +67,5 @@ def install(
         quality_evidence_module,
         validation_module,
     )
+    _install_visual_scope(orchestrator_module)
+    _install_gate_compatibility(orchestrator_module)
