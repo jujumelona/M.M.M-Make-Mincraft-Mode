@@ -7,6 +7,7 @@ from typing import Any, Mapping
 def install(
     atomic_module: Any,
     quality_evidence_module: Any,
+    orchestrator_module: Any | None = None,
 ) -> None:
     """Make atomic requirement coverage part of independent correctness evidence."""
 
@@ -105,3 +106,5 @@ def install(
     quality_evidence_module.compile_quality_evidence = (
         compile_with_atomic_ir
     )
+    if orchestrator_module is not None:
+        orchestrator_module.compile_quality_evidence = compile_with_atomic_ir
