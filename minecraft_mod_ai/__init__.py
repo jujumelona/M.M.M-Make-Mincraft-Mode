@@ -75,6 +75,13 @@ _install_parallel_runtime_contract(
     colab_mtp_server_module=_colab_mtp_server_module,
 )
 
+# In the Colab notebook MODEL_PROFILE already exists when minecraft_mod_ai is first
+# imported in cell 3. Resolve that selected profile immediately so the asynchronous
+# GGUF fetch overlaps existing-input preparation and later setup checks.
+from .colab_prefetch_bootstrap import start as _start_colab_prefetch
+
+_start_colab_prefetch(_model_registry_module)
+
 # On hosts with enough free VRAM, keep FLUX.2 Klein fully resident for the whole
 # asset shard; otherwise retain its documented CPU-offload path. The cached pipeline
 # is parked back on CPU before the local LLM can reacquire the GPU.
