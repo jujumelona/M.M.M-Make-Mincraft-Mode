@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 from minecraft_mod_ai import colab_mtp_server
+from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai import llama_server_autotune
 from minecraft_mod_ai import llama_server_hardware_policy
 
@@ -46,6 +49,17 @@ def test_colab_mtp_cell_uses_pinned_launcher_without_source_build() -> None:
             assert token not in source
 
 
+def test_colab_installs_exact_binary_only_cuda_wheel() -> None:
+    text = SETUP_SCRIPT.read_text(encoding="utf-8")
+    assert 'LLAMA_CPP_CUDA_WHEEL_VERSION = "0.3.34"' in text
+    assert (
+        "v0.3.34-cu124/"
+        "llama_cpp_python-0.3.34-py3-none-manylinux_2_35_x86_64.whl"
+    ) in text
+    assert '"--only-binary=:all:"' in text
+    assert "llama_supports_gpu" in text
+
+
 def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
     text = MTP_LAUNCHER.read_text(encoding="utf-8")
     assert colab_mtp_server.LLAMA_CPP_PYTHON_VERSION == "0.3.34"
@@ -59,6 +73,75 @@ def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
     assert "_git_blob_sha1(data)" in text
     for token in ("git clone", "cmake", "nvcc", "make -j"):
         assert token not in text
+
+
+def test_colab_mtp_stop_releases_process_and_preserves_restart_intent(monkeypatch) -> None:
+    class Process:
+        def __init__(self) -> None:
+            self.alive = True
+            self.terminated = False
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.alive = False
+
+        def wait(self, timeout=None):
+            return 0
+
+    process = Process()
+    monkeypatch.setattr(colab_mtp_server, "_PROCESS", process)
+    monkeypatch.setattr(colab_mtp_server, "_LOG_HANDLE", None)
+    monkeypatch.setenv(colab_mtp_server.ENABLED_ENV, "1")
+    monkeypatch.setenv("LLAMA_SERVER_URL", colab_mtp_server.SERVER_API_URL)
+
+    colab_mtp_server.stop_colab_mtp_server(keep_enabled=True)
+
+    assert process.terminated is True
+    assert colab_mtp_server._PROCESS is None
+    assert os.environ.get(colab_mtp_server.ENABLED_ENV) == "1"
+    assert "LLAMA_SERVER_URL" not in os.environ
+
+
+def test_autotune_restarts_enabled_colab_mtp_server(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(colab_mtp_server, "colab_mtp_server_enabled", lambda: True)
+
+    def fake_start(config):
+        calls.append(config)
+        return "http://127.0.0.1:8910/v1"
+
+    monkeypatch.setattr(colab_mtp_server, "start_colab_mtp_server", fake_start)
+    config = SimpleNamespace()
+    result = llama_server_autotune.ensure_tuned_server(config, SimpleNamespace())
+
+    assert result == "http://127.0.0.1:8910/v1"
+    assert calls == [config]
+    assert getattr(
+        llama_server_autotune.ensure_tuned_server,
+        "_mmm_colab_mtp_restart",
+        False,
+    )
+
+
+def test_image_generation_wrapper_releases_colab_mtp_before_exclusive_gpu() -> None:
+    assert getattr(
+        complete_orchestrator_services.generate_assets,
+        "_mmm_releases_colab_mtp",
+        False,
+    )
+    source = inspect.getsource(complete_orchestrator_services.generate_assets)
+    assert "stop_colab_mtp_server" in source
+    assert "keep_enabled=True" in source
+
+
+def test_external_server_probe_accepts_new_server_endpoints() -> None:
+    source = inspect.getsource(llama_server_autotune._external_server_is_ready)
+    assert '"/v1/models"' in source
+    assert '"/healthz"' in source
+    assert '"/health"' in source
 
 
 def test_colab_status_text_has_no_absolute_integrity_or_zero_risk_claims() -> None:
