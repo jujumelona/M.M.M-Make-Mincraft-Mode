@@ -28,6 +28,7 @@ SERVER_LOG_PATH = Path("/content/mmm_llama_mtp_server.log")
 SERVER_ORIGIN = "http://127.0.0.1:8910"
 SERVER_API_URL = f"{SERVER_ORIGIN}/v1"
 ENABLED_ENV = "MMM_COLAB_MTP_SERVER_ENABLED"
+START_TIMEOUT_ENV = "MMM_COLAB_MTP_SERVER_START_TIMEOUT"
 
 _PROCESS: subprocess.Popen[str] | None = None
 _LOG_HANDLE: Any = None
@@ -53,7 +54,7 @@ def _server_source() -> Path:
     actual = _git_blob_sha1(data)
     if actual != SERVER_SOURCE_GIT_BLOB_SHA1:
         raise RuntimeError(
-            "Pinned llama-cpp-python MTP server source hash mismatch: "
+            "Pinned MTP server source hash mismatch: "
             f"expected {SERVER_SOURCE_GIT_BLOB_SHA1}, got {actual}."
         )
     SERVER_SCRIPT_PATH.write_bytes(data)
@@ -63,7 +64,16 @@ def _server_source() -> Path:
 def _ready() -> bool:
     try:
         response = httpx.get(f"{SERVER_API_URL}/models", timeout=1.0)
-        return response.status_code == 200
+        if response.status_code != 200:
+            return False
+        payload = response.json()
+        models = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            return False
+        return any(
+            isinstance(model, dict) and str(model.get("id", "")) == "local"
+            for model in models
+        )
     except Exception:
         return False
 
@@ -90,7 +100,7 @@ def _close_log() -> None:
     _LOG_HANDLE = None
 
 
-def _log_tail(lines: int = 60) -> str:
+def _log_tail(lines: int = 80) -> str:
     try:
         values = SERVER_LOG_PATH.read_text(
             encoding="utf-8", errors="replace"
@@ -107,6 +117,32 @@ def _mtp_width() -> int:
     except ValueError:
         value = 3
     return min(8, max(1, value))
+
+
+def _start_timeout() -> int:
+    raw = os.environ.get(START_TIMEOUT_ENV, "300").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 300
+    return min(900, max(30, value))
+
+
+def _validate_cuda_binding() -> None:
+    try:
+        import llama_cpp
+    except Exception as exc:
+        raise RuntimeError("llama-cpp-python is not installed.") from exc
+
+    version = str(getattr(llama_cpp, "__version__", ""))
+    if version and version != LLAMA_CPP_PYTHON_VERSION:
+        raise RuntimeError(
+            "llama-cpp-python version mismatch: "
+            f"expected {LLAMA_CPP_PYTHON_VERSION}, found {version}."
+        )
+    supports_gpu = getattr(llama_cpp, "llama_supports_gpu", None)
+    if not callable(supports_gpu) or not bool(supports_gpu()):
+        raise RuntimeError("llama-cpp-python CUDA backend is unavailable.")
 
 
 def _write_config(config: Any, model_path: str) -> int:
@@ -169,34 +205,44 @@ def stop_colab_mtp_server(*, keep_enabled: bool = True) -> None:
 
 
 def start_colab_mtp_server(config: Any) -> str:
-    """Start the pinned low-level MTP server using the installed CUDA wheel.
-
-    This path downloads only the pinned Python server script. It never clones or
-    compiles llama.cpp source. Failure is surfaced with the server log tail.
-    """
+    """Start the pinned CUDA MTP server and return its OpenAI-compatible URL."""
 
     global _PROCESS, _LOG_HANDLE
 
     os.environ[ENABLED_ENV] = "1"
-    if _ready():
-        os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
-        print("llama MTP server: ready", SERVER_API_URL, flush=True)
-        return SERVER_API_URL
 
-    stop_colab_mtp_server(keep_enabled=True)
+    if _PROCESS is not None and _PROCESS.poll() is None:
+        if _ready():
+            os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
+            print("MTP server: ready", SERVER_API_URL, flush=True)
+            return SERVER_API_URL
+        stop_colab_mtp_server(keep_enabled=True)
+    elif _ready():
+        raise RuntimeError(
+            "Port 8910 is already serving a different unmanaged process. "
+            "Stop that process before starting the M.M.M MTP server."
+        )
 
-    server_script = _server_source()
+    print("MTP server: checking CUDA binding", flush=True)
+    _validate_cuda_binding()
+
+    print("MTP server: resolving model", flush=True)
     model_path = _resolve_model_path(config)
+    print("MTP server: model ready", Path(model_path).name, flush=True)
+
+    print("MTP server: preparing launcher", flush=True)
+    server_script = _server_source()
     width = _write_config(config, model_path)
 
     _LOG_HANDLE = SERVER_LOG_PATH.open("w", encoding="utf-8")
     command = [
         sys.executable,
+        "-u",
         str(server_script),
         "-C",
         str(SERVER_CONFIG_PATH),
     ]
-    print("llama MTP server: starting", f"draft_width={width}", flush=True)
+    print("MTP server: starting", f"draft_width={width}", flush=True)
     _PROCESS = subprocess.Popen(
         command,
         stdout=_LOG_HANDLE,
@@ -204,18 +250,40 @@ def start_colab_mtp_server(config: Any) -> str:
         text=True,
     )
 
-    deadline = time.monotonic() + 300
-    next_status = time.monotonic() + 10
+    started = time.monotonic()
+    deadline = started + _start_timeout()
+    next_status = started + 10
     while time.monotonic() < deadline:
-        if _PROCESS.poll() is not None:
-            break
+        returncode = _PROCESS.poll()
+        if returncode is not None:
+            try:
+                _LOG_HANDLE.flush()
+            except Exception:
+                pass
+            tail = _log_tail()
+            _PROCESS = None
+            _close_log()
+            raise RuntimeError(
+                f"MTP server exited during startup with code {returncode}."
+                + ("\n" + tail if tail else "")
+            )
         if _ready():
             os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
-            print("llama MTP server: ready", SERVER_API_URL, flush=True)
+            elapsed = time.monotonic() - started
+            print(
+                "MTP server: ready",
+                SERVER_API_URL,
+                f"startup={elapsed:.1f}s",
+                flush=True,
+            )
             return SERVER_API_URL
         now = time.monotonic()
         if now >= next_status:
-            print("llama MTP server: model loading", flush=True)
+            print(
+                "MTP server: starting",
+                f"elapsed={now - started:.0f}s",
+                flush=True,
+            )
             next_status = now + 10
         time.sleep(0.5)
 
@@ -229,7 +297,7 @@ def start_colab_mtp_server(config: Any) -> str:
     tail = _log_tail()
     _close_log()
     raise RuntimeError(
-        "llama MTP server failed to become ready."
+        f"MTP server startup timed out after {_start_timeout()} seconds."
         + ("\n" + tail if tail else "")
     )
 
