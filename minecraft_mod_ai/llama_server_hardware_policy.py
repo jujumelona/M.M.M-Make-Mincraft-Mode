@@ -3,23 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import subprocess
-import sys
-import threading
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-
-_BOOTSTRAP_LOCK = threading.RLock()
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _existing_built_server() -> str | None:
@@ -41,20 +28,6 @@ def _existing_built_server() -> str | None:
     return None
 
 
-def _cuda_architecture() -> str | None:
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return None
-        major, minor = torch.cuda.get_device_capability(0)
-        if major <= 0 or minor < 0:
-            return None
-        return f"{major}{minor}"
-    except Exception:
-        return None
-
-
 def _source_dir() -> Path:
     raw = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
     if raw:
@@ -62,102 +35,14 @@ def _source_dir() -> Path:
     return (Path.home() / ".cache" / "mmm" / "llama.cpp").resolve()
 
 
-def _can_build_native_server() -> bool:
-    # Native source compilation is never part of the normal Colab/runtime path.
-    # It is available only when an operator explicitly opts in.
-    if not _env_bool("MMM_LLAMA_SERVER_AUTO_BUILD", False):
-        return False
-    if not sys.platform.startswith("linux"):
-        return False
-    if _cuda_architecture() is None:
-        return False
-    return all(shutil.which(tool) for tool in ("git", "cmake", "nvcc"))
-
-
 def _bootstrap_native_server() -> str | None:
-    """Use an existing llama-server or explicitly build one when opted in."""
+    """Return an already installed llama-server binary; never compile one."""
 
     existing = _existing_built_server()
-    if existing is not None:
-        os.environ["MMM_LLAMA_SERVER_BIN"] = existing
-        return existing
-    if not _can_build_native_server():
+    if existing is None:
         return None
-
-    with _BOOTSTRAP_LOCK:
-        existing = _existing_built_server()
-        if existing is not None:
-            os.environ["MMM_LLAMA_SERVER_BIN"] = existing
-            return existing
-
-        source = _source_dir()
-        build = source / "build"
-        binary = build / "bin" / "llama-server"
-        source.parent.mkdir(parents=True, exist_ok=True)
-
-        if source.exists() and not (source / ".git").is_dir():
-            return None
-        if not source.exists():
-            subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "https://github.com/ggml-org/llama.cpp.git",
-                    str(source),
-                ],
-                check=True,
-                timeout=120,
-            )
-
-        architecture = _cuda_architecture()
-        if architecture is None:
-            return None
-        subprocess.run(
-            [
-                "cmake",
-                "-S",
-                str(source),
-                "-B",
-                str(build),
-                "-DGGML_CUDA=ON",
-                "-DGGML_NATIVE=OFF",
-                f"-DCMAKE_CUDA_ARCHITECTURES={architecture}",
-                "-DCMAKE_BUILD_TYPE=Release",
-            ],
-            check=True,
-            timeout=120,
-        )
-        subprocess.run(
-            [
-                "cmake",
-                "--build",
-                str(build),
-                "--config",
-                "Release",
-                "--target",
-                "llama-server",
-                "-j",
-                str(max(1, os.cpu_count() or 1)),
-            ],
-            check=True,
-            timeout=600,
-        )
-        if not binary.is_file() or not os.access(binary, os.X_OK):
-            return None
-        verify = subprocess.run(
-            [str(binary), "--version"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=15,
-        )
-        if verify.returncode != 0:
-            return None
-        resolved = str(binary.resolve())
-        os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
-        return resolved
+    os.environ["MMM_LLAMA_SERVER_BIN"] = existing
+    return existing
 
 
 def install(autotune_module: Any) -> None:
@@ -179,12 +64,10 @@ def install(autotune_module: Any) -> None:
             discovered = original_server_binary()
             if discovered is not None:
                 return discovered
-            try:
-                return _bootstrap_native_server()
-            except Exception:
-                return None
+            return _bootstrap_native_server()
 
         bootstrapped_server_binary._mmm_native_bootstrap = True
+        bootstrapped_server_binary._mmm_no_source_build = True
         autotune_module._server_binary = bootstrapped_server_binary
 
     original_base = autotune_module._base_args
