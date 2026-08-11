@@ -19,10 +19,10 @@ CELL_SPECS = [
 
 `모두 실행`을 기준으로 실행합니다.
 
-- **풀모드**: 새 플랜 생성 → 사용자와 반복 수정/보완 → 확정 → 제작
-- **플랜모드**: 새 플랜 생성 → 사용자와 반복 수정/보완 → 확정 → 플랜 저장
-- **이미 만들어진 모드 수정보안모드**: 기존 source/release ZIP 업로드 → 수정 플랜 대화 → 확정 → 기존 모드 수정 제작
-- **이미 있는 플랜을 만드는모드**: 저장된 플랜 전체 확인 → 필요하면 추가 수정 → 사용자 승인 → 제작
+- **Full**: 새 플랜 생성 → 사용자와 반복 수정/보완 → 확정 → 제작
+- **Plan**: 새 플랜 생성 → 사용자와 반복 수정/보완 → 확정 → 플랜 저장
+- **Revise**: 기존 source/release ZIP 업로드 → 수정 플랜 대화 → 확정 → 기존 모드 수정 제작
+- **Execute**: 저장된 플랜 전체 확인 → 필요하면 추가 수정 → 사용자 승인 → 제작
 
 플랜을 새로 만들거나 불러온 뒤에는 반드시 사용자 입력을 기다립니다. 수정 내용을 입력할 때마다 새 플랜 전체를 다시 보여주며, 사용자가 직접 확정하거나 제작을 승인하기 전에는 다음 단계로 넘어가지 않습니다.
 """,
@@ -31,7 +31,7 @@ CELL_SPECS = [
         "code",
         "configuration",
         """# @title 1. 실행 모드 및 설정
-RUN_MODE = "풀모드" #@param ["플랜모드", "풀모드", "이미 만들어진 모드 수정보안모드", "이미 있는 플랜을 만드는모드"]
+RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute"]
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
 PLAN_FILE = "" #@param {type:"string"}
 MODEL_PROFILE = "Qwen3.5-9B_6GB" #@param ["Qwen3.5-9B_6GB", "Gemma4-12B_7GB", "Gemma4-26B_14GB", "Qwen3.6-35B_23GB", "Qwen3.6-27B_18GB", "Qwen3.6-27B_14GB", "mini_mod", "fast_test"]
@@ -42,14 +42,14 @@ SAVE_TO_GOOGLE_DRIVE = True #@param {type:"boolean"}
 REMOTE_BASE_URL, REMOTE_TEXT_MODEL, REMOTE_IMAGE_MODEL, REMOTE_SPEECH_MODEL, SOURCE_ONLY, RUN_BLOCKBENCH, RUN_RUNTIME, RUN_CLIENT, RUN_MINEFLAYER, RUN_VISUAL_REVIEW, ACCEPT_EULA, SERVER_LAUNCHER, RUN_NAME, SCREENSHOTS = "", "", "", "", True, False, False, False, False, False, False, "", "complete-colab-run", []
 
 VALID_RUN_MODES = {
-    "플랜모드",
-    "풀모드",
-    "이미 만들어진 모드 수정보안모드",
-    "이미 있는 플랜을 만드는모드",
+    "Full",
+    "Plan",
+    "Revise",
+    "Execute",
 }
 if RUN_MODE not in VALID_RUN_MODES:
     raise ValueError(f"지원하지 않는 실행 모드: {RUN_MODE}")
-if RUN_MODE != "이미 있는 플랜을 만드는모드" and not PROMPT.strip():
+if RUN_MODE != "Execute" and not PROMPT.strip():
     raise ValueError("선택한 실행 모드에서는 PROMPT를 입력해야 합니다.")
 if RUN_RUNTIME and not ACCEPT_EULA:
     raise ValueError("Minecraft 실행 검증에는 EULA 동의가 필요합니다.")
@@ -304,7 +304,7 @@ if not PLAN_APPROVED:
 
 BUILD_RESULT = None
 if not should_build(RUN_MODE):
-    print("플랜모드: 제작 생략")
+    print("Plan: 제작 생략")
 else:
     print("모드 생성: 시작", flush=True)
     options = CompleteExecutionOptions(
@@ -340,7 +340,7 @@ else:
         "code",
         "download",
         """# @title 7. 결과 다운로드
-if RUN_MODE == "플랜모드":
+if RUN_MODE == "Plan":
     plan_path = Path(FINAL_PLAN_PATH)
     if not plan_path.is_file():
         raise FileNotFoundError(plan_path)
@@ -370,13 +370,13 @@ else:
         "boundaries",
         """## 실행 모드
 
-기본값은 **풀모드**입니다.
+기본값은 **Full**입니다.
 
-플랜모드와 풀모드는 5번 셀에서 플랜을 만든 뒤 사용자 입력을 기다립니다. 수정/보완 내용을 입력하면 다시 기획하고 전체 플랜을 다시 표시하며, `확정`을 입력해야 다음 단계로 진행합니다.
+**Full**과 **Plan**은 5번 셀에서 플랜을 만든 뒤 사용자 입력을 기다립니다. 수정/보완 내용을 입력하면 다시 기획하고 전체 플랜을 다시 표시하며, `확정`을 입력해야 다음 단계로 진행합니다.
 
-이미 만들어진 모드 수정보안모드는 3번 셀에서 기존 source/release ZIP 업로드를 요구합니다. 이후 수정 요구를 기준으로 플랜을 만들고 같은 대화 확정 과정을 거친 뒤 기존 프로젝트를 수정합니다.
+**Revise**는 3번 셀에서 기존 source/release ZIP 업로드를 요구합니다. 이후 수정 요구를 기준으로 플랜을 만들고 같은 대화 확정 과정을 거친 뒤 기존 프로젝트를 수정합니다.
 
-이미 있는 플랜을 만드는모드는 `PLAN_FILE` 경로의 플랜을 사용합니다. 경로가 비어 있고 기본 `proposal.json`도 없으면 JSON 업로드를 요청합니다. 전체 플랜을 보여준 뒤 `제작`을 입력해야 제작하며, 그 전에 수정 내용을 입력하면 플랜을 다시 보완할 수 있습니다.
+**Execute**는 `PLAN_FILE` 경로의 플랜을 사용합니다. 경로가 비어 있고 기본 `proposal.json`도 없으면 JSON 업로드를 요청합니다. 전체 플랜을 보여준 뒤 `제작`을 입력해야 제작하며, 그 전에 수정 내용을 입력하면 플랜을 다시 보완할 수 있습니다.
 """,
     ),
 ]
