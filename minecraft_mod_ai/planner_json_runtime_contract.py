@@ -12,6 +12,18 @@ _JSON_SCHEMA: ContextVar[dict[str, Any] | None] = ContextVar(
     default=None,
 )
 
+_PRODUCTION_FIELDS = frozenset(
+    {
+        "modules",
+        "assets",
+        "audio",
+        "acceptance_tests",
+        "completed_deliverables",
+        "complete",
+        "next_cursor",
+    }
+)
+
 
 def _schema_for_value(value: Any) -> dict[str, Any]:
     if isinstance(value, bool):
@@ -40,6 +52,45 @@ def _schema_for_value(value: Any) -> dict[str, Any]:
     if value is None:
         return {"type": "null"}
     return {}
+
+
+def _schema_for_contract(view: dict[str, Any]) -> dict[str, Any]:
+    if frozenset(view) != _PRODUCTION_FIELDS:
+        return _schema_for_value(view)
+    string_array = {"type": "array", "items": {"type": "string"}}
+    module_item = {
+        "type": "object",
+        "properties": {
+            "module_id": {"type": "string"},
+            "kind": {"type": "string"},
+            "config": {"type": "object", "additionalProperties": True},
+            "depends_on": string_array,
+            "required_gates": string_array,
+            "implements_deliverables": string_array,
+        },
+        "required": [
+            "module_id",
+            "kind",
+            "config",
+            "depends_on",
+            "required_gates",
+        ],
+        "additionalProperties": True,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "modules": {"type": "array", "items": module_item},
+            "assets": {"type": "array", "items": {"type": "object"}},
+            "audio": {"type": "array", "items": {"type": "object"}},
+            "acceptance_tests": string_array,
+            "completed_deliverables": string_array,
+            "complete": {"type": "boolean"},
+            "next_cursor": {"type": "string"},
+        },
+        "required": list(view),
+        "additionalProperties": False,
+    }
 
 
 def _contract_view(
@@ -71,6 +122,15 @@ def _candidate_key_summary(module: Any, text: str) -> str:
     return "top-level fields=" + " | ".join(summaries)
 
 
+def _alias_only(module: Any, raw: dict[str, Any]) -> dict[str, Any]:
+    candidate = dict(raw)
+    for key, value in list(candidate.items()):
+        alias = module._FIELD_ALIASES.get(key)
+        if alias and alias not in candidate:
+            candidate[alias] = value
+    return candidate
+
+
 def _extract_with_safe_empty_defaults(
     module: Any,
     text: str,
@@ -91,14 +151,15 @@ def _extract_with_safe_empty_defaults(
     if expected != production_expected:
         raise failure
 
-    # Empty asset/audio/test collections carry no semantics. A model that omitted
-    # one of those empty lists still has a recoverable production page. Completion
-    # fields are deliberately NOT invented here because they drive host progress.
+    # Only semantically empty collections may be supplied by the host. Completion,
+    # cursor and completed-deliverable fields must exist in the model response; they
+    # are never inferred here.
     for raw in reversed(module._json_objects(text)):
         if not isinstance(raw, dict):
             continue
-        candidate = module._normalize_json_candidate(raw)
-        if "modules" not in candidate:
+        candidate = _alias_only(module, raw)
+        required_semantic = {"modules", "completed_deliverables", "complete", "next_cursor"}
+        if not required_semantic <= frozenset(candidate):
             continue
         candidate.setdefault("assets", [])
         candidate.setdefault("audio", [])
@@ -256,7 +317,7 @@ def _install_planner_page_contract(complete_planner_module: Any) -> None:
             else json.dumps(request, ensure_ascii=False)
         )
         view = _contract_view(request, expected_contracts)
-        schema = _schema_for_value(view) if view is not None else None
+        schema = _schema_for_contract(view) if view is not None else None
         required_fields = (
             list(view)
             if view is not None
