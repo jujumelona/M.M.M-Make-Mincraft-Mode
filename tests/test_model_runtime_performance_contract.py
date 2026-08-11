@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from minecraft_mod_ai import complete_orchestrator_services
+from minecraft_mod_ai.image_runtime_residency import _full_gpu_threshold_mb
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
 from minecraft_mod_ai.model_adapters.image_diffusion import ImageDiffusionAdapter
@@ -12,6 +15,11 @@ def test_expensive_model_runtime_reuse_contract_is_installed() -> None:
     assert getattr(
         ImageDiffusionAdapter.generate_image,
         "_mmm_cached_image_pipeline",
+        False,
+    )
+    assert getattr(
+        ImageDiffusionAdapter.generate_image,
+        "_mmm_adaptive_image_residency",
         False,
     )
     assert getattr(
@@ -29,6 +37,16 @@ def test_expensive_model_runtime_reuse_contract_is_installed() -> None:
         "_mmm_image_gpu_session",
         False,
     )
+    assert getattr(
+        complete_orchestrator_services.generate_assets,
+        "_mmm_adaptive_image_gpu_session",
+        False,
+    )
+
+
+def test_image_full_gpu_threshold_keeps_headroom_above_preflight() -> None:
+    assert _full_gpu_threshold_mb(SimpleNamespace(min_free_vram_mb=12_500)) == 14_000
+    assert _full_gpu_threshold_mb(SimpleNamespace(min_free_vram_mb=16_000)) == 17_000
 
 
 def test_llama_generation_session_keeps_shared_gguf_runtime_resident() -> None:
