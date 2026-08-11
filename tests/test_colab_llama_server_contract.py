@@ -132,7 +132,7 @@ def test_image_generation_wrapper_releases_colab_mtp_before_exclusive_gpu() -> N
         "_mmm_releases_colab_mtp",
         False,
     )
-    source = inspect.getsource(complete_orchestrator_services.generate_assets)
+    source = inspect.getsource(llama_server_hardware_policy.install)
     assert "stop_colab_mtp_server" in source
     assert "keep_enabled=True" in source
 
