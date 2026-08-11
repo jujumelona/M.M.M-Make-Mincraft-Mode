@@ -64,7 +64,9 @@ def test_colab_installs_exact_binary_only_cuda_wheel() -> None:
         "llama_cpp_python-0.3.34-py3-none-manylinux_2_35_x86_64.whl"
     ) in text
     assert '"--only-binary=:all:"' in text
-    assert "llama_supports_gpu" in text
+    assert "_LLAMA_CPP_CUDA_PROBE" in text
+    assert "libggml-cuda.so" in text
+    assert "llama_supports_gpu" not in text
 
 
 def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
@@ -78,6 +80,8 @@ def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
     assert '"draft_model": "draft-mtp"' in text
     assert '"draft_model_num_pred_tokens": width' in text
     assert "_git_blob_sha1(data)" in text
+    assert "libggml-cuda.so" in text
+    assert "llama_supports_gpu" not in text
     for token in ("git clone", "cmake", "nvcc", "make -j"):
         assert token not in text
 
@@ -90,7 +94,7 @@ def test_colab_mtp_startup_is_fail_fast_and_bounded() -> None:
     assert "exited during startup" in text
     assert "startup timed out" in text
     assert "Port 8910 is already serving a different unmanaged process" in text
-    assert "llama-cpp-python CUDA backend is unavailable" in text
+    assert "CUDA backend library is missing" in text
 
 
 def test_colab_mtp_status_lines_are_state_only() -> None:
