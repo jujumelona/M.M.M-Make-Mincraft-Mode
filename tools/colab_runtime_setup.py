@@ -182,7 +182,7 @@ def _validate_checkout(
         not previous_commit or previous_commit.strip() != used_commit
     ):
         print(
-            f"🔄 Automatically reloading engine modules (commit {previous_commit[:7] if previous_commit else 'old'} -> {used_commit[:7]})...",
+            f"engine reload: {previous_commit[:7] if previous_commit else 'old'} -> {used_commit[:7]}",
             flush=True,
         )
         to_purge = [
@@ -220,12 +220,12 @@ def _install_llama_cpp() -> None:
     try:
         import llama_cpp
         if hasattr(llama_cpp, "llama_supports_gpu") and llama_cpp.llama_supports_gpu():
-            print("✅ Pre-built llama-cpp-python CUDA wheel with GPU support verified.", flush=True)
+            print("llama-cpp-python CUDA wheel: available", flush=True)
             return
     except Exception:
         pass
 
-    print("⚡ Installing pre-built llama-cpp-python CUDA wheel...", flush=True)
+    print("llama-cpp-python CUDA wheel: installing", flush=True)
     subprocess.run(
         [
             sys.executable,
@@ -251,7 +251,7 @@ def _install_project(*, local_profile: bool) -> None:
         if local_profile
         else REMOTE_PROJECT_INSTALL_TARGET
     )
-    print(f"📦 Installing M.M.M project dependencies ({target})...", flush=True)
+    print("project dependencies: installing", target, flush=True)
     cmd = [
         sys.executable,
         "-m",
@@ -275,7 +275,7 @@ def _install_project(*, local_profile: bool) -> None:
     retcode = process.wait()
     if retcode != 0:
         raise subprocess.CalledProcessError(retcode, cmd)
-    print("✅ M.M.M project package installed successfully!", flush=True)
+    print("project dependencies: installed", flush=True)
 
 
 def _verify_qwen_fastpath(*, torch: Any, transformers_was_loaded: bool) -> None:
@@ -288,11 +288,11 @@ def _verify_qwen_fastpath(*, torch: Any, transformers_was_loaded: bool) -> None:
         )
         from transformers.models.qwen3_5 import modeling_qwen3_5
         if not getattr(modeling_qwen3_5, "is_fast_path_available", False):
-            print("ℹ️ Qwen3.5 fast path kernels not active; standard PyTorch execution path enabled.", flush=True)
+            print("Qwen3.5 fast path: unavailable; using standard PyTorch", flush=True)
             return
-        print("✅ Qwen3.5 CUDA fast-path kernels verified.", flush=True)
+        print("Qwen3.5 fast path: available", flush=True)
     except Exception:
-        print("ℹ️ Standard PyTorch execution path silently falling back.", flush=True)
+        print("Qwen3.5 fast path: unavailable; using standard PyTorch", flush=True)
         return
 
     try:
@@ -536,7 +536,7 @@ def setup_colab_runtime(
             raise ValueError("remote_quality requires a text model name.")
     checkout = Path(repo_dir).resolve()
     commit = used_commit.strip()
-    print("🔍 Validating checkout integrity...", flush=True)
+    print("checkout: validating", flush=True)
     _validate_checkout(
         repo_dir=checkout,
         used_commit=commit,
@@ -548,11 +548,9 @@ def setup_colab_runtime(
 
     torch = None
     if profile in LOCAL_PROFILES:
-        print("🔧 Checking CUDA GPU availability...", flush=True)
+        print("CUDA: checking", flush=True)
         torch = _require_local_cuda()
-    print("=" * 60, flush=True)
     _install_project(local_profile=profile in LOCAL_PROFILES)
-    print("=" * 60, flush=True)
     if profile not in LOCAL_PROFILES:
         try:
             import torch as installed_torch
