@@ -20,13 +20,24 @@ from .mod_scope_contract import install as _install_mod_scope_contract
 
 _install_mod_scope_contract(_complete_spec_module, _complete_planner_module)
 
-# Current module generators write shared project files directly. Route every
-# module-shard through the single mutation/commit lane until generation is split
-# into pure intent creation plus path-aware commit application.
+# Resource classification is installed before the orchestrator is imported.
 from . import work_graph as _work_graph_module
 from .work_graph_mutation_contract import install as _install_work_graph_mutation_contract
 
 _install_work_graph_mutation_contract(_work_graph_module)
+
+# Install isolated custom-generation staging plus the short, hash-guarded live
+# project commit contract before public API users construct an orchestrator.
+from . import complete_orchestrator as _complete_orchestrator_module
+from . import custom_module_generator as _custom_module_generator_module
+from . import source_patch as _source_patch_module
+from .performance_final_contract import install as _install_performance_final_contract
+
+_install_performance_final_contract(
+    _complete_orchestrator_module,
+    _custom_module_generator_module,
+    _source_patch_module,
+)
 
 from .api import (
     ChatReply,
