@@ -116,7 +116,7 @@ def test_gametest_resource_gate_detects_generated_namespace_errors(tmp_path: Pat
     assert not any("other_mod:" in finding for finding in findings)
 
 
-def test_jdt_mapping_errors_are_flattened() -> None:
+def test_jdt_mapping_errors_are_flattened_without_blocking_warnings() -> None:
     receipt = {
         "diagnostics": {
             "file:///a.java": [
@@ -127,7 +127,7 @@ def test_jdt_mapping_errors_are_flattened() -> None:
         }
     }
     errors = _diagnostic_errors(receipt)
-    assert [item["message"] for item in errors] == ["compile error", "warning"]
+    assert [item["message"] for item in errors] == ["compile error"]
 
 
 def test_progressive_repair_skips_gradle_when_jdt_is_not_clean(tmp_path: Path) -> None:
