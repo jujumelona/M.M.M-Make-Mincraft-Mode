@@ -57,6 +57,14 @@ def install(api_module: Any, plan_render_module: Any) -> None:
         mcp_tools_module=mcp_tools_module,
     )
 
+    # Skill markdown/package snapshots pre-date dynamic target selection. Compile both
+    # source and wheel Skills through the same target-neutral policy overlay so no
+    # stale 1.20.1/Java17/Yarn phrase can become runtime authorization.
+    from . import skill_catalog as skill_catalog_module
+    from .platform_skill_policy_contract import install as install_skill_policy
+
+    install_skill_policy(skill_catalog_module)
+
 
 def _install_complete_session(api_module: Any) -> None:
     cls = api_module.CompleteModAISession
