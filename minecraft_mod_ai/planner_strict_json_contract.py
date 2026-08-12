@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 
 _OUTLINE_FIELDS = frozenset({"production_batches", "complete", "next_cursor"})
+_IGNORABLE_RESPONSE_METADATA = frozenset({"notes", "generation_metadata"})
 
 
 @dataclass(frozen=True)
@@ -77,20 +78,21 @@ def _extract_unique_contract_object(
     """Select one contract-shaped object while ignoring unrelated scratch JSON.
 
     Some local reasoning models emit a small top-level scratch object before the final
-    structured answer. That object is safe to ignore only when exactly one complete
-    outer object has a field set that matches a host contract. Multiple matching
+    structured answer. It is ignored only when exactly one outer object contains one
+    host contract and any extra fields are inert response metadata. Multiple matching
     objects remain ambiguous and fail closed.
     """
 
-    expected = tuple(expected_contracts)
     matches: list[dict[str, Any]] = []
     for container in containers:
         value = container.value
         if not isinstance(value, dict):
             continue
         fields = frozenset(str(key) for key in value)
-        if fields in expected:
-            matches.append(dict(value))
+        for expected in expected_contracts:
+            if expected <= fields and (fields - expected) <= _IGNORABLE_RESPONSE_METADATA:
+                matches.append({key: value[key] for key in expected})
+                break
     if len(matches) != 1:
         raise ValueError(
             "response must contain exactly one complete contract-shaped JSON object; "
