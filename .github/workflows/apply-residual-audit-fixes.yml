@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
 
+# Final targeted retry: native setup assertion, repair prompt, final page atomicity.
 jobs:
   apply:
     runs-on: ubuntu-latest
