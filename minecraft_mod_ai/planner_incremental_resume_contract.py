@@ -14,6 +14,7 @@ def install(incremental_module: Any) -> None:
     # shards, and escalate best-of-N LLM search only after a verifier state persists.
     from . import agentic_optimization_contract as agentic_module
     from . import audio_generator as audio_module
+    from . import complete_orchestrator as orchestrator_module
     from . import complete_orchestrator_services as orchestrator_services
     from . import complete_planner as complete_planner_module
     from . import work_graph as work_graph_module
@@ -27,6 +28,13 @@ def install(incremental_module: Any) -> None:
     install_agentic_search_efficiency(agentic_module)
     install_asset_resume_efficiency(orchestrator_services)
     install_audio_resume_efficiency(audio_module)
+
+    # complete_orchestrator imports synthesize_audio_files directly, before this late
+    # planner/architecture bootstrap installs the resumable audio wrapper. Rebind that
+    # already-imported hot-path name so audio-synth DAG nodes actually use the per-sound
+    # checkpoint instead of merely leaving the optimized function on audio_generator.
+    orchestrator_module.synthesize_audio_files = audio_module.synthesize_audio_files
+
     install_execution_efficiency(
         complete_planner_module=complete_planner_module,
         work_graph_module=work_graph_module,
