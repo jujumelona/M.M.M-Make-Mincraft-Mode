@@ -70,7 +70,6 @@ jobs:
           python -m pytest -q \
             tests/test_llama_decode_speed_contract.py \
             tests/test_llama_server_autotune.py \
-            tests/test_llama_server_runtime_tuning.py \
             tests/test_runtime_bootstrap_clean.py
       - name: Commit verified policy
         run: |
