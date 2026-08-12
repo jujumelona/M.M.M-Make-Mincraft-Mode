@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
+import time
 import urllib.parse
 import urllib.request
 import zipfile
@@ -147,10 +149,24 @@ def _fabric_api_artifact(cache: Path, version: str) -> dict[str, Any]:
     filename = f"fabric-api-{version}.jar"
     url = f"{_FABRIC_MAVEN}/{encoded}/{urllib.parse.quote(filename, safe='+-._') }"
     target = cache / filename
+
+    # A partially written or externally corrupted cached JAR must not poison every
+    # later runtime preparation. Validate before reuse and repair the cache exactly
+    # once from the reviewed Maven coordinate when validation fails.
+    if target.is_file():
+        try:
+            _validate_mod_jar(target, expected_mod_id_fragment="fabric")
+        except Exception:
+            target.unlink(missing_ok=True)
     if not target.is_file():
         _download(url, target)
+        try:
+            _validate_mod_jar(target, expected_mod_id_fragment="fabric")
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    _validate_mod_jar(target, expected_mod_id_fragment="fabric")
     return {
         "status": "STAGED",
         "path": str(target),
@@ -187,17 +203,43 @@ def _download_verified(url: str, target: Path, expected_sha256: str) -> None:
         )
 
 
+def _download_timeout_seconds() -> float:
+    raw = os.environ.get("MMM_RUNTIME_HELPER_DOWNLOAD_TIMEOUT_SECONDS", "300").strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "MMM_RUNTIME_HELPER_DOWNLOAD_TIMEOUT_SECONDS must be numeric"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError("Runtime helper download timeout must be finite and positive")
+    return value
+
+
 def _download(url: str, target: Path) -> None:
+    total_timeout = _download_timeout_seconds()
+    deadline = time.monotonic() + total_timeout
     request = urllib.request.Request(url, headers=_headers())
     temporary = target.with_suffix(target.suffix + ".part")
     temporary.unlink(missing_ok=True)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as handle:
+        with urllib.request.urlopen(
+            request,
+            timeout=min(60.0, total_timeout),
+        ) as response, temporary.open("wb") as handle:
             while True:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Runtime helper download exceeded {total_timeout:g}s: {url}"
+                    )
                 chunk = response.read(1024 * 1024)
                 if not chunk:
                     break
                 handle.write(chunk)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Runtime helper download exceeded {total_timeout:g}s: {url}"
+                    )
         temporary.replace(target)
     finally:
         temporary.unlink(missing_ok=True)
