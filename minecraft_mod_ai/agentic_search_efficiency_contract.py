@@ -549,15 +549,21 @@ def install(agentic_module: Any) -> None:
             slots = _active_parallel_slots()
             if slots <= 1:
                 return 1
-            if memory and float(memory[0].get("similarity", 0.0)) >= 0.72:
-                return 1
-            signature = self._signature(dict(evidence))
-            counts = getattr(self, "_mmm_signature_counts", None)
-            if not isinstance(counts, Counter):
-                counts = Counter()
-                self._mmm_signature_counts = counts
-            counts[signature] += 1
-            return min(slots, 3, width) if counts[signature] >= 2 else 1
+
+            # Keep the core verifier-search risk policy authoritative. It can widen
+            # immediately for multiple JDT errors or a substantial build failure, and
+            # it can still use verified repair memory/repetition. The efficiency layer
+            # only prevents serial duplicate decode and caps breadth to real native
+            # capacity; it must not replace the core risk model with an unreachable
+            # "same signature twice" requirement (RepairEngine stops exact repeats).
+            risk_width = max(
+                1,
+                min(
+                    3,
+                    int(current_repair_count(self, evidence, memory)),
+                ),
+            )
+            return min(slots, risk_width)
 
         repair_candidate_count._mmm_failure_gated_search = True
         repair_candidate_count.__wrapped__ = current_repair_count
