@@ -42,6 +42,11 @@ def test_package_bootstrap_installs_request_safe_colab_decode_contract() -> None
         "_mmm_local_stream_watchdog",
         False,
     ) is True
+    assert getattr(
+        colab_mtp_server._probe_mtp_server,
+        "_mmm_exact_stream_probe",
+        False,
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -206,21 +211,43 @@ def test_managed_structured_stream_disables_reasoning_without_server_json_gramma
     assert payload["stream"] is True
 
 
-def test_mtp_probe_requires_completed_multi_step_stream(
+def test_mtp_probe_requires_exact_completed_multi_step_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         colab_mtp_server.httpx,
         "stream",
         lambda *args, **kwargs: _StreamResponse(
-            [_delta("1 2 3 "), _delta("4 5 6 7 8 9 10"), "data: [DONE]"]
+            [
+                _delta("1 2 3 4 5 6 7 8 9 10 "),
+                _delta("11 12 13 14 15 16 17 18 19 20"),
+                "data: [DONE]",
+            ]
         ),
     )
 
     ok, detail = colab_mtp_server._probe_mtp_server()
 
     assert ok is True
+    assert "exact_output_match" in detail
     assert "events=2" in detail
+
+
+def test_mtp_probe_rejects_wrong_but_completed_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        colab_mtp_server.httpx,
+        "stream",
+        lambda *args, **kwargs: _StreamResponse(
+            [_delta("1 2 3 4 5 "), _delta("5 5 5 5 5"), "data: [DONE]"]
+        ),
+    )
+
+    ok, detail = colab_mtp_server._probe_mtp_server()
+
+    assert ok is False
+    assert "correctness mismatch" in detail
 
 
 def test_mtp_probe_rejects_first_delta_then_broken_stream(
