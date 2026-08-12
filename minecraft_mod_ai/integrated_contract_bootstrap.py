@@ -146,6 +146,16 @@ def install() -> None:
         orchestrator_module=orchestrator_module,
     )
 
+    # A running task may be reclaimed after its lease expires.  Bind publication to
+    # the exact attempt/lease owner observed before the action so a slow result from an
+    # older claim cannot complete a newer attempt or publish stale ProjectIndex state.
+    from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
+
+    install_scheduler_claim_fencing(
+        work_graph_module=work_graph_module,
+        orchestrator_module=orchestrator_module,
+    )
+
     # MCP production services are cached and can receive concurrent requests. Keep
     # expensive RAG indexing parallel across different outputs while enforcing one
     # writer for the same canonical index path, closing the _new_file/build TOCTOU.
