@@ -145,6 +145,13 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         max_performance_module,
     )
 
+    # Successful production streams already carry exact prompt/completion usage.
+    # Consume that SSE usage and reuse the local HTTP connection instead of issuing
+    # /metrics before+after every request and /slots polls during active decode.
+    from .llama_stream_efficiency_contract import install as install_stream_efficiency
+
+    install_stream_efficiency(hardware_policy_module)
+
     # The server can only benefit from multiple slots when MMM is allowed to issue
     # concurrent requests. Share the resident llama-server GPU allocation between
     # those requests while keeping image/speech/other local GPU runtimes exclusive.
