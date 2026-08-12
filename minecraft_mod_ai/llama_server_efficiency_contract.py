@@ -127,9 +127,23 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
     # Final native-server tuning is layered after the basic safety/telemetry policy so
     # it can benchmark the authoritative server args instead of creating a second
     # execution path.
+    from . import llama_server_max_performance as max_performance_module
     from .llama_server_max_performance import install as install_max_performance
 
     install_max_performance(autotune_module)
+
+    # llama-server exposes n_cache_reuse per request. Keep the same candidate search,
+    # but run those candidates on one already-loaded server instead of reloading the
+    # multi-GB model once per value.
+    from .llama_cache_reuse_efficiency_contract import (
+        install as install_cache_reuse_efficiency,
+    )
+
+    install_cache_reuse_efficiency(
+        autotune_module,
+        hardware_policy_module,
+        max_performance_module,
+    )
 
     # The server can only benefit from multiple slots when MMM is allowed to issue
     # concurrent requests. Share the resident llama-server GPU allocation between
