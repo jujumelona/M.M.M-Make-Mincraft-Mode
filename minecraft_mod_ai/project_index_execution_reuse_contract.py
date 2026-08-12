@@ -15,9 +15,40 @@ _EXECUTION_INDEXES: ContextVar[dict[tuple[str, int], Any] | None] = ContextVar(
 )
 
 
+def _root_key(project_root: str | Path) -> str:
+    return str(Path(project_root).expanduser().resolve())
+
+
 def _cache_key(project_root: str | Path, policy: Any | None) -> tuple[str, int]:
-    root = Path(project_root).expanduser().resolve()
-    return str(root), 0 if policy is None else id(policy)
+    return _root_key(project_root), 0 if policy is None else id(policy)
+
+
+def _cached_indexes_for_root(
+    cache: dict[tuple[str, int], Any],
+    project_root: str | Path,
+) -> tuple[Any, ...]:
+    root = _root_key(project_root)
+    seen: set[int] = set()
+    indexes: list[Any] = []
+    for (cached_root, _policy_id), index in cache.items():
+        if cached_root != root:
+            continue
+        identity = id(index)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        indexes.append(index)
+    return tuple(indexes)
+
+
+def _evict_root(
+    cache: dict[tuple[str, int], Any],
+    project_root: str | Path,
+) -> None:
+    root = _root_key(project_root)
+    for key in tuple(cache):
+        if key[0] == root:
+            cache.pop(key, None)
 
 
 def _receipt_paths(value: Any) -> tuple[str, ...]:
@@ -68,10 +99,10 @@ def install(orchestrator_module: Any) -> None:
 
     Generation itself keeps its existing fresh shared index. Only after generation
     completes do we cache the next ProjectIndex construction. Resource hardening then
-    updates that exact index from its transactional receipts, so the immediate
-    ``write_manifest`` call does not rescan the whole project. If a mutating receipt
-    cannot prove which files changed, the cached instance is discarded and the next
-    construction falls back to the original full scan.
+    updates every cached index for the same project root from its transactional
+    receipts, independent of which derived tuning policy produced those receipts. If a
+    mutating receipt cannot prove which files changed, all cached indexes for that root
+    are discarded and the next construction falls back to the original full scan.
     """
 
     cls = orchestrator_module.CompleteProductionOrchestrator
@@ -137,22 +168,26 @@ def install(orchestrator_module: Any) -> None:
             cache = _EXECUTION_INDEXES.get()
             if cache is None:
                 return receipt
-            key = _cache_key(project_root, kwargs.get("policy"))
-            index = cache.get(key)
-            if index is None:
+            indexes = _cached_indexes_for_root(cache, project_root)
+            if not indexes:
                 return receipt
             paths = _receipt_paths(receipt)
             status = str(receipt.get("status", "")) if isinstance(receipt, dict) else ""
             if paths:
-                index.update_files(paths)
+                for index in indexes:
+                    index.update_files(paths)
             elif status not in {"", "UNCHANGED"}:
                 # Unknown mutating receipt shape: fail safe to a fresh scan on the
                 # next ProjectIndex construction rather than trusting stale state.
-                cache.pop(key, None)
+                _evict_root(cache, project_root)
             return receipt
 
         tune_gradle_resources._mmm_updates_execution_project_index = True  # type: ignore[attr-defined]
         orchestrator_module.tune_gradle_resources = tune_gradle_resources
 
 
-__all__ = ["_receipt_paths", "install"]
+__all__ = [
+    "_cached_indexes_for_root",
+    "_receipt_paths",
+    "install",
+]
