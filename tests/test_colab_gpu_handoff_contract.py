@@ -41,7 +41,7 @@ def test_local_asset_wrapper_holds_global_gpu_lock_during_handoff() -> None:
     assert observed == [True]
 
 
-def test_local_speech_evicts_resident_llama_under_same_gpu_lock(
+def test_local_speech_evicts_native_llama_server_under_same_gpu_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lock = threading.RLock()
@@ -67,20 +67,30 @@ def test_local_speech_evicts_resident_llama_under_same_gpu_lock(
             events.append(("transcribe", bool(is_owned())))
             return "transcript"
 
+    class RunningProcess:
+        def poll(self):
+            return None
+
     services = SimpleNamespace(generate_assets=lambda *args, **kwargs: None)
     model_router = SimpleNamespace(_GPU_EXCLUSIVE_LOCK=lock, ModelRouter=ModelRouter)
 
-    from minecraft_mod_ai import colab_mtp_server
+    from minecraft_mod_ai import llama_server_autotune
 
-    monkeypatch.setattr(colab_mtp_server, "colab_mtp_server_enabled", lambda: True)
+    server_url = "http://127.0.0.1:8910/v1"
+    monkeypatch.setattr(llama_server_autotune, "_MANAGED_PROCESS", RunningProcess())
+    monkeypatch.setattr(llama_server_autotune, "_MANAGED_URL", server_url)
+    monkeypatch.setattr(llama_server_autotune, "_ATTEMPTED_KEYS", {("x",)})
+    monkeypatch.setenv("LLAMA_SERVER_URL", server_url)
 
-    def fake_stop(*, keep_enabled: bool = True):
+    def fake_shutdown() -> None:
         is_owned = getattr(lock, "_is_owned", None)
         assert callable(is_owned)
         events.append(("stop", bool(is_owned())))
 
-    monkeypatch.setattr(colab_mtp_server, "stop_colab_mtp_server", fake_stop)
+    monkeypatch.setattr(llama_server_autotune, "_shutdown_managed_server", fake_shutdown)
     install(services_module=services, model_router_module=model_router)
 
     assert ModelRouter().transcribe("speech_recognition", "/tmp/a.wav") == "transcript"
     assert events == [("stop", True), ("transcribe", True)]
+    assert "LLAMA_SERVER_URL" not in __import__("os").environ
+    assert llama_server_autotune._ATTEMPTED_KEYS == set()
