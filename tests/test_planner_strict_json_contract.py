@@ -159,7 +159,7 @@ def test_truncated_json_is_not_auto_closed() -> None:
 
 
 def test_two_complete_top_level_objects_are_rejected_for_nonpaginated_contract() -> None:
-    with pytest.raises(SpecValidationError, match="found 2 complete outermost JSON containers"):
+    with pytest.raises(SpecValidationError, match="exactly one complete strict JSON object"):
         _extract('{"value": 1}\n{"value": 2}')
 
 
@@ -177,10 +177,8 @@ def test_nested_objects_do_not_count_as_multiple_top_level_values() -> None:
 
 
 def test_complete_json_inside_think_plus_visible_json_is_rejected_as_ambiguous() -> None:
-    with pytest.raises(SpecValidationError, match="found 2 complete outermost JSON containers"):
-        _extract(
-            '<think>{"value": 0}</think>\n{"value": 1}'
-        )
+    with pytest.raises(SpecValidationError, match="exactly one complete strict JSON object"):
+        _extract('<think>{"value": 0}</think>\n{"value": 1}')
 
 
 def test_extra_top_level_field_is_rejected() -> None:
