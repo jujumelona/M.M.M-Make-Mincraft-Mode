@@ -28,13 +28,20 @@ def install(api_module: Any, plan_render_module: Any) -> None:
 
     install_live_execution(orchestrator_module)
 
-    # The runtime manager has already been made target-aware in package __init__.
-    # Add test-only helper staging now so prepare_instance can resolve the approved
-    # target and place only exact-compatible helper jars in the disposable game dirs.
     from . import runtime_manager as runtime_manager_module
     from .minecraft_mcp_runtime_helper_contract import install as install_runtime_helpers
 
     install_runtime_helpers(runtime_manager_module)
+
+    # Route-scoped validation is installed before any external MCP call: search and
+    # migration responses may mention many historical versions, while reviewed
+    # runtime status tools are allowed to prove the actual running target.
+    from . import external_mcp_router as external_mcp_router_module
+    from .external_mcp_target_validation_contract import (
+        install as install_mcp_target_validation,
+    )
+
+    install_mcp_target_validation(external_mcp_router_module)
 
     from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
 
