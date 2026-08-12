@@ -77,11 +77,27 @@ def install() -> None:
         orchestrator_module=orchestrator_module,
     )
 
+    # Built-in persistent systems get a real stop/start round-trip and corruption
+    # recovery probe during disposable-runtime cleanup. Party/guild packs additionally
+    # receive a two-client authority/reconnect probe. These typed receipts feed the
+    # strict quality dimensions instead of relying on unsupported gate strings.
+    from . import production_contract as production_contract_module
+    from . import runtime_manager as runtime_module
+    from . import system_templates_common as system_templates_module
+    from .system_quality_contract import install as install_system_quality
+
+    install_system_quality(
+        templates_module=system_templates_module,
+        system_module=system_module,
+        production_contract_module=production_contract_module,
+        runtime_module=runtime_module,
+        orchestrator_module=orchestrator_module,
+    )
+
     # Finally install the fail-closed atomic requirement/evidence/release architecture.
     # It deliberately runs after platform lowering so acceptance evidence is bound to
     # the actual implementation graph that will execute.
     from . import complete_orchestrator_services as services_module
-    from . import production_contract as production_contract_module
     from . import quality_evidence as quality_module
     from . import validation_execution_contract as validation_module
     from . import work_graph as work_graph_module
