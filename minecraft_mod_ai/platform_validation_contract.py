@@ -4,6 +4,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .imported_platform_repair import read_valid_marker
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
 
 
@@ -20,68 +21,90 @@ def install(module: Any) -> None:
         root = root.expanduser().resolve()
         try:
             expected = adapter_for_lock_values(spec.platform)
+        except Exception as exc:
+            return _platform_failure(
+                module,
+                "PLATFORM_LOCK_INVALID",
+                f"Approved platform lock is invalid: {exc}",
+            )
+
+        try:
             actual = adapter_from_project(root)
         except Exception as exc:
-            return module.ValidationReport(
-                status="FAIL",
-                checks_run=1,
-                findings=(
-                    module.Finding(
-                        "PLATFORM_LOCK_INVALID",
-                        "error",
-                        ".minecraft_ai/platform-lock.json",
-                        f"Project target is missing, mixed or unsupported: {exc}",
-                    ),
-                ),
+            marker = _authorized_import_repair_marker(
+                module,
+                root,
+                spec,
+                expected,
             )
-        if actual.adapter_id != expected.adapter_id:
-            return module.ValidationReport(
-                status="FAIL",
-                checks_run=1,
-                findings=(
-                    module.Finding(
-                        "PLATFORM_LOCK_MISMATCH",
-                        "error",
-                        ".minecraft_ai/platform-lock.json",
-                        (
-                            f"Project uses {actual.adapter_id} but approved proposal uses "
-                            f"{expected.adapter_id}."
-                        ),
+            if marker is None:
+                return _platform_failure(
+                    module,
+                    "PLATFORM_LOCK_INVALID",
+                    f"Project target is missing, mixed or unsupported: {exc}",
+                )
+            # An approved source import may enter repair with incomplete exact
+            # Gradle/Yarn/Fabric metadata, but the marker is not compatibility or
+            # release evidence. Preserve every ordinary source/security check.
+            if expected.source_api_family == "fabric_live_ai":
+                report = _validate_live_project(
+                    self,
+                    module,
+                    root,
+                    spec,
+                    expected,
+                    allow_toolchain_repair=True,
+                )
+            else:
+                report = _validate_reviewed_project(
+                    self,
+                    module,
+                    root,
+                    spec,
+                    expected,
+                    original_validate,
+                )
+            findings = list(report.findings)
+            findings.append(
+                module.Finding(
+                    "PLATFORM_REPAIR_REQUIRED",
+                    "warning",
+                    ".minecraft_ai/imported-platform-repair.json",
+                    (
+                        "Imported source matches the approved Minecraft/loader target, "
+                        "but its exact toolchain must be repaired and re-resolved before release."
                     ),
+                )
+            )
+            return module.ValidationReport(
+                status=(
+                    "PASS"
+                    if not any(item.severity == "error" for item in findings)
+                    else "FAIL"
+                ),
+                checks_run=report.checks_run + 1,
+                findings=tuple(findings),
+            )
+
+        if actual.adapter_id != expected.adapter_id:
+            return _platform_failure(
+                module,
+                "PLATFORM_LOCK_MISMATCH",
+                (
+                    f"Project uses {actual.adapter_id} but approved proposal uses "
+                    f"{expected.adapter_id}."
                 ),
             )
 
         if expected.source_api_family == "fabric_live_ai":
             return _validate_live_project(self, module, root, spec, expected)
-
-        report = original_validate(self, root, spec)
-        extra = list(report.findings)
-        checks = report.checks_run
-        pack = root / "src/main/resources/pack.mcmeta"
-        checks += 1
-        payload = self._load_json(pack, extra, root)
-        pack_data = payload.get("pack") if isinstance(payload, dict) else None
-        if (
-            not isinstance(pack_data, dict)
-            or pack_data.get("pack_format") != expected.resource_pack_format
-        ):
-            extra.append(
-                module.Finding(
-                    "BAD_RESOURCE_PACK_FORMAT",
-                    "error",
-                    self._rel(root, pack),
-                    (
-                        f"pack_format must equal {expected.resource_pack_format} for "
-                        f"Minecraft {expected.minecraft_version}."
-                    ),
-                )
-            )
-        return module.ValidationReport(
-            status=(
-                "PASS" if not any(item.severity == "error" for item in extra) else "FAIL"
-            ),
-            checks_run=checks,
-            findings=tuple(extra),
+        return _validate_reviewed_project(
+            self,
+            module,
+            root,
+            spec,
+            expected,
+            original_validate,
         )
 
     @wraps(original_content)
@@ -183,6 +206,83 @@ def install(module: Any) -> None:
     validator._validate_content = validate_content
 
 
+def _platform_failure(module: Any, code: str, message: str):
+    return module.ValidationReport(
+        status="FAIL",
+        checks_run=1,
+        findings=(
+            module.Finding(
+                code,
+                "error",
+                ".minecraft_ai/platform-lock.json",
+                message,
+            ),
+        ),
+    )
+
+
+def _authorized_import_repair_marker(
+    module: Any,
+    root: Path,
+    spec: Any,
+    adapter: Any,
+) -> dict[str, Any] | None:
+    findings: list[Any] = []
+    try:
+        complete = module._load_complete_project_proposal(root, spec, findings)
+    except Exception:
+        return None
+    if complete is None or findings:
+        return None
+    archive_sha256 = str(getattr(complete, "existing_input_sha256", ""))
+    if not archive_sha256:
+        return None
+    return read_valid_marker(
+        root,
+        adapter=adapter,
+        archive_sha256=archive_sha256,
+    )
+
+
+def _validate_reviewed_project(
+    self: Any,
+    module: Any,
+    root: Path,
+    spec: Any,
+    expected: Any,
+    original_validate: Any,
+):
+    report = original_validate(self, root, spec)
+    extra = list(report.findings)
+    checks = report.checks_run
+    pack = root / "src/main/resources/pack.mcmeta"
+    checks += 1
+    payload = self._load_json(pack, extra, root)
+    pack_data = payload.get("pack") if isinstance(payload, dict) else None
+    if (
+        not isinstance(pack_data, dict)
+        or pack_data.get("pack_format") != expected.resource_pack_format
+    ):
+        extra.append(
+            module.Finding(
+                "BAD_RESOURCE_PACK_FORMAT",
+                "error",
+                self._rel(root, pack),
+                (
+                    f"pack_format must equal {expected.resource_pack_format} for "
+                    f"Minecraft {expected.minecraft_version}."
+                ),
+            )
+        )
+    return module.ValidationReport(
+        status=(
+            "PASS" if not any(item.severity == "error" for item in extra) else "FAIL"
+        ),
+        checks_run=checks,
+        findings=tuple(extra),
+    )
+
+
 def _reviewed_live_network_sources(
     module: Any,
     root: Path,
@@ -199,7 +299,6 @@ def _reviewed_live_network_sources(
             complete,
         )
     except Exception:
-        # No complete-proposal sidecar receipt means no network-source exception.
         return {}
 
 
@@ -209,16 +308,10 @@ def _validate_live_project(
     root: Path,
     spec: Any,
     adapter: Any,
+    *,
+    allow_toolchain_repair: bool = False,
 ):
-    """Version-neutral source gate for officially bootstrapped future targets.
-
-    Historical MMM validators encode exact 1.20/1.21 resource directories, recipe
-    result schemas, pack-format integers and generated class names. None of those is
-    a safe invariant for an unseen release. Live targets therefore validate only
-    target identity, filesystem/security invariants and official project metadata at
-    this stage. JDT, Gradle, GameTest, JAR and runtime gates remain mandatory later in
-    the complete pipeline and are the authority for target-specific API correctness.
-    """
+    """Version-neutral source gate for officially bootstrapped future targets."""
 
     findings: list[Any] = []
     checks = 0
@@ -312,28 +405,28 @@ def _validate_live_project(
                     )
                 )
 
-    properties = _read_properties(root / "gradle.properties")
-    expected_properties = {
-        "minecraft_version": adapter.minecraft_version,
-        "loader_version": adapter.fabric_loader,
-        "fabric_api_version": adapter.fabric_api,
-        "loom_version": adapter.fabric_loom,
-    }
-    for key, expected_value in expected_properties.items():
-        checks += 1
-        actual_value = properties.get(key)
-        # Fabric templates have used both fabric_version and fabric_api_version.
-        if key == "fabric_api_version" and actual_value is None:
-            actual_value = properties.get("fabric_version")
-        if actual_value != expected_value:
-            findings.append(
-                module.Finding(
-                    "LIVE_TOOLCHAIN_MISMATCH",
-                    "error",
-                    "gradle.properties",
-                    f"{key} must match the approved official target {expected_value!r}.",
+    if not allow_toolchain_repair:
+        properties = _read_properties(root / "gradle.properties")
+        expected_properties = {
+            "minecraft_version": adapter.minecraft_version,
+            "loader_version": adapter.fabric_loader,
+            "fabric_api_version": adapter.fabric_api,
+            "loom_version": adapter.fabric_loom,
+        }
+        for key, expected_value in expected_properties.items():
+            checks += 1
+            actual_value = properties.get(key)
+            if key == "fabric_api_version" and actual_value is None:
+                actual_value = properties.get("fabric_version")
+            if actual_value != expected_value:
+                findings.append(
+                    module.Finding(
+                        "LIVE_TOOLCHAIN_MISMATCH",
+                        "error",
+                        "gradle.properties",
+                        f"{key} must match the approved official target {expected_value!r}.",
+                    )
                 )
-            )
 
     fabric_path = root / "src/main/resources/fabric.mod.json"
     fabric = self._load_json(fabric_path, findings, root)
@@ -396,10 +489,6 @@ def _validate_live_project(
                             f"Missing non-empty dependency predicate for {dependency_id}.",
                         )
                     )
-
-    # pack.mcmeta is optional in an official Fabric project and its exact schema is
-    # version-owned. If it exists, JSON validity was already checked above. Never
-    # guess a future pack_format integer in MMM source code.
 
     status = "PASS" if not any(item.severity == "error" for item in findings) else "FAIL"
     return module.ValidationReport(
