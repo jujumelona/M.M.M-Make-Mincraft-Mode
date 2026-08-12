@@ -201,3 +201,55 @@ def test_persisted_saved_digest_avoids_rehash_after_resume(tmp_path: Path) -> No
     # Persisted digest + count + endpoint identity restore the accumulator without
     # serializing any of the 80 historical batches again.
     assert calls == []
+
+
+def test_out_of_band_saved_list_growth_invalidates_tracker_safely(tmp_path: Path) -> None:
+    calls: list[Any] = []
+    module = _fake_incremental(tmp_path, calls)
+    journal.install(module)
+
+    saved = [_batch(index) for index in range(12)]
+    module._accepted_batch_ids(saved)
+    before = module._fingerprint(saved)
+
+    # The live planner always appends through _merge_saved_batches, but a defensive
+    # length guard prevents a stale digest if another caller mutates the same list.
+    saved.append(_batch(12))
+    calls.clear()
+    after = module._fingerprint(saved)
+
+    assert after != before
+    assert len(module._accepted_batch_ids(saved)) == 13
+    # Exceptional external mutation rebuilds once; normal merge path remains O(1)
+    # with respect to the historical prefix.
+    assert len(calls) == 13
+
+
+def test_checkpoint_save_does_not_copy_tracked_saved_list(tmp_path: Path) -> None:
+    calls: list[Any] = []
+    module = _fake_incremental(tmp_path, calls)
+    journal.install(module)
+
+    class CountingList(list[Any]):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    saved = CountingList(_batch(index) for index in range(40))
+    module._accepted_batch_ids(saved)
+    saved.iterations = 0
+    path = module._checkpoint_path("no saved copy", {"contract": {}})
+
+    module._save_checkpoint(
+        path,
+        {
+            "saved_batches": saved,
+            "pending_batches": [],
+            "status": "page_complete",
+        },
+    )
+
+    # No list(saved_source) hot-path copy: persistence indexes the tracked list directly.
+    assert saved.iterations == 0
