@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: native-llama-b10375-cuda12.4
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -67,8 +67,12 @@ jobs:
           set -euo pipefail
           mkdir -p bundle/bin dist
           cp -L llama.cpp/build/bin/llama-server bundle/bin/llama-server
-          find llama.cpp/build/bin -maxdepth 1 -type f -name '*.so*' -print0 \
-            | xargs -0 -r -I{} cp -L '{}' bundle/bin/
+          shopt -s nullglob
+          libraries=(llama.cpp/build/bin/*.so*)
+          test "${#libraries[@]}" -gt 0
+          for library in "${libraries[@]}"; do
+            cp -L "$library" "bundle/bin/$(basename "$library")"
+          done
           test -x bundle/bin/llama-server
           find bundle/bin -maxdepth 1 -type f -name 'libggml-cuda.so*' | grep -q .
           BUNDLE_ARCH="${{ matrix.cuda_arch }}" python3 - <<'PY'
