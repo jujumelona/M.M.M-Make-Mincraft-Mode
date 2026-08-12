@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import minecraft_mod_ai.asset_resume_efficiency_contract as asset_contract
 from minecraft_mod_ai.asset_resume_efficiency_contract import _CachedImageRouter, install
 from minecraft_mod_ai.project_write_lock import project_write_lock
 
@@ -146,10 +147,6 @@ def test_expensive_asset_phase_does_not_hold_project_write_lock(tmp_path) -> Non
 
     def current(router, *, request, concept_dir, target):
         nonlocal lock_was_free
-        # If the asset wrapper held the project lock around expensive generation,
-        # this separate thread/process-equivalent mutation scope would block. Here we
-        # use the same thread only to prove re-entrant acquisition is not enough, so
-        # inspect the lock in a worker thread.
         import threading
 
         entered = threading.Event()
@@ -205,3 +202,27 @@ def test_asset_commit_refuses_stale_overwrite(tmp_path) -> None:
         )
 
     assert target.read_bytes() == b"concurrent-writer"
+
+
+def test_same_filesystem_atomic_commit_does_not_copy_staged_bytes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "project"
+    staged = tmp_path / "run" / "asset-concepts" / ".final-staging" / "asset.png"
+    target = project_root / "src/main/resources/assets/example/textures/item/asset.png"
+    staged.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    payload = b"final-image" * 4096
+    staged.write_bytes(payload)
+
+    def forbidden_temp_copy(*_args, **_kwargs):
+        raise AssertionError("same-filesystem commit must not allocate a copy temp file")
+
+    monkeypatch.setattr(asset_contract.tempfile, "mkstemp", forbidden_temp_copy)
+
+    digest = asset_contract._atomic_commit(staged, target, project_root)
+
+    assert not staged.exists()
+    assert target.read_bytes() == payload
+    assert digest == asset_contract._sha256(target)
