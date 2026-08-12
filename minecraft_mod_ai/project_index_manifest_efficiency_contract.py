@@ -94,26 +94,130 @@ def _fast_receipts(index: Any) -> set[tuple[str, str]]:
     return value
 
 
+def _find_position(files: list[Any], path: str) -> tuple[int, bool]:
+    lo = 0
+    hi = len(files)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if files[mid].path < path:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo, lo < len(files) and files[lo].path == path
+
+
+def _resolve_touched(index: Any, raw_path: str | Path) -> tuple[str, Path | None] | None:
+    raw = Path(raw_path)
+    root = index.root
+    if raw.is_absolute():
+        try:
+            relative = raw.relative_to(root)
+        except ValueError:
+            return None
+    else:
+        relative = raw
+    normalized = relative.as_posix()
+    if not normalized or normalized == ".":
+        return None
+    candidate = root / relative
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        # A formerly valid indexed path that is replaced by an escaping symlink must
+        # disappear from the index instead of retaining stale trusted metadata.
+        return normalized, None
+    return normalized, candidate
+
+
+def _indexed_file(module: Any, index: Any, normalized: str, path: Path | None) -> Any | None:
+    if path is None or not path.is_file() or path.is_symlink():
+        return None
+    relative = Path(normalized)
+    if any(part in module._IGNORED_PARTS for part in relative.parts):
+        return None
+    suffix = path.suffix.lower()
+    if suffix not in module._TEXT_SUFFIXES and path.name not in {
+        "build.gradle",
+        "settings.gradle",
+        "gradle.properties",
+        "fabric.mod.json",
+    }:
+        return None
+    size = path.stat().st_size
+    if size > index.policy.max_single_file_bytes:
+        tokens: tuple[str, ...] = ()
+        digest = index._sha256(path)
+    else:
+        raw = path.read_bytes()
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        text = raw.decode("utf-8", errors="replace")
+        tokens = tuple(
+            sorted({token.lower() for token in module._TOKEN.findall(text)})
+        )
+    return module.IndexedFile(
+        path=normalized,
+        size_bytes=size,
+        sha256=digest,
+        suffix=suffix,
+        tokens=tokens,
+    )
+
+
+def _install_incremental_update_files(project_index_module: Any) -> None:
+    cls = project_index_module.ProjectIndex
+    current = cls.update_files
+    if getattr(current, "_mmm_incremental_sorted_update", False):
+        return
+
+    @wraps(current)
+    def update_files(self: Any, touched_paths: Any) -> None:
+        # Keep the public immutable tuple while replacing the historical full dict
+        # copy + full sort with binary-search edits over the already sorted index.
+        # One tuple materialization remains O(N), but the dominant O(N log N) sort and
+        # O(N) dictionary copy disappear from every generation-node commit.
+        files = list(self.files)
+        by_path = self._by_path
+        for raw_path in touched_paths:
+            resolved = _resolve_touched(self, raw_path)
+            if resolved is None:
+                continue
+            normalized, path = resolved
+            position, existed = _find_position(files, normalized)
+            item = _indexed_file(
+                project_index_module,
+                self,
+                normalized,
+                path,
+            )
+            if item is None:
+                by_path.pop(normalized, None)
+                if existed:
+                    files.pop(position)
+                continue
+            by_path[normalized] = item
+            if existed:
+                files[position] = item
+            else:
+                files.insert(position, item)
+        self.files = tuple(files)
+
+    update_files._mmm_incremental_sorted_update = True  # type: ignore[attr-defined]
+    update_files.__wrapped__ = current  # type: ignore[attr-defined]
+    cls.update_files = update_files
+
+
 def install(project_index_module: Any) -> None:
-    """Keep immutable ProjectIndex snapshots while removing repeated full I/O.
+    """Keep ProjectIndex incremental in CPU work, disk I/O and integrity checks.
 
-    ProjectIndex is committed after every successful generation node. Rewriting every
-    256-file shard and then reading every shard back only to hash bytes that were just
-    serialized turns incremental generation into O(nodes * indexed_files) metadata
-    I/O. This wrapper preserves the v2 on-disk schema and immutable version folders,
-    but:
-
-    * same-process repeated commits of the exact receipt use a zero-read fast path;
-    * resumed-process snapshots are digest-verified once before entering that fast path;
-    * new shard digests are computed from serialized bytes instead of disk readback;
-    * unchanged previous shards are reused through verified hard links when possible;
-    * filesystems without hard-link support fall back to ordinary writes.
-
-    Stored metadata alone is never authority for an old shard: every shard reused from
-    a previous snapshot is hashed first. Existing version directories encountered after
-    restart are also checked against the newly rendered bytes before their receipt is
-    published.
+    ProjectIndex is committed after every successful generation node. The base
+    implementation copied and resorted the complete path catalog for every touched
+    file set, then rewrote every 256-file manifest shard and reread every new shard to
+    hash it. This contract preserves the public tuple ordering and v2 on-disk schema,
+    but removes those repeated whole-project operations wherever correctness permits.
     """
+
+    _install_incremental_update_files(project_index_module)
 
     cls = project_index_module.ProjectIndex
     current = cls.write_manifest
