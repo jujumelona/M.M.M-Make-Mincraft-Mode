@@ -36,6 +36,7 @@ class _SavedBatchTracker:
     digest: str
     identities: set[str]
     accepted_ids: list[str]
+    tracked_length: int
 
 
 def _compact(value: Any) -> str:
@@ -361,11 +362,16 @@ def install(incremental_module: Any) -> None:
             digest=digest,
             identities=identities,
             accepted_ids=accepted_ids,
+            tracked_length=len(saved),
         )
 
     def _tracker_for(saved: list[Any]) -> _SavedBatchTracker:
         tracker = getattr(_HOT_STATE, "saved_tracker", None)
-        if isinstance(tracker, _SavedBatchTracker) and tracker.owner is saved:
+        if (
+            isinstance(tracker, _SavedBatchTracker)
+            and tracker.owner is saved
+            and tracker.tracked_length == len(saved)
+        ):
             return tracker
 
         restored_digest: str | None = None
@@ -393,7 +399,7 @@ def install(incremental_module: Any) -> None:
         if isinstance(value, list):
             tracker = getattr(_HOT_STATE, "saved_tracker", None)
             if isinstance(tracker, _SavedBatchTracker) and tracker.owner is value:
-                return tracker.digest
+                return _tracker_for(value).digest
 
         # This shape is internal to host_resume_* generation. The cursor is opaque, so
         # bind it to the persisted saved-prefix digest plus only the new page digest.
@@ -437,6 +443,7 @@ def install(incremental_module: Any) -> None:
                 value,
                 current_fingerprint,
             )
+            tracker.tracked_length += 1
 
     def checkpoint_path(stage: str, request: Any) -> Path:
         # Preserve the exact legacy path digest without serializing request twice.
@@ -514,8 +521,11 @@ def install(incremental_module: Any) -> None:
                 state["saved_batches_digest_version"] = _SAVED_DIGEST_VERSION
                 state["saved_batches_digest_count"] = len(saved_source)
                 state["saved_batches_digest"] = tracker.digest
-            saved = list(saved_source)
-            pending = list(state.get("pending_batches", []))
+                saved = saved_source
+            else:
+                saved = list(saved_source)
+            pending_source = state.get("pending_batches", [])
+            pending = pending_source if isinstance(pending_source, list) else list(pending_source)
 
             old_meta = _read_meta(path, checkpoint_version=checkpoint_version)
             old_journal = old_meta.get("journal_version") == _JOURNAL_VERSION
