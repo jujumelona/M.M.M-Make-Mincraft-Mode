@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import Any
+from typing import Any, Iterator
 
 
 _PREVIEW_BYTES = 2048
+_SENTENCE_PUNCTUATION = frozenset(".!?。！？;")
 _CONJUNCTION = re.compile(
     r"(?<!\S)(?:and|then|plus|그리고|또한|및)(?=\s)",
     re.IGNORECASE,
@@ -17,6 +18,41 @@ def _preview(text: str) -> str:
     if len(encoded) <= _PREVIEW_BYTES:
         return text
     return encoded[:_PREVIEW_BYTES].decode("utf-8", errors="ignore") + "…"
+
+
+def _sentence_ranges(prompt: str) -> Iterator[tuple[int, int]]:
+    """Yield the legacy sentence spans in one linear pass.
+
+    ``atomic_requirement_contract._SENTENCE`` is compact, but a long line without
+    punctuation that ends at a newline can make CPython's regex engine retry the
+    greedy match from every subsequent character. Large authoritative requests then
+    degrade toward O(n²). This scanner preserves the useful semantics—newlines split
+    records and terminal punctuation stays attached—without backtracking.
+    """
+
+    start = 0
+    index = 0
+    length = len(prompt)
+    while index < length:
+        character = prompt[index]
+        if character == "\n":
+            if start < index:
+                yield start, index
+            start = index + 1
+            index += 1
+            continue
+        if character in _SENTENCE_PUNCTUATION:
+            end = index + 1
+            while end < length and prompt[end] in _SENTENCE_PUNCTUATION:
+                end += 1
+            if start < end:
+                yield start, end
+            start = end
+            index = end
+            continue
+        index += 1
+    if start < length:
+        yield start, length
 
 
 def install(atomic_module: Any) -> None:
@@ -94,8 +130,8 @@ def install(atomic_module: Any) -> None:
 
     def atom_ranges(prompt: str) -> list[tuple[int, int]]:
         result: list[tuple[int, int]] = []
-        for match in atomic_module._SENTENCE.finditer(prompt):
-            start, end = match.span()
+        for sentence_start, sentence_end in _sentence_ranges(prompt):
+            start, end = sentence_start, sentence_end
             while start < end and prompt[start].isspace():
                 start += 1
             while end > start and prompt[end - 1].isspace():
@@ -120,6 +156,7 @@ def install(atomic_module: Any) -> None:
 
     atom_ranges._mmm_enumeration_atomizer = True
     atom_ranges._mmm_conjunction_atomizer = True
+    atom_ranges._mmm_linear_sentence_scanner = True
     implementations._mmm_compact_catalog = True
     acceptances._mmm_compact_catalog = True
     atomic_module._features = cached_features
