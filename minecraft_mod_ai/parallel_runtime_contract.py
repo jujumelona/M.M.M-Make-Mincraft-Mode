@@ -126,15 +126,15 @@ def _install_model_prefetch(
     *,
     model_registry_module: Any,
     llama_server_autotune_module: Any,
-    colab_mtp_server_module: Any,
 ) -> None:
+    """Bind asynchronous GGUF resolution to the single native server resolver."""
+
     global _MODEL_RESOLVER
 
     current_resolver = llama_server_autotune_module._resolve_model_path
     if not getattr(current_resolver, "_mmm_parallel_prefetch_resolver", False):
         _MODEL_RESOLVER = current_resolver
         llama_server_autotune_module._resolve_model_path = _resolve_prefetched_model
-        colab_mtp_server_module._resolve_model_path = _resolve_prefetched_model
     elif _MODEL_RESOLVER is None:
         return
 
@@ -264,9 +264,7 @@ def _parallel_discover_seed_bundle_factory(
             if provider == "openverse_audio":
                 provider_query += " ambience sound effects music"
             elif provider == "openverse_images":
-                provider_query += (
-                    " visual reference texture architecture objects"
-                )
+                provider_query += " visual reference texture architecture objects"
             try:
                 page = discovery.search(
                     provider,
@@ -368,10 +366,7 @@ def _parallel_retrieve_domain_evidence_factory(
     ) -> dict[str, Any]:
         selected_retrieve = retrieve or original_default_retrieve
         if retrieve is not None and retrieve is not original_default_retrieve:
-            return original_retrieve_graph(
-                research_brief,
-                retrieve=retrieve,
-            )
+            return original_retrieve_graph(research_brief, retrieve=retrieve)
 
         raw_domains = research_brief.get("domains")
         if not isinstance(raw_domains, list) or not raw_domains:
@@ -533,10 +528,7 @@ def _install_planner_overlap(
             if not existing or existing[0] != key:
                 _PLANNER_STATE.evidence = (
                     key,
-                    _PLANNER_AUX_EXECUTOR.submit(
-                        parallel_retrieve,
-                        research_brief,
-                    ),
+                    _PLANNER_AUX_EXECUTOR.submit(parallel_retrieve, research_brief),
                 )
         return current_radar(prompt, research_brief, *args, **kwargs)
 
@@ -608,7 +600,6 @@ def install(
     complete_planner_module: Any,
     model_registry_module: Any,
     llama_server_autotune_module: Any,
-    colab_mtp_server_module: Any,
 ) -> None:
     """Overlap only independent work while preserving deterministic result order."""
 
@@ -618,7 +609,6 @@ def install(
     _install_model_prefetch(
         model_registry_module=model_registry_module,
         llama_server_autotune_module=llama_server_autotune_module,
-        colab_mtp_server_module=colab_mtp_server_module,
     )
 
     original_discover = ecosystem_module.discover_seed_bundle
@@ -648,6 +638,4 @@ def install(
     )
 
 
-__all__ = [
-    "install",
-]
+__all__ = ["install"]
