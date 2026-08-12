@@ -6,7 +6,7 @@ from minecraft_mod_ai import agentic_optimization_contract as agentic
 from minecraft_mod_ai.agentic_search_efficiency_contract import install
 
 
-def test_auto_planner_search_uses_one_candidate(monkeypatch) -> None:
+def test_auto_planner_search_preserves_risk_adaptive_width(monkeypatch) -> None:
     install(agentic)
     monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
     monkeypatch.setenv("MMM_PLAN_SEARCH_WIDTH", "3")
@@ -15,7 +15,7 @@ def test_auto_planner_search_uses_one_candidate(monkeypatch) -> None:
         "current_target_deliverables": ["a", "b", "c", "d"],
         "scope": "custom_java networking integration persistence",
     }
-    assert agentic._planner_candidate_count(request, "production page") == 1
+    assert agentic._planner_candidate_count(request, "production page") == 3
 
 
 def test_explicit_agentic_search_on_keeps_requested_width(monkeypatch) -> None:
