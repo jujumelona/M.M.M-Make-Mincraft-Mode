@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _disable_live_ecosystem_network_in_tests(
+def _isolate_test_runtime_state(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """Unit tests opt in explicitly when exercising the live-search path."""
+    """Keep unit tests deterministic while production caches remain durable."""
 
     monkeypatch.setenv("MMM_ECOSYSTEM_DISCOVERY", "off")
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path / "planner-checkpoints"))
