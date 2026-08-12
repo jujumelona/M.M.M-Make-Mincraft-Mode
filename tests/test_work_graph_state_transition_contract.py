@@ -66,6 +66,50 @@ def test_successful_task_allows_same_receipt_but_rejects_different_late_receipt(
     }
 
 
+def test_checkpoint_cannot_be_started_twice_while_running(tmp_path) -> None:
+    ledger = _ledger_with_node(tmp_path)
+    input_hash = "sha256:" + "7" * 64
+    ledger.begin_checkpoint("checkpoint", stage="test", input_hash=input_hash)
+
+    with pytest.raises(work_graph.WorkGraphError, match="already running"):
+        ledger.begin_checkpoint("checkpoint", stage="test", input_hash=input_hash)
+
+
+def test_successful_checkpoint_cannot_be_restarted_for_same_input(tmp_path) -> None:
+    ledger = _ledger_with_node(tmp_path)
+    input_hash = "sha256:" + "8" * 64
+    receipt = {"status": "PASS", "proof": "stable"}
+    ledger.begin_checkpoint("checkpoint", stage="test", input_hash=input_hash)
+    ledger.succeed_checkpoint(
+        "checkpoint",
+        input_hash=input_hash,
+        receipt=receipt,
+    )
+
+    with pytest.raises(work_graph.WorkGraphError, match="already succeeded"):
+        ledger.begin_checkpoint("checkpoint", stage="test", input_hash=input_hash)
+    assert ledger.cached_checkpoint(
+        "checkpoint",
+        input_hash=input_hash,
+    ) == receipt
+
+
+def test_running_checkpoint_rejects_changed_input(tmp_path) -> None:
+    ledger = _ledger_with_node(tmp_path)
+    ledger.begin_checkpoint(
+        "checkpoint",
+        stage="test",
+        input_hash="sha256:" + "9" * 64,
+    )
+
+    with pytest.raises(work_graph.WorkGraphError, match="another attempt is running"):
+        ledger.begin_checkpoint(
+            "checkpoint",
+            stage="test",
+            input_hash="sha256:" + "a" * 64,
+        )
+
+
 def test_successful_checkpoint_cannot_be_overwritten_by_late_failure(tmp_path) -> None:
     ledger = _ledger_with_node(tmp_path)
     input_hash = "sha256:" + "4" * 64
