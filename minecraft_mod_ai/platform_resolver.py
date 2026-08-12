@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
@@ -13,28 +14,14 @@ from .platform_catalog import (
 from .spec import PlatformLock, Proposal, SpecValidationError
 
 
-_VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?)(?!\d)")
-_FABRIC_RE = re.compile(r"(?<![A-Za-z0-9_])fabric(?![A-Za-z0-9_])|패브릭", re.IGNORECASE)
-_NEOFORGE_RE = re.compile(r"(?<![A-Za-z0-9_])neoforge(?![A-Za-z0-9_])|네오포지", re.IGNORECASE)
-_FORGE_RE = re.compile(r"(?<![A-Za-z0-9_])forge(?![A-Za-z0-9_])|(?<!네오)포지", re.IGNORECASE)
+_VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
+_FABRIC_RE = re.compile(r"\bfabric\b|패브릭", re.IGNORECASE)
+_NEOFORGE_RE = re.compile(r"\bneoforge\b|네오포지", re.IGNORECASE)
+_FORGE_RE = re.compile(r"(?<!neo)\bforge\b|(?<!네오)포지", re.IGNORECASE)
 _MIGRATION_RE = re.compile(
     r"마이그레이션|버전\s*(?:변경|업|올려|내려)|업데이트\s*해|포팅|이식|"
     r"migrat|port\s+(?:to|from)|upgrade\s+to|downgrade\s+to",
     re.IGNORECASE,
-)
-
-_LEGACY_SOURCE_TERMS = (
-    "보스", "boss", "몹", "mob", "entity", "npc", "엔피시", "작물", "crop",
-    "농사", "farming", "무기", "weapon", "도구", "tool", "방어구", "armor",
-    "음식", "food", "기계", "machine", "상태효과", "effect", "인챈트",
-    "enchant", "차원", "dimension", "바이옴", "biome", "월드젠", "worldgen",
-    "구조물", "structure", "gui", "network", "네트워크", "quest", "퀘스트",
-    "skill", "스킬", "party", "파티", "guild", "길드",
-)
-_SIMPLE_1211_TERMS = (
-    "아이템", "item", "장식 블록", "decorative block", "block", "블록",
-    "recipe", "레시피", "advancement", "발전과제", "loot", "루트",
-    "command", "명령어",
 )
 
 
@@ -52,8 +39,11 @@ class PlatformSelection:
         return lock_from_adapter(self.adapter)
 
     def to_dict(self) -> dict[str, Any]:
+        mappings_kind = (
+            "mojang" if self.adapter.yarn_mappings == "mojang" else "yarn"
+        )
         return {
-            "schema_version": "mmm/platform-selection-v1",
+            "schema_version": "mmm/platform-selection-v2",
             "adapter_id": self.adapter.adapter_id,
             "source": self.source,
             "reason": self.reason,
@@ -65,6 +55,7 @@ class PlatformSelection:
                 "loader": self.adapter.loader,
                 "minecraft_version": self.adapter.minecraft_version,
                 "java_version": self.adapter.java_version,
+                "mappings_kind": mappings_kind,
                 "mappings": self.adapter.yarn_mappings,
                 "fabric_loader": self.adapter.fabric_loader,
                 "fabric_api": self.adapter.fabric_api,
@@ -96,15 +87,24 @@ def resolve_platform(
     module_kinds: Iterable[str] = (),
     existing_version: str | None = None,
     existing_loader: str | None = None,
+    router: Any | None = None,
 ) -> PlatformSelection:
+    """Resolve a target without a Minecraft-version allowlist.
+
+    Explicit user targets and existing-project targets remain hard constraints. For a
+    new unpinned project the host discovers current stable Fabric targets, then the
+    central planner model chooses one candidate. The model can never invent a target:
+    its answer is accepted only when it exactly matches the discovered candidate set.
+    """
+
     text = str(prompt or "")
     explicit_version = _explicit_minecraft_version(text)
     explicit_loader = _explicit_loader(text)
 
     if explicit_loader and explicit_loader != "fabric":
         raise SpecValidationError(
-            f"요청한 로더 {explicit_loader!r}는 아직 실행 가능한 소스 어댑터가 없습니다. "
-            "지원되는 로더를 가장한 코드를 생성하지 않습니다."
+            f"요청한 로더 {explicit_loader!r}는 아직 실행 가능한 provider가 없습니다. "
+            "지원되는 척 다른 로더 코드를 생성하지 않습니다."
         )
 
     if explicit_version:
@@ -127,7 +127,7 @@ def resolve_platform(
             adapter = adapter_for_target(existing_version, loader)
         except ValueError as exc:
             raise SpecValidationError(
-                "기존 프로젝트의 target을 보존할 실행 어댑터가 없습니다: " + str(exc)
+                "기존 프로젝트 target을 보존할 provider가 없습니다: " + str(exc)
             ) from exc
         _require_supported_kinds(adapter, module_kinds, explicit=True)
         return PlatformSelection(
@@ -142,32 +142,93 @@ def resolve_platform(
             preserved_existing_target=True,
         )
 
-    requested_kinds = {str(value).strip() for value in module_kinds if str(value).strip()}
-    newest = newest_adapter(loader="fabric")
-    advanced = _requires_mature_source_family(text, design) or bool(
-        requested_kinds - newest.deterministic_module_kinds
+    candidates = tuple(supported_minecraft_versions(loader="fabric")[:8])
+    if not candidates:
+        adapter = newest_adapter(loader="fabric")
+        candidates = (adapter.minecraft_version,)
+
+    selected_version, ai_reason = _choose_with_central_ai(
+        router,
+        prompt=text,
+        design=design,
+        candidates=candidates,
     )
-    simple_proven = _is_proven_simple_1211_request(text, design, requested_kinds)
-    if advanced or not simple_proven:
-        adapter = adapter_for_target("1.20.1", "fabric")
-        _require_supported_kinds(adapter, requested_kinds, explicit=False)
-        reason = (
-            "요구 기능이 1.21.1 단순 생성 어댑터 범위로 확정되지 않아, 현재 더 넓게 "
-            "검증된 Minecraft 1.20.1 어댑터를 선택했습니다."
-        )
-    else:
-        adapter = newest
-        _require_supported_kinds(adapter, requested_kinds, explicit=False)
-        reason = (
-            "요구 기능이 현재 1.21.1에서 검증된 단순 생성 범위에 들어가므로 "
-            f"Minecraft {adapter.minecraft_version}을 선택했습니다."
-        )
+    if selected_version not in candidates:
+        # This is a host invariant, not a model trust decision.
+        selected_version = candidates[0]
+        ai_reason = "중앙 AI 응답이 발견 후보 밖이어서 최신 공식 stable 후보로 fail-closed했습니다."
+    try:
+        adapter = adapter_for_target(selected_version, "fabric")
+    except ValueError as exc:
+        raise SpecValidationError(str(exc)) from exc
+    _require_supported_kinds(adapter, module_kinds, explicit=False)
     return PlatformSelection(
         adapter=adapter,
-        source="host_capability_resolution",
-        reason=reason,
+        source="central_ai_over_live_discovery",
+        reason=ai_reason,
         explicit_version=False,
         explicit_loader=bool(explicit_loader),
+    )
+
+
+def _choose_with_central_ai(
+    router: Any | None,
+    *,
+    prompt: str,
+    design: dict[str, Any] | None,
+    candidates: tuple[str, ...],
+) -> tuple[str, str]:
+    newest = candidates[0]
+    if router is None:
+        return newest, (
+            "중앙 AI router가 없는 API 경로이므로 Fabric Meta가 제공한 최신 stable "
+            f"후보 Minecraft {newest}을 선택했습니다."
+        )
+
+    design_view = design if isinstance(design, dict) else {}
+    encoded_design = json.dumps(design_view, ensure_ascii=False, default=str)
+    if len(encoded_design) > 12000:
+        encoded_design = encoded_design[:12000]
+    request = {
+        "task": "choose_minecraft_fabric_target",
+        "user_request": prompt,
+        "game_design": encoded_design,
+        "candidate_versions": list(candidates),
+        "candidate_order": "newest_stable_first_from_official_fabric_meta",
+        "rules": [
+            "Choose exactly one candidate_versions value.",
+            "Prefer the newest stable candidate unless the requested mod has a concrete compatibility reason to use an older candidate.",
+            "Do not invent Loader, API, Loom, Java, Gradle or mappings coordinates; the host discovers those after version choice.",
+            "Existing-project preservation and explicit user versions are handled before this decision.",
+        ],
+        "output": {"minecraft_version": "exact candidate", "reason": "short Korean or English reason"},
+    }
+    try:
+        raw = router.generate_text(
+            "planner",
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the central platform-selection controller. Select one "
+                        "host-discovered Minecraft Fabric candidate. Never invent a version. "
+                        "Return JSON only."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+            ],
+            response_format="json",
+        )
+        payload = json.loads(str(raw).strip())
+        selected = str(payload.get("minecraft_version", "")).strip()
+        reason = str(payload.get("reason", "")).strip()
+        if selected in candidates and reason:
+            return selected, reason
+    except Exception:
+        pass
+    return newest, (
+        "중앙 AI의 플랫폼 선택 응답을 host가 검증하지 못해, 공식 Fabric Meta의 "
+        f"최신 stable 후보 Minecraft {newest}을 사용했습니다."
     )
 
 
@@ -187,8 +248,10 @@ def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Propo
             or "Minecraft " in value and "Fabric" in value
         )
     ) + (
-        f"Target: Minecraft Java {selection.adapter.minecraft_version}, Fabric, "
-        f"Java {selection.adapter.java_version}. {selection.reason}",
+        (
+            f"Target: Minecraft Java {selection.adapter.minecraft_version}, Fabric, "
+            f"Java {selection.adapter.java_version}. {selection.reason}"
+        ),
     )
     updated = replace(
         proposal,
@@ -206,7 +269,7 @@ def supported_target_summary() -> tuple[dict[str, str], ...]:
         {
             "minecraft_version": version,
             "loader": "fabric",
-            "adapter_id": adapter_for_target(version, "fabric").adapter_id,
+            "provider": "official_live_discovery",
         }
         for version in supported_minecraft_versions(loader="fabric")
     )
@@ -225,48 +288,14 @@ def _explicit_loader(prompt: str) -> str | None:
         found.append("fabric")
     if _NEOFORGE_RE.search(prompt):
         found.append("neoforge")
-    if _FORGE_RE.search(prompt) and not _NEOFORGE_RE.search(prompt):
+    if _FORGE_RE.search(prompt):
         found.append("forge")
     unique = list(dict.fromkeys(found))
     if len(unique) > 1:
-        raise SpecValidationError(f"하나의 프로젝트에 여러 로더가 동시에 명시되었습니다: {unique}")
+        raise SpecValidationError(
+            f"하나의 프로젝트에 여러 로더가 동시에 명시되었습니다: {unique}"
+        )
     return unique[0] if unique else None
-
-
-def _requires_mature_source_family(prompt: str, design: dict[str, Any] | None) -> bool:
-    lowered = prompt.casefold()
-    if any(term.casefold() in lowered for term in _LEGACY_SOURCE_TERMS):
-        return True
-    if not isinstance(design, dict):
-        return False
-    serialized = repr(
-        {
-            "modules": design.get("modules", []),
-            "combat": design.get("combat", {}),
-            "mod_context": design.get("mod_context", {}),
-        }
-    ).casefold()
-    return any(term.casefold() in serialized for term in _LEGACY_SOURCE_TERMS)
-
-
-def _is_proven_simple_1211_request(
-    prompt: str,
-    design: dict[str, Any] | None,
-    module_kinds: set[str],
-) -> bool:
-    newest = newest_adapter(loader="fabric")
-    if module_kinds and not module_kinds <= newest.deterministic_module_kinds:
-        return False
-    lowered = prompt.casefold()
-    if not any(term.casefold() in lowered for term in _SIMPLE_1211_TERMS):
-        return False
-    if not isinstance(design, dict):
-        return True
-    modules = design.get("modules", [])
-    if not isinstance(modules, list):
-        return False
-    serialized = repr(modules).casefold()
-    return not any(term.casefold() in serialized for term in _LEGACY_SOURCE_TERMS)
 
 
 def _require_supported_kinds(
@@ -275,13 +304,17 @@ def _require_supported_kinds(
     *,
     explicit: bool,
 ) -> None:
+    # Live targets intentionally use the central AI + compiler repair route rather
+    # than a per-version deterministic source adapter, so no source-kind allowlist is
+    # appropriate here.
+    if adapter.source_api_family == "fabric_live_ai":
+        return
     kinds = {str(value).strip() for value in module_kinds if str(value).strip()}
     unsupported = sorted(kinds - adapter.deterministic_module_kinds)
     if not unsupported:
         return
     prefix = "명시한 target" if explicit else "선택된 target"
     raise SpecValidationError(
-        f"{prefix} {adapter.minecraft_version}/{adapter.loader}의 현재 코드 어댑터가 "
-        f"아직 지원하지 않는 생성 종류가 있습니다: {unsupported}. "
-        "다른 버전으로 가장하거나 깨지는 소스를 생성하지 않습니다."
+        f"{prefix} {adapter.minecraft_version}/{adapter.loader}의 deterministic legacy "
+        f"generator가 지원하지 않는 종류가 있습니다: {unsupported}."
     )
