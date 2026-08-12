@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
 
+# Current-main audit after removing stale repair scaffolding.
 jobs:
   audit:
     runs-on: ubuntu-latest
