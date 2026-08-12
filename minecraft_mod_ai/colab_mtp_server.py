@@ -31,9 +31,14 @@ SERVER_API_URL = f"{SERVER_ORIGIN}/v1"
 SERVER_CONTEXT_CAP = 16384
 ENABLED_ENV = "MMM_COLAB_MTP_SERVER_ENABLED"
 START_TIMEOUT_ENV = "MMM_COLAB_MTP_SERVER_START_TIMEOUT"
+MTP_POLICY_ENV = "MMM_LLAMA_MTP_POLICY"
+MTP_PROBE_TIMEOUT_ENV = "MMM_LLAMA_MTP_PROBE_TIMEOUT"
 
 _PROCESS: subprocess.Popen[str] | None = None
 _LOG_HANDLE: Any = None
+_SERVER_MODE: str | None = None
+_MTP_DISABLED_REASON: str | None = None
+_MTP_VERIFIED_KEYS: set[tuple[str, str, int]] = set()
 
 
 def _git_blob_sha1(data: bytes) -> str:
@@ -102,7 +107,7 @@ def _close_log() -> None:
     _LOG_HANDLE = None
 
 
-def _log_tail(lines: int = 80) -> str:
+def server_log_tail(lines: int = 80) -> str:
     try:
         values = SERVER_LOG_PATH.read_text(
             encoding="utf-8", errors="replace"
@@ -128,6 +133,22 @@ def _start_timeout() -> int:
     except ValueError:
         value = 300
     return min(900, max(30, value))
+
+
+def _mtp_probe_timeout() -> float:
+    raw = os.environ.get(MTP_PROBE_TIMEOUT_ENV, "45").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 45.0
+    return min(180.0, max(10.0, value))
+
+
+def _mtp_policy() -> str:
+    value = os.environ.get(MTP_POLICY_ENV, "auto").strip().lower()
+    if value not in {"auto", "off"}:
+        return "auto"
+    return value
 
 
 def _cuda_backend_files(package_dir: Path) -> list[Path]:
@@ -160,35 +181,73 @@ def _validate_cuda_binding() -> None:
         )
 
 
-def _write_config(config: Any, model_path: str) -> int:
+def _mtp_capable(config: Any) -> bool:
+    if _mtp_policy() == "off" or _MTP_DISABLED_REASON:
+        return False
+    extra = getattr(config, "extra", {})
+    if isinstance(extra, dict) and "mtp_capable" in extra:
+        return bool(extra["mtp_capable"])
+    labels = [
+        str(getattr(config, "model_id", "")),
+        str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else "",
+    ]
+    return any("MTP" in value.upper() for value in labels if value)
+
+
+def request_server_mode(config: Any, request: Any | None = None) -> str:
+    """Choose the narrowest safe server mode for this request.
+
+    The pinned server has no request-level switch for speculative decoding. JSON
+    response_format is implemented as a target-side grammar while MTP uses its own
+    unconstrained draft sampler. Structured planner pages therefore run on the
+    baseline target context. MTP is reserved for unconstrained text/code generation
+    and only after a live probe succeeds for this model/width.
+    """
+
+    response_format = getattr(request, "response_format", None) if request is not None else None
+    if response_format == "json":
+        return "baseline"
+    return "mtp" if _mtp_capable(config) else "baseline"
+
+
+def current_server_mode() -> str | None:
+    return _SERVER_MODE if colab_mtp_server_running() else None
+
+
+def _write_config(config: Any, model_path: str, *, mode: str) -> int:
+    if mode not in {"baseline", "mtp"}:
+        raise ValueError(f"Unknown Colab llama server mode: {mode}")
     threads = max(1, min(8, os.cpu_count() or 1))
-    width = _mtp_width()
+    width = _mtp_width() if mode == "mtp" else 0
+    model_config: dict[str, Any] = {
+        "path": model_path,
+        "alias": "local",
+        "n_ctx": min(int(config.max_context), SERVER_CONTEXT_CAP),
+        "max_output_tokens": int(config.max_new_tokens),
+        "n_seq_max": 1,
+        "n_batch": 512,
+        "n_ubatch": 512,
+        "threads": threads,
+        "threads_batch": threads,
+        "kv_unified": True,
+        "use_mmap": True,
+        "use_mlock": False,
+        "n_gpu_layers": -1,
+        "flash_attn": True,
+        "offload_kqv": True,
+    }
+    if mode == "mtp":
+        model_config.update(
+            {
+                "draft_model": "draft-mtp",
+                "draft_model_num_pred_tokens": width,
+                "draft_model_threads": max(1, min(4, threads)),
+                "draft_model_threads_batch": threads,
+            }
+        )
     payload = {
-        "server": {
-            "host": "127.0.0.1",
-            "port": 8910,
-        },
-        "model": {
-            "path": model_path,
-            "alias": "local",
-            "n_ctx": min(int(config.max_context), SERVER_CONTEXT_CAP),
-            "max_output_tokens": int(config.max_new_tokens),
-            "n_seq_max": 1,
-            "n_batch": 512,
-            "n_ubatch": 512,
-            "threads": threads,
-            "threads_batch": threads,
-            "kv_unified": True,
-            "use_mmap": True,
-            "use_mlock": False,
-            "n_gpu_layers": -1,
-            "flash_attn": True,
-            "offload_kqv": True,
-            "draft_model": "draft-mtp",
-            "draft_model_num_pred_tokens": width,
-            "draft_model_threads": max(1, min(4, threads)),
-            "draft_model_threads_batch": threads,
-        },
+        "server": {"host": "127.0.0.1", "port": 8910},
+        "model": model_config,
     }
     SERVER_CONFIG_PATH.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -202,16 +261,20 @@ def colab_mtp_server_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def colab_mtp_server_running() -> bool:
-    return _PROCESS is not None and _PROCESS.poll() is None and _ready()
+def colab_mtp_server_running(*, mode: str | None = None) -> bool:
+    running = _PROCESS is not None and _PROCESS.poll() is None and _ready()
+    if not running:
+        return False
+    return mode is None or _SERVER_MODE == mode
 
 
 def stop_colab_mtp_server(*, keep_enabled: bool = True) -> None:
-    """Release the MTP server process and its GPU allocation."""
+    """Release the managed llama server process and its GPU allocation."""
 
-    global _PROCESS
+    global _PROCESS, _SERVER_MODE
     _stop_process(_PROCESS)
     _PROCESS = None
+    _SERVER_MODE = None
     _close_log()
     if os.environ.get("LLAMA_SERVER_URL", "").rstrip("/") == SERVER_API_URL:
         os.environ.pop("LLAMA_SERVER_URL", None)
@@ -219,35 +282,39 @@ def stop_colab_mtp_server(*, keep_enabled: bool = True) -> None:
         os.environ.pop(ENABLED_ENV, None)
 
 
-def start_colab_mtp_server(config: Any) -> str:
-    """Start the pinned CUDA MTP server and return its OpenAI-compatible URL."""
+def start_colab_mtp_server(config: Any, *, mode: str = "baseline") -> str:
+    """Start the pinned CUDA server in a request-safe baseline or MTP mode."""
 
-    global _PROCESS, _LOG_HANDLE
+    global _PROCESS, _LOG_HANDLE, _SERVER_MODE
+
+    if mode == "mtp" and not _mtp_capable(config):
+        mode = "baseline"
+    if mode not in {"baseline", "mtp"}:
+        raise ValueError(f"Unknown Colab llama server mode: {mode}")
 
     os.environ[ENABLED_ENV] = "1"
 
     if _PROCESS is not None and _PROCESS.poll() is None:
-        if _ready():
+        if _ready() and _SERVER_MODE == mode:
             os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
-            print("MTP server: ready", SERVER_API_URL, flush=True)
             return SERVER_API_URL
         stop_colab_mtp_server(keep_enabled=True)
     elif _ready():
         raise RuntimeError(
             "Port 8910 is already serving a different unmanaged process. "
-            "Stop that process before starting the M.M.M MTP server."
+            "Stop that process before starting the M.M.M llama server."
         )
 
-    print("MTP server: checking CUDA binding", flush=True)
+    print("llama server: checking CUDA binding", flush=True)
     _validate_cuda_binding()
 
-    print("MTP server: resolving model", flush=True)
+    print("llama server: resolving model", flush=True)
     model_path = _resolve_model_path(config)
-    print("MTP server: model ready", Path(model_path).name, flush=True)
+    print("llama server: model ready", Path(model_path).name, flush=True)
 
-    print("MTP server: preparing launcher", flush=True)
+    print("llama server: preparing launcher", f"mode={mode}", flush=True)
     server_script = _server_source()
-    width = _write_config(config, model_path)
+    width = _write_config(config, model_path, mode=mode)
 
     _LOG_HANDLE = SERVER_LOG_PATH.open("w", encoding="utf-8")
     command = [
@@ -257,7 +324,8 @@ def start_colab_mtp_server(config: Any) -> str:
         "-C",
         str(SERVER_CONFIG_PATH),
     ]
-    print("MTP server: starting", f"draft_width={width}", flush=True)
+    mode_detail = f"draft_width={width}" if mode == "mtp" else "speculation=off"
+    print("llama server: starting", f"mode={mode}", mode_detail, flush=True)
     _PROCESS = subprocess.Popen(
         command,
         stdout=_LOG_HANDLE,
@@ -275,19 +343,22 @@ def start_colab_mtp_server(config: Any) -> str:
                 _LOG_HANDLE.flush()
             except Exception:
                 pass
-            tail = _log_tail()
+            tail = server_log_tail()
             _PROCESS = None
+            _SERVER_MODE = None
             _close_log()
             raise RuntimeError(
-                f"MTP server exited during startup with code {returncode}."
+                f"llama server exited during startup with code {returncode}."
                 + ("\n" + tail if tail else "")
             )
         if _ready():
+            _SERVER_MODE = mode
             os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
             elapsed = time.monotonic() - started
             print(
-                "MTP server: ready",
+                "llama server: ready",
                 SERVER_API_URL,
+                f"mode={mode}",
                 f"startup={elapsed:.1f}s",
                 flush=True,
             )
@@ -295,7 +366,8 @@ def start_colab_mtp_server(config: Any) -> str:
         now = time.monotonic()
         if now >= next_status:
             print(
-                "MTP server: starting",
+                "llama server: starting",
+                f"mode={mode}",
                 f"elapsed={now - started:.0f}s",
                 flush=True,
             )
@@ -304,17 +376,89 @@ def start_colab_mtp_server(config: Any) -> str:
 
     _stop_process(_PROCESS)
     _PROCESS = None
+    _SERVER_MODE = None
     if _LOG_HANDLE is not None:
         try:
             _LOG_HANDLE.flush()
         except Exception:
             pass
-    tail = _log_tail()
+    tail = server_log_tail()
     _close_log()
     raise RuntimeError(
-        f"MTP server startup timed out after {_start_timeout()} seconds."
+        f"llama server startup timed out after {_start_timeout()} seconds."
         + ("\n" + tail if tail else "")
     )
+
+
+def _mtp_probe_key(config: Any) -> tuple[str, str, int]:
+    extra = getattr(config, "extra", {})
+    filename = str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else ""
+    return str(getattr(config, "model_id", "")), filename, _mtp_width()
+
+
+def _probe_mtp_server() -> tuple[bool, str]:
+    payload = {
+        "model": "local",
+        "messages": [
+            {"role": "system", "content": "Return only the word OK."},
+            {"role": "user", "content": "OK"},
+        ],
+        "max_tokens": 8,
+        "temperature": 0.0,
+        "reasoning_effort": "none",
+        "stream": False,
+    }
+    started = time.monotonic()
+    try:
+        response = httpx.post(
+            f"{SERVER_API_URL}/chat/completions",
+            json=payload,
+            timeout=httpx.Timeout(_mtp_probe_timeout()),
+        )
+        elapsed = time.monotonic() - started
+        if response.status_code != 200:
+            return False, f"HTTP {response.status_code} after {elapsed:.1f}s"
+        body = response.json()
+        choices = body.get("choices") if isinstance(body, dict) else None
+        message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            return False, f"empty content after {elapsed:.1f}s"
+        return True, f"content={content.strip()[:32]!r} elapsed={elapsed:.1f}s"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def mark_mtp_unhealthy(reason: str) -> None:
+    global _MTP_DISABLED_REASON
+    rendered = reason.strip() or "runtime MTP failure"
+    if _MTP_DISABLED_REASON is None:
+        _MTP_DISABLED_REASON = rendered
+        print("llama server: MTP disabled for this runtime", rendered, flush=True)
+
+
+def ensure_colab_server_for_request(config: Any, request: Any) -> str:
+    """Ensure structured calls use baseline and only verified text calls use MTP."""
+
+    desired = request_server_mode(config, request)
+    url = start_colab_mtp_server(config, mode=desired)
+    if desired != "mtp":
+        return url
+
+    key = _mtp_probe_key(config)
+    if key in _MTP_VERIFIED_KEYS:
+        return url
+
+    print("llama server: verifying MTP text decode", f"width={key[2]}", flush=True)
+    ok, detail = _probe_mtp_server()
+    if ok:
+        _MTP_VERIFIED_KEYS.add(key)
+        print("llama server: MTP probe PASS", detail, flush=True)
+        return url
+
+    mark_mtp_unhealthy("probe failed: " + detail)
+    stop_colab_mtp_server(keep_enabled=True)
+    return start_colab_mtp_server(config, mode="baseline")
 
 
 def _install_planner_request_budget() -> None:
@@ -338,9 +482,6 @@ def _install_planner_request_budget() -> None:
                 return baseline
             context = min(configured_context, SERVER_CONTEXT_CAP)
             max_output = max(0, int(getattr(config, "max_new_tokens", 0) or 0))
-            # The server context is prompt + completion. Reserve the configured
-            # completion budget and fixed chat/schema overhead instead of pretending
-            # the registry's larger native model context is the active server context.
             available_tokens = max(1024, context - max_output - 2048)
             server_page_budget = max(
                 4 * 1024,
