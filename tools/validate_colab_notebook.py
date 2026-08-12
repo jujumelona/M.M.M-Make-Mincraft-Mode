@@ -14,6 +14,7 @@ EXPECTED_CELL_IDS = (
     "setup",
     "existing-input",
     "registry",
+    "mtp-server",
     "plan",
     "build",
     "download",
