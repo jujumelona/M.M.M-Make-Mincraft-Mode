@@ -6,10 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import colab_mtp_server
+from minecraft_mod_ai import llama_server_hardware_policy
 from minecraft_mod_ai.colab_llama_request_routing_contract import (
     _transient_managed_failure,
 )
 from minecraft_mod_ai.model_adapters import ModelBackendError
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
 def _config(*, model_id: str, filename: str = "model.gguf") -> SimpleNamespace:
@@ -23,6 +25,19 @@ def _config(*, model_id: str, filename: str = "model.gguf") -> SimpleNamespace:
 
 def _request(response_format) -> SimpleNamespace:
     return SimpleNamespace(response_format=response_format)
+
+
+def test_package_bootstrap_installs_request_safe_colab_decode_contract() -> None:
+    assert getattr(
+        LlamaCppAdapter.generate,
+        "_mmm_colab_request_mode_router",
+        False,
+    ) is True
+    assert getattr(
+        llama_server_hardware_policy._strict_server_generate,
+        "_mmm_local_stream_watchdog",
+        False,
+    ) is True
 
 
 @pytest.mark.parametrize(
