@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 
-SETUP_API_VERSION = "mmm/colab-runtime-setup-v2-native-llama-server"
+SETUP_API_VERSION = "mmm/colab-runtime-setup-v3-prebuilt-cache"
 RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v2"
 LOCAL_PROFILES = frozenset(
     {
@@ -32,12 +32,21 @@ REMOTE_TEXT_ROLES = ("PLANNER", "RESEARCH", "CODER", "CODER_SAFE", "VISION")
 REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio,training]"
 LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio,training]"
 
-# Pinned official ggml-org/llama.cpp release commit.  Local GGUF execution uses the
-# native llama-server binary built from this source; there is no Python binding server
-# or in-process GGUF fallback.
+# Pinned official ggml-org/llama.cpp release commit. Local GGUF execution uses the
+# native llama-server binary from the verified prebuilt bundle. Source compilation is
+# emergency-only and must be explicitly enabled; there is no Python binding fallback.
 LLAMA_SERVER_SOURCE_REPOSITORY = "https://github.com/ggml-org/llama.cpp.git"
 LLAMA_SERVER_SOURCE_REF = "ba360efe1f574ebae727aad64112d18ecedca85a"
 LLAMA_SERVER_DEFAULT_SOURCE_DIR = Path("/content/llama.cpp")
+_NATIVE_VERIFY_CACHE: dict[tuple[object, ...], tuple[bool, str]] = {}
+_NATIVE_VERIFY_CACHE_LIMIT = 16
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
@@ -235,7 +244,19 @@ def _native_server_candidates() -> list[Path]:
         / "bin"
         / "llama-server"
     )
-    return values
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for value in values:
+        try:
+            key = str(value.expanduser().resolve(strict=False))
+        except OSError:
+            key = str(value.expanduser().absolute())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value)
+    return unique
 
 
 def _native_cuda_backend(binary: Path) -> Path | None:
@@ -248,12 +269,35 @@ def _native_cuda_backend(binary: Path) -> Path | None:
     return None
 
 
+def _native_verify_signature(binary: Path, backend: Path) -> tuple[object, ...]:
+    binary = binary.resolve()
+    backend = backend.resolve()
+    binary_stat = binary.stat()
+    backend_stat = backend.stat()
+    return (
+        str(binary),
+        int(binary_stat.st_size),
+        int(binary_stat.st_mtime_ns),
+        str(backend),
+        int(backend_stat.st_size),
+        int(backend_stat.st_mtime_ns),
+        os.environ.get("LD_LIBRARY_PATH", ""),
+    )
+
+
 def _verify_native_server(binary: Path) -> tuple[bool, str]:
     if not binary.is_file() or not os.access(binary, os.X_OK):
         return False, "binary missing or not executable"
     backend = _native_cuda_backend(binary)
     if backend is None:
         return False, "CUDA backend library is missing"
+    try:
+        signature = _native_verify_signature(binary, backend)
+    except OSError as exc:
+        return False, f"native server stat failed: {type(exc).__name__}: {exc}"
+    cached = _NATIVE_VERIFY_CACHE.get(signature)
+    if cached is not None:
+        return cached
     try:
         completed = subprocess.run(
             [str(binary), "--version"],
@@ -267,7 +311,11 @@ def _verify_native_server(binary: Path) -> tuple[bool, str]:
         return False, f"version probe failed: {type(exc).__name__}: {exc}"
     if completed.returncode != 0:
         return False, "version probe failed: " + completed.stdout[-1000:]
-    return True, f"binary={binary.name} cuda_backend={backend.name}"
+    result = (True, f"binary={binary.name} cuda_backend={backend.name}")
+    _NATIVE_VERIFY_CACHE[signature] = result
+    while len(_NATIVE_VERIFY_CACHE) > _NATIVE_VERIFY_CACHE_LIMIT:
+        _NATIVE_VERIFY_CACHE.pop(next(iter(_NATIVE_VERIFY_CACHE)))
+    return result
 
 
 def _find_verified_native_server() -> Path | None:
@@ -350,7 +398,11 @@ def _prepare_native_source(source_dir: Path) -> None:
     except Exception:
         pass
     if current != LLAMA_SERVER_SOURCE_REF:
-        print("native llama-server: selecting pinned commit", LLAMA_SERVER_SOURCE_REF[:12], flush=True)
+        print(
+            "native llama-server: selecting pinned commit",
+            LLAMA_SERVER_SOURCE_REF[:12],
+            flush=True,
+        )
         _run_logged(
             [
                 "git",
@@ -388,15 +440,13 @@ def _ensure_native_server(torch: Any) -> str:
 
     major, minor = torch.cuda.get_device_capability(0)
     cuda_arch = str(int(major) * 10 + int(minor))
+    prebuilt_error: BaseException | None = None
     try:
         prebuilt = _ensure_prebuilt_native_server(cuda_arch=cuda_arch)
     except Exception as exc:
-        print(
-            "native llama-server: verified prebuilt unavailable; falling back to pinned source build",
-            f"{type(exc).__name__}: {exc}",
-            flush=True,
-        )
+        prebuilt_error = exc
         prebuilt = None
+
     if prebuilt:
         resolved = str(Path(prebuilt).expanduser().resolve())
         ok, detail = _verify_native_server(Path(resolved))
@@ -408,6 +458,25 @@ def _ensure_native_server(torch: Any) -> str:
         print("native llama-server: using verified prebuilt", resolved, flush=True)
         return resolved
 
+    if not _env_enabled("MMM_LLAMA_ALLOW_SOURCE_BUILD", False):
+        cause = (
+            f"{type(prebuilt_error).__name__}: {prebuilt_error}"
+            if prebuilt_error is not None
+            else "no compatible verified prebuilt bundle was returned"
+        )
+        raise RuntimeError(
+            f"verified prebuilt native llama-server unavailable for CUDA SM{cuda_arch}; "
+            "automatic source compilation is disabled to prevent long Colab rebuilds. "
+            "Wait for/fix the matching prebuilt release asset. Emergency source compilation "
+            "is available only with MMM_LLAMA_ALLOW_SOURCE_BUILD=1. Cause: "
+            + cause
+        ) from prebuilt_error
+
+    print(
+        "native llama-server: explicit emergency source-build fallback enabled",
+        f"arch={cuda_arch}",
+        flush=True,
+    )
     for tool in ("git", "cmake", "nvcc"):
         if shutil.which(tool) is None:
             raise RuntimeError(
@@ -476,7 +545,7 @@ def _install_project(*, local_profile: bool) -> None:
             "-m",
             "pip",
             "install",
-            "--upgrade",
+            "--prefer-binary",
             "--no-build-isolation",
             "-e",
             target,
@@ -799,11 +868,7 @@ def assert_setup_state(
         )
     else:
         native = receipt.get("native_llama_server")
-        binary = (
-            str(native.get("binary", ""))
-            if isinstance(native, Mapping)
-            else ""
-        )
+        binary = str(native.get("binary", "")) if isinstance(native, Mapping) else ""
         ok, detail = _verify_native_server(Path(binary)) if binary else (False, "missing")
         if not ok or os.environ.get("MMM_LLAMA_SERVER_BIN") != binary:
             raise RuntimeError(
