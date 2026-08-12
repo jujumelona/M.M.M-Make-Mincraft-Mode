@@ -49,7 +49,7 @@ def _as_speed_variant(value: Any, *, draft_p_min: float | None = None) -> SpeedS
 def _mtp_p_min_candidates() -> tuple[float, ...]:
     values: list[float] = [0.0]
     for token in os.environ.get(
-        "MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.6,0.8,0.9"
+        "MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.8"
     ).split(","):
         try:
             value = round(float(token.strip()), 4)
@@ -123,7 +123,7 @@ def _kv_candidates() -> tuple[str, ...]:
 def _kv_autotune_enabled(autotune: Any) -> bool:
     return bool(
         autotune._env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True)
-        and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", True)
+        and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", False)
         and _tuning_objective() == "single_stream"
     )
 
@@ -337,12 +337,23 @@ def _probe_p_min(
     config: Any,
     request: Any,
     selected: Any,
+    *,
+    baseline_probe: Any | None = None,
 ):
     if str(getattr(selected, "spec_type", "none")) != "draft-mtp":
         return _as_speed_variant(selected), ()
     candidates = _mtp_p_min_candidates()
     if len(candidates) <= 1:
         return _as_speed_variant(selected), ()
+
+    probes: list[Any] = []
+    baseline = baseline_probe if bool(getattr(baseline_probe, "ok", False)) else None
+    pending = candidates
+    if baseline is not None:
+        # p_min=0 is the MTP probe already selected by the prior stage. Reuse it;
+        # do not reload the same GGUF/server merely to recreate that baseline.
+        probes.append(baseline)
+        pending = tuple(value for value in candidates if value != 0.0)
 
     bench_request = autotune._compact_benchmark_request(request)
     probe_tokens = min(
@@ -351,9 +362,8 @@ def _probe_p_min(
             "MMM_LLAMA_AUTOTUNE_TOKENS", autotune._BENCHMARK_OUTPUT_TOKENS
         ),
     )
-    probes = []
     preferred_port = autotune._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
-    for p_min in candidates:
+    for p_min in pending:
         base = _as_speed_variant(selected, draft_p_min=p_min)
         root_name = base.name.split("|pm", 1)[0]
         variant = replace(
@@ -384,21 +394,22 @@ def _probe_p_min(
         finally:
             autotune._stop_server(process)
         probes.append(probe)
+        if baseline is None and p_min == 0.0 and bool(getattr(probe, "ok", False)):
+            baseline = probe
 
-    baseline = probes[0]
-    if not bool(getattr(baseline, "ok", False)):
+    if baseline is None or not bool(getattr(baseline, "ok", False)):
         return _as_speed_variant(selected), tuple(probes)
     valid = [
-        p
-        for p in probes
-        if bool(getattr(p, "ok", False))
-        and str(getattr(p, "output_sha256", ""))
+        probe
+        for probe in probes
+        if bool(getattr(probe, "ok", False))
+        and str(getattr(probe, "output_sha256", ""))
         == str(getattr(baseline, "output_sha256", ""))
-        and float(getattr(p, "predicted_tps", 0.0)) > 0
+        and float(getattr(probe, "predicted_tps", 0.0)) > 0
     ]
     if not valid:
         return _as_speed_variant(selected), tuple(probes)
-    best = max(valid, key=lambda p: float(getattr(p, "predicted_tps", 0.0)))
+    best = max(valid, key=lambda probe: float(getattr(probe, "predicted_tps", 0.0)))
     minimum_gain = autotune._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
     if best is not baseline and _decode_ratio(best, baseline) < max(1.0, minimum_gain):
         best = baseline
@@ -496,8 +507,28 @@ def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = No
 
             if decision is None:
                 return None
+            selected_baseline_probe = next(
+                (
+                    probe
+                    for probe in reversed(decision.probes)
+                    if bool(getattr(probe, "ok", False))
+                    and str(getattr(getattr(probe, "variant", None), "spec_type", "none"))
+                    == str(getattr(decision.selected, "spec_type", "none"))
+                    and int(getattr(getattr(probe, "variant", None), "draft_n_max", 0) or 0)
+                    == int(getattr(decision.selected, "draft_n_max", 0) or 0)
+                    and float(getattr(getattr(probe, "variant", None), "draft_p_min", 0.0) or 0.0)
+                    == 0.0
+                ),
+                None,
+            )
             selected, extra_probes = _probe_p_min(
-                autotune, binary, model_path, config, request, decision.selected
+                autotune,
+                binary,
+                model_path,
+                config,
+                request,
+                decision.selected,
+                baseline_probe=selected_baseline_probe,
             )
             selected_probe = next(
                 (
