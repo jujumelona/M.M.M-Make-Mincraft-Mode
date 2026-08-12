@@ -103,9 +103,12 @@ def test_runtime_package_never_rebuilds_native_llama() -> None:
     assert not (runtime_root / "llama_server_max_performance.py").exists()
 
 
-def test_bundle_workflows_are_independent_graph_enabled_cuda_builds() -> None:
+def test_bundle_workflows_are_parallel_graph_enabled_cuda_builds() -> None:
     worker = (
         ROOT / ".github" / "workflows" / "build-native-llama-cuda.yml"
+    ).read_text(encoding="utf-8")
+    launcher = (
+        ROOT / ".github" / "workflows" / "build-native-llama-cuda-all.yml"
     ).read_text(encoding="utf-8")
 
     assert "workflow_call:" in worker
@@ -123,14 +126,24 @@ def test_bundle_workflows_are_independent_graph_enabled_cuda_builds() -> None:
     assert "gh --version" in worker
     assert "Publish this architecture immediately" in worker
 
+    # One launcher creates three independent reusable-workflow jobs concurrently.
+    assert 'cuda_arch: ["75", "80", "89"]' in launcher
+    assert "fail-fast: false" in launcher
+    assert "uses: ./.github/workflows/build-native-llama-cuda.yml" in launcher
+    assert "cuda_arch: ${{ matrix.cuda_arch }}" in launcher
+    assert "contents: write" in launcher
+    assert "cancel-in-progress: true" in launcher
+
+    # Native compilation must not run for unrelated main commits.
+    assert "paths:" in launcher
+    assert "- .github/workflows/build-native-llama-cuda-all.yml" in launcher
+    assert "- .github/workflows/build-native-llama-cuda.yml" in launcher
+    assert "- tools/native_llama_bundle.py" in launcher
+
     for arch in ("75", "80", "89"):
-        wrapper = (
+        assert not (
             ROOT / ".github" / "workflows" / f"build-native-llama-sm{arch}.yml"
-        ).read_text(encoding="utf-8")
-        assert "push:" in wrapper
-        assert "uses: ./.github/workflows/build-native-llama-cuda.yml" in wrapper
-        assert f'cuda_arch: "{arch}"' in wrapper
-        assert "contents: write" in wrapper
+        ).exists()
 
 
 def test_bundle_workflow_uses_driver_stub_only_for_linking() -> None:
