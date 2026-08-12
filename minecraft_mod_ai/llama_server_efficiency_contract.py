@@ -63,8 +63,6 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         @wraps(current_payload)
         def payload_with_prompt_cache(adapter: Any, request: Any) -> dict[str, Any]:
             payload = current_payload(adapter, request)
-            # Keep prefix-KV reuse explicit. Planner continuation/repair requests
-            # commonly repeat the same system/contract prefix.
             payload["cache_prompt"] = True
             return payload
 
@@ -124,17 +122,16 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         stable_fingerprint._mmm_stable_model_signature = True  # type: ignore[attr-defined]
         autotune_module._fingerprint = stable_fingerprint
 
-    # Final native-server tuning is layered after the basic safety/telemetry policy so
-    # it can benchmark the authoritative server args instead of creating a second
-    # execution path.
-    from . import llama_server_max_performance as max_performance_module
-    from .llama_server_max_performance import install as install_max_performance
+    # Runtime tuning changes only llama-server startup/request parameters. CUDA Graphs
+    # are built into the verified native bundle/setup build, so package import never
+    # invokes cmake or recompiles native code.
+    from . import llama_server_runtime_tuning as runtime_tuning_module
+    from .llama_server_runtime_tuning import install as install_runtime_tuning
 
-    install_max_performance(autotune_module)
+    install_runtime_tuning(autotune_module)
 
-    # llama-server exposes n_cache_reuse per request. Keep the same candidate search,
-    # but run those candidates on one already-loaded server instead of reloading the
-    # multi-GB model once per value.
+    # n_cache_reuse is request-scoped. Probe all reuse widths on one selected server
+    # instead of reloading the multi-GB GGUF for each candidate.
     from .llama_cache_reuse_efficiency_contract import (
         install as install_cache_reuse_efficiency,
     )
@@ -142,21 +139,11 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
     install_cache_reuse_efficiency(
         autotune_module,
         hardware_policy_module,
-        max_performance_module,
+        runtime_tuning_module,
     )
 
-    # Successful production streams already carry exact prompt/completion usage.
-    # Consume that SSE usage and reuse the local HTTP connection instead of issuing
-    # /metrics before+after every request and /slots polls during active decode.
+    # Consume usage from the production SSE stream and reuse the HTTP connection;
+    # detailed /metrics and /slots telemetry remains an explicit diagnostic opt-in.
     from .llama_stream_efficiency_contract import install as install_stream_efficiency
 
     install_stream_efficiency(hardware_policy_module)
-
-    # The server can only benefit from multiple slots when MMM is allowed to issue
-    # concurrent requests. Share the resident llama-server GPU allocation between
-    # those requests while keeping image/speech/other local GPU runtimes exclusive.
-    from . import model_router as model_router_module
-    from . import scheduler_parallel_safety_contract as scheduler_module
-    from .llama_parallel_runtime_contract import install as install_parallel_runtime
-
-    install_parallel_runtime(model_router_module, scheduler_module)
