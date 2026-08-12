@@ -199,6 +199,11 @@ from .model_registry import ModelRegistry
 from .model_router import ModelRouter
 from .pipeline import PipelineResult
 from .planner import HeuristicPlanner, OpenAICompatiblePlanner
+from .preference_training import (
+    PreferenceCandidate,
+    PreferenceTraceError,
+    PreferenceTraceStore,
+)
 from .production_tools import ProductionToolService
 from .production_contract import (
     ProductionContractCompilation,
@@ -261,6 +266,9 @@ __all__ = [
     "OpenAICompatiblePlanner",
     "PipelineResult",
     "PlatformLock",
+    "PreferenceCandidate",
+    "PreferenceTraceError",
+    "PreferenceTraceStore",
     "ProductionModule",
     "ProductionContractCompilation",
     "ProductionToolService",
