@@ -43,13 +43,16 @@ class _FakeService:
                 type(self).active -= 1
 
 
+# Install once at module import so either test also passes when collected or run in
+# isolation. The installer is idempotent and marks the patched method.
+install(SimpleNamespace(ProductionToolService=_FakeService))
+
+
 def test_same_rag_target_has_one_builder_and_second_rechecks_exists(
     tmp_path: Path,
 ) -> None:
     _FakeService.active = 0
     _FakeService.max_active = 0
-    module = SimpleNamespace(ProductionToolService=_FakeService)
-    install(module)
     service = _FakeService(tmp_path)
     barrier = threading.Barrier(3)
     outcomes = []
@@ -80,7 +83,8 @@ def test_same_rag_target_has_one_builder_and_second_rechecks_exists(
 
 
 def test_different_rag_targets_can_still_build_in_parallel(tmp_path: Path) -> None:
-    # Use the real contract but pick two names whose 64-way stripes differ.
+    # Pick two canonical targets that map to different lock stripes so the test
+    # proves the contract serializes conflicts rather than all RAG work globally.
     from minecraft_mod_ai.production_tool_parallel_contract import _index_lock
 
     root = tmp_path.resolve()
@@ -94,8 +98,6 @@ def test_different_rag_targets_can_still_build_in_parallel(tmp_path: Path) -> No
             break
     assert second is not None
 
-    # The fake class was already patched by the previous install call. Separate
-    # paths with different stripes therefore execute the original method together.
     _FakeService.active = 0
     _FakeService.max_active = 0
     service = _FakeService(root)
