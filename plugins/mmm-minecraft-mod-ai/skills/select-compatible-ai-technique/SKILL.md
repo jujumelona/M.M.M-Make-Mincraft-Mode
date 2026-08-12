@@ -38,6 +38,9 @@ description: Research, compare, and fail-closed gate request-derived AI, agent, 
 9. Attach the normalized decision, evidence IDs, unresolved gates, topology,
    fallback, and immutable receipts to the proposal before implementation. A
    discovered candidate is evidence, not authorization to download or integrate.
+   Accept executed-test receipts only when a code-owned MAC binds the requirement,
+   candidate ID, revision, artifact digest, and evidence digest; a caller-computed
+   public hash is not execution proof.
 
 ## Runtime policy
 
