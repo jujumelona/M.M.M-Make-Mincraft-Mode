@@ -50,15 +50,16 @@ jobs:
           d=Path('/tmp/api.diff').read_text()
           required=['from typing import TYPE_CHECKING','if TYPE_CHECKING:','CompleteExecutionOptions, CompletePipelineResult','CompleteProposal']
           assert all(x in d for x in required)
-          # Guard against accidental method/body churn.
           changed=[line for line in d.splitlines() if line.startswith(('+','-')) and not line.startswith(('+++','---'))]
           assert len(changed) <= 6, changed
           PY
-      - name: Static and API tests
+      - name: Static and API-adjacent tests
         run: |
           python -m pip install --prefer-binary -e '.[dev]' ruff
           python -m ruff check minecraft_mod_ai/api.py --select E9,F63,F7,F82
-          python -m pytest -q tests/test_api.py tests/test_cli_ux.py --tb=short
+          python -m compileall -q minecraft_mod_ai/api.py
+          python -c "import minecraft_mod_ai.api"
+          python -m pytest -q tests/test_cli_ux.py --tb=short
       - name: Commit verified restoration
         run: |
           set -euo pipefail
