@@ -20,6 +20,7 @@ from .custom_generation_search_contract import install as _install_custom_genera
 from .orchestrator_jdt_gate_contract import install as _install_orchestrator_jdt_gate
 from .planner_json_runtime_contract import install as _install_planner_json_runtime
 from .planner_pagination_safety_contract import install as _install_planner_pagination_safety
+from .planner_parser_safety_contract import install as _install_planner_parser_safety
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
 from .repair_memory_budget_contract import install as _install_repair_memory_budget
 from .required_gate_compatibility_contract import install as _install_gate_compatibility
@@ -97,6 +98,7 @@ def install(
         validation_module,
     )
     _install_planner_json_runtime(complete_planner_module)
+    _install_planner_parser_safety(complete_planner_module)
     _install_planner_pagination_safety(complete_planner_module)
     _agentic_module.install(
         complete_planner_module=complete_planner_module,
