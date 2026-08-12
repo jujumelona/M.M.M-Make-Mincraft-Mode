@@ -131,8 +131,9 @@ class ModelRouter:
         *,
         role: str = "reranker",
         instruction: str = (
-            "Retrieve Minecraft Fabric 1.20.1 and Yarn 1.20.1 evidence that directly "
-            "answers the query."
+            "Retrieve the Minecraft modding evidence that directly answers the "
+            "query for the caller-selected platform target. Do not prefer or infer "
+            "a different Minecraft version or mapping namespace."
         ),
     ) -> list[float]:
         config = self.registry.role(self.profile, role)
