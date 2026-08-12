@@ -15,11 +15,16 @@ _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
 
 
 def install(custom_module_generator_module: Any) -> None:
-    """Bind custom coder prompts and patch scope to the approved live target."""
+    """Bind custom coder prompts, repair, and patch scope to the approved target."""
 
     _install_custom_generator_scope(custom_module_generator_module)
     _install_gradle_metadata_scope(custom_module_generator_module)
     _install_router_rewrite()
+
+    from . import repair_engine as repair_engine_module
+    from .platform_repair_target_contract import install as install_repair_target
+
+    install_repair_target(repair_engine_module)
 
 
 def _install_custom_generator_scope(module_api: Any) -> None:
