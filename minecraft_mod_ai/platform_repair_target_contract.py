@@ -105,6 +105,13 @@ def _install_dynamic_patch_request(module: Any) -> None:
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             response_format="json",
+            # Best-of-N candidate generation is a pure proposal phase. The normal
+            # generation stage exposes mutating MCP tools such as apply_source_patch;
+            # allowing candidates to call them would let a losing candidate change the
+            # project before verifier selection. Candidates therefore receive only the
+            # exact host-supplied evidence/context and return inert patch JSON. The one
+            # selected patch is applied later by RepairEngine.
+            enable_tools=False,
         )
         value = module._extract_json(text)
         if set(value) != {"operations"}:
@@ -134,4 +141,5 @@ def _install_dynamic_patch_request(module: Any) -> None:
     # progressive scope is committed downstream by the repair winner selector.
     request_patch._mmm_tracks_repair_scope = True
     request_patch._mmm_defers_repair_scope_commit = True
+    request_patch._mmm_pure_candidate_generation = True
     cls._request_patch = request_patch
