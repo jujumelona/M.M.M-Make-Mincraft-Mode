@@ -11,9 +11,9 @@ def install(incremental_module: Any) -> None:
     # the local GPU at one decode slot, remove host-imposed planner page width and
     # dependency-head-of-line sharding, journal large checkpoints in linear time,
     # checkpoint individual image/audio sources inside coarse residency-friendly
-    # shards, batch large-DAG scheduler polling, losslessly salvage truncated
-    # production streams, and escalate best-of-N LLM search only after a verifier
-    # state actually persists.
+    # shards, batch large-DAG scheduler polling, losslessly salvage and resume
+    # truncated production streams, and escalate best-of-N LLM search only after a
+    # verifier state actually persists.
     from . import agentic_optimization_contract as agentic_module
     from . import audio_generator as audio_module
     from . import complete_orchestrator as orchestrator_module
@@ -28,6 +28,9 @@ def install(incremental_module: Any) -> None:
     from .planner_checkpoint_journal_contract import install as install_checkpoint_journal
     from .production_stream_efficiency_contract import (
         install as install_production_stream_efficiency,
+    )
+    from .production_stream_resume_contract import (
+        install as install_production_stream_resume,
     )
     from .scheduler_poll_efficiency_contract import install as install_scheduler_poll_efficiency
 
@@ -55,10 +58,12 @@ def install(incremental_module: Any) -> None:
     no_production_width_narrowing._mmm_no_fixed_production_width = True  # type: ignore[attr-defined]
     planner_runtime_module._narrow_production_repair_request = no_production_width_narrowing
 
-    # This wrapper is intentionally installed after planner_json_runtime_contract. It
-    # bypasses the historical page-local retry loop for production pages, while leaving
-    # every non-production structured planner page untouched.
+    # These wrappers are intentionally installed after planner_json_runtime_contract.
+    # Production uses lossless stream salvage, then an outer disk-resume layer so a
+    # crash after fsync but before salvage never causes another full GPU decode. All
+    # non-production structured planner pages retain their existing behavior.
     install_production_stream_efficiency(complete_planner_module)
+    install_production_stream_resume(complete_planner_module)
     install_execution_efficiency(
         complete_planner_module=complete_planner_module,
         work_graph_module=work_graph_module,
