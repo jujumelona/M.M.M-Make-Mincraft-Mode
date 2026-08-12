@@ -47,7 +47,7 @@ def _literal_print_prefixes(path: Path) -> list[str]:
     return values
 
 
-def test_colab_mtp_cell_uses_pinned_launcher_without_source_build() -> None:
+def test_colab_llama_cell_uses_pinned_launcher_without_source_build() -> None:
     for notebook in NOTEBOOKS:
         source = _cell_source(notebook, "mtp-server")
         assert "start_colab_mtp_server" in source
@@ -69,7 +69,7 @@ def test_colab_installs_exact_binary_only_cuda_wheel() -> None:
     assert "llama_supports_gpu" not in text
 
 
-def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
+def test_pinned_low_level_server_supports_baseline_and_explicit_draft_mtp() -> None:
     text = MTP_LAUNCHER.read_text(encoding="utf-8")
     assert colab_mtp_server.LLAMA_CPP_PYTHON_VERSION == "0.3.34"
     assert (
@@ -79,6 +79,9 @@ def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
     assert "examples/server/server.py" in colab_mtp_server.SERVER_SOURCE_URL
     assert '"draft_model": "draft-mtp"' in text
     assert '"draft_model_num_pred_tokens": width' in text
+    assert 'if response_format == "json":' in text
+    assert 'return "baseline"' in text
+    assert "_probe_mtp_server" in text
     assert "_git_blob_sha1(data)" in text
     assert "libggml-cuda.so" in text
     assert "llama_supports_gpu" not in text
@@ -86,7 +89,7 @@ def test_pinned_low_level_server_enables_actual_draft_mtp() -> None:
         assert token not in text
 
 
-def test_colab_mtp_startup_is_fail_fast_and_bounded() -> None:
+def test_colab_llama_startup_is_fail_fast_and_bounded() -> None:
     text = MTP_LAUNCHER.read_text(encoding="utf-8")
     assert 'START_TIMEOUT_ENV = "MMM_COLAB_MTP_SERVER_START_TIMEOUT"' in text
     assert '"-u"' in text
@@ -97,22 +100,23 @@ def test_colab_mtp_startup_is_fail_fast_and_bounded() -> None:
     assert "CUDA backend library is missing" in text
 
 
-def test_colab_mtp_status_lines_are_state_only() -> None:
+def test_colab_llama_status_lines_are_state_only() -> None:
     prefixes = _literal_print_prefixes(MTP_LAUNCHER)
     assert prefixes
-    assert all(value.startswith("MTP server:") for value in prefixes)
+    assert all(value.startswith("llama server:") for value in prefixes)
     required = {
-        "MTP server: checking CUDA binding",
-        "MTP server: resolving model",
-        "MTP server: model ready",
-        "MTP server: preparing launcher",
-        "MTP server: starting",
-        "MTP server: ready",
+        "llama server: checking CUDA binding",
+        "llama server: resolving model",
+        "llama server: model ready",
+        "llama server: preparing launcher",
+        "llama server: starting",
+        "llama server: ready",
+        "llama server: verifying MTP text decode",
     }
     assert required.issubset(set(prefixes))
 
 
-def test_colab_mtp_ready_requires_expected_model_alias(monkeypatch) -> None:
+def test_colab_llama_ready_requires_expected_model_alias(monkeypatch) -> None:
     class Response:
         status_code = 200
 
@@ -129,7 +133,7 @@ def test_colab_mtp_ready_requires_expected_model_alias(monkeypatch) -> None:
     assert colab_mtp_server._ready() is True
 
 
-def test_colab_mtp_stop_releases_process_and_preserves_restart_intent(monkeypatch) -> None:
+def test_colab_llama_stop_releases_process_and_preserves_restart_intent(monkeypatch) -> None:
     class Process:
         def __init__(self) -> None:
             self.alive = True
@@ -147,6 +151,7 @@ def test_colab_mtp_stop_releases_process_and_preserves_restart_intent(monkeypatc
 
     process = Process()
     monkeypatch.setattr(colab_mtp_server, "_PROCESS", process)
+    monkeypatch.setattr(colab_mtp_server, "_SERVER_MODE", "baseline")
     monkeypatch.setattr(colab_mtp_server, "_LOG_HANDLE", None)
     monkeypatch.setenv(colab_mtp_server.ENABLED_ENV, "1")
     monkeypatch.setenv("LLAMA_SERVER_URL", colab_mtp_server.SERVER_API_URL)
@@ -155,16 +160,17 @@ def test_colab_mtp_stop_releases_process_and_preserves_restart_intent(monkeypatc
 
     assert process.terminated is True
     assert colab_mtp_server._PROCESS is None
+    assert colab_mtp_server._SERVER_MODE is None
     assert os.environ.get(colab_mtp_server.ENABLED_ENV) == "1"
     assert "LLAMA_SERVER_URL" not in os.environ
 
 
-def test_autotune_restarts_enabled_colab_mtp_server(monkeypatch) -> None:
+def test_autotune_restarts_enabled_colab_server_in_safe_default_mode(monkeypatch) -> None:
     calls: list[object] = []
     monkeypatch.setattr(colab_mtp_server, "colab_mtp_server_enabled", lambda: True)
 
-    def fake_start(config):
-        calls.append(config)
+    def fake_start(config, **kwargs):
+        calls.append((config, kwargs))
         return "http://127.0.0.1:8910/v1"
 
     monkeypatch.setattr(colab_mtp_server, "start_colab_mtp_server", fake_start)
@@ -172,7 +178,7 @@ def test_autotune_restarts_enabled_colab_mtp_server(monkeypatch) -> None:
     result = llama_server_autotune.ensure_tuned_server(config, SimpleNamespace())
 
     assert result == "http://127.0.0.1:8910/v1"
-    assert calls == [config]
+    assert calls == [(config, {})]
     assert getattr(
         llama_server_autotune.ensure_tuned_server,
         "_mmm_colab_mtp_restart",
@@ -180,7 +186,7 @@ def test_autotune_restarts_enabled_colab_mtp_server(monkeypatch) -> None:
     )
 
 
-def test_image_generation_wrapper_releases_colab_mtp_before_exclusive_gpu() -> None:
+def test_image_generation_wrapper_releases_colab_llama_before_exclusive_gpu() -> None:
     assert getattr(
         complete_orchestrator_services.generate_assets,
         "_mmm_releases_colab_mtp",
