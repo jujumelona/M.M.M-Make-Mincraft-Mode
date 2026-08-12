@@ -10,45 +10,9 @@ _INSTALL_MARKER = "_mmm_mod_scope_contract_installed"
 
 
 def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
-    """Install mod-only scope; install platform routing only on the real complete planner."""
+    """Install mod-only scope without composing platform contracts."""
     if getattr(complete_spec_module, _INSTALL_MARKER, False):
         return
-
-    if hasattr(complete_planner_module, "CompleteGameDesignPlanner"):
-        from . import central_research as central_research_module
-        from . import ecosystem_discovery as ecosystem_module
-        from . import game_design as game_design_module
-        from . import platform_planning_contract as platform_planning_module
-        from . import retrieval as retrieval_module
-        from . import technology_radar as technology_module
-        from .platform_central_ai_contract import install as install_platform_central_ai
-        from .platform_ecosystem_contract import install as install_platform_ecosystem
-        from .platform_live_rag_contract import install as install_platform_live_rag
-        from .platform_planning_contract import install as install_platform_planning
-        from .platform_prompt_contract import install as install_platform_prompts
-        from .platform_technology_contract import install as install_platform_technology
-
-        install_platform_planning(
-            game_design_module=game_design_module,
-            complete_planner_module=complete_planner_module,
-            central_research_module=central_research_module,
-            retrieval_module=retrieval_module,
-            technology_module=technology_module,
-        )
-        # Replace the old 1.20.1 receipt relabeling shim before any live plan runs.
-        install_platform_live_rag(
-            retrieval_module=retrieval_module,
-            platform_planning_module=platform_planning_module,
-        )
-        install_platform_technology(technology_module)
-        install_platform_ecosystem(ecosystem_module, complete_planner_module)
-        install_platform_prompts(complete_planner_module)
-        # Must be last: this wrapper gives the real central router the live-discovered
-        # candidate set and lowers future-version source modules before approval.
-        install_platform_central_ai(
-            game_design_module=game_design_module,
-            complete_planner_module=complete_planner_module,
-        )
 
     original_prompt: Callable[..., str] = complete_planner_module._implementation_prompt
     original_builder: Callable[..., Any] = complete_spec_module.complete_proposal_from_parts
@@ -79,12 +43,19 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         )
 
     def scoped_complete_proposal_from_parts(
-        *, requested_prompt: str, base_proposal: Any, game_design: dict[str, Any],
-        modules: tuple[Any, ...], assets: tuple[Any, ...] = (), audio: tuple[Any, ...] = (),
-        acceptance_tests: tuple[str, ...], existing_input_sha256: str = "",
+        *,
+        requested_prompt: str,
+        base_proposal: Any,
+        game_design: dict[str, Any],
+        modules: tuple[Any, ...],
+        assets: tuple[Any, ...] = (),
+        audio: tuple[Any, ...] = (),
+        acceptance_tests: tuple[str, ...],
+        existing_input_sha256: str = "",
     ) -> Any:
         method_plan = resolve_mod_development_methods(
-            requested_prompt, existing_project=bool(existing_input_sha256)
+            requested_prompt,
+            existing_project=bool(existing_input_sha256),
         )
         if method_plan["standalone_map_requested"]:
             raise SpecValidationError(
@@ -93,9 +64,13 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         method_ids = frozenset(method_plan["method_ids"])
         worldgen_selected = "fabric_worldgen" in method_ids
         worldgen_modules = tuple(
-            module.module_id for module in modules
+            module.module_id
+            for module in modules
             if module.kind in _WORLDGEN_MODULE_KINDS
-            or (module.kind == "custom_java" and module.config.get("requested_kind") in _WORLDGEN_MODULE_KINDS)
+            or (
+                module.kind == "custom_java"
+                and module.config.get("requested_kind") in _WORLDGEN_MODULE_KINDS
+            )
         )
         if not worldgen_selected and worldgen_modules:
             raise SpecValidationError(
@@ -112,9 +87,14 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             },
         }
         return original_builder(
-            requested_prompt=requested_prompt, base_proposal=base_proposal,
-            game_design=scoped_design, modules=modules, assets=assets, audio=audio,
-            acceptance_tests=acceptance_tests, existing_input_sha256=existing_input_sha256,
+            requested_prompt=requested_prompt,
+            base_proposal=base_proposal,
+            game_design=scoped_design,
+            modules=modules,
+            assets=assets,
+            audio=audio,
+            acceptance_tests=acceptance_tests,
+            existing_input_sha256=existing_input_sha256,
         )
 
     complete_planner_module._implementation_prompt = scoped_implementation_prompt
