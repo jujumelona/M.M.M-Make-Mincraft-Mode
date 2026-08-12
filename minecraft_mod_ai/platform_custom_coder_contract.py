@@ -205,5 +205,13 @@ def _rewrite_message(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]
         "Minecraft Fabric 1.20.1",
         f"Minecraft {adapter.minecraft_version} {adapter.loader.capitalize()}",
     )
+    content = content.replace(
+        "create/replace patch operations for Java source files.",
+        "create/replace/edit patch operations for source, resources, and approved Gradle metadata.",
+    )
+    content = content.replace(
+        "array containing exact Java source file patches under 'src/main/java/'.",
+        "array containing exact patches within the host-approved source, resource, and Gradle metadata scope.",
+    )
     result["content"] = content
     return result
