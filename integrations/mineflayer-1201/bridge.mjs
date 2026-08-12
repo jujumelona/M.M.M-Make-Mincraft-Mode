@@ -47,6 +47,23 @@ function blockAtParams(current, params) {
   return { block, x, y, z };
 }
 
+function abortBot(current, reason) {
+  if (bot === current) bot = null;
+  try {
+    current.quit(reason);
+    return;
+  } catch (_) {
+    // A connection that failed before login may not support quit(). Fall through to
+    // the lower-level close path when available.
+  }
+  try {
+    current.end?.();
+  } catch (_) {
+    // The Python supervisor also has a hard request deadline and will kill/reap this
+    // bridge process if Mineflayer itself cannot close a broken socket.
+  }
+}
+
 async function connect(params) {
   if (bot) throw new Error("Mineflayer bot is already connected");
   const host = String(params.host || "127.0.0.1");
@@ -61,29 +78,73 @@ async function connect(params) {
   if (!/^[A-Za-z0-9_]{1,16}$/.test(username)) {
     throw new Error("Invalid Minecraft bot username");
   }
-  bot = mineflayer.createBot({
+
+  const current = mineflayer.createBot({
     host,
     port,
     username,
     version: TARGET_VERSION,
     auth: "offline"
   });
-  bot.loadPlugin(pathfinder);
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Mineflayer spawn timed out")), 60000);
-    bot.once("spawn", () => {
-      clearTimeout(timeout);
-      const movement = new Movements(bot);
-      bot.pathfinder.setMovements(movement);
-      resolve();
+  bot = current;
+  current.loadPlugin(pathfinder);
+
+  try {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      let timeout = null;
+
+      const cleanup = () => {
+        if (timeout !== null) clearTimeout(timeout);
+        current.removeListener("spawn", onSpawn);
+        current.removeListener("error", onError);
+        current.removeListener("kicked", onKicked);
+        current.removeListener("end", onEnd);
+      };
+      const finish = error => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve();
+      };
+      const onSpawn = () => {
+        try {
+          const movement = new Movements(current);
+          current.pathfinder.setMovements(movement);
+          finish(null);
+        } catch (error) {
+          finish(error);
+        }
+      };
+      const onError = error => finish(error instanceof Error ? error : new Error(String(error)));
+      const onKicked = reason => finish(new Error(`kicked: ${reason}`));
+      const onEnd = reason => finish(new Error(`ended before spawn: ${reason || "unknown"}`));
+
+      timeout = setTimeout(
+        () => finish(new Error("Mineflayer spawn timed out")),
+        60000
+      );
+      current.once("spawn", onSpawn);
+      current.once("error", onError);
+      current.once("kicked", onKicked);
+      current.once("end", onEnd);
     });
-    bot.once("error", reject);
-    bot.once("kicked", reason => reject(new Error(`kicked: ${reason}`)));
-  });
-  if (bot.version !== TARGET_VERSION) {
-    throw new Error(`Mineflayer connected as ${bot.version}, expected ${TARGET_VERSION}`);
+
+    if (current.version !== TARGET_VERSION) {
+      throw new Error(`Mineflayer connected as ${current.version}, expected ${TARGET_VERSION}`);
+    }
+
+    // Keep the global state truthful after a server-side disconnect. Without this,
+    // a dead bot object permanently blocks later connect attempts.
+    current.once("end", () => {
+      if (bot === current) bot = null;
+    });
+    return status();
+  } catch (error) {
+    abortBot(current, "MMM connect failed");
+    throw error;
   }
-  return status();
 }
 
 function status() {
