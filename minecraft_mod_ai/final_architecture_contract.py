@@ -4,10 +4,12 @@ from typing import Any
 
 from . import agentic_optimization_contract as _agentic_module
 from . import atomic_requirement_contract as _atomic_module
+from . import complete_spec as _complete_spec_module
 from . import custom_module_generator as _custom_module_generator_module
 from . import planner_json_runtime_contract as _planner_json_runtime_module
 from . import planner_pagination_safety_contract as _planner_pagination_module
 from . import production_contract as _production_contract_module
+from . import spec as _spec_module
 from . import work_graph as _work_graph_module
 from .atomic_efficiency_contract import install as _install_atomic_efficiency
 from .atomic_evidence_routing_contract import install as _install_atomic_routes
@@ -26,6 +28,7 @@ from .planner_outline_identity_contract import install as _install_planner_outli
 from .planner_pagination_safety_contract import install as _install_planner_pagination_safety
 from .planner_parser_safety_contract import install as _install_planner_parser_safety
 from .planner_strict_json_contract import install as _install_planner_strict_json
+from .proposal_deserialization_contract import install as _install_proposal_deserialization
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
 from .repair_memory_budget_contract import install as _install_repair_memory_budget
 from .required_gate_compatibility_contract import install as _install_gate_compatibility
@@ -64,6 +67,7 @@ def install(
     graph = work_graph_module or _work_graph_module
     production = production_contract_module or _production_contract_module
 
+    _install_proposal_deserialization(_spec_module, _complete_spec_module)
     _install_build_input_scope(validation_module)
     _install_atomic_efficiency(_atomic_module)
     _install_atomic_routes(
