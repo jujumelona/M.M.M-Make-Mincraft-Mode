@@ -85,33 +85,63 @@ jobs:
           fi
           grep -q '^GGML_CUDA_GRAPHS:BOOL=ON$' llama.cpp/build/CMakeCache.txt
 
-      - name: Package server and shared libraries
+      - name: Package one copy of each shared library
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf bundle dist
           mkdir -p bundle/bin dist
-          cp -L llama.cpp/build/bin/llama-server bundle/bin/llama-server
-          shopt -s nullglob
-          libraries=(llama.cpp/build/bin/*.so*)
-          test "${#libraries[@]}" -gt 0
-          for library in "${libraries[@]}"; do
-            cp -L "$library" "bundle/bin/$(basename "$library")"
-          done
-          test -x bundle/bin/llama-server
-          find bundle/bin -maxdepth 1 -type f -name 'libggml-cuda.so*' | grep -q .
-          test ! -e bundle/bin/libcuda.so
-          test ! -e bundle/bin/libcuda.so.1
           python3 - <<'PY'
           import hashlib
           import json
           import os
+          import shutil
           from pathlib import Path
 
-          root = Path("bundle")
-          files = {}
-          for path in sorted((root / "bin").iterdir()):
-              if path.is_file():
-                  files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+          source = Path("llama.cpp/build/bin").resolve()
+          root = Path("bundle").resolve()
+          target = root / "bin"
+
+          server = source / "llama-server"
+          if not server.is_file():
+              raise SystemExit("llama-server is missing")
+          shutil.copy2(server, target / "llama-server")
+
+          aliases: dict[str, str] = {}
+          real_files: dict[str, Path] = {}
+          libraries = sorted(source.glob("*.so*"))
+          if not libraries:
+              raise SystemExit("no shared libraries were produced")
+          for entry in libraries:
+              if not entry.is_file():
+                  continue
+              resolved = entry.resolve(strict=True)
+              if not resolved.is_relative_to(source):
+                  raise SystemExit(f"shared library resolves outside build/bin: {entry}")
+              real_files.setdefault(resolved.name, resolved)
+              if entry.name != resolved.name:
+                  aliases[f"bin/{entry.name}"] = f"bin/{resolved.name}"
+
+          for name, path in sorted(real_files.items()):
+              shutil.copy2(path, target / name)
+
+          files: dict[str, str] = {}
+          for path in sorted(target.iterdir()):
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit(f"bundle must contain regular files only: {path}")
+              relative = path.relative_to(root).as_posix()
+              files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+          if not any(name.startswith("bin/libggml-cuda.so") for name in files):
+              raise SystemExit("CUDA backend real file is missing")
+          if any(name.startswith("bin/libcuda.so") for name in files):
+              raise SystemExit("CUDA driver stubs must never be packaged")
+          if not aliases:
+              raise SystemExit("expected shared-library aliases were not discovered")
+          for alias, real in aliases.items():
+              if real not in files:
+                  raise SystemExit(f"alias target is not a packaged real file: {alias} -> {real}")
+
           manifest = {
               "schema_version": os.environ["BUNDLE_SCHEMA"],
               "llama_source_ref": os.environ["LLAMA_SOURCE_REF"],
@@ -120,12 +150,21 @@ jobs:
               "cuda_graphs": True,
               "platform": "linux-x86_64",
               "files": files,
+              "aliases": dict(sorted(aliases.items())),
           }
           (root / "manifest.json").write_text(
               json.dumps(manifest, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
+          print(
+              f"packaged regular files={len(files)} aliases={len(aliases)} "
+              f"bytes={sum((root / name).stat().st_size for name in files)}"
+          )
           PY
+          test -x bundle/bin/llama-server
+          test -z "$(find bundle -type l -print -quit)"
+          test ! -e bundle/bin/libcuda.so
+          test ! -e bundle/bin/libcuda.so.1
           asset="${BUNDLE_PREFIX}-sm${BUNDLE_ARCH}-linux-x86_64.tar.gz"
           tar -C bundle -czf "dist/$asset" .
           (cd dist && sha256sum "$asset" > "$asset.sha256")
@@ -150,9 +189,6 @@ jobs:
           (cd dist && sha256sum -c "$asset.sha256")
 
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # Do not pass --target here. GITHUB_TOKEN cannot create a release
-            # targeting a commit that modifies workflow files because it cannot
-            # receive workflows:write. The default-branch head is the intended tag.
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Native llama.cpp CUDA b10375 + CUDA Graphs" \
