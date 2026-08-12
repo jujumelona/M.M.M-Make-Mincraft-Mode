@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import complete_planner as planner
+from minecraft_mod_ai.planner_module_identity_contract import install as install_identity
 from minecraft_mod_ai.planner_parser_safety_contract import install
 from minecraft_mod_ai.spec import SpecValidationError
 
@@ -16,6 +17,36 @@ def test_module_does_not_silently_drop_invalid_dependency_shape() -> None:
                 "kind": "custom_java",
                 "config": {},
                 "depends_on": "other_module",
+                "required_gates": [],
+            }
+        )
+
+
+def test_module_identity_is_not_silently_normalized() -> None:
+    install(planner)
+    install_identity(planner)
+    with pytest.raises(SpecValidationError, match="already be lowercase snake_case"):
+        planner._module(
+            {
+                "module_id": "Boss System",
+                "kind": "custom_java",
+                "config": {},
+                "depends_on": [],
+                "required_gates": [],
+            }
+        )
+
+
+def test_dependency_identity_is_not_silently_normalized() -> None:
+    install(planner)
+    install_identity(planner)
+    with pytest.raises(SpecValidationError, match="invalid dependency ids"):
+        planner._module(
+            {
+                "module_id": "boss_system",
+                "kind": "custom_java",
+                "config": {},
+                "depends_on": ["Core System"],
                 "required_gates": [],
             }
         )
