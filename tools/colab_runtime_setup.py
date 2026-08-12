@@ -433,6 +433,7 @@ def _ensure_native_server(torch: Any) -> str:
             str(build_dir),
             "-DCMAKE_BUILD_TYPE=Release",
             "-DGGML_CUDA=ON",
+            "-DGGML_CUDA_GRAPHS=ON",
             f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}",
             "-DLLAMA_BUILD_TESTS=OFF",
             "-DLLAMA_BUILD_EXAMPLES=OFF",
