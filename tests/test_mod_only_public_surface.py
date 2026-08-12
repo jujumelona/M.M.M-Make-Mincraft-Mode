@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import mcp_gateway
 from minecraft_mod_ai import mcp_server
 from minecraft_mod_ai.mcp_tools import MMMToolService
 from minecraft_mod_ai.skill_catalog import MUTATING_TOOLS, REVIEWED_TOOL_STAGES
@@ -18,10 +17,13 @@ def test_primary_mcp_has_no_standalone_map_tools() -> None:
     assert REMOVED.isdisjoint(mcp_server._tool_names_for_stage("all"))
 
 
-def test_compatibility_gateway_has_no_map_compiler_surface() -> None:
-    assert "generate_world_ir" not in mcp_gateway._CORE_TOOLS
-    assert "compile_world" not in mcp_gateway._PRODUCTION_TOOLS
+def test_primary_service_has_no_removed_map_compiler_surface() -> None:
     assert not hasattr(MMMToolService, "generate_world_ir")
+
+
+def test_obsolete_compatibility_entrypoints_are_physically_removed() -> None:
+    assert not (ROOT / "mcp_gateway.py").exists()
+    assert not (ROOT / "colab_app.py").exists()
 
 
 def test_skill_policy_physically_excludes_removed_tools() -> None:

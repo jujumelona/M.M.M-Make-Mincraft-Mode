@@ -59,9 +59,9 @@ jobs:
           python -m pip install --force-reinstall 'setuptools==75.3.4'
           python -m pip install --no-deps --no-build-isolation -e .
       - name: Compile Python
-        run: python -m compileall -q minecraft_mod_ai tests tools mcp_gateway.py download_resources.py
+        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
       - name: Import package bootstrap
-        run: python -c "import minecraft_mod_ai; import mcp_gateway"
+        run: python -c "import minecraft_mod_ai"
       - name: Validate Mineflayer bridge syntax
         run: node --check integrations/mineflayer-1201/bridge.mjs
       - name: Verify generated notebook
