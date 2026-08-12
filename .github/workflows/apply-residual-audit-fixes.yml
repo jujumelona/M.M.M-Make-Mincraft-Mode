@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
 
-# Final targeted retry: native setup assertion, repair prompt, final page atomicity.
+# Idempotent retry: concurrent main already removed the legacy notebook cell.
 jobs:
   apply:
     runs-on: ubuntu-latest
@@ -24,6 +24,16 @@ jobs:
           cache: pip
       - name: Apply residual fixes
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/_audit_fix_residuals.py')
+          s = p.read_text(encoding='utf-8')
+          old = '    if removed != 1:\n        raise RuntimeError(f"expected one legacy MTP notebook cell, removed {removed}")\n'
+          new = '    if removed not in {0, 1}:\n        raise RuntimeError(f"expected at most one legacy MTP notebook cell, removed {removed}")\n'
+          if old not in s:
+              raise SystemExit('helper notebook idempotency target changed')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
           python tools/_audit_fix_residuals.py
           python tools/_audit_fix_residuals2.py
           rm tools/_audit_fix_residuals.py tools/_audit_fix_residuals2.py
