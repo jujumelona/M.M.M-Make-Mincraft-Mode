@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .model_adapters import (
     EmbeddingAdapter,
@@ -20,6 +22,16 @@ from .model_registry import ModelRegistry
 
 
 _GPU_EXCLUSIVE_LOCK = threading.RLock()
+_ROLE_TOOL_STAGE = {
+    "planner": "planning",
+    "researcher": "research",
+    "coder": "generation",
+    "coder_safe": "quality",
+    "visual_critic": "quality",
+}
+_NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
+_DEFAULT_MAX_TOOL_ROUNDS = 8
+_DEFAULT_MAX_TOOL_CALLS = 24
 
 
 class ModelRouter:
@@ -30,6 +42,7 @@ class ModelRouter:
         *,
         profile: str = "t4_local",
         registry: ModelRegistry | None = None,
+        agent_tool_runtime_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.registry = registry or ModelRegistry()
         self.profile = profile
@@ -37,15 +50,17 @@ class ModelRouter:
         self._generation_lock = threading.RLock()
         self._active_generation_role: str | None = None
         self._active_generation_adapter: Any | None = None
+        self._agent_tool_runtime_factory = agent_tool_runtime_factory
+        self._agent_tool_runtime: Any | None = None
 
     @contextmanager
     def generation_session(self, role: str):
         """Keep one text-generation backend alive for a bounded workflow.
 
-        Only one role can be pinned on a router at a time.  This avoids an
+        Only one role can be pinned on a router at a time. This avoids an
         unbounded multi-model VRAM cache while allowing a paginated planner to
         reuse the same processor and weights until its complete plan succeeds or
-        raises.  Direct ``generate_text`` calls outside this context retain their
+        raises. Direct ``generate_text`` calls outside this context retain their
         existing load-generate-release lifetime.
         """
 
@@ -80,6 +95,8 @@ class ModelRouter:
         *,
         media_paths: Sequence[str | Path] = (),
         response_format: str = "text",
+        tool_stage: str | None = None,
+        enable_tools: bool = True,
     ) -> str:
         with self._generation_lock:
             config = self.registry.role(self.profile, role)
@@ -93,13 +110,162 @@ class ModelRouter:
                 adapter = self._active_generation_adapter
             else:
                 adapter = self._new_text_adapter(config, role=role)
+
+            stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, "")).strip().lower()
+            runtime = None
+            tools: tuple[Mapping[str, Any], ...] = ()
+            if self._tools_enabled(
+                enable_tools=enable_tools,
+                stage=stage,
+                adapter_name=config.adapter,
+            ):
+                runtime = self._tool_runtime()
+                tools = tuple(runtime.tool_schemas(stage))
+
             request = GenerationRequest(
                 messages=messages,
                 media_paths=tuple(Path(path) for path in media_paths),
                 response_format=response_format,
+                tools=tools,
+                tool_choice="auto" if tools else None,
+                parallel_tool_calls=True,
             )
             with self._gpu_scope(config.exclusive_gpu):
+                if runtime is not None and tools:
+                    return self._generate_with_tools(
+                        adapter=adapter,
+                        request=request,
+                        runtime=runtime,
+                        stage=stage,
+                    )
                 return adapter.generate(request)
+
+    def _generate_with_tools(
+        self,
+        *,
+        adapter: Any,
+        request: GenerationRequest,
+        runtime: Any,
+        stage: str,
+    ) -> str:
+        messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
+        total_calls = 0
+        max_rounds = _positive_env_int(
+            "MMM_AGENT_MAX_TOOL_ROUNDS",
+            _DEFAULT_MAX_TOOL_ROUNDS,
+        )
+        max_calls = _positive_env_int(
+            "MMM_AGENT_MAX_TOOL_CALLS",
+            _DEFAULT_MAX_TOOL_CALLS,
+        )
+
+        for round_index in range(max_rounds + 1):
+            turn_request = GenerationRequest(
+                messages=messages,
+                media_paths=request.media_paths if round_index == 0 else (),
+                response_format=request.response_format,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+                parallel_tool_calls=request.parallel_tool_calls,
+            )
+            turn = adapter.generate_turn(turn_request)
+            if not turn.tool_calls:
+                if not turn.content.strip():
+                    raise ModelConfigurationError(
+                        "Tool-capable model returned an empty final response."
+                    )
+                return turn.content.strip()
+
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": turn.content or None,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.raw_arguments
+                            or json.dumps(
+                                dict(call.arguments),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
+                    }
+                    for call in turn.tool_calls
+                ],
+            }
+            messages.append(assistant_message)
+
+            for call in turn.tool_calls:
+                total_calls += 1
+                if total_calls > max_calls:
+                    raise ModelConfigurationError(
+                        f"Agent exceeded the tool-call limit ({max_calls})."
+                    )
+                try:
+                    result = runtime.call(stage, call.name, call.arguments)
+                    tool_payload: Mapping[str, Any] = {
+                        "ok": True,
+                        "tool": call.name,
+                        "result": result,
+                    }
+                except Exception as exc:
+                    # Tool failures are observations, not a reason to kill the agent.
+                    # Feeding the exact error back lets Qwen repair arguments or select
+                    # another stage-allowed tool on the next turn.
+                    tool_payload = {
+                        "ok": False,
+                        "tool": call.name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "name": call.name,
+                        "content": json.dumps(
+                            tool_payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    }
+                )
+
+        raise ModelConfigurationError(
+            f"Agent did not finish after {max_rounds} tool rounds."
+        )
+
+    def _tool_runtime(self) -> Any:
+        if self._agent_tool_runtime is not None:
+            return self._agent_tool_runtime
+        if self._agent_tool_runtime_factory is not None:
+            self._agent_tool_runtime = self._agent_tool_runtime_factory(
+                profile=self.profile
+            )
+        else:
+            from .agent_tool_runtime import AgentToolRuntime
+
+            self._agent_tool_runtime = AgentToolRuntime(profile=self.profile)
+        return self._agent_tool_runtime
+
+    @staticmethod
+    def _tools_enabled(
+        *,
+        enable_tools: bool,
+        stage: str,
+        adapter_name: str,
+    ) -> bool:
+        if not enable_tools or not stage:
+            return False
+        if adapter_name not in _NATIVE_TOOL_ADAPTERS:
+            return False
+        if os.environ.get("MMM_AGENT_TOOL_CHILD", "").strip() == "1":
+            return False
+        raw = os.environ.get("MMM_AGENT_TOOLS", "1").strip().lower()
+        return raw not in {"0", "false", "no", "off"}
 
     @staticmethod
     def _new_text_adapter(config, *, role: str):
@@ -198,3 +364,14 @@ class ModelRouter:
                 yield
         else:
             yield
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
