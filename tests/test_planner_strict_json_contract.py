@@ -73,6 +73,28 @@ def test_production_outline_survives_unknown_transport_envelope() -> None:
     }
 
 
+def test_initial_multi_contract_call_can_emit_multiple_outline_pages() -> None:
+    expected = (
+        frozenset({"modules", "assets", "audio", "acceptance_tests"}),
+        frozenset({"module_batches", "assets", "audio", "acceptance_tests"}),
+        frozenset({"production_batches", "complete", "next_cursor"}),
+    )
+    payload = (
+        '{"production_batches":[{"batch_id":"core"}],'
+        '"complete":true,"next_cursor":"p2"}\n'
+        '{"production_batches":[{"batch_id":"ui"}],'
+        '"complete":true,"next_cursor":""}'
+    )
+    assert _extract(payload, expected) == {
+        "production_batches": [
+            {"batch_id": "core"},
+            {"batch_id": "ui"},
+        ],
+        "complete": True,
+        "next_cursor": "",
+    }
+
+
 def test_multiple_outline_json_pages_are_aggregated_in_order() -> None:
     expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
     payload = (
@@ -98,7 +120,7 @@ def test_multiple_outline_json_pages_are_aggregated_in_order() -> None:
 def test_multiple_outline_pages_can_leave_host_continuation_open() -> None:
     expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
     payload = (
-        '{"production_batches":[1,2],"complete":false,"next_cursor":"p2"}\n'
+        '{"production_batches":[1,2],"complete":true,"next_cursor":"p2"}\n'
         '{"production_batches":[3,4],"complete":false,"next_cursor":"continue_host"}'
     )
     assert _extract(payload, expected) == {
@@ -108,19 +130,22 @@ def test_multiple_outline_pages_can_leave_host_continuation_open() -> None:
     }
 
 
-def test_nonfinal_outline_page_cannot_claim_complete() -> None:
+def test_intermediate_page_bookkeeping_does_not_discard_later_pages() -> None:
     expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
-    with pytest.raises(SpecValidationError, match="non-final emitted production-outline"):
-        _extract(
-            '{"production_batches":[],"complete":true,"next_cursor":""}\n'
-            '{"production_batches":[],"complete":true,"next_cursor":""}',
-            expected,
-        )
+    payload = (
+        '{"production_batches":[1],"complete":true,"next_cursor":""}\n'
+        '{"production_batches":[2],"complete":true,"next_cursor":""}'
+    )
+    assert _extract(payload, expected) == {
+        "production_batches": [1, 2],
+        "complete": True,
+        "next_cursor": "",
+    }
 
 
 def test_outline_sequence_rejects_unrelated_json_object() -> None:
     expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
-    with pytest.raises(SpecValidationError, match="page fields are invalid"):
+    with pytest.raises(SpecValidationError, match="valid sequential production-outline"):
         _extract(
             '{"production_batches":[],"complete":false,"next_cursor":"p2"}\n'
             '{"note":"alternative"}',
