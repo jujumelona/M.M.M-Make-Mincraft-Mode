@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from functools import wraps
 from typing import Any, Iterable
 
-_SCHEMA_VERSION = "mmm/llama-server-autotune-v3-runtime"
+_SCHEMA_VERSION = "mmm/llama-server-autotune-v4-model-eligible"
 _INSTALL_LOCK = threading.RLock()
 
 
@@ -149,6 +149,26 @@ def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:
         if spec_type in allowed and all(item.spec_type != spec_type for item in values):
             values.append(ServerVariant(spec_type, spec_type))
     return tuple(values)
+
+
+def _model_supports_mtp(config: Any) -> bool:
+    """Only probe native draft-MTP for models that actually ship an MTP head."""
+    extra = getattr(config, "extra", {})
+    if isinstance(extra, dict) and "supports_mtp" in extra:
+        return bool(extra.get("supports_mtp"))
+    model_id = str(getattr(config, "model_id", "")).upper()
+    filename = str(extra.get("gguf_filename", "")).upper() if isinstance(extra, dict) else ""
+    return "-MTP-GGUF" in model_id or "-MTP-" in filename
+
+
+def _candidate_variants_for_config(
+    autotune_module: Any,
+    config: Any,
+) -> tuple[ServerVariant, ...]:
+    values = _candidate_variants(autotune_module)
+    if _model_supports_mtp(config):
+        return values
+    return tuple(value for value in values if value.spec_type != "draft-mtp")
 
 
 def _eligible(probe: Any, baseline: Any) -> bool:
@@ -339,8 +359,12 @@ def install(autotune_module: Any) -> None:
             payload = {
                 "schema": _SCHEMA_VERSION,
                 "base": current_fingerprint(config, binary, model_path),
+                "mtp_supported": _model_supports_mtp(config),
                 "load_mode": "auto",
-                "spec_variants": [asdict(value) for value in candidate_variants()],
+                "spec_variants": [
+                    asdict(value)
+                    for value in _candidate_variants_for_config(autotune_module, config)
+                ],
                 "ubatch_candidates": _ubatch_candidates(autotune_module),
                 "cache_reuse_candidates": _cache_reuse_candidates(),
                 "parallel_candidates": _parallel_candidates(),
@@ -426,6 +450,7 @@ def install(autotune_module: Any) -> None:
             stage_gain = autotune_module._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
             probes: list[Any] = []
 
+            spec_variants = _candidate_variants_for_config(autotune_module, config)
             spec_probes = [
                 run_variant(
                     binary,
@@ -435,7 +460,7 @@ def install(autotune_module: Any) -> None:
                     variant,
                     probe_tokens=probe_tokens,
                 )
-                for variant in candidate_variants()
+                for variant in spec_variants
             ]
             probes.extend(spec_probes)
             spec = _select_probe(
@@ -514,6 +539,7 @@ def install(autotune_module: Any) -> None:
             )
 
         benchmark._mmm_staged_runtime_tuning = True  # type: ignore[attr-defined]
+        benchmark._mmm_model_eligible_speculation = True  # type: ignore[attr-defined]
         autotune_module._benchmark = benchmark
 
         current_launch = autotune_module._launch_selected
@@ -541,6 +567,8 @@ def install(autotune_module: Any) -> None:
 __all__ = [
     "ServerVariant",
     "_cache_reuse_candidates",
+    "_candidate_variants_for_config",
+    "_model_supports_mtp",
     "_parallel_candidates",
     "_parallel_target",
     "_parse_int_candidates",
