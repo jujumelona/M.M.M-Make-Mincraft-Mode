@@ -255,7 +255,6 @@ def test_initial_outline_repairs_without_replanning_design_or_research(
     # The bounded design stage already consumed the reference. Retrying the
     # implementation outline must not duplicate its vision-token allocation.
     assert router.media_paths == [(), ()]
-    assert "fewer records" in router.messages[1][0]["content"]
     assert router.session_events == ["enter:planner", "exit:planner"]
 
 
@@ -354,11 +353,7 @@ def test_legacy_module_batch_repairs_only_the_cut_page() -> None:
     assert len(router.requests) == 2
     assert router.requests[0] == router.requests[1]
     assert router.requests[0]["cursor"] == ""
-    assert router.media_paths == [
-        ("reference.png",),
-        ("reference.png",),
-    ]
-    assert "fewer records" in router.messages[1][0]["content"]
+    assert router.media_paths == [("reference.png",), ()]
 
 
 def test_module_pagination_rejects_duplicate_ids_within_page() -> None:
@@ -592,15 +587,11 @@ def test_production_batch_repairs_only_the_cut_page_with_same_cursor() -> None:
     assert router.requests[0] == router.requests[1]
     assert router.requests[0]["cursor"] == ""
     assert router.requests[0]["known_module_catalog"]["count"] == 0
-    assert router.media_paths == [
-        ("reference.png",),
-        ("reference.png",),
-    ]
+    assert router.media_paths == [("reference.png",), ()]
     assert all(
         [message["role"] for message in attempt] == ["system", "user"]
         for attempt in router.messages
     )
-    assert "fewer records" in router.messages[1][0]["content"]
 
 
 def test_production_batch_stops_after_one_page_local_repair() -> None:
@@ -869,14 +860,16 @@ def test_production_outline_repairs_only_the_cut_continuation_page() -> None:
 
     assert [item.batch_id for item in batches] == ["first", "second"]
     assert len(router.requests) == 2
-    assert router.requests[0] == router.requests[1]
+    retry_request = dict(router.requests[1])
+    diagnostic = retry_request.pop("missing_fragment_reason")
+    assert retry_request == router.requests[0]
+    assert "no complete production-outline JSON page" in diagnostic
     assert router.requests[0]["cursor"] == "outline-page-2"
     assert router.requests[0]["known_batch_catalog"]["count"] == 1
     assert all(
         [message["role"] for message in attempt] == ["system", "user"]
         for attempt in router.messages
     )
-    assert "fewer records" in router.messages[1][0]["content"]
 
 
 def _bootstrap_base():
