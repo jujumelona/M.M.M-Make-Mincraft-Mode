@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import complete_planner
-from minecraft_mod_ai import planner_json_runtime_contract as runtime
 from minecraft_mod_ai import planner_incremental_repair_contract as incremental
+from minecraft_mod_ai import planner_json_runtime_contract as runtime
 from minecraft_mod_ai.planner_strict_json_contract import install as install_strict
+from minecraft_mod_ai.spec import SpecValidationError
 
 
 class _Router:
@@ -83,6 +84,15 @@ def _field_patch(raw: object, **set_fields: object) -> str:
     )
 
 
+def _replacement_patch(raw: object, replacement: dict[str, object]) -> str:
+    return json.dumps(
+        {
+            "target_fingerprint": incremental._fingerprint(raw),
+            "replacement_batch": replacement,
+        }
+    )
+
+
 def _run(router: _Router, *, stage: str) -> dict[str, object]:
     install_strict(runtime)
     return complete_planner._generate_json_page_with_repair(
@@ -93,6 +103,12 @@ def _run(router: _Router, *, stage: str) -> dict[str, object]:
         expected_contracts=(frozenset(complete_planner._PRODUCTION_OUTLINE_CONTRACT),),
         stage=stage,
     )
+
+
+def _only_checkpoint(tmp_path: Path) -> Path:
+    files = [path for path in tmp_path.glob("*.json") if not path.name.endswith(".resolved.json")]
+    assert len(files) == 1
+    return files[0]
 
 
 def test_invalid_batch_repairs_only_bad_field_and_preserves_sibling(
@@ -123,33 +139,36 @@ def test_invalid_batch_repairs_only_bad_field_and_preserves_sibling(
     patch_user = json.loads(str(router.calls[1]["messages"][1]["content"]))
     assert patch_user["current_batch"] == bad
 
-    checkpoint_files = list(tmp_path.glob("*.json"))
-    assert len(checkpoint_files) == 1
-    checkpoint = json.loads(checkpoint_files[0].read_text(encoding="utf-8"))
+    checkpoint = incremental._load_checkpoint(_only_checkpoint(tmp_path))
     assert checkpoint["status"] == "complete"
     assert checkpoint["pending_batches"] == []
     assert checkpoint["pending_patch"] is None
     assert checkpoint["saved_batches"] == [good, repaired]
 
 
-def test_patch_of_patch_keeps_correcting_same_batch_until_valid(
+def test_invalid_field_patch_escalates_to_one_complete_batch_regeneration(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
     bad = _batch("broken_scope", scope="")
-    first_bad_patch = _field_patch(bad, scope="")
-    # After the first bad patch, current_value is still structurally the same batch;
-    # the target fingerprint intentionally remains bound to the original saved object.
-    second_patch = _field_patch(bad, scope="Implement the corrected scope.")
-    router = _Router(_outline(bad), first_bad_patch, second_patch)
+    repaired = _batch("broken_scope", scope="Implement the corrected scope.")
+    router = _Router(
+        _outline(bad),
+        _field_patch(bad, scope=""),
+        _replacement_patch(bad, repaired),
+    )
 
-    page = _run(router, stage="patch patch until valid")
+    page = _run(router, stage="field patch then regenerate")
 
     assert page["complete"] is True
-    assert page["production_batches"][0]["scope"] == "Implement the corrected scope."
+    assert page["production_batches"] == [repaired]
     assert len(router.calls) == 3
     assert "field-level JSON patcher" in str(router.calls[1]["messages"][0]["content"])
-    assert "field-level JSON patcher" in str(router.calls[2]["messages"][0]["content"])
+    assert "regenerate exactly ONE invalid production batch" in str(
+        router.calls[2]["messages"][0]["content"]
+    )
+    second_request = json.loads(str(router.calls[2]["messages"][1]["content"]))
+    assert second_request["repair_mode"] == "replacement"
 
 
 def test_backend_failure_resumes_pending_patch_without_regenerating_outline(
@@ -163,9 +182,8 @@ def test_backend_failure_resumes_pending_patch_without_regenerating_outline(
     with pytest.raises(RuntimeError, match="server disconnected"):
         _run(first_router, stage="resume field patch")
 
-    checkpoint_files = list(tmp_path.glob("*.json"))
-    assert len(checkpoint_files) == 1
-    interrupted = json.loads(checkpoint_files[0].read_text(encoding="utf-8"))
+    checkpoint_path = _only_checkpoint(tmp_path)
+    interrupted = incremental._load_checkpoint(checkpoint_path)
     assert interrupted["saved_batches"] == [good]
     assert interrupted["pending_batches"] == [bad]
     assert interrupted["pending_patch"]["current_value"] == bad
@@ -204,3 +222,32 @@ def test_duplicate_batch_id_is_patched_not_silently_dropped(
     assert len(router.calls) == 2
     patch_request = json.loads(str(router.calls[1]["messages"][1]["content"]))
     assert "duplicate batch_id" in patch_request["validation_error"]
+
+
+def test_identical_bad_patch_output_is_not_sent_or_consumed_forever(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    bad = _batch("broken_scope", scope="")
+    repeated = _field_patch(bad, scope="")
+    router = _Router(_outline(bad), repeated, repeated)
+
+    with pytest.raises(SpecValidationError, match="repeated identical model output"):
+        _run(router, stage="repeated batch patch output")
+
+    # One outline call + exactly two distinct repair modes. No third repair call exists.
+    assert len(router.calls) == 3
+
+
+def test_broken_outline_envelope_is_cut_off_before_third_identical_request(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    router = _Router("{}", "{}")
+
+    with pytest.raises(SpecValidationError, match="cycle detected"):
+        _run(router, stage="outline cycle cut off")
+
+    # Initial generation + one diagnostic regeneration. The third identical request is
+    # rejected by the host before it reaches the model.
+    assert len(router.calls) == 2
