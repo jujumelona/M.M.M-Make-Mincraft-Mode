@@ -56,18 +56,67 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     if getattr(request, "response_format", None) == "json":
         payload["response_format"] = {"type": "json_object"}
+        # Qwen3.5/3.6 chat templates begin a generation with an open <think>
+        # section unless reasoning is explicitly disabled.  The standalone 0.3.34
+        # server applies response_format as a generation grammar.  Leaving thinking
+        # enabled therefore makes schema-constrained JSON get generated inside the
+        # reasoning capture instead of the assistant content field.  Planner JSON is
+        # already constrained and host-validated, so close the reasoning section in
+        # the prompt and generate the JSON directly as visible content.
+        payload["reasoning_effort"] = "none"
     return payload
+
+
+def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:
+    """Return (reasoning_progress, visible_content) from one OpenAI stream choice.
+
+    Reasoning text is never returned to callers or printed.  We only count its
+    length so a reasoning-capable server cannot look stalled while it is actively
+    emitting a non-content delta.
+    """
+
+    reasoning = ""
+    content = ""
+    delta = choice.get("delta")
+    if isinstance(delta, dict):
+        raw_reasoning = delta.get("reasoning_content")
+        if raw_reasoning is None:
+            raw_reasoning = delta.get("thinking")
+        if isinstance(raw_reasoning, str):
+            reasoning = raw_reasoning
+        raw_content = delta.get("content")
+        if isinstance(raw_content, str):
+            content = raw_content
+    if not content:
+        raw_text = choice.get("text")
+        if isinstance(raw_text, str):
+            content = raw_text
+    return reasoning, content
+
+
+def _request_content_chars(payload: dict[str, Any]) -> int:
+    total = 0
+    for message in payload.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        value = message.get("content")
+        if isinstance(value, str):
+            total += len(value)
+        elif value is not None:
+            try:
+                total += len(json.dumps(value, ensure_ascii=False))
+            except Exception:
+                pass
+    return total
 
 
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     """Stream an explicitly selected server without silently loading a second GGUF.
 
-    The local llama server can legitimately spend longer than five minutes on a
-    large bounded planner page. A fixed read timeout cannot distinguish active
-    generation from a stalled request because the old non-streaming call exposed no
-    intermediate output. The pinned llama-cpp-python server supports OpenAI SSE
-    streaming, so consume its actual generated deltas and keep no arbitrary overall
-    generation deadline. Connection/write/pool setup remains bounded.
+    The client reports both visible-content progress and opaque reasoning progress.
+    It never prints or returns reasoning text.  Structured JSON requests explicitly
+    disable Qwen thinking so the JSON grammar and the chat template describe the same
+    output channel.
     """
 
     from .model_adapters import ModelBackendError
@@ -86,7 +135,11 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         endpoint = f"{server_url.rstrip('/')}/chat/completions"
         pieces: list[str] = []
         generated_chars = 0
-        last_progress_report = time.monotonic()
+        reasoning_chars = 0
+        output_events = 0
+        request_started = time.monotonic()
+        last_progress_report = request_started
+        first_output_reported = False
         saw_done = False
 
         with httpx.stream(
@@ -108,7 +161,15 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
                 print("llama server: connected", server_url, flush=True)
                 adapter.__class__._reported_server_url = server_url
-            print("llama server: request accepted; streaming", flush=True)
+            structured = payload.get("response_format") is not None
+            print(
+                "llama server: request accepted; streaming",
+                f" input_chars={_request_content_chars(payload)}",
+                f" max_tokens={payload['max_tokens']}",
+                f" reasoning={'disabled' if structured else 'model-default'}",
+                sep="",
+                flush=True,
+            )
 
             for raw_line in response.iter_lines():
                 line = raw_line.strip()
@@ -135,23 +196,34 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 choice = choices[0]
                 if not isinstance(choice, dict):
                     continue
-                delta = choice.get("delta")
-                content: Any = None
-                if isinstance(delta, dict):
-                    content = delta.get("content")
-                if content is None:
-                    content = choice.get("text")
-                if not isinstance(content, str) or not content:
+
+                reasoning, content = _stream_delta_parts(choice)
+                if reasoning:
+                    reasoning_chars += len(reasoning)
+                    output_events += 1
+                if content:
+                    pieces.append(content)
+                    generated_chars += len(content)
+                    output_events += 1
+
+                if not reasoning and not content:
                     continue
 
-                pieces.append(content)
-                generated_chars += len(content)
                 now = time.monotonic()
+                if not first_output_reported:
+                    print(
+                        "llama server: first output delta",
+                        f" elapsed={now - request_started:.1f}s",
+                        f" kind={'content' if content else 'reasoning'}",
+                        flush=True,
+                    )
+                    first_output_reported = True
                 if now - last_progress_report >= 15.0:
                     print(
-                        "llama server: generated_chars=",
-                        generated_chars,
-                        sep="",
+                        "llama server: progress",
+                        f" content_chars={generated_chars}",
+                        f" reasoning_chars={reasoning_chars}",
+                        f" events={output_events}",
                         flush=True,
                     )
                     last_progress_report = now
@@ -162,10 +234,17 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             )
         content = "".join(pieces).strip()
         if not content:
+            if reasoning_chars:
+                raise RuntimeError(
+                    "llama server produced reasoning deltas but no visible content; "
+                    "the chat template/output grammar channels are incompatible."
+                )
             raise RuntimeError("llama server stream produced no text content.")
         print(
-            "llama server: generation complete chars=",
-            generated_chars,
+            "llama server: generation complete",
+            f" content_chars={generated_chars}",
+            f" reasoning_chars={reasoning_chars}",
+            f" elapsed={time.monotonic() - request_started:.1f}s",
             sep="",
             flush=True,
         )
