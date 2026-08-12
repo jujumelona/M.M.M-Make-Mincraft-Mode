@@ -119,6 +119,7 @@ def test_prebuilt_failure_falls_back_to_exact_pinned_source_build(
     assert resolved == str(final_binary.resolve())
     assert probed == ["git", "cmake", "nvcc"]
     assert commands[0][:2] == ["cmake", "-S"]
+    assert "-DGGML_CUDA_GRAPHS=ON" in commands[0]
     assert "-DCMAKE_CUDA_ARCHITECTURES=75" in commands[0]
     assert commands[1][:3] == ["cmake", "--build", str(source / "build")]
     assert os.environ["MMM_LLAMA_SERVER_SOURCE_DIR"] == str(source)
@@ -129,4 +130,4 @@ def test_bundle_loader_is_source_local_and_exposes_verified_installer() -> None:
     module = _load_setup_module()
     bundle = module._load_native_bundle_module()
     assert callable(bundle.ensure_prebuilt_native_server)
-    assert bundle.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v1"
+    assert bundle.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v2"
