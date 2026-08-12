@@ -18,10 +18,12 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         from . import central_research as central_research_module
         from . import ecosystem_discovery as ecosystem_module
         from . import game_design as game_design_module
+        from . import platform_planning_contract as platform_planning_module
         from . import retrieval as retrieval_module
         from . import technology_radar as technology_module
         from .platform_central_ai_contract import install as install_platform_central_ai
         from .platform_ecosystem_contract import install as install_platform_ecosystem
+        from .platform_live_rag_contract import install as install_platform_live_rag
         from .platform_planning_contract import install as install_platform_planning
         from .platform_prompt_contract import install as install_platform_prompts
         from .platform_technology_contract import install as install_platform_technology
@@ -32,6 +34,11 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             central_research_module=central_research_module,
             retrieval_module=retrieval_module,
             technology_module=technology_module,
+        )
+        # Replace the old 1.20.1 receipt relabeling shim before any live plan runs.
+        install_platform_live_rag(
+            retrieval_module=retrieval_module,
+            platform_planning_module=platform_planning_module,
         )
         install_platform_technology(technology_module)
         install_platform_ecosystem(ecosystem_module, complete_planner_module)
