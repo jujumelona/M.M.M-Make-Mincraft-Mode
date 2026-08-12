@@ -21,7 +21,7 @@ def _is_policy_module(name: str) -> bool:
 
 
 def _policy_imports(path: Path) -> tuple[dict[str, str], dict[str, str]]:
-    """Return direct installer aliases and imported policy-module aliases."""
+    """Return direct installer aliases and imported contract/tuning-module aliases."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     installers: dict[str, str] = {}
     modules: dict[str, str] = {}
@@ -95,8 +95,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
     assert "final_architecture_contract" not in source
     assert "platform_mcp_compatibility_contract" not in source
 
-    # Native llama tuning has one explicit owner because its stages must wrap each
-    # other in a defined order. Everything else remains composed at runtime root.
     required_once = (
         "install_runner_lock(",
         "install_gpu_handoff(",
@@ -161,6 +159,9 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     assert _LLAMA_PIPELINE.is_file()
     installers, modules = _policy_imports(_LLAMA_PIPELINE)
     direct_calls, module_calls = _composition_calls(_LLAMA_PIPELINE)
+    # This generic detector intentionally indexes modules named *contract or *_tuning.
+    # llama_server_hardware_policy is checked explicitly below because its filename is
+    # outside that naming convention.
     actual = {
         module
         for local_name, module in installers.items()
@@ -171,7 +172,6 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         if local_name in module_calls
     }
     assert actual == {
-        "llama_server_hardware_policy",
         "llama_server_efficiency_contract",
         "llama_server_runtime_tuning",
         "llama_cache_reuse_efficiency_contract",
@@ -179,6 +179,11 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     }
 
     source = _LLAMA_PIPELINE.read_text(encoding="utf-8")
+    assert (
+        "from .llama_server_hardware_policy import install as install_hardware"
+        in source
+    )
+    assert "install_hardware(self.autotune)" in source
     order = (
         "TuningStage(\"hardware\"",
         "TuningStage(\n                \"efficiency\"",
@@ -231,9 +236,6 @@ def test_specialized_installers_are_single_responsibility() -> None:
     outline_prompt = _text("planner_outline_prompt_contract.py")
     assert "planner_production_page_contract" not in outline_prompt
 
-    # Internal helper names are allowed. What matters is that incremental resume no
-    # longer composes unrelated external runtime contracts; the AST-wide owner test
-    # above enforces that invariant without rejecting local `_install_*` helpers.
     incremental_resume = _text("planner_incremental_resume_contract.py")
     assert "production_stream_efficiency_contract" not in incremental_resume
     assert "scheduler_poll_efficiency_contract" not in incremental_resume
