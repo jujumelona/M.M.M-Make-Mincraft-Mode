@@ -26,6 +26,7 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     assert "final_architecture_contract" not in source
     assert "platform_mcp_compatibility_contract" not in source
     assert source.count("install_scheduler_parallel_safety(") == 1
+    assert source.count("install_llama_parallel_runtime(") == 1
     assert source.count("install_proposal_deserialization(") == 1
 
 
@@ -35,9 +36,15 @@ def test_specialized_installers_do_not_reenter_global_bootstrap() -> None:
     assert "project_manifest_hash_efficiency_contract" not in tuning
     assert "final_architecture_contract" not in tuning
 
+    llama_efficiency = _text("llama_server_efficiency_contract.py")
+    assert "llama_server_max_performance" not in llama_efficiency
+    assert "llama_parallel_runtime_contract" not in llama_efficiency
+    assert "llama_server_runtime_tuning" in llama_efficiency
+
     platform_mcp = _text("platform_mcp_contract.py")
     assert "def _call_supported(" in platform_mcp
     assert "platform_release_contract" in platform_mcp
 
     assert not (PACKAGE / "integrated_contract_bootstrap.py").exists()
     assert not (PACKAGE / "platform_mcp_compatibility_contract.py").exists()
+    assert not (PACKAGE / "llama_server_max_performance.py").exists()
