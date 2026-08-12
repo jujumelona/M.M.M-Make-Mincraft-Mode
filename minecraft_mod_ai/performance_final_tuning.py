@@ -46,16 +46,11 @@ _STAGE_IGNORED_DIRS = frozenset(
 
 
 def install(performance_module: Any) -> None:
-    """Tighten staging cost and concurrent-merge correctness."""
+    """Tighten staging cost and concurrent-merge correctness.
 
-    # Hardware policy is installed earlier in package initialization. Apply the final
-    # native-LLM efficiency layer here so its compact autotune probe and explicit KV
-    # prefix reuse are the outermost runtime policy, even after idempotent reinstalls.
-    from . import llama_server_autotune as _llama_autotune
-    from . import llama_server_hardware_policy as _llama_hardware
-    from .llama_server_efficiency_contract import install as _install_llama_efficiency
-
-    _install_llama_efficiency(_llama_autotune, _llama_hardware)
+    This installer owns only performance_final_contract internals. Cross-cutting
+    runtime contracts are ordered once by runtime_bootstrap.initialize_runtime().
+    """
 
     if getattr(performance_module, "_mmm_final_tuning_installed", False):
         return
@@ -67,10 +62,6 @@ def install(performance_module: Any) -> None:
             tempfile.mkdtemp(prefix="custom-", dir=parent)
         ).resolve()
 
-        # Custom generation reads ProjectIndex source context, not compiled output,
-        # textures, audio, caches or audit metadata. Mirror the indexable text tree
-        # only. This turns staging setup from project-size copying into source-size
-        # copying and avoids recursively scanning Gradle/runtime output.
         for directory, dirnames, filenames in os.walk(
             live_root,
             topdown=True,
@@ -157,23 +148,3 @@ def install(performance_module: Any) -> None:
     performance_module._clone_source_snapshot = clone_source_snapshot
     performance_module._three_way_merge = three_way_merge
     performance_module._mmm_final_tuning_installed = True
-
-    from . import complete_orchestrator as _orchestrator
-    from . import complete_planner as _complete_planner
-    from . import project_index as _project_index
-    from . import quality_evidence as _quality_evidence
-    from . import repair_engine as _repair_engine
-    from . import validation_execution_contract as _validation_execution
-    from .final_architecture_contract import install as _install_final_architecture
-    from .project_manifest_hash_efficiency_contract import (
-        install as _install_manifest_hash_efficiency,
-    )
-
-    _install_manifest_hash_efficiency(_orchestrator, _project_index)
-    _install_final_architecture(
-        complete_planner_module=_complete_planner,
-        orchestrator_module=_orchestrator,
-        repair_module=_repair_engine,
-        quality_evidence_module=_quality_evidence,
-        validation_module=_validation_execution,
-    )
