@@ -11,6 +11,7 @@ from .platform_catalog import (
 
 
 def install(api_module: Any, plan_render_module: Any) -> None:
+    """Install only the Python/API platform surface."""
     api_module.SUPPORTED_MINECRAFT_VERSIONS = tuple(
         item.minecraft_version for item in PLATFORM_ADAPTERS
     )
@@ -22,66 +23,6 @@ def install(api_module: Any, plan_render_module: Any) -> None:
     _install_complete_session(api_module)
     _install_legacy_session(api_module)
     _install_plan_render(plan_render_module)
-
-    from . import complete_orchestrator as orchestrator_module
-    from .platform_live_execution_contract import install as install_live_execution
-
-    install_live_execution(orchestrator_module)
-
-    from . import minecraft_mcp_runtime_helper_contract as runtime_helper_module
-    from . import runtime_manager as runtime_manager_module
-    from .minecraft_mcp_runtime_helper_contract import install as install_runtime_helpers
-    from .runtime_helper_json_deadline_contract import (
-        install as install_runtime_helper_json_deadline,
-    )
-
-    install_runtime_helpers(runtime_manager_module)
-    install_runtime_helper_json_deadline(runtime_helper_module)
-
-    # Route-scoped validation is installed before any external MCP call: search and
-    # migration responses may mention many historical versions, while reviewed
-    # runtime status tools are allowed to prove the actual running target.
-    from . import external_mcp_router as external_mcp_router_module
-    from .external_mcp_bridge_safety_contract import (
-        install as install_external_mcp_bridge_safety,
-    )
-    from .external_mcp_target_validation_contract import (
-        install as install_mcp_target_validation,
-    )
-
-    install_mcp_target_validation(external_mcp_router_module)
-    install_external_mcp_bridge_safety(external_mcp_router_module)
-
-    from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
-
-    install_mcp_runtime(orchestrator_module)
-
-    from . import complete_planner as complete_planner_module
-    from . import custom_module_generator as custom_module_generator_module
-    from . import mcp_tools as mcp_tools_module
-    from . import repair_engine as repair_engine_module
-    from .minecraft_mcp_federation_contract import install as install_mcp_federation
-
-    install_mcp_federation(
-        complete_planner_module=complete_planner_module,
-        custom_module_generator_module=custom_module_generator_module,
-        repair_engine_module=repair_engine_module,
-        mcp_tools_module=mcp_tools_module,
-    )
-
-    from . import minecraft_mcp_repair_batch_contract as repair_batch_module
-    from .minecraft_mcp_repair_batch_contract import install as install_mcp_repair_batch
-    from .mcp_repair_diagnostic_shape_contract import (
-        install as install_mcp_repair_diagnostic_shape,
-    )
-
-    install_mcp_repair_batch(repair_engine_module)
-    install_mcp_repair_diagnostic_shape(repair_batch_module)
-
-    from . import skill_catalog as skill_catalog_module
-    from .platform_skill_policy_contract import install as install_skill_policy
-
-    install_skill_policy(skill_catalog_module)
 
 
 def _install_complete_session(api_module: Any) -> None:
