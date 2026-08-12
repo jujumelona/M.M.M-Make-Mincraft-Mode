@@ -14,12 +14,18 @@ EXPECTED_CELL_IDS = (
     "setup",
     "existing-input",
     "registry",
-    "mtp-server",
     "plan",
     "build",
     "download",
     "boundaries",
 )
+
+
+def _source_by_id(notebook, cell_id: str) -> str:
+    for cell in notebook.cells:
+        if cell.get("id") == cell_id:
+            return str(cell.source)
+    raise SystemExit(f"Missing required Colab cell: {cell_id}")
 
 
 def validate_notebook() -> str:
@@ -47,6 +53,22 @@ def validate_notebook() -> str:
         if cell.get("execution_count") is not None or cell.get("outputs"):
             raise SystemExit(f"Checked-in notebook contains execution state: {cell.id}")
         compile(cell.source, f"<colab:{cell.id}>", "exec")
+
+    configuration = _source_by_id(notebook, "configuration")
+    plan = _source_by_id(notebook, "plan")
+    all_code = "\n".join(
+        str(cell.source) for cell in notebook.cells if cell.cell_type == "code"
+    )
+    if "KV_CACHE_AUTOTUNE = True" not in configuration:
+        raise SystemExit("Canonical Colab must default KV cache autotuning on")
+    if 'os.environ["MMM_LLAMA_KV_AUTOTUNE"]' not in plan:
+        raise SystemExit("Plan cell must apply KV autotune policy before session construction")
+    if plan.index('os.environ["MMM_LLAMA_KV_AUTOTUNE"]') > plan.index(
+        "session = CompleteModAISession("
+    ):
+        raise SystemExit("KV autotune policy must be applied before session construction")
+    if "start_colab_mtp_server" in all_code or '"mtp-server"' in all_code:
+        raise SystemExit("Canonical Colab must not pre-launch a fixed MTP server")
 
     colab_name = notebook.metadata.get("colab", {}).get("name")
     if colab_name != NOTEBOOK_PATH.name:
