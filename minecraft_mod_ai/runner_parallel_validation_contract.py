@@ -382,6 +382,19 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
 
             report = self._build_locked(root, run_gametest=run_gametest)
             final_fingerprint = validation_module.project_build_fingerprint(root)
+            if final_fingerprint != fingerprint:
+                # A successful compiler result for moving inputs is not evidence for
+                # either snapshot. Do not place it in RECENT/SUCCESS caches where the
+                # repair/release path could certify the post-build project by mistake.
+                return runner_module.BuildReport(
+                    status="FAIL",
+                    gradle_version=report.gradle_version,
+                    commands=report.commands,
+                    jar_path=report.jar_path,
+                    gametest_report=report.gametest_report,
+                    error="Project inputs changed during validation; result is not certifiable.",
+                )
+
             final_key = (str(root), final_fingerprint, bool(run_gametest))
             with validation_module._CACHE_LOCK:
                 validation_module._bounded_put(
@@ -389,7 +402,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                     final_key,
                     copy.deepcopy(report),
                 )
-                if report.passed and final_fingerprint == fingerprint:
+                if report.passed:
                     validation_module._bounded_put(
                         validation_module._SUCCESSFUL_BUILDS,
                         final_key,
