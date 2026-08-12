@@ -243,6 +243,9 @@ def test_broken_outline_envelope_is_cut_off_before_third_identical_request(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    # Raise the broad generation ceiling so this test specifically exercises the exact
+    # request-cycle detector rather than the independent no-progress budget.
+    monkeypatch.setenv("MMM_PLANNER_OUTLINE_GENERATION_ATTEMPTS", "4")
     router = _Router("{}", "{}")
 
     with pytest.raises(SpecValidationError, match="cycle detected"):
