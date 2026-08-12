@@ -362,8 +362,10 @@ def _install_public_boundary_contracts() -> None:
     from . import api, mcp_tools, plan_render, production_tools
     from .platform_api_contract import install as install_platform_api
     from .platform_mcp_contract import install as install_platform_mcp
+    from .platform_release_contract import install as install_platform_release
 
     install_platform_mcp(mcp_tools, production_tools)
+    install_platform_release(mcp_tools)
     install_platform_api(api, plan_render)
 
 
