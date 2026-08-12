@@ -137,6 +137,11 @@ def install(incremental_module: Any) -> None:
     Only small mutable metadata (status, cursor, one pending patch) is atomically
     replaced. Legacy monolithic checkpoints remain readable and migrate on the next
     save.
+
+    Recovery authority is deliberately ordered as queue -> accepted events -> metadata.
+    A crash may happen after the immutable queue is atomically installed but before the
+    small metadata file is replaced. In that window stale metadata must never be allowed
+    to claim that the newly durable queue has zero remaining work.
     """
 
     current_save = incremental_module._save_checkpoint
@@ -158,12 +163,14 @@ def install(incremental_module: Any) -> None:
 
         accepted, event_pending_remaining = _replay(path)
         queue = _read_jsonl(_queue_path(path))
-        meta_remaining = meta.get("pending_remaining")
+
+        # The immutable queue is the authoritative record that work exists. Once at
+        # least one fsynced accept event exists, its pending_remaining is the durable
+        # progress cursor. Without an event, ALL queue entries remain pending even if
+        # an older metadata file happens to say pending_remaining=0.
         remaining_count = (
             event_pending_remaining
             if event_pending_remaining is not None
-            else meta_remaining
-            if type(meta_remaining) is int and meta_remaining >= 0
             else len(queue)
         )
         remaining_count = max(0, min(int(remaining_count), len(queue)))
