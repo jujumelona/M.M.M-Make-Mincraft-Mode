@@ -56,7 +56,12 @@ def write_marker(
     return target
 
 
-def read_valid_marker(project_root: str | Path, *, adapter: Any) -> dict[str, Any] | None:
+def read_valid_marker(
+    project_root: str | Path,
+    *,
+    adapter: Any,
+    archive_sha256: str | None = None,
+) -> dict[str, Any] | None:
     root = Path(project_root).expanduser().resolve()
     target = marker_path(root)
     if not target.is_file() or target.is_symlink():
@@ -95,6 +100,8 @@ def read_valid_marker(project_root: str | Path, *, adapter: Any) -> dict[str, An
         return None
     digest = payload.get("archive_sha256")
     if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+        return None
+    if archive_sha256 is not None and digest != archive_sha256:
         return None
     return payload
 
