@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import os
 from dataclasses import asdict
@@ -10,14 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
-def _submodule(name: str) -> Any:
-    package = __package__ or "minecraft_mod_ai"
-    return importlib.import_module(f"{package}.{name}")
-
-
 def _quick_file_signature(path: Path) -> str:
-    """Hash only bounded head/tail samples; never scan a multi-GB GGUF for tuning."""
-
+    """Hash bounded head/tail samples; never scan a multi-GB GGUF for tuning."""
     size = path.stat().st_size
     sample = 1024 * 1024
     digest = hashlib.sha256()
@@ -51,12 +44,16 @@ def _drive_cache_from_setup_receipt() -> Path | None:
 
 
 def install(autotune_module: Any, hardware_policy_module: Any) -> None:
-    """Install correctness-safe native llama-server efficiency policies."""
+    """Install native llama-server efficiency primitives owned by this module only.
+
+    Runtime tuning, cache-reuse tuning, streaming and concurrency are composed by
+    runtime_bootstrap instead of being imported and installed from this installer.
+    """
+    if getattr(autotune_module, "_mmm_server_efficiency_installed", False):
+        return
 
     probe = autotune_module._probe_server
     if getattr(probe, "_mmm_correctness_sentinel", False):
-        # The compact deterministic benchmark is already an exact-output gate. A
-        # second 64-token sentinel per candidate only burns decode time.
         underlying = getattr(probe, "__wrapped__", None)
         if underlying is not None:
             autotune_module._probe_server = underlying
@@ -128,23 +125,7 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         stable_fingerprint._mmm_stable_model_signature = True  # type: ignore[attr-defined]
         autotune_module._fingerprint = stable_fingerprint
 
-    # Runtime tuning changes only llama-server startup/request parameters. CUDA Graphs
-    # are built into the verified native bundle/setup build, so package import never
-    # invokes cmake or recompiles native code. Import siblings directly instead of
-    # resolving them as attributes on a partially initialized package __init__.
-    runtime_tuning_module = _submodule("llama_server_runtime_tuning")
-    runtime_tuning_module.install(autotune_module)
+    autotune_module._mmm_server_efficiency_installed = True
 
-    # n_cache_reuse is request-scoped. Probe all reuse widths on one selected server
-    # instead of reloading the multi-GB GGUF for each candidate.
-    cache_reuse_module = _submodule("llama_cache_reuse_efficiency_contract")
-    cache_reuse_module.install(
-        autotune_module,
-        hardware_policy_module,
-        runtime_tuning_module,
-    )
 
-    # Consume usage from the production SSE stream and reuse the HTTP connection;
-    # detailed /metrics and /slots telemetry remains an explicit diagnostic opt-in.
-    stream_module = _submodule("llama_stream_efficiency_contract")
-    stream_module.install(hardware_policy_module)
+__all__ = ["install"]
