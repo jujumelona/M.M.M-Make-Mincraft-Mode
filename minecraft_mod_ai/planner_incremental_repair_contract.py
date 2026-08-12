@@ -55,6 +55,26 @@ def _merge_saved_batches(saved: list[Any], incoming: Sequence[Any]) -> None:
         known.add(identity)
 
 
+def _partition_batch_descriptors(
+    module: Any,
+    raw_batches: Sequence[Any],
+    *,
+    page_label: str,
+) -> tuple[list[Any], list[str]]:
+    valid: list[Any] = []
+    errors: list[str] = []
+    for batch_index, raw in enumerate(raw_batches, start=1):
+        try:
+            module._production_batch(raw)
+        except Exception as exc:
+            errors.append(
+                f"{page_label} batch {batch_index}: {type(exc).__name__}: {exc}"
+            )
+            continue
+        valid.append(raw)
+    return valid, errors
+
+
 def _valid_batch_descriptors(module: Any, text: str) -> tuple[list[Any], list[str]]:
     """Salvage individually valid batch descriptors from an otherwise bad response."""
 
@@ -70,15 +90,13 @@ def _valid_batch_descriptors(module: Any, text: str) -> tuple[list[Any], list[st
         raw_batches = value.get("production_batches")
         if not isinstance(raw_batches, list):
             continue
-        for batch_index, raw in enumerate(raw_batches, start=1):
-            try:
-                module._production_batch(raw)
-            except Exception as exc:
-                errors.append(
-                    f"page {container_index} batch {batch_index}: {type(exc).__name__}: {exc}"
-                )
-                continue
-            valid.append(raw)
+        accepted, rejected = _partition_batch_descriptors(
+            module,
+            raw_batches,
+            page_label=f"page {container_index}",
+        )
+        valid.extend(accepted)
+        errors.extend(rejected)
     return valid, errors
 
 
@@ -145,7 +163,7 @@ def install(runtime_module: Any) -> None:
     from . import complete_planner as complete_planner_module
 
     # Remove the earlier arbitrary 2-target/1-target production width override. Repair
-    # may narrow to *actually missing* work, but normal generation size belongs to AI.
+    # may narrow to actually missing work, but normal generation size belongs to AI.
     def preserve_requested_production_width(
         request: dict[str, Any] | str,
         attempt: int,
@@ -200,9 +218,12 @@ def install(runtime_module: Any) -> None:
             prompt = _SCALABLE_OUTLINE_PROMPT
             if attempt:
                 prompt += (
-                    "\nINCREMENTAL REPAIR: Correct only the first rejected or missing "
-                    "portion. The host has already saved all valid batches listed in "
-                    "accepted_outline_prefix. Do not reproduce them. Host diagnostic: "
+                    "\nINCREMENTAL REPAIR: Correct only the rejected or missing portion. "
+                    "The host has already saved every valid batch listed in "
+                    "accepted_outline_prefix. Do not reproduce them. If repair_error "
+                    "names an invalid batch descriptor, emit a corrected replacement "
+                    "for that descriptor and then continue the outline if needed. "
+                    "Host diagnostic: "
                     + previous_error
                 )
 
@@ -247,18 +268,37 @@ def install(runtime_module: Any) -> None:
 
             try:
                 page = _extract_outline_sequence(text)
+                valid_batches, batch_errors = _partition_batch_descriptors(
+                    complete_planner_module,
+                    page["production_batches"],
+                    page_label="outline",
+                )
+                if batch_errors:
+                    _merge_saved_batches(saved_batches, valid_batches)
+                    cursor_value = page.get("next_cursor")
+                    if isinstance(cursor_value, str) and cursor_value:
+                        resume_cursor = cursor_value
+                    previous_error = (
+                        "invalid batch descriptors: " + " | ".join(batch_errors[:4])
+                    )
+                    last_error = complete_planner_module.SpecValidationError(previous_error)
+                    continue
                 return _terminal_page(saved_batches, page)
             except (ValueError, json.JSONDecodeError) as exc:
                 last_error = exc
                 prefix, prefix_error = _extract_outline_prefix(text)
                 if prefix is not None:
-                    _merge_saved_batches(
-                        saved_batches,
+                    prefix_valid, prefix_errors = _partition_batch_descriptors(
+                        complete_planner_module,
                         prefix.get("production_batches", []),
+                        page_label="accepted prefix",
                     )
+                    _merge_saved_batches(saved_batches, prefix_valid)
                     cursor_value = prefix.get("next_cursor")
                     if isinstance(cursor_value, str) and cursor_value:
                         resume_cursor = cursor_value
+                else:
+                    prefix_errors = []
 
                 # Even if the page envelope/bookkeeping is bad, preserve every batch
                 # descriptor that already passes the real host batch parser.
@@ -268,8 +308,11 @@ def install(runtime_module: Any) -> None:
                 )
                 _merge_saved_batches(saved_batches, valid_batches)
                 detail = prefix_error or str(exc)
-                if batch_errors:
-                    detail += "; invalid batch descriptors: " + " | ".join(batch_errors[:4])
+                all_batch_errors = [*prefix_errors, *batch_errors]
+                if all_batch_errors:
+                    detail += "; invalid batch descriptors: " + " | ".join(
+                        all_batch_errors[:4]
+                    )
                 previous_error = detail
 
         assert last_error is not None
