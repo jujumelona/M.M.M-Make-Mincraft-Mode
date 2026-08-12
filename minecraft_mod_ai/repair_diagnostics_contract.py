@@ -81,7 +81,10 @@ def install(repair_module: Any, validation_module: Any) -> None:
                     query_parts.append(
                         log.read_text(encoding="utf-8", errors="replace")[-32_000:]
                     )
-        index = repair_module.ProjectIndex(root, policy=self.policy)
+        # RepairEngine owns one ContextVar-isolated ProjectIndex per repair call.
+        # Reuse it here instead of rescanning the complete source tree on every
+        # diagnostic attempt; successfully committed patch paths update it in place.
+        index = repair_module.active_repair_project_index(root, self.policy)
         return {
             "manifest": index.manifest_receipt(),
             "relevant": index.select(
@@ -92,5 +95,6 @@ def install(repair_module: Any, validation_module: Any) -> None:
 
     signature._mmm_flattened_jdt = True
     context._mmm_flattened_jdt = True
+    context._mmm_reuses_repair_project_index = True
     cls._signature = staticmethod(signature)
     cls._context = context
