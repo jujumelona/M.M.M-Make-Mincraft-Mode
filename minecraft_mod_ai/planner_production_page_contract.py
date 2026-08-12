@@ -34,39 +34,16 @@ def _string_list(value: Any) -> list[str]:
     ]
 
 
-def _append_unique_parsed(
-    *,
-    raw_items: Sequence[Any],
-    parser: Any,
-    catalog: Any,
-    id_attr: str,
-    destination: list[Any],
-) -> None:
-    """Preserve valid siblings when one generated item is malformed or duplicated."""
-
-    for raw in raw_items:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            parsed = parser(raw)
-            identifier = str(getattr(parsed, id_attr)).strip()
-        except Exception:
-            continue
-        if not identifier or identifier in catalog:
-            continue
-        try:
-            catalog.add(identifier)
-        except Exception:
-            continue
-        destination.append(parsed)
-
-
 def install(complete_planner_module: Any) -> None:
-    """Let the model choose production-page width while the host owns progress."""
+    """Make model-owned page width the final durable production-page policy."""
 
     cls = complete_planner_module.CompleteGameDesignPlanner
     current = cls._expand_one_production_batch
-    if getattr(current, "_mmm_adaptive_production_page_width", False):
+    if getattr(current, "_mmm_adaptive_production_page_width", False) and getattr(
+        current,
+        "_mmm_durable_production_items",
+        False,
+    ):
         return
 
     @wraps(current)
@@ -84,14 +61,27 @@ def install(complete_planner_module: Any) -> None:
         planning_receipt: dict[str, Any],
         media_paths: Sequence[Any],
     ) -> None:
+        from .production_page_durable_contract import (
+            load_or_generate_page,
+            resolve_page_items,
+        )
+
         remaining = list(dict.fromkeys(str(value) for value in batch.deliverables))
         cursor = ""
-        seen_cursors: set[str] = set()
         first_page = True
+        seen_states: set[tuple[tuple[str, ...], str]] = set()
 
         while remaining:
-            # The unresolved pool, not an arbitrary host slice, is the target. The
-            # model decides how much of it fits safely in this response.
+            state = (tuple(remaining), cursor)
+            if state in seen_states:
+                raise complete_planner_module.SpecValidationError(
+                    f"Production batch {batch.batch_id!r} pagination made no progress."
+                )
+            seen_states.add(state)
+
+            # Never slice the unresolved pool to an arbitrary host width. The model
+            # chooses how many coherent deliverables fit in this response; the host
+            # validates and persists the exact completed subset.
             target_deliverables = list(remaining)
             request = {
                 "batch": {
@@ -116,98 +106,78 @@ def install(complete_planner_module: Any) -> None:
             if first_page:
                 request["planning_context"] = planning_context
 
-            page = complete_planner_module._generate_json_page_with_repair(
-                self.router,
-                system_prompt=_ADAPTIVE_PRODUCTION_PROMPT,
+            stage = f"production batch {batch.batch_id!r} page"
+
+            def generate_page() -> dict[str, Any]:
+                return complete_planner_module._generate_json_page_with_repair(
+                    self.router,
+                    system_prompt=_ADAPTIVE_PRODUCTION_PROMPT,
+                    request=request,
+                    media_paths=media_paths if first_page else (),
+                    expected_contracts=(
+                        frozenset(complete_planner_module._PRODUCTION_PAGE_CONTRACT),
+                    ),
+                    stage=stage,
+                )
+
+            # The page is durably keyed by the exact host request. A process/backend
+            # interruption after a successful decode therefore resumes from disk rather
+            # than spending another full GPU generation on already accepted output.
+            page, page_path = load_or_generate_page(
+                stage=stage,
                 request=request,
-                media_paths=media_paths if first_page else (),
-                expected_contracts=(
-                    frozenset(complete_planner_module._PRODUCTION_PAGE_CONTRACT),
-                ),
-                stage=f"production batch {batch.batch_id!r} page",
+                generate=generate_page,
             )
             first_page = False
 
-            raw_modules = page.get("modules", [])
-            raw_assets = page.get("assets", [])
-            raw_audio = page.get("audio", [])
-            raw_tests = page.get("acceptance_tests", [])
-            if not isinstance(raw_modules, list):
-                raw_modules = []
-            if not isinstance(raw_assets, list):
-                raw_assets = []
-            if not isinstance(raw_audio, list):
-                raw_audio = []
-            if not isinstance(raw_tests, list):
-                raw_tests = []
+            if set(page) != set(complete_planner_module._PRODUCTION_PAGE_CONTRACT):
+                raise complete_planner_module.SpecValidationError(
+                    "Production batch page fields are invalid."
+                )
 
-            # Parse each item independently. A bad sibling is not a reason to discard
-            # valid output already generated in the same page.
-            _append_unique_parsed(
-                raw_items=raw_modules,
-                parser=complete_planner_module._module,
-                catalog=module_catalog,
-                id_attr="module_id",
-                destination=parts.modules,
+            # Parse and repair each child independently. Valid siblings are committed
+            # unchanged; one malformed module/asset/audio item is patched in place and
+            # never causes the whole production page to be regenerated.
+            page_modules, page_assets, page_audio, tests = resolve_page_items(
+                complete_planner_module,
+                self.router,
+                page=page,
+                page_path=page_path,
+                module_catalog=module_catalog,
+                asset_catalog=asset_catalog,
+                audio_catalog=audio_catalog,
+                test_catalog=test_catalog,
             )
-            _append_unique_parsed(
-                raw_items=raw_assets,
-                parser=complete_planner_module._asset,
-                catalog=asset_catalog,
-                id_attr="asset_id",
-                destination=parts.assets,
-            )
-            _append_unique_parsed(
-                raw_items=raw_audio,
-                parser=complete_planner_module._audio,
-                catalog=audio_catalog,
-                id_attr="sound_id",
-                destination=parts.audio,
-            )
+            parts.modules.extend(page_modules)
+            parts.assets.extend(page_assets)
+            parts.audio.extend(page_audio)
+            parts.acceptance_tests.extend(tests)
+            test_catalog.update(tests)
 
-            tests = _string_list(raw_tests)
-            for test in tests:
-                if test in test_catalog:
-                    continue
-                test_catalog.add(test)
-                parts.acceptance_tests.append(test)
-
-            completed = [
+            completed = {
                 value
                 for value in _string_list(page.get("completed_deliverables", []))
                 if value in remaining
-            ]
-            completed_set = set(completed)
-            if not completed_set:
-                # planner_json_runtime_contract normally rejects this before return.
-                # Keep a fail-closed fence here so this loop can never spin forever if
-                # another future wrapper changes that validation behavior.
+            }
+            if not completed:
                 raise complete_planner_module.SpecValidationError(
-                    "Production page made no host-verifiable deliverable progress."
+                    f"Production batch {batch.batch_id!r} page made no verified progress."
                 )
 
-            remaining = [
-                value for value in remaining if value not in completed_set
-            ]
+            remaining = [value for value in remaining if value not in completed]
             if not remaining:
                 break
 
             next_cursor = page.get("next_cursor")
             if not isinstance(next_cursor, str) or not next_cursor:
-                # Host progress, not model memory, is authoritative. A deterministic
-                # continuation token is sufficient because the full remaining pool is
-                # re-sent on every call.
+                # Continuation does not depend on opaque model memory because the exact
+                # unresolved pool is resent every round.
                 next_cursor = f"host_remaining_{len(remaining)}"
-            if next_cursor in seen_cursors:
-                next_cursor = f"host_remaining_{len(remaining)}"
-            if next_cursor in seen_cursors:
-                raise complete_planner_module.SpecValidationError(
-                    "Production pagination cursor stalled despite unresolved work."
-                )
-            seen_cursors.add(next_cursor)
             cursor = next_cursor
 
     expand_one_production_batch._mmm_adaptive_production_page_width = True  # type: ignore[attr-defined]
+    expand_one_production_batch._mmm_adaptive_page_width = True  # type: ignore[attr-defined]
+    expand_one_production_batch._mmm_durable_production_items = True  # type: ignore[attr-defined]
     cls._expand_one_production_batch = expand_one_production_batch
 
 
