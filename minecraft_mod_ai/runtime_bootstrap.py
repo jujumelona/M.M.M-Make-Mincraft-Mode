@@ -46,11 +46,13 @@ def _install_core_contracts() -> None:
     """Install base spec, validation, planning-scope and work-graph semantics."""
     from . import complete_planner, complete_spec, runner, spec, validator, work_graph
     from .mod_scope_contract import install as install_mod_scope
+    from .runner_lock_contract import install as install_runner_lock
     from .toolchain_contract import install as install_toolchain
     from .validator_boss_contract import install as install_validator_boss
     from .work_graph_mutation_contract import install as install_work_graph_mutation
 
     install_toolchain(spec, runner)
+    install_runner_lock(runner)
     install_validator_boss(validator)
     install_mod_scope(complete_spec, complete_planner)
     install_work_graph_mutation(work_graph)
@@ -408,14 +410,58 @@ def _install_late_safety_contracts() -> None:
 
 def _install_public_boundary_contracts() -> None:
     """Bind MCP and Python API surfaces after the runtime implementation is final."""
-    from . import api, mcp_tools, plan_render, production_tools
+    from . import (
+        api,
+        complete_orchestrator,
+        complete_planner,
+        custom_module_generator,
+        external_mcp_router,
+        mcp_tools,
+        minecraft_mcp_repair_batch_contract,
+        minecraft_mcp_runtime_helper_contract,
+        plan_render,
+        production_tools,
+        repair_engine,
+        runtime_manager,
+        skill_catalog,
+    )
+    from .external_mcp_target_validation_contract import (
+        install as install_mcp_target_validation,
+    )
+    from .mcp_repair_diagnostic_shape_contract import (
+        install as install_mcp_repair_diagnostic_shape,
+    )
+    from .minecraft_mcp_federation_contract import install as install_mcp_federation
+    from .minecraft_mcp_repair_batch_contract import install as install_mcp_repair_batch
+    from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
+    from .minecraft_mcp_runtime_helper_contract import install as install_runtime_helpers
     from .platform_api_contract import install as install_platform_api
     from .platform_mcp_contract import install as install_platform_mcp
     from .platform_release_contract import install as install_platform_release
+    from .platform_skill_policy_contract import install as install_skill_policy
+    from .runtime_helper_json_deadline_contract import (
+        install as install_runtime_helper_json_deadline,
+    )
 
     install_platform_mcp(mcp_tools, production_tools)
     install_platform_release(mcp_tools)
     install_platform_api(api, plan_render)
+
+    # These policies used to be nested inside platform_api_contract. Keep their
+    # original public-boundary timing while making composition explicit and unique.
+    install_runtime_helpers(runtime_manager)
+    install_runtime_helper_json_deadline(minecraft_mcp_runtime_helper_contract)
+    install_mcp_target_validation(external_mcp_router)
+    install_mcp_runtime(complete_orchestrator)
+    install_mcp_federation(
+        complete_planner_module=complete_planner,
+        custom_module_generator_module=custom_module_generator,
+        repair_engine_module=repair_engine,
+        mcp_tools_module=mcp_tools,
+    )
+    install_mcp_repair_batch(repair_engine)
+    install_mcp_repair_diagnostic_shape(minecraft_mcp_repair_batch_contract)
+    install_skill_policy(skill_catalog)
 
 
 __all__ = ["initialize_runtime", "runtime_initialized"]
