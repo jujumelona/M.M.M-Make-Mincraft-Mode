@@ -3,6 +3,9 @@ name: CI
 on:
   workflow_dispatch:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -29,7 +32,7 @@ jobs:
           python -m pip install -e '.[dev]'
 
       - name: Compile Python sources
-        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+        run: python -m compileall -q minecraft_mod_ai tests tools mcp_gateway.py download_resources.py
 
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
