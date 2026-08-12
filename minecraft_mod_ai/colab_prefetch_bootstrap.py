@@ -15,6 +15,18 @@ def start(model_registry_module: Any) -> None:
 
     install_request_routing(hardware_policy_module)
 
+    # The old asset wrapper evicts the resident llama process before FLUX starts.
+    # Serialize that eviction with the same re-entrant GPU lock used by text/image
+    # generation so another executor cannot kill an active LLM request.
+    from . import complete_orchestrator_services as services_module
+    from . import model_router as model_router_module
+    from .colab_gpu_handoff_contract import install as install_gpu_handoff
+
+    install_gpu_handoff(
+        services_module=services_module,
+        model_router_module=model_router_module,
+    )
+
     # parallel_runtime_contract is installed after the platform planner and used to
     # capture the old generic research function. Rebind that late overlay to the
     # exact selected PlatformLock while retaining its I/O overlap.
