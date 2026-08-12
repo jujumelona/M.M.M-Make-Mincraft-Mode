@@ -10,6 +10,7 @@ from minecraft_mod_ai.llama_decode_speed_contract import (
     _explicit_parallel_requested,
     _kv_autotune_enabled,
     _kv_candidates,
+    _kv_fingerprint,
     _mtp_p_min_candidates,
     _representative_benchmark_request,
     _tuning_objective,
@@ -102,3 +103,36 @@ def test_structured_local_payload_is_host_validated_without_server_json_grammar(
         "_mmm_host_validated_json_no_gbnf",
         False,
     )
+
+def test_default_policy_searches_for_maximum_decode_speed(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_MTP_P_MIN_CANDIDATES", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_KV_AUTOTUNE", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_SERVER_AUTOTUNE", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_TUNING_OBJECTIVE", raising=False)
+    assert _mtp_p_min_candidates() == (0.0, 0.6, 0.8, 0.9)
+    assert _kv_autotune_enabled(autotune) is True
+
+
+def test_kv_fingerprint_survives_fresh_runtime_path_and_mtime_changes(tmp_path, monkeypatch) -> None:
+    first = tmp_path / "runtime-a" / "model.gguf"
+    second = tmp_path / "runtime-b" / "model.gguf"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    payload = (b"GGUF" + bytes(range(256))) * 9000
+    first.write_bytes(payload)
+    second.write_bytes(payload)
+    first.touch()
+    second.touch()
+    config = SimpleNamespace(
+        model_id="example/model",
+        max_context=32768,
+        max_new_tokens=8192,
+        extra={"gguf_filename": "model.gguf"},
+    )
+    monkeypatch.setattr(autotune, "_server_version", lambda binary: "llama-server-test")
+    monkeypatch.setattr(autotune, "_hardware_identity", lambda: "gpu-test")
+    candidates = ("q4_0", "q8_0", "f16")
+    first_fp = _kv_fingerprint(autotune, config, "/bin/llama-server", str(first), candidates)
+    second_fp = _kv_fingerprint(autotune, config, "/bin/llama-server", str(second), candidates)
+    assert first_fp == second_fp
+

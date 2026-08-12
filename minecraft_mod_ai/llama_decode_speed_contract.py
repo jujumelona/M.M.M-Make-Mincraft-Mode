@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 _SCHEMA_VERSION = "mmm/llama-decode-speed-v2"
-_KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v1"
+_KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v2"
 _INSTALL_LOCK = threading.RLock()
 _BENCHMARK_LOCK = threading.RLock()
 _KV_TUNE_LOCK = threading.RLock()
@@ -49,7 +49,7 @@ def _as_speed_variant(value: Any, *, draft_p_min: float | None = None) -> SpeedS
 def _mtp_p_min_candidates() -> tuple[float, ...]:
     values: list[float] = [0.0]
     for token in os.environ.get(
-        "MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.8"
+        "MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.6,0.8,0.9"
     ).split(","):
         try:
             value = round(float(token.strip()), 4)
@@ -123,7 +123,7 @@ def _kv_candidates() -> tuple[str, ...]:
 def _kv_autotune_enabled(autotune: Any) -> bool:
     return bool(
         autotune._env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True)
-        and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", False)
+        and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", True)
         and _tuning_objective() == "single_stream"
     )
 
@@ -143,14 +143,18 @@ def _kv_fingerprint(
     model_path: str,
     candidates: tuple[str, ...],
 ) -> str:
-    path = Path(model_path)
+    from .llama_server_efficiency_contract import _quick_file_signature
+
+    path = Path(model_path).expanduser().resolve()
     stat = path.stat()
+    extra = getattr(config, "extra", {})
     payload = {
         "schema": _KV_SCHEMA_VERSION,
         "model_id": str(config.model_id),
-        "model_path": str(path.resolve()),
+        "gguf_filename": str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else "",
+        "model_filename": path.name,
         "model_size": int(stat.st_size),
-        "model_mtime_ns": int(stat.st_mtime_ns),
+        "model_signature": _quick_file_signature(path),
         "server": autotune._server_version(binary),
         "hardware": autotune._hardware_identity(),
         "max_context": int(config.max_context),
@@ -552,6 +556,12 @@ def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = No
 
         @wraps(current_ensure)
         def ensure_with_fastest_kv(config: Any, request: Any) -> str:
+            # The managed server is already known-good and is the hottest path. Reuse it
+            # before any external health HTTP or KV fingerprint work.
+            managed_process = getattr(autotune, "_MANAGED_PROCESS", None)
+            managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")
+            if managed_process is not None and managed_process.poll() is None and managed_url:
+                return current_ensure(config, request)
             if not _kv_autotune_enabled(autotune):
                 return current_ensure(config, request)
             if autotune._external_server_is_ready():
