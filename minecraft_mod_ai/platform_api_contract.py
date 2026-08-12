@@ -34,6 +34,23 @@ def install(api_module: Any, plan_render_module: Any) -> None:
 
     install_live_execution(orchestrator_module)
 
+    # External Minecraft MCPs are capability-routed supplements, not a replacement
+    # for the host PlatformLock or deterministic JDT/Gradle/GameTest gates. Install
+    # after live execution so coder target ContextVars and migration lowering already
+    # exist when federation hooks are attached.
+    from . import complete_planner as complete_planner_module
+    from . import custom_module_generator as custom_module_generator_module
+    from . import mcp_tools as mcp_tools_module
+    from . import repair_engine as repair_engine_module
+    from .minecraft_mcp_federation_contract import install as install_mcp_federation
+
+    install_mcp_federation(
+        complete_planner_module=complete_planner_module,
+        custom_module_generator_module=custom_module_generator_module,
+        repair_engine_module=repair_engine_module,
+        mcp_tools_module=mcp_tools_module,
+    )
+
 
 def _install_complete_session(api_module: Any) -> None:
     cls = api_module.CompleteModAISession
