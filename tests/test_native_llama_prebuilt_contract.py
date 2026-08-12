@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -30,17 +31,45 @@ def test_runtime_prefers_verified_prebuilt_before_source_toolchain() -> None:
     assert "falling back to source build" in source
 
 
-def test_bundle_workflow_builds_shared_cuda_for_supported_colab_arches() -> None:
+def test_bundle_workflow_builds_graph_enabled_shared_cuda_for_supported_colab_arches() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "build-native-llama-cuda.yml"
     ).read_text(encoding="utf-8")
 
     assert 'cuda_arch: ["75", "80", "89"]' in workflow
     assert "nvidia/cuda:12.4.1-devel-ubuntu22.04" in workflow
+    assert "BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v2" in workflow
+    assert "RELEASE_TAG: native-llama-b10375-cuda12.4-v2" in workflow
     assert "-DBUILD_SHARED_LIBS=ON" in workflow
     assert "-DGGML_CUDA=ON" in workflow
+    assert "-DGGML_CUDA_GRAPHS=ON" in workflow
+    assert '"cuda_graphs": True' in workflow
     assert "libggml-cuda.so*" in workflow
     assert "sha256sum -c" in workflow
+
+
+def test_bundle_loader_requires_graph_enabled_v2_manifest(tmp_path: Path) -> None:
+    helper = _load_bundle_helper()
+    assert helper.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v2"
+    assert helper.BUNDLE_RELEASE_TAG == "native-llama-b10375-cuda12.4-v2"
+
+    root = tmp_path / "bundle"
+    root.mkdir()
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": helper.BUNDLE_SCHEMA_VERSION,
+                "llama_source_ref": "source-ref",
+                "cuda_arch": "75",
+                "platform": "linux-x86_64",
+                "cuda_graphs": False,
+                "files": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="requires cuda_graphs=true"):
+        helper._validate_bundle(root, cuda_arch="75", source_ref="source-ref")
 
 
 def test_bundle_loader_rejects_archive_path_traversal(tmp_path: Path) -> None:
