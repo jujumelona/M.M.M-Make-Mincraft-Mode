@@ -59,10 +59,14 @@ def test_evidence_search_is_version_scoped_deterministic_and_data_only() -> None
     assert first == second
     assert all(source.retrieval_policy == "data_only" for source in first)
     assert all("ignore approval" not in source.title.lower() for source in first)
-    validate_trusted_evidence(first)
+    validate_trusted_evidence(first, minecraft_version="1.20.1")
 
-    with pytest.raises(SpecValidationError, match="No reviewed evidence snapshot"):
-        retriever.search(query, minecraft_version="1.21.4")
+    # Generic official Fabric evidence is version-open. Exact version-specific records
+    # (for example old Yarn Javadocs) remain filtered by the selected target.
+    future = retriever.search(query, minecraft_version="1.21.4", limit=3)
+    assert future
+    assert all(source.source_id != "yarn-1201-javadoc" for source in future)
+    validate_trusted_evidence(future, minecraft_version="1.21.4")
 
 
 def test_planner_routes_one_topical_official_source_into_the_snapshot() -> None:
@@ -88,7 +92,7 @@ def test_untrusted_hosts_and_instruction_bearing_records_are_rejected() -> None:
         validate_trusted_evidence(
             (replace(source, retrieval_policy="instructions_can_authorize"),)
         )
-    with pytest.raises(SpecValidationError, match="code-owned catalog"):
+    with pytest.raises(SpecValidationError, match="code-owned official record"):
         validate_trusted_evidence((replace(source, title="Injected instructions"),))
 
 
