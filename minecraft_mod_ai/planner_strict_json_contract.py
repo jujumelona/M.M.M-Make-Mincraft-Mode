@@ -17,14 +17,14 @@ def _outermost_complete_json_containers(text: str) -> list[_DecodedContainer]:
     """Return complete outermost JSON object/array values embedded in ``text``.
 
     Structured planner output can travel through several OpenAI-compatible/chat-template
-    transports.  Those transports may add Markdown fences, Qwen channel markers, a BOM,
-    or short presentation text around an otherwise exact JSON value.  Transport syntax
+    transports. Those transports may add Markdown fences, Qwen channel markers, a BOM,
+    or short presentation text around an otherwise exact JSON value. Transport syntax
     must not decide semantic validity.
 
-    This scanner is deliberately *not* a JSON repair routine.  It only accepts values
-    that ``json.JSONDecoder.raw_decode`` can already parse completely.  It never closes
+    This scanner is deliberately *not* a JSON repair routine. It only accepts values
+    that ``json.JSONDecoder.raw_decode`` can already parse completely. It never closes
     braces, changes strictness, fills fields, aliases fields, or drops a second complete
-    top-level JSON container.  Arrays are retained here so an array wrapping the desired
+    top-level JSON container. Arrays are retained here so an array wrapping the desired
     object cannot be mistaken for a valid top-level object merely because the nested
     object itself is parseable.
     """
@@ -48,9 +48,6 @@ def _outermost_complete_json_containers(text: str) -> list[_DecodedContainer]:
             )
         )
 
-    # An object nested inside a successfully decoded object/array is not an additional
-    # top-level response value.  Sorting outer starts first and wider spans first makes
-    # containment removal deterministic even with deeply nested planner payloads.
     outermost: list[_DecodedContainer] = []
     for candidate in sorted(decoded, key=lambda item: (item.start, -item.end)):
         if any(
@@ -78,48 +75,47 @@ def _extract_one_complete_object(text: str) -> dict[str, Any]:
 
 
 def install(runtime_module: Any) -> None:
-    """Require one complete, exact-contract JSON object on structured planner pages.
-
-    The semantic boundary is the JSON object itself, not incidental transport text
-    surrounding it.  This keeps Colab/OpenAI-compatible wrappers from causing false
-    negatives while preserving the properties that matter for safety: no truncation
-    repair, no synthesized pagination fields, one top-level object only, and an exact
-    host-declared top-level field set.
-    """
+    """Require one complete, exact-contract JSON object on structured planner pages."""
 
     current = runtime_module._extract_with_safe_empty_defaults
-    if getattr(current, "_mmm_strict_structured_json", False):
-        return
+    if not getattr(current, "_mmm_strict_structured_json", False):
 
-    @wraps(current)
-    def extract_strict(
-        module: Any,
-        text: str,
-        *,
-        expected_contracts: Sequence[frozenset[str]],
-    ) -> dict[str, Any]:
-        if not isinstance(text, str) or not text.strip():
-            raise module.SpecValidationError("Structured planner returned empty JSON.")
-        try:
-            value = _extract_one_complete_object(text)
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise module.SpecValidationError(
-                "Structured planner did not return exactly one complete strict JSON "
-                f"object: {exc}"
-            ) from exc
+        @wraps(current)
+        def extract_strict(
+            module: Any,
+            text: str,
+            *,
+            expected_contracts: Sequence[frozenset[str]],
+        ) -> dict[str, Any]:
+            if not isinstance(text, str) or not text.strip():
+                raise module.SpecValidationError("Structured planner returned empty JSON.")
+            try:
+                value = _extract_one_complete_object(text)
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise module.SpecValidationError(
+                    "Structured planner did not return exactly one complete strict JSON "
+                    f"object: {exc}"
+                ) from exc
 
-        fields = frozenset(str(key) for key in value)
-        if fields not in tuple(expected_contracts):
-            expected = [sorted(contract) for contract in expected_contracts]
-            raise module.SpecValidationError(
-                "Structured planner top-level fields do not match the host contract: "
-                f"received={sorted(fields)}, expected_one_of={expected}"
-            )
-        return value
+            fields = frozenset(str(key) for key in value)
+            if fields not in tuple(expected_contracts):
+                expected = [sorted(contract) for contract in expected_contracts]
+                raise module.SpecValidationError(
+                    "Structured planner top-level fields do not match the host contract: "
+                    f"received={sorted(fields)}, expected_one_of={expected}"
+                )
+            return value
 
-    extract_strict._mmm_strict_structured_json = True  # type: ignore[attr-defined]
-    extract_strict.__wrapped__ = current  # type: ignore[attr-defined]
-    runtime_module._extract_with_safe_empty_defaults = extract_strict
+        extract_strict._mmm_strict_structured_json = True  # type: ignore[attr-defined]
+        extract_strict.__wrapped__ = current  # type: ignore[attr-defined]
+        runtime_module._extract_with_safe_empty_defaults = extract_strict
+
+    # The strict parser stays strict. Separately constrain the tiny production-outline
+    # generation prompt/output budget so the model produces one object instead of
+    # spending an 8k implementation budget emitting repeated candidate JSON objects.
+    from .planner_outline_prompt_contract import install as install_outline_prompt
+
+    install_outline_prompt(runtime_module)
 
 
 __all__ = ["install"]
