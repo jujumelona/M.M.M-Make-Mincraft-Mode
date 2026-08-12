@@ -29,8 +29,18 @@ def start(model_registry_module: Any) -> None:
         retrieval_module=retrieval_module,
     )
 
-    if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+    managed_colab = bool(os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip())
+    if not managed_colab:
         return
+
+    # The historical notebook passed minecraft_version="1.20.1" only because the
+    # pre-routing constructor required a value. Ignore that implementation placeholder
+    # in managed Colab; an actual version written by the user in the prompt remains a
+    # normal resolver constraint.
+    from . import game_design as game_design_module
+    from .colab_auto_platform_contract import install as install_colab_auto_platform
+
+    install_colab_auto_platform(game_design_module)
 
     # A seed page carries at most twelve independent ecosystem routes. Start all
     # twelve by default in Colab instead of leaving four queued behind an 8-worker
