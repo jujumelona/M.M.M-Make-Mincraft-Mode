@@ -70,7 +70,8 @@ def test_bundle_workflow_uses_driver_stub_only_for_linking() -> None:
         ROOT / ".github" / "workflows" / "build-native-llama-cuda.yml"
     ).read_text(encoding="utf-8")
 
-    assert "/usr/local/cuda/lib64/stubs/libcuda.so" in workflow
+    assert "stub_dir=/usr/local/cuda/lib64/stubs" in workflow
+    assert 'test -f "$stub_dir/libcuda.so"' in workflow
     assert 'ln -sf libcuda.so "$stub_dir/libcuda.so.1"' in workflow
     assert "-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" in workflow
     assert "Shared library: [libcuda.so.1]" in workflow
