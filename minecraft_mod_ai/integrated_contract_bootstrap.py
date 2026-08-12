@@ -27,6 +27,18 @@ def install() -> None:
 
     install_java_lsp_process_safety(java_lsp_module)
 
+    # Safety contracts must be installed in the real package path, not only from their
+    # unit tests. Bound nested external-MCP bridge leakage and make persisted proposal
+    # deserialization fail closed before any resume/approval workflow consumes it.
+    from . import external_mcp_router as external_mcp_router_module
+    from . import spec as spec_module
+    from . import complete_spec as complete_spec_module
+    from .external_mcp_bridge_safety_contract import install as install_external_mcp_bridge_safety
+    from .proposal_deserialization_contract import install as install_proposal_deserialization
+
+    install_external_mcp_bridge_safety(external_mcp_router_module)
+    install_proposal_deserialization(spec_module, complete_spec_module)
+
     # Platform generation/validation must agree with the exact approved adapter.
     from . import generator as generator_module
     from . import validator as validator_module
