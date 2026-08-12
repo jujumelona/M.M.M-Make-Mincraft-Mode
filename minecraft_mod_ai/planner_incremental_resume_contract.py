@@ -7,13 +7,15 @@ from typing import Any
 def install(incremental_module: Any) -> None:
     """Resume saved queues, patch duplicates, and finalize without regeneration."""
 
-    # Install critical-path efficiency after planner JSON/repair wrappers exist. This
-    # keeps the local GPU at one decode slot while removing host-imposed planner page
-    # width and dependency-head-of-line sharding.
+    # Install critical-path efficiency after planner JSON/repair wrappers exist. Keep
+    # the local GPU at one decode slot, remove host-imposed planner page width and
+    # dependency-head-of-line sharding, and journal large checkpoints in linear time.
     from . import complete_planner as complete_planner_module
     from . import work_graph as work_graph_module
     from .execution_efficiency_contract import install as install_execution_efficiency
+    from .planner_checkpoint_journal_contract import install as install_checkpoint_journal
 
+    install_checkpoint_journal(incremental_module)
     install_execution_efficiency(
         complete_planner_module=complete_planner_module,
         work_graph_module=work_graph_module,
