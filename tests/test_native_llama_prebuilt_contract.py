@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -120,11 +121,17 @@ def test_bundle_workflows_are_parallel_graph_enabled_cuda_builds() -> None:
     assert "-DGGML_CUDA=ON" in worker
     assert "-DGGML_CUDA_GRAPHS=ON" in worker
     assert '"cuda_graphs": True' in worker
-    assert "libggml-cuda.so*" in worker
     assert "sha256sum -c" in worker
     assert "gh git" in worker
     assert "gh --version" in worker
     assert "Publish this architecture immediately" in worker
+
+    # Packaging stores one real copy per shared object and reconstructs aliases later.
+    assert "Package one copy of each shared library" in worker
+    assert "resolved = entry.resolve(strict=True)" in worker
+    assert '"aliases": dict(sorted(aliases.items()))' in worker
+    assert "bundle must contain regular files only" in worker
+    assert "cp -L" not in worker
 
     # One launcher creates three independent reusable-workflow jobs concurrently.
     assert 'cuda_arch: ["75", "80", "89"]' in launcher
@@ -182,6 +189,47 @@ def test_bundle_loader_requires_graph_enabled_v2_manifest(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="requires cuda_graphs=true"):
+        helper._validate_bundle(root, cuda_arch="75", source_ref="source-ref")
+
+
+def test_bundle_loader_materializes_only_verified_bin_aliases(tmp_path: Path) -> None:
+    helper = _load_bundle_helper()
+    root = tmp_path / "bundle"
+    bindir = root / "bin"
+    bindir.mkdir(parents=True)
+    server = bindir / "llama-server"
+    cuda_real = bindir / "libggml-cuda.so.0.19.0"
+    server.write_bytes(b"server")
+    cuda_real.write_bytes(b"cuda-real")
+    files = {
+        "bin/llama-server": hashlib.sha256(server.read_bytes()).hexdigest(),
+        "bin/libggml-cuda.so.0.19.0": hashlib.sha256(cuda_real.read_bytes()).hexdigest(),
+    }
+    manifest = {
+        "schema_version": helper.BUNDLE_SCHEMA_VERSION,
+        "llama_source_ref": "source-ref",
+        "cuda_arch": "75",
+        "platform": "linux-x86_64",
+        "cuda_graphs": True,
+        "files": files,
+        "aliases": {
+            "bin/libggml-cuda.so": "bin/libggml-cuda.so.0.19.0",
+            "bin/libggml-cuda.so.0": "bin/libggml-cuda.so.0.19.0",
+        },
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    binary = helper._validate_bundle(root, cuda_arch="75", source_ref="source-ref")
+    assert binary == server.resolve()
+    for name in ("libggml-cuda.so", "libggml-cuda.so.0"):
+        alias = bindir / name
+        assert alias.is_symlink()
+        assert alias.resolve() == cuda_real.resolve()
+
+    malicious = dict(manifest)
+    malicious["aliases"] = {"../escape": "bin/libggml-cuda.so.0.19.0"}
+    (root / "manifest.json").write_text(json.dumps(malicious), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="alias path is unsafe"):
         helper._validate_bundle(root, cuda_arch="75", source_ref="source-ref")
 
 
