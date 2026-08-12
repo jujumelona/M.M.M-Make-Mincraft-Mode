@@ -210,7 +210,9 @@ def _repair_attempt_budget() -> int:
         value = int(raw)
     except ValueError:
         value = _DEFAULT_MODEL_REPAIR_ATTEMPTS
-    return max(1, min(value, 4))
+    # There are exactly two meaningful semantic actions: patch fields, then regenerate
+    # the one item. More calls only repeat an already-failed action.
+    return max(1, min(value, 2))
 
 
 def _safe_identifier(value: Any, *, fallback: str) -> str:
@@ -230,13 +232,14 @@ def _safe_identifier(value: Any, *, fallback: str) -> str:
 def _unique_identifier(base: str, catalog: Any) -> str:
     if base not in catalog:
         return base
-    suffix_index = 2
-    while True:
+    # Host IDs are structural. Allocate deterministically, but never use an unbounded
+    # search even though realistic catalogs are tiny compared with this ceiling.
+    for suffix_index in range(2, 10_002):
         suffix = f"_{suffix_index}"
         candidate = f"{base[: 64 - len(suffix)].rstrip('_')}{suffix}"
         if candidate not in catalog:
             return candidate
-        suffix_index += 1
+    raise RuntimeError(f"Unable to allocate a unique production id for {base!r}")
 
 
 def _deliverable_hint(raw: dict[str, Any]) -> str:
@@ -326,7 +329,14 @@ def _deterministic_normalize(
         value[id_attr] = unique_id
         changes.append(f"{id_attr}:normalized_unique")
 
-    if kind == "asset":
+    if kind == "module":
+        # An omitted config has one unambiguous host representation. Do not waste a
+        # model call asking it to return an empty object. A present non-object config,
+        # however, may carry intended semantics and is left for semantic repair.
+        if "config" not in value:
+            value["config"] = {}
+            changes.append("config:defaulted_empty")
+    elif kind == "asset":
         inferred_kind = _infer_asset_kind(value)
         if value.get("kind") != inferred_kind:
             value["kind"] = inferred_kind
@@ -353,7 +363,7 @@ def _deterministic_normalize(
             changes.append("kind:audio_normalized")
         if "loop" in value:
             normalized_loop = _normalize_bool(value["loop"])
-            if normalized_loop is not value["loop"] and normalized_loop != value["loop"]:
+            if normalized_loop != value["loop"]:
                 value["loop"] = normalized_loop
                 changes.append("loop:boolean_normalized")
 
