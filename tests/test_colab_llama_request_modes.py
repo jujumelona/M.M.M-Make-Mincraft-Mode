@@ -16,6 +16,7 @@ from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 def _config(*, model_id: str, filename: str = "model.gguf") -> SimpleNamespace:
     return SimpleNamespace(
+        role="planner",
         model_id=model_id,
         max_context=32768,
         max_new_tokens=8192,
@@ -24,7 +25,10 @@ def _config(*, model_id: str, filename: str = "model.gguf") -> SimpleNamespace:
 
 
 def _request(response_format) -> SimpleNamespace:
-    return SimpleNamespace(response_format=response_format)
+    return SimpleNamespace(
+        messages=({"role": "user", "content": "hello"},),
+        response_format=response_format,
+    )
 
 
 def test_package_bootstrap_installs_request_safe_colab_decode_contract() -> None:
@@ -83,12 +87,13 @@ def test_runtime_mtp_disable_forces_future_text_requests_to_baseline(
     assert colab_mtp_server.request_server_mode(config, _request("text")) == "baseline"
 
 
-def test_baseline_config_contains_no_speculative_draft_fields(
+def test_baseline_config_contains_no_speculation_and_applies_selected_kv_type(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "server.json"
     monkeypatch.setattr(colab_mtp_server, "SERVER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(colab_mtp_server, "_kv_cache_type_id", lambda: 123)
     config = _config(model_id="unsloth/Qwen3.5-9B-MTP-GGUF")
 
     width = colab_mtp_server._write_config(config, "/tmp/model.gguf", mode="baseline")
@@ -99,14 +104,17 @@ def test_baseline_config_contains_no_speculative_draft_fields(
     assert "draft_model" not in model
     assert "draft_model_num_pred_tokens" not in model
     assert model["n_ctx"] == colab_mtp_server.SERVER_CONTEXT_CAP
+    assert model["type_k"] == 123
+    assert model["type_v"] == 123
 
 
-def test_mtp_config_is_explicit_and_bounded(
+def test_mtp_config_is_explicit_bounded_and_uses_same_kv_type(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "server.json"
     monkeypatch.setattr(colab_mtp_server, "SERVER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(colab_mtp_server, "_kv_cache_type_id", lambda: 456)
     monkeypatch.setenv("MMM_LLAMA_MTP_WIDTH", "3")
     config = _config(model_id="unsloth/Qwen3.5-9B-MTP-GGUF")
 
@@ -118,6 +126,14 @@ def test_mtp_config_is_explicit_and_bounded(
     assert model["draft_model"] == "draft-mtp"
     assert model["draft_model_num_pred_tokens"] == 3
     assert model["n_seq_max"] == 1
+    assert model["type_k"] == 456
+    assert model["type_v"] == 456
+
+
+def test_invalid_kv_cache_quant_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MMM_KV_CACHE_QUANT", "bogus")
+    with pytest.raises(RuntimeError, match="MMM_KV_CACHE_QUANT"):
+        colab_mtp_server._kv_cache_quant()
 
 
 def test_decode_log_summary_distinguishes_first_token_stall_from_server_progress() -> None:
@@ -136,6 +152,7 @@ def test_decode_log_summary_distinguishes_first_token_stall_from_server_progress
 
 class _StreamResponse:
     status_code = 200
+    text = ""
 
     def __init__(self, lines: list[str]) -> None:
         self.lines = lines
@@ -157,6 +174,36 @@ def _delta(content: str) -> str:
     return "data: " + json.dumps(
         {"choices": [{"delta": {"content": content}}]}
     )
+
+
+def test_managed_structured_stream_disables_reasoning_without_server_json_grammar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    payloads: list[dict] = []
+
+    def stream(*args, **kwargs):
+        payloads.append(dict(kwargs["json"]))
+        return _StreamResponse([_delta('{"game_design":{}}'), "data: [DONE]"])
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    adapter = SimpleNamespace(
+        config=_config(model_id="unsloth/Qwen3.5-9B-MTP-GGUF")
+    )
+
+    result = llama_server_hardware_policy._strict_server_generate(
+        adapter,
+        _request("json"),
+        colab_mtp_server.SERVER_API_URL,
+    )
+
+    assert result == '{"game_design":{}}'
+    assert payloads
+    payload = payloads[0]
+    assert "response_format" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["stream"] is True
 
 
 def test_mtp_probe_requires_completed_multi_step_stream(
