@@ -9,6 +9,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .imported_platform_repair import clear_marker, write_marker
 from .platform_catalog import adapter_for_lock_values, adapter_for_target, adapter_from_project
 
 
@@ -56,7 +57,6 @@ def _install_runtime_manager(module: Any) -> None:
         profiles = raw.get("profiles", {})
         entry = profiles.get(profile_name) if isinstance(profiles, dict) else None
         if not isinstance(entry, dict):
-            # Backwards-compatible config fallback for the checked-in legacy profile.
             legacy = profiles.get("fabric_1201_disposable") if isinstance(profiles, dict) else None
             if profile_name == "fabric_target_disposable" and isinstance(legacy, dict):
                 entry = legacy
@@ -109,6 +109,7 @@ def _install_runtime_manager(module: Any) -> None:
     cls.__init__ = init
 
     original_prepare = cls.prepare_instance
+
     @wraps(original_prepare)
     def prepare_instance(self: Any, *args: Any, **kwargs: Any):
         _validate_java_command(
@@ -224,21 +225,28 @@ def _install_orchestrator_runtime(module: Any) -> None:
     cls._runtime_profile = staticmethod(runtime_profile)
 
     original_prepare = cls._prepare_project
+
     @wraps(original_prepare)
     def prepare_project(self: Any, approved: Any, *, run_root: Path, existing_input: Any):
         expected = adapter_for_lock_values(approved.base_proposal.spec.platform)
+        imported_report = None
         if existing_input is not None:
-            report = module.inspect_existing_project_archive(existing_input)
-            if report.minecraft_version and report.minecraft_version != expected.minecraft_version:
+            imported_report = module.inspect_existing_project_archive(existing_input)
+            # Repair admission is intentionally narrower than ordinary import.  We
+            # must know both target facts from the source archive before allowing an
+            # incomplete Gradle/Yarn/Fabric toolchain to be repaired.
+            if imported_report.minecraft_version != expected.minecraft_version:
                 raise module.CompleteProductionError(
                     "Approved Revise target does not match the imported project: "
-                    f"plan={expected.minecraft_version}, existing={report.minecraft_version}."
+                    f"plan={expected.minecraft_version}, existing="
+                    f"{imported_report.minecraft_version or 'unknown'}."
                 )
-            if report.loader and report.loader != expected.loader:
+            if imported_report.loader != expected.loader:
                 raise module.CompleteProductionError(
                     "Approved Revise loader does not match the imported project: "
-                    f"plan={expected.loader}, existing={report.loader}."
+                    f"plan={expected.loader}, existing={imported_report.loader or 'unknown'}."
                 )
+
         root = original_prepare(
             self,
             approved,
@@ -248,22 +256,36 @@ def _install_orchestrator_runtime(module: Any) -> None:
         try:
             actual = adapter_from_project(root)
         except ValueError as exc:
-            if existing_input is not None:
-                raise module.CompleteProductionError(
-                    "Imported project does not resolve to one reviewed exact target: " + str(exc)
-                ) from exc
-            raise
+            if existing_input is None:
+                raise
+            try:
+                write_marker(
+                    root,
+                    adapter=expected,
+                    archive_sha256=approved.existing_input_sha256,
+                    reason=str(exc),
+                )
+            except ValueError as marker_error:
+                raise module.CompleteProductionError(str(marker_error)) from marker_error
+            # This marker is only permission to enter the target-aware repair path.
+            # It is never release evidence; final packaging independently requires
+            # adapter_from_project(root) to resolve exactly to the approved adapter.
+            return root
+
         if actual.adapter_id != expected.adapter_id:
             raise module.CompleteProductionError(
                 f"Prepared project target {actual.adapter_id} does not match approved "
                 f"target {expected.adapter_id}."
             )
+        if existing_input is not None:
+            clear_marker(root)
         return root
 
     prepare_project._mmm_dynamic_platform_runtime = True
     cls._prepare_project = prepare_project
 
     original_matches = cls._project_matches_spec
+
     def project_matches_spec(project_root: Path, spec: Any) -> bool:
         if not original_matches(project_root, spec):
             return False
