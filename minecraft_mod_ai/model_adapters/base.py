@@ -52,10 +52,28 @@ class AdapterConfig:
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: Mapping[str, Any] = field(default_factory=dict)
+    raw_arguments: str = ""
+
+
+@dataclass(frozen=True)
+class GenerationResponse:
+    content: str = ""
+    tool_calls: tuple[ToolCall, ...] = ()
+    reasoning_content: str = ""
+
+
+@dataclass(frozen=True)
 class GenerationRequest:
     messages: Sequence[Mapping[str, Any]]
     media_paths: tuple[Path, ...] = ()
     response_format: str = "text"
+    tools: tuple[Mapping[str, Any], ...] = ()
+    tool_choice: str | Mapping[str, Any] | None = None
+    parallel_tool_calls: bool = True
 
 
 class ModelAdapter(ABC):
@@ -65,6 +83,15 @@ class ModelAdapter(ABC):
     @abstractmethod
     def generate(self, request: GenerationRequest) -> str:
         raise NotImplementedError
+
+    def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
+        """Return one structured assistant turn.
+
+        Legacy adapters remain valid: adapters without native function calling simply
+        produce a text-only turn. Tool-aware adapters override this method.
+        """
+
+        return GenerationResponse(content=self.generate(request))
 
     def close(self) -> None:
         _release_cuda()
