@@ -60,9 +60,14 @@ def install(api_module: Any, plan_render_module: Any) -> None:
         mcp_tools_module=mcp_tools_module,
     )
 
+    from . import minecraft_mcp_repair_batch_contract as repair_batch_module
     from .minecraft_mcp_repair_batch_contract import install as install_mcp_repair_batch
+    from .mcp_repair_diagnostic_shape_contract import (
+        install as install_mcp_repair_diagnostic_shape,
+    )
 
     install_mcp_repair_batch(repair_engine_module)
+    install_mcp_repair_diagnostic_shape(repair_batch_module)
 
     from . import skill_catalog as skill_catalog_module
     from .platform_skill_policy_contract import install as install_skill_policy
