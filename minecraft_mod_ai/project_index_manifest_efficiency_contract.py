@@ -94,6 +94,43 @@ def _fast_receipts(index: Any) -> set[tuple[str, str]]:
     return value
 
 
+def _shard_cache(index: Any) -> dict[int, tuple[bytes, str]]:
+    value = getattr(index, "_mmm_manifest_shard_cache", None)
+    if isinstance(value, dict):
+        return value
+    value = {}
+    index._mmm_manifest_shard_cache = value
+    return value
+
+
+def _copy_receipt(value: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(value)
+    suffix_counts = value.get("suffix_counts")
+    if isinstance(suffix_counts, dict):
+        copied["suffix_counts"] = dict(suffix_counts)
+    return copied
+
+
+def _install_receipt_cache(project_index_module: Any) -> None:
+    cls = project_index_module.ProjectIndex
+    current = cls.manifest_receipt
+    if getattr(current, "_mmm_cached_manifest_receipt", False):
+        return
+
+    @wraps(current)
+    def manifest_receipt(self: Any) -> dict[str, Any]:
+        cached = getattr(self, "_mmm_manifest_receipt_cache", None)
+        if isinstance(cached, dict):
+            return _copy_receipt(cached)
+        value = current(self)
+        self._mmm_manifest_receipt_cache = _copy_receipt(value)
+        return _copy_receipt(value)
+
+    manifest_receipt._mmm_cached_manifest_receipt = True  # type: ignore[attr-defined]
+    manifest_receipt.__wrapped__ = current  # type: ignore[attr-defined]
+    cls.manifest_receipt = manifest_receipt
+
+
 def _find_position(files: list[Any], path: str) -> tuple[int, bool]:
     lo = 0
     hi = len(files)
@@ -164,6 +201,25 @@ def _indexed_file(module: Any, index: Any, normalized: str, path: Path | None) -
     )
 
 
+def _invalidate_after_update(
+    index: Any,
+    *,
+    dirty_shards: set[int],
+    structural_from: int | None,
+) -> None:
+    try:
+        delattr(index, "_mmm_manifest_receipt_cache")
+    except AttributeError:
+        pass
+    cache = _shard_cache(index)
+    if structural_from is not None:
+        for shard in tuple(cache):
+            if shard >= structural_from:
+                cache.pop(shard, None)
+    for shard in dirty_shards:
+        cache.pop(shard, None)
+
+
 def _install_incremental_update_files(project_index_module: Any) -> None:
     cls = project_index_module.ProjectIndex
     current = cls.update_files
@@ -174,16 +230,20 @@ def _install_incremental_update_files(project_index_module: Any) -> None:
     def update_files(self: Any, touched_paths: Any) -> None:
         # Keep the public immutable tuple while replacing the historical full dict
         # copy + full sort with binary-search edits over the already sorted index.
-        # One tuple materialization remains O(N), but the dominant O(N log N) sort and
-        # O(N) dictionary copy disappear from every generation-node commit.
         files = list(self.files)
         by_path = self._by_path
+        shard_size = project_index_module._MANIFEST_SHARD_SIZE
+        dirty_shards: set[int] = set()
+        structural_from: int | None = None
+        changed = False
+
         for raw_path in touched_paths:
             resolved = _resolve_touched(self, raw_path)
             if resolved is None:
                 continue
             normalized, path = resolved
             position, existed = _find_position(files, normalized)
+            before = files[position] if existed else None
             item = _indexed_file(
                 project_index_module,
                 self,
@@ -191,16 +251,42 @@ def _install_incremental_update_files(project_index_module: Any) -> None:
                 path,
             )
             if item is None:
+                if not existed:
+                    by_path.pop(normalized, None)
+                    continue
                 by_path.pop(normalized, None)
-                if existed:
-                    files.pop(position)
+                files.pop(position)
+                changed = True
+                shard = position // shard_size
+                structural_from = (
+                    shard if structural_from is None else min(structural_from, shard)
+                )
                 continue
+
+            if existed and before == item:
+                by_path[normalized] = item
+                continue
+
             by_path[normalized] = item
+            changed = True
+            shard = position // shard_size
             if existed:
                 files[position] = item
+                dirty_shards.add(shard)
             else:
                 files.insert(position, item)
+                structural_from = (
+                    shard if structural_from is None else min(structural_from, shard)
+                )
+
+        if not changed:
+            return
         self.files = tuple(files)
+        _invalidate_after_update(
+            self,
+            dirty_shards=dirty_shards,
+            structural_from=structural_from,
+        )
 
     update_files._mmm_incremental_sorted_update = True  # type: ignore[attr-defined]
     update_files.__wrapped__ = current  # type: ignore[attr-defined]
@@ -212,11 +298,13 @@ def install(project_index_module: Any) -> None:
 
     ProjectIndex is committed after every successful generation node. The base
     implementation copied and resorted the complete path catalog for every touched
-    file set, then rewrote every 256-file manifest shard and reread every new shard to
-    hash it. This contract preserves the public tuple ordering and v2 on-disk schema,
-    but removes those repeated whole-project operations wherever correctness permits.
+    file set, recalculated the complete receipt on every read, then rewrote every
+    256-file manifest shard and reread every new shard to hash it. This contract keeps
+    the exact public tuple ordering, receipt algorithm and v2 disk schema while caching
+    only values whose touched-path dependency set has not changed.
     """
 
+    _install_receipt_cache(project_index_module)
     _install_incremental_update_files(project_index_module)
 
     cls = project_index_module.ProjectIndex
@@ -267,16 +355,21 @@ def install(project_index_module: Any) -> None:
 
         parts_root = target.parent / f"{target.stem}-parts"
         version_root = parts_root / version
+        shard_cache = _shard_cache(self)
         rendered_parts: list[tuple[str, bytes, str]] = []
         for index, start in enumerate(range(0, len(self.files), shard_size)):
-            name = f"part-{index:08d}.json"
-            raw = _part_bytes(
-                project_index_module,
-                index=index,
-                members=self.files[start : start + shard_size],
-            )
-            digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-            rendered_parts.append((name, raw, digest))
+            cached = shard_cache.get(index)
+            if cached is None:
+                raw = _part_bytes(
+                    project_index_module,
+                    index=index,
+                    members=self.files[start : start + shard_size],
+                )
+                digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+                shard_cache[index] = (raw, digest)
+            else:
+                raw, digest = cached
+            rendered_parts.append((f"part-{index:08d}.json", raw, digest))
 
         created_version = False
         if not version_root.is_dir():
