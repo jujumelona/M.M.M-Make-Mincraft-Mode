@@ -2,18 +2,13 @@ name: Build native llama CUDA bundles
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/build-native-llama-cuda.yml
-      - tools/native_llama_bundle.py
 
 permissions:
   contents: write
 
 concurrency:
   group: native-llama-b10375-cuda12.4-v2
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -38,6 +33,15 @@ jobs:
             ca-certificates cmake git ninja-build python3
           rm -rf /var/lib/apt/lists/*
 
+      - name: Prepare CUDA driver stubs for link-only build
+        shell: bash
+        run: |
+          set -euo pipefail
+          stub_dir=/usr/local/cuda/lib64/stubs
+          test -f "$stub_dir/libcuda.so"
+          ln -sf libcuda.so "$stub_dir/libcuda.so.1"
+          test -e "$stub_dir/libcuda.so.1"
+
       - name: Build pinned native llama-server
         shell: bash
         run: |
@@ -52,6 +56,8 @@ jobs:
             -DGGML_CUDA=ON \
             -DGGML_CUDA_GRAPHS=ON \
             -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.cuda_arch }}" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib64/stubs" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib64/stubs" \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_APP=OFF \
