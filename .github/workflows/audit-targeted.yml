@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# Audit generation 6: verify latest production fixes on current main.
+# Audit generation 7: verify all known regressions after large-request fixes.
 jobs:
   audit:
     runs-on: ubuntu-latest
