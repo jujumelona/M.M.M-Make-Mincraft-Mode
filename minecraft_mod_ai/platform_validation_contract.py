@@ -183,6 +183,26 @@ def install(module: Any) -> None:
     validator._validate_content = validate_content
 
 
+def _reviewed_live_network_sources(
+    module: Any,
+    root: Path,
+    spec: Any,
+    findings: list[Any],
+) -> dict[str, str]:
+    """Reuse the base validator's exact sidecar-source exception when available."""
+
+    try:
+        complete = module._load_complete_project_proposal(root, spec, findings)
+        return module._reviewed_local_ai_sidecar_network_sources(
+            root,
+            spec,
+            complete,
+        )
+    except Exception:
+        # No complete-proposal sidecar receipt means no network-source exception.
+        return {}
+
+
 def _validate_live_project(
     self: Any,
     module: Any,
@@ -255,6 +275,12 @@ def _validate_live_project(
         checks += 1
         self._load_json(path, findings, root)
 
+    reviewed_network_sources = _reviewed_live_network_sources(
+        module,
+        root,
+        spec,
+        findings,
+    )
     java_files = sorted(root.rglob("*.java"))
     checks += 1
     if not java_files:
@@ -272,6 +298,11 @@ def _validate_live_project(
         relative = self._rel(root, path)
         for token in self.FORBIDDEN_JAVA:
             if token in text:
+                if (
+                    token == "java.net."
+                    and reviewed_network_sources.get(relative) == text
+                ):
+                    continue
                 findings.append(
                     module.Finding(
                         "FORBIDDEN_JAVA_API",
