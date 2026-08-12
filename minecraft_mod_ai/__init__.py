@@ -113,6 +113,16 @@ from .extended_registration_contract import install as _install_extended_registr
 
 _install_extended_registration_contract(_extended_content_generator_module)
 
+# ProjectIndex is committed after every successful generation node. Preserve its
+# immutable v2 manifest schema while avoiding full-shard rewrite/readback on every
+# incremental node completion.
+from . import project_index as _project_index_module
+from .project_index_manifest_efficiency_contract import (
+    install as _install_project_index_manifest_efficiency_contract,
+)
+
+_install_project_index_manifest_efficiency_contract(_project_index_module)
+
 # Install isolated custom-generation staging plus the short, hash-guarded live
 # project commit contract before public API users construct an orchestrator.
 from . import complete_orchestrator as _complete_orchestrator_module
