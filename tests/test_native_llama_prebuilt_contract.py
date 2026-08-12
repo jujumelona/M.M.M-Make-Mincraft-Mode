@@ -31,6 +31,13 @@ def test_runtime_prefers_verified_prebuilt_before_source_toolchain() -> None:
     assert "falling back to pinned source build" in source
 
 
+def test_source_fallback_build_enables_cuda_graphs() -> None:
+    source = (ROOT / "tools" / "colab_runtime_setup.py").read_text(encoding="utf-8")
+    fallback = source[source.index('for tool in ("git", "cmake", "nvcc")') :]
+    assert '"-DGGML_CUDA=ON"' in fallback
+    assert '"-DGGML_CUDA_GRAPHS=ON"' in fallback
+
+
 def test_runtime_package_never_rebuilds_native_llama() -> None:
     runtime_root = ROOT / "minecraft_mod_ai"
     forbidden = (
