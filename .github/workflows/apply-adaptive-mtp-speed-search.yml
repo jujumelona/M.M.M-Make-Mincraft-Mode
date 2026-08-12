@@ -1,0 +1,99 @@
+name: Apply verified adaptive MTP speed search
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-adaptive-mtp-speed-search.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mmm-adaptive-mtp-speed-search
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Patch adaptive MTP search
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('minecraft_mod_ai/llama_server_runtime_tuning.py')
+          text = p.read_text(encoding='utf-8')
+
+          def once(old: str, new: str) -> None:
+              global text
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one runtime replacement, found {text.count(old)}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          once(
+              '_SCHEMA_VERSION = "mmm/llama-server-autotune-v5-adaptive-staged"',
+              '_SCHEMA_VERSION = "mmm/llama-server-autotune-v6-adaptive-joint-mtp"',
+          )
+          once(
+              '''class ServerVariant:\n    name: str\n    spec_type: str = "none"\n    draft_n_max: int = 0\n    ubatch: int = 0\n    parallel: int = 1\n    cache_reuse: int = 0\n''',
+              '''class ServerVariant:\n    name: str\n    spec_type: str = "none"\n    draft_n_max: int = 0\n    ubatch: int = 0\n    parallel: int = 1\n    cache_reuse: int = 0\n    draft_p_min: float = 0.0\n''',
+          )
+          start = text.index('def _candidate_variants(autotune_module: Any)')
+          end = text.index('\n\ndef _model_supports_mtp', start)
+          new_candidates = '''def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:\n    del autotune_module\n    base_widths = _parse_int_candidates(\n        os.environ.get("MMM_LLAMA_MTP_WIDTHS", "1,2,3"),\n        minimum=1,\n        maximum=32,\n    )\n    confidence_widths = _parse_int_candidates(\n        os.environ.get("MMM_LLAMA_MTP_CONFIDENCE_WIDTHS", "2,4,8,16"),\n        minimum=1,\n        maximum=32,\n    )\n    try:\n        confidence_p_min = float(os.environ.get("MMM_LLAMA_MTP_SEED_P_MIN", "0.8"))\n    except ValueError:\n        confidence_p_min = 0.8\n    confidence_p_min = max(0.0, min(0.999, confidence_p_min))\n\n    values = [ServerVariant("baseline")]\n    values.extend(\n        ServerVariant(f"mtp-{width}", "draft-mtp", width)\n        for width in base_widths\n    )\n    if confidence_p_min > 0:\n        for width in confidence_widths:\n            variant = ServerVariant(\n                f"mtp-{width}|pm{confidence_p_min:g}",\n                "draft-mtp",\n                width,\n                draft_p_min=confidence_p_min,\n            )\n            if all(\n                not (\n                    item.spec_type == "draft-mtp"\n                    and item.draft_n_max == variant.draft_n_max\n                    and float(getattr(item, "draft_p_min", 0.0)) == variant.draft_p_min\n                )\n                for item in values\n            ):\n                values.append(variant)\n\n    allowed = {"ngram-simple", "ngram-mod", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}\n    for token in os.environ.get("MMM_LLAMA_NGRAM_SPEC_TYPES", "ngram-simple,ngram-mod,ngram-map-k").split(","):\n        spec_type = token.strip()\n        if spec_type in allowed and all(item.spec_type != spec_type for item in values):\n            values.append(ServerVariant(spec_type, spec_type))\n    return tuple(values)\n'''
+          text = text[:start] + new_candidates + text[end:]
+          once(
+              '"search": "mtp-first-ngram-fallback+ubatch-progressive"',
+              '"search": "adaptive-joint-mtp-seeds+ngram-fallback+ubatch-exhaustive"',
+          )
+          once(
+              'autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.03)',
+              'autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.01)',
+          )
+          once(
+              '''            # Reuse the already measured selected probe as the base ubatch. Only probe\n            # larger candidates progressively; stop once the next step fails to improve.\n            for value in sorted((v for v in _ubatch_candidates(autotune_module) if v != base_ubatch)):\n                variant = replace(selected, name=f"{selected.name.split('|ub', 1)[0]}|ub{value}", ubatch=value)\n                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)\n                probes.append(probe)\n                if not _eligible(probe, baseline):\n                    break\n                if _balanced_score(probe, final_probe) < max(1.0, stage_gain):\n                    break\n                selected = variant\n                final_probe = probe\n''',
+              '''            # Every configured ubatch is an independent candidate. A local dip at\n            # 1024 must not hide a faster 2048 configuration.\n            for value in sorted((v for v in _ubatch_candidates(autotune_module) if v != base_ubatch)):\n                variant = replace(selected, name=f"{selected.name.split('|ub', 1)[0]}|ub{value}", ubatch=value)\n                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)\n                probes.append(probe)\n                if not _eligible(probe, baseline):\n                    continue\n                if _balanced_score(probe, final_probe) >= max(1.0, stage_gain):\n                    selected = variant\n                    final_probe = probe\n''',
+          )
+          once(
+              '''        benchmark._mmm_adaptive_cold_search = True\n        autotune_module._benchmark = benchmark\n''',
+              '''        benchmark._mmm_adaptive_cold_search = True\n        benchmark._mmm_adaptive_joint_mtp_search = True\n        benchmark._mmm_exhaustive_ubatch_search = True\n        autotune_module._benchmark = benchmark\n''',
+          )
+          p.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_llama_server_autotune.py')
+          text = test.read_text(encoding='utf-8')
+          start = text.index('def test_default_variants_compare_mtp_and_ngram_speculation')
+          end = text.index('\n\ndef test_default_runtime_candidates_are_bounded', start)
+          replacement = '''def test_default_variants_use_sparse_joint_mtp_seeds(monkeypatch) -> None:\n    for name in (\n        "MMM_LLAMA_MTP_WIDTHS",\n        "MMM_LLAMA_MTP_CONFIDENCE_WIDTHS",\n        "MMM_LLAMA_MTP_SEED_P_MIN",\n        "MMM_LLAMA_NGRAM_SPEC_TYPES",\n    ):\n        monkeypatch.delenv(name, raising=False)\n    values = _candidate_variants()\n    mtp = [value for value in values if value.spec_type == "draft-mtp"]\n    assert [(value.draft_n_max, value.draft_p_min) for value in mtp] == [\n        (1, 0.0),\n        (2, 0.0),\n        (3, 0.0),\n        (2, 0.8),\n        (4, 0.8),\n        (8, 0.8),\n        (16, 0.8),\n    ]\n    assert [value.spec_type for value in values if value.spec_type.startswith("ngram-")] == [\n        "ngram-simple",\n        "ngram-mod",\n        "ngram-map-k",\n    ]\n    assert getattr(autotune._benchmark, "_mmm_adaptive_joint_mtp_search", False)\n    assert getattr(autotune._benchmark, "_mmm_exhaustive_ubatch_search", False)\n'''
+          text = text[:start] + replacement + text[end:]
+          test.write_text(text, encoding='utf-8')
+          PY
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Verify adaptive search
+        run: |
+          python -m compileall -q minecraft_mod_ai tests tools
+          python tools/validate_colab_notebook.py
+          python -m pytest -q \
+            tests/test_llama_server_autotune.py \
+            tests/test_llama_decode_speed_contract.py \
+            tests/test_runtime_bootstrap_clean.py
+      - name: Commit verified adaptive search
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-adaptive-mtp-speed-search.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/llama_server_runtime_tuning.py tests/test_llama_server_autotune.py .github/workflows/apply-adaptive-mtp-speed-search.yml
+          git commit -m 'Adaptively search high-speed MTP configurations'
+          git pull --rebase origin main
+          git push origin HEAD:main
