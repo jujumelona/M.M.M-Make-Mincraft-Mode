@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
-from .base import GenerationRequest, ModelAdapter, ModelBackendError, ModelConfigurationError
+from .base import (
+    GenerationRequest,
+    GenerationResponse,
+    ModelAdapter,
+    ModelBackendError,
+    ModelConfigurationError,
+    ToolCall,
+)
 
 
 _AUDIO_MIME_TYPES = {
@@ -37,6 +45,20 @@ def _data_url(path: Path) -> str:
 
 class OpenAICompatibleAdapter(ModelAdapter):
     def generate(self, request: GenerationRequest) -> str:
+        turn = self.generate_turn(request)
+        if not turn.content and turn.tool_calls:
+            raise ModelBackendError(
+                role=self.config.role,
+                model_id=self.config.model_id,
+                cause=(
+                    "A tool-aware completion was requested through the text-only "
+                    "generate() API. Use ModelRouter.generate_text() so tool calls "
+                    "can be executed."
+                ),
+            )
+        return turn.content
+
+    def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
         cfg = self.config
         try:
             import httpx
@@ -58,17 +80,20 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 ]
                 content.append({"type": "text", "text": text})
                 messages[-1] = {"role": "user", "content": content}
-            payload = {
+            payload: dict[str, Any] = {
                 "model": cfg.model_id,
                 "messages": messages,
                 "temperature": 0.1,
                 "max_tokens": cfg.max_new_tokens,
             }
             if request.response_format == "json":
-                # Standard OpenAI-compatible structured-output hint.  Keep it
-                # scoped to text generation so image and speech endpoints retain
-                # their own response contracts.
+                # Standard OpenAI-compatible structured-output hint. Keep it scoped
+                # to text generation so image and speech retain their contracts.
                 payload["response_format"] = {"type": "json_object"}
+            if request.tools:
+                payload["tools"] = [dict(tool) for tool in request.tools]
+                payload["tool_choice"] = request.tool_choice or "auto"
+                payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
             with httpx.Client(timeout=120.0, follow_redirects=False) as client:
                 response = client.post(
                     f"{cfg.base_url.rstrip('/')}/chat/completions",
@@ -80,10 +105,26 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 )
                 response.raise_for_status()
                 data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            if not isinstance(content, str):
-                raise ModelConfigurationError("Remote model returned non-text content.")
-            return content.strip()
+            choices = data.get("choices") if isinstance(data, dict) else None
+            if not isinstance(choices, list) or not choices:
+                raise ModelConfigurationError("Remote model returned no completion choice.")
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            if not isinstance(message, Mapping):
+                raise ModelConfigurationError("Remote model returned no assistant message.")
+            content_value = message.get("content")
+            visible = content_value if isinstance(content_value, str) else ""
+            reasoning_value = message.get("reasoning_content")
+            reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
+            tool_calls = _parse_tool_calls(message.get("tool_calls"))
+            if not visible.strip() and not tool_calls:
+                raise ModelConfigurationError(
+                    "Remote model returned neither text nor tool calls."
+                )
+            return GenerationResponse(
+                content=visible.strip(),
+                tool_calls=tool_calls,
+                reasoning_content=reasoning.strip(),
+            )
         except ModelBackendError:
             raise
         except Exception as exc:
@@ -106,7 +147,6 @@ class OpenAICompatibleAdapter(ModelAdapter):
         cfg = self.config
         try:
             import httpx
-            from PIL import Image
 
             if not cfg.base_url.startswith("https://"):
                 raise ModelConfigurationError("Remote base_url must use HTTPS.")
@@ -165,6 +205,8 @@ class OpenAICompatibleAdapter(ModelAdapter):
             temporary = target.with_name(f".{target.name}.tmp-{uuid.uuid4().hex}")
             temporary.write_bytes(image_bytes)
             try:
+                from PIL import Image
+
                 with Image.open(temporary) as image:
                     image.load()
                     if image.size != (width, height):
@@ -223,10 +265,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 "max_audio_bytes",
                 _DEFAULT_MAX_AUDIO_BYTES,
             )
-            if (
-                type(configured_limit) is not int
-                or configured_limit < 1
-            ):
+            if type(configured_limit) is not int or configured_limit < 1:
                 raise ModelConfigurationError(
                     "max_audio_bytes must be a positive integer."
                 )
@@ -257,10 +296,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     },
                 )
                 response.raise_for_status()
-                if (
-                    len(response.content)
-                    > _MAX_TRANSCRIPTION_RESPONSE_BYTES
-                ):
+                if len(response.content) > _MAX_TRANSCRIPTION_RESPONSE_BYTES:
                     raise ModelConfigurationError(
                         "Remote transcription response is too large."
                     )
@@ -283,3 +319,49 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 model_id=cfg.model_id,
                 cause=exc,
             ) from exc
+
+
+def _parse_tool_calls(value: Any) -> tuple[ToolCall, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ModelConfigurationError("Remote tool_calls must be a list.")
+    result: list[ToolCall] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise ModelConfigurationError("Remote model returned an invalid tool call.")
+        function = item.get("function")
+        if not isinstance(function, Mapping):
+            raise ModelConfigurationError("Remote tool call lacks function data.")
+        name = str(function.get("name", "")).strip()
+        if not name:
+            raise ModelConfigurationError("Remote tool call lacks a function name.")
+        raw_value = function.get("arguments", "{}")
+        if isinstance(raw_value, str):
+            raw_arguments = raw_value.strip() or "{}"
+            try:
+                parsed = json.loads(raw_arguments)
+            except json.JSONDecodeError as exc:
+                raise ModelConfigurationError(
+                    f"Remote tool {name!r} returned invalid JSON arguments."
+                ) from exc
+        elif isinstance(raw_value, Mapping):
+            parsed = dict(raw_value)
+            raw_arguments = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        else:
+            raise ModelConfigurationError(
+                f"Remote tool {name!r} arguments must be a JSON object."
+            )
+        if not isinstance(parsed, Mapping):
+            raise ModelConfigurationError(
+                f"Remote tool {name!r} arguments must decode to an object."
+            )
+        result.append(
+            ToolCall(
+                id=str(item.get("id", "")).strip() or f"call_{index}",
+                name=name,
+                arguments=dict(parsed),
+                raw_arguments=raw_arguments,
+            )
+        )
+    return tuple(result)
