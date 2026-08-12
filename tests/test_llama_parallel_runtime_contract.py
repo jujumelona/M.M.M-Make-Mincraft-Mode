@@ -288,6 +288,7 @@ def test_same_router_llama_requests_overlap_when_parallel_selected(monkeypatch) 
             router.generate_text(
                 "planner",
                 ({"role": "user", "content": "x"},),
+                enable_tools=False,
             )
         )
 
@@ -321,6 +322,7 @@ def test_direct_router_calls_never_exceed_native_llama_slots(monkeypatch) -> Non
             router.generate_text(
                 "planner",
                 ({"role": "user", "content": "x"},),
+                enable_tools=False,
             )
         )
 
