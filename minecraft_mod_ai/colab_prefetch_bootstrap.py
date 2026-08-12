@@ -5,53 +5,11 @@ from typing import Any
 
 
 def start(model_registry_module: Any) -> None:
-    """Install late runtime contracts, then overlap selected-model prefetch with setup."""
-
-    # Local GGUF routing is already bound to the managed native llama-server by the
-    # package bootstrap. Nothing is installed here for text serving: keeping a second
-    # request router would recreate the deleted alternate backend path.
-
-    # Serialize native llama-server eviction with the same re-entrant GPU lock used by
-    # text/image/speech generation so another executor cannot kill an active request.
-    from . import complete_orchestrator_services as services_module
-    from . import model_router as model_router_module
-    from .colab_gpu_handoff_contract import install as install_gpu_handoff
-
-    install_gpu_handoff(
-        services_module=services_module,
-        model_router_module=model_router_module,
-    )
-
-    # parallel_runtime_contract is installed after the platform planner and used to
-    # capture the old generic research function. Rebind that late overlay to the
-    # exact selected PlatformLock while retaining its I/O overlap.
-    from . import complete_planner as complete_planner_module
-    from . import central_research as central_module
-    from . import retrieval as retrieval_module
-    from .parallel_platform_rag_contract import install as install_parallel_platform_rag
-
-    install_parallel_platform_rag(
-        complete_planner_module=complete_planner_module,
-        central_module=central_module,
-        retrieval_module=retrieval_module,
-    )
-
+    """Overlap selected-model prefetch with managed Colab setup only."""
     managed_colab = bool(os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip())
     if not managed_colab:
         return
 
-    # The historical notebook passed minecraft_version="1.20.1" only because the
-    # pre-routing constructor required a value. Ignore that implementation placeholder
-    # in managed Colab; an actual version written by the user in the prompt remains a
-    # normal resolver constraint.
-    from . import game_design as game_design_module
-    from .colab_auto_platform_contract import install as install_colab_auto_platform
-
-    install_colab_auto_platform(game_design_module)
-
-    # A seed page carries at most twelve independent ecosystem routes. Start all
-    # twelve by default in Colab instead of leaving four queued behind an 8-worker
-    # pool. Explicit user/runtime overrides remain authoritative.
     os.environ.setdefault("MMM_DISCOVERY_WORKERS", "12")
     os.environ.setdefault("MMM_RESEARCH_WORKERS", "8")
 
