@@ -19,9 +19,10 @@ def test_local_model_pins_verified_qwen_runtime_and_published_fastpath() -> None
     assert qwen_fastpath == [fla_requirement]
 
 
-def test_colab_requirements_inherit_local_model_fastpath_contract() -> None:
+def test_colab_requirements_keep_source_only_kernel_extra_opt_in() -> None:
     requirements = Path("requirements-colab.txt").read_text(encoding="utf-8")
 
     assert "ui,local-model,rag,image,speech,production-audio,training" in requirements
-    assert "local-model extra includes the Linux/CUDA-only" in requirements
+    assert "verified prebuilt" in requirements
+    assert "source-only Qwen kernel extras stay opt-in" in requirements
     assert ".[qwen-fastpath]" not in requirements
