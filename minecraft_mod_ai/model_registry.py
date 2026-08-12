@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -41,6 +42,8 @@ ALLOWED_ADAPTERS = frozenset(
     }
 )
 SUPPORTED_SCHEMAS = frozenset({"mmm/model-registry-v1", "mmm/model-registry-v2"})
+_REGISTRY_CACHE_LOCK = threading.RLock()
+_REGISTRY_SOURCE_CACHE: dict[tuple[str, int, int], tuple[str, dict[str, Any]]] = {}
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,34 @@ class ModelProfile:
     name: str
     description: str
     roles: Mapping[str, AdapterConfig]
+
+
+def _read_registry_source(path: Path) -> tuple[str, dict[str, Any]]:
+    """Parse an unchanged registry file once per process.
+
+    Profile role resolution remains uncached because remote profiles intentionally read
+    current environment variables on every load_profile() call.
+    """
+    resolved = path.resolve()
+    stat = resolved.stat()
+    key = (str(resolved), int(stat.st_size), int(stat.st_mtime_ns))
+    with _REGISTRY_CACHE_LOCK:
+        cached = _REGISTRY_SOURCE_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+    raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or raw.get("schema_version") not in SUPPORTED_SCHEMAS:
+        raise ModelConfigurationError("Unsupported or malformed model registry.")
+    profiles = raw.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        raise ModelConfigurationError("Model registry contains no profiles.")
+    value = (str(raw["schema_version"]), profiles)
+    with _REGISTRY_CACHE_LOCK:
+        _REGISTRY_SOURCE_CACHE[key] = value
+        while len(_REGISTRY_SOURCE_CACHE) > 8:
+            _REGISTRY_SOURCE_CACHE.pop(next(iter(_REGISTRY_SOURCE_CACHE)))
+    return value
 
 
 class ModelRegistry:
@@ -59,14 +90,7 @@ class ModelRegistry:
         )
         if not self.path.is_file():
             raise ModelConfigurationError(f"Model registry not found: {self.path}")
-        raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("schema_version") not in SUPPORTED_SCHEMAS:
-            raise ModelConfigurationError("Unsupported or malformed model registry.")
-        profiles = raw.get("profiles")
-        if not isinstance(profiles, dict) or not profiles:
-            raise ModelConfigurationError("Model registry contains no profiles.")
-        self.schema_version = str(raw["schema_version"])
-        self._raw_profiles = profiles
+        self.schema_version, self._raw_profiles = _read_registry_source(self.path)
 
     def profile_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._raw_profiles))
