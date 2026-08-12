@@ -28,10 +28,7 @@ def test_every_platform_component_is_exactly_pinned() -> None:
         "gradle",
     ):
         drifted = replace(platform, **{field_name: "unreviewed-version"})
-        with pytest.raises(
-            SpecValidationError,
-            match=r"Unsupported platform (lock|adapter)",
-        ):
+        with pytest.raises(SpecValidationError, match=r"Platform (lock|adapter)"):
             drifted.validate()
 
 
