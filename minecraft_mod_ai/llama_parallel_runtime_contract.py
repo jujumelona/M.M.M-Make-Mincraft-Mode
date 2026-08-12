@@ -207,7 +207,13 @@ def _install_router(model_router_module: Any) -> None:
         *,
         media_paths: Any = (),
         response_format: str = "text",
+        tool_stage: str | None = None,
+        enable_tools: bool = True,
     ) -> str:
+        # Keep router state selection protected, but release the router mutex before
+        # native decode. Native llama/vLLM concurrency is bounded independently by the
+        # server slot gate below. This preserves generation-session safety without
+        # serializing independent Best-of-N candidates.
         with self._generation_lock:
             config = self.registry.role(self.profile, role)
             if self._active_generation_adapter is not None:
@@ -221,11 +227,39 @@ def _install_router(model_router_module: Any) -> None:
             else:
                 adapter = self._new_text_adapter(config, role=role)
 
+        # Preserve the complete ModelRouter tool contract. The parallel runtime layer
+        # is a lock/scheduling policy only; it must not silently remove Qwen's stage-
+        # scoped MCP tools, tool choice, or parallel tool-call capability.
+        stage = (tool_stage or model_router_module._ROLE_TOOL_STAGE.get(role, "")).strip().lower()
+        runtime = None
+        tools: tuple[Any, ...] = ()
+        if self._tools_enabled(
+            enable_tools=enable_tools,
+            stage=stage,
+            adapter_name=config.adapter,
+        ):
+            runtime = self._tool_runtime()
+            tools = tuple(runtime.tool_schemas(stage))
+
         request = model_router_module.GenerationRequest(
             messages=messages,
             media_paths=tuple(Path(path) for path in media_paths),
             response_format=response_format,
+            tools=tools,
+            tool_choice="auto" if tools else None,
+            parallel_tool_calls=True,
         )
+
+        def run_generation() -> str:
+            if runtime is not None and tools:
+                return self._generate_with_tools(
+                    adapter=adapter,
+                    request=request,
+                    runtime=runtime,
+                    stage=stage,
+                )
+            return adapter.generate(request)
+
         shared_llama = (
             bool(config.exclusive_gpu)
             and str(config.provider) == "local"
@@ -238,11 +272,12 @@ def _install_router(model_router_module: Any) -> None:
             # preserving writer preference for image/speech GPU handoff.
             with model_router_module._LLAMA_INFERENCE_SLOTS:
                 with model_router_module._GPU_EXCLUSIVE_LOCK.shared():
-                    return adapter.generate(request)
+                    return run_generation()
         with self._gpu_scope(config.exclusive_gpu):
-            return adapter.generate(request)
+            return run_generation()
 
     generate_text._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
+    generate_text._mmm_preserves_agent_tools = True  # type: ignore[attr-defined]
 
     cls.generation_session = generation_session
     cls.generate_text = generate_text
