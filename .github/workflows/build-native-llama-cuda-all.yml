@@ -1,0 +1,32 @@
+name: Build native llama CUDA bundles
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-native-llama-cuda-all.yml
+      - .github/workflows/build-native-llama-cuda.yml
+      - tools/*llama*.py
+      - minecraft_mod_ai/llama*.py
+      - minecraft_mod_ai/**/llama*.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-llama-all-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: CUDA SM${{ matrix.cuda_arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda_arch: ["75", "80", "89"]
+    uses: ./.github/workflows/build-native-llama-cuda.yml
+    with:
+      cuda_arch: ${{ matrix.cuda_arch }}
+    permissions:
+      contents: write
