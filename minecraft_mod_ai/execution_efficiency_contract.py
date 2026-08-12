@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+import math
+import os
 from typing import Any, Iterator, Sequence
+
+
+def _active_llm_slots() -> int:
+    raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
+    try:
+        return max(1, min(8, int(raw)))
+    except ValueError:
+        return 1
 
 
 def _adaptive_expand_one_production_batch_factory(module: Any):
@@ -152,11 +162,10 @@ def _dependency_wave_shards(
     in the same coarse shard as an unrelated ready module makes unrelated work wait for
     the dependency. Compute dependency depth first, then shard within (depth, stage).
 
-    Do not turn custom LLM work into one durable database node per module. Independent
-    custom modules in the same dependency wave are bounded by the existing
-    ``java_shard_size`` policy just like other Java work. Multiple ready shards can
-    still occupy available LLM slots concurrently, while large plans avoid tens of
-    thousands of scheduler rows, claims and checkpoint commits.
+    Custom LLM work is split just enough to occupy the native decode slots selected by
+    autotuning, not one durable row per module. The normal Java shard ceiling still
+    bounds very large waves, so SQLite/checkpoint overhead remains sublinear in project
+    size while small waves no longer collapse all custom decoding into one serial node.
     """
 
     levels: dict[str, int] = {}
@@ -186,11 +195,16 @@ def _dependency_wave_shards(
     for level in sorted(stage_order):
         for stage in stage_order[level]:
             values = buckets[(level, stage)]
-            shard_size = (
-                policy.entity_shard_size
-                if stage == "entity"
-                else policy.java_shard_size
-            )
+            if stage == "entity":
+                shard_size = policy.entity_shard_size
+            elif stage == "custom":
+                slots = min(_active_llm_slots(), len(values))
+                shard_size = min(
+                    policy.java_shard_size,
+                    max(1, math.ceil(len(values) / slots)),
+                )
+            else:
+                shard_size = policy.java_shard_size
             for index in range(0, len(values), shard_size):
                 yield stage, tuple(values[index : index + shard_size])
 
@@ -218,4 +232,4 @@ def install(*, complete_planner_module: Any, work_graph_module: Any) -> None:
         work_graph_module._module_shards = module_shards
 
 
-__all__ = ["install", "_dependency_wave_shards"]
+__all__ = ["install", "_active_llm_slots", "_dependency_wave_shards"]
