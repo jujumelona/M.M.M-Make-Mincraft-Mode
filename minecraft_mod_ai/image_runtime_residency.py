@@ -46,11 +46,9 @@ def install() -> None:
     from . import model_runtime_performance as runtime
     from .model_adapters import base as base_module
     from .model_adapters.image_diffusion import ImageDiffusionAdapter
-    from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
     _install_adaptive_image_generation(
         ImageDiffusionAdapter,
-        LlamaCppAdapter,
         runtime,
         base_module,
     )
@@ -64,7 +62,6 @@ def install() -> None:
 
 def _install_adaptive_image_generation(
     cls: Any,
-    llama_cls: Any,
     runtime: Any,
     base_module: Any,
 ) -> None:
@@ -98,7 +95,8 @@ def _install_adaptive_image_generation(
                     "Image dimensions must be 256-1024 and divisible by 16."
                 )
 
-            runtime._evict_llama(llama_cls, base_module._release_cuda)
+            # Native llama-server is released once at the asset-shard handoff before
+            # this per-image path executes. Never repeat text-runtime teardown here.
             base_module.preflight_cuda(cfg)
 
             import torch
@@ -290,6 +288,8 @@ def _install_pipeline_parking(
         if not local_exclusive:
             return original(router, *args, **kwargs)
 
+        # Own the GPU through final pipeline parking/release so a waiting native text
+        # request cannot start in the small gap after the inner asset call returns.
         with router_module._GPU_EXCLUSIVE_LOCK:
             try:
                 return original(router, *args, **kwargs)
