@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
-from minecraft_mod_ai.asset_resume_efficiency_contract import _CachedImageRouter
+import pytest
+
+from minecraft_mod_ai.asset_resume_efficiency_contract import _CachedImageRouter, install
+from minecraft_mod_ai.project_write_lock import project_write_lock
 
 
 class _Router:
@@ -111,3 +115,93 @@ def test_corrupted_cached_source_is_regenerated(tmp_path) -> None:
     )
 
     assert backend.calls == 2
+
+
+def _services(current):
+    return SimpleNamespace(
+        _generate_single_asset_source=current,
+        _generate_tiled_asset_source=current,
+    )
+
+
+def _asset_call(service, project_root: Path, concept_dir: Path):
+    target = project_root / "src/main/resources/assets/example/textures/item/test.png"
+    request = SimpleNamespace(
+        asset_id="test_asset",
+        target_path="src/main/resources/assets/example/textures/item/test.png",
+    )
+    return service(
+        object(),
+        request=request,
+        concept_dir=concept_dir,
+        target=target,
+    ), target
+
+
+def test_expensive_asset_phase_does_not_hold_project_write_lock(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    concept_dir = tmp_path / "run" / "asset-concepts"
+    project_root.mkdir()
+    lock_was_free = False
+
+    def current(router, *, request, concept_dir, target):
+        nonlocal lock_was_free
+        # If the asset wrapper held the project lock around expensive generation,
+        # this separate thread/process-equivalent mutation scope would block. Here we
+        # use the same thread only to prove re-entrant acquisition is not enough, so
+        # inspect the lock in a worker thread.
+        import threading
+
+        entered = threading.Event()
+
+        def contender():
+            with project_write_lock(project_root):
+                entered.set()
+
+        thread = threading.Thread(target=contender)
+        thread.start()
+        lock_was_free = entered.wait(timeout=1)
+        thread.join(timeout=1)
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"generated")
+        return {"status": "GENERATED"}
+
+    services = _services(current)
+    install(services)
+    receipt, target = _asset_call(
+        services._generate_single_asset_source,
+        project_root,
+        concept_dir,
+    )
+
+    assert lock_was_free is True
+    assert target.read_bytes() == b"generated"
+    assert receipt["asset_commit_mode"] == "staged_atomic_replace"
+
+
+def test_asset_commit_refuses_stale_overwrite(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    concept_dir = tmp_path / "run" / "asset-concepts"
+    target = project_root / "src/main/resources/assets/example/textures/item/test.png"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"initial")
+
+    def current(router, *, request, concept_dir, target: Path):
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"generated")
+        final_target = project_root / request.target_path
+        with project_write_lock(project_root):
+            final_target.write_bytes(b"concurrent-writer")
+        return {"status": "GENERATED"}
+
+    services = _services(current)
+    install(services)
+
+    with pytest.raises(RuntimeError, match="changed while generation was in flight"):
+        _asset_call(
+            services._generate_single_asset_source,
+            project_root,
+            concept_dir,
+        )
+
+    assert target.read_bytes() == b"concurrent-writer"
