@@ -34,6 +34,8 @@ ENABLED_ENV = "MMM_COLAB_MTP_SERVER_ENABLED"
 START_TIMEOUT_ENV = "MMM_COLAB_MTP_SERVER_START_TIMEOUT"
 MTP_POLICY_ENV = "MMM_LLAMA_MTP_POLICY"
 MTP_PROBE_TIMEOUT_ENV = "MMM_LLAMA_MTP_PROBE_TIMEOUT"
+KV_CACHE_QUANT_ENV = "MMM_KV_CACHE_QUANT"
+KV_CACHE_QUANTS = frozenset({"q4_0", "q8_0", "f16"})
 
 _PROCESS: subprocess.Popen[str] | None = None
 _LOG_HANDLE: Any = None
@@ -195,6 +197,30 @@ def _mtp_policy() -> str:
     return value
 
 
+def _kv_cache_quant() -> str:
+    value = os.environ.get(KV_CACHE_QUANT_ENV, "q4_0").strip().lower()
+    if value not in KV_CACHE_QUANTS:
+        raise RuntimeError(
+            f"{KV_CACHE_QUANT_ENV} must be one of {sorted(KV_CACHE_QUANTS)}, got {value!r}."
+        )
+    return value
+
+
+def _kv_cache_type_id() -> int:
+    try:
+        import llama_cpp.llama_cpp as ggml
+    except Exception as exc:
+        raise RuntimeError(
+            "llama-cpp-python constants are unavailable for KV cache configuration."
+        ) from exc
+    mapping = {
+        "q4_0": int(ggml.GGML_TYPE_Q4_0),
+        "q8_0": int(ggml.GGML_TYPE_Q8_0),
+        "f16": int(ggml.GGML_TYPE_F16),
+    }
+    return mapping[_kv_cache_quant()]
+
+
 def _cuda_backend_files(package_dir: Path) -> list[Path]:
     values: set[Path] = set()
     for pattern in ("libggml-cuda.so*", "ggml-cuda.dll", "libggml-cuda*.dylib"):
@@ -258,11 +284,11 @@ def _structured_response_format(request: Any | None) -> bool:
 def request_server_mode(config: Any, request: Any | None = None) -> str:
     """Choose the narrowest safe server mode for this request.
 
-    The pinned server has no request-level switch for speculative decoding. JSON
-    response formats are implemented as a target-side grammar while MTP uses its own
-    unconstrained draft sampler. Structured planner/coder/repair pages therefore run
-    on the baseline target context. MTP is reserved for unconstrained text generation
-    and only after a live multi-step streaming probe succeeds for this model/width.
+    The pinned server has no request-level switch for speculative decoding. Structured
+    planner/coder/repair pages therefore run on the baseline target context and are
+    host-validated instead of combining MTP with a server-side JSON grammar. MTP is
+    reserved for unconstrained text generation and only after a live multi-step
+    streaming probe succeeds for this model/width.
     """
 
     if _structured_response_format(request):
@@ -279,6 +305,7 @@ def _write_config(config: Any, model_path: str, *, mode: str) -> int:
         raise ValueError(f"Unknown Colab llama server mode: {mode}")
     threads = max(1, min(8, os.cpu_count() or 1))
     width = _mtp_width() if mode == "mtp" else 0
+    kv_type = _kv_cache_type_id()
     model_config: dict[str, Any] = {
         "path": model_path,
         "alias": "local",
@@ -295,6 +322,8 @@ def _write_config(config: Any, model_path: str, *, mode: str) -> int:
         "n_gpu_layers": -1,
         "flash_attn": True,
         "offload_kqv": True,
+        "type_k": kv_type,
+        "type_v": kv_type,
     }
     if mode == "mtp":
         model_config.update(
@@ -372,7 +401,12 @@ def start_colab_mtp_server(config: Any, *, mode: str = "baseline") -> str:
     model_path = _resolve_model_path(config)
     print("llama server: model ready", Path(model_path).name, flush=True)
 
-    print("llama server: preparing launcher", f"mode={mode}", flush=True)
+    print(
+        "llama server: preparing launcher",
+        f"mode={mode}",
+        f"kv={_kv_cache_quant()}",
+        flush=True,
+    )
     server_script = _server_source()
     width = _write_config(config, model_path, mode=mode)
 
@@ -385,7 +419,13 @@ def start_colab_mtp_server(config: Any, *, mode: str = "baseline") -> str:
         str(SERVER_CONFIG_PATH),
     ]
     mode_detail = f"draft_width={width}" if mode == "mtp" else "speculation=off"
-    print("llama server: starting", f"mode={mode}", mode_detail, flush=True)
+    print(
+        "llama server: starting",
+        f"mode={mode}",
+        mode_detail,
+        f"kv={_kv_cache_quant()}",
+        flush=True,
+    )
     _PROCESS = subprocess.Popen(
         command,
         stdout=_LOG_HANDLE,
@@ -419,6 +459,7 @@ def start_colab_mtp_server(config: Any, *, mode: str = "baseline") -> str:
                 "llama server: ready",
                 SERVER_API_URL,
                 f"mode={mode}",
+                f"kv={_kv_cache_quant()}",
                 f"startup={elapsed:.1f}s",
                 flush=True,
             )
