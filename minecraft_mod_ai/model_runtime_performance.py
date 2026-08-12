@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import threading
 from functools import wraps
-from pathlib import Path
 from typing import Any, Sequence
 
 
+# Image runtime state is owned by image_runtime_residency. It lives here only as the
+# shared state container imported by that contract; no second image-generation wrapper
+# is installed from this module.
 _IMAGE_LOCK = threading.RLock()
 _IMAGE_PIPELINE: Any | None = None
 _IMAGE_PIPELINE_KEY: tuple[Any, ...] | None = None
@@ -27,140 +29,13 @@ def _env_bool(name: str, default: bool = True) -> bool:
 
 
 def install() -> None:
-    """Install quality-neutral reuse for expensive image/retrieval runtimes.
+    """Cache CPU retrieval runtimes; image residency is installed separately."""
 
-    Native llama-server exclusively owns GGUF model residency and GPU handoff. This
-    contract caches only diffusion, embedding and reranker runtimes. Atomic GPU
-    ownership for image/speech work is installed separately by the handoff contract.
-    """
-
-    from .model_adapters import base as base_module
     from .model_adapters.embedding import EmbeddingAdapter
-    from .model_adapters.image_diffusion import ImageDiffusionAdapter
     from .model_adapters.reranker import RerankerAdapter
 
-    _install_cached_image_runtime(ImageDiffusionAdapter, base_module)
     _install_cached_embedding(EmbeddingAdapter)
     _install_cached_reranker(RerankerAdapter)
-
-
-def _install_cached_image_runtime(cls: Any, base_module: Any) -> None:
-    original = cls.generate_image
-    if getattr(original, "_mmm_cached_image_pipeline", False):
-        return
-
-    @wraps(original)
-    def cached_generate_image(
-        self: Any,
-        *,
-        prompt: str,
-        output_path: Path,
-        width: int = 512,
-        height: int = 512,
-        seed: int = 0,
-    ) -> Path:
-        global _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY
-
-        cfg = self.config
-        try:
-            base_module.require_package("diffusers", minimum="0.20.0")
-            base_module.require_package("transformers", minimum="4.52.0")
-            base_module.require_package("accelerate", minimum="1.0.0")
-            if not prompt.strip():
-                raise base_module.ModelConfigurationError("Image prompt is empty.")
-            if (
-                width % 16
-                or height % 16
-                or not (256 <= width <= 1024 and 256 <= height <= 1024)
-            ):
-                raise base_module.ModelConfigurationError(
-                    "Image dimensions must be 256-1024 and divisible by 16."
-                )
-
-            # Native llama-server eviction is owned by the GPU handoff contracts.
-            # This layer only manages the diffusion runtime, so it must not mutate
-            # text-model state or duplicate CUDA/model teardown work.
-            base_module.preflight_cuda(cfg)
-
-            import torch
-            from diffusers import DiffusionPipeline
-
-            cache_enabled = bool(cfg.cpu_offload) and _env_bool(
-                "MMM_IMAGE_PIPELINE_CACHE",
-                True,
-            )
-            key = (
-                cfg.model_id,
-                cfg.torch_dtype,
-                bool(cfg.cpu_offload),
-            )
-
-            with _IMAGE_LOCK:
-                pipeline = None
-                if cache_enabled and _IMAGE_PIPELINE_KEY == key:
-                    pipeline = _IMAGE_PIPELINE
-                if pipeline is None:
-                    if _IMAGE_PIPELINE is not None:
-                        try:
-                            del _IMAGE_PIPELINE
-                        except Exception:
-                            pass
-                        _IMAGE_PIPELINE = None
-                        _IMAGE_PIPELINE_KEY = None
-                        base_module._release_cuda()
-                    pipeline = DiffusionPipeline.from_pretrained(
-                        cfg.model_id,
-                        torch_dtype=base_module.torch_dtype(cfg.torch_dtype),
-                        trust_remote_code=False,
-                    )
-                    if cfg.cpu_offload:
-                        pipeline.enable_model_cpu_offload()
-                    else:
-                        pipeline.to("cuda")
-                    set_progress = getattr(pipeline, "set_progress_bar_config", None)
-                    if callable(set_progress):
-                        set_progress(disable=True)
-                    if cache_enabled:
-                        _IMAGE_PIPELINE = pipeline
-                        _IMAGE_PIPELINE_KEY = key
-
-                generator = torch.Generator(device="cpu").manual_seed(seed)
-                with torch.inference_mode():
-                    result = pipeline(
-                        prompt=prompt,
-                        width=width,
-                        height=height,
-                        generator=generator,
-                        num_inference_steps=4,
-                        guidance_scale=1.0,
-                    )
-                output = output_path.expanduser().resolve()
-                output.parent.mkdir(parents=True, exist_ok=True)
-                result.images[0].save(output)
-
-                if not cache_enabled:
-                    del pipeline
-                    base_module._release_cuda()
-                return output
-        except base_module.ModelBackendError:
-            raise
-        except Exception as exc:
-            # Do not retain a partially failed diffusion runtime.
-            with _IMAGE_LOCK:
-                if _IMAGE_PIPELINE_KEY == (
-                    cfg.model_id,
-                    cfg.torch_dtype,
-                    bool(cfg.cpu_offload),
-                ):
-                    _IMAGE_PIPELINE = None
-                    _IMAGE_PIPELINE_KEY = None
-            base_module._release_cuda()
-            raise base_module.ModelBackendError(
-                role=cfg.role, model_id=cfg.model_id, cause=exc
-            ) from exc
-
-    cached_generate_image._mmm_cached_image_pipeline = True
-    cls.generate_image = cached_generate_image
 
 
 def _install_cached_embedding(cls: Any) -> None:
