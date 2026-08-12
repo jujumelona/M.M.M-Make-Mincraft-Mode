@@ -9,17 +9,21 @@ def install(incremental_module: Any) -> None:
 
     # Install critical-path efficiency after planner JSON/repair wrappers exist. Keep
     # the local GPU at one decode slot, remove host-imposed planner page width and
-    # dependency-head-of-line sharding, journal large checkpoints in linear time, and
+    # dependency-head-of-line sharding, journal large checkpoints in linear time,
+    # checkpoint individual image sources inside GPU-resident asset shards, and
     # escalate best-of-N LLM search only after a verifier state actually persists.
     from . import agentic_optimization_contract as agentic_module
+    from . import complete_orchestrator_services as orchestrator_services
     from . import complete_planner as complete_planner_module
     from . import work_graph as work_graph_module
     from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
+    from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
     from .execution_efficiency_contract import install as install_execution_efficiency
     from .planner_checkpoint_journal_contract import install as install_checkpoint_journal
 
     install_checkpoint_journal(incremental_module)
     install_agentic_search_efficiency(agentic_module)
+    install_asset_resume_efficiency(orchestrator_services)
     install_execution_efficiency(
         complete_planner_module=complete_planner_module,
         work_graph_module=work_graph_module,
