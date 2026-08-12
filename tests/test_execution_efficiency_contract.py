@@ -84,7 +84,9 @@ def test_production_batch_has_no_fixed_four_deliverable_page_width(monkeypatch) 
     assert request["current_target_deliverables"] == list(deliverables)
     assert request["remaining_deliverables"] == list(deliverables)
     assert len(parts.modules) == len(deliverables)
-    assert "no fixed host item count" in str(calls[0]["system_prompt"]).lower()
+    prompt = str(calls[0]["system_prompt"]).lower()
+    assert "no fixed deliverable count" in prompt
+    assert "no fixed page count" in prompt
 
 
 def test_module_shards_use_dependency_ready_waves() -> None:
@@ -102,9 +104,6 @@ def test_module_shards_use_dependency_ready_waves() -> None:
         kind="entity",
     )
 
-    # Heap topological order is intentionally a_content, b_dependent_entity,
-    # z_independent_entity. Consecutive-stage sharding would make the independent
-    # entity wait inside the dependent entity's shard.
     ordered = work_graph._topological_modules(
         (independent_content, dependent_entity, independent_entity)
     )
@@ -128,16 +127,14 @@ def test_module_shards_use_dependency_ready_waves() -> None:
     ]
 
 
-def test_custom_llm_modules_are_one_durable_node_each() -> None:
-    modules = (
-        ProductionModule(module_id="custom_one", kind="custom_java"),
-        ProductionModule(module_id="custom_two", kind="custom_java"),
+def test_custom_llm_modules_are_bounded_without_one_node_per_module() -> None:
+    modules = tuple(
+        ProductionModule(module_id=f"custom_{index:03d}", kind="custom_java")
+        for index in range(100)
     )
     policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
     shards = list(work_graph._module_shards(modules, policy=policy))
 
-    assert [stage for stage, _ in shards] == ["custom", "custom"]
-    assert [[item.module_id for item in members] for _, members in shards] == [
-        ["custom_one"],
-        ["custom_two"],
-    ]
+    assert [stage for stage, _ in shards] == ["custom", "custom", "custom"]
+    assert [len(members) for _, members in shards] == [48, 48, 4]
+    assert sum(len(members) for _, members in shards) == 100
