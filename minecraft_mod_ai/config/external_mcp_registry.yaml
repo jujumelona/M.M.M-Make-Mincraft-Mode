@@ -47,7 +47,8 @@ servers:
     loaders: [fabric]
     trust: first_party
 
-  # Source, mappings, version-diff and bytecode-aware validation.
+  # Source, mappings, version-diff and bytecode-aware validation.  These tool
+  # schemas are used directly by the automatic federation path.
   minecraft-dev:
     status: enabled
     transport: stdio
@@ -105,7 +106,8 @@ servers:
         priority: 10
         target_args: {minecraft_version: version}
 
-  # Broader source/mapping/workspace workflow fallback.
+  # Workspace-aware validation.  Its high-level workflow schemas intentionally do
+  # not masquerade as drop-in fallbacks for minecraft-dev's low-level tools.
   minecraft-modding:
     status: optional
     transport: stdio
@@ -114,28 +116,8 @@ servers:
     loaders: [fabric, forge, neoforge]
     trust: reviewed_open_source
     source_repo: adhi-jp/minecraft-modding-mcp
-    purpose: workspace-aware Minecraft source, mapping, version migration and project validation
+    purpose: workspace-aware Minecraft project validation and migration diagnostics
     capabilities:
-      source_search:
-        tool: inspect-minecraft
-        access: read
-        stages: [research, migration, generation, quality]
-        priority: 20
-      mapping_resolution:
-        tool: analyze-symbol
-        access: read
-        stages: [research, migration, generation, quality]
-        priority: 20
-      version_diff:
-        tool: compare-minecraft
-        access: read
-        stages: [planning, research, migration]
-        priority: 20
-      mod_jar_analysis:
-        tool: analyze-mod
-        access: read
-        stages: [planning, research, migration, quality]
-        priority: 20
       workspace_validation:
         tool: validate-project
         access: read
@@ -216,7 +198,7 @@ servers:
         stages: [runtime]
         priority: 10
 
-  # In-game Fabric MCP exposes actual server/world API plus client visual inspection.
+  # Fabric server/world endpoint.  It never owns client-only visual tools.
   fabric-game-runtime:
     status: configuration_required
     transport: streamable_http
@@ -227,7 +209,7 @@ servers:
     trust: reviewed_open_source
     source_repo: chapmanjw/minecraft-java-fabric-mcp-server
     test_harness_only: true
-    purpose: inspect the real target Fabric runtime and, in disposable tests, exercise world/server APIs
+    purpose: inspect the real target Fabric server/world API in a disposable test runtime
     capabilities:
       runtime_world_read:
         tool: player_list_online
@@ -244,6 +226,20 @@ servers:
         access: admin
         stages: [runtime]
         priority: 10
+
+  # The sibling client MCP endpoint is separate from the server/world endpoint.
+  fabric-game-client-runtime:
+    status: configuration_required
+    transport: streamable_http
+    url_env: MMM_FABRIC_GAME_CLIENT_MCP_URL
+    default_url: http://127.0.0.1:8766/mcp
+    version_policy: provider_reported
+    loaders: [fabric]
+    trust: reviewed_open_source
+    source_repo: chapmanjw/minecraft-java-fabric-mcp-server
+    test_harness_only: true
+    purpose: inspect actual first-person rendered pixels and client perception in the disposable target client
+    capabilities:
       runtime_visual:
         tool: view_capture
         access: read
