@@ -175,62 +175,54 @@ def install(runtime_module: Any) -> None:
     """Install strict JSON parsing plus scalable multi-page outline consumption."""
 
     current = runtime_module._extract_with_safe_empty_defaults
-    if not getattr(current, "_mmm_strict_structured_json", False):
+    if getattr(current, "_mmm_strict_structured_json", False):
+        return
 
-        @wraps(current)
-        def extract_strict(
-            module: Any,
-            text: str,
-            *,
-            expected_contracts: Sequence[frozenset[str]],
-        ) -> dict[str, Any]:
-            if not isinstance(text, str) or not text.strip():
-                raise module.SpecValidationError("Structured planner returned empty JSON.")
+    @wraps(current)
+    def extract_strict(
+        module: Any,
+        text: str,
+        *,
+        expected_contracts: Sequence[frozenset[str]],
+    ) -> dict[str, Any]:
+        if not isinstance(text, str) or not text.strip():
+            raise module.SpecValidationError("Structured planner returned empty JSON.")
 
-            containers = _outermost_complete_json_containers(text)
-            outline_allowed = _OUTLINE_FIELDS in tuple(expected_contracts)
-            all_outline = bool(containers) and all(
-                isinstance(container.value, dict)
-                and frozenset(str(key) for key in container.value) == _OUTLINE_FIELDS
-                for container in containers
+        containers = _outermost_complete_json_containers(text)
+        outline_allowed = _OUTLINE_FIELDS in tuple(expected_contracts)
+        all_outline = bool(containers) and all(
+            isinstance(container.value, dict)
+            and frozenset(str(key) for key in container.value) == _OUTLINE_FIELDS
+            for container in containers
+        )
+        try:
+            value = (
+                _extract_outline_sequence(text)
+                if outline_allowed and all_outline
+                else _extract_one_complete_object(text)
             )
-            try:
-                value = (
-                    _extract_outline_sequence(text)
-                    if outline_allowed and all_outline
-                    else _extract_one_complete_object(text)
-                )
-            except (ValueError, json.JSONDecodeError) as exc:
-                expectation = (
-                    "valid sequential production-outline JSON pages"
-                    if outline_allowed and len(containers) > 1
-                    else "exactly one complete strict JSON object"
-                )
-                raise module.SpecValidationError(
-                    f"Structured planner did not return {expectation}: {exc}"
-                ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            expectation = (
+                "valid sequential production-outline JSON pages"
+                if outline_allowed and len(containers) > 1
+                else "exactly one complete strict JSON object"
+            )
+            raise module.SpecValidationError(
+                f"Structured planner did not return {expectation}: {exc}"
+            ) from exc
 
-            fields = frozenset(str(key) for key in value)
-            if fields not in tuple(expected_contracts):
-                expected = [sorted(contract) for contract in expected_contracts]
-                raise module.SpecValidationError(
-                    "Structured planner top-level fields do not match the host contract: "
-                    f"received={sorted(fields)}, expected_one_of={expected}"
-                )
-            return value
+        fields = frozenset(str(key) for key in value)
+        if fields not in tuple(expected_contracts):
+            expected = [sorted(contract) for contract in expected_contracts]
+            raise module.SpecValidationError(
+                "Structured planner top-level fields do not match the host contract: "
+                f"received={sorted(fields)}, expected_one_of={expected}"
+            )
+        return value
 
-        extract_strict._mmm_strict_structured_json = True  # type: ignore[attr-defined]
-        extract_strict.__wrapped__ = current  # type: ignore[attr-defined]
-        runtime_module._extract_with_safe_empty_defaults = extract_strict
-
-    from .planner_outline_prompt_contract import install as install_outline_prompt
-    from . import planner_incremental_repair_contract as incremental_module
-    from .planner_incremental_repair_contract import install as install_incremental_repair
-    from .planner_incremental_resume_contract import install as install_incremental_resume
-
-    install_outline_prompt(runtime_module)
-    install_incremental_repair(runtime_module)
-    install_incremental_resume(incremental_module)
+    extract_strict._mmm_strict_structured_json = True  # type: ignore[attr-defined]
+    extract_strict.__wrapped__ = current  # type: ignore[attr-defined]
+    runtime_module._extract_with_safe_empty_defaults = extract_strict
 
 
 __all__ = [
