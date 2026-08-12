@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 
 _VERSION = 1
+_ITEM_VERSION = 2
+_DEFAULT_MODEL_REPAIR_ATTEMPTS = 2
 _FIELD_PATCH_KEYS = frozenset({"target_fingerprint", "set_fields", "delete_fields"})
 _REPLACE_PATCH_KEYS = frozenset({"target_fingerprint", "replacement"})
+_ID_SAFE = re.compile(r"[^a-z0-9_]+")
 
 _SPECS = {
     "module": {
@@ -157,7 +161,7 @@ def load_or_generate_page(
 def _item_state_path(page_path: Path, kind: str, index: int, raw: Any) -> Path:
     digest = _fingerprint(
         {
-            "version": _VERSION,
+            "version": _ITEM_VERSION,
             "page": page_path.name,
             "kind": kind,
             "index": index,
@@ -197,6 +201,165 @@ def _patch_schema(*, fields: Sequence[str], replacement: bool) -> dict[str, Any]
     }
 
 
+def _repair_attempt_budget() -> int:
+    raw = os.environ.get(
+        "MMM_PLANNER_ITEM_REPAIR_ATTEMPTS",
+        str(_DEFAULT_MODEL_REPAIR_ATTEMPTS),
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_MODEL_REPAIR_ATTEMPTS
+    return max(1, min(value, 4))
+
+
+def _safe_identifier(value: Any, *, fallback: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", text)
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text).lower()
+    text = _ID_SAFE.sub("_", text).strip("_")
+    if not text:
+        text = fallback
+    if not text[0].isalpha():
+        text = f"x_{text}"
+    if len(text) == 1:
+        text = f"{text}_1"
+    return text[:64].rstrip("_") or fallback
+
+
+def _unique_identifier(base: str, catalog: Any) -> str:
+    if base not in catalog:
+        return base
+    suffix_index = 2
+    while True:
+        suffix = f"_{suffix_index}"
+        candidate = f"{base[: 64 - len(suffix)].rstrip('_')}{suffix}"
+        if candidate not in catalog:
+            return candidate
+        suffix_index += 1
+
+
+def _deliverable_hint(raw: dict[str, Any]) -> str:
+    for key in ("implements_deliverables", "implements"):
+        values = raw.get(key)
+        if isinstance(values, (list, tuple)):
+            for value in values:
+                if isinstance(value, str) and value.strip():
+                    return value
+        elif isinstance(values, str) and values.strip():
+            return values
+    return ""
+
+
+def _infer_asset_kind(raw: dict[str, Any]) -> str:
+    kind = str(raw.get("kind") or "").strip().lower()
+    aliases = {
+        "texture": "",
+        "textures": "",
+    }
+    kind = aliases.get(kind, kind)
+    if kind:
+        return kind
+    path = str(raw.get("target_path") or "").replace("\\", "/").lower()
+    for candidate in ("block", "entity", "gui", "environment", "icon", "item"):
+        if f"/{candidate}/" in path or path.endswith(f"/{candidate}.png"):
+            return candidate
+    return "item"
+
+
+def _normalize_bool(value: Any) -> Any:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off", ""}:
+            return False
+    return value
+
+
+def _deterministic_normalize(
+    *,
+    kind: str,
+    index: int,
+    raw: Any,
+    catalog: Any,
+) -> tuple[Any, list[str]]:
+    """Repair host-owned structural facts without spending an LLM call."""
+
+    if not isinstance(raw, dict):
+        return raw, []
+
+    value = dict(raw)
+    changes: list[str] = []
+    spec = _SPECS[kind]
+    id_attr = str(spec["id_attr"])
+
+    if kind == "module":
+        identity_source = (
+            value.get("module_id")
+            or value.get("id")
+            or value.get("name")
+            or _deliverable_hint(value)
+            or f"module_{index + 1}"
+        )
+        fallback = f"module_{index + 1}"
+    elif kind == "asset":
+        identity_source = (
+            value.get("asset_id")
+            or value.get("id")
+            or _deliverable_hint(value)
+            or f"asset_{index + 1}"
+        )
+        fallback = f"asset_{index + 1}"
+    else:
+        identity_source = (
+            value.get("sound_id")
+            or value.get("id")
+            or _deliverable_hint(value)
+            or f"sound_{index + 1}"
+        )
+        fallback = f"sound_{index + 1}"
+
+    normalized_id = _safe_identifier(identity_source, fallback=fallback)
+    unique_id = _unique_identifier(normalized_id, catalog)
+    if value.get(id_attr) != unique_id:
+        value[id_attr] = unique_id
+        changes.append(f"{id_attr}:normalized_unique")
+
+    if kind == "asset":
+        inferred_kind = _infer_asset_kind(value)
+        if value.get("kind") != inferred_kind:
+            value["kind"] = inferred_kind
+            changes.append("kind:asset_normalized")
+        if not value.get("prompt"):
+            description = value.get("description")
+            value["prompt"] = (
+                str(description).strip()
+                if description
+                else f"Asset for {unique_id}"
+            )
+            changes.append("prompt:defaulted")
+        if not value.get("target_path"):
+            value["target_path"] = f"assets/mod/textures/{unique_id}.png"
+            changes.append("target_path:defaulted")
+    elif kind == "audio":
+        raw_kind = str(value.get("kind") or "").strip().lower()
+        normalized_kind = {"sfx": "effect", "sound": "effect"}.get(
+            raw_kind,
+            raw_kind or "effect",
+        )
+        if value.get("kind") != normalized_kind:
+            value["kind"] = normalized_kind
+            changes.append("kind:audio_normalized")
+        if "loop" in value:
+            normalized_loop = _normalize_bool(value["loop"])
+            if normalized_loop is not value["loop"] and normalized_loop != value["loop"]:
+                value["loop"] = normalized_loop
+                changes.append("loop:boolean_normalized")
+
+    return value, changes
+
+
 def _parse_error(
     module: Any,
     *,
@@ -204,19 +367,85 @@ def _parse_error(
     raw: Any,
     catalog: Any,
 ) -> tuple[Any | None, str]:
+    """Run the real parser and the real item validator, then check host identity."""
+
     spec = _SPECS[kind]
     parser = getattr(module, str(spec["parser"]))
     try:
         parsed = parser(raw)
+        validate = getattr(parsed, "validate", None)
+        if callable(validate):
+            validate()
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
+
     identity = str(getattr(parsed, str(spec["id_attr"]), "")).strip()
-    if identity and identity in catalog:
-        return None, (
-            f"duplicate {spec['id_attr']} {identity!r}; change only the identity field "
-            "to a new compatible unique id and preserve the rest"
-        )
+    if not identity:
+        return None, f"empty {spec['id_attr']} after parsing"
+    if identity in catalog:
+        return None, f"duplicate {spec['id_attr']} {identity!r}"
     return parsed, ""
+
+
+def _write_resolved(
+    state_path: Path,
+    *,
+    kind: str,
+    index: int,
+    original_fingerprint: str,
+    round_index: int,
+    resolved: dict[str, Any],
+    repair_method: str,
+    deterministic_changes: Sequence[str] = (),
+) -> None:
+    _atomic_write(
+        state_path,
+        {
+            "version": _ITEM_VERSION,
+            "status": "resolved",
+            "kind": kind,
+            "index": index,
+            "target_fingerprint": original_fingerprint,
+            "round": round_index,
+            "repair_method": repair_method,
+            "deterministic_changes": list(deterministic_changes),
+            "resolved": resolved,
+        },
+    )
+
+
+def _raise_repair_failure(
+    module: Any,
+    *,
+    kind: str,
+    index: int,
+    state_path: Path,
+    original_fingerprint: str,
+    current: Any,
+    error: str,
+    round_index: int,
+    reason: str,
+    last_patch_sha256: str = "",
+) -> None:
+    _atomic_write(
+        state_path,
+        {
+            "version": _ITEM_VERSION,
+            "status": "failed",
+            "kind": kind,
+            "index": index,
+            "target_fingerprint": original_fingerprint,
+            "round": round_index,
+            "reason": reason,
+            "current": current,
+            "validation_error": error,
+            "last_patch_sha256": last_patch_sha256,
+        },
+    )
+    error_type = getattr(module, "SpecValidationError", ValueError)
+    raise error_type(
+        f"Production {kind}[{index}] repair failed safely ({reason}): {error}"
+    )
 
 
 def _patch_one_item(
@@ -229,7 +458,7 @@ def _patch_one_item(
     catalog: Any,
     page_path: Path,
 ) -> tuple[Any, dict[str, Any]]:
-    """Patch only invalid fields until the real production parser accepts the item."""
+    """Resolve one production item without retry cycles or avoidable LLM calls."""
 
     from . import planner_json_runtime_contract as runtime
     from .planner_strict_json_contract import _extract_one_complete_object
@@ -240,47 +469,107 @@ def _patch_one_item(
     state_path = _item_state_path(page_path, kind, index, raw)
     saved = _read(state_path)
 
-    if saved.get("version") == _VERSION and isinstance(saved.get("resolved"), dict):
-        resolved_raw = dict(saved["resolved"])
+    if saved.get("version") == _ITEM_VERSION and isinstance(saved.get("resolved"), dict):
+        resolved_raw, deterministic_changes = _deterministic_normalize(
+            kind=kind,
+            index=index,
+            raw=dict(saved["resolved"]),
+            catalog=catalog,
+        )
         parsed, error = _parse_error(
             module,
             kind=kind,
             raw=resolved_raw,
             catalog=catalog,
         )
-        if not error and parsed is not None:
-            return parsed, resolved_raw
+        if not error and parsed is not None and isinstance(resolved_raw, dict):
+            if deterministic_changes:
+                _write_resolved(
+                    state_path,
+                    kind=kind,
+                    index=index,
+                    original_fingerprint=original_fingerprint,
+                    round_index=int(saved.get("round", 0)),
+                    resolved=resolved_raw,
+                    repair_method="resume_deterministic",
+                    deterministic_changes=deterministic_changes,
+                )
+            return parsed, dict(resolved_raw)
 
-    current = saved.get("current", raw) if saved.get("version") == _VERSION else raw
+    current_source = (
+        saved.get("current", raw)
+        if saved.get("version") == _ITEM_VERSION
+        else raw
+    )
+    current, deterministic_changes = _deterministic_normalize(
+        kind=kind,
+        index=index,
+        raw=current_source,
+        catalog=catalog,
+    )
     parsed, error = _parse_error(module, kind=kind, raw=current, catalog=catalog)
     if not error and parsed is not None and isinstance(current, dict):
+        _write_resolved(
+            state_path,
+            kind=kind,
+            index=index,
+            original_fingerprint=original_fingerprint,
+            round_index=0,
+            resolved=dict(current),
+            repair_method="deterministic" if deterministic_changes else "none",
+            deterministic_changes=deterministic_changes,
+        )
         return parsed, dict(current)
 
-    round_index = int(saved.get("round", 0)) if saved.get("version") == _VERSION else 0
-    while True:
-        round_index += 1
-        field_patch = isinstance(current, dict)
+    seen_states: set[str] = set()
+    seen_patch_hashes: set[str] = set()
+    max_attempts = _repair_attempt_budget()
+    round_index = 0
+    last_patch_sha256 = ""
+
+    for attempt_index in range(1, max_attempts + 1):
+        round_index = attempt_index
+        replacement_mode = not isinstance(current, dict) or attempt_index > 1
+        repair_mode = "replacement" if replacement_mode else "field_patch"
+        state_fingerprint = _fingerprint(
+            {"current": current, "error": error, "repair_mode": repair_mode}
+        )
+        if state_fingerprint in seen_states:
+            _raise_repair_failure(
+                module,
+                kind=kind,
+                index=index,
+                state_path=state_path,
+                original_fingerprint=original_fingerprint,
+                current=current,
+                error=error,
+                round_index=round_index - 1,
+                reason="repeated_validation_state",
+                last_patch_sha256=last_patch_sha256,
+            )
+        seen_states.add(state_fingerprint)
+
         _atomic_write(
             state_path,
             {
-                "version": _VERSION,
-                "status": "patching",
+                "version": _ITEM_VERSION,
+                "status": "repairing",
                 "kind": kind,
                 "index": index,
                 "target_fingerprint": original_fingerprint,
                 "round": round_index,
+                "repair_mode": repair_mode,
                 "current": current,
                 "validation_error": error,
             },
         )
 
-        if field_patch:
+        if not replacement_mode:
             prompt = (
-                f"You are a deterministic field-level JSON patcher for one Minecraft {kind}. "
-                "Return only target_fingerprint, set_fields, delete_fields. DO NOT rewrite "
-                "the whole object. Change only fields required by validation_error; preserve "
-                "every correct field exactly. Do not output Markdown, explanation, siblings, "
-                "or a production page."
+                f"You repair exactly one Minecraft {kind} production object. "
+                "Return only target_fingerprint, set_fields, delete_fields. Change only "
+                "fields required by validation_error and preserve every other field exactly. "
+                "Do not output Markdown, explanation, siblings, or a production page."
             )
             output_contract: dict[str, Any] = {
                 "target_fingerprint": original_fingerprint,
@@ -290,25 +579,27 @@ def _patch_one_item(
             schema = _patch_schema(fields=sorted(allowed), replacement=False)
         else:
             prompt = (
-                f"You are a deterministic JSON repairer for one Minecraft {kind}. The saved "
-                "value is not an object, so return one replacement object only. Do not output "
-                "a page, explanation, Markdown, or any sibling object."
+                f"You regenerate exactly one invalid Minecraft {kind} production object. "
+                "Return only target_fingerprint and replacement. Preserve the current item's "
+                "purpose and implements_deliverables, but produce a complete object that fixes "
+                "validation_error. Do not output Markdown, explanation, siblings, or a page."
             )
             output_contract = {
                 "target_fingerprint": original_fingerprint,
-                "replacement": {"valid_object": "for this exact production item"},
+                "replacement": {"complete_valid_object": "for this exact production item"},
             }
             schema = _patch_schema(fields=sorted(allowed), replacement=True)
 
         request = {
             "item_kind": kind,
             "target_fingerprint": original_fingerprint,
+            "repair_mode": repair_mode,
             "current_value": current,
             "validation_error": error,
             "allowed_fields": sorted(allowed),
             "instruction": (
-                "Repair only this saved item. Existing sibling production items are already "
-                "persisted and must not be regenerated or mentioned."
+                "Repair only this item. Sibling production items are already persisted "
+                "and must not be regenerated or mentioned."
             ),
             "output_contract": output_contract,
         }
@@ -327,13 +618,30 @@ def _patch_one_item(
         finally:
             runtime._JSON_SCHEMA.reset(token)
 
+        last_patch_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if last_patch_sha256 in seen_patch_hashes:
+            _raise_repair_failure(
+                module,
+                kind=kind,
+                index=index,
+                state_path=state_path,
+                original_fingerprint=original_fingerprint,
+                current=current,
+                error=error,
+                round_index=round_index,
+                reason="repeated_model_output",
+                last_patch_sha256=last_patch_sha256,
+            )
+        seen_patch_hashes.add(last_patch_sha256)
+
         patch: dict[str, Any] | None = None
+        candidate: Any = current
         try:
             patch = _extract_one_complete_object(text)
             if patch.get("target_fingerprint") != original_fingerprint:
                 raise ValueError("target_fingerprint mismatch")
 
-            if field_patch:
+            if not replacement_mode:
                 if frozenset(map(str, patch)) != _FIELD_PATCH_KEYS:
                     raise ValueError("field patch has invalid top-level keys")
                 set_fields = patch.get("set_fields")
@@ -348,7 +656,7 @@ def _patch_one_item(
                     raise ValueError("set_fields contains a field outside this item contract")
                 candidate = dict(current)
                 for field in delete_fields:
-                    if field not in allowed:
+                    if field in allowed:
                         candidate.pop(field, None)
                 candidate.update(set_fields)
             else:
@@ -359,6 +667,12 @@ def _patch_one_item(
                     raise ValueError("replacement must be an object")
                 candidate = dict(replacement)
 
+            candidate, deterministic_after_model = _deterministic_normalize(
+                kind=kind,
+                index=index,
+                raw=candidate,
+                catalog=catalog,
+            )
             parsed, next_error = _parse_error(
                 module,
                 kind=kind,
@@ -366,39 +680,43 @@ def _patch_one_item(
                 catalog=catalog,
             )
             if next_error or parsed is None:
-                raise ValueError(next_error or "item parser rejected replacement")
+                error = next_error or "item validator rejected candidate"
+                current = candidate
+                continue
 
-            _atomic_write(
+            if not isinstance(candidate, dict):
+                raise ValueError("validated candidate is not an object")
+            _write_resolved(
                 state_path,
-                {
-                    "version": _VERSION,
-                    "status": "resolved",
-                    "kind": kind,
-                    "index": index,
-                    "target_fingerprint": original_fingerprint,
-                    "round": round_index,
-                    "resolved": candidate,
-                },
+                kind=kind,
+                index=index,
+                original_fingerprint=original_fingerprint,
+                round_index=round_index,
+                resolved=candidate,
+                repair_method=(
+                    "model_replacement" if replacement_mode else "model_field_patch"
+                ),
+                deterministic_changes=deterministic_after_model,
             )
             return parsed, candidate
         except Exception as exc:
-            if field_patch and isinstance(patch, dict):
-                set_fields = patch.get("set_fields")
-                delete_fields = patch.get("delete_fields")
-                if isinstance(set_fields, dict) and isinstance(delete_fields, list):
-                    trial = dict(current)
-                    for field in delete_fields:
-                        if isinstance(field, str) and field not in allowed:
-                            trial.pop(field, None)
-                    trial.update(
-                        {field: value for field, value in set_fields.items() if field in allowed}
-                    )
-                    current = trial
-            elif not field_patch and isinstance(patch, dict):
-                replacement = patch.get("replacement")
-                if isinstance(replacement, dict):
-                    current = dict(replacement)
+            if isinstance(candidate, dict):
+                current = candidate
             error = f"{type(exc).__name__}: {exc}"
+
+    _raise_repair_failure(
+        module,
+        kind=kind,
+        index=index,
+        state_path=state_path,
+        original_fingerprint=original_fingerprint,
+        current=current,
+        error=error,
+        round_index=round_index,
+        reason="repair_budget_exhausted",
+        last_patch_sha256=last_patch_sha256,
+    )
+    raise AssertionError("unreachable")
 
 
 def resolve_page_items(
@@ -453,12 +771,12 @@ def resolve_page_items(
         if isinstance(value, str) and value.strip() and value.strip() not in test_catalog
     ] if isinstance(tests_raw, list) else []
 
-    # Record a compact final semantic receipt. The large raw page remains immutable.
     receipt_path = page_path.with_name(page_path.name + ".resolved.json")
     _atomic_write(
         receipt_path,
         {
             "version": _VERSION,
+            "item_contract_version": _ITEM_VERSION,
             "status": "resolved",
             "module_ids": [value.module_id for value in outputs["module"]],
             "asset_ids": [value.asset_id for value in outputs["asset"]],
