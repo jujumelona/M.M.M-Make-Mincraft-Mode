@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,27 @@ _ALLOWED_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+
+
+_ACTIVE_REPAIR_PROJECT_INDEX: ContextVar[tuple[Path, ProjectIndex] | None] = ContextVar(
+    "mmm_active_repair_project_index",
+    default=None,
+)
+
+
+def active_repair_project_index(root: Path, policy: ScalePolicy) -> ProjectIndex:
+    """Return the ProjectIndex isolated to the current repair call.
+
+    Repair diagnostics contracts call this helper instead of rebuilding the complete
+    project index for every attempt. Calls made outside ``RepairEngine.repair`` retain
+    the old fail-safe behavior and construct a fresh index.
+    """
+
+    normalized_root = root.expanduser().resolve()
+    active = _ACTIVE_REPAIR_PROJECT_INDEX.get()
+    if active is not None and active[0] == normalized_root:
+        return active[1]
+    return ProjectIndex(normalized_root, policy=policy)
 
 
 class RepairEngine:
@@ -68,47 +90,64 @@ class RepairEngine:
         if type(attempts_limit) is not int or attempts_limit < 1:
             raise RepairEngineError("max_attempts must be a positive integer.")
 
-        receipts: list[dict[str, Any]] = []
-        signatures: set[str] = set()
-        last_evidence: dict[str, Any] | None = None
-        for attempt in range(attempts_limit + 1):
-            evidence = self._evidence(root, run_gametest=run_gametest)
-            last_evidence = evidence
-            if evidence["passed"]:
-                ProjectIndex(root, policy=self.policy).write_manifest()
-                return {
-                    "schema_version": "mmm/repair-result-v2",
-                    "status": "PASS",
-                    "attempts": attempt,
-                    "evidence": evidence,
-                    "patch_receipts": receipts,
-                }
-            if attempt >= attempts_limit:
-                break
-            signature = self._signature(evidence)
-            if signature in signatures:
-                raise RepairEngineError(
-                    "Repair stopped because the same normalized error signature repeated."
-                )
-            signatures.add(signature)
-            context = self._context(root, evidence)
-            patch = self._request_patch(evidence, context)
-            self._validate_patch_scope(patch)
-            try:
-                receipt = TransactionalSourcePatcher(root).apply(patch)
-            except SourcePatchError as exc:
-                raise RepairEngineError(f"Generated repair patch was rejected: {exc}") from exc
-            receipts.append(receipt)
+        # Build the complete project index exactly once for this repair invocation.
+        # ContextVar keeps concurrent/nested repairs isolated without storing mutable
+        # run state on the reusable RepairEngine instance.
+        project_index = ProjectIndex(root, policy=self.policy)
+        index_token = _ACTIVE_REPAIR_PROJECT_INDEX.set((root, project_index))
+        try:
+            receipts: list[dict[str, Any]] = []
+            signatures: set[str] = set()
+            last_evidence: dict[str, Any] | None = None
+            for attempt in range(attempts_limit + 1):
+                evidence = self._evidence(root, run_gametest=run_gametest)
+                last_evidence = evidence
+                if evidence["passed"]:
+                    project_index.write_manifest()
+                    return {
+                        "schema_version": "mmm/repair-result-v2",
+                        "status": "PASS",
+                        "attempts": attempt,
+                        "evidence": evidence,
+                        "patch_receipts": receipts,
+                    }
+                if attempt >= attempts_limit:
+                    break
+                signature = self._signature(evidence)
+                if signature in signatures:
+                    raise RepairEngineError(
+                        "Repair stopped because the same normalized error signature repeated."
+                    )
+                signatures.add(signature)
+                context = self._context(root, evidence)
+                patch = self._request_patch(evidence, context)
+                self._validate_patch_scope(patch)
+                try:
+                    receipt = TransactionalSourcePatcher(root).apply(patch)
+                except SourcePatchError as exc:
+                    raise RepairEngineError(
+                        f"Generated repair patch was rejected: {exc}"
+                    ) from exc
 
-        if last_evidence is None:
-            raise AssertionError("Repair loop produced no validation evidence.")
-        return {
-            "schema_version": "mmm/repair-result-v2",
-            "status": "FAIL",
-            "attempts": attempts_limit,
-            "evidence": last_evidence,
-            "patch_receipts": receipts,
-        }
+                # Only a successfully committed patch may mutate the in-memory index.
+                # The patch contract already rejects duplicate/unsafe paths, so this is
+                # the exact minimal touched set needed for the next repair attempt.
+                project_index.update_files(
+                    tuple(str(item["path"]) for item in patch)
+                )
+                receipts.append(receipt)
+
+            if last_evidence is None:
+                raise AssertionError("Repair loop produced no validation evidence.")
+            return {
+                "schema_version": "mmm/repair-result-v2",
+                "status": "FAIL",
+                "attempts": attempts_limit,
+                "evidence": last_evidence,
+                "patch_receipts": receipts,
+            }
+        finally:
+            _ACTIVE_REPAIR_PROJECT_INDEX.reset(index_token)
 
     def _evidence(self, root: Path, *, run_gametest: bool) -> dict[str, Any]:
         try:
@@ -186,7 +225,7 @@ class RepairEngine:
                 if log.is_file() and not log.is_symlink():
                     text = log.read_text(encoding="utf-8", errors="replace")
                     query_parts.append(text[-32_000:])
-        index = ProjectIndex(root, policy=self.policy)
+        index = active_repair_project_index(root, self.policy)
         return {
             "manifest": index.manifest_receipt(),
             "relevant": index.select(
