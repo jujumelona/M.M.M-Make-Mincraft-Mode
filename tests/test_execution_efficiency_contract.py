@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
-from minecraft_mod_ai import complete_planner, work_graph
+from minecraft_mod_ai import complete_planner, execution_efficiency_contract, work_graph
 from minecraft_mod_ai.complete_spec import ProductionModule
 
 
@@ -168,3 +169,30 @@ def test_large_custom_wave_keeps_java_shard_ceiling(monkeypatch) -> None:
     assert sizes == [48, 48, 48, 48, 8]
     assert max(sizes) <= 48
     assert sum(sizes) == 200
+
+
+def test_long_serial_dependency_chain_is_compressed_into_bounded_shards() -> None:
+    modules: list[ProductionModule] = []
+    for index in range(120):
+        module_id = f"chain_{index:03d}"
+        depends_on = () if index == 0 else (f"chain_{index - 1:03d}",)
+        modules.append(
+            ProductionModule(
+                module_id=module_id,
+                kind="item",
+                depends_on=depends_on,
+            )
+        )
+
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+    shards = list(work_graph._module_shards(tuple(modules), policy=policy))
+
+    assert [stage for stage, _ in shards] == ["content", "content", "content"]
+    assert [len(members) for _, members in shards] == [48, 48, 24]
+    assert sum(len(members) for _, members in shards) == 120
+
+
+def test_dependency_sharding_uses_indexed_lookup_not_all_group_reverse_scan() -> None:
+    source = inspect.getsource(execution_efficiency_contract._dependency_wave_shards)
+    assert "open_by_key" in source
+    assert "for index in range(len(groups) - 1" not in source
