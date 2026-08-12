@@ -5,7 +5,7 @@ from typing import Any
 
 
 def start(model_registry_module: Any) -> None:
-    """Install Colab llama routing, then overlap selected-model prefetch with setup."""
+    """Install late runtime contracts, then overlap selected-model prefetch with setup."""
 
     # The hardware-policy wrapper is already installed before this bootstrap is
     # imported. Add the request-mode router now so every later local llama call uses
@@ -14,6 +14,20 @@ def start(model_registry_module: Any) -> None:
     from .colab_llama_request_routing_contract import install as install_request_routing
 
     install_request_routing(hardware_policy_module)
+
+    # parallel_runtime_contract is installed after the platform planner and used to
+    # capture the old generic research function. Rebind that late overlay to the
+    # exact selected PlatformLock while retaining its I/O overlap.
+    from . import complete_planner as complete_planner_module
+    from . import central_research as central_module
+    from . import retrieval as retrieval_module
+    from .parallel_platform_rag_contract import install as install_parallel_platform_rag
+
+    install_parallel_platform_rag(
+        complete_planner_module=complete_planner_module,
+        central_module=central_module,
+        retrieval_module=retrieval_module,
+    )
 
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
