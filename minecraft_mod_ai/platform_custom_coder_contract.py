@@ -21,8 +21,8 @@ def install(custom_module_generator_module: Any) -> None:
     _install_router_rewrite()
 
 
-def _install_custom_generator_scope(module: Any) -> None:
-    cls = module.CustomModuleGenerator
+def _install_custom_generator_scope(module_api: Any) -> None:
+    cls = module_api.CustomModuleGenerator
     original = cls.generate
     if getattr(original, "_mmm_dynamic_coder_target", False):
         return
@@ -41,9 +41,11 @@ def _install_custom_generator_scope(module: Any) -> None:
         try:
             adapter = adapter_for_target(minecraft_version, loader)
         except ValueError as exc:
-            raise module.__class__.__module__ and type(exc)(str(exc))
+            raise module_api.CustomModuleGenerationError(
+                "Custom coder target could not be resolved: " + str(exc)
+            ) from exc
         if mappings != adapter.yarn_mappings:
-            raise ValueError(
+            raise module_api.CustomModuleGenerationError(
                 "Custom coder mappings disagree with the approved platform target: "
                 f"{mappings!r} != {adapter.yarn_mappings!r}."
             )
@@ -107,8 +109,6 @@ def _rewrite_message(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]
     if not isinstance(content, str):
         return result
 
-    # Structured generation requests are authoritative. Rewrite the historical Java
-    # 17 placeholder to the exact approved target before it reaches the coder model.
     try:
         payload = json.loads(content)
     except json.JSONDecodeError:
