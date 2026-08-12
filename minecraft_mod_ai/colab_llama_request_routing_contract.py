@@ -43,6 +43,7 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
     def guarded_stream(adapter: Any, request: Any, server_url: str) -> str:
         from .colab_mtp_server import (
             SERVER_API_URL,
+            _structured_response_format,
             current_server_mode,
             decode_log_summary,
             server_log_offset,
@@ -60,6 +61,18 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
             import httpx
 
             payload = hardware_policy_module._server_payload(adapter, request)
+            structured = _structured_response_format(request)
+            if structured:
+                # The pinned Colab server implements json_object with a generic GBNF
+                # grammar, not the M.M.M game-design/patch schema. M.M.M already
+                # performs complete host-side JSON extraction, schema validation and
+                # one bounded repair. Keeping the generic server grammar adds a
+                # token-by-token sampler constraint without adding semantic safety,
+                # and on local CUDA it can wedge after the first visible token. Keep
+                # Qwen reasoning disabled but let the target model decode normally;
+                # the host remains the source of truth for structured correctness.
+                payload.pop("response_format", None)
+                payload["reasoning_effort"] = "none"
             payload["stream"] = True
             stall = _stall_seconds()
             timeout = httpx.Timeout(
@@ -98,12 +111,12 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
                 if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
                     print("llama server: connected", server_url, flush=True)
                     adapter.__class__._reported_server_url = server_url
-                structured = payload.get("response_format") is not None
                 print(
                     "llama server: request accepted; streaming",
                     f" mode={current_server_mode() or 'unknown'}",
                     f" input_chars={hardware_policy_module._request_content_chars(payload)}",
                     f" max_tokens={payload['max_tokens']}",
+                    f" structured={'host-validated-json' if structured else 'text'}",
                     f" reasoning={'disabled' if structured else 'model-default'}",
                     sep="",
                     flush=True,
@@ -177,7 +190,7 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
                 if reasoning_chars:
                     raise RuntimeError(
                         "llama server produced reasoning deltas but no visible content; "
-                        "the chat template/output grammar channels are incompatible."
+                        "the chat template/output channels are incompatible."
                     )
                 raise RuntimeError("llama server stream produced no text content.")
             print(
