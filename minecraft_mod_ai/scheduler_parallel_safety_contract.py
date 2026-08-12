@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
@@ -44,12 +45,61 @@ def _orchestrator_owner(ledger: Any) -> str:
     owner = getattr(ledger, "_mmm_parallel_lease_owner", "")
     if owner:
         return str(owner)
-    owner = (
-        f"{_ORCHESTRATOR_WORKER}:{os.getpid()}:"
-        f"{uuid.uuid4().hex}"
-    )
+    owner = f"{_ORCHESTRATOR_WORKER}:{os.getpid()}:{uuid.uuid4().hex}"
     setattr(ledger, "_mmm_parallel_lease_owner", owner)
     return owner
+
+
+def _path_values(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple, set)):
+        return ()
+    paths: list[str] = []
+    for item in value:
+        if isinstance(item, (str, Path)):
+            rendered = str(item).strip()
+            if rendered:
+                paths.append(rendered)
+    return tuple(paths)
+
+
+def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
+    """Collect source paths from nested generator and patch receipts deterministically."""
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        normalized = path.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            ordered.append(normalized)
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            operation = value.get("operation")
+            path = value.get("path")
+            if operation in {"create", "replace", "edit", "delete"} and isinstance(path, str):
+                add(path)
+
+            for key in ("touched_paths", "written_files", "deleted_files", "removed_files"):
+                for item in _path_values(value.get(key)):
+                    add(item)
+
+            # Several deterministic generators expose a top-level ``files`` list
+            # while nested source-patch receipts use ``files`` as an object. Accept
+            # only scalar path lists here; object-valued metadata is traversed below.
+            for item in _path_values(value.get("files")):
+                add(item)
+
+            for nested in value.values():
+                visit(nested)
+            return
+        if isinstance(value, (list, tuple)):
+            for nested in value:
+                visit(nested)
+
+    visit(receipt)
+    return tuple(ordered)
 
 
 def _install_thread_local_connections(work_graph_module: Any) -> None:
@@ -114,13 +164,9 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 lease_seconds=lease_seconds,
             )
         if not worker_id.strip():
-            raise work_graph_module.WorkGraphError(
-                "worker_id must not be empty."
-            )
+            raise work_graph_module.WorkGraphError("worker_id must not be empty.")
         if lease_seconds < 1:
-            raise work_graph_module.WorkGraphError(
-                "lease_seconds must be positive."
-            )
+            raise work_graph_module.WorkGraphError("lease_seconds must be positive.")
 
         now = time.time()
         owner = _orchestrator_owner(self)
@@ -258,30 +304,20 @@ def _install_index_commit_order(
         validate_cached: Callable[[dict[str, Any]], bool],
         shared_index: Any | None = None,
     ) -> dict[str, Any]:
-        cached = ledger.cached_receipt(
-            node.node_id,
-            input_hash=node.input_hash,
-        )
+        cached = ledger.cached_receipt(node.node_id, input_hash=node.input_hash)
         if cached is not None and validate_cached(cached):
             return cached
         if cached is not None:
             ledger.invalidate(node.node_id)
 
         current_task = ledger.task(node.node_id)
-        if current_task["state"] in {
-            "failed",
-            "input_required",
-            "cancelled",
-        }:
+        if current_task["state"] in {"failed", "input_required", "cancelled"}:
             ledger.retry(node.node_id)
             current_task = ledger.task(node.node_id)
 
         ledger.raise_if_cancelled()
         if current_task["state"] != "running":
-            ledger.begin(
-                node.node_id,
-                worker_id="complete-orchestrator",
-            )
+            ledger.begin(node.node_id, worker_id="complete-orchestrator")
 
         try:
             receipt = action()
@@ -292,11 +328,7 @@ def _install_index_commit_order(
             ledger.raise_if_cancelled()
 
             if shared_index is not None:
-                touched = (
-                    receipt.get("touched_paths")
-                    or receipt.get("written_files")
-                    or []
-                )
+                touched = _receipt_touched_paths(receipt)
                 if touched:
                     try:
                         with _INDEX_COMMIT_LOCK:
@@ -313,10 +345,7 @@ def _install_index_commit_order(
         except BaseException as exc:
             try:
                 if ledger.task(node.node_id)["state"] == "running":
-                    ledger.fail(
-                        node.node_id,
-                        f"{type(exc).__name__}: {exc}",
-                    )
+                    ledger.fail(node.node_id, f"{type(exc).__name__}: {exc}")
             except work_graph_module.WorkGraphError:
                 pass
             raise
@@ -332,7 +361,7 @@ def install(
 ) -> None:
     _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
-    _install_index_commit_order(
-        work_graph_module,
-        orchestrator_module,
-    )
+    _install_index_commit_order(work_graph_module, orchestrator_module)
+
+
+__all__ = ["_receipt_touched_paths", "install"]
