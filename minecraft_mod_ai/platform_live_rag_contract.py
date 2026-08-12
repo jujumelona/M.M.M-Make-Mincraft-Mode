@@ -1,12 +1,39 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from functools import wraps
 from typing import Any
 
 
+_RAG_THREAD_STATE = threading.local()
+
+
+def _thread_index(retrieval: Any) -> Any:
+    """Build the immutable builtin corpus index once per retrieval worker thread."""
+    key = (id(retrieval.OfficialCorpusIndex), id(retrieval.BUILTIN_CORPUS))
+    indexes = getattr(_RAG_THREAD_STATE, "indexes", None)
+    if indexes is None:
+        indexes = {}
+        _RAG_THREAD_STATE.indexes = indexes
+    index = indexes.get(key)
+    if index is None:
+        index = retrieval.OfficialCorpusIndex(documents=retrieval.BUILTIN_CORPUS)
+        indexes[key] = index
+    return index
+
+
+def _replace_kwonly_default(function: Any, name: str, value: Any) -> None:
+    defaults = getattr(function, "__kwdefaults__", None)
+    if not isinstance(defaults, dict) or name not in defaults:
+        return
+    updated = dict(defaults)
+    updated[name] = value
+    function.__kwdefaults__ = updated
+
+
 def install(*, retrieval_module: Any, platform_planning_module: Any) -> None:
-    """Use only version-applicable or version-neutral documents for live targets."""
+    """Use only version-applicable documents and reuse immutable search indexes."""
 
     cls = retrieval_module.OfficialCorpusIndex
     original = cls.retrieve
@@ -48,17 +75,54 @@ def install(*, retrieval_module: Any, platform_planning_module: Any) -> None:
         retrieve._mmm_live_platform_rag = True
         cls.retrieve = retrieve
 
-    def target_retrieve(retrieval: Any, query: str, *, adapter: Any, limit: int):
-        with retrieval.OfficialCorpusIndex(documents=retrieval.BUILTIN_CORPUS) as index:
-            return index.retrieve(
+    current_public_retrieve = retrieval_module.retrieve_official_evidence
+    if getattr(current_public_retrieve, "_mmm_thread_local_index_reuse", False):
+        shared_retrieve = current_public_retrieve
+    else:
+
+        @wraps(current_public_retrieve)
+        def shared_retrieve(
+            query: str,
+            *,
+            minecraft_version: str = "1.20.1",
+            loader: str = "fabric",
+            mappings: str = "yarn-1.20.1+build.1",
+            limit: int = 6,
+        ):
+            return _thread_index(retrieval_module).retrieve(
                 query,
-                minecraft_version=adapter.minecraft_version,
-                loader=adapter.loader,
-                mappings=adapter.yarn_mappings,
+                minecraft_version=minecraft_version,
+                loader=loader,
+                mappings=mappings,
                 limit=limit,
             )
 
+        shared_retrieve._mmm_thread_local_index_reuse = True
+        retrieval_module.retrieve_official_evidence = shared_retrieve
+
+    # central_research imported retrieve_official_evidence directly and captured it as
+    # a keyword-only default. Replace both references before the later parallel RAG
+    # wrapper captures the legacy lane, otherwise each query would still rebuild FTS.
+    from . import central_research as central_module
+
+    central_module.retrieve_official_evidence = shared_retrieve
+    _replace_kwonly_default(
+        central_module.retrieve_domain_evidence,
+        "retrieve",
+        shared_retrieve,
+    )
+
+    def target_retrieve(retrieval: Any, query: str, *, adapter: Any, limit: int):
+        return _thread_index(retrieval).retrieve(
+            query,
+            minecraft_version=adapter.minecraft_version,
+            loader=adapter.loader,
+            mappings=adapter.yarn_mappings,
+            limit=limit,
+        )
+
     target_retrieve._mmm_live_platform_rag = True
+    target_retrieve._mmm_thread_local_index_reuse = True
     # Replaces the old compatibility shim that queried a 1.20.1 source lane and then
     # rewrote the receipt target. No evidence is relabeled across versions anymore.
     platform_planning_module._target_retrieve = target_retrieve
