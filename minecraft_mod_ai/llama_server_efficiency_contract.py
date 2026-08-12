@@ -14,6 +14,7 @@ _DECISION_STORE_SCHEMA = "mmm/llama-server-autotune-store-v1"
 _DECISION_STORE_LIMIT = 32
 _CACHE_LOCK = threading.RLock()
 _MODEL_SIGNATURE_CACHE: dict[tuple[str, int, int], str] = {}
+_MODEL_PATH_CACHE: dict[tuple[str, str], str] = {}
 _SERVER_VERSION_CACHE: dict[tuple[str, int, int], str] = {}
 _HARDWARE_IDENTITY_CACHE: str | None = None
 
@@ -178,6 +179,29 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
 
         payload_with_prompt_cache._mmm_prompt_cache_reuse = True  # type: ignore[attr-defined]
         hardware_policy_module._server_payload = payload_with_prompt_cache
+
+    current_model_resolver = autotune_module._resolve_model_path
+    if not getattr(current_model_resolver, "_mmm_process_model_path_cache", False):
+
+        @wraps(current_model_resolver)
+        def cached_model_path(config: Any) -> str:
+            extra = getattr(config, "extra", {})
+            filename = str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else ""
+            key = (str(getattr(config, "model_id", "")), filename)
+            with _CACHE_LOCK:
+                cached = _MODEL_PATH_CACHE.get(key)
+            if cached:
+                path = Path(cached)
+                if path.is_file():
+                    return str(path.resolve())
+            resolved = str(Path(current_model_resolver(config)).expanduser().resolve())
+            if Path(resolved).is_file():
+                with _CACHE_LOCK:
+                    _bounded_put(_MODEL_PATH_CACHE, key, resolved, limit=16)
+            return resolved
+
+        cached_model_path._mmm_process_model_path_cache = True  # type: ignore[attr-defined]
+        autotune_module._resolve_model_path = cached_model_path
 
     current_cache_path = autotune_module._cache_path
     if not getattr(current_cache_path, "_mmm_persistent_tuning_cache", False):
