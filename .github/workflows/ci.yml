@@ -48,5 +48,8 @@ jobs:
           python tools/package_skills.py
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
 
+      - name: Enforce clean runtime composition
+        run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
+
       - name: Run unit and contract tests
         run: python -m pytest -vv --tb=short --durations=25
