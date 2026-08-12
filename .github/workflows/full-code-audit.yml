@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 
-# Generation 2: run against the post-regression-fix main snapshot.
+# Generation 3: final audit after API restoration and performance fixes.
 jobs:
   audit:
     runs-on: ubuntu-latest
