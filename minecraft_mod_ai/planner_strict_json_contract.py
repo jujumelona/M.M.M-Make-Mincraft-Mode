@@ -6,6 +6,9 @@ from functools import wraps
 from typing import Any, Sequence
 
 
+_OUTLINE_FIELDS = frozenset({"production_batches", "complete", "next_cursor"})
+
+
 @dataclass(frozen=True)
 class _DecodedContainer:
     start: int
@@ -18,15 +21,12 @@ def _outermost_complete_json_containers(text: str) -> list[_DecodedContainer]:
 
     Structured planner output can travel through several OpenAI-compatible/chat-template
     transports. Those transports may add Markdown fences, Qwen channel markers, a BOM,
-    or short presentation text around an otherwise exact JSON value. Transport syntax
+    or short presentation text around otherwise valid JSON values. Transport syntax
     must not decide semantic validity.
 
-    This scanner is deliberately *not* a JSON repair routine. It only accepts values
+    This scanner is deliberately not a JSON repair routine. It only accepts values
     that ``json.JSONDecoder.raw_decode`` can already parse completely. It never closes
-    braces, changes strictness, fills fields, aliases fields, or drops a second complete
-    top-level JSON container. Arrays are retained here so an array wrapping the desired
-    object cannot be mistaken for a valid top-level object merely because the nested
-    object itself is parseable.
+    braces, changes strictness, fills fields, or aliases fields.
     """
 
     decoder = json.JSONDecoder()
@@ -74,8 +74,82 @@ def _extract_one_complete_object(text: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _extract_outline_sequence(text: str) -> dict[str, Any]:
+    """Consume one or more complete production-outline JSON pages in order.
+
+    Production outlines are intrinsically paginated. A large model response may
+    contain several consecutive outline page objects; treating that as malformed
+    throws away valid planning work and creates an artificial plan-size ceiling.
+    Every outermost JSON value must therefore be an exact outline page, while the
+    host concatenates their batch payloads and carries the terminal page state
+    forward. No page is repaired or synthesized.
+    """
+
+    containers = _outermost_complete_json_containers(text)
+    if not containers:
+        raise ValueError("response contains no complete production-outline JSON page")
+
+    pages: list[dict[str, Any]] = []
+    for index, container in enumerate(containers):
+        if not isinstance(container.value, dict):
+            raise ValueError(
+                f"production-outline page {index + 1} must be a JSON object"
+            )
+        page = dict(container.value)
+        fields = frozenset(str(key) for key in page)
+        if fields != _OUTLINE_FIELDS:
+            raise ValueError(
+                "production-outline page fields are invalid: "
+                f"received={sorted(fields)}"
+            )
+        if not isinstance(page["production_batches"], list):
+            raise ValueError(
+                f"production-outline page {index + 1} production_batches must be a list"
+            )
+        if type(page["complete"]) is not bool:
+            raise ValueError(
+                f"production-outline page {index + 1} complete must be boolean"
+            )
+        if not isinstance(page["next_cursor"], str):
+            raise ValueError(
+                f"production-outline page {index + 1} next_cursor must be a string"
+            )
+
+        final_emitted_page = index == len(containers) - 1
+        if not final_emitted_page:
+            if page["complete"]:
+                raise ValueError(
+                    "a non-final emitted production-outline page may not declare complete=true"
+                )
+            if not page["next_cursor"]:
+                raise ValueError(
+                    "a non-final emitted production-outline page requires next_cursor"
+                )
+        else:
+            if page["complete"] and page["next_cursor"]:
+                raise ValueError(
+                    "a complete production-outline page may not carry next_cursor"
+                )
+            if not page["complete"] and not page["next_cursor"]:
+                raise ValueError(
+                    "an incomplete production-outline page requires next_cursor"
+                )
+        pages.append(page)
+
+    combined_batches: list[Any] = []
+    for page in pages:
+        combined_batches.extend(page["production_batches"])
+
+    terminal = pages[-1]
+    return {
+        "production_batches": combined_batches,
+        "complete": terminal["complete"],
+        "next_cursor": terminal["next_cursor"],
+    }
+
+
 def install(runtime_module: Any) -> None:
-    """Require one complete, exact-contract JSON object on structured planner pages."""
+    """Install strict structured JSON parsing with scalable outline pagination."""
 
     current = runtime_module._extract_with_safe_empty_defaults
     if not getattr(current, "_mmm_strict_structured_json", False):
@@ -89,12 +163,25 @@ def install(runtime_module: Any) -> None:
         ) -> dict[str, Any]:
             if not isinstance(text, str) or not text.strip():
                 raise module.SpecValidationError("Structured planner returned empty JSON.")
+
+            outline_sequence = (
+                len(expected_contracts) == 1
+                and expected_contracts[0] == _OUTLINE_FIELDS
+            )
             try:
-                value = _extract_one_complete_object(text)
+                value = (
+                    _extract_outline_sequence(text)
+                    if outline_sequence
+                    else _extract_one_complete_object(text)
+                )
             except (ValueError, json.JSONDecodeError) as exc:
+                expectation = (
+                    "one or more complete sequential outline JSON pages"
+                    if outline_sequence
+                    else "exactly one complete strict JSON object"
+                )
                 raise module.SpecValidationError(
-                    "Structured planner did not return exactly one complete strict JSON "
-                    f"object: {exc}"
+                    f"Structured planner did not return {expectation}: {exc}"
                 ) from exc
 
             fields = frozenset(str(key) for key in value)
@@ -110,9 +197,8 @@ def install(runtime_module: Any) -> None:
         extract_strict.__wrapped__ = current  # type: ignore[attr-defined]
         runtime_module._extract_with_safe_empty_defaults = extract_strict
 
-    # The strict parser stays strict. Separately constrain the tiny production-outline
-    # generation prompt/output budget so the model produces one object instead of
-    # spending an 8k implementation budget emitting repeated candidate JSON objects.
+    # Outline prompting is independent of strict semantic validation. It gives the
+    # model freedom to choose page size while preserving explicit continuation state.
     from .planner_outline_prompt_contract import install as install_outline_prompt
 
     install_outline_prompt(runtime_module)
