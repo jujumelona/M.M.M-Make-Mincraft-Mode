@@ -20,11 +20,11 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
     ) -> None:
         """Use adaptive page width and durable object-level semantic repair.
 
-        The local llama server has one decode slot, so splitting a coherent batch into
-        host-sized groups cannot create parallel speedup; it only adds serial prompt/
-        decode overhead. Present every outstanding deliverable, let the model finish
-        any coherent non-empty subset that fits cleanly, persist the returned page
-        before semantic parsing, and patch only individual invalid item fields.
+        Splitting a coherent production batch into arbitrary host-sized request pages
+        cannot create useful decode parallelism; it only adds prompt/decode overhead.
+        Present every outstanding deliverable, let the model finish any coherent
+        non-empty subset that fits cleanly, persist the returned page before semantic
+        parsing, and patch only individual invalid item fields.
         """
 
         from .production_page_durable_contract import (
@@ -45,8 +45,6 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
                 )
             seen_states.add(state)
 
-            # No arbitrary host width. The model sees all outstanding work and chooses
-            # how much can be completed without truncating the JSON object.
             target_deliverables = list(remaining)
             request = {
                 "batch": {
@@ -93,8 +91,6 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
                     stage=stage,
                 )
 
-            # If this exact host request already produced a valid structured page before
-            # a crash, replay it from disk instead of spending another GPU decode.
             page, page_path = load_or_generate_page(
                 stage=stage,
                 request=request,
@@ -107,8 +103,6 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
                     "Production batch page fields are invalid."
                 )
 
-            # Each object is durable and independently reparable. One malformed module,
-            # asset or audio item never discards or regenerates its valid siblings.
             page_modules, page_assets, page_audio, tests = resolve_page_items(
                 module,
                 self.router,
@@ -133,9 +127,6 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
                 if isinstance(value, str) and str(value).strip() in set(remaining)
             }
             if not completed:
-                # The runtime normally rejects this before returning the page. Keep the
-                # invariant local as well so future wrappers cannot create an infinite
-                # continuation loop.
                 raise module.SpecValidationError(
                     f"Production batch {batch.batch_id!r} page made no verified progress."
                 )
@@ -158,10 +149,14 @@ def _dependency_wave_shards(
     """Shard only modules that are simultaneously dependency-ready.
 
     Consecutive topological order is not a readiness wave: placing a dependent module
-    in the same coarse shard as an unrelated ready module makes the unrelated work wait
-    for the dependency. Compute dependency depth first, then shard within (depth,stage).
-    Custom LLM modules use one durable node each; the LLM lane is already capacity one,
-    so this improves checkpoint/retry granularity without reducing throughput.
+    in the same coarse shard as an unrelated ready module makes unrelated work wait for
+    the dependency. Compute dependency depth first, then shard within (depth, stage).
+
+    Do not turn custom LLM work into one durable database node per module. Independent
+    custom modules in the same dependency wave are bounded by the existing
+    ``java_shard_size`` policy just like other Java work. Multiple ready shards can
+    still occupy available LLM slots concurrently, while large plans avoid tens of
+    thousands of scheduler rows, claims and checkpoint commits.
     """
 
     levels: dict[str, int] = {}
@@ -192,9 +187,7 @@ def _dependency_wave_shards(
         for stage in stage_order[level]:
             values = buckets[(level, stage)]
             shard_size = (
-                1
-                if stage == "custom"
-                else policy.entity_shard_size
+                policy.entity_shard_size
                 if stage == "entity"
                 else policy.java_shard_size
             )
@@ -203,7 +196,7 @@ def _dependency_wave_shards(
 
 
 def install(*, complete_planner_module: Any, work_graph_module: Any) -> None:
-    """Remove proven serial critical-path waste without increasing GPU concurrency."""
+    """Remove proven serial critical-path waste without weakening dependency fences."""
 
     planner_cls = complete_planner_module.CompleteGameDesignPlanner
     current_expand = planner_cls._expand_one_production_batch
