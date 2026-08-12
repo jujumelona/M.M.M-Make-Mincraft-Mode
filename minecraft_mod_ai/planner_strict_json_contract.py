@@ -101,6 +101,11 @@ def _extract_unique_contract_object(
     return matches[0]
 
 
+def _is_exact_outline_container(container: _DecodedContainer) -> bool:
+    value = container.value
+    return isinstance(value, dict) and frozenset(str(key) for key in value) == _OUTLINE_FIELDS
+
+
 def _valid_outline_page(value: Any, index: int) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"production-outline page {index} must be a JSON object")
@@ -221,22 +226,30 @@ def install(runtime_module: Any) -> None:
 
         containers = _outermost_complete_json_containers(text)
         outline_allowed = _OUTLINE_FIELDS in tuple(expected_contracts)
-        all_outline = bool(containers) and all(
-            isinstance(container.value, dict)
-            and frozenset(str(key) for key in container.value) == _OUTLINE_FIELDS
-            for container in containers
-        )
+        outline_count = sum(1 for container in containers if _is_exact_outline_container(container))
+        all_outline = bool(containers) and outline_count == len(containers)
         try:
             if outline_allowed and all_outline:
                 value = _extract_outline_sequence(text)
+            elif outline_allowed and outline_count:
+                # Once a response contains a production-outline page, every other
+                # outer JSON container must be another outline page. Silently
+                # discarding an unrelated object would make continuation ambiguous.
+                raise ValueError(
+                    "production-outline response mixed valid outline pages with unrelated "
+                    f"outer JSON containers ({outline_count}/{len(containers)} outline pages)"
+                )
             elif len(containers) == 1:
                 value = _extract_one_complete_object(text)
             else:
+                # Non-outline structured calls may still tolerate one scratch object
+                # from a local reasoning model when exactly one final contract object
+                # remains unambiguous.
                 value = _extract_unique_contract_object(containers, expected_contracts)
         except (ValueError, json.JSONDecodeError) as exc:
             expectation = (
                 "valid sequential production-outline JSON pages"
-                if outline_allowed and len(containers) > 1
+                if outline_allowed and outline_count
                 else "exactly one complete strict JSON object"
             )
             raise module.SpecValidationError(
