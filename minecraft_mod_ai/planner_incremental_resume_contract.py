@@ -8,6 +8,9 @@ from typing import Any, Sequence
 
 _FIELD_PATCH_FIELDS = frozenset({"target_fingerprint", "set_fields", "delete_fields"})
 _REPLACE_PATCH_FIELDS = frozenset({"target_fingerprint", "replacement_batch"})
+_BATCH_FIELDS = frozenset(
+    {"batch_id", "scope", "depends_on_batches", "deliverables", "exports"}
+)
 _DEFAULT_OUTLINE_GENERATION_ATTEMPTS = 2
 _DEFAULT_BATCH_REPAIR_ATTEMPTS = 2
 
@@ -21,24 +24,37 @@ def _bounded_env(name: str, default: int, *, maximum: int) -> int:
     return max(1, min(value, maximum))
 
 
-def _field_patch_schema(batch_fields: Sequence[str]) -> dict[str, Any]:
+def _batch_schema(*, replacement: bool) -> dict[str, Any]:
     string_array = {"type": "array", "items": {"type": "string"}}
-    properties: dict[str, Any] = {
+    batch_properties: dict[str, Any] = {
         "batch_id": {"type": "string"},
         "scope": {"type": "string"},
         "depends_on_batches": string_array,
         "deliverables": string_array,
         "exports": string_array,
     }
+    if replacement:
+        return {
+            "type": "object",
+            "properties": {
+                "target_fingerprint": {"type": "string"},
+                "replacement_batch": {
+                    "type": "object",
+                    "properties": batch_properties,
+                    "required": sorted(_BATCH_FIELDS),
+                    "additionalProperties": False,
+                },
+            },
+            "required": sorted(_REPLACE_PATCH_FIELDS),
+            "additionalProperties": False,
+        }
     return {
         "type": "object",
         "properties": {
             "target_fingerprint": {"type": "string"},
             "set_fields": {
                 "type": "object",
-                "properties": {
-                    field: properties.get(field, {}) for field in batch_fields
-                },
+                "properties": batch_properties,
                 "additionalProperties": False,
             },
             "delete_fields": {
@@ -47,33 +63,6 @@ def _field_patch_schema(batch_fields: Sequence[str]) -> dict[str, Any]:
             },
         },
         "required": sorted(_FIELD_PATCH_FIELDS),
-        "additionalProperties": False,
-    }
-
-
-def _replacement_patch_schema(batch_fields: Sequence[str]) -> dict[str, Any]:
-    string_array = {"type": "array", "items": {"type": "string"}}
-    properties: dict[str, Any] = {
-        "batch_id": {"type": "string"},
-        "scope": {"type": "string"},
-        "depends_on_batches": string_array,
-        "deliverables": string_array,
-        "exports": string_array,
-    }
-    return {
-        "type": "object",
-        "properties": {
-            "target_fingerprint": {"type": "string"},
-            "replacement_batch": {
-                "type": "object",
-                "properties": {
-                    field: properties.get(field, {}) for field in batch_fields
-                },
-                "required": sorted(batch_fields),
-                "additionalProperties": False,
-            },
-        },
-        "required": sorted(_REPLACE_PATCH_FIELDS),
         "additionalProperties": False,
     }
 
@@ -98,6 +87,34 @@ def _contextual_batch_error(
     return ""
 
 
+def _save_failed_patch(
+    incremental_module: Any,
+    checkpoint_path: Any,
+    checkpoint_state: dict[str, Any],
+    *,
+    target_fingerprint: str,
+    round_index: int,
+    current_value: Any,
+    validation_error: str,
+    reason: str,
+    last_output_sha256: str = "",
+) -> None:
+    checkpoint_state.update(
+        {
+            "status": "failed",
+            "pending_patch": {
+                "target_fingerprint": target_fingerprint,
+                "round": round_index,
+                "current_value": current_value,
+                "validation_error": validation_error,
+                "reason": reason,
+                "last_output_sha256": last_output_sha256,
+            },
+        }
+    )
+    incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
+
+
 def _install_bounded_batch_repair(incremental_module: Any) -> None:
     current = incremental_module._patch_one_invalid_batch
     if getattr(current, "_mmm_bounded_semantic_batch_repair", False):
@@ -114,15 +131,8 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
         checkpoint_path: Any,
         checkpoint_state: dict[str, Any],
     ) -> dict[str, Any]:
-        """Repair one batch with one field patch then one full-item regeneration.
+        """Field-patch once, then regenerate this one batch once; never retry a mode."""
 
-        A retry is useful only when the action changes. Repeating the same deterministic
-        patch request cannot add information, so semantic escalation is explicit and
-        bounded. Backend exceptions still propagate with the saved pending state so a
-        later process can resume without regenerating accepted outline work.
-        """
-
-        batch_fields = frozenset(incremental_module._BATCH_FIELDS)
         original_fingerprint = incremental_module._fingerprint(raw_batch)
         pending = checkpoint_state.get("pending_patch")
         if (
@@ -145,55 +155,57 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
         last_output_sha256 = ""
 
         for attempt in range(1, max_attempts + 1):
-            replacement_mode = not isinstance(current_value, dict) or attempt > 1
-            repair_mode = "replacement" if replacement_mode else "field_patch"
+            replacement = not isinstance(current_value, dict) or attempt > 1
+            repair_mode = "replacement" if replacement else "field_patch"
             state_sha256 = incremental_module._fingerprint(
                 {
-                    "mode": repair_mode,
-                    "current": current_value,
+                    "repair_mode": repair_mode,
+                    "current_value": current_value,
                     "validation_error": current_error,
                     "accepted_batch_ids": list(accepted_batch_ids),
                 }
             )
             if state_sha256 in seen_states:
-                module.SpecValidationError(
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=original_fingerprint,
+                    round_index=attempt - 1,
+                    current_value=current_value,
+                    validation_error=current_error,
+                    reason="repeated_validation_state",
+                    last_output_sha256=last_output_sha256,
+                )
+                raise module.SpecValidationError(
                     "Production batch repair repeated an identical semantic state."
                 )
             seen_states.add(state_sha256)
 
-            checkpoint_state["status"] = "patching"
-            checkpoint_state["pending_patch"] = {
-                "target_fingerprint": original_fingerprint,
-                "round": attempt,
-                "repair_mode": repair_mode,
-                "current_value": current_value,
-                "validation_error": current_error,
-                "state_sha256": state_sha256,
-            }
+            checkpoint_state.update(
+                {
+                    "status": "patching",
+                    "pending_patch": {
+                        "target_fingerprint": original_fingerprint,
+                        "round": attempt,
+                        "repair_mode": repair_mode,
+                        "current_value": current_value,
+                        "validation_error": current_error,
+                        "state_sha256": state_sha256,
+                    },
+                }
+            )
             incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
 
-            if not replacement_mode:
-                prompt = (
-                    "You are a deterministic field-level JSON patcher. Fix exactly ONE "
-                    "invalid production batch. Return only target_fingerprint, set_fields, "
-                    "and delete_fields. DO NOT rewrite the whole batch. Change only fields "
-                    "required by validation_error; preserve every other field exactly."
+            if replacement:
+                system_prompt = (
+                    "You regenerate exactly ONE invalid production batch. Return only "
+                    "target_fingerprint and replacement_batch. Preserve every valid part of "
+                    "the batch purpose, dependencies, deliverables and exports, but emit one "
+                    "complete object that fixes validation_error. No page, sibling, Markdown, "
+                    "or explanation."
                 )
                 output_contract: dict[str, Any] = {
-                    "target_fingerprint": original_fingerprint,
-                    "set_fields": {"only_invalid_or_missing_fields": "corrected value"},
-                    "delete_fields": ["only_invalid_extra_field_names"],
-                }
-                schema = _field_patch_schema(sorted(batch_fields))
-            else:
-                prompt = (
-                    "You regenerate exactly ONE invalid production batch. Return only "
-                    "target_fingerprint and replacement_batch. Preserve the batch purpose, "
-                    "dependencies, deliverables and exports whenever they are valid, but emit "
-                    "one complete batch object that fixes validation_error. Do not emit a page, "
-                    "sibling batch, explanation, or Markdown."
-                )
-                output_contract = {
                     "target_fingerprint": original_fingerprint,
                     "replacement_batch": {
                         "batch_id": "string",
@@ -203,35 +215,43 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                         "exports": ["string"],
                     },
                 }
-                schema = _replacement_patch_schema(sorted(batch_fields))
+            else:
+                system_prompt = (
+                    "You are a deterministic field-level JSON patcher. Fix exactly ONE "
+                    "invalid production batch. Return only target_fingerprint, set_fields, "
+                    "and delete_fields. DO NOT rewrite the whole batch. Change only fields "
+                    "required by validation_error and preserve every other field exactly."
+                )
+                output_contract = {
+                    "target_fingerprint": original_fingerprint,
+                    "set_fields": {"only_invalid_or_missing_fields": "corrected value"},
+                    "delete_fields": ["only_invalid_extra_field_names"],
+                }
 
-            patch_request = {
+            request = {
                 "target_fingerprint": original_fingerprint,
                 "repair_mode": repair_mode,
                 "current_batch": current_value,
                 "validation_error": current_error,
                 "accepted_batch_ids": list(accepted_batch_ids),
-                "required_fields": sorted(batch_fields),
+                "required_fields": sorted(_BATCH_FIELDS),
                 "rules": {
                     "batch_id": "unique non-empty descriptive snake_case string",
                     "scope": "non-empty string",
                     "depends_on_batches": "unique non-empty strings; no self dependency",
-                    "deliverables": "NON-EMPTY unique strings",
+                    "deliverables": "NON-EMPTY unique non-empty strings",
                     "exports": "unique non-empty snake_case strings",
                 },
                 "output_contract": output_contract,
             }
 
-            token = runtime_module._JSON_SCHEMA.set(schema)
+            token = runtime_module._JSON_SCHEMA.set(_batch_schema(replacement=replacement))
             try:
                 text = router.generate_text(
                     "planner",
                     [
-                        {"role": "system", "content": prompt},
-                        {
-                            "role": "user",
-                            "content": json.dumps(patch_request, ensure_ascii=False),
-                        },
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
                     ],
                     media_paths=(),
                     response_format="json",
@@ -241,30 +261,36 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
 
             last_output_sha256 = incremental_module._fingerprint(text)
             if last_output_sha256 in seen_outputs:
-                checkpoint_state.update(
-                    {
-                        "status": "failed",
-                        "pending_patch": {
-                            **checkpoint_state["pending_patch"],
-                            "reason": "repeated_model_output",
-                            "last_output_sha256": last_output_sha256,
-                        },
-                    }
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=original_fingerprint,
+                    round_index=attempt,
+                    current_value=current_value,
+                    validation_error=current_error,
+                    reason="repeated_model_output",
+                    last_output_sha256=last_output_sha256,
                 )
-                incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
                 raise module.SpecValidationError(
                     "Production batch repair repeated identical model output."
                 )
             seen_outputs.add(last_output_sha256)
 
-            patch: dict[str, Any] | None = None
             candidate: Any = current_value
             try:
                 patch = incremental_module._extract_one_complete_object(text)
                 if patch.get("target_fingerprint") != original_fingerprint:
                     raise ValueError("target_fingerprint does not match saved invalid batch")
 
-                if not replacement_mode:
+                if replacement:
+                    if frozenset(str(key) for key in patch) != _REPLACE_PATCH_FIELDS:
+                        raise ValueError("replacement patch has invalid top-level keys")
+                    candidate = patch.get("replacement_batch")
+                    if not isinstance(candidate, dict):
+                        raise ValueError("replacement_batch must be an object")
+                    candidate = dict(candidate)
+                else:
                     if frozenset(str(key) for key in patch) != _FIELD_PATCH_FIELDS:
                         raise ValueError("field patch has invalid top-level keys")
                     set_fields = patch.get("set_fields")
@@ -275,9 +301,9 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                         not isinstance(value, str) for value in delete_fields
                     ):
                         raise ValueError("delete_fields must be an array of field names")
-                    if any(str(key) not in batch_fields for key in set_fields):
+                    if any(str(key) not in _BATCH_FIELDS for key in set_fields):
                         raise ValueError("set_fields contains a non-batch field")
-                    if any(field in batch_fields for field in delete_fields):
+                    if any(field in _BATCH_FIELDS for field in delete_fields):
                         raise ValueError("required batch fields may not be deleted")
                     if not set_fields and not delete_fields:
                         raise ValueError("field patch must change at least one field")
@@ -285,13 +311,6 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                     for field in delete_fields:
                         candidate.pop(field, None)
                     candidate.update(set_fields)
-                else:
-                    if frozenset(str(key) for key in patch) != _REPLACE_PATCH_FIELDS:
-                        raise ValueError("replacement patch has invalid top-level keys")
-                    replacement = patch.get("replacement_batch")
-                    if not isinstance(replacement, dict):
-                        raise ValueError("replacement_batch must be an object")
-                    candidate = dict(replacement)
 
                 next_error = _contextual_batch_error(
                     incremental_module,
@@ -313,23 +332,20 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                     current_value = candidate
                 current_error = f"{type(exc).__name__}: {exc}"
 
-        checkpoint_state.update(
-            {
-                "status": "failed",
-                "pending_patch": {
-                    "target_fingerprint": original_fingerprint,
-                    "round": max_attempts,
-                    "current_value": current_value,
-                    "validation_error": current_error,
-                    "reason": "repair_budget_exhausted",
-                    "last_output_sha256": last_output_sha256,
-                },
-            }
+        _save_failed_patch(
+            incremental_module,
+            checkpoint_path,
+            checkpoint_state,
+            target_fingerprint=original_fingerprint,
+            round_index=max_attempts,
+            current_value=current_value,
+            validation_error=current_error,
+            reason="repair_budget_exhausted",
+            last_output_sha256=last_output_sha256,
         )
-        incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
         raise module.SpecValidationError(
-            "Production batch could not satisfy the host contract after field repair and "
-            f"single-item regeneration: {current_error}"
+            "Production batch could not satisfy the host contract after one field repair "
+            f"and one complete-item regeneration: {current_error}"
         )
 
     patch_one_invalid_batch._mmm_bounded_semantic_batch_repair = True  # type: ignore[attr-defined]
@@ -337,7 +353,7 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
     incremental_module._patch_one_invalid_batch = patch_one_invalid_batch
 
 
-def _install_contextual_pending_queue(incremental_module: Any) -> None:
+def _install_pending_queue(incremental_module: Any) -> None:
     current = incremental_module._process_pending_batches
     if getattr(current, "_mmm_contextual_pending_queue", False):
         return
@@ -350,7 +366,6 @@ def _install_contextual_pending_queue(incremental_module: Any) -> None:
         saved_batches = kwargs.get("saved_batches")
         checkpoint_path = kwargs.get("checkpoint_path")
         checkpoint_state = kwargs.get("checkpoint_state")
-
         if (
             runtime_module is None
             or module is None
@@ -388,8 +403,6 @@ def _install_contextual_pending_queue(incremental_module: Any) -> None:
             else:
                 raise module.SpecValidationError("Production batch must be a JSON object.")
 
-            # The bounded repair function guarantees parser validity and contextual
-            # uniqueness before returning; never loop a repaired candidate again.
             post_error = _contextual_batch_error(
                 incremental_module,
                 module,
@@ -432,9 +445,8 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
         return
 
     class _GuardedRouter:
-        def __init__(self, router: Any, error_type: type[Exception]) -> None:
+        def __init__(self, router: Any) -> None:
             self._router = router
-            self._error_type = error_type
             self._seen_requests: set[str] = set()
             self._outline_calls = 0
             self._outline_limit = _bounded_env(
@@ -471,7 +483,7 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
             if not is_batch_repair:
                 self._outline_calls += 1
                 if self._outline_calls > self._outline_limit:
-                    raise self._error_type(
+                    raise complete_planner.SpecValidationError(
                         "Production outline generation made no valid progress after the "
                         "diagnostic regeneration path."
                     )
@@ -486,7 +498,7 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
                 }
             )
             if request_sha256 in self._seen_requests:
-                raise self._error_type(
+                raise complete_planner.SpecValidationError(
                     "Planner repair cycle detected before repeating an identical model request."
                 )
             self._seen_requests.add(request_sha256)
@@ -517,9 +529,8 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
                 expected_contracts=expected_contracts,
                 stage=stage,
             )
-        guarded = _GuardedRouter(router, complete_planner.SpecValidationError)
         return current(
-            guarded,
+            _GuardedRouter(router),
             system_prompt=system_prompt,
             request=request,
             media_paths=media_paths,
@@ -528,18 +539,12 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
         )
 
     generate_cycle_safe._mmm_outline_cycle_guard = True  # type: ignore[attr-defined]
+    generate_cycle_safe.__wrapped__ = current  # type: ignore[attr-defined]
     complete_planner._generate_json_page_with_repair = generate_cycle_safe
 
 
 def install(incremental_module: Any) -> None:
-    """Install crash-safe resume plus terminating planner repair semantics.
-
-    The older repair implementation remains only as an implementation detail below this
-    final runtime layer. All active outline batch repair is bounded and cycle-aware: a
-    bad object gets a field patch, then one complete-item regeneration, and an outline
-    envelope gets one diagnostic regeneration. Identical model requests are never sent
-    twice in one planner call.
-    """
+    """Install resume plus terminating outline/batch repair semantics."""
 
     from . import planner_json_runtime_contract as planner_runtime_module
 
@@ -551,7 +556,7 @@ def install(incremental_module: Any) -> None:
     planner_runtime_module._narrow_production_repair_request = no_production_width_narrowing
 
     _install_bounded_batch_repair(incremental_module)
-    _install_contextual_pending_queue(incremental_module)
+    _install_pending_queue(incremental_module)
     _install_outline_cycle_guard(incremental_module)
 
 
