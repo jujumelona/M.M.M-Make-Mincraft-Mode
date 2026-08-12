@@ -68,6 +68,10 @@ def _cell_source(path: Path, cell_id: str) -> str:
     raise AssertionError(f"missing cell {cell_id!r} in {path.name}")
 
 
+def _must_not_prompt(_: str) -> str:
+    raise AssertionError("automatic Colab flow must not request manual approval input")
+
+
 def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
     assert PLAN_MODE == "Plan"
     assert FULL_MODE == "Full"
@@ -104,9 +108,8 @@ def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() 
         assert not any(cell.get("id") == "revise" for cell in payload["cells"])
 
 
-def test_new_plan_dialog_revises_until_user_confirms(tmp_path: Path) -> None:
+def test_new_plan_auto_saves_without_user_confirmation(tmp_path: Path) -> None:
     session = _Session()
-    answers = iter(["시스템을 더 구체화", "확정"])
     output: list[str] = []
 
     result = run_plan_dialog(
@@ -114,37 +117,53 @@ def test_new_plan_dialog_revises_until_user_confirms(tmp_path: Path) -> None:
         run_mode=FULL_MODE,
         prompt="새 모드",
         plan_path=tmp_path / "proposal.json",
-        input_fn=lambda _: next(answers),
+        input_fn=_must_not_prompt,
         print_fn=lambda *values, **_: output.append(" ".join(map(str, values))),
     )
 
     assert result.approved is True
-    assert session.calls == [("plan", "새 모드"), ("revise", "시스템을 더 구체화")]
+    assert session.calls == [("plan", "새 모드")]
     assert session.saved == [tmp_path / "proposal.json"]
     rendered = "\n".join(output)
-    assert rendered.count("현재 플랜") == 2
+    assert rendered.count("현재 플랜") == 1
+    assert "사용자 승인 대기 없이 제작 단계로 진행" in rendered
     assert '"items"' in rendered
     assert "39" in rendered
 
 
-def test_existing_plan_mode_can_revise_before_build(tmp_path: Path) -> None:
+def test_plan_mode_auto_saves_but_does_not_change_build_policy(tmp_path: Path) -> None:
+    session = _Session()
+    result = run_plan_dialog(
+        session=session,
+        run_mode=PLAN_MODE,
+        prompt="플랜만",
+        plan_path=tmp_path / "proposal.json",
+        input_fn=_must_not_prompt,
+        print_fn=lambda *_, **__: None,
+    )
+    assert result.approved is True
+    assert session.calls == [("plan", "플랜만")]
+    assert session.saved == [tmp_path / "proposal.json"]
+    assert should_build(PLAN_MODE) is False
+
+
+def test_existing_plan_mode_loads_and_builds_without_manual_approval(tmp_path: Path) -> None:
     session = _Session()
     plan_path = tmp_path / "proposal.json"
     plan_path.write_text("{}", encoding="utf-8")
-    answers = iter(["보스전을 추가", "제작"])
 
     result = run_plan_dialog(
         session=session,
         run_mode=EXISTING_PLAN_MODE,
         prompt="",
         plan_path=plan_path,
-        input_fn=lambda _: next(answers),
+        input_fn=_must_not_prompt,
         print_fn=lambda *_, **__: None,
     )
 
     assert result.approved is True
-    assert session.calls == [("load", str(plan_path)), ("revise", "보스전을 추가")]
-    assert session.saved == [plan_path]
+    assert session.calls == [("load", str(plan_path))]
+    assert session.saved == []
 
 
 def test_existing_plan_configured_path_must_exist(tmp_path: Path) -> None:
