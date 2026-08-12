@@ -108,9 +108,28 @@ def bootstrap_fabric_project(
             "Fabric official template API changed after target discovery; "
             "restart planning so the user approves the new coordinates."
         )
+    actual_loom = properties.get("loom_version", "")
+    if actual_loom and actual_loom != adapter.fabric_loom:
+        raise FabricTemplateProviderError(
+            "Fabric official template Loom version changed after target discovery; "
+            "restart planning so the user approves the new coordinates."
+        )
+
+    actual_gradle = _gradle_wrapper_version(root)
+    if actual_gradle != adapter.gradle:
+        raise FabricTemplateProviderError(
+            "Fabric official template Gradle wrapper changed after target discovery; "
+            f"expected={adapter.gradle}, actual={actual_gradle!r}. Restart planning."
+        )
+    actual_java = _java_release(root)
+    if actual_java != str(adapter.java_version):
+        raise FabricTemplateProviderError(
+            "Fabric official template Java target changed after target discovery; "
+            f"expected={adapter.java_version}, actual={actual_java!r}. Restart planning."
+        )
 
     receipt = {
-        "schema_version": "mmm/fabric-official-template-v1",
+        "schema_version": "mmm/fabric-official-template-v2",
         "provider": "fabricmc.net/cli",
         "provider_url": _FABRIC_CLI,
         "minecraft_version": adapter.minecraft_version,
@@ -122,6 +141,14 @@ def bootstrap_fabric_project(
         "java": adapter.java_version,
         "mappings": "mojang",
         "deno": _deno_version(deno),
+        "verified_generated_toolchain": {
+            "minecraft_version": actual_mc,
+            "loader_version": actual_loader,
+            "fabric_api": actual_api,
+            "loom": actual_loom,
+            "gradle": actual_gradle,
+            "java": actual_java,
+        },
         "project_manifest_sha256": _manifest_hash(root),
     }
     _write_platform_lock(root, adapter, receipt)
@@ -225,6 +252,36 @@ def _read_properties(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         result[key.strip()] = value.strip()
     return result
+
+
+def _gradle_wrapper_version(root: Path) -> str:
+    path = root / "gradle/wrapper/gradle-wrapper.properties"
+    if not path.is_file() or path.is_symlink():
+        raise FabricTemplateProviderError("Fabric template omitted the Gradle wrapper properties.")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r"gradle-([0-9][0-9A-Za-z_.-]*)-bin\.zip", text)
+    if match is None:
+        raise FabricTemplateProviderError("Could not determine generated Gradle wrapper version.")
+    return match.group(1)
+
+
+def _java_release(root: Path) -> str:
+    candidates = (root / "build.gradle", root / "build.gradle.kts")
+    for path in candidates:
+        if not path.is_file() or path.is_symlink():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        patterns = (
+            r"options\.release\s*=\s*(\d+)",
+            r"options\.release\.set\((\d+)\)",
+            r"JavaVersion\.VERSION_(\d+)",
+            r"JavaLanguageVersion\.of\((\d+)\)",
+        )
+        for pattern_value in patterns:
+            match = re.search(pattern_value, text)
+            if match is not None:
+                return match.group(1)
+    raise FabricTemplateProviderError("Could not determine generated Java target release.")
 
 
 def _deno_version(command: Path) -> str:
