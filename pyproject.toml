@@ -22,7 +22,6 @@ dependencies = [
 ui = ["gradio>=5.0,<6"]
 local-model = [
   "accelerate>=1.0,<2",
-  "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
   "fastapi>=0.100.0",
   "huggingface-hub>=0.28,<2",
   "Jinja2>=3.1,<4",
@@ -36,6 +35,11 @@ local-model = [
   "uvicorn>=0.22.0",
   "websockets>=12,<16",
 ]
+# Legacy/custom TransformersTextAdapter profiles that explicitly request bnb_4bit
+# can opt in without making every native-GGUF Colab install a CUDA BNB wheel.
+transformers-bnb = [
+  "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
+]
 qwen-fastpath = [
   "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6; sys_platform == 'linux'",
 ]
@@ -43,7 +47,9 @@ rag = ["sentence-transformers>=3.0,<6"]
 image = ["diffusers>=0.35,<1", "sentencepiece>=0.2,<1"]
 speech = ["soundfile>=0.12,<1"]
 production-audio = ["numpy>=1.26,<3", "soundfile>=0.12,<1"]
-training = ["peft>=0.14,<1"]
+# The current mmm-training command records/exports trace data and does not import
+# PEFT. Keep the named extra for compatibility without resolving an unused stack.
+training = []
 dev = [
   "gradio>=5.0,<6",
   "nbformat>=5.10,<6",
