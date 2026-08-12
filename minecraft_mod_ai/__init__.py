@@ -46,44 +46,30 @@ from .llama_runtime_tuning import install as _install_llama_runtime_tuning
 
 _install_llama_runtime_tuning()
 
-# When the native llama-server binary is available, benchmark the real first
-# workflow prompt against non-speculative and MTP variants. Only exact-output
-# matches are eligible, and the hardware/model/server-fingerprinted winner is
-# reused on subsequent runs.
+# Benchmark the real first workflow prompt on the managed native llama-server against
+# non-speculative and MTP variants. Only correctness-equivalent results are eligible.
 from . import llama_server_autotune as _llama_server_autotune_module
 from .llama_server_autotune import install as _install_llama_server_autotune
 
 _install_llama_server_autotune()
 
-# Let llama.cpp choose target/draft layer placement for the actual host rather than
-# requiring every layer to fit in VRAM before the benchmark can run.
+# Let native llama-server choose target/draft layer placement for the actual host and
+# bind all local GGUF requests to that single managed server process.
 from . import llama_server_hardware_policy as _llama_server_hardware_policy_module
 from .llama_server_hardware_policy import install as _install_llama_server_hardware_policy
 
 _install_llama_server_hardware_policy(_llama_server_autotune_module)
 
-# The Colab pinned server has no request-level switch for speculative decoding.
-# Install the request router after the hardware-policy wrapper exists so structured
-# JSON calls are forced onto a non-speculative baseline server, free-text MTP is
-# live-probed before use, and decode stalls include per-request server telemetry and
-# one bounded baseline recovery attempt.  Merely defining this contract is not
-# sufficient: the outer ModelRouter path must actually install it during import.
-from .colab_llama_request_routing_contract import install as _install_colab_llama_request_routing_contract
-
-_install_colab_llama_request_routing_contract(_llama_server_hardware_policy_module)
-
 # Start the selected GGUF download as soon as the model profile is resolved, overlap
 # independent research/discovery I/O, and preserve deterministic result ordering.
 # Local one-slot GPU decoding remains serialized; this contract only overlaps work
 # that can execute independently without competing for that decode slot.
-from . import colab_mtp_server as _colab_mtp_server_module
 from .parallel_runtime_contract import install as _install_parallel_runtime_contract
 
 _install_parallel_runtime_contract(
     complete_planner_module=_complete_planner_module,
     model_registry_module=_model_registry_module,
     llama_server_autotune_module=_llama_server_autotune_module,
-    colab_mtp_server_module=_colab_mtp_server_module,
 )
 
 # In the Colab notebook MODEL_PROFILE already exists when minecraft_mod_ai is first
