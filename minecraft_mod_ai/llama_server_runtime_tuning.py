@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from functools import wraps
 from typing import Any, Iterable
 
-_SCHEMA_VERSION = "mmm/llama-server-autotune-v4-model-eligible"
+_SCHEMA_VERSION = "mmm/llama-server-autotune-v5-adaptive-staged"
 _INSTALL_LOCK = threading.RLock()
 
 
@@ -35,13 +35,7 @@ def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int | None =
     return min(maximum, value) if maximum is not None else value
 
 
-def _parse_int_candidates(
-    raw: str,
-    *,
-    minimum: int,
-    maximum: int,
-    required: Iterable[int] = (),
-) -> tuple[int, ...]:
+def _parse_int_candidates(raw: str, *, minimum: int, maximum: int, required: Iterable[int] = ()) -> tuple[int, ...]:
     values: list[int] = []
     for value in required:
         value = int(value)
@@ -128,23 +122,10 @@ def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:
             continue
         if 1 <= width <= 8 and width not in widths:
             widths.append(width)
-
     values = [ServerVariant("baseline")]
-    values.extend(
-        ServerVariant(f"mtp-{width}", "draft-mtp", width)
-        for width in widths
-    )
-    allowed = {
-        "ngram-simple",
-        "ngram-mod",
-        "ngram-map-k",
-        "ngram-map-k4v",
-        "ngram-cache",
-    }
-    for token in os.environ.get(
-        "MMM_LLAMA_NGRAM_SPEC_TYPES",
-        "ngram-simple,ngram-mod,ngram-map-k",
-    ).split(","):
+    values.extend(ServerVariant(f"mtp-{width}", "draft-mtp", width) for width in widths)
+    allowed = {"ngram-simple", "ngram-mod", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}
+    for token in os.environ.get("MMM_LLAMA_NGRAM_SPEC_TYPES", "ngram-simple,ngram-mod,ngram-map-k").split(","):
         spec_type = token.strip()
         if spec_type in allowed and all(item.spec_type != spec_type for item in values):
             values.append(ServerVariant(spec_type, spec_type))
@@ -152,7 +133,6 @@ def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:
 
 
 def _model_supports_mtp(config: Any) -> bool:
-    """Only probe native draft-MTP for models that actually ship an MTP head."""
     extra = getattr(config, "extra", {})
     if isinstance(extra, dict) and "supports_mtp" in extra:
         return bool(extra.get("supports_mtp"))
@@ -161,10 +141,7 @@ def _model_supports_mtp(config: Any) -> bool:
     return "-MTP-GGUF" in model_id or "-MTP-" in filename
 
 
-def _candidate_variants_for_config(
-    autotune_module: Any,
-    config: Any,
-) -> tuple[ServerVariant, ...]:
+def _candidate_variants_for_config(autotune_module: Any, config: Any) -> tuple[ServerVariant, ...]:
     values = _candidate_variants(autotune_module)
     if _model_supports_mtp(config):
         return values
@@ -172,12 +149,7 @@ def _candidate_variants_for_config(
 
 
 def _eligible(probe: Any, baseline: Any) -> bool:
-    return (
-        bool(getattr(probe, "ok", False))
-        and str(getattr(probe, "output_sha256", ""))
-        == str(getattr(baseline, "output_sha256", ""))
-        and float(getattr(probe, "predicted_tps", 0.0)) > 0
-    )
+    return bool(getattr(probe, "ok", False)) and str(getattr(probe, "output_sha256", "")) == str(getattr(baseline, "output_sha256", "")) and float(getattr(probe, "predicted_tps", 0.0)) > 0
 
 
 def _balanced_score(probe: Any, baseline: Any) -> float:
@@ -189,111 +161,48 @@ def _balanced_score(probe: Any, baseline: Any) -> float:
     return 0.70 * decode + 0.30 * prompt
 
 
-def _select_probe(
-    probes: list[Any],
-    *,
-    balanced: bool,
-    minimum_gain: float,
-) -> Any | None:
+def _select_probe(probes: list[Any], *, balanced: bool, minimum_gain: float) -> Any | None:
     if not probes:
         return None
     baseline = probes[0]
     if not getattr(baseline, "ok", False) or float(getattr(baseline, "predicted_tps", 0.0)) <= 0:
         return None
     valid = [baseline] + [probe for probe in probes[1:] if _eligible(probe, baseline)]
-    if balanced:
-        score = lambda probe: _balanced_score(probe, baseline)
-    else:
-        base = max(1e-9, float(getattr(baseline, "predicted_tps", 0.0)))
-        score = lambda probe: float(getattr(probe, "predicted_tps", 0.0)) / base
+    score = (lambda probe: _balanced_score(probe, baseline)) if balanced else (lambda probe: float(getattr(probe, "predicted_tps", 0.0)) / max(1e-9, float(getattr(baseline, "predicted_tps", 0.0))))
     best = max(valid, key=score)
     return best if best is baseline or score(best) >= max(1.0, minimum_gain) else baseline
 
 
-def _parallel_probe(
-    autotune_module: Any,
-    base_url: str,
-    request: Any,
-    *,
-    max_tokens: int,
-    variant: ServerVariant,
-    concurrency: int,
-) -> Any:
+def _parallel_probe(autotune_module: Any, base_url: str, request: Any, *, max_tokens: int, variant: ServerVariant, concurrency: int) -> Any:
     started = time.perf_counter()
     try:
-        with ThreadPoolExecutor(
-            max_workers=concurrency,
-            thread_name_prefix="mmm_llama_slot_probe",
-        ) as pool:
-            values = [
-                future.result()
-                for future in [
-                    pool.submit(
-                        autotune_module._probe_server,
-                        base_url,
-                        request,
-                        max_tokens=max_tokens,
-                        variant=variant,
-                    )
-                    for _ in range(concurrency)
-                ]
-            ]
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe") as pool:
+            values = [future.result() for future in [pool.submit(autotune_module._probe_server, base_url, request, max_tokens=max_tokens, variant=variant) for _ in range(concurrency)]]
         elapsed = time.perf_counter() - started
         first = values[0]
-        if (
-            not all(getattr(value, "ok", False) for value in values)
-            or any(
-                getattr(value, "output_sha256", "") != getattr(first, "output_sha256", "")
-                for value in values[1:]
-            )
-        ):
+        if not all(getattr(value, "ok", False) for value in values) or any(getattr(value, "output_sha256", "") != getattr(first, "output_sha256", "") for value in values[1:]):
             raise RuntimeError("parallel slot probe produced non-identical or failed outputs")
         tokens = sum(int(getattr(value, "predicted_tokens", 0)) for value in values)
-        prompt_values = [
-            float(getattr(value, "prompt_tps", 0.0))
-            for value in values
-            if float(getattr(value, "prompt_tps", 0.0)) > 0
-        ]
-        return autotune_module.ProbeResult(
-            variant=variant,
-            ok=tokens > 0 and elapsed > 0,
-            output_sha256=str(getattr(first, "output_sha256", "")),
-            predicted_tokens=tokens,
-            predicted_tps=(tokens / elapsed if elapsed > 0 else 0.0),
-            prompt_tps=(sum(prompt_values) / len(prompt_values) if prompt_values else 0.0),
-            elapsed_seconds=elapsed,
-        )
+        prompt_values = [float(getattr(value, "prompt_tps", 0.0)) for value in values if float(getattr(value, "prompt_tps", 0.0)) > 0]
+        return autotune_module.ProbeResult(variant=variant, ok=tokens > 0 and elapsed > 0, output_sha256=str(getattr(first, "output_sha256", "")), predicted_tokens=tokens, predicted_tps=(tokens / elapsed if elapsed > 0 else 0.0), prompt_tps=(sum(prompt_values) / len(prompt_values) if prompt_values else 0.0), elapsed_seconds=elapsed)
     except Exception as exc:
-        return autotune_module.ProbeResult(
-            variant=variant,
-            ok=False,
-            output_sha256="",
-            predicted_tokens=0,
-            predicted_tps=0.0,
-            prompt_tps=0.0,
-            elapsed_seconds=time.perf_counter() - started,
-            error=f"{type(exc).__name__}: {exc}",
-        )
+        return autotune_module.ProbeResult(variant=variant, ok=False, output_sha256="", predicted_tokens=0, predicted_tps=0.0, prompt_tps=0.0, elapsed_seconds=time.perf_counter() - started, error=f"{type(exc).__name__}: {exc}")
 
 
 def install(autotune_module: Any) -> None:
-    """Install compile-free runtime tuning over the verified native llama-server."""
-
+    """Install compile-free adaptive staged tuning over verified native llama-server."""
     with _INSTALL_LOCK:
         if getattr(autotune_module, "_mmm_runtime_tuning_installed", False):
             return
-
         autotune_module.ServerVariant = ServerVariant
         autotune_module._BENCHMARK_SCHEMA_VERSION = _SCHEMA_VERSION
 
         def candidate_variants() -> tuple[ServerVariant, ...]:
             return _candidate_variants(autotune_module)
-
-        candidate_variants._mmm_mtp_ngram_autotune = True  # type: ignore[attr-defined]
+        candidate_variants._mmm_mtp_ngram_autotune = True
         autotune_module._candidate_variants = candidate_variants
 
         current_base = autotune_module._base_args
-
         @wraps(current_base)
         def tuned_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
             args = list(current_base(binary, model_path, config, port))
@@ -301,37 +210,24 @@ def install(autotune_module: Any) -> None:
             if "--cache-prompt" not in args:
                 args.append("--cache-prompt")
             return args
-
-        for tag in (
-            "_mmm_auto_gpu_layers",
-            "_mmm_single_decode_slot",
-            "_mmm_native_telemetry_endpoints",
-        ):
+        for tag in ("_mmm_auto_gpu_layers", "_mmm_single_decode_slot", "_mmm_native_telemetry_endpoints"):
             if getattr(current_base, tag, False):
                 setattr(tuned_base_args, tag, True)
-        tuned_base_args._mmm_load_mode_auto = True  # type: ignore[attr-defined]
+        tuned_base_args._mmm_load_mode_auto = True
         autotune_module._base_args = tuned_base_args
 
         current_variant_args = autotune_module._variant_args
-
         @wraps(current_variant_args)
         def tuned_variant_args(variant: ServerVariant) -> list[str]:
             if variant.spec_type.startswith("ngram-"):
                 return ["--spec-type", variant.spec_type]
             return current_variant_args(variant)
-
         if getattr(current_variant_args, "_mmm_auto_draft_layers", False):
-            tuned_variant_args._mmm_auto_draft_layers = True  # type: ignore[attr-defined]
-        tuned_variant_args._mmm_ngram_speculation = True  # type: ignore[attr-defined]
+            tuned_variant_args._mmm_auto_draft_layers = True
+        tuned_variant_args._mmm_ngram_speculation = True
         autotune_module._variant_args = tuned_variant_args
 
-        def start_server(
-            binary: str,
-            model_path: str,
-            config: Any,
-            variant: ServerVariant,
-            port: int,
-        ) -> subprocess.Popen[bytes]:
+        def start_server(binary: str, model_path: str, config: Any, variant: ServerVariant, port: int) -> subprocess.Popen[bytes]:
             debug = autotune_module._env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
             stream = None if debug else subprocess.DEVNULL
             args = list(autotune_module._base_args(binary, model_path, config, port))
@@ -348,231 +244,115 @@ def install(autotune_module: Any) -> None:
                 args.extend(["--cache-reuse", str(variant.cache_reuse)])
             args.extend(autotune_module._variant_args(variant))
             return subprocess.Popen(args, stdout=stream, stderr=stream)
-
-        start_server._mmm_staged_runtime_tuning = True  # type: ignore[attr-defined]
+        start_server._mmm_staged_runtime_tuning = True
         autotune_module._start_server = start_server
 
         current_fingerprint = autotune_module._fingerprint
-
         @wraps(current_fingerprint)
         def tuning_fingerprint(config: Any, binary: str, model_path: str) -> str:
-            payload = {
-                "schema": _SCHEMA_VERSION,
-                "base": current_fingerprint(config, binary, model_path),
-                "mtp_supported": _model_supports_mtp(config),
-                "load_mode": "auto",
-                "spec_variants": [
-                    asdict(value)
-                    for value in _candidate_variants_for_config(autotune_module, config)
-                ],
-                "ubatch_candidates": _ubatch_candidates(autotune_module),
-                "cache_reuse_candidates": _cache_reuse_candidates(),
-                "parallel_candidates": _parallel_candidates(),
-                "concurrent_requests": _parallel_target(),
-            }
-            return hashlib.sha256(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
-
+            payload = {"schema": _SCHEMA_VERSION, "base": current_fingerprint(config, binary, model_path), "mtp_supported": _model_supports_mtp(config), "load_mode": "auto", "spec_variants": [asdict(value) for value in _candidate_variants_for_config(autotune_module, config)], "ubatch_candidates": _ubatch_candidates(autotune_module), "cache_reuse_candidates": _cache_reuse_candidates(), "parallel_candidates": _parallel_candidates(), "concurrent_requests": _parallel_target(), "search": "mtp-first-ngram-fallback+ubatch-progressive"}
+            return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         if getattr(current_fingerprint, "_mmm_stable_model_signature", False):
-            tuning_fingerprint._mmm_stable_model_signature = True  # type: ignore[attr-defined]
-        tuning_fingerprint._mmm_runtime_tuning_fingerprint = True  # type: ignore[attr-defined]
+            tuning_fingerprint._mmm_stable_model_signature = True
+        tuning_fingerprint._mmm_runtime_tuning_fingerprint = True
         autotune_module._fingerprint = tuning_fingerprint
 
-        def run_variant(
-            binary: str,
-            model_path: str,
-            config: Any,
-            benchmark_request: Any,
-            variant: ServerVariant,
-            *,
-            probe_tokens: int,
-            parallel_probe: bool = False,
-            concurrency: int = 1,
-        ) -> Any:
-            port = autotune_module._free_port(
-                autotune_module._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
-            )
+        def run_variant(binary: str, model_path: str, config: Any, benchmark_request: Any, variant: ServerVariant, *, probe_tokens: int, parallel_probe: bool = False, concurrency: int = 1) -> Any:
+            port = autotune_module._free_port(autotune_module._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910))
             process = None
             try:
                 process = autotune_module._start_server(binary, model_path, config, variant, port)
                 url = autotune_module._wait_ready(process, port)
-                autotune_module._probe_server(
-                    url,
-                    benchmark_request,
-                    max_tokens=1,
-                    variant=variant,
-                )
+                autotune_module._probe_server(url, benchmark_request, max_tokens=1, variant=variant)
                 if parallel_probe:
-                    return _parallel_probe(
-                        autotune_module,
-                        url,
-                        benchmark_request,
-                        max_tokens=probe_tokens,
-                        variant=variant,
-                        concurrency=concurrency,
-                    )
-                return autotune_module._probe_server(
-                    url,
-                    benchmark_request,
-                    max_tokens=probe_tokens,
-                    variant=variant,
-                )
+                    return _parallel_probe(autotune_module, url, benchmark_request, max_tokens=probe_tokens, variant=variant, concurrency=concurrency)
+                return autotune_module._probe_server(url, benchmark_request, max_tokens=probe_tokens, variant=variant)
             except Exception as exc:
-                return autotune_module.ProbeResult(
-                    variant=variant,
-                    ok=False,
-                    output_sha256="",
-                    predicted_tokens=0,
-                    predicted_tps=0.0,
-                    prompt_tps=0.0,
-                    elapsed_seconds=0.0,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
+                return autotune_module.ProbeResult(variant=variant, ok=False, output_sha256="", predicted_tokens=0, predicted_tps=0.0, prompt_tps=0.0, elapsed_seconds=0.0, error=f"{type(exc).__name__}: {exc}")
             finally:
                 autotune_module._stop_server(process)
+        autotune_module._mmm_run_tuning_variant = run_variant
 
-        def benchmark(
-            binary: str,
-            model_path: str,
-            config: Any,
-            request: Any,
-            fingerprint: str,
-        ) -> Any | None:
+        def benchmark(binary: str, model_path: str, config: Any, request: Any, fingerprint: str) -> Any | None:
             benchmark_request = autotune_module._compact_benchmark_request(request)
-            probe_tokens = min(
-                int(config.max_new_tokens),
-                autotune_module._env_int(
-                    "MMM_LLAMA_AUTOTUNE_TOKENS",
-                    autotune_module._BENCHMARK_OUTPUT_TOKENS,
-                ),
-            )
+            probe_tokens = min(int(config.max_new_tokens), autotune_module._env_int("MMM_LLAMA_AUTOTUNE_TOKENS", autotune_module._BENCHMARK_OUTPUT_TOKENS))
             stage_gain = autotune_module._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
+            spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.03))
             probes: list[Any] = []
-
-            spec_variants = _candidate_variants_for_config(autotune_module, config)
-            spec_probes = [
-                run_variant(
-                    binary,
-                    model_path,
-                    config,
-                    benchmark_request,
-                    variant,
-                    probe_tokens=probe_tokens,
-                )
-                for variant in spec_variants
-            ]
-            probes.extend(spec_probes)
-            spec = _select_probe(
-                spec_probes,
-                balanced=False,
-                minimum_gain=max(
-                    stage_gain,
-                    autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.03),
-                ),
-            )
-            if spec is None:
+            values = _candidate_variants_for_config(autotune_module, config)
+            baseline_variant = next(value for value in values if value.spec_type == "none")
+            baseline = run_variant(binary, model_path, config, benchmark_request, baseline_variant, probe_tokens=probe_tokens)
+            probes.append(baseline)
+            if not getattr(baseline, "ok", False) or float(getattr(baseline, "predicted_tps", 0.0)) <= 0:
                 return None
-            selected = spec.variant
-            raw_baseline = spec_probes[0]
 
-            base_ubatch = min(
-                autotune_module._env_int("MMM_LLAMA_BATCH", 2048),
-                autotune_module._env_int("MMM_LLAMA_UBATCH", 512),
-            )
-            ubatches = (base_ubatch,) + tuple(
-                value for value in _ubatch_candidates(autotune_module) if value != base_ubatch
-            )
-            ubatch_probes = [
-                run_variant(
-                    binary,
-                    model_path,
-                    config,
-                    benchmark_request,
-                    replace(selected, name=f"{selected.name}|ub{value}", ubatch=value),
-                    probe_tokens=probe_tokens,
-                )
-                for value in ubatches
-            ]
-            probes.extend(ubatch_probes)
-            ubatch = _select_probe(ubatch_probes, balanced=True, minimum_gain=stage_gain)
-            if ubatch is not None:
-                selected = ubatch.variant
+            mtp_values = [value for value in values if value.spec_type == "draft-mtp"]
+            ngram_values = [value for value in values if value.spec_type.startswith("ngram-")]
+            primary = mtp_values if _model_supports_mtp(config) else ngram_values
+            primary_probes = [baseline]
+            for variant in primary:
+                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
+                probes.append(probe)
+                primary_probes.append(probe)
+            spec = _select_probe(primary_probes, balanced=False, minimum_gain=spec_gain) or baseline
+
+            # MTP-capable Qwen models do not pay for ngram probes when native MTP wins.
+            if _model_supports_mtp(config) and spec is baseline and ngram_values:
+                fallback_probes = [baseline]
+                for variant in ngram_values:
+                    probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
+                    probes.append(probe)
+                    fallback_probes.append(probe)
+                spec = _select_probe(fallback_probes, balanced=False, minimum_gain=spec_gain) or baseline
+
+            selected = replace(spec.variant, ubatch=min(autotune_module._env_int("MMM_LLAMA_BATCH", 2048), autotune_module._env_int("MMM_LLAMA_UBATCH", 512)))
+            final_probe = spec
+            base_ubatch = selected.ubatch
+            # Reuse the already measured selected probe as the base ubatch. Only probe
+            # larger candidates progressively; stop once the next step fails to improve.
+            for value in sorted((v for v in _ubatch_candidates(autotune_module) if v != base_ubatch)):
+                variant = replace(selected, name=f"{selected.name.split('|ub', 1)[0]}|ub{value}", ubatch=value)
+                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
+                probes.append(probe)
+                if not _eligible(probe, baseline):
+                    break
+                if _balanced_score(probe, final_probe) < max(1.0, stage_gain):
+                    break
+                selected = variant
+                final_probe = probe
 
             concurrency = _parallel_target()
-            parallel_probes = [
-                run_variant(
-                    binary,
-                    model_path,
-                    config,
-                    benchmark_request,
-                    replace(
-                        selected,
-                        name=f"{selected.name.split('|p', 1)[0]}|p{value}",
-                        parallel=value,
-                    ),
-                    probe_tokens=probe_tokens,
-                    parallel_probe=True,
-                    concurrency=concurrency,
-                )
-                for value in _parallel_candidates()
-            ]
-            probes.extend(parallel_probes)
-            parallel = _select_probe(parallel_probes, balanced=False, minimum_gain=stage_gain)
-            if parallel is not None:
-                selected = parallel.variant
-                final_probe = parallel
-            elif ubatch is not None:
-                final_probe = ubatch
-            else:
-                final_probe = spec
+            for value in _parallel_candidates():
+                if value == max(1, selected.parallel):
+                    continue
+                variant = replace(selected, name=f"{selected.name.split('|p', 1)[0]}|p{value}", parallel=value)
+                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens, parallel_probe=True, concurrency=concurrency)
+                probes.append(probe)
+                if _eligible(probe, baseline) and float(getattr(probe, "predicted_tps", 0.0)) >= float(getattr(final_probe, "predicted_tps", 0.0)) * max(1.0, stage_gain):
+                    selected = variant
+                    final_probe = probe
 
-            baseline_tps = float(getattr(raw_baseline, "predicted_tps", 0.0))
+            baseline_tps = float(getattr(baseline, "predicted_tps", 0.0))
             selected_tps = float(getattr(final_probe, "predicted_tps", 0.0))
-            return autotune_module.AutotuneDecision(
-                fingerprint=fingerprint,
-                selected=selected,
-                baseline_tps=baseline_tps,
-                selected_tps=selected_tps,
-                speedup=(selected_tps / baseline_tps if baseline_tps > 0 else 1.0),
-                probes=tuple(probes),
-            )
+            return autotune_module.AutotuneDecision(fingerprint=fingerprint, selected=selected, baseline_tps=baseline_tps, selected_tps=selected_tps, speedup=(selected_tps / baseline_tps if baseline_tps > 0 else 1.0), probes=tuple(probes))
 
-        benchmark._mmm_staged_runtime_tuning = True  # type: ignore[attr-defined]
-        benchmark._mmm_model_eligible_speculation = True  # type: ignore[attr-defined]
+        benchmark._mmm_staged_runtime_tuning = True
+        benchmark._mmm_model_eligible_speculation = True
+        benchmark._mmm_adaptive_cold_search = True
         autotune_module._benchmark = benchmark
 
         current_launch = autotune_module._launch_selected
-
         @wraps(current_launch)
         def launch_selected(binary: str, model_path: str, config: Any, selected: ServerVariant) -> str:
             url = current_launch(binary, model_path, config, selected)
             os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(max(1, selected.parallel))
-            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(
-                selected.ubatch
-                or min(
-                    autotune_module._env_int("MMM_LLAMA_BATCH", 2048),
-                    autotune_module._env_int("MMM_LLAMA_UBATCH", 512),
-                )
-            )
+            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(selected.ubatch or min(autotune_module._env_int("MMM_LLAMA_BATCH", 2048), autotune_module._env_int("MMM_LLAMA_UBATCH", 512)))
             os.environ["MMM_LLAMA_ACTIVE_CACHE_REUSE"] = str(selected.cache_reuse)
             os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = selected.spec_type
             return url
-
-        launch_selected._mmm_exports_active_runtime = True  # type: ignore[attr-defined]
+        launch_selected._mmm_exports_active_runtime = True
         autotune_module._launch_selected = launch_selected
         autotune_module._mmm_runtime_tuning_installed = True
 
 
-__all__ = [
-    "ServerVariant",
-    "_cache_reuse_candidates",
-    "_candidate_variants_for_config",
-    "_model_supports_mtp",
-    "_parallel_candidates",
-    "_parallel_target",
-    "_parse_int_candidates",
-    "_replace_option",
-    "_ubatch_candidates",
-    "install",
-]
+__all__ = ["ServerVariant", "_cache_reuse_candidates", "_candidate_variants_for_config", "_model_supports_mtp", "_parallel_candidates", "_parallel_target", "_parse_int_candidates", "_replace_option", "_ubatch_candidates", "install"]
