@@ -64,35 +64,15 @@ def _module(
     return value
 
 
-def _complete_page(target: str = "entity_runtime") -> dict[str, object]:
-    return {
-        "modules": [_module(target, implements=(target,))],
-        "assets": [],
-        "audio": [],
-        "acceptance_tests": [],
-        "completed_deliverables": [target],
-        "complete": True,
-        "next_cursor": "",
-    }
-
-
 def test_production_page_host_owns_bookkeeping_and_empty_collections() -> None:
-    router = _Router(
-        json.dumps(
-            {
-                "modules": [_module()],
-            }
-        )
-    )
+    router = _Router(json.dumps({"modules": [_module()]}))
 
     page = complete_planner._generate_json_page_with_repair(
         router,
         system_prompt="Return the production page.",
         request=_request(),
         media_paths=(),
-        expected_contracts=(
-            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
-        ),
+        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
         stage="unit production page",
     )
 
@@ -122,9 +102,7 @@ def test_production_page_derives_multi_target_progress_from_item_claims() -> Non
         system_prompt="Return the production page.",
         request=_request("entity_runtime", "ui_runtime"),
         media_paths=(),
-        expected_contracts=(
-            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
-        ),
+        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
         stage="unit production page",
     )
 
@@ -134,7 +112,7 @@ def test_production_page_derives_multi_target_progress_from_item_claims() -> Non
     assert len(router.calls) == 1
 
 
-def test_large_production_page_is_proactively_bounded_to_two_targets() -> None:
+def test_large_production_page_keeps_ai_requested_target_width() -> None:
     router = _Router(
         json.dumps(
             {
@@ -151,30 +129,27 @@ def test_large_production_page_is_proactively_bounded_to_two_targets() -> None:
         system_prompt="Implement ALL four deliverables in this page.",
         request=_request("d1", "d2", "d3", "d4"),
         media_paths=(),
-        expected_contracts=(
-            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
-        ),
+        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
         stage="unit production page",
     )
 
     assert page["completed_deliverables"] == ["d1", "d2"]
+    assert page["complete"] is False
+    assert page["next_cursor"]
     assert len(router.calls) == 1
     first_user = router.calls[0]["messages"][1]["content"]
-    assert '"current_target_deliverables": ["d1", "d2"]' in first_user
+    assert '"current_target_deliverables": ["d1", "d2", "d3", "d4"]' in first_user
     first_system = router.calls[0]["messages"][0]["content"]
-    assert "ACTIVE HOST PAGE WIDTH OVERRIDE" in first_system
+    assert "ACTIVE HOST PAGE WIDTH OVERRIDE" not in first_system
 
 
-def test_production_repair_narrows_after_truncated_first_page() -> None:
+def test_production_repair_keeps_requested_targets_after_truncated_first_page() -> None:
     router = _Router(
         '{"modules":[{"module_id":"cut_off"',
         json.dumps(
             {
                 "modules": [
-                    _module(
-                        "entity_runtime_impl",
-                        implements=("entity_runtime",),
-                    )
+                    _module("entity_runtime_impl", implements=("entity_runtime",))
                 ]
             }
         ),
@@ -182,24 +157,21 @@ def test_production_repair_narrows_after_truncated_first_page() -> None:
 
     page = complete_planner._generate_json_page_with_repair(
         router,
-        system_prompt=(
-            "Implement ALL requested deliverables in this page and generate multiple modules."
-        ),
+        system_prompt="Implement ALL requested deliverables in this page.",
         request=_request("entity_runtime", "ui_runtime"),
         media_paths=("reference.png",),
-        expected_contracts=(
-            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
-        ),
+        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
         stage="unit production page",
     )
 
     assert page["completed_deliverables"] == ["entity_runtime"]
-    assert page["complete"] is True
+    assert page["complete"] is False
+    assert page["next_cursor"]
     assert len(router.calls) == 2
     second_user = router.calls[1]["messages"][1]["content"]
-    assert '"current_target_deliverables": ["entity_runtime"]' in second_user
+    assert '"current_target_deliverables": ["entity_runtime", "ui_runtime"]' in second_user
     second_system = router.calls[1]["messages"][0]["content"]
-    assert "RECOVERY MODE is host-narrowed" in second_system
+    assert "RECOVERY MODE is host-narrowed" not in second_system
     assert router.calls[1]["media_paths"] == ()
 
 
@@ -215,9 +187,7 @@ def test_production_page_can_repair_more_than_once() -> None:
         system_prompt="Return the production page.",
         request=_request(),
         media_paths=(),
-        expected_contracts=(
-            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
-        ),
+        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
         stage="unit production page",
     )
 
@@ -243,9 +213,7 @@ def test_production_page_repairs_zero_progress_with_exact_host_diagnostic() -> N
         system_prompt="Return the production page.",
         request=_request(),
         media_paths=(),
-        expected_contracts=(
-            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
-        ),
+        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
         stage="unit production page",
     )
 
