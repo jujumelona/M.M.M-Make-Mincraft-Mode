@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -12,8 +13,8 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 
-SETUP_API_VERSION = "mmm/colab-runtime-setup-v1"
-RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v1"
+SETUP_API_VERSION = "mmm/colab-runtime-setup-v2-native-llama-server"
+RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v2"
 LOCAL_PROFILES = frozenset(
     {
         "t4_quality",
@@ -28,15 +29,15 @@ LOCAL_PROFILES = frozenset(
 )
 SUPPORTED_PROFILES = LOCAL_PROFILES | {"remote_quality"}
 REMOTE_TEXT_ROLES = ("PLANNER", "RESEARCH", "CODER", "CODER_SAFE", "VISION")
-REMOTE_PROJECT_INSTALL_TARGET = (
-    ".[ui,rag,image,speech,production-audio,training]"
-)
-LOCAL_PROJECT_INSTALL_TARGET = (
-    ".[ui,local-model,rag,image,speech,production-audio,training]"
-)
-QWEN_FASTPATH_REQUIREMENT = (
-    "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6"
-)
+REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio,training]"
+LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio,training]"
+
+# Pinned official ggml-org/llama.cpp release commit.  Local GGUF execution uses the
+# native llama-server binary built from this source; there is no Python binding server
+# or in-process GGUF fallback.
+LLAMA_SERVER_SOURCE_REPOSITORY = "https://github.com/ggml-org/llama.cpp.git"
+LLAMA_SERVER_SOURCE_REF = "ba360efe1f574ebae727aad64112d18ecedca85a"
+LLAMA_SERVER_DEFAULT_SOURCE_DIR = Path("/content/llama.cpp")
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
@@ -49,8 +50,6 @@ def _canonical_json(payload: Mapping[str, Any]) -> str:
 
 
 def _safe_remote_url(value: str) -> str:
-    """Return a receipt-safe endpoint without credentials, query, or fragment."""
-
     parsed = urlsplit(value.strip())
     if not parsed.scheme or not parsed.hostname:
         return ""
@@ -96,8 +95,6 @@ def setup_request_fingerprint(
     remote_image_model: str = "",
     remote_speech_model: str = "",
 ) -> str:
-    """Fingerprint non-secret setup inputs, including the exact remote endpoint."""
-
     request = {
         "setup_api_version": SETUP_API_VERSION,
         "repo_dir": str(Path(repo_dir).resolve()),
@@ -108,6 +105,9 @@ def setup_request_fingerprint(
         "remote_text_model": remote_text_model.strip(),
         "remote_image_model": remote_image_model.strip(),
         "remote_speech_model": remote_speech_model.strip(),
+        "llama_server_source_ref": (
+            LLAMA_SERVER_SOURCE_REF if model_profile.strip() in LOCAL_PROFILES else ""
+        ),
     }
     return hashlib.sha256(_canonical_json(request).encode("utf-8")).hexdigest()
 
@@ -145,8 +145,8 @@ def _assert_loaded_engine_origin(repo_dir: Path) -> None:
     package_root = (repo_dir / "minecraft_mod_ai").resolve()
     if not module_file or not Path(module_file).resolve().is_relative_to(package_root):
         raise RuntimeError(
-            "minecraft_mod_ai is loaded from a different checkout. "
-            "restart the Colab runtime and rerun from cell 1."
+            "minecraft_mod_ai is loaded from a different checkout. restart the "
+            "Colab runtime and rerun from cell 1."
         )
 
 
@@ -165,6 +165,7 @@ def _validate_checkout(
     engine_was_loaded: bool,
     engine_module_file: str,
 ) -> None:
+    del engine_module_file
     if not (repo_dir / ".git").is_dir():
         raise RuntimeError(f"Not a Git checkout: {repo_dir}")
     actual_commit = _git_head(repo_dir)
@@ -182,173 +183,105 @@ def _validate_checkout(
         not previous_commit or previous_commit.strip() != used_commit
     ):
         print(
-            f"engine reload: {previous_commit[:7] if previous_commit else 'old'} -> {used_commit[:7]}",
+            f"engine reload: {previous_commit[:7] if previous_commit else 'old'} -> "
+            f"{used_commit[:7]}",
             flush=True,
         )
-        to_purge = [
-            name
-            for name in list(sys.modules.keys())
-            if name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai.")
-        ]
-        for name in to_purge:
-            sys.modules.pop(name, None)
+        for name in list(sys.modules):
+            if name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai."):
+                sys.modules.pop(name, None)
         importlib.invalidate_caches()
 
 
 def _require_local_cuda() -> Any:
     try:
         import torch
-        from packaging.version import Version
     except ImportError as exc:
         raise RuntimeError(
-            "PyTorch or packaging is not installed. Select a Colab GPU runtime."
+            "PyTorch is not installed. Select a Colab GPU runtime."
         ) from exc
-
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "The selected local profile requires a Colab GPU runtime; CUDA is "
-            "unavailable."
+            "The selected local profile requires a Colab GPU runtime; CUDA is unavailable."
         )
     return torch
 
 
-LLAMA_CPP_CUDA_WHEEL_VERSION = "0.3.34"
-LLAMA_CPP_CUDA_WHEEL_URL = (
-    "https://github.com/abetlen/llama-cpp-python/releases/download/"
-    "v0.3.34-cu124/llama_cpp_python-0.3.34-py3-none-manylinux_2_35_x86_64.whl"
-)
-
-_LLAMA_CPP_CUDA_PROBE = r'''
-import json
-from pathlib import Path
-
-try:
-    import llama_cpp
-except Exception as exc:
-    print(json.dumps({"ok": False, "error": f"import failed: {type(exc).__name__}: {exc}"}))
-    raise SystemExit(0)
-
-version = str(getattr(llama_cpp, "__version__", ""))
-package_dir = Path(llama_cpp.__file__).resolve().parent
-patterns = ("libggml-cuda.so*", "ggml-cuda.dll", "libggml-cuda*.dylib")
-backends = []
-for pattern in patterns:
-    backends.extend(package_dir.rglob(pattern))
-backends = sorted({str(path.resolve()) for path in backends if path.is_file()})
-if not backends:
-    print(json.dumps({
-        "ok": False,
-        "version": version,
-        "error": "CUDA backend library is missing from the installed wheel",
-        "package_dir": str(package_dir),
-    }))
-else:
-    print(json.dumps({
-        "ok": True,
-        "version": version,
-        "backend": backends[0],
-    }))
-'''
+def _native_source_dir() -> Path:
+    raw = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
+    return (
+        Path(raw).expanduser().resolve()
+        if raw
+        else LLAMA_SERVER_DEFAULT_SOURCE_DIR.resolve()
+    )
 
 
-def _llama_cpp_cuda_probe() -> tuple[bool, str]:
-    """Check the installed wheel in a fresh process without relying on removed APIs."""
+def _native_server_candidates() -> list[Path]:
+    values: list[Path] = []
+    explicit = os.environ.get("MMM_LLAMA_SERVER_BIN", "").strip()
+    if explicit:
+        values.append(Path(explicit).expanduser())
+    discovered = shutil.which("llama-server")
+    if discovered:
+        values.append(Path(discovered))
+    source = _native_source_dir()
+    values.append(source / "build" / "bin" / "llama-server")
+    values.append(
+        Path.home()
+        / ".cache"
+        / "mmm"
+        / "llama.cpp"
+        / "build"
+        / "bin"
+        / "llama-server"
+    )
+    return values
 
+
+def _native_cuda_backend(binary: Path) -> Path | None:
+    roots = [binary.parent, binary.parent.parent]
+    for root in roots:
+        for pattern in ("libggml-cuda.so", "libggml-cuda.so.*"):
+            matches = sorted(path for path in root.rglob(pattern) if path.is_file())
+            if matches:
+                return matches[0]
+    return None
+
+
+def _verify_native_server(binary: Path) -> tuple[bool, str]:
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        return False, "binary missing or not executable"
+    backend = _native_cuda_backend(binary)
+    if backend is None:
+        return False, "CUDA backend library is missing"
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", _LLAMA_CPP_CUDA_PROBE],
+            [str(binary), "--version"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
-            timeout=30,
+            timeout=20,
         )
     except Exception as exc:
-        return False, f"probe failed: {type(exc).__name__}: {exc}"
-
-    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        return False, f"version probe failed: {type(exc).__name__}: {exc}"
     if completed.returncode != 0:
-        return False, f"probe exited with code {completed.returncode}: {' | '.join(lines[-4:])}"
-    if not lines:
-        return False, "probe produced no output"
-    try:
-        payload = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        return False, "probe output was not valid JSON: " + " | ".join(lines[-4:])
-    if bool(payload.get("ok")):
-        version = str(payload.get("version") or "unknown")
-        backend = Path(str(payload.get("backend") or "")).name
-        return True, f"version={version} backend={backend}"
-    return False, str(payload.get("error") or "CUDA backend check failed")
+        return False, "version probe failed: " + completed.stdout[-1000:]
+    return True, f"binary={binary.name} cuda_backend={backend.name}"
 
 
-def _llama_cpp_gpu_available() -> bool:
-    ok, _ = _llama_cpp_cuda_probe()
-    return ok
+def _find_verified_native_server() -> Path | None:
+    for candidate in _native_server_candidates():
+        ok, _detail = _verify_native_server(candidate)
+        if ok:
+            return candidate.resolve()
+    return None
 
 
-def _install_llama_cpp() -> None:
-    """Install and verify the pinned pre-built CUDA wheel without source builds."""
-
-    available, detail = _llama_cpp_cuda_probe()
-    if available:
-        print("llama-cpp-python CUDA wheel: available", detail, flush=True)
-        return
-
-    print("llama-cpp-python CUDA wheel: installing", flush=True)
-    cmd = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "--force-reinstall",
-        "--only-binary=:all:",
-        LLAMA_CPP_CUDA_WHEEL_URL,
-        "--no-cache-dir",
-    ]
-    subprocess.run(cmd, check=True)
-
-    for name in tuple(sys.modules):
-        if name == "llama_cpp" or name.startswith("llama_cpp."):
-            sys.modules.pop(name, None)
-    importlib.invalidate_caches()
-
-    available, detail = _llama_cpp_cuda_probe()
-    if not available:
-        raise RuntimeError(
-            "Installed llama-cpp-python CUDA wheel failed backend verification: "
-            + detail
-        )
-    print(
-        "llama-cpp-python CUDA wheel: installed",
-        LLAMA_CPP_CUDA_WHEEL_VERSION,
-        detail,
-        flush=True,
-    )
-
-
-def _install_project(*, local_profile: bool) -> None:
-    if local_profile:
-        _install_llama_cpp()
-    target = (
-        LOCAL_PROJECT_INSTALL_TARGET
-        if local_profile
-        else REMOTE_PROJECT_INSTALL_TARGET
-    )
-    print("project dependencies: installing", target, flush=True)
-    cmd = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "--no-build-isolation",
-        "-e",
-        target,
-    ]
+def _run_logged(command: list[str], *, cwd: Path | None = None) -> None:
     process = subprocess.Popen(
-        cmd,
+        command,
+        cwd=str(cwd) if cwd is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -357,95 +290,143 @@ def _install_project(*, local_profile: bool) -> None:
     if process.stdout is not None:
         for line in process.stdout:
             print(line, end="", flush=True)
-    retcode = process.wait()
-    if retcode != 0:
-        raise subprocess.CalledProcessError(retcode, cmd)
-    print("project dependencies: installed", flush=True)
+    returncode = process.wait()
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, command)
 
 
-def _verify_qwen_fastpath(*, torch: Any, transformers_was_loaded: bool) -> None:
-    importlib.invalidate_caches()
-    try:
-        from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
-        from fla.ops.gated_delta_rule import (
-            chunk_gated_delta_rule,
-            fused_recurrent_gated_delta_rule,
+def _prepare_native_source(source_dir: Path) -> None:
+    source_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not (source_dir / ".git").is_dir():
+        if source_dir.exists():
+            shutil.rmtree(source_dir)
+        print("native llama-server: fetching pinned source", flush=True)
+        _run_logged(
+            [
+                "git",
+                "clone",
+                "--filter=blob:none",
+                "--no-checkout",
+                LLAMA_SERVER_SOURCE_REPOSITORY,
+                str(source_dir),
+            ]
         )
-        from transformers.models.qwen3_5 import modeling_qwen3_5
-        if not getattr(modeling_qwen3_5, "is_fast_path_available", False):
-            print("Qwen3.5 fast path: unavailable; using standard PyTorch", flush=True)
-            return
-        print("Qwen3.5 fast path: available", flush=True)
-    except Exception:
-        print("Qwen3.5 fast path: unavailable; using standard PyTorch", flush=True)
-        return
-
+    current = ""
     try:
-        with torch.inference_mode():
-            dtype = torch.float16
-            conv_x = torch.randn((1, 8, 16), device="cuda", dtype=dtype)
-            conv_weight = torch.randn((8, 4), device="cuda", dtype=dtype)
-            conv_out = causal_conv1d_fn(
-                conv_x, conv_weight, activation="silu"
-            )
-            conv_state = torch.zeros((1, 8, 4), device="cuda", dtype=dtype)
-            conv_step = causal_conv1d_update(
-                conv_x[:, :, -1], conv_state, conv_weight, activation="silu"
+        current = _git_head(source_dir)
+    except Exception:
+        pass
+    if current != LLAMA_SERVER_SOURCE_REF:
+        print("native llama-server: selecting pinned commit", LLAMA_SERVER_SOURCE_REF[:12], flush=True)
+        _run_logged(
+            [
+                "git",
+                "-C",
+                str(source_dir),
+                "fetch",
+                "--depth",
+                "1",
+                "origin",
+                LLAMA_SERVER_SOURCE_REF,
+            ]
+        )
+        _run_logged(
+            [
+                "git",
+                "-C",
+                str(source_dir),
+                "checkout",
+                "--detach",
+                "FETCH_HEAD",
+            ]
+        )
+    if _git_head(source_dir) != LLAMA_SERVER_SOURCE_REF:
+        raise RuntimeError("native llama-server source commit verification failed")
+
+
+def _ensure_native_server(torch: Any) -> str:
+    existing = _find_verified_native_server()
+    if existing is not None:
+        os.environ["MMM_LLAMA_SERVER_BIN"] = str(existing)
+        os.environ["MMM_LLAMA_SERVER_SOURCE_DIR"] = str(existing.parent.parent.parent)
+        print("native llama-server: available", existing, flush=True)
+        return str(existing)
+
+    for tool in ("git", "cmake", "nvcc"):
+        if shutil.which(tool) is None:
+            raise RuntimeError(
+                f"native llama-server CUDA build requires {tool!r}, but it is unavailable"
             )
 
-            q = torch.randn((1, 16, 1, 16), device="cuda", dtype=dtype)
-            k = torch.nn.functional.normalize(
-                torch.randn((1, 16, 1, 16), device="cuda", dtype=torch.float32),
-                dim=-1,
-            ).to(dtype)
-            v = torch.randn((1, 16, 1, 16), device="cuda", dtype=dtype)
-            g = torch.nn.functional.logsigmoid(
-                torch.randn((1, 16, 1), device="cuda", dtype=torch.float32)
-            )
-            beta = torch.sigmoid(
-                torch.randn((1, 16, 1), device="cuda", dtype=dtype)
-            )
-            chunk_out, recurrent_state = chunk_gated_delta_rule(
-                q,
-                k,
-                v,
-                g,
-                beta,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=True,
-            )
-            recurrent_out, next_recurrent_state = fused_recurrent_gated_delta_rule(
-                q[:, :1],
-                k[:, :1],
-                v[:, :1],
-                g=g[:, :1],
-                beta=beta[:, :1],
-                initial_state=recurrent_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=True,
-            )
-            smoke_outputs = (
-                conv_out,
-                conv_step,
-                chunk_out,
-                recurrent_state,
-                recurrent_out,
-                next_recurrent_state,
-            )
-            if any(not torch.isfinite(output).all() for output in smoke_outputs):
-                raise RuntimeError("a Qwen3.5 fast kernel returned non-finite values")
-            torch.cuda.synchronize()
-    except Exception as exc:
-        raise RuntimeError(
-            "Qwen3.5 CUDA fast-kernel smoke test failed. Setup will not continue "
-            "with an unverified slow fallback."
-        ) from exc
-
+    source_dir = _native_source_dir()
+    _prepare_native_source(source_dir)
+    build_dir = source_dir / "build"
+    major, minor = torch.cuda.get_device_capability(0)
+    cuda_arch = str(int(major) * 10 + int(minor))
+    jobs = max(1, min(8, os.cpu_count() or 1))
     print(
-        "Qwen3.5 fast kernels:",
-        f"flash-linear-attention={package_version('flash-linear-attention')}",
-        f"causal-conv1d={package_version('causal-conv1d')}",
+        "native llama-server: configuring CUDA build",
+        f"arch={cuda_arch}",
+        f"jobs={jobs}",
+        flush=True,
     )
+    _run_logged(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DGGML_CUDA=ON",
+            f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}",
+            "-DLLAMA_BUILD_TESTS=OFF",
+            "-DLLAMA_BUILD_EXAMPLES=OFF",
+            "-DLLAMA_BUILD_APP=OFF",
+            "-DLLAMA_BUILD_UI=OFF",
+            "-DLLAMA_BUILD_TOOLS=ON",
+            "-DLLAMA_BUILD_SERVER=ON",
+        ]
+    )
+    print("native llama-server: building", flush=True)
+    _run_logged(
+        [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--target",
+            "llama-server",
+            "-j",
+            str(jobs),
+        ]
+    )
+    binary = build_dir / "bin" / "llama-server"
+    ok, detail = _verify_native_server(binary)
+    if not ok:
+        raise RuntimeError("native llama-server verification failed: " + detail)
+    resolved = str(binary.resolve())
+    os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
+    os.environ["MMM_LLAMA_SERVER_SOURCE_DIR"] = str(source_dir)
+    print("native llama-server: installed", detail, flush=True)
+    return resolved
+
+
+def _install_project(*, local_profile: bool) -> None:
+    target = LOCAL_PROJECT_INSTALL_TARGET if local_profile else REMOTE_PROJECT_INSTALL_TARGET
+    print("project dependencies: installing", target, flush=True)
+    _run_logged(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "--no-build-isolation",
+            "-e",
+            target,
+        ]
+    )
+    print("project dependencies: installed", flush=True)
 
 
 def _configure_output(save_to_google_drive: bool) -> str:
@@ -477,7 +458,6 @@ def _configure_remote(
     remote_key = getpass("Remote model API key: ").strip()
     if not remote_key:
         raise ValueError("The remote model API key is empty.")
-
     for role in REMOTE_TEXT_ROLES:
         os.environ[f"MMM_{role}_BASE_URL"] = endpoint
         os.environ[f"MMM_{role}_MODEL"] = text_model
@@ -512,16 +492,16 @@ def _assert_remote_environment(
         }
     )
     mismatched = [name for name, value in expected.items() if os.environ.get(name) != value]
-    api_key_names = [
+    key_names = [
         *(f"MMM_{role}_API_KEY" for role in REMOTE_TEXT_ROLES),
         "MMM_IMAGE_API_KEY",
         "MMM_SPEECH_API_KEY",
     ]
-    missing_keys = [name for name in api_key_names if not os.environ.get(name)]
+    missing_keys = [name for name in key_names if not os.environ.get(name)]
     if mismatched or missing_keys:
         raise RuntimeError(
-            "Remote model environment changed after setup. Rerun setup cell 2 "
-            "before planning or building."
+            "Remote model environment changed after setup. Rerun setup cell 2 before "
+            "planning or building."
         )
 
 
@@ -558,6 +538,7 @@ def _build_receipt(
     remote_speech_model: str,
     setup_fingerprint: str,
     torch: Any | None,
+    llama_server_binary: str,
 ) -> dict[str, Any]:
     script_path = Path(__file__).resolve()
     return {
@@ -572,6 +553,10 @@ def _build_receipt(
         "output_root": output_root,
         "process_id": os.getpid(),
         "setup_fingerprint": setup_fingerprint,
+        "native_llama_server": {
+            "source_ref": LLAMA_SERVER_SOURCE_REF if llama_server_binary else "",
+            "binary": llama_server_binary,
+        },
         "remote": {
             "base_url": _safe_remote_url(remote_base_url),
             "text_model": remote_text_model.strip(),
@@ -608,6 +593,7 @@ def setup_colab_runtime(
 ) -> dict[str, Any]:
     """Install and verify the pulled M.M.M checkout in the current Colab process."""
 
+    del transformers_was_loaded
     profile = model_profile.strip()
     if profile not in SUPPORTED_PROFILES:
         raise ValueError(
@@ -619,6 +605,7 @@ def setup_colab_runtime(
         remote_text_model = remote_text_model.strip()
         if not remote_text_model:
             raise ValueError("remote_quality requires a text model name.")
+
     checkout = Path(repo_dir).resolve()
     commit = used_commit.strip()
     print("checkout: validating", flush=True)
@@ -632,9 +619,11 @@ def setup_colab_runtime(
     os.chdir(checkout)
 
     torch = None
+    llama_server_binary = ""
     if profile in LOCAL_PROFILES:
         print("CUDA: checking", flush=True)
         torch = _require_local_cuda()
+        llama_server_binary = _ensure_native_server(torch)
     _install_project(local_profile=profile in LOCAL_PROFILES)
     if profile not in LOCAL_PROFILES:
         try:
@@ -676,6 +665,7 @@ def setup_colab_runtime(
         remote_speech_model=remote_speech_model,
         setup_fingerprint=fingerprint,
         torch=torch,
+        llama_server_binary=llama_server_binary,
     )
     receipt_json = _canonical_json(receipt)
     os.environ["MMM_COLAB_SETUP_FINGERPRINT"] = fingerprint
@@ -692,6 +682,7 @@ def setup_colab_runtime(
             f"{runtime['vram_free_bytes'] / 2**30:.2f}/"
             f"{runtime['vram_total_bytes'] / 2**30:.2f} GiB",
         )
+        print("llama-server:", llama_server_binary)
     print("Setup fingerprint:", fingerprint)
     return {
         "repo_dir": str(checkout),
@@ -714,7 +705,7 @@ def assert_setup_state(
     remote_image_model: str = "",
     remote_speech_model: str = "",
 ) -> None:
-    """Fail if config, checkout, process, or source changed after setup."""
+    """Fail if config, checkout, process, native server, or source changed after setup."""
 
     receipt = state.get("receipt")
     if not isinstance(receipt, Mapping):
@@ -750,27 +741,39 @@ def assert_setup_state(
             remote_image_model=remote_image_model,
             remote_speech_model=remote_speech_model,
         )
+    else:
+        native = receipt.get("native_llama_server")
+        binary = (
+            str(native.get("binary", ""))
+            if isinstance(native, Mapping)
+            else ""
+        )
+        ok, detail = _verify_native_server(Path(binary)) if binary else (False, "missing")
+        if not ok or os.environ.get("MMM_LLAMA_SERVER_BIN") != binary:
+            raise RuntimeError(
+                "Native llama-server changed or is unavailable after setup: "
+                + detail
+                + ". Rerun setup cell 2."
+            )
     if actual_head != used_commit or receipt.get("used_commit") != used_commit:
         raise RuntimeError(
-            "The Git checkout changed after setup. Rerun setup cell 2 before "
-            "planning or building."
+            "The Git checkout changed after setup. Rerun setup cell 2 before planning "
+            "or building."
         )
     if tracked_changes:
         raise RuntimeError(
-            "Tracked engine source changed after setup. Rerun setup cell 2 from "
-            "a clean GitHub checkout."
+            "Tracked engine source changed after setup. Rerun setup cell 2 from a "
+            "clean GitHub checkout."
         )
     _assert_loaded_engine_origin(Path(repo_dir).resolve())
     if receipt.get("process_id") != os.getpid():
         raise RuntimeError(
-            "This setup receipt belongs to another Python runtime. Rerun setup "
-            "cell 2."
+            "This setup receipt belongs to another Python runtime. Rerun setup cell 2."
         )
     script_path = Path(__file__).resolve()
     if receipt.get("setup_script_sha256") != _file_sha256(script_path):
         raise RuntimeError(
-            "The source-owned Colab setup script changed after setup. Rerun "
-            "setup cell 2."
+            "The source-owned Colab setup script changed after setup. Rerun setup cell 2."
         )
     if os.environ.get("MMM_COLAB_SETUP_RECEIPT") != _canonical_json(receipt):
         raise RuntimeError(
