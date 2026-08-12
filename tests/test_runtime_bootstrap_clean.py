@@ -71,9 +71,8 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
     assert source.count("initialize_runtime()") == 1
     assert "_install_" not in source
 
-    # Public API modules may legitimately end in ``_contract`` (for example
-    # production_contract). Reject only imports that are actually invoked as policy
-    # installers from package __init__, rather than matching a filename substring.
+    # Public API modules may legitimately end in ``_contract``. Reject only imports
+    # that are actually invoked as policy installers from package __init__.
     installers, modules = _policy_imports(path)
     direct_calls, module_calls = _composition_calls(path)
     assert not {
@@ -100,6 +99,7 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     # installer must still exist exactly once at the explicit runtime root.
     required_once = (
         "install_runner_lock(",
+        "install_gpu_handoff(",
         "install_scheduler_parallel_safety(",
         "install_llama_parallel_runtime(",
         "install_llama_efficiency(",
@@ -108,11 +108,13 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
         "install_llama_stream_efficiency(",
         "install_project_index_execution_reuse(",
         "install_proposal_deserialization(",
-        "install_external_mcp_target_validation(",
         "install_platform_live_rag(",
         "install_platform_technology(",
         "install_platform_ecosystem(",
         "install_platform_prompts(",
+        "install_mod_scope(",
+        "install_parallel_platform_rag(",
+        "install_colab_auto_platform(",
         "install_planner_json_runtime(",
         "install_planner_strict_json(",
         "install_planner_outline_prompt(",
@@ -130,6 +132,8 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
         "install_planner_production_page(",
         "install_runtime_helpers(",
         "install_runtime_helper_json_deadline(",
+        "install_mcp_target_validation(",
+        "install_external_mcp_bridge_safety(",
         "install_mcp_runtime(",
         "install_mcp_federation(",
         "install_mcp_repair_batch(",
@@ -142,7 +146,7 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     assert source.index("install_planner_pagination_safety(") < source.index(
         "install_planner_production_page("
     )
-    assert source.index("install_external_mcp_target_validation(") < source.index(
+    assert source.index("install_mcp_target_validation(") < source.index(
         "install_external_mcp_bridge_safety("
     )
 
