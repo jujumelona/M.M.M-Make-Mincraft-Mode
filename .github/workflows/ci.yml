@@ -64,7 +64,6 @@ jobs:
           tests/test_agentic_search_efficiency_contract.py
           tests/test_repair_candidate_purity_contract.py
           tests/test_llama_parallel_runtime_contract.py
-          tests/test_platform_repair_target_contract.py
 
       - name: Run remaining unit and contract tests
         run: >-
@@ -76,4 +75,3 @@ jobs:
           --ignore=tests/test_agentic_search_efficiency_contract.py
           --ignore=tests/test_repair_candidate_purity_contract.py
           --ignore=tests/test_llama_parallel_runtime_contract.py
-          --ignore=tests/test_platform_repair_target_contract.py
