@@ -20,6 +20,7 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         from . import game_design as game_design_module
         from . import retrieval as retrieval_module
         from . import technology_radar as technology_module
+        from .platform_central_ai_contract import install as install_platform_central_ai
         from .platform_ecosystem_contract import install as install_platform_ecosystem
         from .platform_planning_contract import install as install_platform_planning
         from .platform_prompt_contract import install as install_platform_prompts
@@ -35,6 +36,12 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         install_platform_technology(technology_module)
         install_platform_ecosystem(ecosystem_module, complete_planner_module)
         install_platform_prompts(complete_planner_module)
+        # Must be last: this wrapper gives the real central router the live-discovered
+        # candidate set and lowers future-version source modules before approval.
+        install_platform_central_ai(
+            game_design_module=game_design_module,
+            complete_planner_module=complete_planner_module,
+        )
 
     original_prompt: Callable[..., str] = complete_planner_module._implementation_prompt
     original_builder: Callable[..., Any] = complete_spec_module.complete_proposal_from_parts
@@ -47,15 +54,17 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
         if isinstance(target, dict) and isinstance(target.get("target"), dict):
             selected = target["target"]
             target_text = (
-                " The exact code-owned target for this plan is "
+                " The exact host-verified target for this plan is "
                 f"Minecraft {selected.get('minecraft_version')} / {selected.get('loader')} / "
                 f"Java {selected.get('java_version')} / {selected.get('mappings')}. "
-                "Do not substitute APIs from another version."
+                "Do not substitute APIs from another version. For a live-discovered target, "
+                "use the supplied official target evidence and compiler feedback rather than a "
+                "hard-coded historical source template."
             )
         return (
             original_prompt(prompt, enriched_design)
             + "\n\nThe resolved mod-development method plan is authoritative for implementation scope. "
-            "Generate only a mod project for the selected platform adapter. Never emit a standalone "
+            "Generate only a mod project for the selected platform target. Never emit a standalone "
             "map, world save, world ZIP, schematic, Litematica file, BuildSpec, NPZ block delta, or "
             "external Builder handoff. Native worldgen modules are mod-owned code and datapack "
             "resources only when fabric_worldgen was selected from the request."
