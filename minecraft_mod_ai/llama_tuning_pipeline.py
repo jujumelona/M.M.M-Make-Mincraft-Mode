@@ -3,7 +3,7 @@ from __future__ import annotations
 """Single ownership point for native llama-server tuning composition.
 
 The individual tuning modules own one concern each, while this pipeline is the only
-place allowed to compose them.  Runtime bootstrap installs exactly this pipeline,
+place allowed to compose them. Runtime bootstrap installs exactly this pipeline,
 which makes ordering explicit and prevents cross-module re-entry or accidental
 multiple installation.
 """
@@ -21,13 +21,7 @@ class TuningStage:
 class NativeLlamaTuningPipeline:
     """Install the native llama tuning stack once, in dependency order."""
 
-    def __init__(
-        self,
-        *,
-        autotune: Any,
-        hardware_policy: Any,
-        runtime_tuning: Any,
-    ) -> None:
+    def __init__(self, *, autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
         self.autotune = autotune
         self.hardware_policy = hardware_policy
         self.runtime_tuning = runtime_tuning
@@ -40,18 +34,12 @@ class NativeLlamaTuningPipeline:
         from .llama_server_runtime_tuning import install as install_runtime_tuning
 
         return (
-            TuningStage(
-                "hardware",
-                lambda: install_hardware(self.autotune),
-            ),
+            TuningStage("hardware", lambda: install_hardware(self.autotune)),
             TuningStage(
                 "efficiency",
                 lambda: install_efficiency(self.autotune, self.hardware_policy),
             ),
-            TuningStage(
-                "runtime",
-                lambda: install_runtime_tuning(self.autotune),
-            ),
+            TuningStage("runtime", lambda: install_runtime_tuning(self.autotune)),
             TuningStage(
                 "cache-reuse",
                 lambda: install_cache_reuse(
@@ -62,7 +50,11 @@ class NativeLlamaTuningPipeline:
             ),
             TuningStage(
                 "decode-speed",
-                lambda: install_decode_speed(self.autotune, self.runtime_tuning),
+                lambda: install_decode_speed(
+                    self.autotune,
+                    self.runtime_tuning,
+                    self.hardware_policy,
+                ),
             ),
         )
 
@@ -77,12 +69,7 @@ class NativeLlamaTuningPipeline:
         self.autotune._mmm_tuning_pipeline_installed = True
 
 
-def install_native_llama_tuning_pipeline(
-    *,
-    autotune: Any,
-    hardware_policy: Any,
-    runtime_tuning: Any,
-) -> None:
+def install_native_llama_tuning_pipeline(*, autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
     NativeLlamaTuningPipeline(
         autotune=autotune,
         hardware_policy=hardware_policy,
@@ -90,4 +77,8 @@ def install_native_llama_tuning_pipeline(
     ).install()
 
 
-__all__ = ["NativeLlamaTuningPipeline", "TuningStage", "install_native_llama_tuning_pipeline"]
+__all__ = [
+    "NativeLlamaTuningPipeline",
+    "TuningStage",
+    "install_native_llama_tuning_pipeline",
+]
