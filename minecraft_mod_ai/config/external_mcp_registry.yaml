@@ -221,16 +221,11 @@ servers:
     test_harness_only: true
     purpose: inspect the real target Fabric server/world API in a disposable test runtime
     capabilities:
-      runtime_world_read:
-        tool: player_list_online
-        access: read
-        stages: [runtime]
-        priority: 10
       runtime_server_status:
-        tool: server_status
+        tool: server_get_status
         access: read
         stages: [runtime]
-        priority: 10
+        priority: 5
       runtime_command:
         tool: command_execute
         access: admin
