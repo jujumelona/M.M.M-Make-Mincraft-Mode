@@ -606,8 +606,24 @@ def install(runtime_module: Any) -> None:
                 envelope_error = f"{type(exc).__name__}: {exc}"
 
             if not raw_batches:
-                # Nothing semantic exists to patch. Save the failure and request only
-                # the missing continuation fragment; never redo accepted batches.
+                # A valid terminal outline page may legitimately contain zero batches.
+                # Treat it as successful no-op work instead of regenerating forever.
+                if page_complete and not page_next_cursor and not envelope_error:
+                    checkpoint_state.update(
+                        {
+                            "saved_batches": saved_batches,
+                            "pending_batches": [],
+                            "pending_patch": None,
+                            "page_complete": True,
+                            "page_next_cursor": "",
+                            "resume_cursor": "",
+                            "last_envelope_error": "",
+                            "status": "complete",
+                        }
+                    )
+                    _save_checkpoint(checkpoint_path, checkpoint_state)
+                    return _resume_result(checkpoint_state, saved_batches)
+
                 checkpoint_state.update(
                     {
                         "saved_batches": saved_batches,

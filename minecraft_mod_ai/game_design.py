@@ -287,7 +287,7 @@ def _lossless_request_pages(
         encoded_size = 0
         preferred_cut: int | None = None
         while end < text_length:
-            character_size = _json_text_bytes(prompt[end])
+            character_size = _json_character_bytes(prompt[end])
             if encoded_size + character_size > max_json_text_bytes:
                 break
             encoded_size += character_size
@@ -318,9 +318,20 @@ def _lossless_request_pages(
     return tuple(pages)
 
 
+def _json_character_bytes(character: str) -> int:
+    """Exact byte cost of one character inside ensure_ascii=False JSON text."""
+    if len(character) != 1:
+        raise ValueError("_json_character_bytes requires exactly one character")
+    codepoint = ord(character)
+    if character in {'"', "\\", "\b", "\f", "\n", "\r", "\t"}:
+        return 2
+    if codepoint < 0x20:
+        return 6
+    return len(character.encode("utf-8"))
+
+
 def _json_text_bytes(value: str) -> int:
-    encoded = json.dumps(value, ensure_ascii=False)
-    return len(encoded[1:-1].encode("utf-8"))
+    return sum(_json_character_bytes(character) for character in value)
 
 
 def _normalize_sharded_research_brief(prompt: str) -> dict[str, Any]:
