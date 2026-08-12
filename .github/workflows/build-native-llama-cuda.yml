@@ -23,14 +23,15 @@ jobs:
       BUNDLE_ARCH: ${{ inputs.cuda_arch }}
       RELEASE_TAG: native-llama-b10375-cuda12.4-v2
     steps:
-      - name: Install build tools
+      - name: Install build and release tools
         shell: bash
         run: |
           set -euo pipefail
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            binutils ca-certificates cmake git ninja-build python3
+            binutils ca-certificates cmake gh git ninja-build python3
           rm -rf /var/lib/apt/lists/*
+          gh --version
 
       - name: Prepare CUDA driver stubs for link-only build
         shell: bash
