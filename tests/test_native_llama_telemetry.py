@@ -5,6 +5,17 @@ from types import SimpleNamespace
 from minecraft_mod_ai import llama_server_hardware_policy as policy
 
 
+def test_server_payload_explicitly_reuses_prompt_cache() -> None:
+    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=128))
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": "x"},),
+        response_format="text",
+    )
+    payload = policy._server_payload(adapter, request)
+    assert payload["cache_prompt"] is True
+    assert getattr(policy._server_payload, "_mmm_prompt_cache_reuse", False)
+
+
 def test_prometheus_parser_reads_native_token_and_time_counters() -> None:
     text = """
 # HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
