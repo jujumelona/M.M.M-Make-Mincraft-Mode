@@ -137,3 +137,10 @@ def install(*, mcp_tools_module: Any, platform_contract_module: Any) -> None:
         inspect_modrinth_project._mmm_platform_bound = True
         inspect_modrinth_project._mmm_signature_compatible_target_forwarding = True
         cls.inspect_modrinth_project = inspect_modrinth_project
+
+    # Release packaging is the last authority boundary for imported-source repair.
+    # Keep this installation adjacent to the target-aware MCP surface so every
+    # package_release caller, including CompleteProductionOrchestrator, receives it.
+    from .platform_release_contract import install as install_platform_release
+
+    install_platform_release(mcp_tools_module)
