@@ -250,12 +250,12 @@ print("설치 확인: 완료")
     (
         "code",
         "mtp-server",
-        """# @title 4-1. [선택] 로컬 CUDA MTP 서버 실행
+        """# @title 4-1. [선택] 로컬 CUDA llama 서버 실행
 from minecraft_mod_ai.colab_mtp_server import start_colab_mtp_server
 
 assert_current_colab_setup()
 LLAMA_SERVER_URL = start_colab_mtp_server(planner_config)
-print("llama MTP server:", LLAMA_SERVER_URL)
+print("llama server:", LLAMA_SERVER_URL, "(structured=baseline; verified free-text may use MTP)")
 """,
     ),
     (
@@ -268,7 +268,6 @@ from minecraft_mod_ai.colab_run_modes import resolve_plan_path, run_plan_dialog
 assert_current_colab_setup()
 session = CompleteModAISession(
     output_root=OUTPUT_ROOT,
-    minecraft_version="1.20.1",
     model_profile=MODEL_PROFILE,
     existing_input=EXISTING_INPUT,
     fast_mode=FAST_MODE,
