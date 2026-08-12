@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Ordered package runtime bootstrap with one explicit integration path.
 
-Cross-cutting contracts are still isolated and testable, but package initialization
+Cross-cutting contracts stay isolated and testable, while package initialization
 owns their composition. No installer re-enters another package bootstrap and no
 runtime contract is intentionally installed twice.
 """
@@ -56,18 +56,36 @@ def _install_core_contracts() -> None:
 
 
 def _install_model_runtime_contracts() -> None:
-    """Install local model ownership, native llama policy and prefetch/residency."""
-    from . import complete_planner, llama_server_autotune, model_registry
+    """Install local model ownership and native llama runtime policy once."""
+    from . import (
+        complete_planner,
+        llama_server_autotune,
+        llama_server_hardware_policy,
+        llama_server_runtime_tuning,
+        model_registry,
+    )
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
+    from .llama_cache_reuse_efficiency_contract import install as install_llama_cache_reuse
+    from .llama_server_efficiency_contract import install as install_llama_efficiency
     from .llama_server_hardware_policy import install as install_llama_hardware
+    from .llama_server_runtime_tuning import install as install_llama_runtime_tuning
+    from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .model_runtime_performance import install as install_model_runtime_performance
     from .parallel_runtime_contract import install as install_parallel_runtime
 
     install_gpu_resource(model_registry)
     install_model_runtime_performance()
     install_llama_hardware(llama_server_autotune)
+    install_llama_efficiency(llama_server_autotune, llama_server_hardware_policy)
+    install_llama_runtime_tuning(llama_server_autotune)
+    install_llama_cache_reuse(
+        llama_server_autotune,
+        llama_server_hardware_policy,
+        llama_server_runtime_tuning,
+    )
+    install_llama_stream_efficiency(llama_server_hardware_policy)
     install_parallel_runtime(
         complete_planner_module=complete_planner,
         model_registry_module=model_registry,
@@ -95,14 +113,11 @@ def _install_generation_contracts() -> None:
         complete_orchestrator,
         custom_module_generator,
         extended_content_generator,
-        llama_server_autotune,
-        llama_server_hardware_policy,
         performance_final_contract,
         project_index,
         source_patch,
     )
     from .extended_registration_contract import install as install_extended_registration
-    from .llama_server_efficiency_contract import install as install_llama_efficiency
     from .performance_final_contract import install as install_performance_contract
     from .performance_final_tuning import install as install_performance_tuning
     from .project_index_manifest_efficiency_contract import (
@@ -114,7 +129,6 @@ def _install_generation_contracts() -> None:
 
     install_extended_registration(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
-    install_llama_efficiency(llama_server_autotune, llama_server_hardware_policy)
     install_performance_tuning(performance_final_contract)
     install_manifest_hash_efficiency(complete_orchestrator, project_index)
     install_performance_contract(
