@@ -1,0 +1,25 @@
+name: Build native llama CUDA SM89
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-native-llama-sm89.yml
+      - .github/workflows/build-native-llama-cuda.yml
+      - tools/native_llama_bundle.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-llama-sm89-b10375-cuda12.4-v2
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-native-llama-cuda.yml
+    with:
+      cuda_arch: "89"
+    permissions:
+      contents: write
