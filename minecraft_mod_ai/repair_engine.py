@@ -70,8 +70,10 @@ class RepairEngine:
 
         receipts: list[dict[str, Any]] = []
         signatures: set[str] = set()
+        last_evidence: dict[str, Any] | None = None
         for attempt in range(attempts_limit + 1):
             evidence = self._evidence(root, run_gametest=run_gametest)
+            last_evidence = evidence
             if evidence["passed"]:
                 ProjectIndex(root, policy=self.policy).write_manifest()
                 return {
@@ -98,11 +100,13 @@ class RepairEngine:
                 raise RepairEngineError(f"Generated repair patch was rejected: {exc}") from exc
             receipts.append(receipt)
 
+        if last_evidence is None:
+            raise AssertionError("Repair loop produced no validation evidence.")
         return {
             "schema_version": "mmm/repair-result-v2",
             "status": "FAIL",
             "attempts": attempts_limit,
-            "evidence": self._evidence(root, run_gametest=run_gametest),
+            "evidence": last_evidence,
             "patch_receipts": receipts,
         }
 
