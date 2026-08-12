@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 from dataclasses import asdict
 from functools import wraps
 from pathlib import Path
 from typing import Any
+
+
+def _submodule(name: str) -> Any:
+    package = __package__ or "minecraft_mod_ai"
+    return importlib.import_module(f"{package}.{name}")
 
 
 def _quick_file_signature(path: Path) -> str:
@@ -124,19 +130,15 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
 
     # Runtime tuning changes only llama-server startup/request parameters. CUDA Graphs
     # are built into the verified native bundle/setup build, so package import never
-    # invokes cmake or recompiles native code.
-    from . import llama_server_runtime_tuning as runtime_tuning_module
-    from .llama_server_runtime_tuning import install as install_runtime_tuning
-
-    install_runtime_tuning(autotune_module)
+    # invokes cmake or recompiles native code. Import siblings directly instead of
+    # resolving them as attributes on a partially initialized package __init__.
+    runtime_tuning_module = _submodule("llama_server_runtime_tuning")
+    runtime_tuning_module.install(autotune_module)
 
     # n_cache_reuse is request-scoped. Probe all reuse widths on one selected server
     # instead of reloading the multi-GB GGUF for each candidate.
-    from .llama_cache_reuse_efficiency_contract import (
-        install as install_cache_reuse_efficiency,
-    )
-
-    install_cache_reuse_efficiency(
+    cache_reuse_module = _submodule("llama_cache_reuse_efficiency_contract")
+    cache_reuse_module.install(
         autotune_module,
         hardware_policy_module,
         runtime_tuning_module,
@@ -144,6 +146,5 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
 
     # Consume usage from the production SSE stream and reuse the HTTP connection;
     # detailed /metrics and /slots telemetry remains an explicit diagnostic opt-in.
-    from .llama_stream_efficiency_contract import install as install_stream_efficiency
-
-    install_stream_efficiency(hardware_policy_module)
+    stream_module = _submodule("llama_stream_efficiency_contract")
+    stream_module.install(hardware_policy_module)
