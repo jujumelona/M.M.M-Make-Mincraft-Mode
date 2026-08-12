@@ -72,11 +72,9 @@ def _install_model_runtime_contracts() -> None:
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
-    from .llama_cache_reuse_efficiency_contract import install as install_llama_cache_reuse
-    from .llama_decode_speed_contract import install as install_llama_decode_speed
-    from .llama_server_efficiency_contract import install as install_llama_efficiency
-    from .llama_server_hardware_policy import install as install_llama_hardware
-    from .llama_server_runtime_tuning import install as install_llama_runtime_tuning
+    from .llama_tuning_pipeline import (
+        install_native_llama_tuning_pipeline,
+    )
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .model_runtime_performance import install as install_model_runtime_performance
     from .parallel_runtime_contract import install as install_parallel_runtime
@@ -87,15 +85,11 @@ def _install_model_runtime_contracts() -> None:
         services_module=complete_orchestrator_services,
         model_router_module=model_router,
     )
-    install_llama_hardware(llama_server_autotune)
-    install_llama_efficiency(llama_server_autotune, llama_server_hardware_policy)
-    install_llama_runtime_tuning(llama_server_autotune)
-    install_llama_cache_reuse(
-        llama_server_autotune,
-        llama_server_hardware_policy,
-        llama_server_runtime_tuning,
+    install_native_llama_tuning_pipeline(
+        autotune=llama_server_autotune,
+        hardware_policy=llama_server_hardware_policy,
+        runtime_tuning=llama_server_runtime_tuning,
     )
-    install_llama_decode_speed(llama_server_autotune, llama_server_runtime_tuning)
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_parallel_runtime(
         complete_planner_module=complete_planner,

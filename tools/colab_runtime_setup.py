@@ -536,8 +536,40 @@ def _ensure_native_server(torch: Any) -> str:
     return resolved
 
 
+def _project_install_receipt_path() -> Path:
+    return (Path.home() / ".cache" / "mmm" / "project-install-receipt.json").resolve()
+
+
+def _project_install_fingerprint(target: str) -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    pyproject = repo_root / "pyproject.toml"
+    payload = {
+        "schema": "mmm/project-install-receipt-v1",
+        "repo_root": str(repo_root),
+        "python_executable": str(Path(sys.executable).resolve()),
+        "python_version": sys.version,
+        "target": target,
+        "pyproject_sha256": _file_sha256(pyproject),
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
 def _install_project(*, local_profile: bool) -> None:
     target = LOCAL_PROJECT_INSTALL_TARGET if local_profile else REMOTE_PROJECT_INSTALL_TARGET
+    fingerprint = _project_install_fingerprint(target)
+    receipt_path = _project_install_receipt_path()
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except Exception:
+        receipt = {}
+    if (
+        receipt.get("schema_version") == "mmm/project-install-receipt-v1"
+        and receipt.get("fingerprint") == fingerprint
+        and _installed_version("mmm-make-mincraft-mode") is not None
+    ):
+        print("project dependencies: receipt hit; pip skipped", flush=True)
+        return
+
     print("project dependencies: installing", target, flush=True)
     _run_logged(
         [
@@ -551,6 +583,19 @@ def _install_project(*, local_profile: bool) -> None:
             target,
         ]
     )
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
+    temporary.write_text(
+        _canonical_json(
+            {
+                "schema_version": "mmm/project-install-receipt-v1",
+                "fingerprint": fingerprint,
+                "target": target,
+            }
+        ) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, receipt_path)
     print("project dependencies: installed", flush=True)
 
 
