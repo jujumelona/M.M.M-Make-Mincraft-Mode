@@ -127,7 +127,8 @@ def test_module_shards_use_dependency_ready_waves() -> None:
     ]
 
 
-def test_custom_llm_modules_are_bounded_without_one_node_per_module() -> None:
+def test_custom_llm_modules_are_bounded_without_one_node_per_module(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
     modules = tuple(
         ProductionModule(module_id=f"custom_{index:03d}", kind="custom_java")
         for index in range(100)
@@ -138,3 +139,32 @@ def test_custom_llm_modules_are_bounded_without_one_node_per_module() -> None:
     assert [stage for stage, _ in shards] == ["custom", "custom", "custom"]
     assert [len(members) for _, members in shards] == [48, 48, 4]
     assert sum(len(members) for _, members in shards) == 100
+
+
+def test_small_custom_wave_uses_all_selected_llm_slots_without_row_explosion(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
+    modules = tuple(
+        ProductionModule(module_id=f"custom_{index:02d}", kind="custom_java")
+        for index in range(10)
+    )
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+    shards = list(work_graph._module_shards(modules, policy=policy))
+
+    assert [stage for stage, _ in shards] == ["custom", "custom", "custom"]
+    assert [len(members) for _, members in shards] == [4, 4, 2]
+    assert sum(len(members) for _, members in shards) == 10
+
+
+def test_large_custom_wave_keeps_java_shard_ceiling(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
+    modules = tuple(
+        ProductionModule(module_id=f"custom_{index:03d}", kind="custom_java")
+        for index in range(200)
+    )
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+    shards = list(work_graph._module_shards(modules, policy=policy))
+
+    sizes = [len(members) for stage, members in shards if stage == "custom"]
+    assert sizes == [48, 48, 48, 48, 8]
+    assert max(sizes) <= 48
+    assert sum(sizes) == 200
