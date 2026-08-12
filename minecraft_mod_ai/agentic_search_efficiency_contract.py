@@ -5,19 +5,18 @@ from typing import Any, Mapping, Sequence
 
 
 def install(agentic_module: Any) -> None:
-    """Avoid proactive best-of-N LLM duplication on a one-slot local GPU.
+    """Keep adaptive planning search while gating expensive repair breadth.
 
-    Auto mode uses one structured planning candidate because schema/semantic validators
-    and targeted repair already guard correctness. Repair search escalates only after
-    the same error signature survives a prior repair. Explicit MMM_AGENTIC_SEARCH=on
-    keeps the original best-of-N behavior for users who intentionally trade latency
-    for search breadth.
+    Auto planning delegates to the core risk-aware policy so independent candidates
+    can use the native llama-server slots when the request actually warrants search.
+    Explicit ``on`` and ``off`` remain hard overrides. Repair search stays failure-
+    gated: it widens only after the same verifier signature survives a prior repair.
     """
 
     current_plan_count = agentic_module._planner_candidate_count
     if not getattr(current_plan_count, "_mmm_failure_gated_search", False):
+
         def planner_candidate_count(request: Any, stage: str) -> int:
-            del request, stage
             mode = agentic_module._mode()
             if mode == "on":
                 return agentic_module._env_int(
@@ -25,7 +24,9 @@ def install(agentic_module: Any) -> None:
                     2,
                     maximum=3,
                 )
-            return 1
+            if mode == "off":
+                return 1
+            return max(1, min(3, int(current_plan_count(request, stage))))
 
         planner_candidate_count._mmm_failure_gated_search = True  # type: ignore[attr-defined]
         planner_candidate_count.__wrapped__ = current_plan_count  # type: ignore[attr-defined]
