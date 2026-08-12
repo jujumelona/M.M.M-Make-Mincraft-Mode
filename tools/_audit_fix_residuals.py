@@ -217,13 +217,10 @@ def main() -> None:
         '        setup_fingerprint=first,\n        torch=None,\n        llama_server_binary="",\n    )\n',
     )
 
+    # Sequential production-outline pages are stricter than ordinary structured
+    # responses: unrelated outer JSON must still fail closed.
     strict = Path("tests/test_planner_strict_json_contract.py")
     text = strict.read_text(encoding="utf-8")
-    old = '''def test_outline_sequence_rejects_unrelated_json_object() -> None:\n    expected = (frozenset({"production_batches", "complete", "next_cursor"}),)\n    with pytest.raises(SpecValidationError, match="valid sequential production-outline"):\n        _extract(\n            '{"production_batches":[],"complete":false,"next_cursor":"p2"}\\n'\n            '{"note":"alternative"}',\n            expected,\n        )\n'''
-    new = '''def test_outline_sequence_ignores_unrelated_scratch_object() -> None:\n    expected = (frozenset({"production_batches", "complete", "next_cursor"}),)\n    assert _extract(\n        '{"production_batches":[],"complete":false,"next_cursor":"p2"}\\n'\n        '{"note":"alternative"}',\n        expected,\n    ) == {"production_batches": [], "complete": False, "next_cursor": "p2"}\n'''
-    if old not in text:
-        raise RuntimeError("strict JSON scratch test shape changed")
-    text = text.replace(old, new, 1)
     text = text.replace(
         'match="found 2 complete outermost JSON containers"',
         'match="found 2 matching objects"',
