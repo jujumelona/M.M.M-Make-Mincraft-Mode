@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import heapq
 import math
 import os
+from collections import Counter
 from typing import Any, Iterator, Sequence
 
 
@@ -28,14 +30,7 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
         planning_receipt: dict[str, Any],
         media_paths: Sequence[Any],
     ) -> None:
-        """Use adaptive page width and durable object-level semantic repair.
-
-        Splitting a coherent production batch into arbitrary host-sized request pages
-        cannot create useful decode parallelism; it only adds prompt/decode overhead.
-        Present every outstanding deliverable, let the model finish any coherent
-        non-empty subset that fits cleanly, persist the returned page before semantic
-        parsing, and patch only individual invalid item fields.
-        """
+        """Use adaptive page width and durable object-level semantic repair."""
 
         from .production_page_durable_contract import (
             load_or_generate_page,
@@ -156,57 +151,112 @@ def _dependency_wave_shards(
     *,
     policy: Any,
 ) -> Iterator[tuple[str, tuple[Any, ...]]]:
-    """Shard only modules that are simultaneously dependency-ready.
+    """Create bounded shards without exploding long serial dependency chains.
 
-    Consecutive topological order is not a readiness wave: placing a dependent module
-    in the same coarse shard as an unrelated ready module makes unrelated work wait for
-    the dependency. Compute dependency depth first, then shard within (depth, stage).
+    Dependencies between members of one shard are safe because ``modules`` is already
+    topological and each bounded member list is processed deterministically in order.
+    The unsafe case is adding an otherwise-ready module to a shard that has unrelated
+    external dependencies. To avoid that artificial wait, a module may join an open
+    shard only when its effective external dependency-group set is identical.
 
-    Custom LLM work is split just enough to occupy the native decode slots selected by
-    autotuning, not one durable row per module. The normal Java shard ceiling still
-    bounds very large waves, so SQLite/checkpoint overhead remains sublinear in project
-    size while small waves no longer collapse all custom decoding into one serial node.
+    This keeps ready work separate while compressing a 20k linear chain into bounded
+    ``java_shard_size`` nodes instead of 20k SQLite rows. Custom LLM work additionally
+    sizes independent shards to expose the native decode slots selected by autotuning.
     """
 
-    levels: dict[str, int] = {}
-    buckets: dict[tuple[int, str], list[Any]] = {}
-    stage_order: dict[int, list[str]] = {}
+    staged = [(item, work_graph_module._module_stage(item)) for item in modules]
+    stage_counts = Counter(stage for _, stage in staged)
+    groups: list[dict[str, Any]] = []
+    module_group: dict[str, int] = {}
 
-    for item in modules:
-        missing = [dependency for dependency in item.depends_on if dependency not in levels]
+    def shard_size_for(stage: str) -> int:
+        if stage == "entity":
+            return max(1, int(policy.entity_shard_size))
+        if stage == "custom":
+            count = max(1, int(stage_counts[stage]))
+            slots = min(_active_llm_slots(), count)
+            return min(
+                max(1, int(policy.java_shard_size)),
+                max(1, math.ceil(count / slots)),
+            )
+        return max(1, int(policy.java_shard_size))
+
+    for item, stage in staged:
+        missing = [dependency for dependency in item.depends_on if dependency not in module_group]
         if missing:
             raise work_graph_module.WorkGraphError(
                 "Module sharding requires topological order; unresolved dependencies for "
                 f"{item.module_id}: {missing[:4]}"
             )
-        level = (
-            0
-            if not item.depends_on
-            else 1 + max(levels[dependency] for dependency in item.depends_on)
-        )
-        levels[item.module_id] = level
-        stage = work_graph_module._module_stage(item)
-        key = (level, stage)
-        buckets.setdefault(key, []).append(item)
-        stages = stage_order.setdefault(level, [])
-        if stage not in stages:
-            stages.append(stage)
 
-    for level in sorted(stage_order):
-        for stage in stage_order[level]:
-            values = buckets[(level, stage)]
-            if stage == "entity":
-                shard_size = policy.entity_shard_size
-            elif stage == "custom":
-                slots = min(_active_llm_slots(), len(values))
-                shard_size = min(
-                    policy.java_shard_size,
-                    max(1, math.ceil(len(values) / slots)),
+        shard_size = shard_size_for(stage)
+        chosen: int | None = None
+        for index in range(len(groups) - 1, -1, -1):
+            group = groups[index]
+            if group["stage"] != stage or len(group["members"]) >= shard_size:
+                continue
+
+            internal_dependency = any(
+                module_group[dependency] == index
+                for dependency in item.depends_on
+            )
+            effective_external = {
+                module_group[dependency]
+                for dependency in item.depends_on
+                if module_group[dependency] != index
+            }
+            if internal_dependency:
+                effective_external.update(group["external_groups"])
+
+            if effective_external == group["external_groups"]:
+                chosen = index
+                break
+
+        if chosen is None:
+            chosen = len(groups)
+            groups.append(
+                {
+                    "stage": stage,
+                    "members": [],
+                    "external_groups": {
+                        module_group[dependency] for dependency in item.depends_on
+                    },
+                    "first_order": len(module_group),
+                }
+            )
+
+        groups[chosen]["members"].append(item)
+        module_group[item.module_id] = chosen
+
+    dependents: dict[int, list[int]] = {index: [] for index in range(len(groups))}
+    indegree = [0] * len(groups)
+    for index, group in enumerate(groups):
+        dependencies = sorted(set(group["external_groups"]))
+        indegree[index] = len(dependencies)
+        for dependency in dependencies:
+            dependents[dependency].append(index)
+
+    ready: list[tuple[int, int]] = []
+    for index, degree in enumerate(indegree):
+        if degree == 0:
+            heapq.heappush(ready, (int(groups[index]["first_order"]), index))
+
+    emitted = 0
+    while ready:
+        _, index = heapq.heappop(ready)
+        group = groups[index]
+        yield str(group["stage"]), tuple(group["members"])
+        emitted += 1
+        for dependent in dependents[index]:
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                heapq.heappush(
+                    ready,
+                    (int(groups[dependent]["first_order"]), dependent),
                 )
-            else:
-                shard_size = policy.java_shard_size
-            for index in range(0, len(values), shard_size):
-                yield stage, tuple(values[index : index + shard_size])
+
+    if emitted != len(groups):
+        raise work_graph_module.WorkGraphError("Module shard dependency graph contains a cycle.")
 
 
 def install(*, complete_planner_module: Any, work_graph_module: Any) -> None:
