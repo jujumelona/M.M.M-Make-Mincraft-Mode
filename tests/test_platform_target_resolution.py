@@ -7,12 +7,15 @@ import pytest
 
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.knowledge import evidence_for_target
+from minecraft_mod_ai import platform_catalog as catalog
+from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.platform_catalog import (
     FABRIC_1201,
     FABRIC_1211,
+    PlatformAdapter,
     adapter_from_project,
-    supported_minecraft_versions,
 )
+from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget
 from minecraft_mod_ai.platform_resolver import lock_from_adapter, resolve_platform
 from minecraft_mod_ai.spec import (
     ContentKind,
@@ -44,32 +47,95 @@ def _simple_spec(adapter) -> ModSpec:
     )
 
 
-def test_supported_versions_are_reviewed_catalog_targets() -> None:
-    assert supported_minecraft_versions(loader="fabric") == ("1.20.1", "1.21.1")
+def _future_live(version: str = "27.0") -> LiveFabricTarget:
+    return LiveFabricTarget(
+        minecraft_version=version,
+        stable=True,
+        loader_version="0.20.0",
+        fabric_api_version=f"0.200.0+{version}",
+        loom_version="1.20-SNAPSHOT",
+        java_version="25",
+        gradle_version="9.7",
+        gradle_sha256="a" * 64,
+        mappings_kind="mojang",
+        mappings_version="mojang",
+        discovery_sha256="sha256:" + "b" * 64,
+    )
 
 
-def test_auto_target_uses_newest_adapter_for_simple_content() -> None:
-    selection = resolve_platform("간단한 장식 아이템 하나를 추가해줘")
-    assert selection.adapter.adapter_id == FABRIC_1211.adapter_id
-    assert selection.source == "host_capability_resolution"
-    assert selection.explicit_version is False
+def test_supported_versions_are_live_discovery_not_source_allowlist(monkeypatch) -> None:
+    monkeypatch.setattr(
+        catalog,
+        "latest_stable_versions",
+        lambda limit=32: ("27.0", "26.2", "1.21.11")[:limit],
+    )
+    assert catalog.supported_minecraft_versions(loader="fabric")[:2] == (
+        "27.0",
+        "26.2",
+    )
 
 
-def test_auto_target_keeps_mature_adapter_for_advanced_source_family() -> None:
-    selection = resolve_platform("새로운 보스 몬스터와 전투 패턴을 추가해줘")
-    assert selection.adapter.adapter_id == FABRIC_1201.adapter_id
+def test_future_version_needs_no_new_platform_catalog_entry(monkeypatch) -> None:
+    monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
+    selected = catalog.adapter_for_target("27.0", "fabric")
+    assert selected.minecraft_version == "27.0"
+    assert selected.source_api_family == "fabric_live_ai"
+    assert selected.adapter_id.startswith("fabric_live_27_0_")
+    assert all(seed.minecraft_version != "27.0" for seed in catalog.PLATFORM_ADAPTERS)
 
 
-def test_explicit_target_is_hard_constraint() -> None:
-    selected = resolve_platform("Minecraft 1.21.1 Fabric에 아이템 하나 추가")
-    assert selected.adapter.adapter_id == FABRIC_1211.adapter_id
+class _ChoiceRouter:
+    def __init__(self, selected: str) -> None:
+        self.selected = selected
+        self.calls = 0
+
+    def generate_text(self, *_args, **_kwargs) -> str:
+        self.calls += 1
+        return json.dumps(
+            {
+                "minecraft_version": self.selected,
+                "reason": "central compatibility choice",
+            }
+        )
+
+
+def _patch_future_candidates(monkeypatch) -> None:
+    monkeypatch.setattr(
+        resolver,
+        "supported_minecraft_versions",
+        lambda loader="fabric": ("27.0", "26.2"),
+    )
+    monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
+
+
+def test_central_ai_selects_from_live_discovered_candidates(monkeypatch) -> None:
+    _patch_future_candidates(monkeypatch)
+    router = _ChoiceRouter("26.2")
+    selected = resolve_platform(
+        "새 모드를 만들어줘",
+        router=router,
+    )
+    assert router.calls == 1
+    assert selected.adapter.minecraft_version == "26.2"
+    assert selected.source == "central_ai_over_live_discovery"
+
+
+def test_central_ai_cannot_invent_undiscovered_version(monkeypatch) -> None:
+    _patch_future_candidates(monkeypatch)
+    router = _ChoiceRouter("99.99")
+    selected = resolve_platform("새 모드를 만들어줘", router=router)
+    assert selected.adapter.minecraft_version == "27.0"
+    assert "fail-closed" in selected.reason
+
+
+def test_explicit_future_target_is_hard_constraint_when_officially_discovered(monkeypatch) -> None:
+    monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
+    selected = resolve_platform("Minecraft 27.0 Fabric에 아이템 하나 추가")
+    assert selected.adapter.minecraft_version == "27.0"
     assert selected.explicit_version is True
 
     with pytest.raises(SpecValidationError):
-        resolve_platform("Minecraft 1.22.0 Fabric에 아이템 하나 추가")
-
-    with pytest.raises(SpecValidationError):
-        resolve_platform("Minecraft 1.21.1 NeoForge에 아이템 하나 추가")
+        resolve_platform("Minecraft 27.0 NeoForge에 아이템 하나 추가")
 
 
 def test_revise_preserves_existing_target_without_migration_request() -> None:
@@ -98,13 +164,19 @@ def test_platform_lock_rejects_mixed_version_tuple() -> None:
         mixed.validate()
 
 
-def test_target_evidence_uses_matching_yarn_snapshot() -> None:
-    ids_1201 = {item.source_id for item in evidence_for_target("item", minecraft_version="1.20.1")}
-    ids_1211 = {item.source_id for item in evidence_for_target("item", minecraft_version="1.21.1")}
+def test_legacy_target_evidence_keeps_exact_yarn_javadocs() -> None:
+    ids_1201 = {
+        item.source_id for item in evidence_for_target(None, minecraft_version="1.20.1")
+    }
+    ids_1211 = {
+        item.source_id for item in evidence_for_target(None, minecraft_version="1.21.1")
+    }
     assert "yarn-1201-javadoc" in ids_1201
     assert "yarn-1211-javadoc" not in ids_1201
     assert "yarn-1211-javadoc" in ids_1211
     assert "yarn-1201-javadoc" not in ids_1211
+    assert "fabric-develop-live" in ids_1201
+    assert "fabric-develop-live" in ids_1211
 
 
 def test_1211_generator_writes_1211_source_resource_and_lock(tmp_path: Path) -> None:
