@@ -25,11 +25,17 @@ def install(skill_catalog_module: Any) -> None:
     planning/generation/quality/runtime tools. Skills therefore do not gain invented
     direct MCP tool names or new authorization surfaces; their existing tool calls
     receive federated evidence automatically at the appropriate stage.
+
+    Packaging is a different concern: ``tools/package_skills.py`` must compare the
+    checked-in canonical markdown with the checked-in JSON snapshot byte-for-byte in
+    meaning, so it is given the unmodified parser through ``_mmm_raw_parse_skill``.
     """
 
     original = skill_catalog_module._parse_skill
     if getattr(original, "_mmm_dynamic_platform_skill", False):
         return
+    if not hasattr(skill_catalog_module, "_mmm_raw_parse_skill"):
+        skill_catalog_module._mmm_raw_parse_skill = original
 
     @wraps(original)
     def parse_skill(text: str, expected_name: str):
