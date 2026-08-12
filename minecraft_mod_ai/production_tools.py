@@ -103,8 +103,8 @@ class ProductionToolService:
             timeout_seconds=timeout_seconds,
         )
 
-    def blockbench_list_tools(self) -> dict[str, Any]:
-        client = BlockbenchMCPClient()
+    def blockbench_list_tools(self, timeout_seconds: int = 60) -> dict[str, Any]:
+        client = BlockbenchMCPClient(timeout_seconds=timeout_seconds)
         try:
             return {
                 "schema_version": "mmm/blockbench-tools-v1",
@@ -118,8 +118,9 @@ class ProductionToolService:
         self,
         operation: str,
         arguments: dict[str, Any],
+        timeout_seconds: int = 60,
     ) -> dict[str, Any]:
-        client = BlockbenchMCPClient()
+        client = BlockbenchMCPClient(timeout_seconds=timeout_seconds)
         try:
             return client.call(operation, arguments)
         finally:
@@ -212,16 +213,18 @@ class ProductionToolService:
         host: str = "127.0.0.1",
         port: int = 25565,
         username: str = "MMMTestBot",
+        timeout_seconds: float = 180.0,
     ) -> dict[str, Any]:
         return self.mineflayer.call(
             "connect",
+            timeout_seconds=timeout_seconds,
             host=host,
             port=port,
             username=username,
         )
 
-    def mineflayer_status(self) -> dict[str, Any]:
-        return self.mineflayer.call("status")
+    def mineflayer_status(self, timeout_seconds: float = 180.0) -> dict[str, Any]:
+        return self.mineflayer.call("status", timeout_seconds=timeout_seconds)
 
     def mineflayer_walk_to(
         self,
@@ -229,9 +232,11 @@ class ProductionToolService:
         y: float,
         z: float,
         range: int = 1,
+        timeout_seconds: float = 180.0,
     ) -> dict[str, Any]:
         return self.mineflayer.call(
             "walk_to",
+            timeout_seconds=timeout_seconds,
             x=x,
             y=y,
             z=z,
@@ -243,14 +248,21 @@ class ProductionToolService:
         x: int,
         y: int,
         z: int,
+        timeout_seconds: float = 180.0,
     ) -> dict[str, Any]:
-        return self.mineflayer.call("interact_block", x=x, y=y, z=z)
+        return self.mineflayer.call(
+            "interact_block",
+            timeout_seconds=timeout_seconds,
+            x=x,
+            y=y,
+            z=z,
+        )
 
-    def mineflayer_inventory(self) -> dict[str, Any]:
-        return self.mineflayer.call("inventory")
+    def mineflayer_inventory(self, timeout_seconds: float = 180.0) -> dict[str, Any]:
+        return self.mineflayer.call("inventory", timeout_seconds=timeout_seconds)
 
-    def mineflayer_disconnect(self) -> dict[str, Any]:
-        return self.mineflayer.call("disconnect")
+    def mineflayer_disconnect(self, timeout_seconds: float = 30.0) -> dict[str, Any]:
+        return self.mineflayer.call("disconnect", timeout_seconds=timeout_seconds)
 
     def run_model_smoke(
         self,
