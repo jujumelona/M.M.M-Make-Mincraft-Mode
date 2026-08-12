@@ -37,7 +37,24 @@ class _StreamingResponse:
         yield 'data: [DONE]'
 
 
-def test_local_mtp_generation_uses_sse_without_fixed_read_timeout(monkeypatch) -> None:
+class _UnavailableTelemetryResponse:
+    status_code = 404
+    text = ""
+
+    @staticmethod
+    def json():
+        return {}
+
+
+def _disable_mock_telemetry(monkeypatch) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: _UnavailableTelemetryResponse(),
+    )
+
+
+def test_local_native_generation_uses_sse_without_fixed_read_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_stream(method, url, *, json, timeout):
@@ -48,6 +65,7 @@ def test_local_mtp_generation_uses_sse_without_fixed_read_timeout(monkeypatch) -
         return _StreamingResponse()
 
     monkeypatch.setattr(httpx, "stream", fake_stream)
+    _disable_mock_telemetry(monkeypatch)
 
     adapter = _Adapter()
     request = SimpleNamespace(
@@ -73,12 +91,13 @@ def test_local_mtp_generation_uses_sse_without_fixed_read_timeout(monkeypatch) -
     assert timeout.pool == 30.0
 
 
-def test_local_mtp_stream_requires_done_marker(monkeypatch) -> None:
+def test_local_native_stream_requires_done_marker(monkeypatch) -> None:
     class _BrokenResponse(_StreamingResponse):
         def iter_lines(self):
             yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
 
     monkeypatch.setattr(httpx, "stream", lambda *args, **kwargs: _BrokenResponse())
+    _disable_mock_telemetry(monkeypatch)
 
     adapter = _Adapter()
     request = SimpleNamespace(
