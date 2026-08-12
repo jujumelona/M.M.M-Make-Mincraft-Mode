@@ -1,0 +1,33 @@
+name: Profile large request
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/profile-large-request.yml
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run large request with watchdog
+        run: |
+          timeout 90s python - <<'PY'
+          import faulthandler
+          import pytest
+          faulthandler.dump_traceback_later(20, repeat=True)
+          raise SystemExit(pytest.main([
+              '-vv', '-s', '--tb=short',
+              'tests/test_large_request_ingestion.py::test_more_than_6144_word_request_is_losslessly_paged_through_production',
+          ]))
+          PY
