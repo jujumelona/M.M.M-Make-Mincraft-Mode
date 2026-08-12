@@ -30,12 +30,10 @@ def install() -> None:
     """Install quality-neutral reuse for expensive image/retrieval runtimes.
 
     Native llama-server exclusively owns GGUF model residency and GPU handoff. This
-    contract caches only diffusion, embedding and reranker runtimes and prevents
-    independent local GPU work from interleaving inside one asset shard.
+    contract caches only diffusion, embedding and reranker runtimes. Atomic GPU
+    ownership for image/speech work is installed separately by the handoff contract.
     """
 
-    from . import complete_orchestrator_services as services
-    from . import model_router as router_module
     from .model_adapters import base as base_module
     from .model_adapters.embedding import EmbeddingAdapter
     from .model_adapters.image_diffusion import ImageDiffusionAdapter
@@ -44,7 +42,6 @@ def install() -> None:
     _install_cached_image_runtime(ImageDiffusionAdapter, base_module)
     _install_cached_embedding(EmbeddingAdapter)
     _install_cached_reranker(RerankerAdapter)
-    _install_asset_gpu_session(services, router_module, base_module)
 
 
 def _install_cached_image_runtime(cls: Any, base_module: Any) -> None:
@@ -355,43 +352,3 @@ def _install_cached_reranker(cls: Any) -> None:
 
     cached_score._mmm_cached_reranker_model = True
     cls.score = cached_score
-
-
-def _install_asset_gpu_session(
-    services: Any,
-    router_module: Any,
-    base_module: Any,
-) -> None:
-    original = services.generate_assets
-    if getattr(original, "_mmm_image_gpu_session", False):
-        return
-
-    @wraps(original)
-    def image_gpu_session(router: Any, *args: Any, **kwargs: Any):
-        registry = getattr(router, "registry", None)
-        profile = getattr(router, "profile", None)
-        if registry is None or profile is None:
-            # Unit-test/lightweight routers intentionally implement only
-            # generate_image(). They have no model registry and must keep the
-            # original deterministic asset-generation contract.
-            return original(router, *args, **kwargs)
-        config = registry.role(profile, "image_generator")
-        local_exclusive = (
-            config.provider == "local"
-            and config.adapter == "image_diffusion"
-            and config.exclusive_gpu
-        )
-        if not local_exclusive:
-            return original(router, *args, **kwargs)
-
-        # One asset shard owns the GPU as a unit. Individual diffusion calls use the
-        # same RLock recursively, so a waiting local LLM cannot slip between overview
-        # and detail tiles and force both large runtimes to reload repeatedly.
-        with router_module._GPU_EXCLUSIVE_LOCK:
-            try:
-                return original(router, *args, **kwargs)
-            finally:
-                base_module._release_cuda()
-
-    image_gpu_session._mmm_image_gpu_session = True
-    services.generate_assets = image_gpu_session
