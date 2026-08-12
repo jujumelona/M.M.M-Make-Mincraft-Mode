@@ -6,14 +6,7 @@ from typing import Any, Sequence
 
 
 def _unwrap_transport_json_fence(text: str) -> str:
-    """Remove one transport-only ```json fence and nothing else.
-
-    The Colab llama streaming path intentionally disables the server's generic JSON
-    grammar because that grammar has previously stalled CUDA decoding.  Some models
-    still wrap an otherwise exact JSON object in a Markdown JSON fence.  Treat that
-    fence as transport syntax only when it encloses the *entire* response.  Prose,
-    multiple fenced blocks, other fence languages and truncated JSON remain invalid.
-    """
+    """Remove one response-wide ```json fence and nothing else."""
 
     stripped = text.strip()
     if not stripped.startswith("```"):
@@ -26,8 +19,49 @@ def _unwrap_transport_json_fence(text: str) -> str:
     if opener != "```json" or not stripped.endswith("```"):
         return stripped
 
-    inner = stripped[newline + 1 : -3].strip()
-    return inner
+    return stripped[newline + 1 : -3].strip()
+
+
+def _unwrap_qwen_think_channel(text: str) -> str:
+    """Remove one leading Qwen reasoning-channel wrapper, if present.
+
+    The pinned Colab OpenAI-compatible server can leave Qwen's chat-template
+    ``<think>...</think>`` delimiter in ``delta.content`` even when host policy has
+    disabled reasoning.  A template can also pre-open the channel and expose only a
+    leading ``</think>`` before visible content.  These are transport/channel markers,
+    not planner output.  Only one *leading* channel wrapper is ignored; arbitrary
+    prose before/after the JSON remains invalid and an unterminated think block is
+    deliberately left untouched so strict JSON parsing rejects it.
+    """
+
+    stripped = text.strip()
+    if stripped.startswith("<think>"):
+        close = stripped.find("</think>", len("<think>"))
+        if close < 0:
+            return stripped
+        return stripped[close + len("</think>") :].strip()
+    if stripped.startswith("</think>"):
+        return stripped[len("</think>") :].strip()
+    return stripped
+
+
+def _normalize_structured_transport(text: str) -> str:
+    """Normalize only known structured-output transport wrappers.
+
+    This is intentionally not a JSON recovery routine: it never searches for an
+    embedded object, auto-closes JSON, deletes prose, or accepts multiple values.
+    After the known Qwen channel marker and optional response-wide JSON fence are
+    removed, the complete remainder still has to pass ``json.loads`` exactly once.
+    """
+
+    candidate = text.strip()
+    # A BOM is a serialization marker rather than model prose.  Accept at most one at
+    # the absolute start, which also keeps ``json.loads`` behavior deterministic.
+    if candidate.startswith("\ufeff"):
+        candidate = candidate[1:].lstrip()
+    candidate = _unwrap_qwen_think_channel(candidate)
+    candidate = _unwrap_transport_json_fence(candidate)
+    return candidate
 
 
 def install(runtime_module: Any) -> None:
@@ -37,9 +71,8 @@ def install(runtime_module: Any) -> None:
     ``strict=False`` JSON, or auto-closed truncated objects bypasses that repair gate
     and can synthesize pagination state the model never actually completed. Structured
     decode output therefore has one contract: one complete strict JSON object whose
-    top-level field set matches one declared host contract. A single response-wide
-    `````json`` transport fence is ignored because the Colab streaming path cannot
-    safely rely on the server's generic JSON grammar.
+    top-level field set matches one declared host contract. Known Colab/Qwen transport
+    wrappers are normalized before that strict boundary is enforced.
     """
 
     current = runtime_module._extract_with_safe_empty_defaults
@@ -55,7 +88,7 @@ def install(runtime_module: Any) -> None:
     ) -> dict[str, Any]:
         if not isinstance(text, str) or not text.strip():
             raise module.SpecValidationError("Structured planner returned empty JSON.")
-        candidate = _unwrap_transport_json_fence(text)
+        candidate = _normalize_structured_transport(text)
         try:
             value = json.loads(candidate)
         except json.JSONDecodeError as exc:
