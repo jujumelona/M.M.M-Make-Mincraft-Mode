@@ -5,6 +5,7 @@ from pathlib import Path
 
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.work_graph as work_graph_module
+from minecraft_mod_ai.scheduler_fairness_contract import install as install_fairness
 from minecraft_mod_ai.scheduler_parallel_safety_contract import install
 from minecraft_mod_ai.work_graph import (
     DurableWorkLedger,
@@ -44,6 +45,26 @@ def _node(
         },
         resource_class=resource_class,
     )
+
+
+def test_safety_layer_rewraps_late_scheduler_fairness() -> None:
+    # final_architecture_contract installs fairness after the first safety install.
+    # Reinstalling safety must make the orchestrator heartbeat-aware outer layer
+    # while keeping the fairness wrapper immediately underneath for delegation.
+    install_fairness(work_graph_module)
+    assert getattr(
+        work_graph_module.DurableWorkLedger.claim_ready,
+        "_mmm_exact_executor_fairness",
+        False,
+    )
+
+    install(
+        work_graph_module=work_graph_module,
+        orchestrator_module=orchestrator_module,
+    )
+    outer = work_graph_module.DurableWorkLedger.claim_ready
+    assert getattr(outer, "_mmm_parallel_lane_claim", False)
+    assert getattr(outer.__wrapped__, "_mmm_exact_executor_fairness", False)
 
 
 def test_ledger_reuses_one_sqlite_connection_per_thread(
