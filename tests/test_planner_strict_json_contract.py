@@ -49,7 +49,43 @@ def test_response_wide_json_fence_is_accepted_as_transport_only() -> None:
     ) == {"value": 1}
 
 
-def test_production_outline_json_fence_is_accepted_without_synthesizing_fields() -> None:
+def test_leading_qwen_think_channel_is_transport_only() -> None:
+    install(runtime)
+    assert runtime._extract_with_safe_empty_defaults(
+        planner,
+        '<think>internal reasoning not returned to the host</think>\n{"value": 1}',
+        expected_contracts=EXPECTED,
+    ) == {"value": 1}
+
+
+def test_preopened_qwen_think_channel_close_is_transport_only() -> None:
+    install(runtime)
+    assert runtime._extract_with_safe_empty_defaults(
+        planner,
+        '</think>\n{"value": 1}',
+        expected_contracts=EXPECTED,
+    ) == {"value": 1}
+
+
+def test_qwen_think_channel_then_json_fence_is_accepted() -> None:
+    install(runtime)
+    assert runtime._extract_with_safe_empty_defaults(
+        planner,
+        '<think>\n\n</think>\n```json\n{"value": 1}\n```',
+        expected_contracts=EXPECTED,
+    ) == {"value": 1}
+
+
+def test_utf8_bom_is_transport_only() -> None:
+    install(runtime)
+    assert runtime._extract_with_safe_empty_defaults(
+        planner,
+        '\ufeff{"value": 1}',
+        expected_contracts=EXPECTED,
+    ) == {"value": 1}
+
+
+def test_production_outline_qwen_wrapper_and_fence_are_accepted() -> None:
     install(runtime)
     expected = (
         frozenset({"modules", "assets", "audio", "acceptance_tests"}),
@@ -57,7 +93,7 @@ def test_production_outline_json_fence_is_accepted_without_synthesizing_fields()
         frozenset({"production_batches", "complete", "next_cursor"}),
     )
     payload = (
-        '```json\n'
+        '<think>\n\n</think>\n```json\n'
         '{"production_batches":[],"complete":true,"next_cursor":""}'
         '\n```'
     )
@@ -82,12 +118,42 @@ def test_json_fence_with_surrounding_prose_is_rejected() -> None:
         )
 
 
+def test_prose_after_think_channel_is_rejected() -> None:
+    install(runtime)
+    with pytest.raises(SpecValidationError, match="one complete strict JSON object"):
+        runtime._extract_with_safe_empty_defaults(
+            planner,
+            '<think>reasoning</think>\nresult follows\n{"value": 1}',
+            expected_contracts=EXPECTED,
+        )
+
+
+def test_unterminated_think_channel_is_rejected() -> None:
+    install(runtime)
+    with pytest.raises(SpecValidationError, match="one complete strict JSON object"):
+        runtime._extract_with_safe_empty_defaults(
+            planner,
+            '<think>reasoning\n{"value": 1}',
+            expected_contracts=EXPECTED,
+        )
+
+
 def test_non_json_fence_is_rejected() -> None:
     install(runtime)
     with pytest.raises(SpecValidationError, match="one complete strict JSON object"):
         runtime._extract_with_safe_empty_defaults(
             planner,
             '```text\n{"value": 1}\n```',
+            expected_contracts=EXPECTED,
+        )
+
+
+def test_multiple_json_values_are_rejected() -> None:
+    install(runtime)
+    with pytest.raises(SpecValidationError, match="one complete strict JSON object"):
+        runtime._extract_with_safe_empty_defaults(
+            planner,
+            '{"value": 1}\n{"value": 2}',
             expected_contracts=EXPECTED,
         )
 
