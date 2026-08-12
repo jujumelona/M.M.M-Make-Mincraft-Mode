@@ -8,7 +8,14 @@ from typing import Any
 
 SCHEMA = "mmm/imported-platform-repair-v1"
 RELATIVE_PATH = Path(".minecraft_ai/imported-platform-repair.json")
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SHA256 = re.compile(r"^(?:sha256:)?([0-9a-f]{64})$")
+
+
+def _canonical_sha256(value: str) -> str:
+    match = _SHA256.fullmatch(str(value).strip())
+    if match is None:
+        raise ValueError("Imported platform repair requires the bound source SHA-256.")
+    return "sha256:" + match.group(1)
 
 
 def marker_path(project_root: str | Path) -> Path:
@@ -23,8 +30,7 @@ def write_marker(
     archive_sha256: str,
     reason: str,
 ) -> Path:
-    if not _SHA256.fullmatch(str(archive_sha256)):
-        raise ValueError("Imported platform repair requires the bound source SHA-256.")
+    digest = _canonical_sha256(archive_sha256)
     root = Path(project_root).expanduser().resolve()
     target = marker_path(root)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -44,7 +50,7 @@ def write_marker(
             "fabric_loom": str(adapter.fabric_loom),
             "gradle": str(adapter.gradle),
         },
-        "archive_sha256": str(archive_sha256),
+        "archive_sha256": digest,
         "reason": str(reason)[:2000],
         "authority": "repair-entry-only",
         "release_evidence": False,
@@ -99,11 +105,20 @@ def read_valid_marker(
     if any(str(expected.get(key, "")) != value for key, value in required.items()):
         return None
     digest = payload.get("archive_sha256")
-    if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+    if not isinstance(digest, str):
         return None
-    if archive_sha256 is not None and digest != archive_sha256:
+    try:
+        digest = _canonical_sha256(digest)
+    except ValueError:
         return None
-    return payload
+    if archive_sha256 is not None:
+        try:
+            expected_digest = _canonical_sha256(archive_sha256)
+        except ValueError:
+            return None
+        if digest != expected_digest:
+            return None
+    return {**payload, "archive_sha256": digest}
 
 
 def clear_marker(project_root: str | Path) -> None:
