@@ -19,10 +19,8 @@ from minecraft_mod_ai.colab_run_modes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOKS = (
-    ROOT / "M.M.M_Make_Mincraft_Mode_Colab.ipynb",
-    ROOT / "Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb",
-)
+NOTEBOOKS = (ROOT / "M.M.M_Make_Mincraft_Mode_Colab.ipynb",)
+LEGACY_NOTEBOOK = ROOT / "Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb"
 
 
 class _Proposal:
@@ -87,7 +85,7 @@ def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
     assert should_build(EXISTING_PLAN_MODE) is True
 
 
-def test_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() -> None:
+def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() -> None:
     expected = 'RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute"]'
     legacy_labels = (
         "플랜모드",
@@ -95,7 +93,9 @@ def test_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() -> None:
         "이미 만들어진 모드 수정보안모드",
         "이미 있는 플랜을 만드는모드",
     )
+    assert not LEGACY_NOTEBOOK.exists()
     for notebook in NOTEBOOKS:
+        assert notebook.is_file()
         source = _cell_source(notebook, "configuration")
         assert expected in source
         assert "PATCH_EXISTING" not in source
