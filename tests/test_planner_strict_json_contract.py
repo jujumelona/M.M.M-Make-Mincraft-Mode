@@ -73,12 +73,67 @@ def test_production_outline_survives_unknown_transport_envelope() -> None:
     }
 
 
+def test_multiple_outline_json_pages_are_aggregated_in_order() -> None:
+    expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
+    payload = (
+        '{"production_batches":[{"batch_id":"core"}],'
+        '"complete":false,"next_cursor":"p2"}\n'
+        '{"production_batches":[{"batch_id":"ui"},{"batch_id":"audio"}],'
+        '"complete":false,"next_cursor":"p3"}\n'
+        '{"production_batches":[{"batch_id":"integration"}],'
+        '"complete":true,"next_cursor":""}'
+    )
+    assert _extract(payload, expected) == {
+        "production_batches": [
+            {"batch_id": "core"},
+            {"batch_id": "ui"},
+            {"batch_id": "audio"},
+            {"batch_id": "integration"},
+        ],
+        "complete": True,
+        "next_cursor": "",
+    }
+
+
+def test_multiple_outline_pages_can_leave_host_continuation_open() -> None:
+    expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
+    payload = (
+        '{"production_batches":[1,2],"complete":false,"next_cursor":"p2"}\n'
+        '{"production_batches":[3,4],"complete":false,"next_cursor":"continue_host"}'
+    )
+    assert _extract(payload, expected) == {
+        "production_batches": [1, 2, 3, 4],
+        "complete": False,
+        "next_cursor": "continue_host",
+    }
+
+
+def test_nonfinal_outline_page_cannot_claim_complete() -> None:
+    expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
+    with pytest.raises(SpecValidationError, match="non-final emitted production-outline"):
+        _extract(
+            '{"production_batches":[],"complete":true,"next_cursor":""}\n'
+            '{"production_batches":[],"complete":true,"next_cursor":""}',
+            expected,
+        )
+
+
+def test_outline_sequence_rejects_unrelated_json_object() -> None:
+    expected = (frozenset({"production_batches", "complete", "next_cursor"}),)
+    with pytest.raises(SpecValidationError, match="page fields are invalid"):
+        _extract(
+            '{"production_batches":[],"complete":false,"next_cursor":"p2"}\n'
+            '{"note":"alternative"}',
+            expected,
+        )
+
+
 def test_truncated_json_is_not_auto_closed() -> None:
     with pytest.raises(SpecValidationError, match="exactly one complete strict JSON object"):
         _extract('{"value": 1')
 
 
-def test_two_complete_top_level_objects_are_rejected() -> None:
+def test_two_complete_top_level_objects_are_rejected_for_nonpaginated_contract() -> None:
     with pytest.raises(SpecValidationError, match="found 2 complete outermost JSON containers"):
         _extract('{"value": 1}\n{"value": 2}')
 
