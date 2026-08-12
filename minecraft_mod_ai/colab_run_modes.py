@@ -154,42 +154,35 @@ def run_plan_dialog(
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[..., None] = print,
 ) -> PlanDialogResult:
+    """Create/load the plan and continue without a manual approval prompt.
+
+    ``input_fn`` is retained only for API compatibility with older notebooks and
+    tests; it is deliberately never called. Integrity/authorization remains
+    content-bound through the proposal hash that CompleteModAISession.build() passes
+    to the orchestrator automatically.
+    """
+
+    del input_fn
     mode = validate_run_mode(run_mode)
     target = Path(plan_path)
 
     if mode == EXISTING_PLAN_MODE:
         reply = session.load_plan(target)
         show_full_plan(reply, print_fn=print_fn)
-        while True:
-            message = input_fn(
-                "\n이 플랜으로 제작하려면 '제작'을 입력하세요. 수정하려면 수정 내용을 입력하세요: "
-            ).strip()
-            if not message:
-                print_fn("'제작' 또는 수정 내용을 입력해 주세요.")
-                continue
-            if message == "제작":
-                return PlanDialogResult(reply=reply, plan_path=target, approved=True)
-            reply = session.revise(message)
-            target = session.save_plan(target)
-            show_full_plan(reply, print_fn=print_fn)
+        print_fn("플랜 로드 완료: 사용자 승인 대기 없이 제작 단계로 진행합니다.")
+        return PlanDialogResult(reply=reply, plan_path=target, approved=True)
 
     if not prompt.strip():
         raise ValueError(f"{mode}에서는 PROMPT를 입력해야 합니다.")
 
     reply = session.plan(prompt)
+    target = session.save_plan(target)
     show_full_plan(reply, print_fn=print_fn)
-    while True:
-        message = input_fn(
-            "\n수정/보완 내용을 입력하세요. 현재 플랜을 확정하려면 '확정'을 입력하세요: "
-        ).strip()
-        if not message:
-            print_fn("수정 내용 또는 '확정'을 입력해 주세요.")
-            continue
-        if message == "확정":
-            target = session.save_plan(target)
-            return PlanDialogResult(reply=reply, plan_path=target, approved=True)
-        reply = session.revise(message)
-        show_full_plan(reply, print_fn=print_fn)
+    if mode == PLAN_MODE:
+        print_fn("플랜 저장 완료: Plan 모드는 제작하지 않고 종료합니다.")
+    else:
+        print_fn("플랜 확정 완료: 사용자 승인 대기 없이 제작 단계로 진행합니다.")
+    return PlanDialogResult(reply=reply, plan_path=target, approved=True)
 
 
 __all__ = [
