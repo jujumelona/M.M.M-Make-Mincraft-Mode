@@ -10,6 +10,7 @@ from minecraft_mod_ai.external_mcp_router import (
     ExternalMCPRouter,
     MCPRouteTarget,
 )
+from minecraft_mod_ai.skill_catalog import compile_skill_contract
 
 
 def _registry(tmp_path: Path) -> ExternalMCPRegistry:
@@ -197,3 +198,31 @@ def test_checked_in_registry_is_valid_and_capability_routed() -> None:
     assert registry.server("minecraft-dev")["version_policy"] == "provider_reported"
     assert registry.server("fabric-game-runtime")["default_url"].endswith("8765/mcp")
     assert registry.server("fabric-game-client-runtime")["default_url"].endswith("8766/mcp")
+
+
+def test_editable_and_packaged_external_mcp_registries_are_identical() -> None:
+    root = Path(__file__).resolve().parents[1]
+    editable = root / "config/external_mcp_registry.yaml"
+    packaged = root / "minecraft_mod_ai/config/external_mcp_registry.yaml"
+    assert editable.read_bytes() == packaged.read_bytes()
+
+
+def test_effective_skill_policy_is_target_dynamic_and_mcp_aware() -> None:
+    contract = compile_skill_contract("generate-fabric-core")
+    flattened = str(contract.to_dict())
+    assert "1.20.1" not in flattened
+    assert "Java 17" not in flattened
+    assert "Yarn 1.20.1" not in flattened
+    assert "minecraft_mcp_capabilities" in contract.allowed_tools
+    assert "research_minecraft_mcp" in contract.allowed_tools
+    assert contract.authorize_tool(
+        "research_minecraft_mcp",
+        "generation",
+        write_approved=False,
+    ).allowed
+
+
+def test_runtime_skill_can_discover_mcp_without_gaining_research_mutation() -> None:
+    contract = compile_skill_contract("runtime-playtest")
+    assert "minecraft_mcp_capabilities" in contract.allowed_tools
+    assert "research_minecraft_mcp" not in contract.allowed_tools
