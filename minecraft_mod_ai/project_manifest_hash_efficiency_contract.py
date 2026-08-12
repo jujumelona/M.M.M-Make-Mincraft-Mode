@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,10 @@ from typing import Any
 _CACHE_LOCK = threading.RLock()
 _CACHE_LIMIT = 32
 _CACHE: dict[str, tuple[str, str]] = {}
+_EXECUTION_CACHE: ContextVar[dict[str, str] | None] = ContextVar(
+    "mmm_execution_project_manifest_cache",
+    default=None,
+)
 _SPECIAL_NAMES = frozenset(
     {"build.gradle", "settings.gradle", "gradle.properties", "fabric.mod.json"}
 )
@@ -49,43 +54,73 @@ def _bounded_store(root: str, signature: str, value: str) -> None:
 
 
 def install(orchestrator_module: Any, project_index_module: Any) -> None:
-    """Avoid repeated full source reads when the project tree is unchanged.
+    """Avoid repeated full source reads and scans for one authoritative snapshot.
 
-    CompleteProductionOrchestrator asks for the same manifest commitment several
-    times between generation, deterministic validation, JDT and build/package gates.
-    Constructing a fresh ProjectIndex on every call rereads and tokenizes the entire
-    source tree. A metadata-only signature is enough to prove whether the expensive
-    content commitment must be recomputed. If anything changed, the original full
-    content hash remains authoritative.
+    The global cache remains metadata-validated across independent calls. During one
+    ``execute()`` invocation, the first post-generation source commitment is also the
+    exact input to deterministic validation, JDT and build/package checkpoints. Those
+    calls occur before any repair action can mutate source, so the already-authoritative
+    value can be reused without rescanning the tree. The execution cache is ContextVar-
+    scoped so concurrent runs never share an unvalidated value.
     """
 
     cls = orchestrator_module.CompleteProductionOrchestrator
     current = cls._project_manifest_hash
-    if getattr(current, "_mmm_metadata_manifest_cache", False):
-        return
+    if not getattr(current, "_mmm_metadata_manifest_cache", False):
 
-    @wraps(current)
-    def cached_manifest_hash(self: Any, project_root: Path) -> str:
-        root = Path(project_root).expanduser().resolve()
-        root_key = str(root)
-        before = _metadata_signature(project_index_module, root)
-        with _CACHE_LOCK:
-            cached = _CACHE.get(root_key)
-        if cached is not None and cached[0] == before:
-            return cached[1]
+        @wraps(current)
+        def cached_manifest_hash(self: Any, project_root: Path) -> str:
+            root = Path(project_root).expanduser().resolve()
+            root_key = str(root)
 
-        # Full ProjectIndex scan/content hashing is still the source of truth whenever
-        # metadata differs. Recheck metadata after it finishes; if writers raced the
-        # scan, do not cache that result for a later call.
-        value = str(current(self, root))
-        after = _metadata_signature(project_index_module, root)
-        if before == after:
-            _bounded_store(root_key, after, value)
-        return value
+            execution_cache = _EXECUTION_CACHE.get()
+            if execution_cache is not None:
+                execution_value = execution_cache.get(root_key)
+                if execution_value is not None:
+                    return execution_value
 
-    cached_manifest_hash._mmm_metadata_manifest_cache = True  # type: ignore[attr-defined]
-    cached_manifest_hash.__wrapped__ = current  # type: ignore[attr-defined]
-    cls._project_manifest_hash = cached_manifest_hash
+            before = _metadata_signature(project_index_module, root)
+            with _CACHE_LOCK:
+                cached = _CACHE.get(root_key)
+            if cached is not None and cached[0] == before:
+                value = cached[1]
+                if execution_cache is not None:
+                    execution_cache[root_key] = value
+                return value
+
+            # Full ProjectIndex scan/content hashing is still the source of truth whenever
+            # metadata differs. Recheck metadata after it finishes; if writers raced the
+            # scan, do not cache that result for a later independent call.
+            value = str(current(self, root))
+            after = _metadata_signature(project_index_module, root)
+            if before == after:
+                _bounded_store(root_key, after, value)
+                if execution_cache is not None:
+                    execution_cache[root_key] = value
+            return value
+
+        cached_manifest_hash._mmm_metadata_manifest_cache = True  # type: ignore[attr-defined]
+        cached_manifest_hash._mmm_execution_manifest_cache = True  # type: ignore[attr-defined]
+        cached_manifest_hash.__wrapped__ = current  # type: ignore[attr-defined]
+        cls._project_manifest_hash = cached_manifest_hash
+
+    current_execute = getattr(cls, "execute", None)
+    if callable(current_execute) and not getattr(
+        current_execute,
+        "_mmm_execution_manifest_scope",
+        False,
+    ):
+
+        @wraps(current_execute)
+        def execute_with_manifest_scope(self: Any, *args: Any, **kwargs: Any):
+            token = _EXECUTION_CACHE.set({})
+            try:
+                return current_execute(self, *args, **kwargs)
+            finally:
+                _EXECUTION_CACHE.reset(token)
+
+        execute_with_manifest_scope._mmm_execution_manifest_scope = True  # type: ignore[attr-defined]
+        cls.execute = execute_with_manifest_scope
 
 
 __all__ = ["install"]
