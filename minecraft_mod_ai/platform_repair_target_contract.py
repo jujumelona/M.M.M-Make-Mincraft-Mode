@@ -122,20 +122,16 @@ def _install_dynamic_patch_request(module: Any) -> None:
                 "Repair patch exceeds MMM_MAX_PATCH_BYTES; raise the host policy explicitly."
             )
 
-        # validation_execution_contract narrows the next JDT pass to Java files
-        # touched by the previous repair.  This dynamic target implementation owns
-        # the actual request path, so it must preserve that progressive scope rather
-        # than discarding the earlier wrapper when it installs itself.
-        self._mmm_last_java_paths = tuple(
-            sorted(
-                str(item.get("path", "")).replace("\\", "/")
-                for item in operations
-                if isinstance(item, dict)
-                and str(item.get("path", "")).lower().endswith(".java")
-            )
-        )
+        # Candidate generation must be side-effect free. Best-of-N repair may execute
+        # several requests concurrently, so mutating progressive JDT scope here would
+        # race between candidates. The agentic repair selector commits
+        # _mmm_last_java_paths only after the deterministic winner is selected.
         return operations
 
     request_patch._mmm_dynamic_repair_target = True
+    # Prevent validation_execution_contract from re-introducing per-candidate scope
+    # mutation if contracts are composed manually in a different order. The actual
+    # progressive scope is committed downstream by the repair winner selector.
     request_patch._mmm_tracks_repair_scope = True
+    request_patch._mmm_defers_repair_scope_commit = True
     cls._request_patch = request_patch
