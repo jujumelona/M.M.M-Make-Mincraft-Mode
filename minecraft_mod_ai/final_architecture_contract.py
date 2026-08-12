@@ -21,6 +21,7 @@ from .clean_room_verification_contract import install as _install_clean_room
 from .custom_generation_search_contract import install as _install_custom_generation_search
 from .orchestrator_jdt_gate_contract import install as _install_orchestrator_jdt_gate
 from .planner_json_runtime_contract import install as _install_planner_json_runtime
+from .planner_module_identity_contract import install as _install_planner_module_identity
 from .planner_outline_identity_contract import install as _install_planner_outline_identity
 from .planner_pagination_safety_contract import install as _install_planner_pagination_safety
 from .planner_parser_safety_contract import install as _install_planner_parser_safety
@@ -105,6 +106,7 @@ def install(
     _install_planner_json_runtime(complete_planner_module)
     _install_planner_strict_json(_planner_json_runtime_module)
     _install_planner_parser_safety(complete_planner_module)
+    _install_planner_module_identity(complete_planner_module)
     _install_planner_pagination_safety(complete_planner_module)
     _install_planner_outline_identity(_planner_pagination_module)
     _install_work_graph_state_transitions(graph)
