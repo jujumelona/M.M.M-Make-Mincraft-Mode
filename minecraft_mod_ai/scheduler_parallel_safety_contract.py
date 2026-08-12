@@ -52,6 +52,57 @@ def _orchestrator_owner(ledger: Any) -> str:
     return owner
 
 
+def _install_thread_local_connections(work_graph_module: Any) -> None:
+    """Bound SQLite connections to one reusable handle per ledger/thread.
+
+    DurableWorkLedger historically created a fresh sqlite3.Connection for every
+    ``with self._connect()`` call. sqlite3.Connection.__exit__ commits or rolls
+    back but does not close the handle, so a 50 ms scheduler poll over a large
+    DAG can create an unbounded stream of connections while also repeating the
+    WAL/pragma setup.  The scheduler already uses a bounded thread topology, so
+    a thread-local connection gives both correct sqlite thread affinity and a
+    fixed connection count.
+    """
+
+    ledger_cls = work_graph_module.DurableWorkLedger
+    current = ledger_cls._connect
+    if getattr(current, "_mmm_thread_local_connection", False):
+        return
+
+    @wraps(current)
+    def connect(self: Any):
+        local = getattr(self, "_mmm_sqlite_local", None)
+        if local is None:
+            local = threading.local()
+            setattr(self, "_mmm_sqlite_local", local)
+
+        connection = getattr(local, "connection", None)
+        pid = getattr(local, "pid", None)
+        if connection is not None and pid != os.getpid():
+            # A connection must never be inherited across a fork.  Closing can
+            # fail for an already-invalid inherited handle; either way replace it.
+            try:
+                connection.close()
+            except Exception:
+                pass
+            connection = None
+
+        if connection is None:
+            connection = work_graph_module.sqlite3.connect(
+                self.path,
+                timeout=30,
+            )
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            local.connection = connection
+            local.pid = os.getpid()
+        return connection
+
+    connect._mmm_thread_local_connection = True
+    ledger_cls._connect = connect
+
+
 def _install_lane_aware_claim(work_graph_module: Any) -> None:
     ledger_cls = work_graph_module.DurableWorkLedger
     current = ledger_cls.claim_ready
@@ -302,6 +353,7 @@ def install(
     work_graph_module: Any,
     orchestrator_module: Any,
 ) -> None:
+    _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
     _install_index_commit_order(
         work_graph_module,
