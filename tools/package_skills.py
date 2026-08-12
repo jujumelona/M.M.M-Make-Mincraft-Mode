@@ -3,15 +3,25 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from minecraft_mod_ai.skill_catalog import (
-    CANONICAL_SKILLS,
-    compile_skill_catalog,
-)
+import minecraft_mod_ai.skill_catalog as skill_catalog
+from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / "skills"
 OUTPUT = ROOT / "minecraft_mod_ai" / "packaged_skills.json"
+
+
+def _compile_raw_skill_catalog():
+    """Compile the checked-in Skill snapshot without runtime platform overlays."""
+
+    current = skill_catalog._parse_skill
+    raw = getattr(skill_catalog, "_mmm_raw_parse_skill", current)
+    skill_catalog._parse_skill = raw
+    try:
+        return skill_catalog.compile_skill_catalog(SKILLS_ROOT)
+    finally:
+        skill_catalog._parse_skill = current
 
 
 def build_payload() -> dict[str, object]:
@@ -29,7 +39,7 @@ def build_payload() -> dict[str, object]:
     }
     contracts = {
         name: contract.to_dict()
-        for name, contract in compile_skill_catalog(SKILLS_ROOT).items()
+        for name, contract in _compile_raw_skill_catalog().items()
     }
     return {
         "schema_version": "mmm/packaged-skills-v3",
