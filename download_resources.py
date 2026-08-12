@@ -30,17 +30,21 @@ def resource_manifest() -> dict[str, object]:
     }
 
 
-def local_model_ids(profile: str = "t4_local") -> tuple[str, ...]:
+def local_model_specs(profile: str = "t4_local") -> tuple[tuple[str, str], ...]:
+    """Return unique (repo_id, exact_file) specs; exact_file is empty for snapshots."""
     loaded = ModelRegistry().load_profile(profile)
-    return tuple(
-        sorted(
-            {
-                config.model_id
-                for config in loaded.roles.values()
-                if config.provider == "local" and config.model_id
-            }
-        )
-    )
+    specs: set[tuple[str, str]] = set()
+    for config in loaded.roles.values():
+        if config.provider != "local" or not config.model_id:
+            continue
+        filename = str(config.extra.get("gguf_filename", "")).strip()
+        specs.add((config.model_id, filename))
+    return tuple(sorted(specs))
+
+
+def local_model_ids(profile: str = "t4_local") -> tuple[str, ...]:
+    """Backward-compatible repository ID view used by manifests/tests."""
+    return tuple(sorted({repo_id for repo_id, _filename in local_model_specs(profile)}))
 
 
 def generate_download_script(
@@ -52,12 +56,15 @@ def generate_download_script(
     lines = [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "# Downloads the exact repositories in config/model_registry.yaml.",
-        "# Gated repositories require HF_TOKEN and prior license acceptance.",
-        "command -v huggingface-cli >/dev/null || { echo 'Install huggingface_hub first.' >&2; exit 2; }",
+        "# Downloads only the artifacts required by config/model_registry.yaml.",
+        "# GGUF roles download one exact quantized file; other model roles keep snapshots.",
+        "command -v hf >/dev/null || { echo 'Install huggingface_hub first.' >&2; exit 2; }",
     ]
-    for model_id in local_model_ids(profile):
-        lines.append(f"huggingface-cli download {model_id} --resume-download")
+    for model_id, filename in local_model_specs(profile):
+        if filename:
+            lines.append(f"hf download {model_id} {filename}")
+        else:
+            lines.append(f"hf download {model_id}")
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     target.chmod(0o755)
     return str(target)
@@ -69,17 +76,25 @@ def download_models(
     cache_dir: str | Path | None = None,
 ) -> list[str]:
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import hf_hub_download, snapshot_download
     except ImportError as exc:
         raise RuntimeError("Install the local-model extra before downloading models.") from exc
+
+    cache = str(cache_dir) if cache_dir is not None else None
     downloaded: list[str] = []
-    for model_id in local_model_ids(profile):
-        path = snapshot_download(
-            repo_id=model_id,
-            cache_dir=(str(cache_dir) if cache_dir is not None else None),
-            resume_download=True,
-        )
-        downloaded.append(path)
+    for model_id, filename in local_model_specs(profile):
+        if filename:
+            path = hf_hub_download(
+                repo_id=model_id,
+                filename=filename,
+                cache_dir=cache,
+            )
+        else:
+            path = snapshot_download(
+                repo_id=model_id,
+                cache_dir=cache,
+            )
+        downloaded.append(str(path))
     return downloaded
 
 
