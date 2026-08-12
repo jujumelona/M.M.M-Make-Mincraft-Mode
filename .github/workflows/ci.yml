@@ -10,9 +10,11 @@ on:
 permissions:
   contents: read
 
+# Direct-main development can produce several commits in quick succession. Only the
+# newest commit is useful; keeping superseded full suites alive wastes runner time.
 concurrency:
-  group: ci-audit-v4-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: ci-audit-v5-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -27,9 +29,7 @@ jobs:
           cache: pip
 
       - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]'
+        run: python -m pip install --prefer-binary -e '.[dev]'
 
       - name: Compile Python sources
         run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
@@ -51,6 +51,7 @@ jobs:
       - name: Enforce clean runtime composition
         run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
 
-      - name: Run unit and contract tests
-        if: always()
-        run: python -m pytest -vv --tb=short --durations=25 --maxfail=25
+      - name: Run remaining unit and contract tests
+        run: >-
+          python -m pytest -vv --tb=short --durations=25 --maxfail=25
+          --ignore=tests/test_runtime_bootstrap_clean.py
