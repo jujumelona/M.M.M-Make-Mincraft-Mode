@@ -42,16 +42,9 @@ def _outline_is_allowed(expected_contracts: Sequence[frozenset[str]]) -> bool:
 
 
 def install(runtime_module: Any) -> None:
-    """Give outline and implementation pages model-chosen, unbounded pagination."""
+    """Give production-outline pages model-chosen, unbounded pagination."""
 
     from . import complete_planner as complete_planner_module
-    from .planner_production_page_contract import install as install_production_pages
-
-    # Production implementation pages and production-outline pages share one policy:
-    # the model chooses how much coherent work fits; the host verifies progress. Keep
-    # this installation independent of the outline wrapper's idempotence marker so a
-    # late/repeated installer can never leave the old fixed-width implementation live.
-    install_production_pages(complete_planner_module)
 
     page_current = complete_planner_module._generate_json_page_with_repair
     if getattr(page_current, "_mmm_scalable_outline_prompt", False):
