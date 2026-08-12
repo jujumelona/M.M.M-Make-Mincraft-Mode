@@ -33,16 +33,35 @@ def install(
     complete_planner_module: Any,
     orchestrator_module: Any,
     repair_module: Any,
-    quality_evidence_module: Any,
     validation_module: Any,
+    quality_evidence_module: Any | None = None,
+    quality_module: Any | None = None,
+    game_design_module: Any | None = None,
+    work_graph_module: Any | None = None,
+    production_contract_module: Any | None = None,
+    services_module: Any | None = None,
 ) -> None:
-    """Install MMM's final deterministic-control / narrow-agent architecture."""
+    """Install MMM's final deterministic-control / narrow-agent architecture.
+
+    ``performance_final_tuning`` historically calls this installer with the compact
+    five-module contract while ``integrated_contract_bootstrap`` supplies the wider
+    package integration set. Both paths are active during normal package import, so
+    the installer intentionally accepts both forms and resolves their shared modules
+    here instead of relying on import-order-specific signatures.
+    """
+
+    del game_design_module, services_module
+    quality = quality_evidence_module or quality_module
+    if quality is None:
+        raise TypeError("final architecture install requires a quality evidence module")
+    graph = work_graph_module or _work_graph_module
+    production = production_contract_module or _production_contract_module
 
     _install_build_input_scope(validation_module)
     _install_atomic_efficiency(_atomic_module)
     _install_atomic_routes(
         _atomic_module,
-        _production_contract_module,
+        production,
     )
     _install_reviewer_role(_atomic_module)
     _install_atomic_requirements(
@@ -59,12 +78,12 @@ def install(
     )
     _install_atomic_quality(
         _atomic_module,
-        quality_evidence_module,
+        quality,
         orchestrator_module,
     )
     _install_atomic_playtest(
         _atomic_module,
-        quality_evidence_module,
+        quality,
         orchestrator_module,
     )
     _install_repair_diagnostics(
@@ -74,7 +93,7 @@ def install(
     _install_orchestrator_jdt_gate(orchestrator_module)
     _install_clean_room(
         orchestrator_module,
-        quality_evidence_module,
+        quality,
         validation_module,
     )
     _install_planner_json_runtime(complete_planner_module)
@@ -82,10 +101,10 @@ def install(
     _agentic_module.install(
         complete_planner_module=complete_planner_module,
         repair_module=repair_module,
-        work_graph_module=_work_graph_module,
+        work_graph_module=graph,
     )
     _install_custom_generation_search(_custom_module_generator_module)
     _install_repair_memory_budget(_agentic_module)
-    _install_scheduler_fairness(_work_graph_module)
+    _install_scheduler_fairness(graph)
     _install_visual_scope(orchestrator_module)
     _install_gate_compatibility(orchestrator_module)
