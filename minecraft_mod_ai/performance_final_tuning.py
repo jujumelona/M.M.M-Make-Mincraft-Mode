@@ -160,11 +160,16 @@ def install(performance_module: Any) -> None:
 
     from . import complete_orchestrator as _orchestrator
     from . import complete_planner as _complete_planner
+    from . import project_index as _project_index
     from . import quality_evidence as _quality_evidence
     from . import repair_engine as _repair_engine
     from . import validation_execution_contract as _validation_execution
     from .final_architecture_contract import install as _install_final_architecture
+    from .project_manifest_hash_efficiency_contract import (
+        install as _install_manifest_hash_efficiency,
+    )
 
+    _install_manifest_hash_efficiency(_orchestrator, _project_index)
     _install_final_architecture(
         complete_planner_module=_complete_planner,
         orchestrator_module=_orchestrator,
