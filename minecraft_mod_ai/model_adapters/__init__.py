@@ -1,9 +1,11 @@
 from .base import (
     AdapterConfig,
     GenerationRequest,
+    GenerationResponse,
     HardwarePreflightError,
     ModelBackendError,
     ModelConfigurationError,
+    ToolCall,
 )
 from .embedding import EmbeddingAdapter
 from .image_diffusion import ImageDiffusionAdapter
@@ -18,6 +20,7 @@ __all__ = [
     "AdapterConfig",
     "EmbeddingAdapter",
     "GenerationRequest",
+    "GenerationResponse",
     "HardwarePreflightError",
     "ImageDiffusionAdapter",
     "LlamaCppAdapter",
@@ -26,6 +29,7 @@ __all__ = [
     "OpenAICompatibleAdapter",
     "RerankerAdapter",
     "SpeechAdapter",
+    "ToolCall",
     "TransformersMultimodalAdapter",
     "TransformersTextAdapter",
 ]
