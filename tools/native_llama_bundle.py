@@ -172,6 +172,62 @@ def _load_manifest(root: Path) -> dict[str, object]:
     return payload
 
 
+def _bundle_path(root: Path, relative: str, *, kind: str) -> Path:
+    member = Path(relative)
+    if member.is_absolute() or ".." in member.parts or not member.parts:
+        raise RuntimeError(f"prebuilt native llama {kind} path is unsafe: {relative}")
+    # Runtime artifacts and aliases are intentionally restricted to bin/. This keeps
+    # manifest-driven alias creation unable to touch arbitrary cache paths.
+    if len(member.parts) != 2 or member.parts[0] != "bin":
+        raise RuntimeError(
+            f"prebuilt native llama {kind} path must be a direct bin/ member: {relative}"
+        )
+    path = root / member
+    if not path.parent.resolve().is_relative_to(root):
+        raise RuntimeError(f"prebuilt native llama {kind} path escapes bundle: {relative}")
+    return path
+
+
+def _materialize_aliases(
+    root: Path,
+    manifest: dict[str, object],
+    files: dict[str, object],
+) -> None:
+    raw_aliases = manifest.get("aliases", {})
+    if raw_aliases is None:
+        return
+    if not isinstance(raw_aliases, dict):
+        raise RuntimeError("prebuilt native llama aliases must be an object")
+    for relative, target_relative in sorted(raw_aliases.items()):
+        if not isinstance(relative, str) or not isinstance(target_relative, str):
+            raise RuntimeError("prebuilt native llama alias entry is invalid")
+        if relative in files:
+            raise RuntimeError(f"prebuilt native llama alias shadows a file: {relative}")
+        if target_relative not in files:
+            raise RuntimeError(
+                f"prebuilt native llama alias target is not a verified file: {relative} -> {target_relative}"
+            )
+        alias = _bundle_path(root, relative, kind="alias")
+        target = _bundle_path(root, target_relative, kind="alias target")
+        if not target.is_file() or target.is_symlink():
+            raise RuntimeError(
+                f"prebuilt native llama alias target is unavailable: {target_relative}"
+            )
+        expected_link = os.path.relpath(target, start=alias.parent)
+        if alias.is_symlink():
+            current = os.readlink(alias)
+            if current != expected_link:
+                raise RuntimeError(
+                    f"prebuilt native llama alias mismatch: {relative} -> {current}"
+                )
+            continue
+        if alias.exists():
+            raise RuntimeError(
+                f"prebuilt native llama alias path is occupied by a regular file: {relative}"
+            )
+        alias.symlink_to(expected_link)
+
+
 def _validate_bundle(root: Path, *, cuda_arch: str, source_ref: str) -> Path:
     root = root.resolve()
     manifest = _load_manifest(root)
@@ -191,24 +247,30 @@ def _validate_bundle(root: Path, *, cuda_arch: str, source_ref: str) -> Path:
         raise RuntimeError(
             "prebuilt native llama manifest requires cuda_graphs=true"
         )
-    files = manifest.get("files")
-    if not isinstance(files, dict) or not files:
+    raw_files = manifest.get("files")
+    if not isinstance(raw_files, dict) or not raw_files:
         raise RuntimeError("prebuilt native llama manifest contains no files")
+    files: dict[str, object] = dict(raw_files)
     for relative, expected_digest in files.items():
         if not isinstance(relative, str) or not isinstance(expected_digest, str):
             raise RuntimeError(
                 "prebuilt native llama manifest file entry is invalid"
             )
-        path = (root / relative).resolve()
-        if not path.is_relative_to(root) or not path.is_file():
+        path = _bundle_path(root, relative, kind="file")
+        if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"prebuilt native llama file is missing: {relative}")
         if _sha256(path) != expected_digest.lower():
             raise RuntimeError(
                 f"prebuilt native llama checksum mismatch: {relative}"
             )
 
+    # The tar itself contains regular files only. Recreate build-system aliases only
+    # after every real file passed SHA-256 verification. Cached aliases are checked on
+    # every validation and can never point outside the verified bin/ file set.
+    _materialize_aliases(root, manifest, files)
+
     binary = root / "bin" / "llama-server"
-    if not binary.is_file():
+    if not binary.is_file() or binary.is_symlink():
         raise RuntimeError("prebuilt native llama-server binary is missing")
     cuda_backends = [
         path
