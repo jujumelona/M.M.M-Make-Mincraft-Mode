@@ -15,9 +15,10 @@ _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
 
 
 def install(custom_module_generator_module: Any) -> None:
-    """Prevent historical 1.20.1 coder prompt defaults from leaking into live targets."""
+    """Bind custom coder prompts and patch scope to the approved live target."""
 
     _install_custom_generator_scope(custom_module_generator_module)
+    _install_gradle_metadata_scope(custom_module_generator_module)
     _install_router_rewrite()
 
 
@@ -65,6 +66,63 @@ def _install_custom_generator_scope(module_api: Any) -> None:
 
     generate._mmm_dynamic_coder_target = True
     cls.generate = generate
+
+
+def _install_gradle_metadata_scope(module_api: Any) -> None:
+    """Permit only project-owned Gradle metadata needed for version migration."""
+
+    cls = module_api.CustomModuleGenerator
+    current = cls._validate_operations
+    if getattr(current, "_mmm_live_gradle_metadata_scope", False):
+        return
+
+    def validate_operations(self: Any, operations: list[dict[str, Any]]) -> None:
+        gradle_metadata = {
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+            "gradle.properties",
+            "gradle/libs.versions.toml",
+        }
+        for item in operations:
+            if not isinstance(item, dict):
+                raise module_api.CustomModuleGenerationError(
+                    "Patch operation must be an object."
+                )
+            if item.get("operation") not in {"create", "replace", "edit"}:
+                raise module_api.CustomModuleGenerationError(
+                    "Custom module may not delete files."
+                )
+            path = module_api._normalized_operation_path(item)
+            protected_path = path.casefold()
+            if any(
+                protected_path == root
+                or protected_path.startswith(root + "/")
+                for root in (
+                    ".minecraft_ai/research",
+                    ".minecraft_ai/context-observations",
+                )
+            ):
+                raise module_api.CustomModuleGenerationError(
+                    "Model patches may not modify the code-owned research ledger "
+                    "or context-observation ledger."
+                )
+            allowed = (
+                path.startswith("src/main/java/")
+                or path.startswith("src/main/resources/")
+                or path.startswith("src/test/java/")
+                or path.startswith("src/gametest/")
+                or path.startswith(".minecraft_ai/")
+                or path in gradle_metadata
+            )
+            if not allowed:
+                raise module_api.CustomModuleGenerationError(
+                    f"Custom module path is outside the allowed scope: {path}"
+                )
+
+    validate_operations._mmm_live_gradle_metadata_scope = True
+    cls._validate_operations = validate_operations
 
 
 def _install_router_rewrite() -> None:
