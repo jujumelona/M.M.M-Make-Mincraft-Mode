@@ -52,7 +52,7 @@ def test_explicit_agentic_search_on_keeps_requested_width(monkeypatch) -> None:
     assert agentic._planner_candidate_count({}, "planner") == 3
 
 
-def test_auto_repair_search_escalates_only_after_same_failure_repeats(monkeypatch) -> None:
+def test_auto_repair_search_uses_core_risk_width_when_slots_exist(monkeypatch) -> None:
     install(agentic)
     monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
     monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
@@ -70,10 +70,9 @@ def test_auto_repair_search_escalates_only_after_same_failure_repeats(monkeypatc
         "build": {"status": "FAIL", "error": "x" * 200},
     }
 
-    first = agentic._repair_candidate_count(engine, evidence, ())
-    second = agentic._repair_candidate_count(engine, evidence, ())
-    assert first == 1
-    assert second == 2
+    # The core repair risk model widens immediately for a complex failure. The
+    # efficiency wrapper only caps that breadth to actual native decode capacity.
+    assert agentic._repair_candidate_count(engine, evidence, ()) == 2
 
 
 def test_auto_repair_search_never_duplicates_serial_native_decode(monkeypatch) -> None:
