@@ -11,12 +11,78 @@ def install(work_graph_module: Any) -> None:
 
     MMM now reuses one SQLite connection per ledger/thread. ``Connection.total_changes``
     is cumulative for that connection, so it cannot prove that the current UPDATE
-    matched a row. The legacy failure paths also allowed a late worker to overwrite a
-    cancelled/succeeded state. Use statement ``rowcount`` and RUNNING-state predicates
-    so stale completions fail closed instead of rewriting newer durable state.
+    matched a row. The legacy paths also allowed late workers to overwrite cancelled
+    or successful durable state. Use statement ``rowcount`` and RUNNING-state fences;
+    an already-successful task is idempotent only for the exact same receipt.
     """
 
     cls = work_graph_module.DurableWorkLedger
+
+    current_succeed = cls.succeed
+    if not getattr(current_succeed, "_mmm_fenced_transition", False):
+
+        @wraps(current_succeed)
+        def succeed(
+            self: Any,
+            node_id: str,
+            receipt: dict[str, Any],
+            *,
+            output_hash: str = "",
+        ) -> dict[str, Any]:
+            rendered = work_graph_module.canonical_json(receipt)
+            digest = output_hash or "sha256:" + hashlib.sha256(
+                rendered.encode("utf-8")
+            ).hexdigest()
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT state, output_hash, receipt_json FROM tasks
+                    WHERE node_id = ?
+                    """,
+                    (node_id,),
+                ).fetchone()
+                if row is None:
+                    raise work_graph_module.WorkGraphError(
+                        f"Unknown work node: {node_id}"
+                    )
+                if row[0] == work_graph_module.WorkState.SUCCEEDED.value:
+                    if row[1] == digest and row[2] == rendered:
+                        connection.commit()
+                        return self.task(node_id)
+                    raise work_graph_module.WorkGraphError(
+                        f"Work node {node_id} already succeeded with a different receipt."
+                    )
+                if row[0] != work_graph_module.WorkState.RUNNING.value:
+                    raise work_graph_module.WorkGraphError(
+                        f"Work node {node_id} cannot succeed from state {row[0]}."
+                    )
+                cursor = connection.execute(
+                    """
+                    UPDATE tasks
+                    SET state = ?, output_hash = ?, receipt_json = ?,
+                        lease_owner = NULL, lease_until = NULL, error = NULL,
+                        updated_at = ?
+                    WHERE node_id = ? AND state = ?
+                    """,
+                    (
+                        work_graph_module.WorkState.SUCCEEDED.value,
+                        digest,
+                        rendered,
+                        time.time(),
+                        node_id,
+                        work_graph_module.WorkState.RUNNING.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    raise work_graph_module.WorkGraphError(
+                        f"Work node changed while succeeding: {node_id}"
+                    )
+                connection.commit()
+            return self.task(node_id)
+
+        succeed._mmm_fenced_transition = True  # type: ignore[attr-defined]
+        cls.succeed = succeed
 
     current_fail = cls.fail
     if not getattr(current_fail, "_mmm_fenced_transition", False):
