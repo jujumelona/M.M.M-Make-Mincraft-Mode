@@ -49,6 +49,23 @@ def test_cancelled_task_is_not_overwritten_by_late_failure(tmp_path) -> None:
     assert result["state"] == "cancelled"
 
 
+def test_successful_task_allows_same_receipt_but_rejects_different_late_receipt(tmp_path) -> None:
+    ledger = _ledger_with_node(tmp_path)
+    ledger.begin("node")
+    first = ledger.succeed("node", {"status": "PASS", "winner": "new"})
+    assert first["state"] == "succeeded"
+
+    same = ledger.succeed("node", {"status": "PASS", "winner": "new"})
+    assert same["receipt"] == {"status": "PASS", "winner": "new"}
+
+    with pytest.raises(work_graph.WorkGraphError, match="different receipt"):
+        ledger.succeed("node", {"status": "PASS", "winner": "stale"})
+    assert ledger.task("node")["receipt"] == {
+        "status": "PASS",
+        "winner": "new",
+    }
+
+
 def test_successful_checkpoint_cannot_be_overwritten_by_late_failure(tmp_path) -> None:
     ledger = _ledger_with_node(tmp_path)
     input_hash = "sha256:" + "4" * 64
