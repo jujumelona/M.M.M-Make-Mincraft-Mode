@@ -17,6 +17,7 @@ from .atomic_requirement_contract import install as _install_atomic_requirements
 from .build_input_scope_contract import install as _install_build_input_scope
 from .clean_room_verification_contract import install as _install_clean_room
 from .custom_generation_search_contract import install as _install_custom_generation_search
+from .orchestrator_jdt_gate_contract import install as _install_orchestrator_jdt_gate
 from .planner_json_runtime_contract import install as _install_planner_json_runtime
 from .planner_pagination_safety_contract import install as _install_planner_pagination_safety
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
@@ -70,6 +71,7 @@ def install(
         repair_module,
         validation_module,
     )
+    _install_orchestrator_jdt_gate(orchestrator_module)
     _install_clean_room(
         orchestrator_module,
         quality_evidence_module,
