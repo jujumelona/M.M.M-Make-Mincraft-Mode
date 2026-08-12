@@ -19,8 +19,9 @@ _OUTLINE_FIELDS = frozenset({"production_batches", "complete", "next_cursor"})
 _BATCH_FIELDS = frozenset(
     {"batch_id", "scope", "depends_on_batches", "deliverables", "exports"}
 )
-_PATCH_FIELDS = frozenset({"target_fingerprint", "replacement_batch"})
-_CHECKPOINT_VERSION = 1
+_FIELD_PATCH_FIELDS = frozenset({"target_fingerprint", "set_fields", "delete_fields"})
+_REPLACE_PATCH_FIELDS = frozenset({"target_fingerprint", "replacement_batch"})
+_CHECKPOINT_VERSION = 2
 
 
 def _outline_allowed(expected_contracts: Sequence[frozenset[str]]) -> bool:
@@ -125,11 +126,16 @@ def _all_complete_dicts(text: str) -> list[dict[str, Any]]:
 
 
 def _batch_candidates_from_text(text: str) -> list[dict[str, Any]]:
+    """Salvage complete batch objects even when the surrounding page was truncated."""
+
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for value in _all_complete_dicts(text):
         fields = frozenset(str(key) for key in value)
-        if fields != _BATCH_FIELDS:
+        if not fields.intersection(_BATCH_FIELDS):
+            continue
+        # Avoid treating page envelopes or arbitrary config objects as batches.
+        if "batch_id" not in value and not fields.issubset(_BATCH_FIELDS):
             continue
         identity = _fingerprint(value)
         if identity in seen:
@@ -139,27 +145,53 @@ def _batch_candidates_from_text(text: str) -> list[dict[str, Any]]:
     return result
 
 
-def _patch_schema() -> dict[str, Any]:
+def _field_patch_schema() -> dict[str, Any]:
     string_array = {"type": "array", "items": {"type": "string"}}
-    batch = {
-        "type": "object",
-        "properties": {
-            "batch_id": {"type": "string"},
-            "scope": {"type": "string"},
-            "depends_on_batches": string_array,
-            "deliverables": string_array,
-            "exports": string_array,
-        },
-        "required": sorted(_BATCH_FIELDS),
-        "additionalProperties": False,
-    }
     return {
         "type": "object",
         "properties": {
             "target_fingerprint": {"type": "string"},
-            "replacement_batch": batch,
+            "set_fields": {
+                "type": "object",
+                "properties": {
+                    "batch_id": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "depends_on_batches": string_array,
+                    "deliverables": string_array,
+                    "exports": string_array,
+                },
+                "additionalProperties": False,
+            },
+            "delete_fields": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
         },
-        "required": sorted(_PATCH_FIELDS),
+        "required": sorted(_FIELD_PATCH_FIELDS),
+        "additionalProperties": False,
+    }
+
+
+def _replacement_patch_schema() -> dict[str, Any]:
+    string_array = {"type": "array", "items": {"type": "string"}}
+    return {
+        "type": "object",
+        "properties": {
+            "target_fingerprint": {"type": "string"},
+            "replacement_batch": {
+                "type": "object",
+                "properties": {
+                    "batch_id": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "depends_on_batches": string_array,
+                    "deliverables": string_array,
+                    "exports": string_array,
+                },
+                "required": sorted(_BATCH_FIELDS),
+                "additionalProperties": False,
+            },
+        },
+        "required": sorted(_REPLACE_PATCH_FIELDS),
         "additionalProperties": False,
     }
 
@@ -172,7 +204,15 @@ def _batch_validation_error(module: Any, raw: Any) -> str:
     return ""
 
 
-def _repair_one_batch(
+def _accepted_batch_ids(saved_batches: Sequence[Any]) -> list[str]:
+    return [
+        str(value.get("batch_id", "")).strip()
+        for value in saved_batches
+        if isinstance(value, dict) and str(value.get("batch_id", "")).strip()
+    ]
+
+
+def _patch_one_invalid_batch(
     runtime_module: Any,
     module: Any,
     router: Any,
@@ -183,59 +223,93 @@ def _repair_one_batch(
     checkpoint_path: Path,
     checkpoint_state: dict[str, Any],
 ) -> dict[str, Any]:
-    """Patch one invalid batch forever-until-valid; never regenerate its page."""
+    """Keep patching only the invalid object/fields until the real validator accepts it."""
 
-    target_fingerprint = _fingerprint(raw_batch)
-    current_value = raw_batch
-    current_error = validation_error
-    patch_round = 0
+    original_fingerprint = _fingerprint(raw_batch)
+    pending = checkpoint_state.get("pending_patch")
+    if (
+        isinstance(pending, dict)
+        and pending.get("target_fingerprint") == original_fingerprint
+    ):
+        current_value = pending.get("current_value", raw_batch)
+        current_error = str(pending.get("validation_error", validation_error))
+        patch_round = int(pending.get("round", 0))
+    else:
+        current_value = raw_batch
+        current_error = validation_error
+        patch_round = 0
 
     while True:
         patch_round += 1
-        request = {
-            "batch_patch_request": {
-                "target_fingerprint": target_fingerprint,
-                "invalid_batch": current_value,
-                "validation_error": current_error,
-                "accepted_batch_ids": list(accepted_batch_ids),
-                "required_batch_fields": sorted(_BATCH_FIELDS),
-                "rules": {
-                    "batch_id": "non-empty descriptive snake_case string, unique",
-                    "scope": "non-empty string",
-                    "depends_on_batches": (
-                        "unique non-empty strings; no self dependency; only accepted/known ids"
-                    ),
-                    "deliverables": "non-empty array of unique non-empty strings",
-                    "exports": "array of unique non-empty snake_case strings",
-                },
-                "output_contract": {
-                    "target_fingerprint": target_fingerprint,
-                    "replacement_batch": {
-                        "batch_id": "string",
-                        "scope": "string",
-                        "depends_on_batches": ["string"],
-                        "deliverables": ["string"],
-                        "exports": ["string"],
-                    },
+        field_patch = isinstance(current_value, dict)
+        checkpoint_state["status"] = "patching"
+        checkpoint_state["pending_patch"] = {
+            "target_fingerprint": original_fingerprint,
+            "round": patch_round,
+            "current_value": current_value,
+            "validation_error": current_error,
+        }
+        _save_checkpoint(checkpoint_path, checkpoint_state)
+
+        if field_patch:
+            output_contract = {
+                "target_fingerprint": original_fingerprint,
+                "set_fields": {"only_fields_that_must_change": "corrected value"},
+                "delete_fields": ["only_invalid_extra_field_names"],
+            }
+            prompt = (
+                "You are a deterministic field-level JSON patcher. Fix exactly ONE "
+                "invalid production batch. Return only target_fingerprint, set_fields, "
+                "and delete_fields. DO NOT rewrite the whole batch. Put in set_fields "
+                "only fields that must change or are missing. Put in delete_fields only "
+                "invalid extra fields. Preserve every other field byte-for-byte in host "
+                "state. Do not output Markdown, explanation, a page, or another batch."
+            )
+            schema = _field_patch_schema()
+        else:
+            output_contract = {
+                "target_fingerprint": original_fingerprint,
+                "replacement_batch": {
+                    "batch_id": "string",
+                    "scope": "string",
+                    "depends_on_batches": ["string"],
+                    "deliverables": ["string"],
+                    "exports": ["string"],
                 },
             }
-        }
-        prompt = (
-            "You are a deterministic JSON patcher. Repair exactly ONE invalid "
-            "production batch. Do not generate a page, plan, explanation, Markdown, "
-            "or any other batch. Preserve every semantically correct value from "
-            "invalid_batch and change only what validation_error requires. Return "
-            "exactly one JSON object with keys target_fingerprint and replacement_batch. "
-            "target_fingerprint must exactly echo the supplied fingerprint."
-        )
+            prompt = (
+                "You are a deterministic JSON object repairer. The invalid value is not "
+                "a batch object, so return exactly one replacement batch object. Do not "
+                "generate a page, plan, explanation, Markdown, or any other batch."
+            )
+            schema = _replacement_patch_schema()
 
-        token = runtime_module._JSON_SCHEMA.set(_patch_schema())
+        patch_request = {
+            "target_fingerprint": original_fingerprint,
+            "current_batch": current_value,
+            "validation_error": current_error,
+            "accepted_batch_ids": list(accepted_batch_ids),
+            "required_fields": sorted(_BATCH_FIELDS),
+            "rules": {
+                "batch_id": "non-empty descriptive snake_case string",
+                "scope": "non-empty string",
+                "depends_on_batches": "unique non-empty strings; no self dependency",
+                "deliverables": "NON-EMPTY array of unique non-empty strings",
+                "exports": "array of unique non-empty snake_case strings",
+            },
+            "output_contract": output_contract,
+        }
+
+        token = runtime_module._JSON_SCHEMA.set(schema)
         try:
             text = router.generate_text(
                 "planner",
                 [
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+                    {
+                        "role": "user",
+                        "content": json.dumps(patch_request, ensure_ascii=False),
+                    },
                 ],
                 media_paths=(),
                 response_format="json",
@@ -243,93 +317,144 @@ def _repair_one_batch(
         finally:
             runtime_module._JSON_SCHEMA.reset(token)
 
+        patch: dict[str, Any] | None = None
         try:
             patch = _extract_one_complete_object(text)
-            if frozenset(str(key) for key in patch) != _PATCH_FIELDS:
-                raise ValueError(
-                    f"patch fields must be {sorted(_PATCH_FIELDS)}"
-                )
-            if patch.get("target_fingerprint") != target_fingerprint:
-                raise ValueError("patch target_fingerprint does not match requested batch")
-            replacement = patch.get("replacement_batch")
-            if not isinstance(replacement, dict):
-                raise ValueError("replacement_batch must be an object")
-            if frozenset(str(key) for key in replacement) != _BATCH_FIELDS:
-                raise ValueError(
-                    f"replacement_batch fields must be {sorted(_BATCH_FIELDS)}"
-                )
-            error = _batch_validation_error(module, replacement)
+            if patch.get("target_fingerprint") != original_fingerprint:
+                raise ValueError("target_fingerprint does not match the saved invalid batch")
+
+            if field_patch:
+                if frozenset(str(key) for key in patch) != _FIELD_PATCH_FIELDS:
+                    raise ValueError(
+                        f"field patch keys must be {sorted(_FIELD_PATCH_FIELDS)}"
+                    )
+                set_fields = patch.get("set_fields")
+                delete_fields = patch.get("delete_fields")
+                if not isinstance(set_fields, dict):
+                    raise ValueError("set_fields must be an object")
+                if not isinstance(delete_fields, list) or any(
+                    not isinstance(value, str) for value in delete_fields
+                ):
+                    raise ValueError("delete_fields must be an array of field names")
+                if any(key not in _BATCH_FIELDS for key in set_fields):
+                    raise ValueError("set_fields contains a non-batch field")
+                if any(key in _BATCH_FIELDS for key in delete_fields):
+                    raise ValueError("required batch fields may not be deleted")
+                if not set_fields and not delete_fields:
+                    raise ValueError("patch must change at least one invalid field")
+
+                candidate = dict(current_value)
+                for field in delete_fields:
+                    candidate.pop(field, None)
+                candidate.update(set_fields)
+            else:
+                if frozenset(str(key) for key in patch) != _REPLACE_PATCH_FIELDS:
+                    raise ValueError(
+                        f"replacement patch keys must be {sorted(_REPLACE_PATCH_FIELDS)}"
+                    )
+                replacement = patch.get("replacement_batch")
+                if not isinstance(replacement, dict):
+                    raise ValueError("replacement_batch must be an object")
+                candidate = dict(replacement)
+
+            error = _batch_validation_error(module, candidate)
             if error:
                 raise ValueError(error)
-            return dict(replacement)
-        except Exception as exc:
-            # This is a patch-of-the-patch, not regeneration of accepted plan work.
-            current_value = (
-                patch.get("replacement_batch")
-                if "patch" in locals() and isinstance(patch, dict)
-                else current_value
-            )
-            current_error = f"{type(exc).__name__}: {exc}"
-            checkpoint_state["status"] = "patching"
-            checkpoint_state["pending_patch"] = {
-                "target_fingerprint": target_fingerprint,
-                "round": patch_round,
-                "current_value": current_value,
-                "validation_error": current_error,
-            }
+
+            checkpoint_state["pending_patch"] = None
+            checkpoint_state["status"] = "collecting"
             _save_checkpoint(checkpoint_path, checkpoint_state)
+            return candidate
+        except Exception as exc:
+            # Patch the patch next round. Accepted plan data is never touched.
+            if field_patch and isinstance(patch, dict):
+                set_fields = patch.get("set_fields")
+                delete_fields = patch.get("delete_fields")
+                if isinstance(set_fields, dict) and isinstance(delete_fields, list):
+                    trial = dict(current_value)
+                    for field in delete_fields:
+                        if isinstance(field, str) and field not in _BATCH_FIELDS:
+                            trial.pop(field, None)
+                    trial.update(
+                        {
+                            key: value
+                            for key, value in set_fields.items()
+                            if key in _BATCH_FIELDS
+                        }
+                    )
+                    current_value = trial
+            elif not field_patch and isinstance(patch, dict):
+                replacement = patch.get("replacement_batch")
+                if isinstance(replacement, dict):
+                    current_value = replacement
+            current_error = f"{type(exc).__name__}: {exc}"
 
 
-def _validated_batches_with_patches(
+def _process_pending_batches(
     runtime_module: Any,
     module: Any,
     router: Any,
     *,
-    raw_batches: Sequence[Any],
     saved_batches: list[Any],
     checkpoint_path: Path,
     checkpoint_state: dict[str, Any],
-) -> list[dict[str, Any]]:
-    resolved: list[dict[str, Any]] = []
-    accepted_ids = [
-        str(value.get("batch_id", "")).strip()
-        for value in saved_batches
-        if isinstance(value, dict) and str(value.get("batch_id", "")).strip()
-    ]
-
-    for raw in raw_batches:
+) -> None:
+    pending = list(checkpoint_state.get("pending_batches", []))
+    while pending:
+        raw = pending[0]
         error = _batch_validation_error(module, raw)
-        if not error and isinstance(raw, dict):
-            resolved_batch = dict(raw)
-        else:
-            resolved_batch = _repair_one_batch(
+        if error:
+            resolved = _patch_one_invalid_batch(
                 runtime_module,
                 module,
                 router,
                 raw_batch=raw,
-                validation_error=error or "batch must be a JSON object",
-                accepted_batch_ids=accepted_ids,
+                validation_error=error,
+                accepted_batch_ids=_accepted_batch_ids(saved_batches),
                 checkpoint_path=checkpoint_path,
                 checkpoint_state=checkpoint_state,
             )
-        resolved.append(resolved_batch)
-        batch_id = str(resolved_batch.get("batch_id", "")).strip()
-        if batch_id and batch_id not in accepted_ids:
-            accepted_ids.append(batch_id)
-        _merge_saved_batches(saved_batches, [resolved_batch])
-        checkpoint_state["saved_batches"] = saved_batches
-        checkpoint_state["pending_patch"] = None
-        checkpoint_state["status"] = "collecting"
+        elif isinstance(raw, dict):
+            resolved = dict(raw)
+        else:
+            resolved = _patch_one_invalid_batch(
+                runtime_module,
+                module,
+                router,
+                raw_batch=raw,
+                validation_error="batch must be a JSON object",
+                accepted_batch_ids=_accepted_batch_ids(saved_batches),
+                checkpoint_path=checkpoint_path,
+                checkpoint_state=checkpoint_state,
+            )
+
+        _merge_saved_batches(saved_batches, [resolved])
+        pending.pop(0)
+        checkpoint_state.update(
+            {
+                "saved_batches": saved_batches,
+                "pending_batches": pending,
+                "pending_patch": None,
+                "status": "collecting",
+            }
+        )
         _save_checkpoint(checkpoint_path, checkpoint_state)
-    return resolved
+
+
+def _resume_result(checkpoint_state: dict[str, Any], saved_batches: list[Any]) -> dict[str, Any]:
+    return {
+        "production_batches": saved_batches,
+        "complete": bool(checkpoint_state.get("page_complete", False)),
+        "next_cursor": str(checkpoint_state.get("page_next_cursor", "")),
+    }
 
 
 def install(runtime_module: Any) -> None:
-    """Persist valid planner work and patch only invalid batch objects in place."""
+    """Persist valid planner work and patch only invalid fields/objects in place."""
 
     from . import complete_planner as complete_planner_module
 
-    # Host no longer invents a 2-target/1-target page width. AI owns normal page size.
+    # Normal page size belongs to AI; host must not impose a 2-target/1-target width.
     def preserve_requested_production_width(
         request: dict[str, Any] | str,
         attempt: int,
@@ -341,11 +466,11 @@ def install(runtime_module: Any) -> None:
     runtime_module._narrow_production_repair_request = preserve_requested_production_width
 
     current = complete_planner_module._generate_json_page_with_repair
-    if getattr(current, "_mmm_persistent_batch_patch", False):
+    if getattr(current, "_mmm_persistent_field_patch", False):
         return
 
     @wraps(current)
-    def generate_with_persistent_batch_patch(
+    def generate_with_persistent_field_patch(
         router: Any,
         *,
         system_prompt: str,
@@ -367,148 +492,177 @@ def install(runtime_module: Any) -> None:
         checkpoint_path = _checkpoint_path(stage, request)
         checkpoint_state = _load_checkpoint(checkpoint_path)
         saved_batches = list(checkpoint_state.get("saved_batches", []))
-        resume_cursor = str(checkpoint_state.get("resume_cursor", ""))
-        if checkpoint_state.get("status") == "complete":
-            return {
-                "production_batches": saved_batches,
-                "complete": bool(checkpoint_state.get("complete", True)),
-                "next_cursor": str(checkpoint_state.get("next_cursor", "")),
-            }
 
-        attempt_request = request
-        if isinstance(request, dict) and resume_cursor:
-            attempt_request = {**request, "cursor": resume_cursor}
-        request_text = (
-            attempt_request
-            if isinstance(attempt_request, str)
-            else json.dumps(attempt_request, ensure_ascii=False)
-        )
-
-        # One normal generation for new work. Semantic defects inside that output are
-        # patched object-by-object below; this call is never repeated merely because a
-        # batch descriptor is invalid.
-        schema_view = (
-            attempt_request.get("contract")
-            if isinstance(attempt_request, dict)
-            and isinstance(attempt_request.get("contract"), dict)
-            else None
-        )
-        schema = (
-            runtime_module._schema_for_contract(schema_view)
-            if isinstance(schema_view, dict)
-            and frozenset(schema_view) == _OUTLINE_FIELDS
-            else None
-        )
-        token = runtime_module._JSON_SCHEMA.set(schema)
-        try:
-            text = router.generate_text(
-                "planner",
-                [
-                    {"role": "system", "content": _SCALABLE_OUTLINE_PROMPT},
-                    {"role": "user", "content": request_text},
-                ],
-                media_paths=media_paths,
-                response_format="json",
+        # Resume exactly where a previous run stopped before asking for any new plan.
+        if checkpoint_state.get("pending_batches"):
+            _process_pending_batches(
+                runtime_module,
+                complete_planner_module,
+                router,
+                saved_batches=saved_batches,
+                checkpoint_path=checkpoint_path,
+                checkpoint_state=checkpoint_state,
             )
-        finally:
-            runtime_module._JSON_SCHEMA.reset(token)
+            checkpoint_state = _load_checkpoint(checkpoint_path)
+            if checkpoint_state.get("status") == "page_complete":
+                return _resume_result(checkpoint_state, saved_batches)
 
-        # Legacy single-object contracts remain compatible on the first call.
-        if not saved_batches:
-            containers = _outermost_complete_json_containers(text)
-            if len(containers) == 1 and isinstance(containers[0].value, dict):
-                fields = frozenset(str(key) for key in containers[0].value)
-                if fields in tuple(expected_contracts) and fields != _OUTLINE_FIELDS:
-                    return runtime_module._extract_with_safe_empty_defaults(
-                        complete_planner_module,
-                        text,
-                        expected_contracts=expected_contracts,
-                    )
+        if checkpoint_state.get("status") in {"page_complete", "complete"}:
+            return _resume_result(checkpoint_state, saved_batches)
 
-        # Prefer complete outline pages. Their batch members are independently patched
-        # in place; a single bad member never invalidates its siblings.
-        try:
-            page = _extract_outline_sequence(text)
-            raw_batches = page["production_batches"]
-            complete = bool(page["complete"])
-            next_cursor = str(page["next_cursor"])
-        except Exception as envelope_error:
-            # If the outer page was truncated, preserve every complete batch object that
-            # survived in the stream. Then continue from that checkpoint; do not ask the
-            # model to recreate those batches.
-            raw_batches = _batch_candidates_from_text(text)
-            complete = False
-            next_cursor = ""
-            checkpoint_state["last_envelope_error"] = (
-                f"{type(envelope_error).__name__}: {envelope_error}"
+        generation_round = int(checkpoint_state.get("generation_round", 0))
+        first_generation = generation_round == 0
+
+        while True:
+            generation_round += 1
+            accepted_ids = _accepted_batch_ids(saved_batches)
+            attempt_request: dict[str, Any] | str = request
+            if isinstance(request, dict):
+                attempt_request = dict(request)
+                resume_cursor = str(checkpoint_state.get("resume_cursor", ""))
+                if resume_cursor:
+                    attempt_request["cursor"] = resume_cursor
+                if accepted_ids:
+                    attempt_request["accepted_outline_prefix"] = {
+                        "saved_batch_ids": accepted_ids,
+                        "saved_batch_count": len(accepted_ids),
+                        "saved_batches_sha256": _fingerprint(saved_batches),
+                        "instruction": (
+                            "These batches are already valid and persisted. Continue only "
+                            "missing work; never regenerate or modify them."
+                        ),
+                    }
+                last_error = checkpoint_state.get("last_envelope_error")
+                if last_error:
+                    attempt_request["missing_fragment_reason"] = last_error
+
+            request_text = (
+                attempt_request
+                if isinstance(attempt_request, str)
+                else json.dumps(attempt_request, ensure_ascii=False)
             )
+            schema_view = (
+                attempt_request.get("contract")
+                if isinstance(attempt_request, dict)
+                and isinstance(attempt_request.get("contract"), dict)
+                else None
+            )
+            schema = (
+                runtime_module._schema_for_contract(schema_view)
+                if isinstance(schema_view, dict)
+                and frozenset(schema_view) == _OUTLINE_FIELDS
+                else None
+            )
+
+            checkpoint_state.update(
+                {
+                    "stage": stage,
+                    "request_sha256": _fingerprint(request),
+                    "saved_batches": saved_batches,
+                    "generation_round": generation_round,
+                    "status": "generating_missing_work",
+                }
+            )
+            _save_checkpoint(checkpoint_path, checkpoint_state)
+
+            token = runtime_module._JSON_SCHEMA.set(schema)
+            try:
+                text = router.generate_text(
+                    "planner",
+                    [
+                        {"role": "system", "content": _SCALABLE_OUTLINE_PROMPT},
+                        {"role": "user", "content": request_text},
+                    ],
+                    media_paths=media_paths if first_generation else (),
+                    response_format="json",
+                )
+            finally:
+                runtime_module._JSON_SCHEMA.reset(token)
+            first_generation = False
+
+            # Preserve compatibility with the legacy one-shot initial contract.
+            if not saved_batches:
+                containers = _outermost_complete_json_containers(text)
+                if len(containers) == 1 and isinstance(containers[0].value, dict):
+                    fields = frozenset(str(key) for key in containers[0].value)
+                    if fields in tuple(expected_contracts) and fields != _OUTLINE_FIELDS:
+                        return runtime_module._extract_with_safe_empty_defaults(
+                            complete_planner_module,
+                            text,
+                            expected_contracts=expected_contracts,
+                        )
+
+            try:
+                page = _extract_outline_sequence(text)
+                raw_batches = list(page["production_batches"])
+                page_complete = bool(page["complete"])
+                page_next_cursor = str(page["next_cursor"])
+                envelope_error = ""
+            except Exception as exc:
+                # A broken envelope does not erase complete batch objects already emitted.
+                raw_batches = _batch_candidates_from_text(text)
+                page_complete = False
+                page_next_cursor = ""
+                envelope_error = f"{type(exc).__name__}: {exc}"
+
             if not raw_batches:
-                # There is no accepted semantic object to patch. Preserve state and ask
-                # only for the missing continuation fragment on the next loop iteration.
+                # Nothing semantic exists to patch. Save the failure and request only
+                # the missing continuation fragment; never redo accepted batches.
                 checkpoint_state.update(
                     {
                         "saved_batches": saved_batches,
-                        "resume_cursor": resume_cursor,
-                        "status": "awaiting_continuation",
+                        "last_envelope_error": envelope_error or "no complete batch object",
+                        "status": "awaiting_missing_fragment",
                     }
                 )
                 _save_checkpoint(checkpoint_path, checkpoint_state)
-                continuation_request = (
-                    {**request, "accepted_outline_prefix": {
-                        "saved_batch_ids": [
-                            value.get("batch_id") for value in saved_batches
-                            if isinstance(value, dict)
-                        ],
-                        "instruction": "Continue only missing outline work; do not regenerate saved batches.",
-                    }}
-                    if isinstance(request, dict)
-                    else request
-                )
-                return generate_with_persistent_batch_patch(
-                    router,
-                    system_prompt=system_prompt,
-                    request=continuation_request,
-                    media_paths=(),
-                    expected_contracts=expected_contracts,
-                    stage=stage,
-                )
+                continue
 
-        checkpoint_state.update(
-            {
-                "stage": stage,
-                "request_sha256": _fingerprint(request),
-                "saved_batches": saved_batches,
-                "resume_cursor": next_cursor or resume_cursor,
-                "status": "collecting",
-            }
-        )
-        _save_checkpoint(checkpoint_path, checkpoint_state)
+            if not page_complete and not page_next_cursor:
+                page_next_cursor = "host_resume_" + _fingerprint(
+                    {"saved": saved_batches, "new": raw_batches}
+                )[:16]
 
-        _validated_batches_with_patches(
-            runtime_module,
-            complete_planner_module,
-            router,
-            raw_batches=raw_batches,
-            saved_batches=saved_batches,
-            checkpoint_path=checkpoint_path,
-            checkpoint_state=checkpoint_state,
-        )
+            # Persist the whole queue BEFORE validating the first item. From here on a
+            # crash/restart resumes the exact queue rather than regenerating the page.
+            checkpoint_state.update(
+                {
+                    "saved_batches": saved_batches,
+                    "pending_batches": raw_batches,
+                    "pending_patch": None,
+                    "page_complete": page_complete,
+                    "page_next_cursor": page_next_cursor,
+                    "resume_cursor": page_next_cursor,
+                    "last_envelope_error": envelope_error,
+                    "status": "collecting",
+                }
+            )
+            _save_checkpoint(checkpoint_path, checkpoint_state)
 
-        checkpoint_state["saved_batches"] = saved_batches
-        checkpoint_state["resume_cursor"] = next_cursor
-        checkpoint_state["complete"] = complete
-        checkpoint_state["next_cursor"] = next_cursor
-        checkpoint_state["status"] = "complete" if complete else "page_complete"
-        _save_checkpoint(checkpoint_path, checkpoint_state)
+            _process_pending_batches(
+                runtime_module,
+                complete_planner_module,
+                router,
+                saved_batches=saved_batches,
+                checkpoint_path=checkpoint_path,
+                checkpoint_state=checkpoint_state,
+            )
 
-        return {
-            "production_batches": saved_batches,
-            "complete": complete,
-            "next_cursor": next_cursor,
-        }
+            checkpoint_state.update(
+                {
+                    "saved_batches": saved_batches,
+                    "pending_batches": [],
+                    "pending_patch": None,
+                    "page_complete": page_complete,
+                    "page_next_cursor": page_next_cursor,
+                    "status": "complete" if page_complete else "page_complete",
+                }
+            )
+            _save_checkpoint(checkpoint_path, checkpoint_state)
+            return _resume_result(checkpoint_state, saved_batches)
 
-    generate_with_persistent_batch_patch._mmm_persistent_batch_patch = True  # type: ignore[attr-defined]
-    complete_planner_module._generate_json_page_with_repair = generate_with_persistent_batch_patch
+    generate_with_persistent_field_patch._mmm_persistent_field_patch = True  # type: ignore[attr-defined]
+    complete_planner_module._generate_json_page_with_repair = generate_with_persistent_field_patch
 
 
 __all__ = ["install"]
