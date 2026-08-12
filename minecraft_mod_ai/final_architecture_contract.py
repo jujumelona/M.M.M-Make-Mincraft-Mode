@@ -18,6 +18,7 @@ from .clean_room_verification_contract import install as _install_clean_room
 from .planner_json_runtime_contract import install as _install_planner_json_runtime
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
 from .required_gate_compatibility_contract import install as _install_gate_compatibility
+from .scheduler_fairness_contract import install as _install_scheduler_fairness
 from .semantic_reviewer_role_contract import install as _install_reviewer_role
 from .visual_acceptance_scope_contract import install as _install_visual_scope
 
@@ -76,5 +77,6 @@ def install(
         repair_module=repair_module,
         work_graph_module=_work_graph_module,
     )
+    _install_scheduler_fairness(_work_graph_module)
     _install_visual_scope(orchestrator_module)
     _install_gate_compatibility(orchestrator_module)
