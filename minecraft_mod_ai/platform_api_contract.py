@@ -11,9 +11,6 @@ from .platform_catalog import (
 
 
 def install(api_module: Any, plan_render_module: Any) -> None:
-    # Package import must remain offline-safe. This constant is only a legacy snapshot
-    # for old callers; the public function below performs live official discovery when
-    # the caller actually asks for current targets.
     api_module.SUPPORTED_MINECRAFT_VERSIONS = tuple(
         item.minecraft_version for item in PLATFORM_ADAPTERS
     )
@@ -30,6 +27,14 @@ def install(api_module: Any, plan_render_module: Any) -> None:
     from .platform_live_execution_contract import install as install_live_execution
 
     install_live_execution(orchestrator_module)
+
+    # The runtime manager has already been made target-aware in package __init__.
+    # Add test-only helper staging now so prepare_instance can resolve the approved
+    # target and place only exact-compatible helper jars in the disposable game dirs.
+    from . import runtime_manager as runtime_manager_module
+    from .minecraft_mcp_runtime_helper_contract import install as install_runtime_helpers
+
+    install_runtime_helpers(runtime_manager_module)
 
     from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
 
@@ -48,16 +53,10 @@ def install(api_module: Any, plan_render_module: Any) -> None:
         mcp_tools_module=mcp_tools_module,
     )
 
-    # Replace the generic per-call repair federation with a provider-batched lane:
-    # minecraft-dev initializes once and validates source/mixins/AW/AT over the same
-    # MCP session. This prevents one npx/JVM setup per file.
     from .minecraft_mcp_repair_batch_contract import install as install_mcp_repair_batch
 
     install_mcp_repair_batch(repair_engine_module)
 
-    # Skill markdown/package snapshots pre-date dynamic target selection. Compile both
-    # source and wheel Skills through the same target-neutral policy overlay so no
-    # stale 1.20.1/Java17/Yarn phrase can become runtime authorization.
     from . import skill_catalog as skill_catalog_module
     from .platform_skill_policy_contract import install as install_skill_policy
 
