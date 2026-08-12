@@ -1,0 +1,84 @@
+name: Apply verified maximum llama decode policy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-max-llama-decode.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mmm-max-llama-decode
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Patch maximum decode policy
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}: {old!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = 'minecraft_mod_ai/llama_decode_speed_contract.py'
+          replace_once(path, '_KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v1"', '_KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v2"')
+          replace_once(path, '"MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.8"', '"MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.6,0.8,0.9"')
+          replace_once(path, 'and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", False)', 'and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", True)')
+          replace_once(
+              path,
+              '''    path = Path(model_path)\n    stat = path.stat()\n    payload = {\n        "schema": _KV_SCHEMA_VERSION,\n        "model_id": str(config.model_id),\n        "model_path": str(path.resolve()),\n        "model_size": int(stat.st_size),\n        "model_mtime_ns": int(stat.st_mtime_ns),\n''',
+              '''    from .llama_server_efficiency_contract import _quick_file_signature\n\n    path = Path(model_path).expanduser().resolve()\n    stat = path.stat()\n    extra = getattr(config, "extra", {})\n    payload = {\n        "schema": _KV_SCHEMA_VERSION,\n        "model_id": str(config.model_id),\n        "gguf_filename": str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else "",\n        "model_filename": path.name,\n        "model_size": int(stat.st_size),\n        "model_signature": _quick_file_signature(path),\n''',
+          )
+
+          tests = Path('tests/test_llama_decode_speed_contract.py')
+          text = tests.read_text(encoding='utf-8')
+          old_import = '    _kv_autotune_enabled,\n    _kv_candidates,\n'
+          new_import = '    _kv_autotune_enabled,\n    _kv_candidates,\n    _kv_fingerprint,\n'
+          if text.count(old_import) != 1:
+              raise SystemExit('decode-speed test import shape changed')
+          text = text.replace(old_import, new_import, 1)
+          addition = '''\n\ndef test_default_policy_searches_for_maximum_decode_speed(monkeypatch) -> None:\n    monkeypatch.delenv("MMM_LLAMA_MTP_P_MIN_CANDIDATES", raising=False)\n    monkeypatch.delenv("MMM_LLAMA_KV_AUTOTUNE", raising=False)\n    monkeypatch.delenv("MMM_LLAMA_SERVER_AUTOTUNE", raising=False)\n    monkeypatch.delenv("MMM_LLAMA_TUNING_OBJECTIVE", raising=False)\n    assert _mtp_p_min_candidates() == (0.0, 0.6, 0.8, 0.9)\n    assert _kv_autotune_enabled(autotune) is True\n\n\ndef test_kv_fingerprint_survives_fresh_runtime_path_and_mtime_changes(tmp_path, monkeypatch) -> None:\n    first = tmp_path / "runtime-a" / "model.gguf"\n    second = tmp_path / "runtime-b" / "model.gguf"\n    first.parent.mkdir()\n    second.parent.mkdir()\n    payload = (b"GGUF" + bytes(range(256))) * 9000\n    first.write_bytes(payload)\n    second.write_bytes(payload)\n    first.touch()\n    second.touch()\n    config = SimpleNamespace(\n        model_id="example/model",\n        max_context=32768,\n        max_new_tokens=8192,\n        extra={"gguf_filename": "model.gguf"},\n    )\n    monkeypatch.setattr(autotune, "_server_version", lambda binary: "llama-server-test")\n    monkeypatch.setattr(autotune, "_hardware_identity", lambda: "gpu-test")\n    candidates = ("q4_0", "q8_0", "f16")\n    first_fp = _kv_fingerprint(autotune, config, "/bin/llama-server", str(first), candidates)\n    second_fp = _kv_fingerprint(autotune, config, "/bin/llama-server", str(second), candidates)\n    assert first_fp == second_fp\n'''
+          marker = 'def test_default_policy_searches_for_maximum_decode_speed'
+          if marker in text:
+              raise SystemExit('decode-speed max policy tests already present')
+          tests.write_text(text.rstrip() + addition + '\n', encoding='utf-8')
+          PY
+      - name: Install focused test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Verify maximum decode policy
+        run: |
+          python -m compileall -q minecraft_mod_ai tests tools
+          python tools/validate_colab_notebook.py
+          python -m pytest -q \
+            tests/test_llama_decode_speed_contract.py \
+            tests/test_llama_server_autotune.py \
+            tests/test_llama_server_runtime_tuning.py \
+            tests/test_runtime_bootstrap_clean.py
+      - name: Commit verified policy
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-max-llama-decode.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/llama_decode_speed_contract.py tests/test_llama_decode_speed_contract.py .github/workflows/apply-max-llama-decode.yml
+          git commit -m 'Maximize single-stream llama decode tuning'
+          git pull --rebase origin main
+          git push origin HEAD:main
