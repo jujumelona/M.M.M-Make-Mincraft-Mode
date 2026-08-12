@@ -1,124 +1,364 @@
-schema_version: mmm/external-mcp-registry-v1
+schema_version: mmm/external-mcp-registry-v2
 servers:
+  # First-party MMM stage servers are advertised here for discovery, but the
+  # federation router never recursively invokes them.
   mmm-frontdoor:
     status: enabled
+    federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: frontdoor}
-    target_versions: ["1.20.1", "1.21.1"]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
   mmm-research:
     status: enabled
+    federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: research}
-    target_versions: ["1.20.1", "1.21.1"]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
   mmm-generation:
     status: enabled
+    federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
-    env: {MMM_MCP_STAGE: generation}
-    target_versions: ["1.20.1", "1.21.1"]
+    command: [python, -m, minecraft_mod_ai.mod_generation_mcp_server]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
   mmm-quality:
     status: enabled
+    federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: quality}
-    target_versions: ["1.20.1", "1.21.1"]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
   mmm-runtime:
     status: enabled
+    federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: runtime}
-    target_versions: ["1.20.1", "1.21.1"]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
   mmm-release:
     status: enabled
+    federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: release}
-    target_versions: ["1.20.1", "1.21.1"]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
   mmm-training:
     status: enabled
+    federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: training}
-    target_versions: ["1.20.1", "1.21.1"]
+    version_policy: dynamic
+    loaders: [fabric]
     trust: first_party
+
   minecraft-dev:
     status: enabled
     transport: stdio
-    command: [npx, -y, "@mcdxai/minecraft-dev-mcp@1.2.4"]
-    target_versions: ["1.20.1", "1.21.1"]
+    command: [npx, -y, "@mcdxai/minecraft-dev-mcp"]
+    version_policy: provider_reported
+    loaders: [fabric, quilt, forge, neoforge]
     trust: reviewed_open_source
-    purpose: source decompilation, mappings, symbol search and JAR inspection for the selected target
-  playwright:
+    source_repo: MCDxAI/minecraft-dev-mcp
+    purpose: decompile/remap/search Minecraft source, compare versions, inspect mod jars and validate mixins/access rules
+    capabilities:
+      source_search:
+        tool: search_minecraft_code
+        access: read
+        stages: [research, migration, generation, quality]
+        priority: 10
+        target_args: {minecraft_version: version, mapping: mapping}
+      mapping_resolution:
+        tool: find_mapping
+        access: read
+        stages: [research, migration, generation, quality]
+        priority: 10
+        target_args: {minecraft_version: version}
+      version_diff:
+        tool: compare_versions_detailed
+        access: read
+        stages: [planning, research, migration]
+        priority: 10
+      mod_jar_analysis:
+        tool: analyze_mod_jar
+        access: read
+        stages: [planning, research, migration, quality]
+        priority: 10
+      mixin_validation:
+        tool: analyze_mixin
+        access: read
+        stages: [generation, quality, migration]
+        priority: 10
+        target_args: {minecraft_version: mcVersion, mapping: mapping}
+      access_widener_validation:
+        tool: validate_access_widener
+        access: read
+        stages: [generation, quality, migration]
+        priority: 10
+        target_args: {minecraft_version: mcVersion, mapping: mapping}
+      access_transformer_validation:
+        tool: validate_access_transformer
+        access: read
+        stages: [generation, quality, migration]
+        priority: 10
+        target_args: {minecraft_version: mcVersion, mapping: mapping}
+      registry_lookup:
+        tool: get_registry_data
+        access: read
+        stages: [research, generation, quality]
+        priority: 10
+        target_args: {minecraft_version: version}
+
+  minecraft-modding:
+    status: optional
+    transport: stdio
+    command: [npx, -y, "@adhisang/minecraft-modding-mcp"]
+    version_policy: provider_reported
+    loaders: [fabric, forge, neoforge]
+    trust: reviewed_open_source
+    source_repo: adhi-jp/minecraft-modding-mcp
+    purpose: workspace-aware Minecraft project validation and migration diagnostics
+    capabilities:
+      workspace_validation:
+        tool: validate-project
+        access: read
+        stages: [migration, quality]
+        priority: 10
+
+  mcmodding-docs:
     status: enabled
     transport: stdio
+    command: [npx, -y, mcmodding-mcp]
+    version_policy: provider_reported
+    loaders: [fabric, neoforge]
+    trust: reviewed_open_source
+    source_repo: OGMatrix/mcmodding-mcp
+    purpose: current Fabric/NeoForge docs, semantic search, mappings/Javadocs and real mod examples
+    capabilities:
+      official_mod_docs:
+        tool: search_fabric_docs
+        access: read
+        stages: [planning, research, migration, generation, quality]
+        priority: 10
+        target_args: {minecraft_version: minecraft_version, loader: loader}
+      mapping_resolution:
+        tool: search_mappings
+        access: read
+        stages: [research, migration, generation, quality]
+        priority: 30
+        target_args: {minecraft_version: minecraft_version}
+      mod_examples:
+        tool: search_mod_examples
+        access: read
+        stages: [research, generation]
+        priority: 10
+
+  minecraft-wiki:
+    status: enabled
+    transport: streamable_http
+    default_url: https://minecraft-wiki-mcp.goett.top/mcp
+    version_policy: agnostic
+    loaders: ["*"]
+    trust: reviewed_public_service
+    source_repo: L3-N0X/Minecraft-Wiki-MCP
+    purpose: vanilla blocks/items/entities/structures/mechanics evidence
+    capabilities:
+      vanilla_knowledge:
+        tool: minecraft_wiki_search
+        access: read
+        stages: [planning, research, generation]
+        priority: 10
+
+  mcdev-runtime:
+    status: optional
+    transport: stdio
+    command: [npx, -y, mcdev-mcp, serve]
+    version_policy: provider_reported
+    loaders: [fabric]
+    trust: reviewed_open_source
+    source_repo: use-ai-for-mc/mcdev-mcp
+    test_harness_only: true
+    purpose: source/callgraph plus live game snapshots, screenshots, GUI/world inspection and dev-loop diagnostics
+    capabilities:
+      runtime_inspection:
+        tool: mc_snapshot
+        access: read
+        stages: [runtime]
+        priority: 20
+      runtime_visual:
+        tool: mc_screenshot
+        access: read
+        stages: [runtime]
+        priority: 20
+      runtime_gui:
+        tool: mc_screen_inspect
+        access: read
+        stages: [runtime]
+        priority: 10
+
+  fabric-game-runtime:
+    status: configuration_required
+    transport: streamable_http
+    url_env: MMM_FABRIC_GAME_MCP_URL
+    default_url: http://127.0.0.1:8765/mcp
+    version_policy: provider_reported
+    loaders: [fabric]
+    trust: reviewed_open_source
+    source_repo: chapmanjw/minecraft-java-fabric-mcp-server
+    test_harness_only: true
+    purpose: inspect the real target Fabric server/world API in a disposable test runtime
+    capabilities:
+      runtime_world_read:
+        tool: player_list_online
+        access: read
+        stages: [runtime]
+        priority: 10
+      runtime_server_status:
+        tool: server_status
+        access: read
+        stages: [runtime]
+        priority: 10
+      runtime_command:
+        tool: command_execute
+        access: admin
+        stages: [runtime]
+        priority: 10
+
+  fabric-game-client-runtime:
+    status: configuration_required
+    transport: streamable_http
+    url_env: MMM_FABRIC_GAME_CLIENT_MCP_URL
+    default_url: http://127.0.0.1:8766/mcp
+    version_policy: provider_reported
+    loaders: [fabric]
+    trust: reviewed_open_source
+    source_repo: chapmanjw/minecraft-java-fabric-mcp-server
+    test_harness_only: true
+    purpose: inspect actual first-person rendered pixels and client perception in the disposable target client
+    capabilities:
+      runtime_visual:
+        tool: view_capture
+        access: read
+        stages: [runtime]
+        priority: 10
+
+  minecraft-mod-runtime:
+    status: optional
+    transport: stdio
+    command: [npx, -y, minecraft-mod-mcp]
+    version_policy: provider_reported
+    loaders: [fabric, forge, neoforge]
+    trust: reviewed_open_source
+    source_repo: langyo/minecraft-mod-mcp
+    test_harness_only: true
+    purpose: cross-version screenshot, GUI and debug-state runtime inspection
+    capabilities:
+      runtime_visual:
+        tool: screenshot
+        access: read
+        stages: [runtime]
+        priority: 30
+      runtime_inspection:
+        tool: get_minecraft_status
+        access: read
+        stages: [runtime]
+        priority: 30
+
+  minecraft-player-agent:
+    status: optional
+    transport: stdio
+    command: [npx, -y, "@fundamentallabs/minecraft-mcp"]
+    version_policy: provider_reported
+    loaders: ["*"]
+    trust: reviewed_open_source
+    source_repo: FundamentalLabs/minecraft-mcp
+    test_harness_only: true
+    purpose: Mineflayer-style player navigation, interaction, crafting, inventory and observation
+    capabilities:
+      player_e2e_observe:
+        tool: lookAround
+        access: read
+        stages: [runtime]
+        priority: 20
+      player_e2e_inventory:
+        tool: openInventory
+        access: read
+        stages: [runtime]
+        priority: 20
+      player_e2e_interact:
+        tool: useItemOnBlockOrEntity
+        access: write
+        stages: [runtime]
+        priority: 20
+
+  minecraft-rcon:
+    status: configuration_required
+    transport: streamable_http
+    url_env: MMM_RCON_MCP_URL
+    version_policy: agnostic
+    loaders: ["*"]
+    trust: reviewed_open_source
+    source_repo: rgbkrk/rcon-mcp
+    test_harness_only: true
+    purpose: final disposable-server command/status smoke tests
+    capabilities:
+      server_rcon:
+        tool: rcon
+        access: admin
+        stages: [runtime]
+        priority: 40
+
+  playwright:
+    status: enabled
+    federated: false
+    transport: stdio
     command: [npx, -y, "@playwright/mcp@0.0.78", "--headless"]
+    version_policy: agnostic
+    loaders: ["*"]
     trust: official_open_source
-    purpose: documentation and web UI research
   github:
     status: optional
+    federated: false
     transport: stdio
     command: [docker, run, -i, --rm, -e, GITHUB_PERSONAL_ACCESS_TOKEN, ghcr.io/github/github-mcp-server]
     required_env: [GITHUB_PERSONAL_ACCESS_TOKEN]
+    version_policy: agnostic
+    loaders: ["*"]
     trust: official_open_source
-    purpose: repository, issue, pull request, Actions and release operations
   blockbench:
     status: configuration_required
+    federated: false
     transport: streamable_http
     url_env: MMM_BLOCKBENCH_MCP_URL
     default_url: http://127.0.0.1:3000/bb-mcp
+    version_policy: agnostic
+    loaders: ["*"]
     trust: restricted_gpl_process
-    allowed_tools:
-      - open_project
-      - create_cube
-      - set_texture
-      - set_uv
-      - create_animation
-      - render_preview
-      - validate_uv
-      - export_bbmodel
-      - export_geckolib
-      - close_project
   jdtls:
     status: configuration_required
+    federated: false
     transport: stdio_lsp
     command_env: MMM_JDTLS_CMD
+    version_policy: agnostic
+    loaders: ["*"]
     trust: official_eclipse
-    required_runtime: Java 21 for the language server; generated project uses the selected target Java version
-  minecraft-runtime-1201:
-    status: configuration_required
-    transport: first_party_process
-    trust: first_party
-    target_versions: ["1.20.1"]
-    purpose: disposable server/client lifecycle, logs, commands and screenshots for Minecraft 1.20.1
-  minecraft-runtime-1211:
-    status: configuration_required
-    transport: first_party_process
-    trust: first_party
-    target_versions: ["1.21.1"]
-    purpose: disposable server/client lifecycle, logs, commands and screenshots for Minecraft 1.21.1
-  mineflayer-1201:
-    status: configuration_required
-    transport: first_party_jsonl
-    command: [node, integrations/mineflayer-1201/bridge.mjs]
-    env: {MMM_MINEFLAYER_MC_VERSION: "1.20.1"}
-    target_versions: ["1.20.1"]
-    trust: first_party_wrapper_over_mineflayer
-  mineflayer-1211:
-    status: configuration_required
-    transport: first_party_jsonl
-    command: [node, integrations/mineflayer-1201/bridge.mjs]
-    env: {MMM_MINEFLAYER_MC_VERSION: "1.21.1"}
-    target_versions: ["1.21.1"]
-    trust: first_party_wrapper_over_mineflayer
   gdmc:
     status: incompatible_by_default
+    federated: false
+    version_policy: exact
     target_versions: ["1.20.2"]
-    reason: upstream target is outside the currently reviewed MMM platform adapter catalog
+    loaders: [fabric]
+    reason: map-building protocol is outside the mod-only production path
