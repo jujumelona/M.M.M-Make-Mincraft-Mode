@@ -95,3 +95,43 @@ def test_checkpoint_patch_metadata_changes_without_rewriting_large_lists(tmp_pat
     assert loaded["pending_batches"] == queue
     assert loaded["pending_patch"]["round"] == 3
     assert loaded["status"] == "patching"
+
+
+def test_queue_written_before_metadata_commit_is_never_lost(tmp_path) -> None:
+    """Crash after queue rename but before metadata replace must recover all work."""
+
+    install(incremental)
+    path = tmp_path / "planner.json"
+    queue = [_batch(index) for index in range(4)]
+
+    # Simulate an older/stale metadata file that says no work remains.
+    path.write_text(
+        json.dumps(
+            {
+                "version": incremental._CHECKPOINT_VERSION,
+                "journal_version": 1,
+                "status": "collecting",
+                "accepted_count": 0,
+                "pending_count": 0,
+                "pending_remaining": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Simulate the next save having atomically installed its immutable queue and then
+    # losing the process before it could replace metadata or append an accept event.
+    pending_path = path.with_name(path.name + ".pending.jsonl")
+    pending_path.write_text(
+        "".join(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            + "\n"
+            for value in queue
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = incremental._load_checkpoint(path)
+    assert loaded["saved_batches"] == []
+    assert loaded["pending_batches"] == queue
+    assert loaded["status"] == "collecting"
