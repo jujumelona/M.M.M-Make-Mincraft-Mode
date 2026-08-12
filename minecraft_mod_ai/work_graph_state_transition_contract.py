@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import time
 from functools import wraps
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+
+_T = TypeVar("_T")
 
 
 def install(work_graph_module: Any) -> None:
     """Make durable task/checkpoint transitions row-local and monotonic.
 
-    MMM now reuses one SQLite connection per ledger/thread. ``Connection.total_changes``
-    is cumulative for that connection, so it cannot prove that the current UPDATE
-    matched a row. The legacy paths also allowed late workers to overwrite cancelled
-    or successful durable state. Use statement ``rowcount`` and RUNNING-state fences;
-    an already-successful task is idempotent only for the exact same receipt.
+    Ordinary worker failure/success remains fenced to RUNNING rows. INPUT_REQUIRED is
+    different: it is a control-plane blocked state and may be recorded directly from a
+    pending node whose dependencies cannot yet run. Named checkpoints also get one
+    explicit invalid-cache recovery path; direct begin_checkpoint() still refuses to
+    restart an already successful checkpoint.
     """
 
     cls = work_graph_module.DurableWorkLedger
@@ -109,12 +113,26 @@ def install(work_graph_module: Any) -> None:
                     raise work_graph_module.WorkGraphError(
                         f"Unknown work node: {node_id}"
                     )
-                if row[0] == work_graph_module.WorkState.CANCELLED.value:
+                source_state = str(row[0])
+                if source_state == work_graph_module.WorkState.CANCELLED.value:
                     connection.commit()
                     return self.task(node_id)
-                if row[0] != work_graph_module.WorkState.RUNNING.value:
+                if (
+                    input_required
+                    and source_state == work_graph_module.WorkState.INPUT_REQUIRED.value
+                ):
+                    connection.commit()
+                    return self.task(node_id)
+                allowed = {work_graph_module.WorkState.RUNNING.value}
+                if input_required:
+                    # A node can be known to require external evidence/input before its
+                    # execution dependencies are satisfiable. This is not a worker
+                    # failure, so forcing begin() first would be both false and often
+                    # impossible (quality nodes can depend on runtime/build gates).
+                    allowed.add(work_graph_module.WorkState.PENDING.value)
+                if source_state not in allowed:
                     raise work_graph_module.WorkGraphError(
-                        f"Work node {node_id} cannot fail from state {row[0]}."
+                        f"Work node {node_id} cannot fail from state {source_state}."
                     )
                 cursor = connection.execute(
                     """
@@ -128,7 +146,7 @@ def install(work_graph_module: Any) -> None:
                         str(error)[:16_384],
                         time.time(),
                         node_id,
-                        work_graph_module.WorkState.RUNNING.value,
+                        source_state,
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -332,6 +350,126 @@ def install(work_graph_module: Any) -> None:
 
         fail_checkpoint._mmm_fenced_transition = True  # type: ignore[attr-defined]
         cls.fail_checkpoint = fail_checkpoint
+
+    if not hasattr(cls, "invalidate_checkpoint"):
+
+        def invalidate_checkpoint(
+            self: Any,
+            checkpoint_id: str,
+            *,
+            input_hash: str,
+            reason: str = "cached checkpoint output failed validation",
+        ) -> bool:
+            """Invalidate exactly one successful checkpoint/input pair atomically."""
+
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """
+                    SELECT input_hash, state FROM checkpoints
+                    WHERE checkpoint_id = ?
+                    """,
+                    (checkpoint_id,),
+                ).fetchone()
+                if row is None:
+                    connection.rollback()
+                    raise work_graph_module.WorkGraphError(
+                        f"Unknown checkpoint: {checkpoint_id}"
+                    )
+                if str(row[0]) != input_hash:
+                    connection.rollback()
+                    return False
+                if str(row[1]) != work_graph_module.WorkState.SUCCEEDED.value:
+                    connection.commit()
+                    return False
+                cursor = connection.execute(
+                    """
+                    UPDATE checkpoints
+                    SET state = ?, receipt_json = NULL, output_hash = NULL,
+                        error = ?, updated_at = ?
+                    WHERE checkpoint_id = ? AND input_hash = ? AND state = ?
+                    """,
+                    (
+                        work_graph_module.WorkState.FAILED.value,
+                        reason[:16_384],
+                        time.time(),
+                        checkpoint_id,
+                        input_hash,
+                        work_graph_module.WorkState.SUCCEEDED.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    raise work_graph_module.WorkGraphError(
+                        f"Checkpoint changed while invalidating: {checkpoint_id}"
+                    )
+                connection.commit()
+                return True
+
+        cls.invalidate_checkpoint = invalidate_checkpoint
+
+    current_named = work_graph_module.run_named_checkpoint
+    if not getattr(current_named, "_mmm_validated_cache_recovery", False):
+
+        @wraps(current_named)
+        def run_named_checkpoint(
+            ledger: Any,
+            checkpoint_id: str,
+            *,
+            stage: str,
+            input_value: Any,
+            action: Callable[[], _T],
+            encode: Callable[[_T], dict[str, Any]],
+            decode: Callable[[dict[str, Any]], _T],
+            validate_cached: Callable[[_T], bool] | None = None,
+        ) -> _T:
+            ledger.raise_if_cancelled()
+            input_hash = work_graph_module._hash_json(input_value)
+            cached = ledger.cached_checkpoint(
+                checkpoint_id,
+                input_hash=input_hash,
+            )
+            if cached is not None:
+                decoded = decode(cached)
+                if validate_cached is None or validate_cached(decoded):
+                    return decoded
+                ledger.invalidate_checkpoint(
+                    checkpoint_id,
+                    input_hash=input_hash,
+                )
+            ledger.begin_checkpoint(
+                checkpoint_id,
+                stage=stage,
+                input_hash=input_hash,
+            )
+            try:
+                value = action()
+                ledger.succeed_checkpoint(
+                    checkpoint_id,
+                    input_hash=input_hash,
+                    receipt=encode(value),
+                )
+                return value
+            except Exception as exc:
+                ledger.fail_checkpoint(
+                    checkpoint_id,
+                    input_hash=input_hash,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                raise
+
+        run_named_checkpoint._mmm_validated_cache_recovery = True  # type: ignore[attr-defined]
+        work_graph_module.run_named_checkpoint = run_named_checkpoint
+
+        # complete_orchestrator imports this helper by value before architecture
+        # contracts are installed. Rebind only that already-imported exact symbol so
+        # the runtime and direct work_graph callers share one recovery semantics.
+        orchestrator = sys.modules.get(f"{work_graph_module.__package__}.complete_orchestrator")
+        if (
+            orchestrator is not None
+            and getattr(orchestrator, "run_named_checkpoint", None) is current_named
+        ):
+            orchestrator.run_named_checkpoint = run_named_checkpoint
 
 
 __all__ = ["install"]
