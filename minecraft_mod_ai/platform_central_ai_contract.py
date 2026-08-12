@@ -98,6 +98,40 @@ def _install_central_target_choice(module: Any) -> None:
     cls.plan = plan
 
 
+def _bootstrap_content_payload(result: CompleteProposal) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for content in result.base_proposal.spec.contents:
+        payload.append(
+            {
+                "content_id": content.content_id,
+                "kind": content.kind.value,
+                "display_name_en": content.display_name_en,
+                "display_name_ko": content.display_name_ko,
+                "color": content.color,
+                "recipe": content.recipe,
+            }
+        )
+    return payload
+
+
+def _bootstrap_boss_payload(result: CompleteProposal) -> dict[str, Any] | None:
+    boss = result.base_proposal.spec.boss
+    if boss is None:
+        return None
+    return {
+        "entity_id": boss.entity_id,
+        "display_name_en": boss.display_name_en,
+        "display_name_ko": boss.display_name_ko,
+        "max_health": boss.max_health,
+        "attack_damage": boss.attack_damage,
+        "movement_speed": boss.movement_speed,
+        "scale": boss.scale,
+        "primary_color": boss.primary_color,
+        "secondary_color": boss.secondary_color,
+        "model_kind": boss.model_kind,
+    }
+
+
 def _install_live_module_lowering(module: Any) -> None:
     cls = module.CompleteGameDesignPlanner
     original = cls._plan_in_session
@@ -122,9 +156,40 @@ def _install_live_module_lowering(module: Any) -> None:
         if not isinstance(target, dict) or target.get("source_api_family") != "fabric_live_ai":
             return result
 
+        bootstrap_contents = _bootstrap_content_payload(result)
+        bootstrap_boss = _bootstrap_boss_payload(result)
         lowered: list[ProductionModule] = []
         changed = False
+        bootstrap_bound = False
+
         for item in result.modules:
+            uses_base_content = (
+                item.kind == "integration"
+                and isinstance(item.config.get("uses_base_content"), list)
+            )
+            if uses_base_content:
+                config = {
+                    **item.config,
+                    "implementation": "custom",
+                    "requested_kind": "bootstrap_content",
+                    "platform_generation": "central_ai_live_target",
+                    "bootstrap_contents": bootstrap_contents,
+                    "bootstrap_boss": bootstrap_boss,
+                    "require_exact_base_spec": True,
+                }
+                lowered.append(
+                    ProductionModule(
+                        module_id=item.module_id,
+                        kind="custom_java",
+                        config=config,
+                        depends_on=item.depends_on,
+                        required_gates=item.required_gates,
+                    )
+                )
+                bootstrap_bound = True
+                changed = True
+                continue
+
             if item.kind in _LIVE_NON_SOURCE_KINDS or item.kind == "custom_java":
                 lowered.append(item)
                 continue
@@ -145,6 +210,62 @@ def _install_live_module_lowering(module: Any) -> None:
             )
             changed = True
 
+        # _remove_bootstrap_duplicates intentionally removes modules duplicated by
+        # ModSpec.contents because the historical deterministic generator creates
+        # those files. A live target starts from Fabric's official blank template,
+        # so bind the exact base spec into an existing source-generating module if
+        # the compatibility sentinel was not emitted. Do not add a new module ID:
+        # the production contract was already compiled against this module catalog.
+        if (bootstrap_contents or bootstrap_boss) and not bootstrap_bound:
+            target_index = next(
+                (
+                    index
+                    for index, item in enumerate(lowered)
+                    if item.kind == "custom_java"
+                ),
+                None,
+            )
+            if target_index is None:
+                # Keep the production-contract module ID stable by converting the
+                # first non-audio module. Research/sidecar integrations are not a
+                # valid place to hide gameplay bootstrap requirements.
+                target_index = next(
+                    (
+                        index
+                        for index, item in enumerate(lowered)
+                        if item.kind != "audio"
+                        and not (
+                            item.kind == "integration"
+                            and item.config.get("integration_type")
+                            in {"mmm_research_shard", "mmm_local_ai_sidecar"}
+                        )
+                    ),
+                    None,
+                )
+            if target_index is None:
+                raise module.SpecValidationError(
+                    "Live target has base ModSpec content but no production module "
+                    "that can carry its implementation without changing the approved module catalog."
+                )
+            carrier = lowered[target_index]
+            config = {
+                **carrier.config,
+                "implementation": "custom",
+                "requested_kind": carrier.config.get("requested_kind", carrier.kind),
+                "platform_generation": "central_ai_live_target",
+                "bootstrap_contents": bootstrap_contents,
+                "bootstrap_boss": bootstrap_boss,
+                "require_exact_base_spec": True,
+            }
+            lowered[target_index] = ProductionModule(
+                module_id=carrier.module_id,
+                kind="custom_java",
+                config=config,
+                depends_on=carrier.depends_on,
+                required_gates=carrier.required_gates,
+            )
+            changed = True
+
         if not changed:
             return result
 
@@ -154,6 +275,9 @@ def _install_live_module_lowering(module: Any) -> None:
                 "mode": "central_ai_compile_repair",
                 "source_api_family": "fabric_live_ai",
                 "semantic_kinds_preserved_in": "module.config.requested_kind",
+                "base_modspec_bound_to_live_generation": bool(
+                    bootstrap_contents or bootstrap_boss
+                ),
             },
         }
         updated: CompleteProposal = replace(
