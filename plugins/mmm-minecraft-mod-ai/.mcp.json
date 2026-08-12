@@ -31,6 +31,7 @@
         "minecraft_mod_ai.mod_generation_mcp_server"
       ],
       "env": {
+        "MMM_MCP_STAGE": "generation",
         "MMM_MODEL_PROFILE": "t4_local",
         "MMM_WORKSPACE": "mmm-output"
       }
