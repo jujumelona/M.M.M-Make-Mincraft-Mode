@@ -13,33 +13,26 @@ Every page is one complete JSON object with exactly these top-level keys:
 production_batches, complete, next_cursor.
 Every production batch must use exactly the batch fields supplied by the host contract.
 
-Choose the page size yourself from the actual plan complexity and the available model context/output budget.
+Choose page size yourself from the actual plan complexity and the available model context/output budget.
 There is NO fixed batch count and NO fixed page count.
 Do not pad, duplicate, or artificially split small work, but do not truncate a large plan to fit one object either.
 
 If the whole outline fits comfortably, return one JSON object with complete=true and next_cursor="".
 If more work remains, close the current JSON object cleanly with complete=false and a short non-empty next_cursor.
-You may then either:
-1. emit the next complete JSON page immediately after it, or
-2. stop after that page and let the host request the continuation using next_cursor.
-If you emit multiple JSON objects in one response, they are consecutive pages of ONE outline, in order; every non-final page must have complete=false and a non-empty next_cursor. The final emitted page carries the true complete/next_cursor state for the remaining outline.
+You may then either emit the next complete JSON page immediately or stop and let the host request continuation.
+If several JSON objects are emitted in one response, they are consecutive pages of ONE outline in order. The host preserves every valid page and uses the final emitted page to decide whether another request is needed.
 
+On a repair request, the host may provide accepted_outline_prefix containing pages/batches already validated and saved. NEVER regenerate, rename, summarize, or replace those accepted batches. Continue only from the first rejected/missing part described by repair_error.
 Never leave a JSON object truncated. Prefer another page over an oversized or incomplete object.
 """
 
 
-def _is_outline_contract(expected_contracts: Sequence[frozenset[str]]) -> bool:
-    return len(expected_contracts) == 1 and expected_contracts[0] == _OUTLINE_FIELDS
+def _outline_is_allowed(expected_contracts: Sequence[frozenset[str]]) -> bool:
+    return _OUTLINE_FIELDS in tuple(expected_contracts)
 
 
 def install(runtime_module: Any) -> None:
-    """Give production outlines a scalable, model-chosen pagination prompt.
-
-    This installer deliberately does not change ``max_tokens``, batch count, page count,
-    or retry count.  The selected model keeps its configured output budget and chooses
-    how much outline work belongs in each page.  Large plans scale through explicit
-    ``complete``/``next_cursor`` pagination instead of host-imposed size limits.
-    """
+    """Give every production-outline path model-chosen, unbounded pagination."""
 
     from . import complete_planner as complete_planner_module
 
@@ -57,7 +50,7 @@ def install(runtime_module: Any) -> None:
         expected_contracts: Sequence[frozenset[str]],
         stage: str,
     ) -> dict[str, Any]:
-        if not _is_outline_contract(expected_contracts):
+        if not _outline_is_allowed(expected_contracts):
             return page_current(
                 router,
                 system_prompt=system_prompt,
