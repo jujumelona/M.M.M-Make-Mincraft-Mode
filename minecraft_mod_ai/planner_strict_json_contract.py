@@ -70,6 +70,35 @@ def _extract_one_complete_object(text: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _extract_unique_contract_object(
+    containers: Sequence[_DecodedContainer],
+    expected_contracts: Sequence[frozenset[str]],
+) -> dict[str, Any]:
+    """Select one contract-shaped object while ignoring unrelated scratch JSON.
+
+    Some local reasoning models emit a small top-level scratch object before the final
+    structured answer. That object is safe to ignore only when exactly one complete
+    outer object has a field set that matches a host contract. Multiple matching
+    objects remain ambiguous and fail closed.
+    """
+
+    expected = tuple(expected_contracts)
+    matches: list[dict[str, Any]] = []
+    for container in containers:
+        value = container.value
+        if not isinstance(value, dict):
+            continue
+        fields = frozenset(str(key) for key in value)
+        if fields in expected:
+            matches.append(dict(value))
+    if len(matches) != 1:
+        raise ValueError(
+            "response must contain exactly one complete contract-shaped JSON object; "
+            f"found {len(matches)} matching objects among {len(containers)} outer containers"
+        )
+    return matches[0]
+
+
 def _valid_outline_page(value: Any, index: int) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"production-outline page {index} must be a JSON object")
@@ -196,11 +225,12 @@ def install(runtime_module: Any) -> None:
             for container in containers
         )
         try:
-            value = (
-                _extract_outline_sequence(text)
-                if outline_allowed and all_outline
-                else _extract_one_complete_object(text)
-            )
+            if outline_allowed and all_outline:
+                value = _extract_outline_sequence(text)
+            elif len(containers) == 1:
+                value = _extract_one_complete_object(text)
+            else:
+                value = _extract_unique_contract_object(containers, expected_contracts)
         except (ValueError, json.JSONDecodeError) as exc:
             expectation = (
                 "valid sequential production-outline JSON pages"
