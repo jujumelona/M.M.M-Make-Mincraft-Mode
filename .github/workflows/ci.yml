@@ -47,6 +47,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -57,6 +60,8 @@ jobs:
           python -m pip install --no-deps --no-build-isolation -e .
       - name: Compile Python
         run: python -m compileall -q minecraft_mod_ai tests tools mcp_gateway.py download_resources.py
+      - name: Validate Mineflayer bridge syntax
+        run: node --check integrations/mineflayer-1201/bridge.mjs
       - name: Verify generated notebook
         run: python tools/build_colab_notebook.py --check
       - name: Verify packaged Skill catalog
@@ -101,10 +106,10 @@ jobs:
               Path('audit/FULL_PROJECT_AUDIT.json').read_text(encoding='utf-8')
           )
           if report['overall_status'] != 'passed':
-              raise SystemExit(
-                  'Full project audit failed: '
-                  + ', '.join(report['failed_checks'])
-              )
+            raise SystemExit(
+              'Full project audit failed: '
+              + ', '.join(report['failed_checks'])
+          )
           PY
       - uses: actions/upload-artifact@v4
         if: always()
