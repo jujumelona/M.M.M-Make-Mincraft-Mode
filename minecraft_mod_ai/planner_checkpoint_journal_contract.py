@@ -15,6 +15,11 @@ _RUNTIME_CACHE_LOCK = threading.RLock()
 _RUNTIME_CACHE: dict[str, "_JournalRuntime"] = {}
 _PATH_LOCKS: dict[str, threading.RLock] = {}
 
+_SAVED_DIGEST_VERSION = 1
+_SAVED_DIGEST_DOMAIN = b"mmm/planner/saved-batches/v1\0"
+_HOST_RESUME_DOMAIN = b"mmm/planner/host-resume/v2\0"
+_HOT_STATE = threading.local()
+
 
 @dataclass
 class _JournalRuntime:
@@ -23,6 +28,14 @@ class _JournalRuntime:
     pending_remaining: int | None
     queue_signature: tuple[int, int] | None
     events_signature: tuple[int, int] | None
+
+
+@dataclass
+class _SavedBatchTracker:
+    owner: list[Any]
+    digest: str
+    identities: set[str]
+    accepted_ids: list[str]
 
 
 def _compact(value: Any) -> str:
@@ -249,18 +262,69 @@ def _record_accepted(
     runtime.events_signature = _file_signature(_events_path(path))
 
 
+def _valid_saved_digest(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _saved_digest_seed() -> str:
+    return hashlib.sha256(_SAVED_DIGEST_DOMAIN).hexdigest()
+
+
+def _extend_saved_digest(previous: str, batch: Any, fingerprint_fn: Any) -> str:
+    """Append one immutable batch to the persisted SHA256 chain in O(batch size)."""
+
+    leaf = fingerprint_fn(batch)
+    digest = hashlib.sha256()
+    digest.update(_SAVED_DIGEST_DOMAIN)
+    digest.update(bytes.fromhex(previous))
+    digest.update(bytes.fromhex(leaf))
+    return digest.hexdigest()
+
+
+def _remember_loaded_saved(state: dict[str, Any]) -> None:
+    saved = state.get("saved_batches")
+    if not isinstance(saved, list):
+        _HOT_STATE.loaded_saved_hint = None
+        return
+    digest = state.get("saved_batches_digest")
+    count = state.get("saved_batches_digest_count")
+    version = state.get("saved_batches_digest_version")
+    if (
+        version != _SAVED_DIGEST_VERSION
+        or type(count) is not int
+        or count != len(saved)
+        or not _valid_saved_digest(digest)
+    ):
+        _HOT_STATE.loaded_saved_hint = None
+        return
+    _HOT_STATE.loaded_saved_hint = (
+        count,
+        saved[0] if saved else None,
+        saved[-1] if saved else None,
+        digest,
+    )
+
+
 def install(incremental_module: Any) -> None:
-    """Replace quadratic full-state rewrites with append-only planner journals.
+    """Install append-only planner persistence and hot-path digest reuse.
 
     The pending queue is written once. Each accepted batch is one fsynced append event.
     Only small mutable metadata (status, cursor, one pending patch) is atomically
     replaced. Legacy monolithic checkpoints remain readable and migrate on the next
     save.
 
-    The durable queue/event files are replayed once per process/path and thereafter
-    tracked in memory only after fsync succeeds. A fresh process or an externally
-    changed sidecar automatically replays the disk journal, preserving crash recovery
-    while avoiding O(N^2) read/parse work during long paged generations.
+    Durable queue/event files are replayed once per process/path and thereafter tracked
+    in memory only after fsync succeeds. Large immutable requests are canonicalized once
+    per planner invocation. Accepted batches use a persisted append-only SHA256 chain,
+    so adding one batch hashes only that batch instead of serializing the full accepted
+    prefix again. This removes the quadratic request/saved_batches fingerprint path while
+    retaining deterministic resume identifiers and crash recovery.
     """
 
     current_save = incremental_module._save_checkpoint
@@ -268,7 +332,131 @@ def install(incremental_module: Any) -> None:
     if getattr(current_save, "_mmm_linear_checkpoint_journal", False):
         return
 
+    current_fingerprint = incremental_module._fingerprint
+    current_batch_identity = incremental_module._batch_identity
+    current_accepted_batch_ids = incremental_module._accepted_batch_ids
+    current_merge_saved_batches = incremental_module._merge_saved_batches
+    current_checkpoint_path = incremental_module._checkpoint_path
     checkpoint_version = int(incremental_module._CHECKPOINT_VERSION)
+
+    def _new_saved_tracker(
+        saved: list[Any],
+        *,
+        restored_digest: str | None = None,
+    ) -> _SavedBatchTracker:
+        identities: set[str] = set()
+        accepted_ids: list[str] = []
+        digest = restored_digest if _valid_saved_digest(restored_digest) else _saved_digest_seed()
+        rebuild_digest = restored_digest is None or not _valid_saved_digest(restored_digest)
+        for value in saved:
+            identities.add(current_batch_identity(value))
+            if isinstance(value, dict):
+                batch_id = str(value.get("batch_id", "")).strip()
+                if batch_id:
+                    accepted_ids.append(batch_id)
+            if rebuild_digest:
+                digest = _extend_saved_digest(digest, value, current_fingerprint)
+        return _SavedBatchTracker(
+            owner=saved,
+            digest=digest,
+            identities=identities,
+            accepted_ids=accepted_ids,
+        )
+
+    def _tracker_for(saved: list[Any]) -> _SavedBatchTracker:
+        tracker = getattr(_HOT_STATE, "saved_tracker", None)
+        if isinstance(tracker, _SavedBatchTracker) and tracker.owner is saved:
+            return tracker
+
+        restored_digest: str | None = None
+        hint = getattr(_HOT_STATE, "loaded_saved_hint", None)
+        if isinstance(hint, tuple) and len(hint) == 4:
+            count, first, last, digest = hint
+            if (
+                count == len(saved)
+                and (not saved or (saved[0] is first and saved[-1] is last))
+                and _valid_saved_digest(digest)
+            ):
+                restored_digest = digest
+
+        tracker = _new_saved_tracker(saved, restored_digest=restored_digest)
+        _HOT_STATE.saved_tracker = tracker
+        return tracker
+
+    def fingerprint(value: Any) -> str:
+        request_obj = getattr(_HOT_STATE, "request_obj", None)
+        if value is request_obj:
+            request_digest = getattr(_HOT_STATE, "request_digest", None)
+            if _valid_saved_digest(request_digest):
+                return request_digest
+
+        if isinstance(value, list):
+            tracker = getattr(_HOT_STATE, "saved_tracker", None)
+            if isinstance(tracker, _SavedBatchTracker) and tracker.owner is value:
+                return tracker.digest
+
+        # This shape is internal to host_resume_* generation. The cursor is opaque, so
+        # bind it to the persisted saved-prefix digest plus only the new page digest.
+        # Do not serialize/hash the entire accepted prefix again.
+        if (
+            isinstance(value, dict)
+            and frozenset(value) == {"saved", "new"}
+            and isinstance(value.get("saved"), list)
+        ):
+            saved = value["saved"]
+            tracker = _tracker_for(saved)
+            new_digest = current_fingerprint(value.get("new"))
+            digest = hashlib.sha256()
+            digest.update(_HOST_RESUME_DOMAIN)
+            digest.update(bytes.fromhex(tracker.digest))
+            digest.update(bytes.fromhex(new_digest))
+            return digest.hexdigest()
+
+        return current_fingerprint(value)
+
+    def accepted_batch_ids(saved_batches: Any) -> list[str]:
+        if not isinstance(saved_batches, list):
+            return current_accepted_batch_ids(saved_batches)
+        tracker = _tracker_for(saved_batches)
+        return list(tracker.accepted_ids)
+
+    def merge_saved_batches(saved: list[Any], incoming: Any) -> None:
+        tracker = _tracker_for(saved)
+        for value in incoming:
+            identity = current_batch_identity(value)
+            if identity in tracker.identities:
+                continue
+            saved.append(value)
+            tracker.identities.add(identity)
+            if isinstance(value, dict):
+                batch_id = str(value.get("batch_id", "")).strip()
+                if batch_id:
+                    tracker.accepted_ids.append(batch_id)
+            tracker.digest = _extend_saved_digest(
+                tracker.digest,
+                value,
+                current_fingerprint,
+            )
+
+    def checkpoint_path(stage: str, request: Any) -> Path:
+        # Preserve the exact legacy path digest without serializing request twice.
+        # sort_keys=True orders this two-key object as request,stage.
+        request_bytes = incremental_module._canonical_bytes(request)
+        request_digest = hashlib.sha256(request_bytes).hexdigest()
+        payload = (
+            b'{"request":'
+            + request_bytes
+            + b',"stage":'
+            + incremental_module._canonical_bytes(stage)
+            + b"}"
+        )
+        digest = hashlib.sha256(payload).hexdigest()
+        safe_stage = "".join(
+            char if char.isalnum() or char in "-_" else "_" for char in stage
+        ).strip("_")[:60] or "planner"
+        _HOT_STATE.request_obj = request
+        _HOT_STATE.request_digest = request_digest
+        return incremental_module._checkpoint_root() / f"{safe_stage}-{digest[:20]}.json"
 
     def load_checkpoint(path: Path) -> dict[str, Any]:
         with _path_lock(path):
@@ -279,7 +467,10 @@ def install(incremental_module: Any) -> None:
                 or _events_path(path).is_file()
             )
             if not journaled:
-                return current_load(path)
+                state = current_load(path)
+                if isinstance(state, dict):
+                    _remember_loaded_saved(state)
+                return state
 
             runtime = _hydrate_runtime(path)
             accepted = list(runtime.accepted)
@@ -311,12 +502,19 @@ def install(incremental_module: Any) -> None:
             }
             state["saved_batches"] = accepted
             state["pending_batches"] = pending
+            _remember_loaded_saved(state)
             return state
 
     def save_checkpoint(path: Path, state: dict[str, Any]) -> None:
         with _path_lock(path):
             path.parent.mkdir(parents=True, exist_ok=True)
-            saved = list(state.get("saved_batches", []))
+            saved_source = state.get("saved_batches", [])
+            if isinstance(saved_source, list):
+                tracker = _tracker_for(saved_source)
+                state["saved_batches_digest_version"] = _SAVED_DIGEST_VERSION
+                state["saved_batches_digest_count"] = len(saved_source)
+                state["saved_batches_digest"] = tracker.digest
+            saved = list(saved_source)
             pending = list(state.get("pending_batches", []))
 
             old_meta = _read_meta(path, checkpoint_version=checkpoint_version)
@@ -376,12 +574,26 @@ def install(incremental_module: Any) -> None:
             )
             _atomic_json(path, small)
 
+    fingerprint._mmm_incremental_fingerprint_cache = True  # type: ignore[attr-defined]
+    accepted_batch_ids._mmm_incremental_identity_cache = True  # type: ignore[attr-defined]
+    merge_saved_batches._mmm_incremental_identity_cache = True  # type: ignore[attr-defined]
+    checkpoint_path._mmm_request_fingerprint_cache = True  # type: ignore[attr-defined]
+    checkpoint_path.__wrapped__ = current_checkpoint_path  # type: ignore[attr-defined]
+    merge_saved_batches.__wrapped__ = current_merge_saved_batches  # type: ignore[attr-defined]
+
     save_checkpoint._mmm_linear_checkpoint_journal = True  # type: ignore[attr-defined]
     load_checkpoint._mmm_linear_checkpoint_journal = True  # type: ignore[attr-defined]
     save_checkpoint._mmm_cached_journal_replay = True  # type: ignore[attr-defined]
     load_checkpoint._mmm_cached_journal_replay = True  # type: ignore[attr-defined]
+    save_checkpoint._mmm_saved_digest_chain = True  # type: ignore[attr-defined]
+    load_checkpoint._mmm_saved_digest_chain = True  # type: ignore[attr-defined]
     save_checkpoint.__wrapped__ = current_save  # type: ignore[attr-defined]
     load_checkpoint.__wrapped__ = current_load  # type: ignore[attr-defined]
+
+    incremental_module._fingerprint = fingerprint
+    incremental_module._accepted_batch_ids = accepted_batch_ids
+    incremental_module._merge_saved_batches = merge_saved_batches
+    incremental_module._checkpoint_path = checkpoint_path
     incremental_module._save_checkpoint = save_checkpoint
     incremental_module._load_checkpoint = load_checkpoint
 
