@@ -19,6 +19,7 @@ def install(incremental_module: Any) -> None:
     from . import complete_orchestrator as orchestrator_module
     from . import complete_orchestrator_services as orchestrator_services
     from . import complete_planner as complete_planner_module
+    from . import planner_json_runtime_contract as planner_runtime_module
     from . import work_graph as work_graph_module
     from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
     from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
@@ -42,9 +43,21 @@ def install(incremental_module: Any) -> None:
     # checkpoint instead of merely leaving the optimized function on audio_generator.
     orchestrator_module.synthesize_audio_files = audio_module.synthesize_audio_files
 
+    # Disable the historical production 2->1 host width reduction at its source too.
+    # The lossless stream wrapper below already bypasses that loop, but making this
+    # helper an identity prevents any retained/internal callable from reintroducing a
+    # fixed target count. Page width belongs to the model; the host owns validation,
+    # persistence, salvage and continuation only.
+    def no_production_width_narrowing(request: Any, attempt: int) -> Any:
+        del attempt
+        return request
+
+    no_production_width_narrowing._mmm_no_fixed_production_width = True  # type: ignore[attr-defined]
+    planner_runtime_module._narrow_production_repair_request = no_production_width_narrowing
+
     # This wrapper is intentionally installed after planner_json_runtime_contract. It
-    # bypasses the historical production-only 2->1 target narrowing and page-local
-    # retry loop, while leaving every non-production structured planner page untouched.
+    # bypasses the historical page-local retry loop for production pages, while leaving
+    # every non-production structured planner page untouched.
     install_production_stream_efficiency(complete_planner_module)
     install_execution_efficiency(
         complete_planner_module=complete_planner_module,
