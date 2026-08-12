@@ -45,3 +45,37 @@ def test_audio_string_false_is_not_coerced_to_true() -> None:
                 "loop": "false",
             }
         )
+
+
+def test_batch_does_not_fabricate_missing_deliverable() -> None:
+    install(planner)
+    with pytest.raises(SpecValidationError, match="at least one deliverable"):
+        planner._production_batch(
+            {
+                "batch_id": "core",
+                "scope": "core gameplay",
+                "depends_on_batches": [],
+                "deliverables": [],
+                "exports": [],
+            }
+        )
+
+
+def test_unknown_batch_dependency_is_not_fuzzy_rewritten_or_dropped() -> None:
+    install(planner)
+    first = planner._ProductionBatch(
+        batch_id="core_system",
+        scope="core",
+        depends_on_batches=(),
+        deliverables=("core",),
+        exports=(),
+    )
+    second = planner._ProductionBatch(
+        batch_id="boss_system",
+        scope="boss",
+        depends_on_batches=("core",),
+        deliverables=("boss",),
+        exports=(),
+    )
+    with pytest.raises(SpecValidationError, match="unknown dependencies"):
+        planner._topological_production_batches((first, second))
