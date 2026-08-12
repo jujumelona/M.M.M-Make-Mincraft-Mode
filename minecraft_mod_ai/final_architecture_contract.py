@@ -5,6 +5,7 @@ from typing import Any
 from . import agentic_optimization_contract as _agentic_module
 from . import atomic_requirement_contract as _atomic_module
 from . import custom_module_generator as _custom_module_generator_module
+from . import planner_pagination_safety_contract as _planner_pagination_module
 from . import production_contract as _production_contract_module
 from . import work_graph as _work_graph_module
 from .atomic_efficiency_contract import install as _install_atomic_efficiency
@@ -19,6 +20,7 @@ from .clean_room_verification_contract import install as _install_clean_room
 from .custom_generation_search_contract import install as _install_custom_generation_search
 from .orchestrator_jdt_gate_contract import install as _install_orchestrator_jdt_gate
 from .planner_json_runtime_contract import install as _install_planner_json_runtime
+from .planner_outline_identity_contract import install as _install_planner_outline_identity
 from .planner_pagination_safety_contract import install as _install_planner_pagination_safety
 from .planner_parser_safety_contract import install as _install_planner_parser_safety
 from .repair_diagnostics_contract import install as _install_repair_diagnostics
@@ -100,6 +102,7 @@ def install(
     _install_planner_json_runtime(complete_planner_module)
     _install_planner_parser_safety(complete_planner_module)
     _install_planner_pagination_safety(complete_planner_module)
+    _install_planner_outline_identity(_planner_pagination_module)
     _agentic_module.install(
         complete_planner_module=complete_planner_module,
         repair_module=repair_module,
