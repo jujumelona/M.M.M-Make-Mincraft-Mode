@@ -20,6 +20,9 @@ def _node(node_id: str, resource_class: str) -> WorkNode:
 def test_plan_search_is_adaptive(monkeypatch) -> None:
     monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
     monkeypatch.setenv("MMM_PLAN_SEARCH_WIDTH", "2")
+    # Auto search may widen only when the native server actually exposes independent
+    # decode slots. Serial decode must not duplicate the same expensive request.
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     assert agentic._planner_candidate_count({"task": "add one item"}, "page") == 1
     risky = {
         "current_target_deliverables": ["network sync", "persistence", "migration"],
