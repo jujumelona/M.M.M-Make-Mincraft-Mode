@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# Audit generation 5: verify SHA/retry/sharding fixes on current main.
+# Audit generation 6: verify latest production fixes on current main.
 jobs:
   audit:
     runs-on: ubuntu-latest
