@@ -154,6 +154,13 @@ _install_platform_runtime_contract(
     mineflayer_module=_mineflayer_bridge_module,
 )
 
+# Activate the target-aware generation/validation stack and the atomic requirement,
+# evidence, repair and release contracts.  This is deliberately after the runtime
+# target binding so the live-target project bootstrap wraps the final preparation path.
+from .integrated_contract_bootstrap import install as _install_integrated_contract_bootstrap
+
+_install_integrated_contract_bootstrap()
+
 # MCP service methods are target-bound too. Standalone research requires an explicit
 # target; proposal-bound runtime/playtest derives the target from the approved spec.
 from . import mcp_tools as _mcp_tools_module
