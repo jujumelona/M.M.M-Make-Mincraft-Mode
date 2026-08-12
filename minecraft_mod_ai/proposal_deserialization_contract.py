@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from functools import wraps
 from typing import Any
 
@@ -38,16 +39,48 @@ def _string_list(value: Any, field: str, error_type: type[Exception], *, empty_i
     return result
 
 
+def _json_native(value: Any) -> Any:
+    """Normalize internal dataclass containers into JSON-native values."""
+
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, tuple):
+        return [_json_native(item) for item in value]
+    if isinstance(value, list):
+        return [_json_native(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_native(item) for key, item in value.items()}
+    return value
+
+
 def install(spec_module: Any, complete_spec_module: Any) -> None:
-    """Validate JSON types before legacy dataclass constructors can coerce them.
+    """Harden proposal serialization/deserialization at the JSON integrity boundary.
 
     Resume/approval data is an integrity boundary. Lists must not accept strings as
     character iterables, numeric ids must not become strings, and legacy
     ``ProductionModule`` normalization must not silently change persisted graph ids.
-    The existing cryptographic/hash validators still run after these structural checks.
+    ``Proposal.to_dict`` is normalized to real JSON arrays so data produced by the
+    package is accepted by the same strict boundary it later consumes.
     """
 
     proposal_cls = spec_module.Proposal
+
+    current_to_dict = proposal_cls.to_dict
+    if not getattr(current_to_dict, "_mmm_json_native_serialization", False):
+
+        @wraps(current_to_dict)
+        def proposal_to_dict(self: Any) -> dict[str, Any]:
+            value = _json_native(current_to_dict(self))
+            if not isinstance(value, dict):
+                raise spec_module.SpecValidationError(
+                    "Proposal serialization must produce a JSON object."
+                )
+            return value
+
+        proposal_to_dict._mmm_json_native_serialization = True  # type: ignore[attr-defined]
+        proposal_to_dict.__wrapped__ = current_to_dict  # type: ignore[attr-defined]
+        proposal_cls.to_dict = proposal_to_dict
+
     proposal_descriptor = proposal_cls.__dict__["from_dict"]
     proposal_function = proposal_descriptor.__func__
     if not getattr(proposal_function, "_mmm_strict_deserialization", False):
