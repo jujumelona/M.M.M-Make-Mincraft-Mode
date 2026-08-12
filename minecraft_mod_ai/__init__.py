@@ -161,6 +161,17 @@ from .integrated_contract_bootstrap import install as _install_integrated_contra
 
 _install_integrated_contract_bootstrap()
 
+# Parallel worker completion order is intentionally nondeterministic. Canonicalize
+# audio batches before registry emission and canonicalize aggregate generation
+# receipts after all late architecture/runtime wrappers have been installed.
+from . import audio_generator as _audio_generator_module
+from .parallel_result_determinism_contract import install as _install_parallel_result_determinism_contract
+
+_install_parallel_result_determinism_contract(
+    audio_generator_module=_audio_generator_module,
+    orchestrator_module=_complete_orchestrator_module,
+)
+
 # MCP service methods are target-bound too. Standalone research requires an explicit
 # target; proposal-bound runtime/playtest derives the target from the approved spec.
 from . import mcp_tools as _mcp_tools_module
