@@ -13,11 +13,7 @@ from .platform_catalog import adapter_for_lock_values, adapter_from_project
 
 
 def install(orchestrator_module: Any) -> None:
-    from . import custom_module_generator as custom_module_generator_module
-    from .platform_custom_coder_contract import install as install_custom_coder
-
-    install_custom_coder(custom_module_generator_module)
-
+    """Install only live-target project preparation and migration behavior."""
     cls = orchestrator_module.CompleteProductionOrchestrator
     original = cls._prepare_project
     if getattr(original, "_mmm_live_official_bootstrap", False):
@@ -127,7 +123,6 @@ def _prepare_live_migration(
     selection: dict[str, Any],
 ) -> Path:
     """Import the old source, bind approved migration intent, then let AI port it."""
-
     try:
         report = orchestrator_module.inspect_existing_project_archive(existing_input)
     except Exception as exc:
@@ -154,9 +149,6 @@ def _prepare_live_migration(
                 "Approved migration source loader does not match the bound Revise ZIP."
             )
 
-    # platform_runtime_contract is the immediate wrapper installed before this live
-    # contract. Its __wrapped__ target retains all earlier preparation contracts but
-    # omits only the same-target guard that would intentionally reject a migration.
     inner_prepare = getattr(wrapped_prepare, "__wrapped__", None)
     if not callable(inner_prepare):
         raise orchestrator_module.CompleteProductionError(
