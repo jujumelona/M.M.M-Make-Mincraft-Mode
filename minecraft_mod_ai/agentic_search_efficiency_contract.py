@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 from typing import Any, Mapping, Sequence
+
+
+def _active_parallel_slots() -> int:
+    raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
+    try:
+        return max(1, min(8, int(raw)))
+    except ValueError:
+        return 1
 
 
 def install(agentic_module: Any) -> None:
     """Keep adaptive planning search while gating expensive repair breadth.
 
-    Auto planning delegates to the core risk-aware policy so independent candidates
-    can use the native llama-server slots when the request actually warrants search.
-    Explicit ``on`` and ``off`` remain hard overrides. Repair search stays failure-
-    gated: it widens only after the same verifier signature survives a prior repair.
+    Auto planning uses risk-aware best-of-N only when the native local server has
+    parallel decode slots available; otherwise duplicate candidates would be purely
+    serial latency. Explicit ``on`` remains the user's hard override and can still pay
+    for sequential breadth intentionally. Repair search remains failure-gated.
     """
 
     current_plan_count = agentic_module._planner_candidate_count
@@ -26,7 +35,11 @@ def install(agentic_module: Any) -> None:
                 )
             if mode == "off":
                 return 1
-            return max(1, min(3, int(current_plan_count(request, stage))))
+            slots = _active_parallel_slots()
+            if slots <= 1:
+                return 1
+            risk_width = max(1, min(3, int(current_plan_count(request, stage))))
+            return min(slots, risk_width)
 
         planner_candidate_count._mmm_failure_gated_search = True  # type: ignore[attr-defined]
         planner_candidate_count.__wrapped__ = current_plan_count  # type: ignore[attr-defined]
@@ -72,4 +85,4 @@ def install(agentic_module: Any) -> None:
     agentic_module._repair_candidate_count = repair_candidate_count
 
 
-__all__ = ["install"]
+__all__ = ["install", "_active_parallel_slots"]
