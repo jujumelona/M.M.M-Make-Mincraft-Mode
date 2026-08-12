@@ -79,9 +79,13 @@ def test_pinned_low_level_server_supports_baseline_and_explicit_draft_mtp() -> N
     assert "examples/server/server.py" in colab_mtp_server.SERVER_SOURCE_URL
     assert '"draft_model": "draft-mtp"' in text
     assert '"draft_model_num_pred_tokens": width' in text
-    assert 'if response_format == "json":' in text
+    assert "_structured_response_format" in text
+    assert '"json_object"' in text
+    assert '"json_schema"' in text
     assert 'return "baseline"' in text
     assert "_probe_mtp_server" in text
+    assert '"stream": True' in text
+    assert "decode_log_summary" in text
     assert "_git_blob_sha1(data)" in text
     assert "libggml-cuda.so" in text
     assert "llama_supports_gpu" not in text
