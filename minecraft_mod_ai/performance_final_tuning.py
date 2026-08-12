@@ -48,6 +48,15 @@ _STAGE_IGNORED_DIRS = frozenset(
 def install(performance_module: Any) -> None:
     """Tighten staging cost and concurrent-merge correctness."""
 
+    # Hardware policy is installed earlier in package initialization. Apply the final
+    # native-LLM efficiency layer here so its compact autotune probe and explicit KV
+    # prefix reuse are the outermost runtime policy, even after idempotent reinstalls.
+    from . import llama_server_autotune as _llama_autotune
+    from . import llama_server_hardware_policy as _llama_hardware
+    from .llama_server_efficiency_contract import install as _install_llama_efficiency
+
+    _install_llama_efficiency(_llama_autotune, _llama_hardware)
+
     if getattr(performance_module, "_mmm_final_tuning_installed", False):
         return
 
@@ -119,9 +128,6 @@ def install(performance_module: Any) -> None:
                 staged = json.loads(staged_text)
                 live = json.loads(live_text)
             except json.JSONDecodeError:
-                # A file carrying .json but not valid JSON can still be merged as
-                # plain text. Once all three documents parse, semantic conflicts
-                # must remain fail-closed instead of falling through to line merge.
                 return performance_module._merge_text_lines(
                     relative,
                     base_text=base_text,
@@ -152,9 +158,6 @@ def install(performance_module: Any) -> None:
     performance_module._three_way_merge = three_way_merge
     performance_module._mmm_final_tuning_installed = True
 
-    # The complete orchestrator is already imported at this point in package
-    # initialization. Install final request-coverage, repair-diagnostic and
-    # clean-room release gates without rebinding deterministic generators early.
     from . import complete_orchestrator as _orchestrator
     from . import complete_planner as _complete_planner
     from . import quality_evidence as _quality_evidence
