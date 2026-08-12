@@ -11,7 +11,8 @@ def install(incremental_module: Any) -> None:
     # the local GPU at one decode slot, remove host-imposed planner page width and
     # dependency-head-of-line sharding, journal large checkpoints in linear time,
     # checkpoint individual image/audio sources inside coarse residency-friendly
-    # shards, and escalate best-of-N LLM search only after a verifier state persists.
+    # shards, batch large-DAG scheduler polling, and escalate best-of-N LLM search
+    # only after a verifier state actually persists.
     from . import agentic_optimization_contract as agentic_module
     from . import audio_generator as audio_module
     from . import complete_orchestrator as orchestrator_module
@@ -23,11 +24,13 @@ def install(incremental_module: Any) -> None:
     from .audio_resume_efficiency_contract import install as install_audio_resume_efficiency
     from .execution_efficiency_contract import install as install_execution_efficiency
     from .planner_checkpoint_journal_contract import install as install_checkpoint_journal
+    from .scheduler_poll_efficiency_contract import install as install_scheduler_poll_efficiency
 
     install_checkpoint_journal(incremental_module)
     install_agentic_search_efficiency(agentic_module)
     install_asset_resume_efficiency(orchestrator_services)
     install_audio_resume_efficiency(audio_module)
+    install_scheduler_poll_efficiency(work_graph_module)
 
     # complete_orchestrator imports synthesize_audio_files directly, before this late
     # planner/architecture bootstrap installs the resumable audio wrapper. Rebind that
