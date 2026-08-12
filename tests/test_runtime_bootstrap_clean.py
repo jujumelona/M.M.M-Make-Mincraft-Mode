@@ -7,6 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "minecraft_mod_ai"
 _BOOTSTRAP = PACKAGE / "runtime_bootstrap.py"
+_LLAMA_PIPELINE = PACKAGE / "llama_tuning_pipeline.py"
+_APPROVED_COMPOSERS = {_BOOTSTRAP, _LLAMA_PIPELINE}
 
 
 def _text(name: str) -> str:
@@ -71,8 +73,6 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
     assert source.count("initialize_runtime()") == 1
     assert "_install_" not in source
 
-    # Public API modules may legitimately end in ``_contract``. Reject only imports
-    # that are actually invoked as policy installers from package __init__.
     installers, modules = _policy_imports(path)
     direct_calls, module_calls = _composition_calls(path)
     assert not {
@@ -89,22 +89,20 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
     assert "platform_mcp_compatibility_contract" not in source
 
 
-def test_runtime_bootstrap_is_flat_not_nested() -> None:
+def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
     source = _text("runtime_bootstrap.py")
     assert "integrated_contract_bootstrap" not in source
     assert "final_architecture_contract" not in source
     assert "platform_mcp_compatibility_contract" not in source
 
-    # Flatness is not enough: every policy that used to be hidden behind a child
-    # installer must still exist exactly once at the explicit runtime root.
+    # Native llama tuning has one explicit owner because its stages must wrap each
+    # other in a defined order. Everything else remains composed at runtime root.
     required_once = (
         "install_runner_lock(",
         "install_gpu_handoff(",
         "install_scheduler_parallel_safety(",
         "install_llama_parallel_runtime(",
-        "install_llama_efficiency(",
-        "install_llama_runtime_tuning(",
-        "install_llama_cache_reuse(",
+        "install_native_llama_tuning_pipeline(",
         "install_llama_stream_efficiency(",
         "install_project_index_execution_reuse(",
         "install_proposal_deserialization(",
@@ -143,6 +141,14 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     for call in required_once:
         assert source.count(call) == 1, call
 
+    for obsolete_direct_call in (
+        "install_llama_efficiency(",
+        "install_llama_runtime_tuning(",
+        "install_llama_cache_reuse(",
+        "install_llama_decode_speed(",
+    ):
+        assert obsolete_direct_call not in source
+
     assert source.index("install_planner_pagination_safety(") < source.index(
         "install_planner_production_page("
     )
@@ -151,10 +157,43 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     )
 
 
-def test_contract_composition_exists_only_in_runtime_bootstrap() -> None:
+def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
+    assert _LLAMA_PIPELINE.is_file()
+    installers, modules = _policy_imports(_LLAMA_PIPELINE)
+    direct_calls, module_calls = _composition_calls(_LLAMA_PIPELINE)
+    actual = {
+        module
+        for local_name, module in installers.items()
+        if local_name in direct_calls
+    } | {
+        module
+        for local_name, module in modules.items()
+        if local_name in module_calls
+    }
+    assert actual == {
+        "llama_server_hardware_policy",
+        "llama_server_efficiency_contract",
+        "llama_server_runtime_tuning",
+        "llama_cache_reuse_efficiency_contract",
+        "llama_decode_speed_contract",
+    }
+
+    source = _LLAMA_PIPELINE.read_text(encoding="utf-8")
+    order = (
+        "TuningStage(\"hardware\"",
+        "TuningStage(\n                \"efficiency\"",
+        "TuningStage(\"runtime\"",
+        "TuningStage(\n                \"cache-reuse\"",
+        "TuningStage(\n                \"decode-speed\"",
+    )
+    positions = [source.index(marker) for marker in order]
+    assert positions == sorted(positions)
+
+
+def test_contract_composition_is_limited_to_explicit_owners() -> None:
     offenders: list[str] = []
     for path in sorted(PACKAGE.glob("*.py")):
-        if path == _BOOTSTRAP:
+        if path in _APPROVED_COMPOSERS:
             continue
         installers, modules = _policy_imports(path)
         direct_calls, module_calls = _composition_calls(path)
@@ -192,8 +231,10 @@ def test_specialized_installers_are_single_responsibility() -> None:
     outline_prompt = _text("planner_outline_prompt_contract.py")
     assert "planner_production_page_contract" not in outline_prompt
 
+    # Internal helper names are allowed. What matters is that incremental resume no
+    # longer composes unrelated external runtime contracts; the AST-wide owner test
+    # above enforces that invariant without rejecting local `_install_*` helpers.
     incremental_resume = _text("planner_incremental_resume_contract.py")
-    assert "install_" not in incremental_resume
     assert "production_stream_efficiency_contract" not in incremental_resume
     assert "scheduler_poll_efficiency_contract" not in incremental_resume
 
