@@ -79,8 +79,6 @@ def _install_thread_local_connections(work_graph_module: Any) -> None:
         connection = getattr(local, "connection", None)
         pid = getattr(local, "pid", None)
         if connection is not None and pid != os.getpid():
-            # A connection must never be inherited across a fork.  Closing can
-            # fail for an already-invalid inherited handle; either way replace it.
             try:
                 connection.close()
             except Exception:
@@ -138,11 +136,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
         capacities = _capacities()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-
-            # The scheduler polls claim_ready while futures are alive. Renew only
-            # leases owned by this exact process/run token, so a crashed process
-            # cannot be revived accidentally by a later run that uses the same
-            # public worker label.
             connection.execute(
                 """
                 UPDATE tasks
@@ -158,9 +151,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                     now,
                 ),
             )
-
-            # Preserve the durable-ledger recovery rule for genuinely abandoned
-            # work. Expired work is reclaimable by this or another worker.
             connection.execute(
                 """
                 UPDATE tasks
@@ -310,10 +300,6 @@ def _install_index_commit_order(
                 )
             ledger.raise_if_cancelled()
 
-            # Dependency readiness is driven by ledger SUCCEEDED. Therefore every
-            # shared index mutation that a dependent node may read must become
-            # visible before that state transition. Serialize update+manifest as
-            # one critical section to avoid lost updates between CPU workers.
             if shared_index is not None:
                 touched = (
                     receipt.get("touched_paths")
@@ -325,11 +311,15 @@ def _install_index_commit_order(
                         with _INDEX_COMMIT_LOCK:
                             shared_index.update_files(touched)
                             shared_index.write_manifest()
-                    except Exception:
-                        # Preserve the existing best-effort index behavior. The
-                        # important ordering guarantee is that this attempt is
-                        # complete before dependency success becomes observable.
-                        pass
+                    except Exception as exc:
+                        # A dependent node may start as soon as SUCCEEDED becomes
+                        # visible. Publishing success with a stale shared index is
+                        # therefore a correctness violation, not best-effort cache
+                        # maintenance. The outer failure path keeps the task failed.
+                        raise orchestrator_module.CompleteProductionError(
+                            f"Shared ProjectIndex commit failed for {node.node_id}: "
+                            f"{type(exc).__name__}: {exc}"
+                        ) from exc
 
             ledger.succeed(node.node_id, receipt)
             return receipt
