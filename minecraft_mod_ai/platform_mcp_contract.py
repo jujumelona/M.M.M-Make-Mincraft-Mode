@@ -10,18 +10,9 @@ from .platform_catalog import adapter_for_lock_values, adapter_for_target
 
 
 def install(mcp_tools_module: Any, production_tools_module: Any) -> None:
-    """Install the target-bound MCP surface once.
-
-    Signature-compatible forwarding and release-boundary hardening live here rather
-    than in a second compatibility wrapper.
-    """
-
+    """Install the target-bound MCP surface once."""
     _install_core_tools(mcp_tools_module)
     _install_production_tools(production_tools_module)
-
-    from .platform_release_contract import install as install_platform_release
-
-    install_platform_release(mcp_tools_module)
 
 
 def _call_supported(
