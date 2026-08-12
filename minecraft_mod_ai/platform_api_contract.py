@@ -28,10 +28,15 @@ def install(api_module: Any, plan_render_module: Any) -> None:
 
     install_live_execution(orchestrator_module)
 
+    from . import minecraft_mcp_runtime_helper_contract as runtime_helper_module
     from . import runtime_manager as runtime_manager_module
     from .minecraft_mcp_runtime_helper_contract import install as install_runtime_helpers
+    from .runtime_helper_json_deadline_contract import (
+        install as install_runtime_helper_json_deadline,
+    )
 
     install_runtime_helpers(runtime_manager_module)
+    install_runtime_helper_json_deadline(runtime_helper_module)
 
     # Route-scoped validation is installed before any external MCP call: search and
     # migration responses may mention many historical versions, while reviewed
