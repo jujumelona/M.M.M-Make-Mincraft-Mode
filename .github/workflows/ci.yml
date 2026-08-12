@@ -51,7 +51,17 @@ jobs:
       - name: Enforce clean runtime composition
         run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
 
+      - name: Enforce planner repair termination
+        run: >-
+          python -m pytest -q
+          tests/test_production_page_durable_contract.py
+          tests/test_planner_incremental_repair_contract.py
+          tests/test_planner_strict_json_contract.py
+
       - name: Run remaining unit and contract tests
         run: >-
           python -m pytest -vv --tb=short --durations=25 --maxfail=25
           --ignore=tests/test_runtime_bootstrap_clean.py
+          --ignore=tests/test_production_page_durable_contract.py
+          --ignore=tests/test_planner_incremental_repair_contract.py
+          --ignore=tests/test_planner_strict_json_contract.py
