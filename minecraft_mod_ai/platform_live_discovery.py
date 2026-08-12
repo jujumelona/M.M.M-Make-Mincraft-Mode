@@ -47,6 +47,10 @@ class LiveFabricTarget:
 _META = "https://meta.fabricmc.net"
 _MAVEN = "https://maven.fabricmc.net"
 _FABRIC_DEVELOP = "https://fabricmc.net/develop/"
+_FABRIC_TEMPLATE_PROPERTIES = (
+    "https://raw.githubusercontent.com/FabricMC/fabricmc.net/main/"
+    "scripts/src/lib/template/templates/gradle/gradle.properties.eta"
+)
 _FABRIC_WRAPPER = (
     "https://raw.githubusercontent.com/FabricMC/fabricmc.net/main/"
     "scripts/src/lib/template/templates/gradle/wrapper/gradle/wrapper/"
@@ -119,23 +123,12 @@ def _stable_loader() -> str:
     raise PlatformDiscoveryError("Fabric Meta returned no stable loader")
 
 
-def _yarn_for(version: str) -> str:
-    payload = _json(_META + "/v2/versions/yarn/" + version + "?limit=1")
-    if isinstance(payload, list) and payload:
-        first = payload[0]
-        if isinstance(first, dict) and first.get("version"):
-            return str(first["version"])
-    return ""
-
-
 def _api_for(version: str) -> str:
     versions = _maven_versions("/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml")
     exact_suffixes = ("+" + version, "-" + version)
     matches = [value for value in versions if value.endswith(exact_suffixes)]
     if matches:
         return matches[-1]
-    # Modern calendar-version Minecraft releases use their release number as the
-    # Fabric API branch. Future releases therefore require no MMM version table.
     release = version.split("-", 1)[0]
     major = release.split(".", 1)[0]
     if major.isdigit() and int(major) >= 26:
@@ -152,12 +145,15 @@ def _api_for(version: str) -> str:
 
 
 def _loom_version() -> str:
-    text = _fetch(_FABRIC_DEVELOP).decode("utf-8", errors="replace")
-    match = re.search(r"loom_version=([^\s<]+)", text)
+    # Do not scrape the rendered Develop page: the version panel is hydrated by
+    # client-side JavaScript and therefore is not a stable machine interface. The
+    # official Fabric template source is what the official CLI itself renders.
+    text = _fetch(_FABRIC_TEMPLATE_PROPERTIES).decode("utf-8", errors="replace")
+    match = re.search(r"(?m)^loom_version=([^\s]+)\s*$", text)
     if not match:
-        match = re.search(r"recommended loom version is\s*<strong>([^<]+)", text, re.I)
-    if not match:
-        raise PlatformDiscoveryError("Fabric develop page exposed no recommended Loom version")
+        raise PlatformDiscoveryError(
+            "Fabric official template source exposed no Loom version"
+        )
     return match.group(1).strip()
 
 
@@ -215,11 +211,15 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
     loom = _loom_version()
     gradle = _gradle_version()
     java = _mojang_java_version(version)
-    yarn = _yarn_for(version)
-    mappings_kind = "yarn" if yarn else "mojang"
-    mappings_version = yarn or "mojang"
+
+    # MMM's live path deliberately standardizes on Mojang names. For 26.1+ the game
+    # is unobfuscated and this is the native source surface; on earlier dynamically
+    # discovered versions Fabric's official project generator supports the Mojang
+    # mappings option. Old pinned Yarn projects remain covered by compatibility seeds.
+    mappings_kind = "mojang"
+    mappings_version = "mojang"
     payload = {
-        "source": "official-live-discovery-v1",
+        "source": "official-live-discovery-v2",
         "minecraft_version": version,
         "stable": bool(row["stable"]),
         "loader_version": loader,
@@ -234,6 +234,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
             _META,
             _MAVEN,
             _FABRIC_DEVELOP,
+            _FABRIC_TEMPLATE_PROPERTIES,
             _FABRIC_WRAPPER,
             _MOJANG_MANIFEST,
         ],
