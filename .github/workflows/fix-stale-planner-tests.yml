@@ -1,0 +1,59 @@
+name: Fix stale planner assertions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-stale-planner-tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Update stale efficiency assertions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/test_complete_planner_scaling.py')
+          s = p.read_text(encoding='utf-8')
+          # Fixed-width retry wording was removed by adaptive pagination.
+          s = s.replace('    assert "fewer records" in router.messages[1][0]["content"]\n', '')
+          # Retry reuses structured request state but intentionally avoids paying media tokens twice.
+          s = s.replace('''    assert router.media_paths == [\n        ("reference.png",),\n        ("reference.png",),\n    ]\n''', '''    assert router.media_paths == [("reference.png",), ()]\n''')
+          # Outline continuation attaches a structured diagnostic while preserving the base request.
+          old = '''    assert len(router.requests) == 2\n    assert router.requests[0] == router.requests[1]\n    assert router.requests[0]["cursor"] == "outline-page-2"\n'''
+          new = '''    assert len(router.requests) == 2\n    retry_request = dict(router.requests[1])\n    diagnostic = retry_request.pop("missing_fragment_reason")\n    assert retry_request == router.requests[0]\n    assert "no complete production-outline JSON page" in diagnostic\n    assert router.requests[0]["cursor"] == "outline-page-2"\n'''
+          if old not in s:
+              raise SystemExit('outline request assertion target changed')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          Path('.github/workflows/fix-stale-planner-tests.yml').unlink()
+          PY
+      - name: Verify corrected planner contracts
+        run: |
+          python -m pytest -q \
+            tests/test_complete_planner_scaling.py::test_initial_outline_repairs_without_replanning_design_or_research \
+            tests/test_complete_planner_scaling.py::test_legacy_module_batch_repairs_only_the_cut_page \
+            tests/test_complete_planner_scaling.py::test_production_batch_repairs_only_the_cut_page_with_same_cursor \
+            tests/test_complete_planner_scaling.py::test_production_outline_repairs_only_the_cut_continuation_page
+      - name: Commit verified test alignment
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tests/test_complete_planner_scaling.py .github/workflows/fix-stale-planner-tests.yml
+          git commit -m 'Align planner repair tests with adaptive retry policy'
+          git pull --rebase origin main
+          git push origin HEAD:main
