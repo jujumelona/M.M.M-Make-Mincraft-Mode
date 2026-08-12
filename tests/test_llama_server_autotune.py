@@ -3,12 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import complete_orchestrator_services
+from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai.llama_server_autotune import (
     ProbeResult,
     ServerVariant,
     _base_args,
     _candidate_variants,
     _choose_variant,
+    _compact_benchmark_request,
     _probe_server,
     _server_binary,
     _variant_args,
@@ -33,22 +35,23 @@ def _probe(
         variant=variant,
         ok=ok,
         output_sha256=output_sha256,
-        predicted_tokens=192 if ok else 0,
+        predicted_tokens=96 if ok else 0,
         predicted_tps=tps,
         prompt_tps=100.0,
         elapsed_seconds=1.0,
     )
 
 
-def test_server_autotune_contract_is_installed() -> None:
-    assert getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
-    assert getattr(LlamaCppAdapter.generate, "_mmm_prefill_tuned", False)
+def test_server_autotune_contract_is_installed_without_duplicate_probe() -> None:
+    assert getattr(LlamaCppAdapter.generate, "_mmm_explicit_server_strict", False)
+    assert not getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
     assert getattr(_server_binary, "_mmm_native_bootstrap", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_base_args, "_mmm_single_decode_slot", False)
     assert getattr(_base_args, "_mmm_native_telemetry_endpoints", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
-    assert getattr(_probe_server, "_mmm_correctness_sentinel", False)
+    assert getattr(_probe_server, "_mmm_compact_decode_probe", False)
+    assert not getattr(_probe_server, "_mmm_correctness_sentinel", False)
     assert getattr(
         complete_orchestrator_services.generate_assets,
         "_mmm_releases_managed_llama",
@@ -62,6 +65,19 @@ def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -
     assert [value.name for value in values] == ["baseline", "mtp-1", "mtp-2", "mtp-3"]
     assert values[0].spec_type == "none"
     assert [value.draft_n_max for value in values[1:]] == [1, 2, 3]
+
+
+def test_compact_benchmark_never_reuses_real_workflow_prompt() -> None:
+    secret = "REAL-WORKFLOW-PROMPT-THAT-MUST-NOT-BE-PREFILLED-PER-VARIANT"
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": secret},),
+        response_format="json",
+    )
+    compact = _compact_benchmark_request(request)
+    rendered = "\n".join(str(message["content"]) for message in compact.messages)
+    assert secret not in rendered
+    assert compact.response_format == "text"
+    assert len(rendered) < 512
 
 
 def test_autotune_requires_exact_output_match_before_speed() -> None:
@@ -109,6 +125,33 @@ def test_autotune_fails_closed_without_valid_baseline() -> None:
         minimum_speedup=1.03,
     )
     assert decision is None
+
+
+def test_disabling_autotune_still_launches_native_baseline(monkeypatch) -> None:
+    selected: list[ServerVariant] = []
+    monkeypatch.setenv("MMM_LLAMA_SERVER_AUTOTUNE", "0")
+    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
+    monkeypatch.setattr(autotune, "_MANAGED_PROCESS", None)
+    monkeypatch.setattr(autotune, "_MANAGED_URL", None)
+    monkeypatch.setattr(autotune, "_ATTEMPTED_KEYS", set())
+    monkeypatch.setattr(autotune, "_external_server_is_ready", lambda: False)
+    monkeypatch.setattr(autotune, "_server_binary", lambda: "/tmp/llama-server")
+    monkeypatch.setattr(autotune, "_resolve_model_path", lambda config: "/tmp/model.gguf")
+    monkeypatch.setattr(autotune, "_fingerprint", lambda *args: "fingerprint")
+    monkeypatch.setattr(autotune, "_load_cached_decision", lambda fingerprint: None)
+    monkeypatch.setattr(
+        autotune,
+        "_launch_selected",
+        lambda binary, model, config, variant: selected.append(variant)
+        or "http://127.0.0.1:8910/v1",
+    )
+
+    config = SimpleNamespace(model_id="test", extra={}, max_context=1024, max_new_tokens=64)
+    request = SimpleNamespace(messages=(), response_format="text")
+    url = autotune.ensure_tuned_server(config, request)
+
+    assert url.endswith("/v1")
+    assert [value.name for value in selected] == ["baseline"]
 
 
 def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None:
