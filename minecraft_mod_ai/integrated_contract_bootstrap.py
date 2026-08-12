@@ -3,21 +3,17 @@ from __future__ import annotations
 """Install cross-cutting production contracts that must be active package-wide.
 
 The individual contracts are intentionally kept in their own modules so they can be
-unit-tested in isolation.  This bootstrap is the single integration point used by
-``minecraft_mod_ai.__init__`` after the legacy/runtime bootstrap has loaded.  Every
+unit-tested in isolation. This bootstrap is the single integration point used by
+``minecraft_mod_ai.__init__`` after native server/runtime setup has loaded. Every
 installer is idempotent and marks the wrapped callable, so importing the package more
 than once cannot stack duplicate wrappers.
 """
 
 
 def install() -> None:
-    # The optional Colab server cell can start before CompleteModAISession applies the
-    # selected KV-cache quantization. Reuse must therefore be bound to the exact model,
-    # context/output limits, baseline/MTP lane and KV-cache type rather than only mode.
-    from . import colab_mtp_server as colab_server_module
-    from .colab_server_config_contract import install as install_colab_server_config
-
-    install_colab_server_config(colab_server_module)
+    # Native llama-server model/context/KV configuration is owned by
+    # llama_server_autotune + llama_server_hardware_policy during package bootstrap.
+    # Do not install an alternate text-server/configuration layer here.
 
     # JDT LS is a long-lived JSON-RPC subprocess. Ensure malformed stdout framing,
     # early process exit and forced shutdown are surfaced/reaped immediately rather
@@ -48,7 +44,7 @@ def install() -> None:
     install_platform_generation(generator_module)
     install_platform_validation(validator_module)
 
-    # Planning and implementation must use the same target-scoped evidence.  The
+    # Planning and implementation must use the same target-scoped evidence. The
     # central live-target compiler is installed after the planning contract so it is
     # the outer lowering pass for future Fabric targets.
     from . import central_research as central_research_module
@@ -91,7 +87,7 @@ def install() -> None:
     install_platform_repair(repair_module)
 
     # platform_runtime_contract is installed by __init__ immediately before this
-    # bootstrap.  Wrap the resulting project preparation path so live-discovered
+    # bootstrap. Wrap the resulting project preparation path so live-discovered
     # targets use the official Fabric template rather than the legacy generator.
     from . import complete_orchestrator as orchestrator_module
     from .platform_live_execution_contract import install as install_live_execution
@@ -99,7 +95,7 @@ def install() -> None:
     install_live_execution(orchestrator_module)
 
     # Specialized deterministic templates still contain Fabric-1.20.1-specific API
-    # code.  Guard both their public functions and the copies already imported by the
+    # code. Guard both their public functions and the copies already imported by the
     # orchestrator so a newer target is routed to custom_java instead of receiving a
     # silently incompatible source tree.
     from . import geckolib_generator as geckolib_module
@@ -166,7 +162,7 @@ def install() -> None:
         orchestrator_module=orchestrator_module,
     )
 
-    # A running task may be reclaimed after its lease expires.  Bind publication to
+    # A running task may be reclaimed after its lease expires. Bind publication to
     # the exact attempt/lease owner observed before the action so a slow result from an
     # older claim cannot complete a newer attempt or publish stale ProjectIndex state.
     from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
