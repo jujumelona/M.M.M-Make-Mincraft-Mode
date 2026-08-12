@@ -46,9 +46,25 @@ servers:
     version_policy: dynamic
     loaders: [fabric]
     trust: first_party
+  mmm-release:
+    status: enabled
+    federated: false
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: release}
+    version_policy: dynamic
+    loaders: [fabric]
+    trust: first_party
+  mmm-training:
+    status: enabled
+    federated: false
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: training}
+    version_policy: dynamic
+    loaders: [fabric]
+    trust: first_party
 
-  # Source, mappings, version-diff and bytecode-aware validation.  These tool
-  # schemas are used directly by the automatic federation path.
   minecraft-dev:
     status: enabled
     transport: stdio
@@ -106,8 +122,6 @@ servers:
         priority: 10
         target_args: {minecraft_version: version}
 
-  # Workspace-aware validation.  Its high-level workflow schemas intentionally do
-  # not masquerade as drop-in fallbacks for minecraft-dev's low-level tools.
   minecraft-modding:
     status: optional
     transport: stdio
@@ -124,7 +138,6 @@ servers:
         stages: [migration, quality]
         priority: 10
 
-  # Documentation, mappings/Javadocs and proven mod examples.
   mcmodding-docs:
     status: enabled
     transport: stdio
@@ -153,7 +166,6 @@ servers:
         stages: [research, generation]
         priority: 10
 
-  # Vanilla mechanics/registries/behavior facts.  Public hosted instance is read-only.
   minecraft-wiki:
     status: enabled
     transport: streamable_http
@@ -170,7 +182,6 @@ servers:
         stages: [planning, research, generation]
         priority: 10
 
-  # Runtime/static dev loop with optional DebugBridge helper in a disposable test client.
   mcdev-runtime:
     status: optional
     transport: stdio
@@ -198,7 +209,6 @@ servers:
         stages: [runtime]
         priority: 10
 
-  # Fabric server/world endpoint.  It never owns client-only visual tools.
   fabric-game-runtime:
     status: configuration_required
     transport: streamable_http
@@ -227,7 +237,6 @@ servers:
         stages: [runtime]
         priority: 10
 
-  # The sibling client MCP endpoint is separate from the server/world endpoint.
   fabric-game-client-runtime:
     status: configuration_required
     transport: streamable_http
@@ -246,7 +255,6 @@ servers:
         stages: [runtime]
         priority: 10
 
-  # Cross-version GUI/input/screenshot harness. Never packaged into the generated mod.
   minecraft-mod-runtime:
     status: optional
     transport: stdio
@@ -256,7 +264,7 @@ servers:
     trust: reviewed_open_source
     source_repo: langyo/minecraft-mod-mcp
     test_harness_only: true
-    purpose: cross-version screenshot, input, GUI and debug-field runtime inspection
+    purpose: cross-version screenshot, GUI and debug-state runtime inspection
     capabilities:
       runtime_visual:
         tool: screenshot
@@ -264,12 +272,11 @@ servers:
         stages: [runtime]
         priority: 30
       runtime_inspection:
-        tool: get_status
+        tool: get_minecraft_status
         access: read
         stages: [runtime]
         priority: 30
 
-  # Player-perspective end-to-end behavior tests.
   minecraft-player-agent:
     status: optional
     transport: stdio
@@ -297,8 +304,6 @@ servers:
         stages: [runtime]
         priority: 20
 
-  # Optional RCON MCP. URL is deliberately user/host supplied because there is no
-  # reviewed public endpoint and it must only point at the disposable test server.
   minecraft-rcon:
     status: configuration_required
     transport: streamable_http
@@ -316,7 +321,6 @@ servers:
         stages: [runtime]
         priority: 40
 
-  # Existing general-purpose integrations remain available outside the federation.
   playwright:
     status: enabled
     federated: false
