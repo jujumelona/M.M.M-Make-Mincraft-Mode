@@ -8,12 +8,17 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .project_write_lock import project_write_lock
+
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
 _RESOURCE_CAPACITIES = {
     "llm": 1,
     "image_gpu": 1,
     "commit": 1,
 }
+_SERIAL_GENERATION_STAGES = frozenset(
+    {"content", "system", "entity", "audio-binding"}
+)
 _INDEX_COMMIT_LOCK = threading.RLock()
 
 
@@ -85,9 +90,6 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
                 for item in _path_values(value.get(key)):
                     add(item)
 
-            # Several deterministic generators expose a top-level ``files`` list
-            # while nested source-patch receipts use ``files`` as an object. Accept
-            # only scalar path lists here; object-valued metadata is traversed below.
             for item in _path_values(value.get("files")):
                 add(item)
 
@@ -100,6 +102,34 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
 
     visit(receipt)
     return tuple(ordered)
+
+
+def _install_generation_commit_lanes(work_graph_module: Any) -> None:
+    """Do not occupy CPU workers with generators that must serialize shared writes."""
+
+    current = work_graph_module._node
+    if getattr(current, "_mmm_shared_write_commit_lane", False):
+        return
+
+    @wraps(current)
+    def node(
+        node_id: str,
+        stage: str,
+        dependencies: Any,
+        payload: dict[str, Any],
+    ):
+        normalized = dict(payload)
+        if (
+            "resource_class" not in normalized
+            and normalized.get("kind") == "module-shard"
+            and str(normalized.get("generation_stage", ""))
+            in _SERIAL_GENERATION_STAGES
+        ):
+            normalized["resource_class"] = "commit"
+        return current(node_id, stage, dependencies, normalized)
+
+    node._mmm_shared_write_commit_lane = True  # type: ignore[attr-defined]
+    work_graph_module._node = node
 
 
 def _install_thread_local_connections(work_graph_module: Any) -> None:
@@ -320,7 +350,15 @@ def _install_index_commit_order(
             ledger.begin(node.node_id, worker_id="complete-orchestrator")
 
         try:
-            receipt = action()
+            if (
+                node.resource_class == "commit"
+                and shared_index is not None
+                and hasattr(shared_index, "root")
+            ):
+                with project_write_lock(shared_index.root):
+                    receipt = action()
+            else:
+                receipt = action()
             if not isinstance(receipt, dict):
                 raise orchestrator_module.CompleteProductionError(
                     f"Work node {node.node_id} returned a non-object receipt."
@@ -359,6 +397,7 @@ def install(
     work_graph_module: Any,
     orchestrator_module: Any,
 ) -> None:
+    _install_generation_commit_lanes(work_graph_module)
     _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
     _install_index_commit_order(work_graph_module, orchestrator_module)
