@@ -17,6 +17,11 @@ from minecraft_mod_ai.llama_server_autotune import (
     _server_binary,
     _variant_args,
 )
+from minecraft_mod_ai.llama_server_max_performance import (
+    _cache_reuse_candidates,
+    _parallel_candidates,
+    _ubatch_candidates,
+)
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
@@ -48,13 +53,18 @@ def test_server_autotune_contract_is_installed_without_duplicate_probe() -> None
     assert getattr(LlamaCppAdapter.generate, "_mmm_explicit_server_strict", False)
     assert not getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
     assert getattr(_server_binary, "_mmm_native_bootstrap", False)
+    assert getattr(_server_binary, "_mmm_cuda_graphs", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_base_args, "_mmm_single_decode_slot", False)
     assert getattr(_base_args, "_mmm_native_telemetry_endpoints", False)
+    assert getattr(_base_args, "_mmm_load_mode_auto", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
+    assert getattr(_variant_args, "_mmm_ngram_speculation", False)
     assert getattr(_probe_server, "_mmm_compact_decode_probe", False)
     assert not getattr(_probe_server, "_mmm_correctness_sentinel", False)
+    assert getattr(autotune._benchmark, "_mmm_staged_max_performance", False)
     assert getattr(autotune._fingerprint, "_mmm_stable_model_signature", False)
+    assert getattr(autotune._fingerprint, "_mmm_max_performance_fingerprint", False)
     assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)
     assert getattr(
         complete_orchestrator_services.generate_assets,
@@ -63,12 +73,41 @@ def test_server_autotune_contract_is_installed_without_duplicate_probe() -> None
     )
 
 
-def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
+def test_default_variants_compare_mtp_and_ngram_speculation(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_MTP_WIDTHS", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_NGRAM_SPEC_TYPES", raising=False)
     values = _candidate_variants()
-    assert [value.name for value in values] == ["baseline", "mtp-1", "mtp-2", "mtp-3"]
+    assert [value.name for value in values] == [
+        "baseline",
+        "mtp-1",
+        "mtp-2",
+        "mtp-3",
+        "ngram-simple",
+        "ngram-mod",
+        "ngram-map-k",
+    ]
     assert values[0].spec_type == "none"
-    assert [value.draft_n_max for value in values[1:]] == [1, 2, 3]
+    assert [value.draft_n_max for value in values[1:4]] == [1, 2, 3]
+    assert [value.spec_type for value in values[4:]] == [
+        "ngram-simple",
+        "ngram-mod",
+        "ngram-map-k",
+    ]
+
+
+def test_default_staged_runtime_candidates_are_bounded(monkeypatch) -> None:
+    for name in (
+        "MMM_LLAMA_BATCH",
+        "MMM_LLAMA_UBATCH",
+        "MMM_LLAMA_UBATCH_CANDIDATES",
+        "MMM_LLAMA_CACHE_REUSE_CANDIDATES",
+        "MMM_LLAMA_CONCURRENT_REQUESTS",
+        "MMM_LLAMA_PARALLEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    assert _ubatch_candidates(autotune) == (512, 1024, 2048)
+    assert _cache_reuse_candidates() == (0, 64, 256)
+    assert _parallel_candidates() == (1, 2)
 
 
 def test_compact_benchmark_never_reuses_real_workflow_prompt() -> None:
@@ -211,7 +250,8 @@ def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None
     assert args[args.index("--flash-attn") + 1] == "on"
     assert args[args.index("--cache-type-k") + 1] == "q4_0"
     assert args[args.index("--cache-type-v") + 1] == "q4_0"
-    assert args[args.index("--load-mode") + 1] == "none"
+    assert args[args.index("--load-mode") + 1] == "auto"
+    assert "--cache-prompt" in args
     assert "--metrics" in args
     assert "--slots" in args
 
@@ -227,4 +267,11 @@ def test_mtp_variant_uses_server_startup_flags_not_request_mutation() -> None:
         "0",
         "--spec-draft-ngl",
         "auto",
+    ]
+
+
+def test_ngram_variant_uses_native_speculation_without_draft_model() -> None:
+    assert _variant_args(ServerVariant("ngram-simple", "ngram-simple")) == [
+        "--spec-type",
+        "ngram-simple",
     ]
