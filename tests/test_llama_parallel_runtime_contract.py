@@ -63,6 +63,38 @@ class _SlotProbeAdapter:
         return "ok"
 
 
+class _ToolAwareAdapter:
+    def __init__(self) -> None:
+        self.turn_requests = []
+        self.generate_requests = []
+
+    def generate_turn(self, request):
+        self.turn_requests.append(request)
+        return SimpleNamespace(content="tool-aware", tool_calls=())
+
+    def generate(self, request):
+        self.generate_requests.append(request)
+        return "plain"
+
+
+class _ToolRuntime:
+    def __init__(self) -> None:
+        self.stages: list[str] = []
+
+    def tool_schemas(self, stage):
+        self.stages.append(stage)
+        return (
+            {
+                "type": "function",
+                "function": {
+                    "name": "inspect_project",
+                    "description": "inspect",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        )
+
+
 class _PlannerProbeRouter:
     profile = "test"
 
@@ -112,6 +144,7 @@ class _PlannerProbeRouter:
 
 def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_llama_shared_slots", False)
+    assert getattr(ModelRouter.generate_text, "_mmm_preserves_agent_tools", False)
     assert getattr(ModelRouter.generation_session, "_mmm_llama_shared_slots", False)
     assert getattr(scheduler_module._capacities, "_mmm_dynamic_llama_slots", False)
     assert getattr(
@@ -142,6 +175,45 @@ def test_planner_parallel_capacity_is_native_local_only(monkeypatch) -> None:
 
     remote = SimpleNamespace(profile="test", registry=_RemoteRegistry())
     assert _planner_parallel_capacity(remote, 2) == 1
+
+
+def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    runtime = _ToolRuntime()
+    router = ModelRouter(
+        profile="test",
+        registry=_Registry(),
+        agent_tool_runtime_factory=lambda **_kwargs: runtime,
+    )
+    adapter = _ToolAwareAdapter()
+    monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
+
+    tool_result = router.generate_text(
+        "coder",
+        ({"role": "user", "content": "repair"},),
+        response_format="json",
+        tool_stage="generation",
+        enable_tools=True,
+    )
+
+    assert tool_result == "tool-aware"
+    assert runtime.stages == ["generation"]
+    assert len(adapter.turn_requests) == 1
+    request = adapter.turn_requests[0]
+    assert request.tools
+    assert request.tool_choice == "auto"
+    assert request.parallel_tool_calls is True
+    assert request.response_format == "json"
+
+    plain_result = router.generate_text(
+        "coder",
+        ({"role": "user", "content": "repair without tools"},),
+        tool_stage="generation",
+        enable_tools=False,
+    )
+    assert plain_result == "plain"
+    assert len(adapter.generate_requests) == 1
+    assert runtime.stages == ["generation"]
 
 
 def test_verified_planner_candidates_use_native_slots(monkeypatch) -> None:
