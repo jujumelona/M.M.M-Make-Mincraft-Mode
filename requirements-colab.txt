@@ -1,3 +1,3 @@
-# Base Colab environment. The local-model extra includes the Linux/CUDA-only
-# Qwen3.5 fast kernels; the notebook also verifies the active GPU runtime.
+# Base Colab environment. Native llama CUDA is supplied as a verified prebuilt
+# llama-server + shared-library bundle; source-only Qwen kernel extras stay opt-in.
 -e .[ui,local-model,rag,image,speech,production-audio,training]
