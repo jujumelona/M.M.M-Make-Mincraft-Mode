@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import game_design
-from minecraft_mod_ai.colab_mtp_server import ENABLED_ENV, SERVER_CONTEXT_CAP
 from minecraft_mod_ai.llama_server_hardware_policy import (
     _server_payload,
     _stream_delta_parts,
@@ -60,8 +59,7 @@ def test_legacy_text_choice_is_still_supported() -> None:
     assert content == "legacy"
 
 
-def test_planner_page_budget_uses_active_mtp_context(monkeypatch) -> None:
-    monkeypatch.setenv(ENABLED_ENV, "1")
+def test_planner_page_budget_uses_selected_native_model_context() -> None:
     config = SimpleNamespace(max_context=32768, max_new_tokens=8192)
 
     class Registry:
@@ -73,6 +71,6 @@ def test_planner_page_budget_uses_active_mtp_context(monkeypatch) -> None:
 
     router = SimpleNamespace(profile="Qwen3.5-9B_6GB", registry=Registry())
     budget = game_design._request_page_bytes(router)
-    expected_ceiling = int((SERVER_CONTEXT_CAP - 8192 - 2048) * 3.5)
-    assert budget <= expected_ceiling
-    assert budget < 32 * 1024
+    # Host paging follows the selected model context and remains bounded per call;
+    # native llama-server is responsible for the actual runtime context allocation.
+    assert budget == 64 * 1024
