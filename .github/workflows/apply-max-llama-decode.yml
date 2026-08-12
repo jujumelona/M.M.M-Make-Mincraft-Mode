@@ -47,6 +47,11 @@ jobs:
               '''    path = Path(model_path)\n    stat = path.stat()\n    payload = {\n        "schema": _KV_SCHEMA_VERSION,\n        "model_id": str(config.model_id),\n        "model_path": str(path.resolve()),\n        "model_size": int(stat.st_size),\n        "model_mtime_ns": int(stat.st_mtime_ns),\n''',
               '''    from .llama_server_efficiency_contract import _quick_file_signature\n\n    path = Path(model_path).expanduser().resolve()\n    stat = path.stat()\n    extra = getattr(config, "extra", {})\n    payload = {\n        "schema": _KV_SCHEMA_VERSION,\n        "model_id": str(config.model_id),\n        "gguf_filename": str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else "",\n        "model_filename": path.name,\n        "model_size": int(stat.st_size),\n        "model_signature": _quick_file_signature(path),\n''',
           )
+          replace_once(
+              path,
+              '''        def ensure_with_fastest_kv(config: Any, request: Any) -> str:\n            if not _kv_autotune_enabled(autotune):\n                return current_ensure(config, request)\n            if autotune._external_server_is_ready():\n                return current_ensure(config, request)\n\n            with _KV_TUNE_LOCK:\n''',
+              '''        def ensure_with_fastest_kv(config: Any, request: Any) -> str:\n            # The managed server is already known-good and is the hottest path. Reuse it\n            # before any external health HTTP or KV fingerprint work.\n            managed_process = getattr(autotune, "_MANAGED_PROCESS", None)\n            managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")\n            if managed_process is not None and managed_process.poll() is None and managed_url:\n                return current_ensure(config, request)\n            if not _kv_autotune_enabled(autotune):\n                return current_ensure(config, request)\n            if autotune._external_server_is_ready():\n                return current_ensure(config, request)\n\n            with _KV_TUNE_LOCK:\n''',
+          )
 
           tests = Path('tests/test_llama_decode_speed_contract.py')
           text = tests.read_text(encoding='utf-8')
