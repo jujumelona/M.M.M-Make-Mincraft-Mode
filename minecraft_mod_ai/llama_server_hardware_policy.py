@@ -21,30 +21,33 @@ def _existing_built_server() -> str | None:
     if discovered:
         candidates.append(Path(discovered))
     if explicit_source:
-        candidates.append(Path(explicit_source).expanduser() / "build" / "bin" / "llama-server")
-    candidates.append(Path("/content/llama.cpp/build/bin/llama-server"))
-    candidates.append(Path.home() / ".cache" / "mmm" / "llama.cpp" / "build" / "bin" / "llama-server")
+        candidates.append(
+            Path(explicit_source).expanduser() / "build" / "bin" / "llama-server"
+        )
+    candidates.extend(
+        [
+            Path("/content/llama.cpp/build/bin/llama-server"),
+            Path.home()
+            / ".cache"
+            / "mmm"
+            / "llama.cpp"
+            / "build"
+            / "bin"
+            / "llama-server",
+        ]
+    )
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate.resolve())
+            resolved = str(candidate.resolve())
+            os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
+            return resolved
     return None
 
 
-def _source_dir() -> Path:
-    raw = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
-    if raw:
-        return Path(raw).expanduser().resolve()
-    return (Path.home() / ".cache" / "mmm" / "llama.cpp").resolve()
-
-
 def _bootstrap_native_server() -> str | None:
-    """Return an already installed llama-server binary; never compile one."""
+    """Return the source-owned native llama-server installed during setup."""
 
-    existing = _existing_built_server()
-    if existing is None:
-        return None
-    os.environ["MMM_LLAMA_SERVER_BIN"] = existing
-    return existing
+    return _existing_built_server()
 
 
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
@@ -56,24 +59,14 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     if getattr(request, "response_format", None) == "json":
         payload["response_format"] = {"type": "json_object"}
-        # Qwen3.5/3.6 chat templates begin a generation with an open <think>
-        # section unless reasoning is explicitly disabled.  The standalone 0.3.34
-        # server applies response_format as a generation grammar.  Leaving thinking
-        # enabled therefore makes schema-constrained JSON get generated inside the
-        # reasoning capture instead of the assistant content field.  Planner JSON is
-        # already constrained and host-validated, so close the reasoning section in
-        # the prompt and generate the JSON directly as visible content.
+        # Structured planner pages are host-validated and must be emitted directly in
+        # the assistant content channel rather than inside an opaque reasoning field.
         payload["reasoning_effort"] = "none"
     return payload
 
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:
-    """Return (reasoning_progress, visible_content) from one OpenAI stream choice.
-
-    Reasoning text is never returned to callers or printed.  We only count its
-    length so a reasoning-capable server cannot look stalled while it is actively
-    emitting a non-content delta.
-    """
+    """Return opaque reasoning progress and visible content from one SSE choice."""
 
     reasoning = ""
     content = ""
@@ -111,13 +104,7 @@ def _request_content_chars(payload: dict[str, Any]) -> int:
 
 
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
-    """Stream an explicitly selected server without silently loading a second GGUF.
-
-    The client reports both visible-content progress and opaque reasoning progress.
-    It never prints or returns reasoning text.  Structured JSON requests explicitly
-    disable Qwen thinking so the JSON grammar and the chat template describe the same
-    output channel.
-    """
+    """Stream exactly one selected native server; never load an alternate backend."""
 
     from .model_adapters import ModelBackendError
 
@@ -126,12 +113,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 
         payload = _server_payload(adapter, request)
         payload["stream"] = True
-        timeout = httpx.Timeout(
-            connect=30.0,
-            read=None,
-            write=30.0,
-            pool=30.0,
-        )
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
         endpoint = f"{server_url.rstrip('/')}/chat/completions"
         pieces: list[str] = []
         generated_chars = 0
@@ -142,12 +124,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         first_output_reported = False
         saw_done = False
 
-        with httpx.stream(
-            "POST",
-            endpoint,
-            json=payload,
-            timeout=timeout,
-        ) as response:
+        with httpx.stream("POST", endpoint, json=payload, timeout=timeout) as response:
             if response.status_code != 200:
                 response.read()
                 body = response.text.strip().replace("\n", " ")
@@ -166,6 +143,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 "llama server: request accepted; streaming",
                 f" input_chars={_request_content_chars(payload)}",
                 f" max_tokens={payload['max_tokens']}",
+                f" structured={'json' if structured else 'text'}",
                 f" reasoning={'disabled' if structured else 'model-default'}",
                 sep="",
                 flush=True,
@@ -173,9 +151,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 
             for raw_line in response.iter_lines():
                 line = raw_line.strip()
-                if not line or line.startswith(":"):
-                    continue
-                if not line.startswith("data:"):
+                if not line or line.startswith(":") or not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
                 if not data:
@@ -183,20 +159,16 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 if data == "[DONE]":
                     saw_done = True
                     break
-
                 try:
                     chunk = json.loads(data)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError(
-                        "llama server returned malformed SSE JSON."
-                    ) from exc
+                    raise RuntimeError("llama server returned malformed SSE JSON") from exc
                 choices = chunk.get("choices") if isinstance(chunk, dict) else None
                 if not isinstance(choices, list) or not choices:
                     continue
                 choice = choices[0]
                 if not isinstance(choice, dict):
                     continue
-
                 reasoning, content = _stream_delta_parts(choice)
                 if reasoning:
                     reasoning_chars += len(reasoning)
@@ -205,7 +177,6 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                     pieces.append(content)
                     generated_chars += len(content)
                     output_events += 1
-
                 if not reasoning and not content:
                     continue
 
@@ -224,22 +195,20 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                         f" content_chars={generated_chars}",
                         f" reasoning_chars={reasoning_chars}",
                         f" events={output_events}",
+                        f" elapsed={now - request_started:.1f}s",
                         flush=True,
                     )
                     last_progress_report = now
 
         if not saw_done:
-            raise RuntimeError(
-                "llama server stream ended before the [DONE] marker."
-            )
+            raise RuntimeError("llama server stream ended before the [DONE] marker")
         content = "".join(pieces).strip()
         if not content:
             if reasoning_chars:
                 raise RuntimeError(
-                    "llama server produced reasoning deltas but no visible content; "
-                    "the chat template/output grammar channels are incompatible."
+                    "llama server produced reasoning deltas but no visible content"
                 )
-            raise RuntimeError("llama server stream produced no text content.")
+            raise RuntimeError("llama server stream produced no text content")
         print(
             "llama server: generation complete",
             f" content_chars={generated_chars}",
@@ -260,28 +229,18 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 
 
 def install(autotune_module: Any) -> None:
-    """Keep managed llama-server tuning hardware-adaptive and correctness-gated."""
+    """Bind local GGUF inference exclusively to managed native llama-server."""
 
     from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
-
-    if (
-        getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
-        and not getattr(LlamaCppAdapter.generate, "_mmm_prefill_tuned", False)
-    ):
-        LlamaCppAdapter.generate._mmm_prefill_tuned = True
 
     original_server_binary = autotune_module._server_binary
     if not getattr(original_server_binary, "_mmm_native_bootstrap", False):
 
         @wraps(original_server_binary)
         def bootstrapped_server_binary() -> str | None:
-            discovered = original_server_binary()
-            if discovered is not None:
-                return discovered
-            return _bootstrap_native_server()
+            return original_server_binary() or _bootstrap_native_server()
 
-        bootstrapped_server_binary._mmm_native_bootstrap = True
-        bootstrapped_server_binary._mmm_no_source_build = True
+        bootstrapped_server_binary._mmm_native_bootstrap = True  # type: ignore[attr-defined]
         autotune_module._server_binary = bootstrapped_server_binary
 
     original_base = autotune_module._base_args
@@ -304,8 +263,8 @@ def install(autotune_module: Any) -> None:
                 args.extend(["--parallel", "1"])
             return args
 
-        adaptive_base_args._mmm_auto_gpu_layers = True
-        adaptive_base_args._mmm_single_decode_slot = True
+        adaptive_base_args._mmm_auto_gpu_layers = True  # type: ignore[attr-defined]
+        adaptive_base_args._mmm_single_decode_slot = True  # type: ignore[attr-defined]
         autotune_module._base_args = adaptive_base_args
 
     original_variant = autotune_module._variant_args
@@ -321,7 +280,7 @@ def install(autotune_module: Any) -> None:
                 pass
             return args
 
-        adaptive_variant_args._mmm_auto_draft_layers = True
+        adaptive_variant_args._mmm_auto_draft_layers = True  # type: ignore[attr-defined]
         autotune_module._variant_args = adaptive_variant_args
 
     original_probe = autotune_module._probe_server
@@ -343,14 +302,13 @@ def install(autotune_module: Any) -> None:
             )
             if max_tokens <= 1 or not measured.ok:
                 return measured
-
             sentinel_request = SimpleNamespace(
                 messages=(
                     {
                         "role": "system",
                         "content": (
-                            "You are a deterministic Java 17 code generator. "
-                            "Output only valid Java code and no explanation."
+                            "You are a deterministic Java 17 code generator. Output "
+                            "only valid Java code and no explanation."
                         ),
                     },
                     {
@@ -385,36 +343,17 @@ def install(autotune_module: Any) -> None:
                     if sentinel.ok
                     else "; ".join(
                         value
-                        for value in (measured.error, f"sentinel: {sentinel.error}")
+                        for value in (
+                            measured.error,
+                            f"sentinel: {sentinel.error}",
+                        )
                         if value
                     )
                 ),
             )
 
-        guarded_probe._mmm_correctness_sentinel = True
+        guarded_probe._mmm_correctness_sentinel = True  # type: ignore[attr-defined]
         autotune_module._probe_server = guarded_probe
-
-    original_ensure = autotune_module.ensure_tuned_server
-    if not getattr(original_ensure, "_mmm_colab_mtp_restart", False):
-
-        @wraps(original_ensure)
-        def ensure_with_colab_mtp(config: Any, request: Any) -> str | None:
-            from .colab_mtp_server import (
-                SERVER_API_URL,
-                colab_mtp_server_enabled,
-                colab_mtp_server_running,
-                start_colab_mtp_server,
-            )
-
-            if colab_mtp_server_enabled():
-                if colab_mtp_server_running():
-                    os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL
-                    return SERVER_API_URL
-                return start_colab_mtp_server(config)
-            return original_ensure(config, request)
-
-        ensure_with_colab_mtp._mmm_colab_mtp_restart = True
-        autotune_module.ensure_tuned_server = ensure_with_colab_mtp
 
     current_generate = LlamaCppAdapter.generate
     if not getattr(current_generate, "_mmm_explicit_server_strict", False):
@@ -423,22 +362,16 @@ def install(autotune_module: Any) -> None:
         def strict_selected_server_generate(self: Any, request: Any) -> str:
             explicit = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
             if not explicit:
-                from .colab_mtp_server import colab_mtp_server_enabled
+                explicit = (
+                    autotune_module.ensure_tuned_server(self.config, request) or ""
+                ).strip().rstrip("/")
+            if not explicit:
+                raise RuntimeError(
+                    "native llama-server is required but could not be started"
+                )
+            return _strict_server_generate(self, request, explicit)
 
-                if colab_mtp_server_enabled():
-                    explicit = (
-                        autotune_module.ensure_tuned_server(self.config, request)
-                        or ""
-                    ).strip().rstrip("/")
-                    if not explicit:
-                        raise RuntimeError(
-                            "MTP server is enabled but no server URL was produced."
-                        )
-            if explicit:
-                return _strict_server_generate(self, request, explicit)
-            return current_generate(self, request)
-
-        strict_selected_server_generate._mmm_explicit_server_strict = True
+        strict_selected_server_generate._mmm_explicit_server_strict = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate = strict_selected_server_generate
 
     from . import complete_orchestrator_services as services
@@ -461,19 +394,7 @@ def install(autotune_module: Any) -> None:
                     )
                 except Exception:
                     local_exclusive_image = False
-
             if local_exclusive_image:
-                try:
-                    from .colab_mtp_server import (
-                        colab_mtp_server_enabled,
-                        stop_colab_mtp_server,
-                    )
-
-                    if colab_mtp_server_enabled():
-                        stop_colab_mtp_server(keep_enabled=True)
-                except Exception:
-                    pass
-
                 process = getattr(autotune_module, "_MANAGED_PROCESS", None)
                 if process is not None and process.poll() is None:
                     managed_url = getattr(autotune_module, "_MANAGED_URL", None)
@@ -481,9 +402,16 @@ def install(autotune_module: Any) -> None:
                     if managed_url and os.environ.get("LLAMA_SERVER_URL") == managed_url:
                         os.environ.pop("LLAMA_SERVER_URL", None)
                     autotune_module._ATTEMPTED_KEYS.clear()
-
             return original_assets(router, *args, **kwargs)
 
-        assets_with_llama_release._mmm_releases_managed_llama = True
-        assets_with_llama_release._mmm_releases_colab_mtp = True
+        assets_with_llama_release._mmm_releases_managed_llama = True  # type: ignore[attr-defined]
         services.generate_assets = assets_with_llama_release
+
+
+__all__ = [
+    "_request_content_chars",
+    "_server_payload",
+    "_stream_delta_parts",
+    "_strict_server_generate",
+    "install",
+]
