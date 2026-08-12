@@ -301,11 +301,14 @@ def _install_late_safety_contracts() -> None:
     from . import (
         audio_generator,
         complete_orchestrator,
+        model_router,
         production_tools,
         runner,
+        scheduler_parallel_safety_contract,
         validation_execution_contract,
         work_graph,
     )
+    from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
     from .parallel_result_determinism_contract import (
         install as install_parallel_result_determinism,
     )
@@ -324,6 +327,7 @@ def _install_late_safety_contracts() -> None:
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,
     )
+    install_llama_parallel_runtime(model_router, scheduler_parallel_safety_contract)
     install_scheduler_claim_fencing(
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,
