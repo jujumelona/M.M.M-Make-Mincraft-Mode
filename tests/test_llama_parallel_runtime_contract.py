@@ -36,10 +36,33 @@ class _BlockingAdapter:
         return "ok"
 
 
+class _SlotProbeAdapter:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.release = threading.Event()
+        self.two_entered = threading.Event()
+        self.started = 0
+        self.active = 0
+        self.max_active = 0
+
+    def generate(self, request):
+        with self.lock:
+            self.started += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            if self.active >= 2:
+                self.two_entered.set()
+        self.release.wait(timeout=2)
+        with self.lock:
+            self.active -= 1
+        return "ok"
+
+
 def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_llama_shared_slots", False)
     assert getattr(ModelRouter.generation_session, "_mmm_llama_shared_slots", False)
     assert getattr(scheduler_module._capacities, "_mmm_dynamic_llama_slots", False)
+    assert hasattr(router_module, "_LLAMA_INFERENCE_SLOTS")
 
 
 def test_scheduler_llm_capacity_follows_selected_native_slots(monkeypatch) -> None:
@@ -113,3 +136,42 @@ def test_same_router_llama_requests_overlap_when_parallel_selected(monkeypatch) 
     assert results == ["ok", "ok"]
     assert len([event for event, _ in events if event == "start"]) == 2
     assert elapsed < 0.5
+
+
+def test_direct_router_calls_never_exceed_native_llama_slots(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    router = ModelRouter(profile="test", registry=_Registry())
+    adapter = _SlotProbeAdapter()
+    monkeypatch.setattr(
+        router,
+        "_new_text_adapter",
+        lambda config, role: adapter,
+    )
+
+    results: list[str] = []
+
+    def run() -> None:
+        results.append(
+            router.generate_text(
+                "planner",
+                ({"role": "user", "content": "x"},),
+            )
+        )
+
+    threads = [threading.Thread(target=run) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+
+    assert adapter.two_entered.wait(timeout=2)
+    time.sleep(0.05)
+    with adapter.lock:
+        assert adapter.started == 2
+        assert adapter.max_active == 2
+
+    adapter.release.set()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert results == ["ok", "ok", "ok"]
+    assert adapter.started == 3
+    assert adapter.max_active == 2
