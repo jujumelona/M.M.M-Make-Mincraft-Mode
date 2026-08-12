@@ -79,13 +79,37 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     assert "integrated_contract_bootstrap" not in source
     assert "final_architecture_contract" not in source
     assert "platform_mcp_compatibility_contract" not in source
-    assert source.count("install_scheduler_parallel_safety(") == 1
-    assert source.count("install_llama_parallel_runtime(") == 1
-    assert source.count("install_llama_efficiency(") == 1
-    assert source.count("install_llama_runtime_tuning(") == 1
-    assert source.count("install_llama_cache_reuse(") == 1
-    assert source.count("install_llama_stream_efficiency(") == 1
-    assert source.count("install_proposal_deserialization(") == 1
+
+    required_once = (
+        "install_scheduler_parallel_safety(",
+        "install_llama_parallel_runtime(",
+        "install_llama_efficiency(",
+        "install_llama_runtime_tuning(",
+        "install_llama_cache_reuse(",
+        "install_llama_stream_efficiency(",
+        "install_proposal_deserialization(",
+        "install_planner_json_runtime(",
+        "install_planner_strict_json(",
+        "install_planner_outline_prompt(",
+        "install_incremental_repair(",
+        "install_checkpoint_journal(",
+        "install_agentic_search_efficiency(",
+        "install_asset_resume_efficiency(",
+        "install_audio_resume_efficiency(",
+        "install_scheduler_poll_efficiency(",
+        "install_production_stream_efficiency(",
+        "install_production_stream_resume(",
+        "install_execution_efficiency(",
+        "install_incremental_resume(",
+        "install_planner_pagination_safety(",
+        "install_planner_production_page(",
+    )
+    for call in required_once:
+        assert source.count(call) == 1, call
+
+    assert source.index("install_planner_pagination_safety(") < source.index(
+        "install_planner_production_page("
+    )
 
 
 def test_contract_composition_exists_only_in_runtime_bootstrap() -> None:
@@ -120,6 +144,19 @@ def test_specialized_installers_are_single_responsibility() -> None:
     assert "llama_cache_reuse_efficiency_contract" not in llama_efficiency
     assert "llama_stream_efficiency_contract" not in llama_efficiency
     assert "llama_parallel_runtime_contract" not in llama_efficiency
+
+    strict_json = _text("planner_strict_json_contract.py")
+    assert "planner_outline_prompt_contract" not in strict_json
+    assert "planner_incremental_repair_contract" not in strict_json
+    assert "planner_incremental_resume_contract" not in strict_json
+
+    outline_prompt = _text("planner_outline_prompt_contract.py")
+    assert "planner_production_page_contract" not in outline_prompt
+
+    incremental_resume = _text("planner_incremental_resume_contract.py")
+    assert "install_" not in incremental_resume
+    assert "production_stream_efficiency_contract" not in incremental_resume
+    assert "scheduler_poll_efficiency_contract" not in incremental_resume
 
     cache_reuse = _text("llama_cache_reuse_efficiency_contract.py")
     assert "max_performance_module" not in cache_reuse
