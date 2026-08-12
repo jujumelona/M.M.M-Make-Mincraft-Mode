@@ -1,38 +1,43 @@
 from __future__ import annotations
 
-import __main__
 from types import SimpleNamespace
 
 from minecraft_mod_ai.colab_prefetch_bootstrap import start
 
 
-def test_selected_colab_profile_is_resolved_on_first_import(monkeypatch) -> None:
-    loaded: list[str] = []
+def test_colab_bootstrap_sets_worker_defaults_without_registry_lookup(monkeypatch) -> None:
+    calls: list[str] = []
 
     class Registry:
+        def __init__(self):
+            calls.append("init")
+
         def load_profile(self, name: str):
-            loaded.append(name)
+            calls.append(name)
             return object()
 
     monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", "receipt")
+    monkeypatch.delenv("MMM_DISCOVERY_WORKERS", raising=False)
+    monkeypatch.delenv("MMM_RESEARCH_WORKERS", raising=False)
+    start(SimpleNamespace(ModelRegistry=Registry))
+    assert calls == []
+    assert __import__("os").environ["MMM_DISCOVERY_WORKERS"] == "12"
+    assert __import__("os").environ["MMM_RESEARCH_WORKERS"] == "8"
+
+
+def test_colab_bootstrap_preserves_explicit_worker_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", "receipt")
     monkeypatch.setenv("MMM_DISCOVERY_WORKERS", "17")
     monkeypatch.setenv("MMM_RESEARCH_WORKERS", "9")
-    monkeypatch.setattr(__main__, "MODEL_PROFILE", "Qwen3.5-9B_6GB", raising=False)
-    start(SimpleNamespace(ModelRegistry=Registry))
-    assert loaded == ["Qwen3.5-9B_6GB"]
+    start(SimpleNamespace())
     assert __import__("os").environ["MMM_DISCOVERY_WORKERS"] == "17"
     assert __import__("os").environ["MMM_RESEARCH_WORKERS"] == "9"
 
 
 def test_prefetch_bootstrap_is_inert_without_colab_setup(monkeypatch) -> None:
-    loaded: list[str] = []
-
-    class Registry:
-        def load_profile(self, name: str):
-            loaded.append(name)
-            return object()
-
     monkeypatch.delenv("MMM_COLAB_SETUP_RECEIPT", raising=False)
-    monkeypatch.setattr(__main__, "MODEL_PROFILE", "Qwen3.5-9B_6GB", raising=False)
-    start(SimpleNamespace(ModelRegistry=Registry))
-    assert loaded == []
+    monkeypatch.delenv("MMM_DISCOVERY_WORKERS", raising=False)
+    monkeypatch.delenv("MMM_RESEARCH_WORKERS", raising=False)
+    start(SimpleNamespace())
+    assert "MMM_DISCOVERY_WORKERS" not in __import__("os").environ
+    assert "MMM_RESEARCH_WORKERS" not in __import__("os").environ
