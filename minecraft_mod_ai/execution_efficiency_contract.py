@@ -151,23 +151,23 @@ def _dependency_wave_shards(
     *,
     policy: Any,
 ) -> Iterator[tuple[str, tuple[Any, ...]]]:
-    """Create bounded shards without exploding long serial dependency chains.
+    """Create bounded, ready-safe shards without rescanning all prior groups.
 
-    Dependencies between members of one shard are safe because ``modules`` is already
-    topological and each bounded member list is processed deterministically in order.
-    The unsafe case is adding an otherwise-ready module to a shard that has unrelated
-    external dependencies. To avoid that artificial wait, a module may join an open
-    shard only when its effective external dependency-group set is identical.
+    Consecutive modules may share one durable shard only when doing so cannot add an
+    unrelated external dependency. Exact external dependency sets are indexed in O(1),
+    while chain extension checks only groups that the current module actually depends
+    on. This preserves the previous newest-qualifying-group rule but avoids an
+    O(module_count * group_count) reverse scan on dependency-diverse projects.
 
-    This keeps ready work separate while compressing a 20k linear chain into bounded
-    ``java_shard_size`` nodes instead of 20k SQLite rows. Custom LLM work additionally
-    sizes independent shards to expose the native decode slots selected by autotuning.
+    Custom LLM work is sized to expose the native decode slots selected by autotuning,
+    while the normal Java/entity shard ceilings keep SQLite/checkpoint overhead bounded.
     """
 
     staged = [(item, work_graph_module._module_stage(item)) for item in modules]
     stage_counts = Counter(stage for _, stage in staged)
     groups: list[dict[str, Any]] = []
     module_group: dict[str, int] = {}
+    open_by_key: dict[tuple[str, frozenset[int]], int] = {}
 
     def shard_size_for(stage: str) -> int:
         if stage == "entity":
@@ -190,43 +190,55 @@ def _dependency_wave_shards(
             )
 
         shard_size = shard_size_for(stage)
-        chosen: int | None = None
-        for index in range(len(groups) - 1, -1, -1):
+        dependency_groups = {
+            module_group[dependency] for dependency in item.depends_on
+        }
+        candidates: set[int] = set()
+
+        exact_key = (stage, frozenset(dependency_groups))
+        exact = open_by_key.get(exact_key)
+        if exact is not None and len(groups[exact]["members"]) < shard_size:
+            candidates.add(exact)
+
+        # A dependency group may absorb this module when the module already waits for
+        # that group, and every other dependency is transitively covered by that
+        # group's own external dependencies. Only actual dependency groups can satisfy
+        # this internal-chain case; there is no reason to scan unrelated prior groups.
+        for index in dependency_groups:
             group = groups[index]
             if group["stage"] != stage or len(group["members"]) >= shard_size:
                 continue
+            if (dependency_groups - {index}).issubset(group["external_groups"]):
+                candidates.add(index)
 
-            internal_dependency = any(
-                module_group[dependency] == index
-                for dependency in item.depends_on
-            )
-            effective_external = {
-                module_group[dependency]
-                for dependency in item.depends_on
-                if module_group[dependency] != index
-            }
-            if internal_dependency:
-                effective_external.update(group["external_groups"])
-
-            if effective_external == group["external_groups"]:
-                chosen = index
-                break
-
+        chosen = max(candidates) if candidates else None
         if chosen is None:
             chosen = len(groups)
+            external_groups = set(dependency_groups)
             groups.append(
                 {
                     "stage": stage,
                     "members": [],
-                    "external_groups": {
-                        module_group[dependency] for dependency in item.depends_on
-                    },
+                    "external_groups": external_groups,
                     "first_order": len(module_group),
                 }
             )
+            open_by_key[(stage, frozenset(external_groups))] = chosen
 
-        groups[chosen]["members"].append(item)
+        group = groups[chosen]
+        group["members"].append(item)
         module_group[item.module_id] = chosen
+
+        group_key = (str(group["stage"]), frozenset(group["external_groups"]))
+        if len(group["members"]) >= shard_size:
+            if open_by_key.get(group_key) == chosen:
+                open_by_key.pop(group_key, None)
+        else:
+            # Keep the newest still-open group for exact dependency-set lookup, which
+            # matches the previous reverse-search tie rule.
+            previous = open_by_key.get(group_key)
+            if previous is None or chosen > previous:
+                open_by_key[group_key] = chosen
 
     dependents: dict[int, list[int]] = {index: [] for index in range(len(groups))}
     indegree = [0] * len(groups)
