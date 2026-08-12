@@ -31,48 +31,56 @@ class _Router:
                 "response_format": response_format,
             }
         )
+        if not self.responses:
+            raise AssertionError("planner repair loop requested an unexpected extra response")
         return self.responses.pop(0)
 
 
-def _request(target: str = "entity_runtime") -> dict[str, object]:
+def _request(*targets: str) -> dict[str, object]:
+    selected = list(targets or ("entity_runtime",))
     return {
-        "current_target_deliverable": target,
-        "current_target_deliverables": [target],
-        "remaining_deliverables": [target],
+        "current_target_deliverable": selected[0],
+        "current_target_deliverables": selected,
+        "remaining_deliverables": selected,
+        "total_remaining": len(selected),
         "contract": complete_planner._PRODUCTION_PAGE_CONTRACT,
     }
 
 
-def _module(module_id: str = "entity_runtime") -> dict[str, object]:
-    return {
+def _module(
+    module_id: str = "entity_runtime",
+    *,
+    implements: tuple[str, ...] = (),
+) -> dict[str, object]:
+    value: dict[str, object] = {
         "module_id": module_id,
         "kind": "entity",
         "config": {},
         "depends_on": [],
         "required_gates": [],
     }
+    if implements:
+        value["implements_deliverables"] = list(implements)
+    return value
 
 
-def _complete_page() -> dict[str, object]:
+def _complete_page(target: str = "entity_runtime") -> dict[str, object]:
     return {
-        "modules": [_module()],
+        "modules": [_module(target, implements=(target,))],
         "assets": [],
         "audio": [],
         "acceptance_tests": [],
-        "completed_deliverables": ["entity_runtime"],
+        "completed_deliverables": [target],
         "complete": True,
         "next_cursor": "",
     }
 
 
-def test_production_page_recovers_only_semantically_empty_collections() -> None:
+def test_production_page_host_owns_bookkeeping_and_empty_collections() -> None:
     router = _Router(
         json.dumps(
             {
                 "modules": [_module()],
-                "completed_deliverables": ["entity_runtime"],
-                "complete": True,
-                "next_cursor": "",
             }
         )
     )
@@ -92,19 +100,115 @@ def test_production_page_recovers_only_semantically_empty_collections() -> None:
     assert page["audio"] == []
     assert page["acceptance_tests"] == []
     assert page["completed_deliverables"] == ["entity_runtime"]
+    assert page["complete"] is True
+    assert page["next_cursor"] == ""
     assert len(router.calls) == 1
 
 
-def test_production_page_never_infers_semantic_completion_fields() -> None:
-    first = json.dumps(
-        {
-            "modules": [_module()],
-            "assets": [],
-            "audio": [],
-            "acceptance_tests": [],
-        }
+def test_production_page_derives_multi_target_progress_from_item_claims() -> None:
+    router = _Router(
+        json.dumps(
+            {
+                "modules": [
+                    _module("entity_runtime_impl", implements=("entity_runtime",)),
+                    _module("ui_runtime_impl", implements=("ui_runtime",)),
+                ],
+            }
+        )
     )
-    router = _Router(first, json.dumps(_complete_page()))
+
+    page = complete_planner._generate_json_page_with_repair(
+        router,
+        system_prompt="Return the production page.",
+        request=_request("entity_runtime", "ui_runtime"),
+        media_paths=(),
+        expected_contracts=(
+            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
+        ),
+        stage="unit production page",
+    )
+
+    assert page["completed_deliverables"] == ["entity_runtime", "ui_runtime"]
+    assert page["complete"] is True
+    assert page["next_cursor"] == ""
+    assert len(router.calls) == 1
+
+
+def test_large_production_page_is_proactively_bounded_to_two_targets() -> None:
+    router = _Router(
+        json.dumps(
+            {
+                "modules": [
+                    _module("d1_impl", implements=("d1",)),
+                    _module("d2_impl", implements=("d2",)),
+                ]
+            }
+        )
+    )
+
+    page = complete_planner._generate_json_page_with_repair(
+        router,
+        system_prompt="Implement ALL four deliverables in this page.",
+        request=_request("d1", "d2", "d3", "d4"),
+        media_paths=(),
+        expected_contracts=(
+            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
+        ),
+        stage="unit production page",
+    )
+
+    assert page["completed_deliverables"] == ["d1", "d2"]
+    assert len(router.calls) == 1
+    first_user = router.calls[0]["messages"][1]["content"]
+    assert '"current_target_deliverables": ["d1", "d2"]' in first_user
+    first_system = router.calls[0]["messages"][0]["content"]
+    assert "ACTIVE HOST PAGE WIDTH OVERRIDE" in first_system
+
+
+def test_production_repair_narrows_after_truncated_first_page() -> None:
+    router = _Router(
+        '{"modules":[{"module_id":"cut_off"',
+        json.dumps(
+            {
+                "modules": [
+                    _module(
+                        "entity_runtime_impl",
+                        implements=("entity_runtime",),
+                    )
+                ]
+            }
+        ),
+    )
+
+    page = complete_planner._generate_json_page_with_repair(
+        router,
+        system_prompt=(
+            "Implement ALL requested deliverables in this page and generate multiple modules."
+        ),
+        request=_request("entity_runtime", "ui_runtime"),
+        media_paths=("reference.png",),
+        expected_contracts=(
+            frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),
+        ),
+        stage="unit production page",
+    )
+
+    assert page["completed_deliverables"] == ["entity_runtime"]
+    assert page["complete"] is True
+    assert len(router.calls) == 2
+    second_user = router.calls[1]["messages"][1]["content"]
+    assert '"current_target_deliverables": ["entity_runtime"]' in second_user
+    second_system = router.calls[1]["messages"][0]["content"]
+    assert "RECOVERY MODE is host-narrowed" in second_system
+    assert router.calls[1]["media_paths"] == ()
+
+
+def test_production_page_can_repair_more_than_once() -> None:
+    router = _Router(
+        "not json",
+        "still not json",
+        json.dumps({"modules": [_module()]}),
+    )
 
     page = complete_planner._generate_json_page_with_repair(
         router,
@@ -117,26 +221,22 @@ def test_production_page_never_infers_semantic_completion_fields() -> None:
         stage="unit production page",
     )
 
-    assert page["complete"] is True
     assert page["completed_deliverables"] == ["entity_runtime"]
-    assert len(router.calls) == 2
-    repair_prompt = router.calls[1]["messages"][0]["content"]
-    assert "did not contain all host-required semantic fields" in repair_prompt
+    assert len(router.calls) == 3
+    assert "REPAIR THIS PAGE" in router.calls[1]["messages"][0]["content"]
+    assert "REPAIR THIS PAGE" in router.calls[2]["messages"][0]["content"]
 
 
 def test_production_page_repairs_zero_progress_with_exact_host_diagnostic() -> None:
     first = json.dumps(
         {
-            "modules": [_module()],
+            "modules": [],
             "assets": [],
             "audio": [],
             "acceptance_tests": [],
-            "completed_deliverables": [],
-            "complete": True,
-            "next_cursor": "",
         }
     )
-    router = _Router(first, json.dumps(_complete_page()))
+    router = _Router(first, json.dumps({"modules": [_module()]}))
 
     page = complete_planner._generate_json_page_with_repair(
         router,
