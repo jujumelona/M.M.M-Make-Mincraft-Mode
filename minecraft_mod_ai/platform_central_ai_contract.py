@@ -20,10 +20,6 @@ def install(*, game_design_module: Any, complete_planner_module: Any) -> None:
 
 
 def _make_old_live_kind_gate_non_blocking() -> None:
-    # platform_planning_contract predates live AI targets and contains a final
-    # deterministic-kind gate. Keep that gate for the two legacy optimized source
-    # families, but expose all semantic module kinds to that one compatibility check
-    # for live targets. Actual live execution is lowered to custom_java below.
     from . import platform_planning_contract as legacy_contract
 
     current = legacy_contract.adapter_for_target
@@ -77,6 +73,11 @@ def _install_central_target_choice(module: Any) -> None:
         )
         proposal = retarget_proposal(proposal, selection)
         selection_dict = selection.to_dict()
+        if selection.migration_requested and existing_version:
+            selection_dict["migration_from"] = {
+                "minecraft_version": str(existing_version),
+                "loader": str(existing_loader or "fabric").strip().lower(),
+            }
         research_brief = design.get("_research_brief")
         if isinstance(research_brief, dict):
             research_brief = {
@@ -133,8 +134,6 @@ def _bootstrap_boss_payload(result: CompleteProposal) -> dict[str, Any] | None:
 
 
 def _input_acceptance_tests(result: CompleteProposal) -> tuple[str, ...]:
-    """Recover only planner-authored tests before the code-owned quality expansion."""
-
     contract = result.game_design.get("_production_contract")
     if isinstance(contract, dict):
         catalog = contract.get("acceptance_catalog")
@@ -148,9 +147,6 @@ def _input_acceptance_tests(result: CompleteProposal) -> tuple[str, ...]:
             )
             if values:
                 return values
-    # Saved/legacy proposal fallback: recompiling from all tests is preferable to
-    # leaving a stale module implementation catalog. Normal planning always has the
-    # structured acceptance catalog above.
     return tuple(result.acceptance_tests)
 
 
@@ -183,6 +179,49 @@ def _recompile_live_contract(
     return rebound_design, tuple(compiled.acceptance_tests)
 
 
+def _carrier_index(modules: list[ProductionModule]) -> int | None:
+    custom = next(
+        (index for index, item in enumerate(modules) if item.kind == "custom_java"),
+        None,
+    )
+    if custom is not None:
+        return custom
+    return next(
+        (
+            index
+            for index, item in enumerate(modules)
+            if item.kind != "audio"
+            and not (
+                item.kind == "integration"
+                and item.config.get("integration_type")
+                in {"mmm_research_shard", "mmm_local_ai_sidecar"}
+            )
+        ),
+        None,
+    )
+
+
+def _as_custom_carrier(
+    item: ProductionModule,
+    *,
+    extra_config: dict[str, Any],
+) -> ProductionModule:
+    config = {
+        **item.config,
+        "implementation": "custom",
+        "requested_kind": item.config.get("requested_kind", item.kind),
+        "platform_generation": "central_ai_live_target",
+        **extra_config,
+    }
+    return ProductionModule(
+        module_id=item.module_id,
+        kind="custom_java",
+        config=config,
+        depends_on=item.depends_on,
+        required_gates=item.required_gates,
+    )
+
+
 def _install_live_module_lowering(module: Any) -> None:
     cls = module.CompleteGameDesignPlanner
     original = cls._plan_in_session
@@ -203,12 +242,19 @@ def _install_live_module_lowering(module: Any) -> None:
             media_paths=media_paths,
             existing_input_sha256=existing_input_sha256,
         )
-        target = result.game_design.get("_platform_selection", {}).get("target", {})
+        selection = result.game_design.get("_platform_selection", {})
+        target = selection.get("target", {}) if isinstance(selection, dict) else {}
         if not isinstance(target, dict) or target.get("source_api_family") != "fabric_live_ai":
             return result
 
         bootstrap_contents = _bootstrap_content_payload(result)
         bootstrap_boss = _bootstrap_boss_payload(result)
+        migration_requested = bool(
+            isinstance(selection, dict) and selection.get("migration_requested")
+        )
+        migration_from = (
+            selection.get("migration_from") if isinstance(selection, dict) else None
+        )
         lowered: list[ProductionModule] = []
         changed = False
         bootstrap_bound = False
@@ -244,72 +290,50 @@ def _install_live_module_lowering(module: Any) -> None:
             if item.kind in _LIVE_NON_SOURCE_KINDS or item.kind == "custom_java":
                 lowered.append(item)
                 continue
-            config = {
-                **item.config,
-                "implementation": "custom",
-                "requested_kind": item.kind,
-                "platform_generation": "central_ai_live_target",
-            }
-            lowered.append(
-                ProductionModule(
-                    module_id=item.module_id,
-                    kind="custom_java",
-                    config=config,
-                    depends_on=item.depends_on,
-                    required_gates=item.required_gates,
-                )
-            )
+            lowered.append(_as_custom_carrier(item, extra_config={}))
             changed = True
 
-        # _remove_bootstrap_duplicates intentionally removes modules duplicated by
-        # ModSpec.contents because the historical deterministic generator creates
-        # those files. A live target starts from Fabric's official blank template,
-        # so bind the exact base spec into an existing source-generating module if
-        # the compatibility sentinel was not emitted.
         if (bootstrap_contents or bootstrap_boss) and not bootstrap_bound:
-            target_index = next(
-                (
-                    index
-                    for index, item in enumerate(lowered)
-                    if item.kind == "custom_java"
-                ),
-                None,
-            )
-            if target_index is None:
-                target_index = next(
-                    (
-                        index
-                        for index, item in enumerate(lowered)
-                        if item.kind != "audio"
-                        and not (
-                            item.kind == "integration"
-                            and item.config.get("integration_type")
-                            in {"mmm_research_shard", "mmm_local_ai_sidecar"}
-                        )
-                    ),
-                    None,
-                )
+            target_index = _carrier_index(lowered)
             if target_index is None:
                 raise module.SpecValidationError(
                     "Live target has base ModSpec content but no production module "
                     "that can carry its implementation."
                 )
-            carrier = lowered[target_index]
-            config = {
-                **carrier.config,
-                "implementation": "custom",
-                "requested_kind": carrier.config.get("requested_kind", carrier.kind),
-                "platform_generation": "central_ai_live_target",
-                "bootstrap_contents": bootstrap_contents,
-                "bootstrap_boss": bootstrap_boss,
-                "require_exact_base_spec": True,
-            }
-            lowered[target_index] = ProductionModule(
-                module_id=carrier.module_id,
-                kind="custom_java",
-                config=config,
-                depends_on=carrier.depends_on,
-                required_gates=carrier.required_gates,
+            lowered[target_index] = _as_custom_carrier(
+                lowered[target_index],
+                extra_config={
+                    "bootstrap_contents": bootstrap_contents,
+                    "bootstrap_boss": bootstrap_boss,
+                    "require_exact_base_spec": True,
+                },
+            )
+            changed = True
+
+        if migration_requested:
+            target_index = _carrier_index(lowered)
+            if target_index is None:
+                raise module.SpecValidationError(
+                    "Version migration requires at least one source-generation module."
+                )
+            lowered[target_index] = _as_custom_carrier(
+                lowered[target_index],
+                extra_config={
+                    "platform_migration": {
+                        "from": (
+                            dict(migration_from)
+                            if isinstance(migration_from, dict)
+                            else {"minecraft_version": "existing-project", "loader": "fabric"}
+                        ),
+                        "to": dict(target),
+                        "requirements": [
+                            "migrate Gradle and Fabric metadata to the approved target",
+                            "port Java/API usage using target-scoped official evidence",
+                            "preserve requested behavior and existing project content",
+                            "finish only after JDT, Gradle and GameTest pass",
+                        ],
+                    }
+                },
             )
             changed = True
 
@@ -326,6 +350,7 @@ def _install_live_module_lowering(module: Any) -> None:
                 "base_modspec_bound_to_live_generation": bool(
                     bootstrap_contents or bootstrap_boss
                 ),
+                "migration_bound_to_live_generation": migration_requested,
                 "production_contract_rebound_after_lowering": True,
             },
         }
