@@ -49,6 +49,15 @@ def test_response_wide_json_fence_is_accepted_as_transport_only() -> None:
     ) == {"value": 1}
 
 
+def test_response_wide_bare_fence_is_accepted_as_transport_only() -> None:
+    install(runtime)
+    assert runtime._extract_with_safe_empty_defaults(
+        planner,
+        '```\n{"value": 1}\n```',
+        expected_contracts=EXPECTED,
+    ) == {"value": 1}
+
+
 def test_leading_qwen_think_channel_is_transport_only() -> None:
     install(runtime)
     assert runtime._extract_with_safe_empty_defaults(
