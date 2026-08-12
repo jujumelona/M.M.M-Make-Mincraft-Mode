@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 
-# Generation 4: rerun against current main after concurrent fixes.
+# Generation 5: audit current main after bootstrap consolidation.
 jobs:
   audit:
     runs-on: ubuntu-latest
