@@ -8,7 +8,6 @@ from typing import Any, Iterable
 from .platform_catalog import (
     PlatformAdapter,
     adapter_for_target,
-    newest_adapter,
     supported_minecraft_versions,
 )
 from .spec import PlatformLock, Proposal, SpecValidationError
@@ -89,12 +88,12 @@ def resolve_platform(
     existing_loader: str | None = None,
     router: Any | None = None,
 ) -> PlatformSelection:
-    """Resolve a target without a Minecraft-version allowlist.
+    """Resolve an immutable target without a Minecraft-version source allowlist.
 
-    Explicit user targets and existing-project targets remain hard constraints. For a
-    new unpinned project the host discovers current stable Fabric targets, then the
-    central planner model chooses one candidate. The model can never invent a target:
-    its answer is accepted only when it exactly matches the discovered candidate set.
+    Explicit user targets and existing-project targets are hard constraints. For a new
+    unpinned project, the host first resolves complete official toolchain profiles for
+    recent stable Fabric game versions. Only those ready profiles are shown to the
+    central planner AI. The model can select one but cannot invent any coordinate.
     """
 
     text = str(prompt or "")
@@ -142,25 +141,27 @@ def resolve_platform(
             preserved_existing_target=True,
         )
 
-    candidates = tuple(supported_minecraft_versions(loader="fabric")[:8])
-    if not candidates:
-        adapter = newest_adapter(loader="fabric")
-        candidates = (adapter.minecraft_version,)
-
+    ready = _ready_live_profiles(limit=8)
+    if not ready:
+        raise SpecValidationError(
+            "Fabric의 공식 stable 버전은 발견됐지만 Loader/API/Loom/Java/Gradle까지 "
+            "완전히 resolve된 실행 가능한 target이 없습니다."
+        )
+    by_version = {adapter.minecraft_version: adapter for adapter in ready}
+    candidates = tuple(by_version)
     selected_version, ai_reason = _choose_with_central_ai(
         router,
         prompt=text,
         design=design,
-        candidates=candidates,
+        candidates=ready,
     )
-    if selected_version not in candidates:
-        # This is a host invariant, not a model trust decision.
+    if selected_version not in by_version:
         selected_version = candidates[0]
-        ai_reason = "중앙 AI 응답이 발견 후보 밖이어서 최신 공식 stable 후보로 fail-closed했습니다."
-    try:
-        adapter = adapter_for_target(selected_version, "fabric")
-    except ValueError as exc:
-        raise SpecValidationError(str(exc)) from exc
+        ai_reason = (
+            "중앙 AI 응답이 host가 완전히 resolve한 후보 밖이어서 가장 최신의 "
+            "실행 가능한 공식 stable profile로 fail-closed했습니다."
+        )
+    adapter = by_version[selected_version]
     _require_supported_kinds(adapter, module_kinds, explicit=False)
     return PlatformSelection(
         adapter=adapter,
@@ -171,37 +172,80 @@ def resolve_platform(
     )
 
 
+def _ready_live_profiles(*, limit: int) -> tuple[PlatformAdapter, ...]:
+    result: list[PlatformAdapter] = []
+    seen: set[str] = set()
+    for version in supported_minecraft_versions(loader="fabric"):
+        if version in seen:
+            continue
+        seen.add(version)
+        try:
+            adapter = adapter_for_target(version, "fabric")
+        except ValueError:
+            # A game version can appear in Fabric Meta before Fabric API or another
+            # required build coordinate is ready. It is not an executable candidate yet.
+            continue
+        result.append(adapter)
+        if len(result) >= max(1, int(limit)):
+            break
+    return tuple(result)
+
+
 def _choose_with_central_ai(
     router: Any | None,
     *,
     prompt: str,
     design: dict[str, Any] | None,
-    candidates: tuple[str, ...],
+    candidates: tuple[PlatformAdapter, ...],
 ) -> tuple[str, str]:
-    newest = candidates[0]
+    newest = candidates[0].minecraft_version
     if router is None:
         return newest, (
-            "중앙 AI router가 없는 API 경로이므로 Fabric Meta가 제공한 최신 stable "
-            f"후보 Minecraft {newest}을 선택했습니다."
+            "중앙 AI router가 없는 API 경로이므로 공식 메타데이터가 완전히 resolve된 "
+            f"최신 stable profile Minecraft {newest}을 선택했습니다."
         )
 
     design_view = design if isinstance(design, dict) else {}
     encoded_design = json.dumps(design_view, ensure_ascii=False, default=str)
     if len(encoded_design) > 12000:
         encoded_design = encoded_design[:12000]
+    profiles = [
+        {
+            "minecraft_version": item.minecraft_version,
+            "loader": item.loader,
+            "java": item.java_version,
+            "mappings": (
+                "mojang" if item.yarn_mappings == "mojang" else item.yarn_mappings
+            ),
+            "fabric_loader": item.fabric_loader,
+            "fabric_api": item.fabric_api,
+            "loom": item.fabric_loom,
+            "gradle": item.gradle,
+            "generation_mode": (
+                "central_ai_compile_repair"
+                if item.source_api_family == "fabric_live_ai"
+                else "legacy_optimized_adapter"
+            ),
+        }
+        for item in candidates
+    ]
+    candidate_versions = tuple(item.minecraft_version for item in candidates)
     request = {
         "task": "choose_minecraft_fabric_target",
         "user_request": prompt,
         "game_design": encoded_design,
-        "candidate_versions": list(candidates),
-        "candidate_order": "newest_stable_first_from_official_fabric_meta",
+        "ready_profiles": profiles,
+        "candidate_order": "newest_stable_first_after_full_official_resolution",
         "rules": [
-            "Choose exactly one candidate_versions value.",
-            "Prefer the newest stable candidate unless the requested mod has a concrete compatibility reason to use an older candidate.",
-            "Do not invent Loader, API, Loom, Java, Gradle or mappings coordinates; the host discovers those after version choice.",
+            "Choose exactly one ready_profiles.minecraft_version value.",
+            "Prefer the newest ready profile unless the requested mod has a concrete compatibility reason to use an older profile.",
+            "Evaluate the supplied Java, mappings, Loader, Fabric API, Loom and Gradle profile; never invent or alter coordinates.",
             "Existing-project preservation and explicit user versions are handled before this decision.",
         ],
-        "output": {"minecraft_version": "exact candidate", "reason": "short Korean or English reason"},
+        "output": {
+            "minecraft_version": "exact ready profile version",
+            "reason": "short Korean or English compatibility reason",
+        },
     }
     try:
         raw = router.generate_text(
@@ -211,8 +255,8 @@ def _choose_with_central_ai(
                     "role": "system",
                     "content": (
                         "You are the central platform-selection controller. Select one "
-                        "host-discovered Minecraft Fabric candidate. Never invent a version. "
-                        "Return JSON only."
+                        "fully host-resolved Fabric target profile. Never invent a version or "
+                        "toolchain coordinate. Return JSON only."
                     ),
                 },
                 {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
@@ -222,13 +266,13 @@ def _choose_with_central_ai(
         payload = json.loads(str(raw).strip())
         selected = str(payload.get("minecraft_version", "")).strip()
         reason = str(payload.get("reason", "")).strip()
-        if selected in candidates and reason:
+        if selected in candidate_versions and reason:
             return selected, reason
     except Exception:
         pass
     return newest, (
-        "중앙 AI의 플랫폼 선택 응답을 host가 검증하지 못해, 공식 Fabric Meta의 "
-        f"최신 stable 후보 Minecraft {newest}을 사용했습니다."
+        "중앙 AI의 플랫폼 선택 응답을 host가 검증하지 못해, 완전히 resolve된 "
+        f"최신 stable profile Minecraft {newest}을 사용했습니다."
     )
 
 
@@ -304,9 +348,6 @@ def _require_supported_kinds(
     *,
     explicit: bool,
 ) -> None:
-    # Live targets intentionally use the central AI + compiler repair route rather
-    # than a per-version deterministic source adapter, so no source-kind allowlist is
-    # appropriate here.
     if adapter.source_api_family == "fabric_live_ai":
         return
     kinds = {str(value).strip() for value in module_kinds if str(value).strip()}
