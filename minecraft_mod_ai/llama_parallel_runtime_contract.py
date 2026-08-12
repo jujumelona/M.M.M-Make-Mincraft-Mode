@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -141,6 +142,23 @@ def _active_parallelism() -> int:
         return 1
 
 
+def _planner_parallel_capacity(router: Any, width: int) -> int:
+    capacity = min(max(1, int(width)), _active_parallelism())
+    if capacity <= 1:
+        return 1
+    try:
+        config = router.registry.role(router.profile, "planner")
+    except Exception:
+        return 1
+    if not bool(getattr(config, "exclusive_gpu", False)):
+        return 1
+    if str(getattr(config, "provider", "")) != "local":
+        return 1
+    if str(getattr(config, "adapter", "")) not in {"llama_cpp", "vllm"}:
+        return 1
+    return capacity
+
+
 def _install_router(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
     if getattr(cls.generate_text, "_mmm_llama_shared_slots", False):
@@ -215,7 +233,7 @@ def _install_router(model_router_module: Any) -> None:
             and _active_parallelism() > 1
         )
         if shared_llama:
-            # Take a native-server slot before the shared GPU lock.  This keeps
+            # Take a native-server slot before the shared GPU lock. This keeps
             # scheduler-external callers out of llama-server's internal queue while
             # preserving writer preference for image/speech GPU handoff.
             with model_router_module._LLAMA_INFERENCE_SLOTS:
@@ -245,14 +263,112 @@ def _install_scheduler(scheduler_module: Any) -> None:
     scheduler_module._capacities = capacities
 
 
+def _install_planner_search_parallelism() -> None:
+    # Agentic search owns candidate policy/scoring. This layer only maps independent
+    # candidates onto the native server slots selected by autotuning.
+    from . import agentic_optimization_contract as agentic_module
+    from . import complete_planner as complete_planner_module
+
+    current = complete_planner_module._generate_json_page_with_repair
+    if getattr(current, "_mmm_parallel_plan_search", False):
+        return
+    if not getattr(current, "_mmm_verifier_plan_search", False):
+        return
+    base = getattr(current, "__wrapped__", None)
+    if not callable(base):
+        return
+
+    @wraps(current)
+    def generate_with_parallel_search(
+        router: Any,
+        *,
+        system_prompt: str,
+        request: dict[str, Any] | str,
+        media_paths: Any,
+        expected_contracts: Any,
+        stage: str,
+    ) -> dict[str, Any]:
+        width = agentic_module._planner_candidate_count(request, stage)
+        parallel = _planner_parallel_capacity(router, width)
+        if width <= 1 or parallel <= 1:
+            return current(
+                router,
+                system_prompt=system_prompt,
+                request=request,
+                media_paths=media_paths,
+                expected_contracts=expected_contracts,
+                stage=stage,
+            )
+
+        def run_candidate(candidate_index: int):
+            candidate_system = (
+                system_prompt
+                + "\n\nHOST SEARCH CANDIDATE: independently solve this page. Candidate "
+                + str(candidate_index + 1)
+                + " of "
+                + str(width)
+                + ". Preserve the exact contract; do not mention candidate search."
+            )
+            page = base(
+                router,
+                system_prompt=candidate_system,
+                request=request,
+                media_paths=media_paths,
+                expected_contracts=expected_contracts,
+                stage=stage,
+            )
+            score, verifier = agentic_module._score_plan_page(page)
+            return score, candidate_index, page, verifier
+
+        candidates: list[tuple[float, int, dict[str, Any], dict[str, Any]]] = []
+        errors: dict[int, BaseException] = {}
+        with ThreadPoolExecutor(
+            max_workers=parallel,
+            thread_name_prefix="mmm_plan_search",
+        ) as pool:
+            futures = [pool.submit(run_candidate, index) for index in range(width)]
+            # Consume in candidate order so failure selection and tie behavior remain
+            # deterministic even though native decode runs concurrently.
+            for candidate_index, future in enumerate(futures):
+                try:
+                    candidates.append(future.result())
+                except BaseException as exc:
+                    errors[candidate_index] = exc
+
+        if not candidates:
+            if errors:
+                raise errors[max(errors)]
+            raise complete_planner_module.SpecValidationError(
+                f"{stage} produced no verified planning candidate."
+            )
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        winner = candidates[0]
+        print(
+            "planner search:",
+            f"stage={stage}",
+            f"candidates={len(candidates)}",
+            f"parallel={parallel}",
+            f"winner={winner[1] + 1}",
+            f"score={winner[0]:.3f}",
+            flush=True,
+        )
+        return winner[2]
+
+    generate_with_parallel_search._mmm_parallel_plan_search = True  # type: ignore[attr-defined]
+    generate_with_parallel_search._mmm_verifier_plan_search = True  # type: ignore[attr-defined]
+    complete_planner_module._generate_json_page_with_repair = generate_with_parallel_search
+
+
 def install(model_router_module: Any, scheduler_module: Any) -> None:
     _install_router(model_router_module)
     _install_scheduler(scheduler_module)
+    _install_planner_search_parallelism()
 
 
 __all__ = [
     "ReentrantCapacityGate",
     "ReentrantReadWriteLock",
     "_active_parallelism",
+    "_planner_parallel_capacity",
     "install",
 ]
