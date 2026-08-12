@@ -43,7 +43,8 @@ def test_autotune_cache_keeps_multiple_model_fingerprints(monkeypatch, tmp_path)
     assert set(payload["entries"]) == {"model-a", "model-b"}
 
 
-def test_autotune_metadata_helpers_are_process_cached() -> None:
+def test_autotune_metadata_and_model_resolution_are_process_cached() -> None:
+    assert getattr(autotune._resolve_model_path, "_mmm_process_model_path_cache", False)
     assert getattr(autotune._server_version, "_mmm_process_metadata_cache", False)
     assert getattr(autotune._hardware_identity, "_mmm_process_metadata_cache", False)
     assert getattr(autotune._load_cached_decision, "_mmm_multi_decision_store", False)
