@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: native-llama-b10375-cuda12.4
+  group: native-llama-b10375-cuda12.4-v2
   cancel-in-progress: false
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
         cuda_arch: ["75", "80", "89"]
     env:
       LLAMA_SOURCE_REF: ba360efe1f574ebae727aad64112d18ecedca85a
-      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v1
+      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v2
       BUNDLE_PREFIX: llama-b10375-cuda12.4
     steps:
       - name: Install build tools
@@ -50,6 +50,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_CUDA=ON \
+            -DGGML_CUDA_GRAPHS=ON \
             -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.cuda_arch }}" \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -74,6 +75,7 @@ jobs:
           done
           test -x bundle/bin/llama-server
           find bundle/bin -maxdepth 1 -type f -name 'libggml-cuda.so*' | grep -q .
+          grep -q '^GGML_CUDA_GRAPHS:BOOL=ON$' llama.cpp/build/CMakeCache.txt
           BUNDLE_ARCH="${{ matrix.cuda_arch }}" python3 - <<'PY'
           import hashlib
           import json
@@ -90,6 +92,7 @@ jobs:
               "llama_source_ref": os.environ["LLAMA_SOURCE_REF"],
               "cuda_arch": os.environ["BUNDLE_ARCH"],
               "cuda_toolkit": "12.4",
+              "cuda_graphs": True,
               "platform": "linux-x86_64",
               "files": files,
           }
@@ -115,7 +118,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: build
     env:
-      RELEASE_TAG: native-llama-b10375-cuda12.4-v1
+      RELEASE_TAG: native-llama-b10375-cuda12.4-v2
     steps:
       - name: Download built bundles
         uses: actions/download-artifact@v4
@@ -144,8 +147,8 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "Native llama.cpp CUDA b10375" \
-              --notes "Verified native llama-server CUDA 12.4 bundles for Colab. Source: ggml-org/llama.cpp ba360efe1f574ebae727aad64112d18ecedca85a."
+              --title "Native llama.cpp CUDA b10375 + CUDA Graphs" \
+              --notes "Verified native llama-server CUDA 12.4 bundles with GGML_CUDA_GRAPHS=ON for Colab. Source: ggml-org/llama.cpp ba360efe1f574ebae727aad64112d18ecedca85a."
           fi
           gh release upload "$RELEASE_TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
