@@ -4,6 +4,7 @@ import atexit
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -117,6 +118,49 @@ def server_log_tail(lines: int = 80) -> str:
     return "\n".join(values[-lines:])
 
 
+def server_log_offset() -> int:
+    try:
+        return SERVER_LOG_PATH.stat().st_size
+    except OSError:
+        return 0
+
+
+def server_log_since(offset: int, *, max_bytes: int = 64 * 1024) -> str:
+    try:
+        size = SERVER_LOG_PATH.stat().st_size
+        start = min(max(0, int(offset)), size)
+        if size - start > max_bytes:
+            start = size - max_bytes
+        with SERVER_LOG_PATH.open("rb") as handle:
+            handle.seek(start)
+            data = handle.read(max_bytes)
+        return data.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def decode_log_summary(text: str) -> str:
+    values = [
+        int(match)
+        for match in re.findall(r"\bn_decoded\s*=\s*(\d+)", text or "")
+    ]
+    if not values:
+        return "no n_decoded telemetry in request log"
+    first = values[0]
+    last = values[-1]
+    maximum = max(values)
+    if maximum <= 1:
+        state = "decode stalled at or before the first decoded token"
+    elif last >= 2:
+        state = "server-side decode advanced beyond the first token"
+    else:
+        state = "server-side decode telemetry is non-monotonic"
+    return (
+        f"{state}; n_decoded first={first} last={last} "
+        f"max={maximum} samples={len(values)}"
+    )
+
+
 def _mtp_width() -> int:
     raw = os.environ.get("MMM_LLAMA_MTP_WIDTH", "3").strip()
     try:
@@ -194,18 +238,34 @@ def _mtp_capable(config: Any) -> bool:
     return any("MTP" in value.upper() for value in labels if value)
 
 
+def _structured_response_format(request: Any | None) -> bool:
+    if request is None:
+        return False
+    value = getattr(request, "response_format", None)
+    if isinstance(value, str):
+        return value.strip().lower() in {
+            "json",
+            "json_object",
+            "json_schema",
+            "structured",
+        }
+    if isinstance(value, dict):
+        kind = str(value.get("type", "")).strip().lower()
+        return kind in {"json_object", "json_schema"}
+    return False
+
+
 def request_server_mode(config: Any, request: Any | None = None) -> str:
     """Choose the narrowest safe server mode for this request.
 
     The pinned server has no request-level switch for speculative decoding. JSON
-    response_format is implemented as a target-side grammar while MTP uses its own
-    unconstrained draft sampler. Structured planner pages therefore run on the
-    baseline target context. MTP is reserved for unconstrained text/code generation
-    and only after a live probe succeeds for this model/width.
+    response formats are implemented as a target-side grammar while MTP uses its own
+    unconstrained draft sampler. Structured planner/coder/repair pages therefore run
+    on the baseline target context. MTP is reserved for unconstrained text generation
+    and only after a live multi-step streaming probe succeeds for this model/width.
     """
 
-    response_format = getattr(request, "response_format", None) if request is not None else None
-    if response_format == "json":
+    if _structured_response_format(request):
         return "baseline"
     return "mtp" if _mtp_capable(config) else "baseline"
 
@@ -397,36 +457,92 @@ def _mtp_probe_key(config: Any) -> tuple[str, str, int]:
 
 
 def _probe_mtp_server() -> tuple[bool, str]:
+    """Exercise actual MTP decode *and* SSE delivery across several decode steps."""
+
     payload = {
         "model": "local",
         "messages": [
-            {"role": "system", "content": "Return only the word OK."},
-            {"role": "user", "content": "OK"},
+            {
+                "role": "system",
+                "content": "Follow the user literally. Do not explain.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Output the integers 1 through 20 in order, separated by one "
+                    "space, and nothing else."
+                ),
+            },
         ],
-        "max_tokens": 8,
+        "max_tokens": 64,
         "temperature": 0.0,
         "reasoning_effort": "none",
-        "stream": False,
+        "stream": True,
     }
     started = time.monotonic()
+    content_chars = 0
+    output_events = 0
+    saw_done = False
     try:
-        response = httpx.post(
+        timeout = _mtp_probe_timeout()
+        with httpx.stream(
+            "POST",
             f"{SERVER_API_URL}/chat/completions",
             json=payload,
-            timeout=httpx.Timeout(_mtp_probe_timeout()),
-        )
+            timeout=httpx.Timeout(
+                connect=min(30.0, timeout),
+                read=timeout,
+                write=min(30.0, timeout),
+                pool=min(30.0, timeout),
+            ),
+        ) as response:
+            if response.status_code != 200:
+                response.read()
+                return False, f"HTTP {response.status_code}"
+            for raw_line in response.iter_lines():
+                line = raw_line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    saw_done = True
+                    break
+                if not data:
+                    continue
+                chunk = json.loads(data)
+                choices = chunk.get("choices") if isinstance(chunk, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                parts = (
+                    delta.get("reasoning_content"),
+                    delta.get("reasoning"),
+                    delta.get("content"),
+                )
+                emitted = "".join(part for part in parts if isinstance(part, str))
+                if emitted:
+                    output_events += 1
+                    content_chars += len(emitted)
         elapsed = time.monotonic() - started
-        if response.status_code != 200:
-            return False, f"HTTP {response.status_code} after {elapsed:.1f}s"
-        body = response.json()
-        choices = body.get("choices") if isinstance(body, dict) else None
-        message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, str) or not content.strip():
-            return False, f"empty content after {elapsed:.1f}s"
-        return True, f"content={content.strip()[:32]!r} elapsed={elapsed:.1f}s"
+        if not saw_done:
+            return False, f"stream ended before [DONE] after {elapsed:.1f}s"
+        if content_chars < 8:
+            return False, (
+                f"insufficient streamed output chars={content_chars} "
+                f"events={output_events} elapsed={elapsed:.1f}s"
+            )
+        return True, (
+            f"stream_chars={content_chars} events={output_events} "
+            f"elapsed={elapsed:.1f}s"
+        )
     except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
+        elapsed = time.monotonic() - started
+        return False, f"{type(exc).__name__}: {exc} after {elapsed:.1f}s"
 
 
 def mark_mtp_unhealthy(reason: str) -> None:
