@@ -1,33 +1,27 @@
-name: Build native llama CUDA bundles
+name: Native llama CUDA bundle worker
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/build-native-llama-cuda.yml
-      - tools/native_llama_bundle.py
+  workflow_call:
+    inputs:
+      cuda_arch:
+        description: CUDA SM architecture, for example 75
+        required: true
+        type: string
 
 permissions:
   contents: write
 
-concurrency:
-  group: native-llama-b10375-cuda12.4-v2
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: CUDA SM${{ matrix.cuda_arch }}
+  build_and_publish:
+    name: CUDA SM${{ inputs.cuda_arch }}
     runs-on: ubuntu-22.04
     container: nvidia/cuda:12.4.1-devel-ubuntu22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        cuda_arch: ["75", "80", "89"]
     env:
       LLAMA_SOURCE_REF: ba360efe1f574ebae727aad64112d18ecedca85a
       BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v2
       BUNDLE_PREFIX: llama-b10375-cuda12.4
+      BUNDLE_ARCH: ${{ inputs.cuda_arch }}
+      RELEASE_TAG: native-llama-b10375-cuda12.4-v2
     steps:
       - name: Install build tools
         shell: bash
@@ -44,10 +38,6 @@ jobs:
           set -euo pipefail
           stub_dir=/usr/local/cuda/lib64/stubs
           test -f "$stub_dir/libcuda.so"
-          # Hosted GitHub runners have the CUDA toolkit but no NVIDIA kernel driver.
-          # The toolkit stub has the correct driver ABI but is shipped only as
-          # libcuda.so; llama.cpp's shared CUDA backend records libcuda.so.1.
-          # Add the SONAME alias for link time only. Nothing from stub_dir is packaged.
           ln -sf libcuda.so "$stub_dir/libcuda.so.1"
           test -e "$stub_dir/libcuda.so.1"
 
@@ -64,7 +54,7 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_GRAPHS=ON \
-            -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.cuda_arch }}" \
+            -DCMAKE_CUDA_ARCHITECTURES="$BUNDLE_ARCH" \
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib64/stubs" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib64/stubs" \
             -DLLAMA_BUILD_TESTS=OFF \
@@ -110,7 +100,7 @@ jobs:
           find bundle/bin -maxdepth 1 -type f -name 'libggml-cuda.so*' | grep -q .
           test ! -e bundle/bin/libcuda.so
           test ! -e bundle/bin/libcuda.so.1
-          BUNDLE_ARCH="${{ matrix.cuda_arch }}" python3 - <<'PY'
+          python3 - <<'PY'
           import hashlib
           import json
           import os
@@ -135,55 +125,41 @@ jobs:
               encoding="utf-8",
           )
           PY
-          asset="${BUNDLE_PREFIX}-sm${{ matrix.cuda_arch }}-linux-x86_64.tar.gz"
+          asset="${BUNDLE_PREFIX}-sm${BUNDLE_ARCH}-linux-x86_64.tar.gz"
           tar -C bundle -czf "dist/$asset" .
           (cd dist && sha256sum "$asset" > "$asset.sha256")
 
-      - name: Upload bundle artifact
+      - name: Upload workflow artifact backup
         uses: actions/upload-artifact@v4
         with:
-          name: native-llama-sm${{ matrix.cuda_arch }}
+          name: native-llama-sm${{ inputs.cuda_arch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    name: Publish verified bundles
-    runs-on: ubuntu-22.04
-    needs: build
-    env:
-      RELEASE_TAG: native-llama-b10375-cuda12.4-v2
-    steps:
-      - name: Download built bundles
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Verify release payload
-        shell: bash
-        run: |
-          set -euo pipefail
-          for arch in 75 80 89; do
-            asset="llama-b10375-cuda12.4-sm${arch}-linux-x86_64.tar.gz"
-            test -s "dist/$asset"
-            test -s "dist/$asset.sha256"
-            (cd dist && sha256sum -c "$asset.sha256")
-          done
-
-      - name: Publish stable release assets
+      - name: Publish this architecture immediately
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          asset="${BUNDLE_PREFIX}-sm${BUNDLE_ARCH}-linux-x86_64.tar.gz"
+          test -s "dist/$asset"
+          test -s "dist/$asset.sha256"
+          (cd dist && sha256sum -c "$asset.sha256")
+
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Do not pass --target here. GITHUB_TOKEN cannot create a release
+            # targeting a commit that modifies workflow files because it cannot
+            # receive workflows:write. The default-branch head is the intended tag.
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
               --title "Native llama.cpp CUDA b10375 + CUDA Graphs" \
-              --notes "Verified native llama-server CUDA 12.4 bundles with GGML_CUDA_GRAPHS=ON for Colab. Source: ggml-org/llama.cpp ba360efe1f574ebae727aad64112d18ecedca85a."
+              --notes "Verified native llama-server CUDA 12.4 bundles with GGML_CUDA_GRAPHS=ON. Source: ggml-org/llama.cpp ba360efe1f574ebae727aad64112d18ecedca85a." \
+            || gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           fi
-          gh release upload "$RELEASE_TAG" dist/* \
+
+          gh release upload "$RELEASE_TAG" \
+            "dist/$asset" "dist/$asset.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
