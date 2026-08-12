@@ -36,6 +36,7 @@ def _install_runtime_contracts() -> None:
     _install_validation_contracts()
     _install_generation_contracts()
     _install_platform_contracts()
+    _install_planner_contracts()
     _install_architecture_contracts()
     _install_late_safety_contracts()
     _install_public_boundary_contracts()
@@ -224,16 +225,74 @@ def _install_platform_contracts() -> None:
     )
 
 
+def _install_planner_contracts() -> None:
+    """Compose planner parsing, pagination, resume and efficiency policies explicitly."""
+    from . import (
+        agentic_optimization_contract,
+        audio_generator,
+        complete_orchestrator,
+        complete_orchestrator_services,
+        complete_planner,
+        planner_incremental_repair_contract,
+        planner_json_runtime_contract,
+        planner_pagination_safety_contract,
+        work_graph,
+    )
+    from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
+    from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
+    from .audio_resume_efficiency_contract import install as install_audio_resume_efficiency
+    from .execution_efficiency_contract import install as install_execution_efficiency
+    from .planner_checkpoint_journal_contract import install as install_checkpoint_journal
+    from .planner_incremental_repair_contract import install as install_incremental_repair
+    from .planner_incremental_resume_contract import install as install_incremental_resume
+    from .planner_json_runtime_contract import install as install_planner_json_runtime
+    from .planner_module_identity_contract import install as install_planner_module_identity
+    from .planner_outline_identity_contract import install as install_planner_outline_identity
+    from .planner_outline_prompt_contract import install as install_planner_outline_prompt
+    from .planner_pagination_safety_contract import install as install_planner_pagination_safety
+    from .planner_parser_safety_contract import install as install_planner_parser_safety
+    from .planner_production_page_contract import install as install_planner_production_page
+    from .planner_strict_json_contract import install as install_planner_strict_json
+    from .production_stream_efficiency_contract import install as install_production_stream_efficiency
+    from .production_stream_resume_contract import install as install_production_stream_resume
+    from .scheduler_poll_efficiency_contract import install as install_scheduler_poll_efficiency
+
+    install_planner_json_runtime(complete_planner)
+    install_planner_strict_json(planner_json_runtime_contract)
+    install_planner_outline_prompt(planner_json_runtime_contract)
+    install_incremental_repair(planner_json_runtime_contract)
+
+    install_checkpoint_journal(planner_incremental_repair_contract)
+    install_agentic_search_efficiency(agentic_optimization_contract)
+    install_asset_resume_efficiency(complete_orchestrator_services)
+    install_audio_resume_efficiency(audio_generator)
+    complete_orchestrator.synthesize_audio_files = audio_generator.synthesize_audio_files
+    install_scheduler_poll_efficiency(work_graph)
+    install_production_stream_efficiency(complete_planner)
+    install_production_stream_resume(complete_planner)
+    install_execution_efficiency(
+        complete_planner_module=complete_planner,
+        work_graph_module=work_graph,
+    )
+    install_incremental_resume(planner_incremental_repair_contract)
+
+    install_planner_parser_safety(complete_planner)
+    install_planner_module_identity(complete_planner)
+    install_planner_pagination_safety(complete_planner)
+    # Pagination safety replaces _expand_one_production_batch. Adaptive page width is
+    # the final authority for that method and therefore installs immediately after it.
+    install_planner_production_page(complete_planner)
+    install_planner_outline_identity(planner_pagination_safety_contract)
+
+
 def _install_architecture_contracts() -> None:
-    """Install the final deterministic-control and narrow-agent policy layer once."""
+    """Install deterministic-control and narrow-agent architecture policies once."""
     from . import (
         agentic_optimization_contract,
         atomic_requirement_contract,
         complete_orchestrator,
         complete_planner,
         custom_module_generator,
-        planner_json_runtime_contract,
-        planner_pagination_safety_contract,
         production_contract,
         quality_evidence,
         repair_engine,
@@ -251,12 +310,6 @@ def _install_architecture_contracts() -> None:
     from .clean_room_verification_contract import install as install_clean_room
     from .custom_generation_search_contract import install as install_custom_generation_search
     from .orchestrator_jdt_gate_contract import install as install_orchestrator_jdt_gate
-    from .planner_json_runtime_contract import install as install_planner_json_runtime
-    from .planner_module_identity_contract import install as install_planner_module_identity
-    from .planner_outline_identity_contract import install as install_planner_outline_identity
-    from .planner_pagination_safety_contract import install as install_planner_pagination_safety
-    from .planner_parser_safety_contract import install as install_planner_parser_safety
-    from .planner_strict_json_contract import install as install_planner_strict_json
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
     from .required_gate_compatibility_contract import install as install_gate_compatibility
@@ -291,12 +344,6 @@ def _install_architecture_contracts() -> None:
         quality_evidence,
         validation_execution_contract,
     )
-    install_planner_json_runtime(complete_planner)
-    install_planner_strict_json(planner_json_runtime_contract)
-    install_planner_parser_safety(complete_planner)
-    install_planner_module_identity(complete_planner)
-    install_planner_pagination_safety(complete_planner)
-    install_planner_outline_identity(planner_pagination_safety_contract)
     install_work_graph_state_transitions(work_graph)
     agentic_optimization_contract.install(
         complete_planner_module=complete_planner,
