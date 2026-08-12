@@ -103,6 +103,7 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
         "install_llama_runtime_tuning(",
         "install_llama_cache_reuse(",
         "install_llama_stream_efficiency(",
+        "install_project_index_execution_reuse(",
         "install_proposal_deserialization(",
         "install_planner_json_runtime(",
         "install_planner_strict_json(",
