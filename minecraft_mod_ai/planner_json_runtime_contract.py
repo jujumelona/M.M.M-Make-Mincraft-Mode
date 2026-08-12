@@ -238,9 +238,6 @@ def _derive_completed_deliverables(
             if referenced & (ids | tests):
                 completed.add(target_name)
 
-    # Once recovery has narrowed the host request to one deliverable, every emitted
-    # implementation/test artifact belongs to that sole target.  This is host-owned
-    # attribution, not a model-invented completion claim.
     if (
         len(targets) == 1
         and targets[0] not in completed
@@ -305,9 +302,6 @@ def _extract_with_safe_empty_defaults(
     if len(expected_contracts) != 1 or expected_contracts[0] != production_expected:
         return module._extract_json(text, expected_contracts=expected_contracts)
 
-    # Kept for compatibility with direct callers. The installed production path below
-    # uses _extract_production_page_with_host_bookkeeping because request context is
-    # required to compute progress safely.
     for raw in reversed(module._json_objects(text)):
         if not isinstance(raw, dict):
             continue
@@ -402,31 +396,10 @@ def _narrow_production_repair_request(
     request: dict[str, Any] | str,
     attempt: int,
 ) -> dict[str, Any] | str:
-    if not isinstance(request, dict):
-        return request
-    targets = _target_names(request)
-    if not targets:
-        return request
+    """Compatibility hook: production width is model-owned, never host-capped."""
 
-    # Keep normal production pages comfortably below an 8k-output ceiling.  The
-    # caller may group four deliverables for throughput, but two implementation
-    # targets per decode avoids spending an entire long generation on an object that
-    # is likely to be truncated near max_new_tokens.
-    width = 2 if attempt == 0 else 1
-    selected = targets[:width]
-    if selected == targets:
-        return request
-
-    # A rejected page is never regenerated at the same width.  Recovery collapses
-    # to one outstanding deliverable; the outer host loop returns for the rest after
-    # this page is verified.
-    narrowed = dict(request)
-    narrowed["current_target_deliverable"] = selected[0]
-    narrowed["current_target_deliverables"] = selected
-    narrowed["remaining_deliverables"] = selected
-    narrowed["total_remaining"] = len(selected)
-    narrowed["cursor"] = ""
-    return narrowed
+    del attempt
+    return request
 
 
 def _attempt_budget(production_page: bool) -> int:
@@ -446,68 +419,26 @@ def _attempt_budget(production_page: bool) -> int:
     return max(2, min(value, 12))
 
 
-def _install_server_schema_and_strict_mtp(
-    hardware_policy_module: Any,
-) -> None:
+def _install_server_schema(hardware_policy_module: Any) -> None:
+    """Attach request-local JSON schema to the already-selected native server."""
+
     original_payload = hardware_policy_module._server_payload
-    if not getattr(original_payload, "_mmm_json_schema_payload", False):
-
-        @wraps(original_payload)
-        def payload_with_schema(adapter: Any, request: Any) -> dict[str, Any]:
-            payload = original_payload(adapter, request)
-            schema = _JSON_SCHEMA.get()
-            if schema is not None and getattr(request, "response_format", None) == "json":
-                payload["response_format"] = {
-                    "type": "json_object",
-                    "schema": schema,
-                }
-            return payload
-
-        payload_with_schema._mmm_json_schema_payload = True
-        hardware_policy_module._server_payload = payload_with_schema
-
-    from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
-
-    current_generate = LlamaCppAdapter.generate
-    if getattr(current_generate, "_mmm_final_strict_mtp", False):
+    if getattr(original_payload, "_mmm_json_schema_payload", False):
         return
 
-    @wraps(current_generate)
-    def final_strict_mtp_generate(self: Any, request: Any) -> str:
-        from .colab_mtp_server import (
-            SERVER_API_URL,
-            colab_mtp_server_enabled,
-            colab_mtp_server_running,
-            start_colab_mtp_server,
-        )
+    @wraps(original_payload)
+    def payload_with_schema(adapter: Any, request: Any) -> dict[str, Any]:
+        payload = original_payload(adapter, request)
+        schema = _JSON_SCHEMA.get()
+        if schema is not None and getattr(request, "response_format", None) == "json":
+            payload["response_format"] = {
+                "type": "json_object",
+                "schema": schema,
+            }
+        return payload
 
-        explicit = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
-        if colab_mtp_server_enabled():
-            if colab_mtp_server_running():
-                explicit = SERVER_API_URL
-                os.environ["LLAMA_SERVER_URL"] = explicit
-            else:
-                explicit = start_colab_mtp_server(self.config).strip().rstrip("/")
-            if not explicit:
-                raise RuntimeError("MTP server is enabled but produced no server URL.")
-            # Never fall back to an in-process second GGUF when the user explicitly
-            # enabled the managed MTP server. Surface the actual server failure.
-            return hardware_policy_module._strict_server_generate(
-                self,
-                request,
-                explicit,
-            )
-
-        if explicit:
-            return hardware_policy_module._strict_server_generate(
-                self,
-                request,
-                explicit,
-            )
-        return current_generate(self, request)
-
-    final_strict_mtp_generate._mmm_final_strict_mtp = True
-    LlamaCppAdapter.generate = final_strict_mtp_generate
+    payload_with_schema._mmm_json_schema_payload = True  # type: ignore[attr-defined]
+    hardware_policy_module._server_payload = payload_with_schema
 
 
 def _install_planner_page_contract(complete_planner_module: Any) -> None:
@@ -563,39 +494,14 @@ def _install_planner_page_contract(complete_planner_module: Any) -> None:
                 + contract_text
                 + ". Do not omit empty arrays; return them as []."
             )
-            if production_page:
-                original_targets = _target_names(request)
-                active_targets = _target_names(attempt_request)
-                if active_targets != original_targets:
-                    prompt += (
-                        "\nACTIVE HOST PAGE WIDTH OVERRIDE: Earlier batching text may name "
-                        + "more deliverables, but this decode must implement ONLY "
-                        + json.dumps(active_targets, ensure_ascii=False)
-                        + ". The outer host loop will schedule the remaining deliverables "
-                        + "after this page succeeds."
-                    )
             if attempt:
                 prompt += (
                     "\nREPAIR THIS PAGE. The previous page was rejected by the host: "
                     + previous_diagnostic
                     + ". Do not repeat the previous oversized/invalid response. Return "
-                    + "one corrected JSON object only."
+                    + "one corrected JSON object only. Preserve the exact requested "
+                    + "deliverable set; the host does not narrow page width."
                 )
-                if production_page:
-                    repair_targets = _target_names(attempt_request)
-                    prompt += (
-                        " RECOVERY MODE is host-narrowed to exactly these deliverables: "
-                        + json.dumps(repair_targets, ensure_ascii=False)
-                        + ". Implement only those targets in this response. Keep config "
-                        + "structured and concise; do not duplicate request prose. Put the "
-                        + "exact target names in completed_deliverables. The host owns "
-                        + "pagination bookkeeping, but still emit complete and next_cursor "
-                        + "with valid JSON types."
-                    )
-                else:
-                    prompt += (
-                        " Preserve the exact host-required top-level field names and types."
-                    )
 
             token = _JSON_SCHEMA.set(schema)
             try:
@@ -644,18 +550,18 @@ def _install_planner_page_contract(complete_planner_module: Any) -> None:
             + previous_diagnostic
         ) from last_error
 
-    generate_json_page_with_schema._mmm_schema_constrained_pages = True
+    generate_json_page_with_schema._mmm_schema_constrained_pages = True  # type: ignore[attr-defined]
     complete_planner_module._generate_json_page_with_repair = generate_json_page_with_schema
 
 
 def install(complete_planner_module: Any) -> None:
-    """Constrain planner JSON at decode time and keep explicit MTP fail-closed."""
+    """Constrain planner JSON on the single managed native llama-server."""
 
     if getattr(complete_planner_module, "_mmm_planner_json_runtime_contract", False):
         return
     from . import llama_server_hardware_policy as hardware_policy_module
 
-    _install_server_schema_and_strict_mtp(hardware_policy_module)
+    _install_server_schema(hardware_policy_module)
     _install_planner_page_contract(complete_planner_module)
     complete_planner_module._mmm_planner_json_runtime_contract = True
 
