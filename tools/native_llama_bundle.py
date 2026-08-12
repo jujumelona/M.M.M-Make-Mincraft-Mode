@@ -238,7 +238,7 @@ def ensure_prebuilt_native_server(
     source_ref: str,
     verify: Callable[[Path], tuple[bool, str]],
 ) -> str | None:
-    """Install a verified native CUDA llama-server bundle, or return None for fallback."""
+    """Install and return a verified native CUDA llama-server bundle."""
 
     if not _env_enabled("MMM_LLAMA_PREBUILT", True):
         return None
@@ -295,22 +295,18 @@ def ensure_prebuilt_native_server(
                 "prebuilt native llama verification failed: " + detail
             )
 
+        relative_binary = binary.relative_to(extracted.resolve())
         if install_dir.exists():
             shutil.rmtree(install_dir)
         os.replace(extracted, install_dir)
 
-    final_binary = _validate_bundle(
-        install_dir,
-        cuda_arch=cuda_arch,
-        source_ref=source_ref,
-    )
+    # The complete extracted tree was cryptographically checked and executed before
+    # the atomic directory rename above. os.replace() changes only the parent path, not
+    # file contents; repeating every SHA-256, ldd and --version probe here was pure I/O.
+    final_binary = (install_dir / relative_binary).resolve()
+    if not final_binary.is_file():
+        raise RuntimeError("installed prebuilt native llama-server disappeared after rename")
     _prepend_library_path(final_binary.parent)
-    _verify_linkage(final_binary)
-    ok, detail = verify(final_binary)
-    if not ok:
-        raise RuntimeError(
-            "installed prebuilt native llama verification failed: " + detail
-        )
     os.environ["MMM_LLAMA_SERVER_DISTRIBUTION"] = "prebuilt-download"
     return str(final_binary)
 
