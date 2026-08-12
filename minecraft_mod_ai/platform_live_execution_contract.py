@@ -12,6 +12,14 @@ from .platform_catalog import adapter_for_lock_values, adapter_from_project
 
 
 def install(orchestrator_module: Any) -> None:
+    # Live module execution uses the same approved adapter all the way into the
+    # coder prompt. Install this here because platform_api_contract is the late,
+    # outermost platform hook and CustomModuleGenerator has already been imported.
+    from . import custom_module_generator as custom_module_generator_module
+    from .platform_custom_coder_contract import install as install_custom_coder
+
+    install_custom_coder(custom_module_generator_module)
+
     cls = orchestrator_module.CompleteProductionOrchestrator
     original = cls._prepare_project
     if getattr(original, "_mmm_live_official_bootstrap", False):
