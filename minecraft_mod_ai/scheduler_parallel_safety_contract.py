@@ -53,16 +53,7 @@ def _orchestrator_owner(ledger: Any) -> str:
 
 
 def _install_thread_local_connections(work_graph_module: Any) -> None:
-    """Bound SQLite connections to one reusable handle per ledger/thread.
-
-    DurableWorkLedger historically created a fresh sqlite3.Connection for every
-    ``with self._connect()`` call. sqlite3.Connection.__exit__ commits or rolls
-    back but does not close the handle, so a 50 ms scheduler poll over a large
-    DAG can create an unbounded stream of connections while also repeating the
-    WAL/pragma setup. The scheduler already uses a bounded thread topology, so
-    a thread-local connection gives both correct sqlite thread affinity and a
-    fixed connection count.
-    """
+    """Bound SQLite connections to one reusable handle per ledger/thread."""
 
     ledger_cls = work_graph_module.DurableWorkLedger
     current = ledger_cls._connect
@@ -341,13 +332,6 @@ def install(
 ) -> None:
     _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
-
-    # Re-run the idempotent polling optimizer after the final lane-aware claim has
-    # replaced claim_ready. This wraps the authoritative claim with snapshot fences;
-    # task-state snapshots themselves remain one-scan-only and read-only.
-    from .scheduler_poll_efficiency_contract import install as install_poll_efficiency
-
-    install_poll_efficiency(work_graph_module)
     _install_index_commit_order(
         work_graph_module,
         orchestrator_module,
