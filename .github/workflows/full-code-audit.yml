@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 
-# Generation 3: final audit after API restoration and performance fixes.
+# Generation 4: rerun against current main after concurrent fixes.
 jobs:
   audit:
     runs-on: ubuntu-latest
