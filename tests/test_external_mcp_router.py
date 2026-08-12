@@ -141,8 +141,10 @@ def test_priority_fallback_and_target_argument_binding(
             "server_info": {"name": server_name},
             "result": {
                 "structured": {
-                    "minecraft_version": "27.0",
-                    "hits": ["ok"],
+                    # Search evidence can contain version references and they are not
+                    # the provider's authoritative runtime target.
+                    "minecraft_version": "1.20.1",
+                    "hits": ["historical API comparison"],
                 },
                 "parsed_text": None,
                 "text": [],
@@ -170,7 +172,7 @@ def test_priority_fallback_and_target_argument_binding(
     assert bundle["evidence"][0]["server"] == "dynamic-fallback"
 
 
-def test_explicit_provider_target_conflict_is_rejected() -> None:
+def test_authoritative_runtime_target_conflict_is_rejected() -> None:
     target = MCPRouteTarget.from_value(
         {"minecraft_version": "27.0", "loader": "fabric", "mappings": "mojang"}
     )
@@ -178,10 +180,22 @@ def test_explicit_provider_target_conflict_is_rejected() -> None:
         ExternalMCPRouter._validate_reported_target(
             {
                 "structured": {
-                    "target": {"minecraft_version": "1.20.1"},
+                    "minecraftVersion": "1.20.1",
                 }
             },
-            {},
+            {"tool": "server_get_status"},
+            target,
+        )
+
+
+def test_authoritative_runtime_target_must_be_present() -> None:
+    target = MCPRouteTarget.from_value(
+        {"minecraft_version": "27.0", "loader": "fabric", "mappings": "mojang"}
+    )
+    with pytest.raises(ExternalMCPError, match="did not report"):
+        ExternalMCPRouter._validate_reported_target(
+            {"structured": {"players": 0}},
+            {"tool": "server_get_status"},
             target,
         )
 
@@ -197,6 +211,7 @@ def test_checked_in_registry_is_valid_and_capability_routed() -> None:
     assert any(row["server"] == "mcmodding-docs" for row in future)
     assert registry.server("minecraft-dev")["version_policy"] == "provider_reported"
     assert registry.server("fabric-game-runtime")["default_url"].endswith("8765/mcp")
+    assert registry.server("fabric-game-runtime")["capabilities"]["runtime_server_status"]["tool"] == "server_get_status"
     assert registry.server("fabric-game-client-runtime")["default_url"].endswith("8766/mcp")
 
 
@@ -213,8 +228,6 @@ def test_effective_skill_policy_is_target_dynamic() -> None:
     assert "1.20.1" not in flattened
     assert "Java 17" not in flattened
     assert "Yarn 1.20.1" not in flattened
-    # External MCP federation is internal to reviewed MMM tools; Skills must not
-    # receive phantom direct tool names that the staged MCP server does not expose.
     assert "minecraft_mcp_capabilities" not in contract.allowed_tools
     assert "research_minecraft_mcp" not in contract.allowed_tools
 
