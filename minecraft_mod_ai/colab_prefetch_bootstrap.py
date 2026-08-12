@@ -7,17 +7,12 @@ from typing import Any
 def start(model_registry_module: Any) -> None:
     """Install late runtime contracts, then overlap selected-model prefetch with setup."""
 
-    # The hardware-policy wrapper is already installed before this bootstrap is
-    # imported. Add the request-mode router now so every later local llama call uses
-    # baseline decoding for structured JSON and only verified MTP for free text/code.
-    from . import llama_server_hardware_policy as hardware_policy_module
-    from .colab_llama_request_routing_contract import install as install_request_routing
+    # Local GGUF routing is already bound to the managed native llama-server by the
+    # package bootstrap. Nothing is installed here for text serving: keeping a second
+    # request router would recreate the deleted alternate backend path.
 
-    install_request_routing(hardware_policy_module)
-
-    # The old asset wrapper evicts the resident llama process before FLUX starts.
-    # Serialize that eviction with the same re-entrant GPU lock used by text/image
-    # generation so another executor cannot kill an active LLM request.
+    # Serialize native llama-server eviction with the same re-entrant GPU lock used by
+    # text/image/speech generation so another executor cannot kill an active request.
     from . import complete_orchestrator_services as services_module
     from . import model_router as model_router_module
     from .colab_gpu_handoff_contract import install as install_gpu_handoff
