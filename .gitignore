@@ -14,3 +14,5 @@ release/
 reference-build*.log
 pdf_full_text.txt
 .ipynb_checkpoints/
+audit/
+tools/.complete_patch/

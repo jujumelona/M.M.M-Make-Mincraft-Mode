@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.12']
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -176,7 +176,7 @@ jobs:
               state: success ? 'success' : 'failure',
               context: 'mmm/ci',
               description: success
-                ? 'Python 3.10/3.12, repository audit and Fabric reference passed'
+                ? 'Python 3.10/3.11/3.12, repository audit and Fabric reference passed'
                 : `contracts=${process.env.CONTRACTS_RESULT}, audit=${process.env.AUDIT_RESULT}, reference=${process.env.REFERENCE_RESULT}`,
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
