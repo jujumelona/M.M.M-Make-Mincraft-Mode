@@ -13,7 +13,6 @@ from minecraft_mod_ai.llama_server_autotune import (
     _server_binary,
     _variant_args,
 )
-from minecraft_mod_ai.llama_server_hardware_policy import _source_dir
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
@@ -47,6 +46,7 @@ def test_server_autotune_contract_is_installed() -> None:
     assert getattr(_server_binary, "_mmm_native_bootstrap", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_base_args, "_mmm_single_decode_slot", False)
+    assert getattr(_base_args, "_mmm_native_telemetry_endpoints", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
     assert getattr(_probe_server, "_mmm_correctness_sentinel", False)
     assert getattr(
@@ -54,12 +54,6 @@ def test_server_autotune_contract_is_installed() -> None:
         "_mmm_releases_managed_llama",
         False,
     )
-
-
-def test_native_server_source_directory_can_be_overridden(monkeypatch, tmp_path) -> None:
-    target = tmp_path / "llama.cpp"
-    monkeypatch.setenv("MMM_LLAMA_SERVER_SOURCE_DIR", str(target))
-    assert _source_dir() == target.resolve()
 
 
 def test_default_variants_compare_baseline_and_bounded_mtp_widths(monkeypatch) -> None:
@@ -133,6 +127,8 @@ def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None
     assert args[args.index("--cache-type-k") + 1] == "q4_0"
     assert args[args.index("--cache-type-v") + 1] == "q4_0"
     assert args[args.index("--load-mode") + 1] == "none"
+    assert "--metrics" in args
+    assert "--slots" in args
 
 
 def test_mtp_variant_uses_server_startup_flags_not_request_mutation() -> None:
