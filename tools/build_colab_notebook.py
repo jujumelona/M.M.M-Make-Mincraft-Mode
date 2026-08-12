@@ -31,6 +31,8 @@ CELL_SPECS = [
         "code",
         "configuration",
         """# @title 1. 실행 모드 및 설정
+import os
+
 RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute"]
 PROMPT = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘." #@param {type:"string"}
 PLAN_FILE = "" #@param {type:"string"}
@@ -47,8 +49,12 @@ VALID_RUN_MODES = {
     "Revise",
     "Execute",
 }
+VALID_KV_CACHE_QUANTS = {"q4_0", "q8_0", "f16"}
 if RUN_MODE not in VALID_RUN_MODES:
     raise ValueError(f"지원하지 않는 실행 모드: {RUN_MODE}")
+if KV_CACHE_QUANT not in VALID_KV_CACHE_QUANTS:
+    raise ValueError(f"지원하지 않는 KV cache 양자화: {KV_CACHE_QUANT}")
+os.environ["MMM_KV_CACHE_QUANT"] = KV_CACHE_QUANT
 if RUN_MODE != "Execute" and not PROMPT.strip():
     raise ValueError("선택한 실행 모드에서는 PROMPT를 입력해야 합니다.")
 if RUN_RUNTIME and not ACCEPT_EULA:
@@ -216,6 +222,10 @@ def assert_current_colab_setup():
         remote_image_model=REMOTE_IMAGE_MODEL,
         remote_speech_model=REMOTE_SPEECH_MODEL,
     )
+    if os.environ.get("MMM_KV_CACHE_QUANT") != KV_CACHE_QUANT:
+        raise RuntimeError(
+            "KV cache 설정이 변경되었습니다. 1번 셀부터 다시 실행하세요."
+        )
 
 
 assert_current_colab_setup()
@@ -239,6 +249,7 @@ print(
     else "native-context bound (no separate page cap)",
 )
 print("기획 page output:", f"{planner_config.max_new_tokens:,} tokens")
+print("KV cache:", KV_CACHE_QUANT)
 print("결과 저장 위치:", OUTPUT_ROOT)
 
 from minecraft_mod_ai.custom_module_generator import _extract_json
@@ -255,7 +266,7 @@ from minecraft_mod_ai.colab_mtp_server import start_colab_mtp_server
 
 assert_current_colab_setup()
 LLAMA_SERVER_URL = start_colab_mtp_server(planner_config)
-print("llama server:", LLAMA_SERVER_URL, "(structured=baseline; verified free-text may use MTP)")
+print("llama server:", LLAMA_SERVER_URL, "(structured=baseline host validation; verified free-text may use MTP)")
 """,
     ),
     (
