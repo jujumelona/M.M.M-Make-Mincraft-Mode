@@ -4,20 +4,64 @@ import threading
 from functools import wraps
 from typing import Any
 
+_SYNC_PLAN_TEMP_TABLES = (
+    "affected_nodes",
+    "changed_nodes",
+    "desired_edges",
+    "desired_tasks",
+)
+
+
+def _drop_sync_plan_temp_tables(ledger: Any) -> None:
+    """Make DurableWorkLedger.sync_plan reusable on a cached SQLite connection.
+
+    sync_plan historically relied on a short-lived sqlite connection to discard its
+    TEMP tables. The scheduler now intentionally reuses one connection per thread to
+    avoid repeated connect/PRAGMA overhead, so those TEMP tables must be removed at
+    the transaction boundary instead of depending on connection destruction.
+    """
+
+    with ledger._connect() as connection:
+        for table_name in _SYNC_PLAN_TEMP_TABLES:
+            connection.execute(f"DROP TABLE IF EXISTS {table_name}")
+        connection.commit()
+
 
 def install(work_graph_module: Any) -> None:
-    """Batch one full generation-state scan without carrying stale state forward.
+    """Batch generation polling while keeping reusable SQLite state exact.
 
     ``_execute_generation_work`` reads every generation node once per scheduler pass.
     Thousands of point reads are wasteful, but a time-based cache can survive a worker
-    completion and create a false deadlock.  This contract therefore gives the main
+    completion and create a false deadlock. This contract therefore gives the main
     scheduler thread exactly one snapshot budget equal to the number of generation
     tasks. After that many reads the snapshot is discarded. ``claim_ready`` also clears
     it before and after every transactional claim. Worker threads always use exact point
     reads, and database transactions remain the only authority for readiness/leases.
+
+    The parallel scheduler also reuses one SQLite connection per ledger/thread. Keep
+    sync_plan's TEMP-table workspace bounded to one call so repeated plan syncs and a
+    retry after rollback stay valid without giving up the connection-reuse speedup.
     """
 
     ledger_cls = work_graph_module.DurableWorkLedger
+
+    current_sync_plan = ledger_cls.sync_plan
+    if not getattr(current_sync_plan, "_mmm_reusable_connection_sync_plan", False):
+
+        @wraps(current_sync_plan)
+        def sync_plan(self: Any, plan: Any):
+            _drop_sync_plan_temp_tables(self)
+            try:
+                return current_sync_plan(self, plan)
+            finally:
+                # sqlite3.Connection.__exit__ has committed/rolled back the original
+                # transaction before control reaches here, so cleanup cannot mask or
+                # partially commit the sync_plan transaction itself.
+                _drop_sync_plan_temp_tables(self)
+
+        sync_plan._mmm_reusable_connection_sync_plan = True  # type: ignore[attr-defined]
+        sync_plan.__wrapped__ = current_sync_plan  # type: ignore[attr-defined]
+        ledger_cls.sync_plan = sync_plan
 
     def _clear(self: Any) -> None:
         setattr(self, "_mmm_generation_poll_snapshot", None)
