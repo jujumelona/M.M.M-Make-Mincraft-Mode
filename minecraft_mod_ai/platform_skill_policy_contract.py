@@ -5,41 +5,6 @@ from functools import wraps
 from typing import Any
 
 
-_MCP_CAPABILITY_STAGES = frozenset(
-    {"frontdoor", "planning", "research", "generation", "quality", "runtime"}
-)
-_MCP_RESEARCH_STAGES = frozenset({"planning", "research", "generation", "quality"})
-
-# Skills whose task can legitimately ask the read-only Minecraft MCP federation for
-# target-bound evidence. Automatic planner/coder/repair federation still runs even
-# when the Skill does not call these tools explicitly.
-_RESEARCH_SKILLS = frozenset(
-    {
-        "research-minecraft-evidence",
-        "gather-adaptive-minecraft-evidence",
-        "plan-game-design",
-        "inspect-existing-project",
-        "generate-fabric-core",
-        "generate-datagen",
-        "generate-worldgen",
-        "generate-geckolib-entity",
-        "generate-quest-progression",
-        "generate-gui-networking",
-        "compile-and-repair",
-        "patch-existing-project",
-        "execute-complete-production",
-        "converge-game-quality",
-    }
-)
-_CAPABILITY_SKILLS = _RESEARCH_SKILLS | frozenset(
-    {
-        "runtime-playtest",
-        "visual-review",
-        "freeze-approved-spec",
-        "resume-production-run",
-    }
-)
-
 _REPLACEMENTS = (
     ("Minecraft Java 1.20.1 Fabric", "the approved Minecraft Java Fabric target"),
     ("Minecraft 1.20.1 Fabric", "the approved Minecraft Fabric target"),
@@ -56,17 +21,11 @@ _REPLACEMENTS = (
 def install(skill_catalog_module: Any) -> None:
     """Compile legacy Skill text into target-dynamic runtime policy.
 
-    The checked-in Skill markdown remains a historical/documentation artifact until
-    it is regenerated, but neither source checkout nor packaged wheel may use those
-    fixed version phrases as runtime authorization or evidence requirements.
+    External Minecraft MCP federation is intentionally internal to reviewed MMM
+    planning/generation/quality/runtime tools. Skills therefore do not gain invented
+    direct MCP tool names or new authorization surfaces; their existing tool calls
+    receive federated evidence automatically at the appropriate stage.
     """
-
-    skill_catalog_module.REVIEWED_TOOL_STAGES["minecraft_mcp_capabilities"] = (
-        _MCP_CAPABILITY_STAGES
-    )
-    skill_catalog_module.REVIEWED_TOOL_STAGES["research_minecraft_mcp"] = (
-        _MCP_RESEARCH_STAGES
-    )
 
     original = skill_catalog_module._parse_skill
     if getattr(original, "_mmm_dynamic_platform_skill", False):
@@ -77,15 +36,6 @@ def install(skill_catalog_module: Any) -> None:
         frontmatter, policy = original(text, expected_name)
         normalized_frontmatter = _normalize(deepcopy(frontmatter))
         normalized_policy = _normalize(deepcopy(policy))
-
-        allowed = normalized_policy.get("allowed_tools")
-        if isinstance(allowed, list):
-            values = [str(value) for value in allowed]
-            if expected_name in _CAPABILITY_SKILLS and "minecraft_mcp_capabilities" not in values:
-                values.append("minecraft_mcp_capabilities")
-            if expected_name in _RESEARCH_SKILLS and "research_minecraft_mcp" not in values:
-                values.append("research_minecraft_mcp")
-            normalized_policy["allowed_tools"] = values
 
         # The external federation is evidence-only. It never grants mutation or
         # runtime approval and never substitutes its own version for PlatformLock.
