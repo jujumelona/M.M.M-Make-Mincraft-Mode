@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai import complete_planner, llama_server_hardware_policy
-from minecraft_mod_ai import colab_mtp_server
 from minecraft_mod_ai.model_adapters import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.planner_json_runtime_contract import _JSON_SCHEMA
@@ -248,16 +247,15 @@ def test_llama_server_payload_receives_decode_time_json_schema() -> None:
     }
 
 
-def test_enabled_mtp_is_final_fail_closed_hot_path(monkeypatch) -> None:
+def test_native_server_is_final_fail_closed_hot_path(monkeypatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(colab_mtp_server, "colab_mtp_server_enabled", lambda: True)
-    monkeypatch.setattr(colab_mtp_server, "colab_mtp_server_running", lambda: True)
+    server_url = "http://127.0.0.1:8910/v1"
+    monkeypatch.setenv("LLAMA_SERVER_URL", server_url)
     monkeypatch.setattr(
         llama_server_hardware_policy,
         "_strict_server_generate",
-        lambda adapter, request, url: calls.append(url) or "mtp-only",
+        lambda adapter, request, url: calls.append(url) or "native-only",
     )
-    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
 
     adapter = LlamaCppAdapter(
         AdapterConfig(
@@ -274,6 +272,6 @@ def test_enabled_mtp_is_final_fail_closed_hot_path(monkeypatch) -> None:
         )
     )
 
-    assert result == "mtp-only"
-    assert calls == [colab_mtp_server.SERVER_API_URL]
-    assert getattr(LlamaCppAdapter.generate, "_mmm_final_strict_mtp", False)
+    assert result == "native-only"
+    assert calls == [server_url]
+    assert getattr(LlamaCppAdapter.generate, "_mmm_explicit_server_strict", False)
