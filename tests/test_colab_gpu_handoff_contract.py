@@ -22,12 +22,9 @@ def test_local_asset_wrapper_holds_global_gpu_lock_during_handoff() -> None:
     router = SimpleNamespace(registry=Registry(), profile="test")
 
     def generate_assets(router, *args, **kwargs):
-        # RLock has no public owner API; non-blocking acquire succeeds re-entrantly
-        # only when this call already owns the same lock on the current thread.
-        acquired = lock.acquire(blocking=False)
-        observed.append(acquired)
-        if acquired:
-            lock.release()
+        is_owned = getattr(lock, "_is_owned", None)
+        assert callable(is_owned)
+        observed.append(bool(is_owned()))
         return "ok"
 
     services = SimpleNamespace(generate_assets=generate_assets)
