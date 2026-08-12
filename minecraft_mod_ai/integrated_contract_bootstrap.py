@@ -128,3 +128,13 @@ def install() -> None:
         work_graph_module=work_graph_module,
         orchestrator_module=orchestrator_module,
     )
+
+    # MCP production services are cached and can receive concurrent requests. Keep
+    # expensive RAG indexing parallel across different outputs while enforcing one
+    # writer for the same canonical index path, closing the _new_file/build TOCTOU.
+    from . import production_tools as production_tools_module
+    from .production_tool_parallel_contract import (
+        install as install_production_tool_parallel_safety,
+    )
+
+    install_production_tool_parallel_safety(production_tools_module)
