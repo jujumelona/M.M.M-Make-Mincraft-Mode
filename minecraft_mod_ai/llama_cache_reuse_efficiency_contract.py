@@ -22,11 +22,8 @@ def _probe_request_cache_reuse(
     max_tokens: int,
 ) -> Any:
     """Measure one request-scoped cache-reuse value without reloading the model."""
-
     import httpx
 
-    # Keep each candidate's seed prefix distinct so one candidate cannot inherit KV
-    # state from another candidate while all candidates share the same server/model.
     prefix = (
         f"MMM cache reuse candidate {cache_reuse}. "
         "Minecraft Fabric deterministic repair context. Preserve package names, "
@@ -77,8 +74,6 @@ def _probe_request_cache_reuse(
 
     started = time.perf_counter()
     try:
-        # Seed this candidate's prefix. Only the second request is timed for selection:
-        # production continuation/repair benefits from the already-present prefix.
         request(messages_a)
         output, predicted, prompt_tps, reuse_elapsed = request(messages_b)
         return autotune_module.ProbeResult(
@@ -122,25 +117,19 @@ def _choose_cache_probe(probes: list[Any], *, minimum_gain: float) -> Any | None
     best = min(valid, key=lambda probe: float(probe.elapsed_seconds))
     if best is baseline:
         return baseline
-    gain = float(baseline.elapsed_seconds) / max(
-        1e-9,
-        float(best.elapsed_seconds),
-    )
+    gain = float(baseline.elapsed_seconds) / max(1e-9, float(best.elapsed_seconds))
     return best if gain >= max(1.0, minimum_gain) else baseline
 
 
 def install(
     autotune_module: Any,
     hardware_policy_module: Any,
-    max_performance_module: Any,
+    runtime_tuning_module: Any,
 ) -> None:
-    """Tune KV-shift cache reuse without candidate-by-candidate model reloads."""
-
+    """Tune request-scoped KV cache reuse on one already-loaded llama server."""
     if getattr(autotune_module, "_mmm_request_cache_reuse_tuning", False):
         return
 
-    # cache_reuse is a request field in the pinned llama-server schema. Keep startup
-    # cache reuse neutral and apply the selected value per production request instead.
     current_start = autotune_module._start_server
     if not getattr(current_start, "_mmm_request_scoped_cache_reuse", False):
 
@@ -152,8 +141,13 @@ def install(
             variant: Any,
             port: int,
         ) -> subprocess.Popen[bytes]:
-            neutral = replace(variant, cache_reuse=0)
-            return current_start(binary, model_path, config, neutral, port)
+            return current_start(
+                binary,
+                model_path,
+                config,
+                replace(variant, cache_reuse=0),
+                port,
+            )
 
         start_without_global_cache_reuse._mmm_request_scoped_cache_reuse = True  # type: ignore[attr-defined]
         autotune_module._start_server = start_without_global_cache_reuse
@@ -186,14 +180,14 @@ def install(
         request: Any,
         fingerprint: str,
     ) -> Any | None:
-        candidates = tuple(max_performance_module._cache_reuse_candidates())
+        candidates = tuple(runtime_tuning_module._cache_reuse_candidates())
 
-        # The upstream max-performance benchmark otherwise restarts the full model once
-        # per cache-reuse value. Skip only that internal stage; all speculative, ubatch
-        # and parallel candidates remain unchanged.
+        # The runtime benchmark owns speculative, ubatch and parallel selection.
+        # Temporarily disable only its cache-reuse stage, then benchmark every
+        # request-scoped reuse value against one already-loaded selected server.
         with _TUNING_LOCK:
-            original_candidates = max_performance_module._cache_reuse_candidates
-            max_performance_module._cache_reuse_candidates = lambda: ()
+            original_candidates = runtime_tuning_module._cache_reuse_candidates
+            runtime_tuning_module._cache_reuse_candidates = lambda: ()
             try:
                 decision = current_benchmark(
                     binary,
@@ -203,17 +197,15 @@ def install(
                     fingerprint,
                 )
             finally:
-                max_performance_module._cache_reuse_candidates = original_candidates
+                runtime_tuning_module._cache_reuse_candidates = original_candidates
 
         if decision is None or not candidates:
             return decision
 
         selected = decision.selected
-        preferred_port = autotune_module._env_int(
-            "MMM_LLAMA_AUTOTUNE_PORT",
-            18910,
+        port = autotune_module._free_port(
+            autotune_module._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
         )
-        port = autotune_module._free_port(preferred_port)
         process = None
         probes: list[Any] = []
         probe_tokens = min(
