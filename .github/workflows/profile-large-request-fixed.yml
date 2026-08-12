@@ -1,0 +1,47 @@
+name: Profile fixed large request
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/profile-large-request-fixed.yml
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply candidate fixes locally
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('minecraft_mod_ai/planner_incremental_repair_contract.py')
+          s=p.read_text()
+          old='''            if not raw_batches:\n                # Nothing semantic exists to patch. Save the failure and request only\n                # the missing continuation fragment; never redo accepted batches.\n                checkpoint_state.update(\n                    {\n                        "saved_batches": saved_batches,\n                        "last_envelope_error": envelope_error or "no complete batch object",\n                        "status": "awaiting_missing_fragment",\n                    }\n                )\n                _save_checkpoint(checkpoint_path, checkpoint_state)\n                continue\n'''
+          new='''            if not raw_batches:\n                if page_complete and not page_next_cursor and not envelope_error:\n                    checkpoint_state.update({"saved_batches": saved_batches, "pending_batches": [], "pending_patch": None, "page_complete": True, "page_next_cursor": "", "resume_cursor": "", "last_envelope_error": "", "status": "complete"})\n                    _save_checkpoint(checkpoint_path, checkpoint_state)\n                    return _resume_result(checkpoint_state, saved_batches)\n                checkpoint_state.update({"saved_batches": saved_batches, "last_envelope_error": envelope_error or "no complete batch object", "status": "awaiting_missing_fragment"})\n                _save_checkpoint(checkpoint_path, checkpoint_state)\n                continue\n'''
+          if old not in s: raise SystemExit('repair target changed')
+          p.write_text(s.replace(old,new,1))
+          g=Path('minecraft_mod_ai/game_design.py'); s=g.read_text()
+          if '_json_character_bytes(prompt[end])' not in s:
+              s=s.replace('            character_size = _json_text_bytes(prompt[end])\n','            character_size = _json_character_bytes(prompt[end])\n',1)
+              oldf='''def _json_text_bytes(value: str) -> int:\n    encoded = json.dumps(value, ensure_ascii=False)\n    return len(encoded[1:-1].encode("utf-8"))\n'''
+              newf='''def _json_character_bytes(character: str) -> int:\n    if len(character) != 1: raise ValueError("one character required")\n    codepoint=ord(character)\n    if character in {'"', "\\\\", "\\b", "\\f", "\\n", "\\r", "\\t"}: return 2\n    if codepoint < 0x20: return 6\n    return len(character.encode("utf-8"))\n\ndef _json_text_bytes(value: str) -> int:\n    return sum(_json_character_bytes(c) for c in value)\n'''
+              if oldf not in s: raise SystemExit('pager target changed')
+              g.write_text(s.replace(oldf,newf,1))
+          PY
+      - name: Profile patched test
+        run: |
+          timeout 80s python - <<'PY'
+          import faulthandler, pytest
+          faulthandler.dump_traceback_later(10, repeat=True)
+          raise SystemExit(pytest.main(['-vv','-s','--tb=short','tests/test_large_request_ingestion.py::test_more_than_6144_word_request_is_losslessly_paged_through_production']))
+          PY
