@@ -42,11 +42,15 @@ def install(api_module: Any, plan_render_module: Any) -> None:
     # migration responses may mention many historical versions, while reviewed
     # runtime status tools are allowed to prove the actual running target.
     from . import external_mcp_router as external_mcp_router_module
+    from .external_mcp_bridge_safety_contract import (
+        install as install_external_mcp_bridge_safety,
+    )
     from .external_mcp_target_validation_contract import (
         install as install_mcp_target_validation,
     )
 
     install_mcp_target_validation(external_mcp_router_module)
+    install_external_mcp_bridge_safety(external_mcp_router_module)
 
     from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
 
