@@ -208,57 +208,54 @@ def _cuda_graph_build(autotune_module: Any, binary: str) -> str:
     if not (source / "CMakeLists.txt").is_file() or shutil.which("cmake") is None:
         return binary
 
-    graph_build = source / "build-cuda-graphs"
-    graph_binary = graph_build / "bin" / "llama-server"
-    cache = graph_build / "CMakeCache.txt"
-    try:
-        cache_text = cache.read_text(encoding="utf-8", errors="ignore") if cache.is_file() else ""
-    except Exception:
-        cache_text = ""
-    if graph_binary.is_file() and "GGML_CUDA_GRAPHS:BOOL=ON" in cache_text:
-        os.environ["MMM_LLAMA_CUDA_GRAPH_SERVER_BIN"] = str(graph_binary.resolve())
+    build_dir = source / "build"
+    graph_binary = build_dir / "bin" / "llama-server"
+    cache = build_dir / "CMakeCache.txt"
+
+    def graphs_enabled() -> bool:
+        try:
+            return (
+                cache.is_file()
+                and "GGML_CUDA_GRAPHS:BOOL=ON"
+                in cache.read_text(encoding="utf-8", errors="ignore")
+            )
+        except Exception:
+            return False
+
+    if graph_binary.is_file() and graphs_enabled():
         return str(graph_binary.resolve())
 
     with _CUDA_GRAPH_LOCK:
-        try:
-            cache_text = cache.read_text(encoding="utf-8", errors="ignore") if cache.is_file() else ""
-        except Exception:
-            cache_text = ""
-        if graph_binary.is_file() and "GGML_CUDA_GRAPHS:BOOL=ON" in cache_text:
-            os.environ["MMM_LLAMA_CUDA_GRAPH_SERVER_BIN"] = str(graph_binary.resolve())
+        if graph_binary.is_file() and graphs_enabled():
             return str(graph_binary.resolve())
 
+        # Reconfigure the source-owned build in place. The Colab setup has already
+        # compiled this exact pinned llama.cpp checkout, so CMake preserves its CUDA
+        # architecture and all existing options and only rebuilds targets affected by
+        # enabling CUDA graphs instead of compiling a second full server tree.
         command = [
             "cmake",
             "-S",
             str(source),
             "-B",
-            str(graph_build),
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DGGML_CUDA=ON",
+            str(build_dir),
             "-DGGML_CUDA_GRAPHS=ON",
-            "-DLLAMA_BUILD_TESTS=OFF",
-            "-DLLAMA_BUILD_EXAMPLES=OFF",
-            "-DLLAMA_BUILD_APP=OFF",
-            "-DLLAMA_BUILD_UI=OFF",
-            "-DLLAMA_BUILD_TOOLS=ON",
-            "-DLLAMA_BUILD_SERVER=ON",
         ]
-        existing_cache = source / "build" / "CMakeCache.txt"
-        if existing_cache.is_file():
-            try:
-                for line in existing_cache.read_text(
-                    encoding="utf-8", errors="ignore"
-                ).splitlines():
-                    if line.startswith("CMAKE_CUDA_ARCHITECTURES:STRING="):
-                        arch = line.split("=", 1)[1].strip()
-                        if arch:
-                            command.append(f"-DCMAKE_CUDA_ARCHITECTURES={arch}")
-                        break
-            except Exception:
-                pass
+        if not cache.is_file():
+            command.extend(
+                [
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DGGML_CUDA=ON",
+                    "-DLLAMA_BUILD_TESTS=OFF",
+                    "-DLLAMA_BUILD_EXAMPLES=OFF",
+                    "-DLLAMA_BUILD_APP=OFF",
+                    "-DLLAMA_BUILD_UI=OFF",
+                    "-DLLAMA_BUILD_TOOLS=ON",
+                    "-DLLAMA_BUILD_SERVER=ON",
+                ]
+            )
         jobs = max(1, min(8, os.cpu_count() or 1))
-        print("native llama-server: enabling CUDA graphs", flush=True)
+        print("native llama-server: enabling CUDA graphs (incremental)", flush=True)
         try:
             subprocess.run(
                 command,
@@ -270,7 +267,7 @@ def _cuda_graph_build(autotune_module: Any, binary: str) -> str:
                 [
                     "cmake",
                     "--build",
-                    str(graph_build),
+                    str(build_dir),
                     "--target",
                     "llama-server",
                     "-j",
@@ -287,11 +284,9 @@ def _cuda_graph_build(autotune_module: Any, binary: str) -> str:
                 flush=True,
             )
             return binary
-        if not graph_binary.is_file():
+        if not graph_binary.is_file() or not graphs_enabled():
             return binary
-        resolved = str(graph_binary.resolve())
-        os.environ["MMM_LLAMA_CUDA_GRAPH_SERVER_BIN"] = resolved
-        return resolved
+        return str(graph_binary.resolve())
 
 
 def _cache_probe(
