@@ -31,6 +31,7 @@ from .required_gate_compatibility_contract import install as _install_gate_compa
 from .scheduler_fairness_contract import install as _install_scheduler_fairness
 from .semantic_reviewer_role_contract import install as _install_reviewer_role
 from .visual_acceptance_scope_contract import install as _install_visual_scope
+from .work_graph_state_transition_contract import install as _install_work_graph_state_transitions
 
 
 def install(
@@ -106,6 +107,7 @@ def install(
     _install_planner_parser_safety(complete_planner_module)
     _install_planner_pagination_safety(complete_planner_module)
     _install_planner_outline_identity(_planner_pagination_module)
+    _install_work_graph_state_transitions(graph)
     _agentic_module.install(
         complete_planner_module=complete_planner_module,
         repair_module=repair_module,
