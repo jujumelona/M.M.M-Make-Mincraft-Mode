@@ -6,7 +6,7 @@ from typing import Any, Sequence
 
 
 def _unwrap_transport_json_fence(text: str) -> str:
-    """Remove one response-wide ```json fence and nothing else."""
+    """Remove one response-wide JSON/bare Markdown fence and nothing else."""
 
     stripped = text.strip()
     if not stripped.startswith("```"):
@@ -16,7 +16,7 @@ def _unwrap_transport_json_fence(text: str) -> str:
     if newline < 0:
         return stripped
     opener = stripped[:newline].strip().casefold()
-    if opener != "```json" or not stripped.endswith("```"):
+    if opener not in {"```", "```json"} or not stripped.endswith("```"):
         return stripped
 
     return stripped[newline + 1 : -3].strip()
@@ -27,9 +27,9 @@ def _unwrap_qwen_think_channel(text: str) -> str:
 
     The pinned Colab OpenAI-compatible server can leave Qwen's chat-template
     ``<think>...</think>`` delimiter in ``delta.content`` even when host policy has
-    disabled reasoning.  A template can also pre-open the channel and expose only a
-    leading ``</think>`` before visible content.  These are transport/channel markers,
-    not planner output.  Only one *leading* channel wrapper is ignored; arbitrary
+    disabled reasoning. A template can also pre-open the channel and expose only a
+    leading ``</think>`` before visible content. These are transport/channel markers,
+    not planner output. Only one *leading* channel wrapper is ignored; arbitrary
     prose before/after the JSON remains invalid and an unterminated think block is
     deliberately left untouched so strict JSON parsing rejects it.
     """
@@ -50,12 +50,12 @@ def _normalize_structured_transport(text: str) -> str:
 
     This is intentionally not a JSON recovery routine: it never searches for an
     embedded object, auto-closes JSON, deletes prose, or accepts multiple values.
-    After the known Qwen channel marker and optional response-wide JSON fence are
+    After the known Qwen channel marker and optional response-wide JSON/bare fence are
     removed, the complete remainder still has to pass ``json.loads`` exactly once.
     """
 
     candidate = text.strip()
-    # A BOM is a serialization marker rather than model prose.  Accept at most one at
+    # A BOM is a serialization marker rather than model prose. Accept at most one at
     # the absolute start, which also keeps ``json.loads`` behavior deterministic.
     if candidate.startswith("\ufeff"):
         candidate = candidate[1:].lstrip()
