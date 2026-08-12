@@ -123,6 +123,9 @@ def _install_generation_contracts() -> None:
     from .extended_registration_contract import install as install_extended_registration
     from .performance_final_contract import install as install_performance_contract
     from .performance_final_tuning import install as install_performance_tuning
+    from .project_index_execution_reuse_contract import (
+        install as install_project_index_execution_reuse,
+    )
     from .project_index_manifest_efficiency_contract import (
         install as install_project_index_manifest_efficiency,
     )
@@ -132,6 +135,7 @@ def _install_generation_contracts() -> None:
 
     install_extended_registration(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
+    install_project_index_execution_reuse(complete_orchestrator)
     install_performance_tuning(performance_final_contract)
     install_manifest_hash_efficiency(complete_orchestrator, project_index)
     install_performance_contract(
