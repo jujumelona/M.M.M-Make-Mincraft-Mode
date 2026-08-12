@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import minecraft_mod_ai.llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import llama_cache_reuse_efficiency_contract as contract
-from minecraft_mod_ai import llama_server_max_performance as max_performance
 
 
 @dataclass(frozen=True)
 class _Probe:
-    variant: max_performance.ServerVariant
+    variant: runtime_tuning.ServerVariant
     ok: bool = True
     output_sha256: str = "same"
     predicted_tokens: int = 4
@@ -22,7 +22,7 @@ class _Probe:
 @dataclass(frozen=True)
 class _Decision:
     fingerprint: str
-    selected: max_performance.ServerVariant
+    selected: runtime_tuning.ServerVariant
     baseline_tps: float
     selected_tps: float
     speedup: float
@@ -39,8 +39,13 @@ def test_cache_reuse_candidates_share_one_loaded_server(monkeypatch) -> None:
     stops = []
 
     def base_benchmark(_binary, _model, _config, _request, fingerprint):
-        benchmark_seen_candidates.append(tuple(max_performance._cache_reuse_candidates()))
-        selected = max_performance.ServerVariant("mtp-2", "draft-mtp", 2, ubatch=512)
+        benchmark_seen_candidates.append(tuple(runtime_tuning._cache_reuse_candidates()))
+        selected = runtime_tuning.ServerVariant(
+            "mtp-2",
+            "draft-mtp",
+            2,
+            ubatch=512,
+        )
         return _Decision(
             fingerprint=fingerprint,
             selected=selected,
@@ -70,9 +75,8 @@ def test_cache_reuse_candidates_share_one_loaded_server(monkeypatch) -> None:
         _server_payload=lambda _adapter, _request: {"cache_prompt": True}
     )
 
-    original_candidates = max_performance._cache_reuse_candidates
     monkeypatch.setattr(
-        max_performance,
+        runtime_tuning,
         "_cache_reuse_candidates",
         lambda: (0, 64, 256),
     )
@@ -82,7 +86,7 @@ def test_cache_reuse_candidates_share_one_loaded_server(monkeypatch) -> None:
         return _Probe(variant=variant, elapsed_seconds=elapsed)
 
     monkeypatch.setattr(contract, "_probe_request_cache_reuse", fake_probe)
-    contract.install(autotune, hardware, max_performance)
+    contract.install(autotune, hardware, runtime_tuning)
 
     decision = autotune._benchmark(
         "server",
@@ -92,6 +96,8 @@ def test_cache_reuse_candidates_share_one_loaded_server(monkeypatch) -> None:
         "fp",
     )
 
+    # The original runtime benchmark sees its internal cache-reuse stage disabled,
+    # while this contract keeps the same candidates and measures them on one server.
     assert benchmark_seen_candidates == [()]
     assert len(starts) == 1
     assert len(stops) == 1
@@ -102,5 +108,3 @@ def test_cache_reuse_candidates_share_one_loaded_server(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_CACHE_REUSE", "64")
     payload = hardware._server_payload(SimpleNamespace(), SimpleNamespace())
     assert payload["n_cache_reuse"] == 64
-
-    monkeypatch.setattr(max_performance, "_cache_reuse_candidates", original_candidates)
