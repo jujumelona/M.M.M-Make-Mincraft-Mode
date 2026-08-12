@@ -22,6 +22,7 @@ BUNDLE_RELEASE_BASE = (
 BUNDLE_NAME_PREFIX = "llama-b10375-cuda12.4"
 SUPPORTED_CUDA_ARCHES = frozenset({"75", "80", "89"})
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+CACHE_RECEIPT_NAME = ".archive.sha256"
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -62,7 +63,11 @@ def _cache_root() -> Path:
 def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "M.M.M-Colab-native-llama/2"},
+        headers={
+            "User-Agent": "M.M.M-Colab-native-llama/2",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(request, timeout=120) as response, destination.open(
@@ -94,6 +99,43 @@ def _read_expected_sha256(url: str, destination: Path) -> str:
     if len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
         raise RuntimeError("prebuilt checksum file is malformed")
     return token
+
+
+def _read_cache_receipt(install_dir: Path) -> str | None:
+    path = install_dir / CACHE_RECEIPT_NAME
+    try:
+        token = path.read_text(encoding="utf-8").strip().split()[0].lower()
+    except Exception:
+        return None
+    if len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
+        return None
+    return token
+
+
+def _write_cache_receipt(install_dir: Path, archive_sha256: str) -> None:
+    (install_dir / CACHE_RECEIPT_NAME).write_text(
+        archive_sha256.lower() + "\n",
+        encoding="utf-8",
+    )
+
+
+def _published_archive_sha256(url: str, cache_parent: Path) -> str | None:
+    """Return the currently published bundle SHA when GitHub is reachable.
+
+    A temporary network failure must not make an already cryptographically validated
+    local bundle unusable. When the checksum endpoint is reachable, however, it is the
+    cache-generation authority: any changed release asset invalidates the old cache.
+    """
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="native-llama-checksum-",
+            dir=cache_parent,
+        ) as temporary:
+            checksum = Path(temporary) / "bundle.sha256"
+            return _read_expected_sha256(url, checksum)
+    except Exception:
+        return None
 
 
 def _safe_extract(archive: Path, destination: Path) -> None:
@@ -214,9 +256,13 @@ def _cached_bundle(
     *,
     cuda_arch: str,
     source_ref: str,
+    expected_archive_sha: str | None,
     verify: Callable[[Path], tuple[bool, str]],
 ) -> Path | None:
     try:
+        if expected_archive_sha is not None:
+            if _read_cache_receipt(install_dir) != expected_archive_sha:
+                return None
         binary = _validate_bundle(
             install_dir,
             cuda_arch=cuda_arch,
@@ -238,7 +284,7 @@ def ensure_prebuilt_native_server(
     source_ref: str,
     verify: Callable[[Path], tuple[bool, str]],
 ) -> str | None:
-    """Install and return a verified native CUDA llama-server bundle."""
+    """Install and return the newest verified native CUDA llama-server bundle."""
 
     if not _env_enabled("MMM_LLAMA_PREBUILT", True):
         return None
@@ -252,19 +298,25 @@ def ensure_prebuilt_native_server(
         return None
 
     install_dir = _cache_root() / f"sm{cuda_arch}"
+    cache_parent = install_dir.parent
+    cache_parent.mkdir(parents=True, exist_ok=True)
+    url = _archive_url(cuda_arch)
+
+    # The release checksum is the cache generation. A rebuilt/clobbered release asset
+    # automatically invalidates an older local extraction even when the stable release
+    # tag and asset filename stay unchanged.
+    published_archive_sha = _published_archive_sha256(url, cache_parent)
     cached = _cached_bundle(
         install_dir,
         cuda_arch=cuda_arch,
         source_ref=source_ref,
+        expected_archive_sha=published_archive_sha,
         verify=verify,
     )
     if cached is not None:
         os.environ["MMM_LLAMA_SERVER_DISTRIBUTION"] = "prebuilt-cache"
         return str(cached)
 
-    cache_parent = install_dir.parent
-    cache_parent.mkdir(parents=True, exist_ok=True)
-    url = _archive_url(cuda_arch)
     with tempfile.TemporaryDirectory(
         prefix="native-llama-",
         dir=cache_parent,
@@ -272,7 +324,9 @@ def ensure_prebuilt_native_server(
         temp = Path(temporary)
         archive = temp / _asset_name(cuda_arch)
         checksum = temp / (archive.name + ".sha256")
-        expected_archive_sha = _read_expected_sha256(url, checksum)
+        expected_archive_sha = published_archive_sha
+        if expected_archive_sha is None:
+            expected_archive_sha = _read_expected_sha256(url, checksum)
         _download(url, archive)
         actual_archive_sha = _sha256(archive)
         if actual_archive_sha != expected_archive_sha:
@@ -299,10 +353,8 @@ def ensure_prebuilt_native_server(
         if install_dir.exists():
             shutil.rmtree(install_dir)
         os.replace(extracted, install_dir)
+        _write_cache_receipt(install_dir, expected_archive_sha)
 
-    # The complete extracted tree was cryptographically checked and executed before
-    # the atomic directory rename above. os.replace() changes only the parent path, not
-    # file contents; repeating every SHA-256, ldd and --version probe here was pure I/O.
     final_binary = (install_dir / relative_binary).resolve()
     if not final_binary.is_file():
         raise RuntimeError("installed prebuilt native llama-server disappeared after rename")
