@@ -38,31 +38,15 @@ def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
 
 
 def install(spec_module: Any, runner_module: Any) -> None:
-    """Install compatibility aliases plus version-aware source generation.
+    """Install only backward-compatible toolchain aliases.
 
-    Older MMM builds monkeypatched ``PlatformLock`` here and therefore forced every
-    plan to Minecraft 1.20.1. Platform validation is now owned by the adapter catalog.
-    Runner globals remain only as legacy import aliases; ``GradleRunner`` resolves the
-    actual project's adapter before wrapper/build execution.
+    Platform generation and runner locking are composed explicitly by
+    ``runtime_bootstrap`` so this installer has no hidden child installers.
     """
 
+    del spec_module
     runner_module.GRADLE_VERSION = GRADLE_VERSION
     runner_module.GRADLE_URL = (
         f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip"
     )
     runner_module.GRADLE_SHA256 = GRADLE_SHA256
-
-    # Cache synchronization must be crash-safe before any Gradle runner can execute.
-    # Kernel advisory locks release automatically when a worker exits and avoid the
-    # stale-path deletion race of the legacy O_EXCL lock file.
-    from .runner_lock_contract import install as install_runner_lock
-
-    install_runner_lock(runner_module)
-
-    # Import after spec/runner are initialized. Generator imports this module for
-    # dependency predicates, so installing here keeps one early, deterministic patch
-    # point without creating a second target-selection authority.
-    from . import generator as generator_module
-    from .platform_generation_contract import install as install_generation
-
-    install_generation(generator_module)
