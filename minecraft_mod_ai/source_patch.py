@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .project_write_lock import project_write_lock
+
 
 class SourcePatchError(RuntimeError):
     """Raised when a bounded source patch cannot be validated or committed."""
@@ -42,6 +44,8 @@ class TransactionalSourcePatcher:
     Operations are fully validated in memory before any file is changed. Writes use
     atomic ``os.replace`` and all touched files are rolled back if any commit step
     fails. Symlinks, path traversal and broad directory deletion are rejected.
+    Concurrent transactions for the same project root are serialized so rollback from
+    one transaction cannot overwrite another transaction's commit.
     """
 
     def __init__(self, project_root: str | Path) -> None:
@@ -50,6 +54,14 @@ class TransactionalSourcePatcher:
             raise SourcePatchError(f"Project root is not a real directory: {self.project_root}")
 
     def apply(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
+        # Keep the lock around validation/staging as well as commit. expected_sha256
+        # must be checked against the same project state that is ultimately mutated.
+        # The lock is re-entrant because higher-level generators may already hold it
+        # while performing an atomic read/merge/write sequence.
+        with project_write_lock(self.project_root):
+            return self._apply_locked(operations)
+
+    def _apply_locked(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
         normalized = [self._normalize(item) for item in operations]
         if not normalized:
             raise SourcePatchError("At least one patch operation is required.")
