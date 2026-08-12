@@ -34,6 +34,12 @@ def install(api_module: Any, plan_render_module: Any) -> None:
 
     install_live_execution(orchestrator_module)
 
+    # External runtime readers must run while the disposable Minecraft server/client
+    # are still alive, so hook the playtest call before the orchestrator cleanup block.
+    from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
+
+    install_mcp_runtime(orchestrator_module)
+
     # External Minecraft MCPs are capability-routed supplements, not a replacement
     # for the host PlatformLock or deterministic JDT/Gradle/GameTest gates. Install
     # after live execution so coder target ContextVars and migration lowering already
