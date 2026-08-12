@@ -73,6 +73,7 @@ def _install_model_runtime_contracts() -> None:
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
     from .llama_cache_reuse_efficiency_contract import install as install_llama_cache_reuse
+    from .llama_decode_speed_contract import install as install_llama_decode_speed
     from .llama_server_efficiency_contract import install as install_llama_efficiency
     from .llama_server_hardware_policy import install as install_llama_hardware
     from .llama_server_runtime_tuning import install as install_llama_runtime_tuning
@@ -94,6 +95,7 @@ def _install_model_runtime_contracts() -> None:
         llama_server_hardware_policy,
         llama_server_runtime_tuning,
     )
+    install_llama_decode_speed(llama_server_autotune, llama_server_runtime_tuning)
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_parallel_runtime(
         complete_planner_module=complete_planner,

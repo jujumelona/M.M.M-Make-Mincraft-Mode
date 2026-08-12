@@ -2,14 +2,8 @@
 
 from .runtime_bootstrap import initialize_runtime
 
-# Compose the base runtime first, then bind the final llama decode objective over
-# the fully installed native-server tuning stack.
+# One package-wide bootstrap replaces the previous import-order patch chain.
 initialize_runtime()
-from . import llama_server_autotune as _llama_server_autotune
-from . import llama_server_runtime_tuning as _llama_server_runtime_tuning
-from .llama_decode_speed_contract import install as _install_llama_decode_speed
-
-_install_llama_decode_speed(_llama_server_autotune, _llama_server_runtime_tuning)
 
 from .api import (
     ChatReply,
