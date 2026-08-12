@@ -278,6 +278,39 @@ def _find_verified_native_server() -> Path | None:
     return None
 
 
+def _load_native_bundle_module() -> Any:
+    name = "_mmm_native_llama_bundle"
+    cached = sys.modules.get(name)
+    if cached is not None:
+        return cached
+    path = Path(__file__).resolve().with_name("native_llama_bundle.py")
+    if not path.is_file() or path.is_symlink():
+        raise RuntimeError(f"native llama bundle loader is unavailable: {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load native llama bundle loader: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return module
+
+
+def _ensure_prebuilt_native_server(*, cuda_arch: str) -> str | None:
+    module = _load_native_bundle_module()
+    ensure = getattr(module, "ensure_prebuilt_native_server", None)
+    if not callable(ensure):
+        raise RuntimeError("native llama bundle loader has no installer entry point")
+    return ensure(
+        cuda_arch=cuda_arch,
+        source_ref=LLAMA_SERVER_SOURCE_REF,
+        verify=_verify_native_server,
+    )
+
+
 def _run_logged(command: list[str], *, cwd: Path | None = None) -> None:
     process = subprocess.Popen(
         command,
@@ -347,10 +380,33 @@ def _prepare_native_source(source_dir: Path) -> None:
 def _ensure_native_server(torch: Any) -> str:
     existing = _find_verified_native_server()
     if existing is not None:
-        os.environ["MMM_LLAMA_SERVER_BIN"] = str(existing)
-        os.environ["MMM_LLAMA_SERVER_SOURCE_DIR"] = str(existing.parent.parent.parent)
+        resolved = str(existing)
+        os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
+        os.environ.setdefault("MMM_LLAMA_SERVER_DISTRIBUTION", "existing")
         print("native llama-server: available", existing, flush=True)
-        return str(existing)
+        return resolved
+
+    major, minor = torch.cuda.get_device_capability(0)
+    cuda_arch = str(int(major) * 10 + int(minor))
+    try:
+        prebuilt = _ensure_prebuilt_native_server(cuda_arch=cuda_arch)
+    except Exception as exc:
+        print(
+            "native llama-server: verified prebuilt unavailable; falling back to pinned source build",
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        prebuilt = None
+    if prebuilt:
+        resolved = str(Path(prebuilt).expanduser().resolve())
+        ok, detail = _verify_native_server(Path(resolved))
+        if not ok:
+            raise RuntimeError(
+                "prebuilt native llama-server failed final setup verification: " + detail
+            )
+        os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
+        print("native llama-server: using verified prebuilt", resolved, flush=True)
+        return resolved
 
     for tool in ("git", "cmake", "nvcc"):
         if shutil.which(tool) is None:
@@ -361,8 +417,6 @@ def _ensure_native_server(torch: Any) -> str:
     source_dir = _native_source_dir()
     _prepare_native_source(source_dir)
     build_dir = source_dir / "build"
-    major, minor = torch.cuda.get_device_capability(0)
-    cuda_arch = str(int(major) * 10 + int(minor))
     jobs = max(1, min(8, os.cpu_count() or 1))
     print(
         "native llama-server: configuring CUDA build",
@@ -407,6 +461,7 @@ def _ensure_native_server(torch: Any) -> str:
     resolved = str(binary.resolve())
     os.environ["MMM_LLAMA_SERVER_BIN"] = resolved
     os.environ["MMM_LLAMA_SERVER_SOURCE_DIR"] = str(source_dir)
+    os.environ["MMM_LLAMA_SERVER_DISTRIBUTION"] = "source-build"
     print("native llama-server: installed", detail, flush=True)
     return resolved
 
