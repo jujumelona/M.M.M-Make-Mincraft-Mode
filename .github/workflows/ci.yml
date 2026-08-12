@@ -64,8 +64,8 @@ jobs:
         run: python -c "import minecraft_mod_ai"
       - name: Validate Mineflayer bridge syntax
         run: node --check integrations/mineflayer-1201/bridge.mjs
-      - name: Verify generated notebook
-        run: python tools/build_colab_notebook.py --check
+      - name: Validate canonical Colab notebook
+        run: python tools/validate_colab_notebook.py
       - name: Verify packaged Skill catalog
         run: |
           python tools/package_skills.py

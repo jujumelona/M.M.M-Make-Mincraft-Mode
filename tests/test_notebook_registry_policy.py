@@ -2,10 +2,25 @@ import json
 import runpy
 from pathlib import Path
 
+import nbformat
 import pytest
 
 
-def test_notebooks_are_registry_driven_and_have_no_silent_fallback() -> None:
+NOTEBOOK_PATH = Path("M.M.M_Make_Mincraft_Mode_Colab.ipynb")
+OBSOLETE_NOTEBOOK_PATH = Path("Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb")
+
+
+def _load_notebook():
+    notebook = nbformat.read(NOTEBOOK_PATH, as_version=4)
+    nbformat.validate(notebook)
+    return notebook
+
+
+def _cells() -> dict[str, str]:
+    return {cell["id"]: cell["source"] for cell in _load_notebook().cells}
+
+
+def test_notebook_is_single_registry_driven_source() -> None:
     forbidden = (
         "Qwen/Qwen3.5-9B-Instruct",
         "Qwen/Qwen3.5-4B-Instruct",
@@ -13,28 +28,34 @@ def test_notebooks_are_registry_driven_and_have_no_silent_fallback() -> None:
         "deterministic-fallback",
         "model_name_or_path=LOCAL_MODEL_ID",
     )
-    for path in (
-        Path("M.M.M_Make_Mincraft_Mode_Colab.ipynb"),
-        Path("Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb"),
-    ):
-        raw = path.read_text(encoding="utf-8")
-        json.loads(raw)
-        assert "MODEL_PROFILE" in raw
-        assert "config/model_registry.yaml" in raw
-        assert all(token not in raw for token in forbidden)
+    raw = NOTEBOOK_PATH.read_text(encoding="utf-8")
+    assert "MODEL_PROFILE" in raw
+    assert "config/model_registry.yaml" in raw
+    assert all(token not in raw for token in forbidden)
+    assert not OBSOLETE_NOTEBOOK_PATH.exists()
 
 
-def test_notebook_builder_matches_checked_in_notebooks() -> None:
-    module = runpy.run_path("tools/build_colab_notebook.py")
-    rendered = module["serialize_notebook"](module["build_notebook"]())
-    assert Path("M.M.M_Make_Mincraft_Mode_Colab.ipynb").read_text(encoding="utf-8") == rendered
-    assert Path("Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb").read_text(encoding="utf-8") == rendered
+def test_notebook_has_stable_unique_cell_contract() -> None:
+    notebook = _load_notebook()
+    ids = [cell["id"] for cell in notebook.cells]
+    assert ids == [
+        "title",
+        "configuration",
+        "setup",
+        "existing-input",
+        "registry",
+        "mtp-server",
+        "plan",
+        "build",
+        "download",
+        "boundaries",
+    ]
+    assert len(ids) == len(set(ids))
+    assert notebook.metadata["colab"]["name"] == NOTEBOOK_PATH.name
 
 
 def test_existing_zip_upload_is_explicit_and_bound_to_revise_mode() -> None:
-    module = runpy.run_path("tools/build_colab_notebook.py")
-    notebook = module["build_notebook"]()
-    cells = {cell["id"]: cell["source"] for cell in notebook.cells}
+    cells = _cells()
     run_modes = Path("minecraft_mod_ai/colab_run_modes.py").read_text(encoding="utf-8")
 
     assert 'RUN_MODE = "Full"' in cells["configuration"]
@@ -53,9 +74,7 @@ def test_existing_zip_upload_is_explicit_and_bound_to_revise_mode() -> None:
 
 
 def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
-    module = runpy.run_path("tools/build_colab_notebook.py")
-    notebook = module["build_notebook"]()
-    cells = {cell["id"]: cell["source"] for cell in notebook.cells}
+    cells = _cells()
     setup_source = Path("tools/colab_runtime_setup.py").read_text(encoding="utf-8")
 
     assert 'MODEL_PROFILE = "Qwen3.5-9B_6GB"' in cells["configuration"]
@@ -101,9 +120,7 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
 
 
 def test_notebook_checks_setup_fingerprint_and_prints_resolved_planner() -> None:
-    module = runpy.run_path("tools/build_colab_notebook.py")
-    notebook = module["build_notebook"]()
-    cells = {cell["id"]: cell["source"] for cell in notebook.cells}
+    cells = _cells()
 
     assert "def assert_current_colab_setup" in cells["registry"]
     assert "COLAB_SETUP_MODULE.assert_setup_state(" in cells["registry"]
@@ -202,9 +219,8 @@ def test_static_colab_requirements_leave_cuda_fastpath_to_runtime_preflight() ->
 
 
 def test_notebook_code_cells_compile_top_to_bottom() -> None:
-    module = runpy.run_path("tools/build_colab_notebook.py")
-    notebook = module["build_notebook"]()
-
-    for cell in notebook.cells:
+    for cell in _load_notebook().cells:
         if cell["cell_type"] == "code":
+            assert cell.get("execution_count") is None
+            assert not cell.get("outputs")
             compile(cell["source"], f"<colab:{cell['id']}>", "exec")
