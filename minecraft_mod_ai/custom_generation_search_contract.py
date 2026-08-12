@@ -203,11 +203,16 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
 def install(custom_module_generator_module: Any) -> None:
     """Search only complex first-pass custom generation and commit one verified winner.
 
-    This installer must run before performance_final_contract wraps custom generation.
-    The outer performance wrapper therefore still owns the only live-project commit;
-    candidates are generated in isolated source snapshots and JDT verification is
-    parallelized after the single local LLM lane has produced them.
+    This installer runs before the outer staged-live-commit wrapper. Install the
+    patcher's thread-local capture hook here as well, so inner candidate snapshots
+    can expose their exact original operations without widening edits into full-file
+    replacements. The later performance installer sees the marker and reuses it.
     """
+
+    from . import performance_final_contract as performance_module
+    from . import source_patch as source_patch_module
+
+    performance_module._install_locked_source_patcher(source_patch_module)
 
     cls = custom_module_generator_module.CustomModuleGenerator
     original = cls.generate
