@@ -40,6 +40,20 @@ def test_failed_task_cannot_be_failed_again_from_stopped_state(tmp_path) -> None
         ledger.fail("node", "late")
 
 
+def test_pending_task_can_be_marked_input_required_without_fake_execution(tmp_path) -> None:
+    ledger = _ledger_with_node(tmp_path)
+
+    result = ledger.fail(
+        "node",
+        "external evidence is required",
+        input_required=True,
+    )
+
+    assert result["state"] == "input_required"
+    assert result["attempt"] == 0
+    assert result["error"] == "external evidence is required"
+
+
 def test_cancelled_task_is_not_overwritten_by_late_failure(tmp_path) -> None:
     ledger = _ledger_with_node(tmp_path)
     ledger.begin("node")
@@ -92,6 +106,41 @@ def test_successful_checkpoint_cannot_be_restarted_for_same_input(tmp_path) -> N
         "checkpoint",
         input_hash=input_hash,
     ) == receipt
+
+
+def test_named_checkpoint_rebuilds_only_after_cached_output_validation_fails(tmp_path) -> None:
+    ledger = _ledger_with_node(tmp_path)
+    calls = []
+
+    first = work_graph.run_named_checkpoint(
+        ledger,
+        "artifact",
+        stage="test",
+        input_value={"source": "same"},
+        action=lambda: calls.append("first") or {"path": "missing"},
+        encode=lambda value: value,
+        decode=lambda value: value,
+        validate_cached=lambda value: value.get("path") == "exists",
+    )
+    assert first == {"path": "missing"}
+
+    second = work_graph.run_named_checkpoint(
+        ledger,
+        "artifact",
+        stage="test",
+        input_value={"source": "same"},
+        action=lambda: calls.append("second") or {"path": "exists"},
+        encode=lambda value: value,
+        decode=lambda value: value,
+        validate_cached=lambda value: value.get("path") == "exists",
+    )
+
+    assert second == {"path": "exists"}
+    assert calls == ["first", "second"]
+    input_hash = work_graph._hash_json({"source": "same"})
+    assert ledger.cached_checkpoint("artifact", input_hash=input_hash) == {
+        "path": "exists"
+    }
 
 
 def test_running_checkpoint_rejects_changed_input(tmp_path) -> None:
