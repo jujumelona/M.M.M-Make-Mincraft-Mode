@@ -18,14 +18,19 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
         planning_receipt: dict[str, Any],
         media_paths: Sequence[Any],
     ) -> None:
-        """Let the planner choose useful page width instead of forcing groups of four.
+        """Use adaptive page width and durable object-level semantic repair.
 
         The local llama server has one decode slot, so splitting a coherent batch into
         host-sized groups cannot create parallel speedup; it only adds serial prompt/
-        decode overhead.  Present every outstanding deliverable, let the model finish
-        any coherent non-empty subset that fits cleanly, and let host-verified evidence
-        decide what remains for the next page.
+        decode overhead. Present every outstanding deliverable, let the model finish
+        any coherent non-empty subset that fits cleanly, persist the returned page
+        before semantic parsing, and patch only individual invalid item fields.
         """
+
+        from .production_page_durable_contract import (
+            load_or_generate_page,
+            resolve_page_items,
+        )
 
         remaining = list(batch.deliverables)
         cursor = ""
@@ -66,23 +71,34 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
             if first_page:
                 request["planning_context"] = planning_context
 
-            page = module._generate_json_page_with_repair(
-                self.router,
-                system_prompt=(
-                    "Return one clean production-batch JSON page. The host provides ALL "
-                    "currently outstanding deliverables in current_target_deliverables. "
-                    "There is no fixed host item count. Choose a coherent NON-EMPTY subset "
-                    "that you can fully implement before the output limit; if all remaining "
-                    "work fits comfortably, complete all of it. Prefer another continuation "
-                    "page over truncating or padding the response. Every claimed completed "
-                    "deliverable must be backed by emitted module/asset/audio/test evidence; "
-                    "use implements_deliverables on emitted objects when applicable. Never "
-                    "repeat IDs already committed by the host catalogs."
-                ),
+            stage = f"production batch {batch.batch_id!r} page"
+
+            def generate_page() -> dict[str, Any]:
+                return module._generate_json_page_with_repair(
+                    self.router,
+                    system_prompt=(
+                        "Return one clean production-batch JSON page. The host provides ALL "
+                        "currently outstanding deliverables in current_target_deliverables. "
+                        "There is no fixed host item count. Choose a coherent NON-EMPTY subset "
+                        "that you can fully implement before the output limit; if all remaining "
+                        "work fits comfortably, complete all of it. Prefer another continuation "
+                        "page over truncating or padding the response. Every claimed completed "
+                        "deliverable must be backed by emitted module/asset/audio/test evidence; "
+                        "use implements_deliverables on emitted objects when applicable. Never "
+                        "repeat IDs already committed by the host catalogs."
+                    ),
+                    request=request,
+                    media_paths=media_paths if first_page else (),
+                    expected_contracts=(frozenset(module._PRODUCTION_PAGE_CONTRACT),),
+                    stage=stage,
+                )
+
+            # If this exact host request already produced a valid structured page before
+            # a crash, replay it from disk instead of spending another GPU decode.
+            page, page_path = load_or_generate_page(
+                stage=stage,
                 request=request,
-                media_paths=media_paths if first_page else (),
-                expected_contracts=(frozenset(module._PRODUCTION_PAGE_CONTRACT),),
-                stage=f"production batch {batch.batch_id!r} page",
+                generate=generate_page,
             )
             first_page = False
 
@@ -91,32 +107,18 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
                     "Production batch page fields are invalid."
                 )
 
-            raw_modules = module._list(page, "modules")
-            raw_assets = module._list(page, "assets")
-            raw_audio = module._list(page, "audio")
-            raw_tests = module._list(page, "acceptance_tests")
-
-            page_modules = [
-                module._module(item) for item in raw_modules if isinstance(item, dict)
-            ]
-            page_assets = [
-                module._asset(item) for item in raw_assets if isinstance(item, dict)
-            ]
-            page_audio = [
-                module._audio(item) for item in raw_audio if isinstance(item, dict)
-            ]
-            tests = [
-                str(value).strip()
-                for value in raw_tests
-                if str(value).strip() and str(value).strip() not in test_catalog
-            ]
-
-            for value in page_modules:
-                module_catalog.add(value.module_id)
-            for value in page_assets:
-                asset_catalog.add(value.asset_id)
-            for value in page_audio:
-                audio_catalog.add(value.sound_id)
+            # Each object is durable and independently reparable. One malformed module,
+            # asset or audio item never discards or regenerates its valid siblings.
+            page_modules, page_assets, page_audio, tests = resolve_page_items(
+                module,
+                self.router,
+                page=page,
+                page_path=page_path,
+                module_catalog=module_catalog,
+                asset_catalog=asset_catalog,
+                audio_catalog=audio_catalog,
+                test_catalog=test_catalog,
+            )
 
             parts.modules.extend(page_modules)
             parts.assets.extend(page_assets)
@@ -143,6 +145,7 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
             cursor = cursor_value if isinstance(cursor_value, str) else ""
 
     adaptive_expand_one_production_batch._mmm_adaptive_page_width = True  # type: ignore[attr-defined]
+    adaptive_expand_one_production_batch._mmm_durable_production_items = True  # type: ignore[attr-defined]
     return adaptive_expand_one_production_batch
 
 
@@ -156,7 +159,7 @@ def _dependency_wave_shards(
 
     Consecutive topological order is not a readiness wave: placing a dependent module
     in the same coarse shard as an unrelated ready module makes the unrelated work wait
-    for the dependency.  Compute dependency depth first, then shard within (depth,stage).
+    for the dependency. Compute dependency depth first, then shard within (depth,stage).
     Custom LLM modules use one durable node each; the LLM lane is already capacity one,
     so this improves checkpoint/retry granularity without reducing throughput.
     """
@@ -165,22 +168,22 @@ def _dependency_wave_shards(
     buckets: dict[tuple[int, str], list[Any]] = {}
     stage_order: dict[int, list[str]] = {}
 
-    for module in modules:
-        missing = [dependency for dependency in module.depends_on if dependency not in levels]
+    for item in modules:
+        missing = [dependency for dependency in item.depends_on if dependency not in levels]
         if missing:
             raise work_graph_module.WorkGraphError(
                 "Module sharding requires topological order; unresolved dependencies for "
-                f"{module.module_id}: {missing[:4]}"
+                f"{item.module_id}: {missing[:4]}"
             )
         level = (
             0
-            if not module.depends_on
-            else 1 + max(levels[dependency] for dependency in module.depends_on)
+            if not item.depends_on
+            else 1 + max(levels[dependency] for dependency in item.depends_on)
         )
-        levels[module.module_id] = level
-        stage = work_graph_module._module_stage(module)
+        levels[item.module_id] = level
+        stage = work_graph_module._module_stage(item)
         key = (level, stage)
-        buckets.setdefault(key, []).append(module)
+        buckets.setdefault(key, []).append(item)
         stages = stage_order.setdefault(level, [])
         if stage not in stages:
             stages.append(stage)
@@ -204,7 +207,7 @@ def install(*, complete_planner_module: Any, work_graph_module: Any) -> None:
 
     planner_cls = complete_planner_module.CompleteGameDesignPlanner
     current_expand = planner_cls._expand_one_production_batch
-    if not getattr(current_expand, "_mmm_adaptive_page_width", False):
+    if not getattr(current_expand, "_mmm_durable_production_items", False):
         planner_cls._expand_one_production_batch = (
             _adaptive_expand_one_production_batch_factory(complete_planner_module)
         )
