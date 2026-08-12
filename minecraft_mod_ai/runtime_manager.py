@@ -92,59 +92,68 @@ class MinecraftRuntimeManager:
         server_launcher: str | Path,
         eula_accepted: bool,
     ) -> dict[str, Any]:
-        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", instance_name):
-            raise RuntimePolicyError("Invalid runtime instance name.")
-        if self.profile.eula_must_be_explicitly_accepted and not eula_accepted:
-            raise RuntimePolicyError("Minecraft EULA acceptance must be explicit.")
-        root = self._new_child(Path("runtime-instances") / instance_name)
-        mods = root / "mods"
-        mods.mkdir(parents=True)
-        jar = self._existing_file(mod_jar)
-        launcher = self._existing_file(server_launcher)
-        shutil.copy2(jar, mods / jar.name)
-        runtime_launcher = root / "fabric-server-launch.jar"
-        shutil.copy2(launcher, runtime_launcher)
-        (root / "eula.txt").write_text("eula=true\n", encoding="utf-8")
-        (root / "server.properties").write_text(
-            "\n".join(
-                [
-                    "online-mode=false",
-                    "enable-command-block=true",
-                    "spawn-protection=0",
-                    "view-distance=6",
-                    "simulation-distance=5",
-                    "max-players=4",
-                    "motd=M.M.M disposable integration test",
-                ]
+        with self._lock:
+            if self._process_running(self.server_process) or self._process_running(
+                self.client_process
+            ):
+                raise RuntimePolicyError(
+                    "Stop the active disposable runtime before preparing another instance."
+                )
+            if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", instance_name):
+                raise RuntimePolicyError("Invalid runtime instance name.")
+            if self.profile.eula_must_be_explicitly_accepted and not eula_accepted:
+                raise RuntimePolicyError("Minecraft EULA acceptance must be explicit.")
+            root = self._new_child(Path("runtime-instances") / instance_name)
+            mods = root / "mods"
+            mods.mkdir(parents=True)
+            jar = self._existing_file(mod_jar)
+            launcher = self._existing_file(server_launcher)
+            shutil.copy2(jar, mods / jar.name)
+            runtime_launcher = root / "fabric-server-launch.jar"
+            shutil.copy2(launcher, runtime_launcher)
+            (root / "eula.txt").write_text("eula=true\n", encoding="utf-8")
+            (root / "server.properties").write_text(
+                "\n".join(
+                    [
+                        "online-mode=false",
+                        "enable-command-block=true",
+                        "spawn-protection=0",
+                        "view-distance=6",
+                        "simulation-distance=5",
+                        "max-players=4",
+                        "motd=M.M.M disposable integration test",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        self.instance_root = root
-        return {
-            "schema_version": "mmm/runtime-instance-v1",
-            "instance_root": str(root),
-            "mod_jar": str(mods / jar.name),
-            "server_launcher": str(runtime_launcher),
-            "minecraft_version": self.profile.minecraft_version,
-            "disposable": True,
-        }
+            self.instance_root = root
+            return {
+                "schema_version": "mmm/runtime-instance-v1",
+                "instance_root": str(root),
+                "mod_jar": str(mods / jar.name),
+                "server_launcher": str(runtime_launcher),
+                "minecraft_version": self.profile.minecraft_version,
+                "disposable": True,
+            }
 
     def start_server(self, timeout_seconds: int = 180) -> dict[str, Any]:
+        if type(timeout_seconds) is not int or timeout_seconds < 1:
+            raise RuntimePolicyError("Server startup timeout must be a positive integer.")
         with self._lock:
             if self.instance_root is None:
                 raise RuntimePolicyError("Prepare a runtime instance first.")
-            if self.server_process and self.server_process.poll() is None:
+            if self._process_running(self.server_process):
                 raise RuntimePolicyError("Minecraft server is already running.")
             command = [
                 self.profile.server_java_command,
-                f"-Xms1024M",
+                "-Xms1024M",
                 f"-Xmx{self.profile.server_memory_mb}M",
                 "-jar",
                 "fabric-server-launch.jar",
                 "nogui",
             ]
-            self.server_process = subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 cwd=str(self.instance_root),
                 stdin=subprocess.PIPE,
@@ -156,16 +165,21 @@ class MinecraftRuntimeManager:
                 shell=False,
                 start_new_session=(os.name != "nt"),
             )
+            self.server_process = process
             self._server_log.clear()
-            thread = threading.Thread(
+            threading.Thread(
                 target=self._read_stream,
-                args=(self.server_process, self._server_log),
+                args=(process, self._server_log),
+                name="mmm-runtime-server-log",
                 daemon=True,
-            )
-            thread.start()
+            ).start()
+
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if self.server_process.poll() is not None:
+            if process.poll() is not None:
+                with self._lock:
+                    if self.server_process is process:
+                        self.server_process = None
                 raise RuntimePolicyError(
                     "Minecraft server exited before readiness.\n"
                     + "\n".join(self._server_log[-80:])
@@ -174,60 +188,81 @@ class MinecraftRuntimeManager:
             if any(pattern.search(text) for pattern in self.profile.startup_ready_patterns):
                 return self.status()
             time.sleep(0.5)
-        self.stop_server()
+
+        with self._lock:
+            if self.server_process is process:
+                self._stop_process(process, graceful_server=True)
+                self.server_process = None
         raise TimeoutError("Minecraft server did not become ready before timeout.")
 
     def start_client(self) -> dict[str, Any]:
-        if self.instance_root is None:
-            raise RuntimePolicyError("Prepare a runtime instance first.")
-        raw = os.environ.get(self.profile.client_command_env, "").strip()
-        if not raw:
-            raise RuntimePolicyError(
-                f"{self.profile.client_command_env} must contain a JSON command array."
+        with self._lock:
+            if self.instance_root is None:
+                raise RuntimePolicyError("Prepare a runtime instance first.")
+            raw = os.environ.get(self.profile.client_command_env, "").strip()
+            if not raw:
+                raise RuntimePolicyError(
+                    f"{self.profile.client_command_env} must contain a JSON command array."
+                )
+            try:
+                command = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise RuntimePolicyError("Client command must be valid JSON.") from exc
+            if (
+                not isinstance(command, list)
+                or not command
+                or any(not isinstance(item, str) or not item for item in command)
+            ):
+                raise RuntimePolicyError("Client command must be a non-empty JSON string array.")
+            if self._process_running(self.client_process):
+                raise RuntimePolicyError("Minecraft client is already running.")
+            env = os.environ.copy()
+            env["MMM_GAME_DIR"] = str(self.instance_root / "client")
+            Path(env["MMM_GAME_DIR"]).mkdir(parents=True, exist_ok=True)
+            process = subprocess.Popen(
+                command,
+                cwd=str(self.instance_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                env=env,
+                start_new_session=(os.name != "nt"),
             )
-        command = json.loads(raw)
-        if (
-            not isinstance(command, list)
-            or not command
-            or any(not isinstance(item, str) or not item for item in command)
-        ):
-            raise RuntimePolicyError("Client command must be a non-empty JSON string array.")
-        if self.client_process and self.client_process.poll() is None:
-            raise RuntimePolicyError("Minecraft client is already running.")
-        env = os.environ.copy()
-        env["MMM_GAME_DIR"] = str(self.instance_root / "client")
-        Path(env["MMM_GAME_DIR"]).mkdir(parents=True, exist_ok=True)
-        self.client_process = subprocess.Popen(
-            command,
-            cwd=str(self.instance_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            shell=False,
-            env=env,
-            start_new_session=(os.name != "nt"),
-        )
-        self._client_log.clear()
-        threading.Thread(
-            target=self._read_stream,
-            args=(self.client_process, self._client_log),
-            daemon=True,
-        ).start()
-        return self.status()
+            self.client_process = process
+            self._client_log.clear()
+            threading.Thread(
+                target=self._read_stream,
+                args=(process, self._client_log),
+                name="mmm-runtime-client-log",
+                daemon=True,
+            ).start()
+            return self.status()
 
     def send_server_command(self, command: str) -> dict[str, Any]:
-        command = command.strip()
-        if not any(pattern.fullmatch(command) for pattern in self.profile.allowed_server_commands):
-            raise RuntimePolicyError(f"Server command is not allowlisted: {command!r}")
-        if not self.server_process or self.server_process.poll() is not None:
-            raise RuntimePolicyError("Minecraft server is not running.")
-        if self.server_process.stdin is None:
-            raise RuntimePolicyError("Minecraft server stdin is unavailable.")
-        self.server_process.stdin.write(command + "\n")
-        self.server_process.stdin.flush()
-        return {"status": "sent", "command": command}
+        with self._lock:
+            command = command.strip()
+            if not any(
+                pattern.fullmatch(command)
+                for pattern in self.profile.allowed_server_commands
+            ):
+                raise RuntimePolicyError(
+                    f"Server command is not allowlisted: {command!r}"
+                )
+            process = self.server_process
+            if not self._process_running(process):
+                raise RuntimePolicyError("Minecraft server is not running.")
+            assert process is not None
+            if process.stdin is None:
+                raise RuntimePolicyError("Minecraft server stdin is unavailable.")
+            try:
+                process.stdin.write(command + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise RuntimePolicyError("Minecraft server stdin write failed.") from exc
+            return {"status": "sent", "command": command}
 
     def register_screenshot(self, screenshot_path: str | Path) -> dict[str, Any]:
         path = self._existing_file(screenshot_path)
@@ -242,63 +277,93 @@ class MinecraftRuntimeManager:
     def tail_logs(self, lines: int = 120) -> dict[str, Any]:
         if not 1 <= lines <= 1000:
             raise RuntimePolicyError("Log line limit must be 1-1000.")
-        return {
-            "server": self._server_log[-lines:],
-            "client": self._client_log[-lines:],
-        }
+        with self._lock:
+            return {
+                "server": self._server_log[-lines:],
+                "client": self._client_log[-lines:],
+            }
 
     def stop_server(self) -> dict[str, Any]:
         with self._lock:
             process = self.server_process
-            if process is None:
-                return self.status()
-            if process.poll() is None:
-                try:
-                    self.send_server_command("stop")
-                    process.wait(timeout=30)
-                except Exception:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-            self.server_process = None
+            if process is not None:
+                self._stop_process(process, graceful_server=True)
+                if self.server_process is process:
+                    self.server_process = None
             return self.status()
 
     def stop_client(self) -> dict[str, Any]:
         with self._lock:
             process = self.client_process
-            if process and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-            self.client_process = None
+            if process is not None:
+                self._stop_process(process, graceful_server=False)
+                if self.client_process is process:
+                    self.client_process = None
             return self.status()
 
     def cleanup(self) -> dict[str, Any]:
-        self.stop_client()
-        self.stop_server()
-        root = self.instance_root
-        self.instance_root = None
-        if root and root.is_dir():
-            shutil.rmtree(root)
-        return {"status": "cleaned", "removed": str(root) if root else None}
+        with self._lock:
+            self.stop_client()
+            self.stop_server()
+            root = self.instance_root
+            self.instance_root = None
+            if root and root.is_dir():
+                shutil.rmtree(root)
+            return {"status": "cleaned", "removed": str(root) if root else None}
 
     def status(self) -> dict[str, Any]:
-        return {
-            "schema_version": "mmm/runtime-status-v1",
-            "instance_root": str(self.instance_root) if self.instance_root else None,
-            "server_running": bool(
-                self.server_process and self.server_process.poll() is None
-            ),
-            "client_running": bool(
-                self.client_process and self.client_process.poll() is None
-            ),
-            "server_log_lines": len(self._server_log),
-            "client_log_lines": len(self._client_log),
-        }
+        with self._lock:
+            return {
+                "schema_version": "mmm/runtime-status-v1",
+                "instance_root": str(self.instance_root) if self.instance_root else None,
+                "server_running": self._process_running(self.server_process),
+                "client_running": self._process_running(self.client_process),
+                "server_log_lines": len(self._server_log),
+                "client_log_lines": len(self._client_log),
+            }
+
+    def _stop_process(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        graceful_server: bool,
+    ) -> None:
+        if process.poll() is not None:
+            # wait() also reaps an already-exited child on POSIX.
+            try:
+                process.wait(timeout=0)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            return
+        if graceful_server and process.stdin is not None:
+            try:
+                process.stdin.write("stop\n")
+                process.stdin.flush()
+                process.wait(timeout=30)
+                return
+            except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+                pass
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=15 if not graceful_server else 10)
+            return
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    @staticmethod
+    def _process_running(process: subprocess.Popen[str] | None) -> bool:
+        return bool(process is not None and process.poll() is None)
 
     @staticmethod
     def _read_stream(process: subprocess.Popen[str], target: list[str]) -> None:
@@ -319,7 +384,11 @@ class MinecraftRuntimeManager:
 
     def _existing_file(self, value: str | Path) -> Path:
         candidate = Path(value).expanduser()
-        target = candidate.resolve() if candidate.is_absolute() else (self.workspace_root / candidate).resolve()
+        target = (
+            candidate.resolve()
+            if candidate.is_absolute()
+            else (self.workspace_root / candidate).resolve()
+        )
         self._assert_child(target)
         if not target.is_file() or target.is_symlink():
             raise FileNotFoundError(target)
@@ -329,6 +398,8 @@ class MinecraftRuntimeManager:
         try:
             target.relative_to(self.workspace_root)
         except ValueError as exc:
-            raise RuntimePolicyError("Runtime path escaped the configured workspace.") from exc
+            raise RuntimePolicyError(
+                "Runtime path escaped the configured workspace."
+            ) from exc
         if target == self.workspace_root:
             raise RuntimePolicyError("Runtime may not target the workspace root.")
