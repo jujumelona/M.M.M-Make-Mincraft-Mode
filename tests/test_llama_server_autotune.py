@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from types import SimpleNamespace
 
 from minecraft_mod_ai import complete_orchestrator_services
@@ -52,6 +54,8 @@ def test_server_autotune_contract_is_installed_without_duplicate_probe() -> None
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
     assert getattr(_probe_server, "_mmm_compact_decode_probe", False)
     assert not getattr(_probe_server, "_mmm_correctness_sentinel", False)
+    assert getattr(autotune._fingerprint, "_mmm_stable_model_signature", False)
+    assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)
     assert getattr(
         complete_orchestrator_services.generate_assets,
         "_mmm_releases_managed_llama",
@@ -78,6 +82,44 @@ def test_compact_benchmark_never_reuses_real_workflow_prompt() -> None:
     assert secret not in rendered
     assert compact.response_format == "text"
     assert len(rendered) < 512
+
+
+def test_tuning_fingerprint_is_stable_across_path_and_mtime(monkeypatch, tmp_path) -> None:
+    left = tmp_path / "left" / "model.gguf"
+    right = tmp_path / "right" / "model.gguf"
+    left.parent.mkdir()
+    right.parent.mkdir()
+    payload = (b"head" * 300_000) + (b"tail" * 300_000)
+    left.write_bytes(payload)
+    right.write_bytes(payload)
+    os.utime(left, (1_700_000_000, 1_700_000_000))
+    os.utime(right, (1_800_000_000, 1_800_000_000))
+    monkeypatch.setattr(autotune, "_server_version", lambda binary: "server-v1")
+    monkeypatch.setattr(autotune, "_hardware_identity", lambda: "GPU, 16 GiB, driver")
+    config = SimpleNamespace(
+        model_id="repo/model",
+        extra={"gguf_filename": "model.gguf"},
+        max_context=32768,
+        max_new_tokens=8192,
+    )
+    assert autotune._fingerprint(config, "llama-server", str(left)) == autotune._fingerprint(
+        config,
+        "llama-server",
+        str(right),
+    )
+
+
+def test_drive_output_reuses_autotune_decision_across_runtimes(monkeypatch, tmp_path) -> None:
+    output_root = tmp_path / "M.M.M-output"
+    receipt = {
+        "save_to_google_drive": True,
+        "output_root": str(output_root),
+    }
+    monkeypatch.delenv("MMM_LLAMA_AUTOTUNE_CACHE", raising=False)
+    monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", json.dumps(receipt))
+    assert autotune._cache_path() == (
+        output_root / ".mmm-cache" / "llama-server-autotune.json"
+    ).resolve()
 
 
 def test_autotune_requires_exact_output_match_before_speed() -> None:
