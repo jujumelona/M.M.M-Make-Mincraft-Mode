@@ -48,7 +48,11 @@ def _client(server_url: str) -> Any:
         return client
 
 
-def _commit_usage(hardware_module: Any, usage: dict[str, Any], elapsed: float) -> dict[str, float] | None:
+def _commit_usage(
+    hardware_module: Any,
+    usage: dict[str, Any],
+    elapsed: float,
+) -> dict[str, float] | None:
     try:
         prompt = max(0, int(usage.get("prompt_tokens", 0) or 0))
         output = max(0, int(usage.get("completion_tokens", 0) or 0))
@@ -74,8 +78,32 @@ def _commit_usage(hardware_module: Any, usage: dict[str, Any], elapsed: float) -
     }
 
 
+def _install_host_validated_json_payload(hardware_module: Any) -> None:
+    current_payload = hardware_module._server_payload
+    if getattr(current_payload, "_mmm_host_validated_json_no_gbnf", False):
+        return
+
+    @wraps(current_payload)
+    def host_validated_payload(adapter: Any, request: Any) -> dict[str, Any]:
+        payload = dict(current_payload(adapter, request))
+        if getattr(request, "response_format", None) == "json":
+            # Structural correctness belongs to the host strict parser + targeted repair.
+            # Do not attach llama.cpp's generic JSON grammar to CUDA decoding: that path
+            # previously stalled real planner generations after the first visible token.
+            payload.pop("response_format", None)
+            payload["reasoning_effort"] = "none"
+        return payload
+
+    host_validated_payload._mmm_host_validated_json_no_gbnf = True
+    hardware_module._server_payload = host_validated_payload
+
+
 def install(hardware_module: Any) -> None:
     """Use SSE-native usage and persistent HTTP connections on the llama hot path."""
+
+    # Apply this before the idempotence return: structured JSON must stay off the
+    # generic server grammar even if another layer already installed streaming.
+    _install_host_validated_json_payload(hardware_module)
 
     current = hardware_module._strict_server_generate
     if getattr(current, "_mmm_sse_usage_fast_path", False):
@@ -122,13 +150,14 @@ def install(hardware_module: Any) -> None:
                 if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
                     print("llama server: connected", server_url, flush=True)
                     adapter.__class__._reported_server_url = server_url
-                structured = payload.get("response_format") is not None
+                structured = getattr(request, "response_format", None) == "json"
+                reasoning_disabled = payload.get("reasoning_effort") == "none"
                 print(
                     "llama server: request accepted; streaming",
                     f" input_chars={hardware_module._request_content_chars(payload)}",
                     f" max_tokens={payload['max_tokens']}",
-                    f" structured={'json' if structured else 'text'}",
-                    f" reasoning={'disabled' if structured else 'model-default'}",
+                    f" structured={'json-host-validated' if structured else 'text'}",
+                    f" reasoning={'disabled' if reasoning_disabled else 'model-default'}",
                     sep="",
                     flush=True,
                 )
@@ -214,7 +243,9 @@ def install(hardware_module: Any) -> None:
                 else None
             )
             if committed is not None:
-                request_total = int(committed["prompt_tokens"]) + int(committed["output_tokens"])
+                request_total = int(committed["prompt_tokens"]) + int(
+                    committed["output_tokens"]
+                )
                 cumulative_total = int(committed["cumulative_prompt_tokens"]) + int(
                     committed["cumulative_output_tokens"]
                 )
@@ -258,7 +289,7 @@ def install(hardware_module: Any) -> None:
                 cause=exc,
             ) from exc
 
-    fast_stream_generate._mmm_sse_usage_fast_path = True  # type: ignore[attr-defined]
+    fast_stream_generate._mmm_sse_usage_fast_path = True
     hardware_module._strict_server_generate = fast_stream_generate
 
 
