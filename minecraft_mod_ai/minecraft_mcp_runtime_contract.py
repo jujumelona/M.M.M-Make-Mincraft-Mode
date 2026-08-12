@@ -25,10 +25,12 @@ def install(orchestrator_module: Any) -> None:
         if adapter is None:
             return base
 
+        # server_get_status is the target-binding probe: its DTO reports the actual
+        # running Minecraft version. Visual/DebugBridge evidence is supplemental.
         capabilities = (
+            ("runtime_server_status", {}),
             ("runtime_inspection", {}),
             ("runtime_visual", {}),
-            ("runtime_world_read", {}),
         )
         results: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=len(capabilities)) as pool:
@@ -84,14 +86,23 @@ def install(orchestrator_module: Any) -> None:
                     }
                 )
         results.sort(key=lambda item: item["capability"])
+        status_probe = next(
+            (item for item in results if item["capability"] == "runtime_server_status"),
+            None,
+        )
         return {
             **base,
             "external_mcp": {
-                "schema_version": "mmm/runtime-mcp-evidence-v1",
+                "schema_version": "mmm/runtime-mcp-evidence-v2",
                 "minecraft_version": adapter.minecraft_version,
                 "loader": adapter.loader,
                 "read_only": True,
                 "test_harness_only": True,
+                "target_probe_status": (
+                    status_probe.get("status", "UNAVAILABLE")
+                    if isinstance(status_probe, dict)
+                    else "UNAVAILABLE"
+                ),
                 "routes": results,
             },
         }
