@@ -29,7 +29,13 @@ def _latest_saved_stream(path: Path) -> str:
 
 
 def install(complete_planner_module: Any) -> None:
-    """Replay the last fsynced failed production stream before any new decode."""
+    """Replay the last fsynced failed production stream before any new decode.
+
+    Once a saved stream contains salvageable production semantics, recovery is the
+    authoritative path. Backend/process errors must propagate so the same durable
+    fragment remains the restart point; they must never trigger a fresh full-page GPU
+    decode that discards already-generated work.
+    """
 
     from . import production_stream_efficiency_contract as stream
 
@@ -58,20 +64,23 @@ def install(complete_planner_module: Any) -> None:
 
             saved_text = _latest_saved_stream(stream._stream_event_path(stage, request))
             if saved_text:
-                try:
-                    page = stream._salvage_production_stream(
-                        complete_planner_module,
-                        runtime,
-                        router,
-                        text=saved_text,
-                        request=request,
-                        stage=stage,
-                    )
-                except Exception:
-                    page = None
+                # Do not catch failures here. Semantic child-repair errors are handled
+                # inside the stream salvage loops. A router/backend/process failure is
+                # intentionally surfaced while the fsynced raw stream and repair state
+                # remain untouched for the next run.
+                page = stream._salvage_production_stream(
+                    complete_planner_module,
+                    runtime,
+                    router,
+                    text=saved_text,
+                    request=request,
+                    stage=stage,
+                )
                 if page is not None:
                     return page
 
+        # A new full-page decode is allowed only when there is no saved stream or the
+        # saved stream contains no host-verifiable production semantic object at all.
         return current(
             router,
             system_prompt=system_prompt,
