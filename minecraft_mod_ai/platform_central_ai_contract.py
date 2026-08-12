@@ -132,6 +132,57 @@ def _bootstrap_boss_payload(result: CompleteProposal) -> dict[str, Any] | None:
     }
 
 
+def _input_acceptance_tests(result: CompleteProposal) -> tuple[str, ...]:
+    """Recover only planner-authored tests before the code-owned quality expansion."""
+
+    contract = result.game_design.get("_production_contract")
+    if isinstance(contract, dict):
+        catalog = contract.get("acceptance_catalog")
+        if isinstance(catalog, list):
+            values = tuple(
+                str(item.get("statement", "")).strip()
+                for item in catalog
+                if isinstance(item, dict)
+                and item.get("origin") == "input"
+                and str(item.get("statement", "")).strip()
+            )
+            if values:
+                return values
+    # Saved/legacy proposal fallback: recompiling from all tests is preferable to
+    # leaving a stale module implementation catalog. Normal planning always has the
+    # structured acceptance catalog above.
+    return tuple(result.acceptance_tests)
+
+
+def _recompile_live_contract(
+    module: Any,
+    result: CompleteProposal,
+    *,
+    game_design: dict[str, Any],
+    lowered: tuple[ProductionModule, ...],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    contract_design = {
+        key: value
+        for key, value in game_design.items()
+        if not str(key).startswith("_")
+    }
+    research_brief = game_design.get("_research_brief")
+    compiled = module.compile_production_contract(
+        requested_prompt=result.requested_prompt,
+        game_design=contract_design,
+        research_brief=(research_brief if isinstance(research_brief, dict) else None),
+        modules=lowered,
+        assets=result.assets,
+        audio=result.audio,
+        acceptance_tests=_input_acceptance_tests(result),
+    )
+    rebound_design = {
+        **game_design,
+        "_production_contract": compiled.contract,
+    }
+    return rebound_design, tuple(compiled.acceptance_tests)
+
+
 def _install_live_module_lowering(module: Any) -> None:
     cls = module.CompleteGameDesignPlanner
     original = cls._plan_in_session
@@ -214,8 +265,7 @@ def _install_live_module_lowering(module: Any) -> None:
         # ModSpec.contents because the historical deterministic generator creates
         # those files. A live target starts from Fabric's official blank template,
         # so bind the exact base spec into an existing source-generating module if
-        # the compatibility sentinel was not emitted. Do not add a new module ID:
-        # the production contract was already compiled against this module catalog.
+        # the compatibility sentinel was not emitted.
         if (bootstrap_contents or bootstrap_boss) and not bootstrap_bound:
             target_index = next(
                 (
@@ -226,9 +276,6 @@ def _install_live_module_lowering(module: Any) -> None:
                 None,
             )
             if target_index is None:
-                # Keep the production-contract module ID stable by converting the
-                # first non-audio module. Research/sidecar integrations are not a
-                # valid place to hide gameplay bootstrap requirements.
                 target_index = next(
                     (
                         index
@@ -245,7 +292,7 @@ def _install_live_module_lowering(module: Any) -> None:
             if target_index is None:
                 raise module.SpecValidationError(
                     "Live target has base ModSpec content but no production module "
-                    "that can carry its implementation without changing the approved module catalog."
+                    "that can carry its implementation."
                 )
             carrier = lowered[target_index]
             config = {
@@ -269,6 +316,7 @@ def _install_live_module_lowering(module: Any) -> None:
         if not changed:
             return result
 
+        lowered_tuple = tuple(lowered)
         game_design = {
             **result.game_design,
             "_platform_execution": {
@@ -278,12 +326,20 @@ def _install_live_module_lowering(module: Any) -> None:
                 "base_modspec_bound_to_live_generation": bool(
                     bootstrap_contents or bootstrap_boss
                 ),
+                "production_contract_rebound_after_lowering": True,
             },
         }
+        game_design, acceptance_tests = _recompile_live_contract(
+            module,
+            result,
+            game_design=game_design,
+            lowered=lowered_tuple,
+        )
         updated: CompleteProposal = replace(
             result,
             game_design=game_design,
-            modules=tuple(lowered),
+            modules=lowered_tuple,
+            acceptance_tests=acceptance_tests,
             approval_hash="",
         )
         updated = updated.with_hash()
