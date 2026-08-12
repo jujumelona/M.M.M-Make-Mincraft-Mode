@@ -19,6 +19,14 @@ def install() -> None:
 
     install_colab_server_config(colab_server_module)
 
+    # JDT LS is a long-lived JSON-RPC subprocess. Ensure malformed stdout framing,
+    # early process exit and forced shutdown are surfaced/reaped immediately rather
+    # than degenerating into request-timeout stalls or zombie processes.
+    from . import java_lsp as java_lsp_module
+    from .java_lsp_process_safety_contract import install as install_java_lsp_process_safety
+
+    install_java_lsp_process_safety(java_lsp_module)
+
     # Platform generation/validation must agree with the exact approved adapter.
     from . import generator as generator_module
     from . import validator as validator_module
