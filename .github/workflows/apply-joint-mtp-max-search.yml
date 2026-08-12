@@ -1,0 +1,126 @@
+name: Apply verified joint MTP maximum-speed search
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-joint-mtp-max-search.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mmm-joint-mtp-max-search
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Patch joint MTP search
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}: {old!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          runtime = 'minecraft_mod_ai/llama_server_runtime_tuning.py'
+          replace_once(runtime, '_SCHEMA_VERSION = "mmm/llama-server-autotune-v5-adaptive-staged"', '_SCHEMA_VERSION = "mmm/llama-server-autotune-v6-joint-mtp"')
+          replace_once(
+              runtime,
+              '''class ServerVariant:\n    name: str\n    spec_type: str = "none"\n    draft_n_max: int = 0\n    ubatch: int = 0\n    parallel: int = 1\n    cache_reuse: int = 0\n''',
+              '''class ServerVariant:\n    name: str\n    spec_type: str = "none"\n    draft_n_max: int = 0\n    ubatch: int = 0\n    parallel: int = 1\n    cache_reuse: int = 0\n    draft_p_min: float = 0.0\n''',
+          )
+          old_candidates = '''def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:\n    widths: list[int] = []\n    for token in os.environ.get("MMM_LLAMA_MTP_WIDTHS", "1,2,3").split(","):\n        try:\n            width = int(token.strip())\n        except ValueError:\n            continue\n        if 1 <= width <= 8 and width not in widths:\n            widths.append(width)\n    values = [ServerVariant("baseline")]\n    values.extend(ServerVariant(f"mtp-{width}", "draft-mtp", width) for width in widths)\n    allowed = {"ngram-simple", "ngram-mod", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}\n    for token in os.environ.get("MMM_LLAMA_NGRAM_SPEC_TYPES", "ngram-simple,ngram-mod,ngram-map-k").split(","):\n        spec_type = token.strip()\n        if spec_type in allowed and all(item.spec_type != spec_type for item in values):\n            values.append(ServerVariant(spec_type, spec_type))\n    return tuple(values)\n'''
+          new_candidates = '''def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:\n    del autotune_module\n    widths: list[int] = []\n    for token in os.environ.get("MMM_LLAMA_MTP_WIDTHS", "1,2,4,8,16").split(","):\n        try:\n            width = int(token.strip())\n        except ValueError:\n            continue\n        if 1 <= width <= 32 and width not in widths:\n            widths.append(width)\n\n    p_mins: list[float] = []\n    for token in os.environ.get("MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.6,0.8,0.9").split(","):\n        try:\n            p_min = round(float(token.strip()), 4)\n        except ValueError:\n            continue\n        if 0.0 <= p_min < 1.0 and p_min not in p_mins:\n            p_mins.append(p_min)\n    if 0.0 not in p_mins:\n        p_mins.insert(0, 0.0)\n\n    values = [ServerVariant("baseline")]\n    for width in widths:\n        for p_min in p_mins:\n            suffix = "" if p_min == 0 else f"|pm{p_min:g}"\n            values.append(\n                ServerVariant(\n                    f"mtp-{width}{suffix}",\n                    "draft-mtp",\n                    width,\n                    draft_p_min=p_min,\n                )\n            )\n    allowed = {"ngram-simple", "ngram-mod", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}\n    for token in os.environ.get("MMM_LLAMA_NGRAM_SPEC_TYPES", "ngram-simple,ngram-mod,ngram-map-k").split(","):\n        spec_type = token.strip()\n        if spec_type in allowed and all(item.spec_type != spec_type for item in values):\n            values.append(ServerVariant(spec_type, spec_type))\n    return tuple(values)\n'''
+          replace_once(runtime, old_candidates, new_candidates)
+          replace_once(
+              runtime,
+              '''        def tuned_variant_args(variant: ServerVariant) -> list[str]:\n            if variant.spec_type.startswith("ngram-"):\n                return ["--spec-type", variant.spec_type]\n            return current_variant_args(variant)\n''',
+              '''        def tuned_variant_args(variant: ServerVariant) -> list[str]:\n            if variant.spec_type.startswith("ngram-"):\n                return ["--spec-type", variant.spec_type]\n            args = list(current_variant_args(variant))\n            p_min = float(getattr(variant, "draft_p_min", 0.0) or 0.0)\n            if variant.spec_type == "draft-mtp" and p_min > 0 and "--spec-draft-p-min" not in args:\n                args.extend(["--spec-draft-p-min", f"{p_min:g}"])\n            return args\n''',
+          )
+          replace_once(
+              runtime,
+              '"search": "mtp-first-ngram-fallback+ubatch-progressive"',
+              '"search": "joint-mtp-width-pmin+ngram-fallback+ubatch-exhaustive"',
+          )
+          replace_once(
+              runtime,
+              'spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.03))',
+              'spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.01))',
+          )
+          replace_once(
+              runtime,
+              '''                if not _eligible(probe, baseline):\n                    break\n                if _balanced_score(probe, final_probe) < max(1.0, stage_gain):\n                    break\n                selected = variant\n                final_probe = probe\n''',
+              '''                if not _eligible(probe, baseline):\n                    continue\n                if _balanced_score(probe, final_probe) >= max(1.0, stage_gain):\n                    selected = variant\n                    final_probe = probe\n''',
+          )
+          replace_once(
+              runtime,
+              '        benchmark._mmm_adaptive_cold_search = True\n        autotune_module._benchmark = benchmark',
+              '        benchmark._mmm_adaptive_cold_search = True\n        benchmark._mmm_joint_mtp_grid = True\n        benchmark._mmm_exhaustive_ubatch_search = True\n        autotune_module._benchmark = benchmark',
+          )
+
+          decode = 'minecraft_mod_ai/llama_decode_speed_contract.py'
+          replace_once(decode, '_SCHEMA_VERSION = "mmm/llama-decode-speed-v1"', '_SCHEMA_VERSION = "mmm/llama-decode-speed-v2-joint-mtp"')
+          replace_once(
+              decode,
+              '''            if str(getattr(variant, "spec_type", "none")) == "draft-mtp" and p_min > 0:\n                args.extend(["--spec-draft-p-min", f"{p_min:g}"])\n''',
+              '''            if (\n                str(getattr(variant, "spec_type", "none")) == "draft-mtp"\n                and p_min > 0\n                and "--spec-draft-p-min" not in args\n            ):\n                args.extend(["--spec-draft-p-min", f"{p_min:g}"])\n''',
+          )
+          replace_once(
+              decode,
+              '''            selected, extra_probes = _probe_p_min(\n                autotune, binary, model_path, config, request, decision.selected\n            )\n''',
+              '''            if getattr(current_benchmark, "_mmm_joint_mtp_grid", False):\n                # Runtime tuning already searched width x p-min before ubatch, so a\n                # second p-min-only pass would duplicate launches and could undo the\n                # jointly optimal selection.\n                selected = _as_speed_variant(decision.selected)\n                extra_probes = ()\n            else:\n                selected, extra_probes = _probe_p_min(\n                    autotune, binary, model_path, config, request, decision.selected\n                )\n''',
+          )
+          replace_once(
+              decode,
+              '''        benchmark._mmm_single_stream_decode_objective = True\n        benchmark._mmm_mtp_p_min_stage = True\n        autotune._benchmark = benchmark\n''',
+              '''        benchmark._mmm_single_stream_decode_objective = True\n        benchmark._mmm_mtp_p_min_stage = True\n        if getattr(current_benchmark, "_mmm_joint_mtp_grid", False):\n            benchmark._mmm_joint_mtp_grid = True\n        if getattr(current_benchmark, "_mmm_exhaustive_ubatch_search", False):\n            benchmark._mmm_exhaustive_ubatch_search = True\n        autotune._benchmark = benchmark\n''',
+          )
+
+          test = Path('tests/test_llama_server_autotune.py')
+          text = test.read_text(encoding='utf-8')
+          start = text.index('def test_default_variants_compare_mtp_and_ngram_speculation')
+          end = text.index('\n\ndef test_default_runtime_candidates_are_bounded', start)
+          replacement = '''def test_default_variants_compare_joint_mtp_and_ngram_speculation(monkeypatch) -> None:\n    monkeypatch.delenv("MMM_LLAMA_MTP_WIDTHS", raising=False)\n    monkeypatch.delenv("MMM_LLAMA_MTP_P_MIN_CANDIDATES", raising=False)\n    monkeypatch.delenv("MMM_LLAMA_NGRAM_SPEC_TYPES", raising=False)\n    values = _candidate_variants()\n    mtp = [value for value in values if value.spec_type == "draft-mtp"]\n    assert {(value.draft_n_max, value.draft_p_min) for value in mtp} == {\n        (width, p_min)\n        for width in (1, 2, 4, 8, 16)\n        for p_min in (0.0, 0.6, 0.8, 0.9)\n    }\n    assert any(value.draft_n_max == 16 for value in mtp)\n    assert [value.spec_type for value in values if value.spec_type.startswith("ngram-")] == [\n        "ngram-simple",\n        "ngram-mod",\n        "ngram-map-k",\n    ]\n    assert getattr(autotune._benchmark, "_mmm_joint_mtp_grid", False)\n    assert getattr(autotune._benchmark, "_mmm_exhaustive_ubatch_search", False)\n'''
+          text = text[:start] + replacement + text[end:]
+          marker = 'def test_speculative_server_flags_include_joint_p_min'
+          if marker in text:
+              raise SystemExit('joint MTP flag test already exists')
+          text += '''\n\ndef test_speculative_server_flags_include_joint_p_min() -> None:\n    variant = ServerVariant(\n        "mtp-16|pm0.8",\n        "draft-mtp",\n        16,\n        draft_p_min=0.8,\n    )\n    args = _variant_args(variant)\n    assert args[args.index("--spec-draft-n-max") + 1] == "16"\n    assert args[args.index("--spec-draft-p-min") + 1] == "0.8"\n    assert args.count("--spec-draft-p-min") == 1\n'''
+          test.write_text(text, encoding='utf-8')
+          PY
+      - name: Install focused test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Verify joint search
+        run: |
+          python -m compileall -q minecraft_mod_ai tests tools
+          python tools/validate_colab_notebook.py
+          python -m pytest -q \
+            tests/test_llama_server_autotune.py \
+            tests/test_llama_decode_speed_contract.py \
+            tests/test_runtime_bootstrap_clean.py
+      - name: Commit verified joint search
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-joint-mtp-max-search.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/llama_server_runtime_tuning.py minecraft_mod_ai/llama_decode_speed_contract.py tests/test_llama_server_autotune.py .github/workflows/apply-joint-mtp-max-search.yml
+          git commit -m 'Jointly tune MTP width and confidence for decode speed'
+          git pull --rebase origin main
+          git push origin HEAD:main
