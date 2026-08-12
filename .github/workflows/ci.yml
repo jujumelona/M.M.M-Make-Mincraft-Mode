@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-audit-v2-${{ github.workflow }}-${{ github.ref }}
+  group: ci-audit-v3-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,4 +52,4 @@ jobs:
         run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
 
       - name: Run unit and contract tests
-        run: python -m pytest -vv --tb=short --durations=25
+        run: python -m pytest -vv --tb=short --durations=25 --maxfail=25
