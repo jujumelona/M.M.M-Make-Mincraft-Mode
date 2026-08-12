@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 
 SCHEMA = "mmm/imported-platform-repair-v1"
 RELATIVE_PATH = Path(".minecraft_ai/imported-platform-repair.json")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def marker_path(project_root: str | Path) -> Path:
@@ -21,6 +23,8 @@ def write_marker(
     archive_sha256: str,
     reason: str,
 ) -> Path:
+    if not _SHA256.fullmatch(str(archive_sha256)):
+        raise ValueError("Imported platform repair requires the bound source SHA-256.")
     root = Path(project_root).expanduser().resolve()
     target = marker_path(root)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -90,12 +94,7 @@ def read_valid_marker(project_root: str | Path, *, adapter: Any) -> dict[str, An
     if any(str(expected.get(key, "")) != value for key, value in required.items()):
         return None
     digest = payload.get("archive_sha256")
-    if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) != 71:
-        # CompleteProposal stores imported bindings as sha256:<64 hex>.
-        return None
-    try:
-        int(digest.removeprefix("sha256:"), 16)
-    except ValueError:
+    if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
         return None
     return payload
 
