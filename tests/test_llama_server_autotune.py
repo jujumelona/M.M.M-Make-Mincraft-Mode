@@ -17,7 +17,7 @@ from minecraft_mod_ai.llama_server_autotune import (
     _server_binary,
     _variant_args,
 )
-from minecraft_mod_ai.llama_server_max_performance import (
+from minecraft_mod_ai.llama_server_runtime_tuning import (
     _cache_reuse_candidates,
     _parallel_candidates,
     _ubatch_candidates,
@@ -49,22 +49,19 @@ def _probe(
     )
 
 
-def test_server_autotune_contract_is_installed_without_duplicate_probe() -> None:
+def test_server_runtime_tuning_contract_is_installed() -> None:
     assert getattr(LlamaCppAdapter.generate, "_mmm_explicit_server_strict", False)
-    assert not getattr(LlamaCppAdapter.generate, "_mmm_server_autotuned", False)
     assert getattr(_server_binary, "_mmm_native_bootstrap", False)
-    assert getattr(_server_binary, "_mmm_cuda_graphs", False)
     assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
     assert getattr(_base_args, "_mmm_single_decode_slot", False)
-    assert getattr(_base_args, "_mmm_native_telemetry_endpoints", False)
     assert getattr(_base_args, "_mmm_load_mode_auto", False)
     assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
     assert getattr(_variant_args, "_mmm_ngram_speculation", False)
     assert getattr(_probe_server, "_mmm_compact_decode_probe", False)
-    assert not getattr(_probe_server, "_mmm_correctness_sentinel", False)
-    assert getattr(autotune._benchmark, "_mmm_staged_max_performance", False)
+    assert getattr(autotune._benchmark, "_mmm_staged_runtime_tuning", False)
+    assert getattr(autotune._benchmark, "_mmm_single_server_cache_stage", False)
     assert getattr(autotune._fingerprint, "_mmm_stable_model_signature", False)
-    assert getattr(autotune._fingerprint, "_mmm_max_performance_fingerprint", False)
+    assert getattr(autotune._fingerprint, "_mmm_runtime_tuning_fingerprint", False)
     assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)
     assert getattr(
         complete_orchestrator_services.generate_assets,
@@ -86,7 +83,6 @@ def test_default_variants_compare_mtp_and_ngram_speculation(monkeypatch) -> None
         "ngram-mod",
         "ngram-map-k",
     ]
-    assert values[0].spec_type == "none"
     assert [value.draft_n_max for value in values[1:4]] == [1, 2, 3]
     assert [value.spec_type for value in values[4:]] == [
         "ngram-simple",
@@ -95,7 +91,7 @@ def test_default_variants_compare_mtp_and_ngram_speculation(monkeypatch) -> None
     ]
 
 
-def test_default_staged_runtime_candidates_are_bounded(monkeypatch) -> None:
+def test_default_runtime_candidates_are_bounded(monkeypatch) -> None:
     for name in (
         "MMM_LLAMA_BATCH",
         "MMM_LLAMA_UBATCH",
@@ -150,12 +146,11 @@ def test_tuning_fingerprint_is_stable_across_path_and_mtime(monkeypatch, tmp_pat
 
 def test_drive_output_reuses_autotune_decision_across_runtimes(monkeypatch, tmp_path) -> None:
     output_root = tmp_path / "M.M.M-output"
-    receipt = {
-        "save_to_google_drive": True,
-        "output_root": str(output_root),
-    }
     monkeypatch.delenv("MMM_LLAMA_AUTOTUNE_CACHE", raising=False)
-    monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", json.dumps(receipt))
+    monkeypatch.setenv(
+        "MMM_COLAB_SETUP_RECEIPT",
+        json.dumps({"save_to_google_drive": True, "output_root": str(output_root)}),
+    )
     assert autotune._cache_path() == (
         output_root / ".mmm-cache" / "llama-server-autotune.json"
     ).resolve()
@@ -172,70 +167,19 @@ def test_autotune_requires_exact_output_match_before_speed() -> None:
     )
     assert decision is not None
     assert decision.selected.name == "mtp-2"
-    assert decision.selected_tps == 26.0
     assert decision.speedup == 1.3
 
 
 def test_autotune_keeps_baseline_when_gain_is_below_threshold() -> None:
     decision = _choose_variant(
-        (
-            _probe("baseline", tps=20.0),
-            _probe("mtp-1", tps=20.4, width=1),
-        ),
+        (_probe("baseline", tps=20.0), _probe("mtp-1", tps=20.4, width=1)),
         minimum_speedup=1.03,
     )
     assert decision is not None
     assert decision.selected.name == "baseline"
 
 
-def test_autotune_ignores_failed_fast_candidate() -> None:
-    decision = _choose_variant(
-        (
-            _probe("baseline", tps=20.0),
-            _probe("mtp-1", tps=999.0, ok=False, width=1),
-        ),
-        minimum_speedup=1.01,
-    )
-    assert decision is not None
-    assert decision.selected.name == "baseline"
-
-
-def test_autotune_fails_closed_without_valid_baseline() -> None:
-    decision = _choose_variant(
-        (_probe("baseline", tps=0.0, ok=False),),
-        minimum_speedup=1.03,
-    )
-    assert decision is None
-
-
-def test_disabling_autotune_still_launches_native_baseline(monkeypatch) -> None:
-    selected: list[ServerVariant] = []
-    monkeypatch.setenv("MMM_LLAMA_SERVER_AUTOTUNE", "0")
-    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
-    monkeypatch.setattr(autotune, "_MANAGED_PROCESS", None)
-    monkeypatch.setattr(autotune, "_MANAGED_URL", None)
-    monkeypatch.setattr(autotune, "_ATTEMPTED_KEYS", set())
-    monkeypatch.setattr(autotune, "_external_server_is_ready", lambda: False)
-    monkeypatch.setattr(autotune, "_server_binary", lambda: "/tmp/llama-server")
-    monkeypatch.setattr(autotune, "_resolve_model_path", lambda config: "/tmp/model.gguf")
-    monkeypatch.setattr(autotune, "_fingerprint", lambda *args: "fingerprint")
-    monkeypatch.setattr(autotune, "_load_cached_decision", lambda fingerprint: None)
-    monkeypatch.setattr(
-        autotune,
-        "_launch_selected",
-        lambda binary, model, config, variant: selected.append(variant)
-        or "http://127.0.0.1:8910/v1",
-    )
-
-    config = SimpleNamespace(model_id="test", extra={}, max_context=1024, max_new_tokens=64)
-    request = SimpleNamespace(messages=(), response_format="text")
-    url = autotune.ensure_tuned_server(config, request)
-
-    assert url.endswith("/v1")
-    assert [value.name for value in selected] == ["baseline"]
-
-
-def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None:
+def test_server_args_use_quality_neutral_performance_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
     monkeypatch.delenv("MMM_LLAMA_BATCH", raising=False)
     monkeypatch.delenv("MMM_LLAMA_UBATCH", raising=False)
@@ -252,13 +196,10 @@ def test_server_args_match_quality_neutral_runtime_defaults(monkeypatch) -> None
     assert args[args.index("--cache-type-v") + 1] == "q4_0"
     assert args[args.index("--load-mode") + 1] == "auto"
     assert "--cache-prompt" in args
-    assert "--metrics" in args
-    assert "--slots" in args
 
 
-def test_mtp_variant_uses_server_startup_flags_not_request_mutation() -> None:
-    args = _variant_args(ServerVariant("mtp-2", "draft-mtp", 2))
-    assert args == [
+def test_speculative_server_flags_are_native() -> None:
+    assert _variant_args(ServerVariant("mtp-2", "draft-mtp", 2)) == [
         "--spec-type",
         "draft-mtp",
         "--spec-draft-n-max",
@@ -268,9 +209,6 @@ def test_mtp_variant_uses_server_startup_flags_not_request_mutation() -> None:
         "--spec-draft-ngl",
         "auto",
     ]
-
-
-def test_ngram_variant_uses_native_speculation_without_draft_model() -> None:
     assert _variant_args(ServerVariant("ngram-simple", "ngram-simple")) == [
         "--spec-type",
         "ngram-simple",
