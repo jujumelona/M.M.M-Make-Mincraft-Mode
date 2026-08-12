@@ -4,6 +4,8 @@ from typing import Any
 
 from . import atomic_requirement_contract as _atomic_module
 from . import production_contract as _production_contract_module
+from . import work_graph as _work_graph_module
+from .agentic_optimization_contract import install as _install_agentic_optimization
 from .atomic_efficiency_contract import install as _install_atomic_efficiency
 from .atomic_evidence_routing_contract import install as _install_atomic_routes
 from .atomic_execution_policy_contract import install as _install_atomic_execution
@@ -69,5 +71,10 @@ def install(
         validation_module,
     )
     _install_planner_json_runtime(complete_planner_module)
+    _install_agentic_optimization(
+        complete_planner_module=complete_planner_module,
+        repair_module=repair_module,
+        work_graph_module=_work_graph_module,
+    )
     _install_visual_scope(orchestrator_module)
     _install_gate_compatibility(orchestrator_module)
