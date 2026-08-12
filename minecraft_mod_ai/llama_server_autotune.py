@@ -11,6 +11,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 
@@ -18,6 +19,8 @@ _AUTOTUNE_LOCK = threading.RLock()
 _MANAGED_PROCESS: subprocess.Popen[bytes] | None = None
 _MANAGED_URL: str | None = None
 _ATTEMPTED_KEYS: set[str] = set()
+_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v2-compact"
+_BENCHMARK_OUTPUT_TOKENS = 96
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,8 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 
 
 def _candidate_variants() -> tuple[ServerVariant, ...]:
+    """Keep exhaustive width selection while avoiding work unrelated to decoding."""
+
     raw = os.environ.get("MMM_LLAMA_MTP_WIDTHS", "1,2,3")
     widths: list[int] = []
     for token in raw.split(","):
@@ -106,9 +111,8 @@ def _choose_variant(
     if baseline is None or baseline.predicted_tps <= 0:
         return None
 
-    # Speculative decoding is only eligible when it commits exactly the same output
-    # as the non-speculative greedy baseline. This is deliberately stricter than a
-    # semantic-quality comparison: acceleration must not change generated code.
+    # Greedy speculative decoding is eligible only when it commits byte-identical
+    # output to the baseline on the same deterministic probe.
     eligible = [baseline]
     eligible.extend(
         probe
@@ -121,13 +125,12 @@ def _choose_variant(
     fastest = max(eligible, key=lambda probe: probe.predicted_tps)
     required = baseline.predicted_tps * max(1.0, minimum_speedup)
     selected = fastest if fastest.predicted_tps >= required else baseline
-    speedup = selected.predicted_tps / baseline.predicted_tps
     return AutotuneDecision(
         fingerprint="",
         selected=selected.variant,
         baseline_tps=baseline.predicted_tps,
         selected_tps=selected.predicted_tps,
-        speedup=speedup,
+        speedup=selected.predicted_tps / baseline.predicted_tps,
         probes=values,
     )
 
@@ -214,6 +217,7 @@ def _fingerprint(config: Any, binary: str, model_path: str) -> str:
     path = Path(model_path)
     stat = path.stat()
     payload = {
+        "schema": _BENCHMARK_SCHEMA_VERSION,
         "model_id": str(config.model_id),
         "gguf_filename": str(config.extra.get("gguf_filename", "")),
         "model_path": str(path.resolve()),
@@ -225,6 +229,10 @@ def _fingerprint(config: Any, binary: str, model_path: str) -> str:
         "hardware": _hardware_identity(),
         "batch": _env_int("MMM_LLAMA_BATCH", 2048),
         "ubatch": _env_int("MMM_LLAMA_UBATCH", 512),
+        "probe_tokens": min(
+            int(config.max_new_tokens),
+            _env_int("MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS),
+        ),
         "variants": [asdict(value) for value in _candidate_variants()],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -243,6 +251,8 @@ def _load_cached_decision(fingerprint: str) -> AutotuneDecision | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        return None
+    if payload.get("schema_version") != _BENCHMARK_SCHEMA_VERSION:
         return None
     if payload.get("fingerprint") != fingerprint:
         return None
@@ -277,7 +287,7 @@ def _save_decision(decision: AutotuneDecision) -> None:
     path = _cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": "mmm/llama-server-autotune-v1",
+        "schema_version": _BENCHMARK_SCHEMA_VERSION,
         "fingerprint": decision.fingerprint,
         "selected": asdict(decision.selected),
         "baseline_tps": decision.baseline_tps,
@@ -369,12 +379,11 @@ def _start_server(
 ) -> subprocess.Popen[bytes]:
     debug = _env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
     stream = None if debug else subprocess.DEVNULL
-    process = subprocess.Popen(
+    return subprocess.Popen(
         _base_args(binary, model_path, config, port) + _variant_args(variant),
         stdout=stream,
         stderr=stream,
     )
-    return process
 
 
 def _stop_server(process: subprocess.Popen[bytes] | None) -> None:
@@ -417,6 +426,31 @@ def _assistant_output(data: dict[str, Any]) -> str:
     reasoning = str(message.get("reasoning_content") or "")
     content = str(message.get("content") or "")
     return reasoning + "\n<MMM-CONTENT>\n" + content
+
+
+def _compact_benchmark_request(request: Any) -> Any:
+    """Benchmark decode/MTP without repeatedly prefilling the real workflow prompt."""
+
+    del request
+    return SimpleNamespace(
+        messages=(
+            {
+                "role": "system",
+                "content": (
+                    "Deterministic inference benchmark. Do not explain or reason. "
+                    "Return only the requested JSON-like text."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    'Emit one object {"values":[0,1,2,...,63]} with every integer '
+                    "from 0 through 63 in ascending order and no other text."
+                ),
+            },
+        ),
+        response_format="text",
+    )
 
 
 def _probe_server(
@@ -488,26 +522,26 @@ def _benchmark(
     request: Any,
     fingerprint: str,
 ) -> AutotuneDecision | None:
+    benchmark_request = _compact_benchmark_request(request)
     probe_tokens = min(
         int(config.max_new_tokens),
-        _env_int("MMM_LLAMA_AUTOTUNE_TOKENS", 192),
+        _env_int("MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS),
     )
     preferred_port = _env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
     probes: list[ProbeResult] = []
 
+    # Width selection remains exhaustive. Only irrelevant prompt-prefill work is cut.
     for variant in _candidate_variants():
         port = _free_port(preferred_port)
         process: subprocess.Popen[bytes] | None = None
         try:
             process = _start_server(binary, model_path, config, variant, port)
             url = _wait_ready(process, port)
-            # One-token warm-up initializes lazy kernels without dominating the
-            # measured decode throughput of the actual first workflow request.
-            _probe_server(url, request, max_tokens=1, variant=variant)
+            _probe_server(url, benchmark_request, max_tokens=1, variant=variant)
             probes.append(
                 _probe_server(
                     url,
-                    request,
+                    benchmark_request,
                     max_tokens=probe_tokens,
                     variant=variant,
                 )
@@ -527,7 +561,6 @@ def _benchmark(
             )
         finally:
             _stop_server(process)
-            time.sleep(0.2)
 
     decision = _choose_variant(
         probes,
@@ -586,45 +619,57 @@ def _launch_selected(
     return url
 
 
-def ensure_tuned_server(config: Any, request: Any) -> str | None:
-    """Start a cached, correctness-gated best llama-server variant when possible.
+def _baseline_decision(fingerprint: str) -> AutotuneDecision:
+    return AutotuneDecision(
+        fingerprint=fingerprint,
+        selected=ServerVariant("baseline"),
+        baseline_tps=0.0,
+        selected_tps=0.0,
+        speedup=1.0,
+        probes=(),
+    )
 
-    The first eligible local run benchmarks baseline and MTP variants sequentially
-    with the real first workflow prompt. Later runs reuse the hardware/model/server
-    fingerprinted decision. If no llama-server binary is installed, the existing
-    llama-cpp-python path remains untouched.
-    """
 
-    if not _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True):
-        return None
+def ensure_tuned_server(config: Any, request: Any) -> str:
+    """Start one managed native server and never fall back to a second GGUF engine."""
+
     if _external_server_is_ready():
-        return os.environ.get("LLAMA_SERVER_URL")
+        explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
+        if explicit:
+            return explicit
 
     binary = _server_binary()
     if binary is None:
-        return None
+        raise RuntimeError("native llama-server binary is unavailable")
 
     with _AUTOTUNE_LOCK:
         if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.poll() is None:
-            return _MANAGED_URL
+            if _MANAGED_URL:
+                return _MANAGED_URL
+            raise RuntimeError("managed llama-server process has no URL")
 
         model_path = _resolve_model_path(config)
         fingerprint = _fingerprint(config, binary, model_path)
         if fingerprint in _ATTEMPTED_KEYS:
-            return None
+            raise RuntimeError(
+                "native llama-server startup was already attempted and did not leave "
+                "a healthy managed process for this exact runtime fingerprint"
+            )
         _ATTEMPTED_KEYS.add(fingerprint)
 
         decision = _load_cached_decision(fingerprint)
         if decision is None:
-            decision = _benchmark(binary, model_path, config, request, fingerprint)
-            if decision is None:
-                return None
-            _save_decision(decision)
+            if _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True):
+                decision = _benchmark(binary, model_path, config, request, fingerprint)
+                if decision is None:
+                    raise RuntimeError(
+                        "llama-server autotune could not validate a baseline decode"
+                    )
+                _save_decision(decision)
+            else:
+                decision = _baseline_decision(fingerprint)
 
-        try:
-            return _launch_selected(binary, model_path, config, decision.selected)
-        except Exception:
-            return None
+        return _launch_selected(binary, model_path, config, decision.selected)
 
 
 def _shutdown_managed_server() -> None:
@@ -639,23 +684,22 @@ atexit.register(_shutdown_managed_server)
 
 
 def install() -> None:
-    from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
+    """Compatibility no-op; hardware policy exclusively owns adapter binding."""
 
-    original = LlamaCppAdapter.generate
-    if getattr(original, "_mmm_server_autotuned", False):
-        return
 
-    def tuned_generate(self: Any, request: Any) -> str:
-        # Do not fail a valid model request merely because optional benchmarking or
-        # managed-server startup is unavailable. The existing in-process llama.cpp
-        # backend remains the fail-closed functional path.
-        try:
-            ensure_tuned_server(self.config, request)
-        except Exception:
-            pass
-        return original(self, request)
-
-    tuned_generate.__name__ = getattr(original, "__name__", "generate")
-    tuned_generate.__doc__ = getattr(original, "__doc__", None)
-    tuned_generate._mmm_server_autotuned = True
-    LlamaCppAdapter.generate = tuned_generate
+__all__ = [
+    "AutotuneDecision",
+    "ProbeResult",
+    "ServerVariant",
+    "_base_args",
+    "_benchmark",
+    "_candidate_variants",
+    "_choose_variant",
+    "_compact_benchmark_request",
+    "_probe_server",
+    "_server_binary",
+    "_shutdown_managed_server",
+    "_variant_args",
+    "ensure_tuned_server",
+    "install",
+]
