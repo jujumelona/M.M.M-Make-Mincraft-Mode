@@ -7,6 +7,7 @@ owns their composition. No installer re-enters another package bootstrap and no
 runtime contract is intentionally installed twice.
 """
 
+import os
 from threading import RLock
 
 _BOOTSTRAP_LOCK = RLock()
@@ -43,9 +44,8 @@ def _install_runtime_contracts() -> None:
 
 
 def _install_core_contracts() -> None:
-    """Install base spec, validation, planning-scope and work-graph semantics."""
-    from . import complete_planner, complete_spec, runner, spec, validator, work_graph
-    from .mod_scope_contract import install as install_mod_scope
+    """Install base spec, validation, runner-lock and work-graph semantics."""
+    from . import runner, spec, validator, work_graph
     from .runner_lock_contract import install as install_runner_lock
     from .toolchain_contract import install as install_toolchain
     from .validator_boss_contract import install as install_validator_boss
@@ -54,19 +54,21 @@ def _install_core_contracts() -> None:
     install_toolchain(spec, runner)
     install_runner_lock(runner)
     install_validator_boss(validator)
-    install_mod_scope(complete_spec, complete_planner)
     install_work_graph_mutation(work_graph)
 
 
 def _install_model_runtime_contracts() -> None:
     """Install local model ownership and native llama runtime policy once."""
     from . import (
+        complete_orchestrator_services,
         complete_planner,
         llama_server_autotune,
         llama_server_hardware_policy,
         llama_server_runtime_tuning,
         model_registry,
+        model_router,
     )
+    from .colab_gpu_handoff_contract import install as install_gpu_handoff
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
@@ -80,6 +82,10 @@ def _install_model_runtime_contracts() -> None:
 
     install_gpu_resource(model_registry)
     install_model_runtime_performance()
+    install_gpu_handoff(
+        services_module=complete_orchestrator_services,
+        model_router_module=model_router,
+    )
     install_llama_hardware(llama_server_autotune)
     install_llama_efficiency(llama_server_autotune, llama_server_hardware_policy)
     install_llama_runtime_tuning(llama_server_autotune)
@@ -154,7 +160,6 @@ def _install_platform_contracts() -> None:
         complete_spec,
         custom_module_generator,
         ecosystem_discovery,
-        external_mcp_router,
         game_design,
         geckolib_generator,
         generator,
@@ -172,12 +177,9 @@ def _install_platform_contracts() -> None:
         technology_radar,
         validator,
     )
-    from .external_mcp_bridge_safety_contract import (
-        install as install_external_mcp_bridge_safety,
-    )
-    from .external_mcp_target_validation_contract import (
-        install as install_external_mcp_target_validation,
-    )
+    from .colab_auto_platform_contract import install as install_colab_auto_platform
+    from .mod_scope_contract import install as install_mod_scope
+    from .parallel_platform_rag_contract import install as install_parallel_platform_rag
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_ecosystem_contract import install as install_platform_ecosystem
@@ -204,8 +206,6 @@ def _install_platform_contracts() -> None:
         runtime_manager_module=runtime_manager,
         mineflayer_module=mineflayer_bridge,
     )
-    install_external_mcp_target_validation(external_mcp_router)
-    install_external_mcp_bridge_safety(external_mcp_router)
     install_proposal_deserialization(spec, complete_spec)
     install_platform_generation(generator)
     install_platform_validation(validator)
@@ -231,6 +231,14 @@ def _install_platform_contracts() -> None:
         game_design_module=game_design,
         complete_planner_module=complete_planner,
     )
+    install_mod_scope(complete_spec, complete_planner)
+    install_parallel_platform_rag(
+        complete_planner_module=complete_planner,
+        central_module=central_research,
+        retrieval_module=retrieval,
+    )
+    if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+        install_colab_auto_platform(game_design)
     install_platform_custom_coder(custom_module_generator)
     install_platform_repair(repair_engine)
     install_live_execution(complete_orchestrator)
@@ -436,6 +444,7 @@ def _install_public_boundary_contracts() -> None:
         complete_orchestrator,
         complete_planner,
         custom_module_generator,
+        external_mcp_router,
         mcp_tools,
         minecraft_mcp_repair_batch_contract,
         minecraft_mcp_runtime_helper_contract,
@@ -444,6 +453,12 @@ def _install_public_boundary_contracts() -> None:
         repair_engine,
         runtime_manager,
         skill_catalog,
+    )
+    from .external_mcp_bridge_safety_contract import (
+        install as install_external_mcp_bridge_safety,
+    )
+    from .external_mcp_target_validation_contract import (
+        install as install_mcp_target_validation,
     )
     from .mcp_repair_diagnostic_shape_contract import (
         install as install_mcp_repair_diagnostic_shape,
@@ -462,6 +477,8 @@ def _install_public_boundary_contracts() -> None:
 
     install_runtime_helpers(runtime_manager)
     install_runtime_helper_json_deadline(minecraft_mcp_runtime_helper_contract)
+    install_mcp_target_validation(external_mcp_router)
+    install_external_mcp_bridge_safety(external_mcp_router)
     install_mcp_runtime(complete_orchestrator)
     install_mcp_federation(
         complete_planner_module=complete_planner,
