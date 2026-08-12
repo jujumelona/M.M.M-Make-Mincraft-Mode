@@ -125,6 +125,25 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         stable_fingerprint._mmm_stable_model_signature = True  # type: ignore[attr-defined]
         autotune_module._fingerprint = stable_fingerprint
 
+    current_ensure = autotune_module.ensure_tuned_server
+    if not getattr(current_ensure, "_mmm_managed_server_fast_path", False):
+
+        @wraps(current_ensure)
+        def ensure_managed_server_first(config: Any, request: Any) -> str:
+            # The managed process is authoritative after MMM launches it. Avoid a
+            # redundant local HTTP health request before every generation call.
+            with autotune_module._AUTOTUNE_LOCK:
+                process = autotune_module._MANAGED_PROCESS
+                if process is not None and process.poll() is None:
+                    url = autotune_module._MANAGED_URL
+                    if url:
+                        return str(url)
+                    raise RuntimeError("managed llama-server process has no URL")
+            return current_ensure(config, request)
+
+        ensure_managed_server_first._mmm_managed_server_fast_path = True  # type: ignore[attr-defined]
+        autotune_module.ensure_tuned_server = ensure_managed_server_first
+
     autotune_module._mmm_server_efficiency_installed = True
 
 
