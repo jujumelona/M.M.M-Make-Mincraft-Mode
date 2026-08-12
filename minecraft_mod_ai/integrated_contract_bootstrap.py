@@ -36,8 +36,13 @@ def install() -> None:
     from . import game_design as game_design_module
     from . import retrieval as retrieval_module
     from . import technology_radar as technology_module
+    from . import platform_resolver as platform_resolver_module
+    from . import platform_central_ai_contract as platform_central_ai_module
     from .platform_planning_contract import install as install_platform_planning
     from .platform_central_ai_contract import install as install_platform_central_ai
+    from .platform_selection_efficiency_contract import (
+        install as install_platform_selection_efficiency,
+    )
 
     install_platform_planning(
         game_design_module=game_design_module,
@@ -45,6 +50,10 @@ def install() -> None:
         central_research_module=central_research_module,
         retrieval_module=retrieval_module,
         technology_module=technology_module,
+    )
+    install_platform_selection_efficiency(
+        resolver_module=platform_resolver_module,
+        central_contract_module=platform_central_ai_module,
     )
     install_platform_central_ai(
         game_design_module=game_design_module,
