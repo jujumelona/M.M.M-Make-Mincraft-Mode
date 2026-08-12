@@ -40,21 +40,10 @@ from .model_runtime_performance import install as _install_model_runtime_perform
 
 _install_model_runtime_performance()
 
-# Increase llama.cpp logical prompt batching while retaining the existing physical
-# microbatch ceiling and deterministic sampling parameters.
-from .llama_runtime_tuning import install as _install_llama_runtime_tuning
-
-_install_llama_runtime_tuning()
-
-# Benchmark the real first workflow prompt on the managed native llama-server against
-# non-speculative and MTP variants. Only correctness-equivalent results are eligible.
+# Native llama-server is the only local GGUF runtime. Autotune selects a
+# correctness-equivalent baseline/MTP server variant; hardware policy owns adapter
+# binding and native batch/microbatch/context flags.
 from . import llama_server_autotune as _llama_server_autotune_module
-from .llama_server_autotune import install as _install_llama_server_autotune
-
-_install_llama_server_autotune()
-
-# Let native llama-server choose target/draft layer placement for the actual host and
-# bind all local GGUF requests to that single managed server process.
 from . import llama_server_hardware_policy as _llama_server_hardware_policy_module
 from .llama_server_hardware_policy import install as _install_llama_server_hardware_policy
 
