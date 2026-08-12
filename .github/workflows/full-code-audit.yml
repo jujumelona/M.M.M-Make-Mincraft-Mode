@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
 
+# Generation 2: run against the post-regression-fix main snapshot.
 jobs:
   audit:
     runs-on: ubuntu-latest
