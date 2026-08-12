@@ -1,16 +1,51 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from functools import wraps
-from typing import Any
+from typing import Any, Callable
 
 from .platform_catalog import adapter_for_lock_values, adapter_for_target
 
 
 def install(mcp_tools_module: Any, production_tools_module: Any) -> None:
+    """Install the target-bound MCP surface once.
+
+    Signature-compatible forwarding and release-boundary hardening live here rather
+    than in a second compatibility wrapper.
+    """
+
     _install_core_tools(mcp_tools_module)
     _install_production_tools(production_tools_module)
+
+    from .platform_release_contract import install as install_platform_release
+
+    install_platform_release(mcp_tools_module)
+
+
+def _call_supported(
+    callable_obj: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+):
+    """Forward only kwargs declared by a concrete adapter/test double."""
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return callable_obj(*args, **kwargs)
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return callable_obj(*args, **kwargs)
+    accepted = {
+        key: value
+        for key, value in kwargs.items()
+        if key in signature.parameters
+    }
+    return callable_obj(*args, **accepted)
 
 
 def _required_adapter(module: Any, minecraft_version: str, loader: str = "fabric"):
@@ -34,9 +69,6 @@ def _service_adapter(
     loader: str = "fabric",
 ):
     active = getattr(self, "_mmm_last_platform_adapter", None)
-    # Once this MCP service has produced a plan, every plan-bound research call must
-    # stay on that immutable target. This deliberately overrides historical wrapper
-    # defaults such as search_project_rag(..., minecraft_version="1.20.1").
     if active is not None:
         return active
     configured = os.environ.get("MMM_MCP_MINECRAFT_VERSION", "").strip()
@@ -60,7 +92,9 @@ def _install_core_tools(module: Any) -> None:
         loader: str = "fabric",
     ) -> dict[str, Any]:
         adapter = _service_adapter(self, module, minecraft_version, loader)
-        return self.discovery_client_factory().search(
+        client = self.discovery_client_factory()
+        return _call_supported(
+            client.search,
             provider,
             query,
             cursor=cursor,
@@ -77,7 +111,9 @@ def _install_core_tools(module: Any) -> None:
         loader: str = "fabric",
     ) -> dict[str, Any]:
         adapter = _service_adapter(self, module, minecraft_version, loader)
-        return self.discovery_client_factory().inspect_modrinth_project(
+        client = self.discovery_client_factory()
+        return _call_supported(
+            client.inspect_modrinth_project,
             project_id,
             minecraft_version=adapter.minecraft_version,
             loader=adapter.loader,
@@ -136,7 +172,9 @@ def _install_core_tools(module: Any) -> None:
         }
 
     discover_ecosystem_resources._mmm_platform_bound = True
+    discover_ecosystem_resources._mmm_signature_compatible_target_forwarding = True
     inspect_modrinth_project._mmm_platform_bound = True
+    inspect_modrinth_project._mmm_signature_compatible_target_forwarding = True
     build_technology_radar._mmm_platform_bound = True
     search_project_rag._mmm_platform_bound = True
     cls.discover_ecosystem_resources = discover_ecosystem_resources
@@ -218,7 +256,8 @@ def _install_core_tools(module: Any) -> None:
         except ValueError as exc:
             raise module.SpecValidationError("revision must not be empty.") from exc
         active = getattr(self, "_mmm_last_platform_adapter", None)
-        return self.plan_complete_game(
+        return _call_supported(
+            self.plan_complete_game,
             merged,
             media_paths=media_paths,
             existing_input_sha256=existing_input_sha256,
@@ -232,6 +271,7 @@ def _install_core_tools(module: Any) -> None:
         )
 
     revise_complete_plan._mmm_platform_bound = True
+    revise_complete_plan._mmm_signature_compatible_target_forwarding = True
     cls.revise_complete_plan = revise_complete_plan
 
 
@@ -273,7 +313,9 @@ def _install_production_tools(module: Any) -> None:
                             "server_launcher_relative": "runtime/fabric-server-launch.jar",
                             "client_command_env": "MMM_MINECRAFT_CLIENT_COMMAND_JSON",
                             "allowed_server_commands": [
-                                "^list$", "^stop$", "^gametest runall$",
+                                "^list$",
+                                "^stop$",
+                                "^gametest runall$",
                                 "^say [A-Za-z0-9 _.,!?-]{1,120}$",
                                 "^tp testplayer -?[0-9]{1,7} -?[0-9]{1,7} -?[0-9]{1,7}$",
                                 "^give testplayer [a-z0-9_.-]+:[a-z0-9_./-]+( [1-9][0-9]{0,3})?$",
@@ -289,7 +331,8 @@ def _install_production_tools(module: Any) -> None:
                 },
                 ensure_ascii=False,
                 indent=2,
-            ) + "\n",
+            )
+            + "\n",
             encoding="utf-8",
         )
         self.runtime = module.MinecraftRuntimeManager(
