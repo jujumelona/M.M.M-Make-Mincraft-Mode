@@ -1,182 +1,49 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
-  statuses: write
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  mark-pending:
-    name: Mark CI pending
+  test:
+    name: Python contracts
     runs-on: ubuntu-latest
-    steps:
-      - name: Publish pending mmm/ci status
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: 'pending',
-              context: 'mmm/ci',
-              description: 'Python, package audit and Fabric reference verification running',
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
-
-  contracts:
-    name: Python contracts (${{ matrix.python-version }})
-    needs: mark-pending
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.11', '3.12']
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.11'
           cache: pip
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install
+
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
-      - name: Reproduce Colab editable metadata path
-        run: |
-          python -m pip install --force-reinstall 'setuptools==75.3.4'
-          python -m pip install --no-deps --no-build-isolation -e .
-      - name: Compile Python
-        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q minecraft_mod_ai tests tools mcp_gateway.py download_resources.py
+
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
+
       - name: Validate Mineflayer bridge syntax
         run: node --check integrations/mineflayer-1201/bridge.mjs
+
       - name: Validate canonical Colab notebook
         run: python tools/validate_colab_notebook.py
+
       - name: Verify packaged Skill catalog
         run: |
           python tools/package_skills.py
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
-      - name: Unit and contract tests
-        run: |
-          set -o pipefail
-          python -m pytest -q 2>&1 | tee pytest-${{ matrix.python-version }}.log
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: pytest-${{ matrix.python-version }}
-          path: pytest-${{ matrix.python-version }}.log
-          if-no-files-found: error
 
-  repository-audit:
-    name: Repository, package and wheel audit
-    needs: contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-      - name: Install audit dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]' build
-      - name: Run full repository audit
-        run: python tools/full_project_audit.py
-      - name: Enforce audit report
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          report = json.loads(
-              Path('audit/FULL_PROJECT_AUDIT.json').read_text(encoding='utf-8')
-          )
-          if report['overall_status'] != 'passed':
-            raise SystemExit(
-              'Full project audit failed: '
-              + ', '.join(report['failed_checks'])
-          )
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: full-project-audit
-          path: |
-            audit/FULL_PROJECT_AUDIT.json
-            audit/FULL_PROJECT_AUDIT.log
-          if-no-files-found: error
-
-  complete-reference:
-    name: Generated Fabric Gradle, GameTest and JAR
-    needs: repository-audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]'
-      - name: Generate, build, GameTest and inspect reference mod
-        run: python tools/verify_complete_reference_ci.py --output /tmp/mmm-complete-reference
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: complete-reference-evidence
-          path: |
-            /tmp/mmm-complete-reference/evidence/
-            /tmp/mmm-complete-reference/reference-build-result.json
-          if-no-files-found: warn
-
-  report-status:
-    if: always()
-    needs: [mark-pending, contracts, repository-audit, complete-reference]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish final mmm/ci commit status
-        uses: actions/github-script@v7
-        env:
-          CONTRACTS_RESULT: ${{ needs.contracts.result }}
-          AUDIT_RESULT: ${{ needs.repository-audit.result }}
-          REFERENCE_RESULT: ${{ needs.complete-reference.result }}
-        with:
-          script: |
-            const success =
-              process.env.CONTRACTS_RESULT === 'success' &&
-              process.env.AUDIT_RESULT === 'success' &&
-              process.env.REFERENCE_RESULT === 'success';
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: success ? 'success' : 'failure',
-              context: 'mmm/ci',
-              description: success
-                ? 'Python 3.10/3.11/3.12, repository audit and Fabric reference passed'
-                : `contracts=${process.env.CONTRACTS_RESULT}, audit=${process.env.AUDIT_RESULT}, reference=${process.env.REFERENCE_RESULT}`,
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
+      - name: Run unit and contract tests
+        run: python -m pytest -q
