@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from functools import wraps
 from typing import Any, Iterable
 
-_SCHEMA_VERSION = "mmm/llama-server-autotune-v5-adaptive-staged"
+_SCHEMA_VERSION = "mmm/llama-server-autotune-v6-adaptive-joint-mtp"
 _INSTALL_LOCK = threading.RLock()
 
 
@@ -23,6 +23,7 @@ class ServerVariant:
     ubatch: int = 0
     parallel: int = 1
     cache_reuse: int = 0
+    draft_p_min: float = 0.0
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
@@ -114,16 +115,37 @@ def _parallel_candidates() -> tuple[int, ...]:
 
 
 def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:
-    widths: list[int] = []
-    for token in os.environ.get("MMM_LLAMA_MTP_WIDTHS", "1,2,3").split(","):
-        try:
-            width = int(token.strip())
-        except ValueError:
-            continue
-        if 1 <= width <= 8 and width not in widths:
-            widths.append(width)
+    del autotune_module
+    base_widths = _parse_int_candidates(
+        os.environ.get("MMM_LLAMA_MTP_WIDTHS", "1,2,3"), minimum=1, maximum=32
+    )
+    confidence_widths = _parse_int_candidates(
+        os.environ.get("MMM_LLAMA_MTP_CONFIDENCE_WIDTHS", "2,4,8,16"), minimum=1, maximum=32
+    )
+    try:
+        confidence_p_min = float(os.environ.get("MMM_LLAMA_MTP_SEED_P_MIN", "0.8"))
+    except ValueError:
+        confidence_p_min = 0.8
+    confidence_p_min = max(0.0, min(0.999, confidence_p_min))
+
     values = [ServerVariant("baseline")]
-    values.extend(ServerVariant(f"mtp-{width}", "draft-mtp", width) for width in widths)
+    values.extend(ServerVariant(f"mtp-{w}", "draft-mtp", w) for w in base_widths)
+    if confidence_p_min > 0:
+        for width in confidence_widths:
+            candidate = ServerVariant(
+                f"mtp-{width}|pm{confidence_p_min:g}", "draft-mtp", width,
+                draft_p_min=confidence_p_min,
+            )
+            if all(
+                not (
+                    item.spec_type == "draft-mtp"
+                    and item.draft_n_max == candidate.draft_n_max
+                    and float(getattr(item, "draft_p_min", 0.0)) == candidate.draft_p_min
+                )
+                for item in values
+            ):
+                values.append(candidate)
+
     allowed = {"ngram-simple", "ngram-mod", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}
     for token in os.environ.get("MMM_LLAMA_NGRAM_SPEC_TYPES", "ngram-simple,ngram-mod,ngram-map-k").split(","):
         spec_type = token.strip()
@@ -250,7 +272,7 @@ def install(autotune_module: Any) -> None:
         current_fingerprint = autotune_module._fingerprint
         @wraps(current_fingerprint)
         def tuning_fingerprint(config: Any, binary: str, model_path: str) -> str:
-            payload = {"schema": _SCHEMA_VERSION, "base": current_fingerprint(config, binary, model_path), "mtp_supported": _model_supports_mtp(config), "load_mode": "auto", "spec_variants": [asdict(value) for value in _candidate_variants_for_config(autotune_module, config)], "ubatch_candidates": _ubatch_candidates(autotune_module), "cache_reuse_candidates": _cache_reuse_candidates(), "parallel_candidates": _parallel_candidates(), "concurrent_requests": _parallel_target(), "search": "mtp-first-ngram-fallback+ubatch-progressive"}
+            payload = {"schema": _SCHEMA_VERSION, "base": current_fingerprint(config, binary, model_path), "mtp_supported": _model_supports_mtp(config), "load_mode": "auto", "spec_variants": [asdict(value) for value in _candidate_variants_for_config(autotune_module, config)], "ubatch_candidates": _ubatch_candidates(autotune_module), "cache_reuse_candidates": _cache_reuse_candidates(), "parallel_candidates": _parallel_candidates(), "concurrent_requests": _parallel_target(), "search": "adaptive-joint-mtp-seeds+ngram-fallback+ubatch-exhaustive"}
             return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         if getattr(current_fingerprint, "_mmm_stable_model_signature", False):
             tuning_fingerprint._mmm_stable_model_signature = True
@@ -277,7 +299,7 @@ def install(autotune_module: Any) -> None:
             benchmark_request = autotune_module._compact_benchmark_request(request)
             probe_tokens = min(int(config.max_new_tokens), autotune_module._env_int("MMM_LLAMA_AUTOTUNE_TOKENS", autotune_module._BENCHMARK_OUTPUT_TOKENS))
             stage_gain = autotune_module._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
-            spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.03))
+            spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.01))
             probes: list[Any] = []
             values = _candidate_variants_for_config(autotune_module, config)
             baseline_variant = next(value for value in values if value.spec_type == "none")
@@ -308,18 +330,16 @@ def install(autotune_module: Any) -> None:
             selected = replace(spec.variant, ubatch=min(autotune_module._env_int("MMM_LLAMA_BATCH", 2048), autotune_module._env_int("MMM_LLAMA_UBATCH", 512)))
             final_probe = spec
             base_ubatch = selected.ubatch
-            # Reuse the already measured selected probe as the base ubatch. Only probe
-            # larger candidates progressively; stop once the next step fails to improve.
+            # Every ubatch candidate is independent: a local dip must not hide a faster later setting.
             for value in sorted((v for v in _ubatch_candidates(autotune_module) if v != base_ubatch)):
                 variant = replace(selected, name=f"{selected.name.split('|ub', 1)[0]}|ub{value}", ubatch=value)
                 probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
                 probes.append(probe)
                 if not _eligible(probe, baseline):
-                    break
-                if _balanced_score(probe, final_probe) < max(1.0, stage_gain):
-                    break
-                selected = variant
-                final_probe = probe
+                    continue
+                if _balanced_score(probe, final_probe) >= max(1.0, stage_gain):
+                    selected = variant
+                    final_probe = probe
 
             concurrency = _parallel_target()
             for value in _parallel_candidates():
@@ -339,6 +359,8 @@ def install(autotune_module: Any) -> None:
         benchmark._mmm_staged_runtime_tuning = True
         benchmark._mmm_model_eligible_speculation = True
         benchmark._mmm_adaptive_cold_search = True
+        benchmark._mmm_adaptive_joint_mtp_search = True
+        benchmark._mmm_exhaustive_ubatch_search = True
         autotune_module._benchmark = benchmark
 
         current_launch = autotune_module._launch_selected

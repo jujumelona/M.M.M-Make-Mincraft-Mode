@@ -71,25 +71,22 @@ def test_server_runtime_tuning_contract_is_installed() -> None:
     )
 
 
-def test_default_variants_compare_mtp_and_ngram_speculation(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_LLAMA_MTP_WIDTHS", raising=False)
-    monkeypatch.delenv("MMM_LLAMA_NGRAM_SPEC_TYPES", raising=False)
+def test_default_variants_use_sparse_joint_mtp_seeds(monkeypatch) -> None:
+    for name in (
+        "MMM_LLAMA_MTP_WIDTHS", "MMM_LLAMA_MTP_CONFIDENCE_WIDTHS",
+        "MMM_LLAMA_MTP_SEED_P_MIN", "MMM_LLAMA_NGRAM_SPEC_TYPES",
+    ):
+        monkeypatch.delenv(name, raising=False)
     values = _candidate_variants()
-    assert [value.name for value in values] == [
-        "baseline",
-        "mtp-1",
-        "mtp-2",
-        "mtp-3",
-        "ngram-simple",
-        "ngram-mod",
-        "ngram-map-k",
+    mtp = [value for value in values if value.spec_type == "draft-mtp"]
+    assert [(value.draft_n_max, value.draft_p_min) for value in mtp] == [
+        (1, 0.0), (2, 0.0), (3, 0.0), (2, 0.8), (4, 0.8), (8, 0.8), (16, 0.8),
     ]
-    assert [value.draft_n_max for value in values[1:4]] == [1, 2, 3]
-    assert [value.spec_type for value in values[4:]] == [
-        "ngram-simple",
-        "ngram-mod",
-        "ngram-map-k",
+    assert [value.spec_type for value in values if value.spec_type.startswith("ngram-")] == [
+        "ngram-simple", "ngram-mod", "ngram-map-k",
     ]
+    assert getattr(autotune._benchmark, "_mmm_adaptive_joint_mtp_search", False)
+    assert getattr(autotune._benchmark, "_mmm_exhaustive_ubatch_search", False)
 
 
 def test_default_runtime_candidates_are_bounded(monkeypatch) -> None:

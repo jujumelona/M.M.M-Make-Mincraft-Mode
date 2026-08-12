@@ -49,7 +49,7 @@ def _as_speed_variant(value: Any, *, draft_p_min: float | None = None) -> SpeedS
 def _mtp_p_min_candidates() -> tuple[float, ...]:
     values: list[float] = [0.0]
     for token in os.environ.get(
-        "MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.8"
+        "MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.6,0.8,0.9"
     ).split(","):
         try:
             value = round(float(token.strip()), 4)
@@ -123,7 +123,7 @@ def _kv_candidates() -> tuple[str, ...]:
 def _kv_autotune_enabled(autotune: Any) -> bool:
     return bool(
         autotune._env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True)
-        and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", False)
+        and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", True)
         and _tuning_objective() == "single_stream"
     )
 
