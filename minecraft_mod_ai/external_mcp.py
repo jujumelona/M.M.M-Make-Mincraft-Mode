@@ -73,8 +73,6 @@ class ExternalMCPRegistry:
 
             version_policy = entry.get("version_policy")
             if version_policy is None:
-                # v1 compatibility: an explicit list was historically an exact pin;
-                # otherwise the server is version-agnostic.
                 version_policy = "exact" if entry.get("target_versions") else "agnostic"
                 entry["version_policy"] = version_policy
             if version_policy not in _ALLOWED_VERSION_POLICIES:
@@ -138,6 +136,14 @@ class ExternalMCPRegistry:
             for key, value in target_args.items()
         ):
             raise ValueError(f"Invalid target_args for {name}/{capability}.")
+        response_target_fields = route.get("response_target_fields", [])
+        if not isinstance(response_target_fields, list) or any(
+            not isinstance(value, str) or not value.strip()
+            for value in response_target_fields
+        ):
+            raise ValueError(
+                f"Invalid response_target_fields for {name}/{capability}."
+            )
         priority = route.get("priority", 100)
         if type(priority) is not int or not 0 <= priority <= 10_000:
             raise ValueError(f"Invalid priority for {name}/{capability}.")
