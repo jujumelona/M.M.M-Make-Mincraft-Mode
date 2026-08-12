@@ -82,7 +82,11 @@ class MinecraftRuntimeManager:
         self.instance_root: Path | None = None
         self._server_log: list[str] = []
         self._client_log: list[str] = []
+        # Process/instance state and log buffers have different blocking behavior.
+        # Never make the stdout reader wait behind a 30s process shutdown lock: a
+        # chatty child could otherwise fill its pipe while stop_server waits.
         self._lock = threading.RLock()
+        self._log_lock = threading.RLock()
 
     def prepare_instance(
         self,
@@ -103,30 +107,37 @@ class MinecraftRuntimeManager:
                 raise RuntimePolicyError("Invalid runtime instance name.")
             if self.profile.eula_must_be_explicitly_accepted and not eula_accepted:
                 raise RuntimePolicyError("Minecraft EULA acceptance must be explicit.")
-            root = self._new_child(Path("runtime-instances") / instance_name)
-            mods = root / "mods"
-            mods.mkdir(parents=True)
+
+            # Validate all external inputs before creating the disposable directory.
+            # A bad jar/launcher must not leave a reserved instance name behind.
             jar = self._existing_file(mod_jar)
             launcher = self._existing_file(server_launcher)
-            shutil.copy2(jar, mods / jar.name)
-            runtime_launcher = root / "fabric-server-launch.jar"
-            shutil.copy2(launcher, runtime_launcher)
-            (root / "eula.txt").write_text("eula=true\n", encoding="utf-8")
-            (root / "server.properties").write_text(
-                "\n".join(
-                    [
-                        "online-mode=false",
-                        "enable-command-block=true",
-                        "spawn-protection=0",
-                        "view-distance=6",
-                        "simulation-distance=5",
-                        "max-players=4",
-                        "motd=M.M.M disposable integration test",
-                    ]
+            root = self._new_child(Path("runtime-instances") / instance_name)
+            try:
+                mods = root / "mods"
+                mods.mkdir(parents=True)
+                shutil.copy2(jar, mods / jar.name)
+                runtime_launcher = root / "fabric-server-launch.jar"
+                shutil.copy2(launcher, runtime_launcher)
+                (root / "eula.txt").write_text("eula=true\n", encoding="utf-8")
+                (root / "server.properties").write_text(
+                    "\n".join(
+                        [
+                            "online-mode=false",
+                            "enable-command-block=true",
+                            "spawn-protection=0",
+                            "view-distance=6",
+                            "simulation-distance=5",
+                            "max-players=4",
+                            "motd=M.M.M disposable integration test",
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
-                + "\n",
-                encoding="utf-8",
-            )
+            except BaseException:
+                shutil.rmtree(root, ignore_errors=True)
+                raise
             self.instance_root = root
             return {
                 "schema_version": "mmm/runtime-instance-v1",
@@ -166,7 +177,8 @@ class MinecraftRuntimeManager:
                 start_new_session=(os.name != "nt"),
             )
             self.server_process = process
-            self._server_log.clear()
+            with self._log_lock:
+                self._server_log.clear()
             threading.Thread(
                 target=self._read_stream,
                 args=(process, self._server_log),
@@ -182,9 +194,9 @@ class MinecraftRuntimeManager:
                         self.server_process = None
                 raise RuntimePolicyError(
                     "Minecraft server exited before readiness.\n"
-                    + "\n".join(self._server_log[-80:])
+                    + "\n".join(self._log_tail(self._server_log, 80))
                 )
-            text = "\n".join(self._server_log[-80:])
+            text = "\n".join(self._log_tail(self._server_log, 80))
             if any(pattern.search(text) for pattern in self.profile.startup_ready_patterns):
                 return self.status()
             time.sleep(0.5)
@@ -232,7 +244,8 @@ class MinecraftRuntimeManager:
                 start_new_session=(os.name != "nt"),
             )
             self.client_process = process
-            self._client_log.clear()
+            with self._log_lock:
+                self._client_log.clear()
             threading.Thread(
                 target=self._read_stream,
                 args=(process, self._client_log),
@@ -277,10 +290,10 @@ class MinecraftRuntimeManager:
     def tail_logs(self, lines: int = 120) -> dict[str, Any]:
         if not 1 <= lines <= 1000:
             raise RuntimePolicyError("Log line limit must be 1-1000.")
-        with self._lock:
+        with self._log_lock:
             return {
-                "server": self._server_log[-lines:],
-                "client": self._client_log[-lines:],
+                "server": list(self._server_log[-lines:]),
+                "client": list(self._client_log[-lines:]),
             }
 
     def stop_server(self) -> dict[str, Any]:
@@ -306,21 +319,31 @@ class MinecraftRuntimeManager:
             self.stop_client()
             self.stop_server()
             root = self.instance_root
-            self.instance_root = None
+            # Keep the path bound until deletion succeeds. If rmtree raises, callers
+            # retain a valid cleanup target and can retry rather than leaking an
+            # unreachable disposable instance.
             if root and root.is_dir():
                 shutil.rmtree(root)
+            if self.instance_root is root:
+                self.instance_root = None
             return {"status": "cleaned", "removed": str(root) if root else None}
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            return {
-                "schema_version": "mmm/runtime-status-v1",
-                "instance_root": str(self.instance_root) if self.instance_root else None,
-                "server_running": self._process_running(self.server_process),
-                "client_running": self._process_running(self.client_process),
-                "server_log_lines": len(self._server_log),
-                "client_log_lines": len(self._client_log),
-            }
+            instance_root = self.instance_root
+            server_process = self.server_process
+            client_process = self.client_process
+        with self._log_lock:
+            server_log_lines = len(self._server_log)
+            client_log_lines = len(self._client_log)
+        return {
+            "schema_version": "mmm/runtime-status-v1",
+            "instance_root": str(instance_root) if instance_root else None,
+            "server_running": self._process_running(server_process),
+            "client_running": self._process_running(client_process),
+            "server_log_lines": server_log_lines,
+            "client_log_lines": client_log_lines,
+        }
 
     def _stop_process(
         self,
@@ -365,14 +388,18 @@ class MinecraftRuntimeManager:
     def _process_running(process: subprocess.Popen[str] | None) -> bool:
         return bool(process is not None and process.poll() is None)
 
-    @staticmethod
-    def _read_stream(process: subprocess.Popen[str], target: list[str]) -> None:
+    def _read_stream(self, process: subprocess.Popen[str], target: list[str]) -> None:
         if process.stdout is None:
             return
         for line in iter(process.stdout.readline, ""):
-            target.append(line.rstrip())
-            if len(target) > 5000:
-                del target[:1000]
+            with self._log_lock:
+                target.append(line.rstrip())
+                if len(target) > 5000:
+                    del target[:1000]
+
+    def _log_tail(self, target: list[str], lines: int) -> list[str]:
+        with self._log_lock:
+            return list(target[-lines:])
 
     def _new_child(self, relative: Path) -> Path:
         target = (self.workspace_root / relative).resolve()
