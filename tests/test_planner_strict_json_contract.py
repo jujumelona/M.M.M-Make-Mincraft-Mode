@@ -24,7 +24,7 @@ def test_embedded_json_with_prose_is_rejected() -> None:
 def test_truncated_json_is_not_auto_closed() -> None:
     install(runtime)
     with pytest.raises(SpecValidationError, match="one complete strict JSON object"):
-        runtime._extract_with_safe_empty_empty_defaults(
+        runtime._extract_with_safe_empty_defaults(
             planner,
             '{"value": 1',
             expected_contracts=EXPECTED,
@@ -47,6 +47,29 @@ def test_response_wide_json_fence_is_accepted_as_transport_only() -> None:
         '```json\n{"value": 1}\n```',
         expected_contracts=EXPECTED,
     ) == {"value": 1}
+
+
+def test_production_outline_json_fence_is_accepted_without_synthesizing_fields() -> None:
+    install(runtime)
+    expected = (
+        frozenset({"modules", "assets", "audio", "acceptance_tests"}),
+        frozenset({"module_batches", "assets", "audio", "acceptance_tests"}),
+        frozenset({"production_batches", "complete", "next_cursor"}),
+    )
+    payload = (
+        '```json\n'
+        '{"production_batches":[],"complete":true,"next_cursor":""}'
+        '\n```'
+    )
+    assert runtime._extract_with_safe_empty_defaults(
+        planner,
+        payload,
+        expected_contracts=expected,
+    ) == {
+        "production_batches": [],
+        "complete": True,
+        "next_cursor": "",
+    }
 
 
 def test_json_fence_with_surrounding_prose_is_rejected() -> None:
