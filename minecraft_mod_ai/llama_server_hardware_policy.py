@@ -4,11 +4,21 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import time
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+
+_TELEMETRY_LOCK = threading.Lock()
+_TELEMETRY_TOTALS = {
+    "prompt_tokens": 0,
+    "output_tokens": 0,
+    "generation_seconds": 0.0,
+    "requests": 0,
+}
 
 
 def _existing_built_server() -> str | None:
@@ -59,15 +69,11 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     if getattr(request, "response_format", None) == "json":
         payload["response_format"] = {"type": "json_object"}
-        # Structured planner pages are host-validated and must be emitted directly in
-        # the assistant content channel rather than inside an opaque reasoning field.
         payload["reasoning_effort"] = "none"
     return payload
 
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:
-    """Return opaque reasoning progress and visible content from one SSE choice."""
-
     reasoning = ""
     content = ""
     delta = choice.get("delta")
@@ -103,11 +109,133 @@ def _request_content_chars(payload: dict[str, Any]) -> int:
     return total
 
 
+def _server_origin(server_url: str) -> str:
+    value = server_url.rstrip("/")
+    return value[:-3] if value.endswith("/v1") else value
+
+
+def _parse_prometheus_metrics(text: str) -> dict[str, float]:
+    values: dict[str, float] = {}
+    prefix = "llamacpp:"
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or not line.startswith(prefix):
+            continue
+        fields = line.split()
+        if len(fields) != 2 or "{" in fields[0]:
+            continue
+        try:
+            values[fields[0][len(prefix) :]] = float(fields[1])
+        except ValueError:
+            continue
+    return values
+
+
+def _metrics_snapshot(httpx_module: Any, server_url: str) -> dict[str, float] | None:
+    try:
+        response = httpx_module.get(
+            f"{_server_origin(server_url)}/metrics",
+            timeout=0.75,
+        )
+        if response.status_code != 200:
+            return None
+        values = _parse_prometheus_metrics(response.text)
+        required = {"prompt_tokens_total", "tokens_predicted_total"}
+        return values if required.issubset(values) else None
+    except Exception:
+        return None
+
+
+def _slot_snapshot(httpx_module: Any, server_url: str) -> dict[str, int] | None:
+    """Read current native slot counters; no prompt/generated text is requested."""
+
+    try:
+        response = httpx_module.get(
+            f"{_server_origin(server_url)}/slots",
+            timeout=0.75,
+        )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        if not isinstance(payload, list):
+            return None
+        active = next(
+            (
+                value
+                for value in payload
+                if isinstance(value, dict) and bool(value.get("is_processing"))
+            ),
+            None,
+        )
+        if active is None:
+            return None
+        next_token = active.get("next_token")
+        if not isinstance(next_token, dict):
+            next_token = {}
+        return {
+            "prompt_tokens": max(0, int(active.get("n_prompt_tokens", 0) or 0)),
+            "prompt_processed": max(
+                0, int(active.get("n_prompt_tokens_processed", 0) or 0)
+            ),
+            "prompt_cached": max(
+                0, int(active.get("n_prompt_tokens_cache", 0) or 0)
+            ),
+            "output_tokens": max(0, int(next_token.get("n_decoded", 0) or 0)),
+        }
+    except Exception:
+        return None
+
+
+def _telemetry_totals() -> dict[str, float]:
+    with _TELEMETRY_LOCK:
+        return dict(_TELEMETRY_TOTALS)
+
+
+def _commit_metrics_delta(
+    before: dict[str, float] | None,
+    after: dict[str, float] | None,
+) -> dict[str, float] | None:
+    if before is None or after is None:
+        return None
+    prompt = max(
+        0,
+        int(after.get("prompt_tokens_total", 0))
+        - int(before.get("prompt_tokens_total", 0)),
+    )
+    output = max(
+        0,
+        int(after.get("tokens_predicted_total", 0))
+        - int(before.get("tokens_predicted_total", 0)),
+    )
+    generation_seconds = max(
+        0.0,
+        float(after.get("tokens_predicted_seconds_total", 0.0))
+        - float(before.get("tokens_predicted_seconds_total", 0.0)),
+    )
+    with _TELEMETRY_LOCK:
+        _TELEMETRY_TOTALS["prompt_tokens"] += prompt
+        _TELEMETRY_TOTALS["output_tokens"] += output
+        _TELEMETRY_TOTALS["generation_seconds"] += generation_seconds
+        _TELEMETRY_TOTALS["requests"] += 1
+        cumulative = dict(_TELEMETRY_TOTALS)
+    return {
+        "prompt_tokens": prompt,
+        "output_tokens": output,
+        "generation_seconds": generation_seconds,
+        "cumulative_prompt_tokens": int(cumulative["prompt_tokens"]),
+        "cumulative_output_tokens": int(cumulative["output_tokens"]),
+        "cumulative_generation_seconds": float(cumulative["generation_seconds"]),
+        "cumulative_requests": int(cumulative["requests"]),
+    }
+
+
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
-    """Stream exactly one selected native server; never load an alternate backend."""
+    """Stream one native server with low-overhead native token telemetry."""
 
     from .model_adapters import ModelBackendError
 
+    metrics_before: dict[str, float] | None = None
+    metrics_committed = False
     try:
         import httpx
 
@@ -121,8 +249,14 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         output_events = 0
         request_started = time.monotonic()
         last_progress_report = request_started
+        first_output_time: float | None = None
+        last_token_sample_time: float | None = None
+        last_token_sample_count = 0
         first_output_reported = False
         saw_done = False
+        last_slot: dict[str, int] | None = None
+        metrics_before = _metrics_snapshot(httpx, server_url)
+        committed_at_start = _telemetry_totals()
 
         with httpx.stream("POST", endpoint, json=payload, timeout=timeout) as response:
             if response.status_code != 200:
@@ -182,6 +316,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 
                 now = time.monotonic()
                 if not first_output_reported:
+                    first_output_time = now
                     print(
                         "llama server: first output delta",
                         f" elapsed={now - request_started:.1f}s",
@@ -190,14 +325,47 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                     )
                     first_output_reported = True
                 if now - last_progress_report >= 15.0:
-                    print(
-                        "llama server: progress",
-                        f" content_chars={generated_chars}",
-                        f" reasoning_chars={reasoning_chars}",
-                        f" events={output_events}",
-                        f" elapsed={now - request_started:.1f}s",
-                        flush=True,
-                    )
+                    slot = _slot_snapshot(httpx, server_url)
+                    if slot is not None:
+                        last_slot = slot
+                        output_tokens = slot["output_tokens"]
+                        sample_base_time = last_token_sample_time or first_output_time or request_started
+                        sample_base_count = (
+                            last_token_sample_count if last_token_sample_time is not None else 0
+                        )
+                        sample_seconds = max(1e-9, now - sample_base_time)
+                        current_tps = max(0.0, output_tokens - sample_base_count) / sample_seconds
+                        last_token_sample_time = now
+                        last_token_sample_count = output_tokens
+                        request_total = slot["prompt_tokens"] + output_tokens
+                        cumulative_total = (
+                            int(committed_at_start["prompt_tokens"])
+                            + int(committed_at_start["output_tokens"])
+                            + slot["prompt_processed"]
+                            + output_tokens
+                        )
+                        print(
+                            "llama server: progress",
+                            f" prompt_tokens={slot['prompt_tokens']}",
+                            f" prompt_processed={slot['prompt_processed']}",
+                            f" prompt_cached={slot['prompt_cached']}",
+                            f" output_tokens={output_tokens}",
+                            f" request_tokens={request_total}",
+                            f" tok_s={current_tps:.2f}",
+                            f" cumulative_tokens={cumulative_total}",
+                            f" elapsed={now - request_started:.1f}s",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            "llama server: progress",
+                            f" content_chars={generated_chars}",
+                            f" reasoning_chars={reasoning_chars}",
+                            f" events={output_events}",
+                            f" elapsed={now - request_started:.1f}s",
+                            " token_telemetry=unavailable",
+                            flush=True,
+                        )
                     last_progress_report = now
 
         if not saw_done:
@@ -209,16 +377,65 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                     "llama server produced reasoning deltas but no visible content"
                 )
             raise RuntimeError("llama server stream produced no text content")
-        print(
-            "llama server: generation complete",
-            f" content_chars={generated_chars}",
-            f" reasoning_chars={reasoning_chars}",
-            f" elapsed={time.monotonic() - request_started:.1f}s",
-            sep="",
-            flush=True,
-        )
+
+        metrics_after = _metrics_snapshot(httpx, server_url)
+        usage = _commit_metrics_delta(metrics_before, metrics_after)
+        metrics_committed = usage is not None
+        elapsed = time.monotonic() - request_started
+        if usage is not None:
+            request_total = int(usage["prompt_tokens"]) + int(usage["output_tokens"])
+            cumulative_total = int(usage["cumulative_prompt_tokens"]) + int(
+                usage["cumulative_output_tokens"]
+            )
+            generation_seconds = float(usage["generation_seconds"])
+            request_tps = (
+                float(usage["output_tokens"]) / generation_seconds
+                if generation_seconds > 0
+                else 0.0
+            )
+            cumulative_generation_seconds = float(
+                usage["cumulative_generation_seconds"]
+            )
+            cumulative_tps = (
+                float(usage["cumulative_output_tokens"]) / cumulative_generation_seconds
+                if cumulative_generation_seconds > 0
+                else 0.0
+            )
+            print(
+                "llama server: generation complete",
+                f" prompt_tokens={int(usage['prompt_tokens'])}",
+                f" output_tokens={int(usage['output_tokens'])}",
+                f" request_tokens={request_total}",
+                f" tok_s={request_tps:.2f}",
+                f" cumulative_prompt_tokens={int(usage['cumulative_prompt_tokens'])}",
+                f" cumulative_output_tokens={int(usage['cumulative_output_tokens'])}",
+                f" cumulative_tokens={cumulative_total}",
+                f" cumulative_tok_s={cumulative_tps:.2f}",
+                f" elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+        else:
+            fallback = last_slot or {}
+            print(
+                "llama server: generation complete",
+                f" content_chars={generated_chars}",
+                f" output_tokens={fallback.get('output_tokens', 'unknown')}",
+                f" elapsed={elapsed:.1f}s",
+                " token_telemetry=unavailable",
+                flush=True,
+            )
         return content
     except Exception as exc:
+        # Count native work consumed by a failed request too when exact server counters
+        # are still available. This makes cumulative usage reflect retries/failures.
+        if not metrics_committed:
+            try:
+                import httpx
+
+                metrics_after = _metrics_snapshot(httpx, server_url)
+                _commit_metrics_delta(metrics_before, metrics_after)
+            except Exception:
+                pass
         if isinstance(exc, ModelBackendError):
             raise
         raise ModelBackendError(
@@ -261,10 +478,15 @@ def install(autotune_module: Any) -> None:
                 pass
             if "--parallel" not in args and "-np" not in args:
                 args.extend(["--parallel", "1"])
+            if "--metrics" not in args:
+                args.append("--metrics")
+            if "--slots" not in args:
+                args.append("--slots")
             return args
 
         adaptive_base_args._mmm_auto_gpu_layers = True  # type: ignore[attr-defined]
         adaptive_base_args._mmm_single_decode_slot = True  # type: ignore[attr-defined]
+        adaptive_base_args._mmm_native_telemetry_endpoints = True  # type: ignore[attr-defined]
         autotune_module._base_args = adaptive_base_args
 
     original_variant = autotune_module._variant_args
@@ -409,9 +631,13 @@ def install(autotune_module: Any) -> None:
 
 
 __all__ = [
+    "_metrics_snapshot",
+    "_parse_prometheus_metrics",
     "_request_content_chars",
     "_server_payload",
+    "_slot_snapshot",
     "_stream_delta_parts",
     "_strict_server_generate",
+    "_telemetry_totals",
     "install",
 ]
