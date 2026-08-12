@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Callable
 
 
-BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v1"
-BUNDLE_RELEASE_TAG = "native-llama-b10375-cuda12.4-v1"
+BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v2"
+BUNDLE_RELEASE_TAG = "native-llama-b10375-cuda12.4-v2"
 BUNDLE_RELEASE_BASE = (
     "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/releases/download/"
     + BUNDLE_RELEASE_TAG
@@ -62,7 +62,7 @@ def _cache_root() -> Path:
 def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "M.M.M-Colab-native-llama/1"},
+        headers={"User-Agent": "M.M.M-Colab-native-llama/2"},
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(request, timeout=120) as response, destination.open(
@@ -145,6 +145,10 @@ def _validate_bundle(root: Path, *, cuda_arch: str, source_ref: str) -> Path:
                 f"prebuilt native llama manifest mismatch for {key}: "
                 f"expected {value!r}, found {manifest.get(key)!r}"
             )
+    if manifest.get("cuda_graphs") is not True:
+        raise RuntimeError(
+            "prebuilt native llama manifest requires cuda_graphs=true"
+        )
     files = manifest.get("files")
     if not isinstance(files, dict) or not files:
         raise RuntimeError("prebuilt native llama manifest contains no files")
