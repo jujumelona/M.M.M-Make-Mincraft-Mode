@@ -6,7 +6,6 @@ on:
     branches: [main]
     paths:
       - .github/workflows/build-native-llama-cuda.yml
-      - tools/colab_runtime_setup.py
       - tools/native_llama_bundle.py
 
 permissions:
@@ -14,7 +13,7 @@ permissions:
 
 concurrency:
   group: native-llama-b10375-cuda12.4
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
