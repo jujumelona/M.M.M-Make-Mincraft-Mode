@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
 
+# Retry after canonical notebook validator dropped the obsolete MTP cell.
 jobs:
   apply:
     runs-on: ubuntu-latest
