@@ -26,24 +26,15 @@ def install(api_module: Any, plan_render_module: Any) -> None:
     _install_legacy_session(api_module)
     _install_plan_render(plan_render_module)
 
-    # The orchestrator has already been imported when this API contract is installed.
-    # Install the live official-template wrapper after the older runtime target wrapper
-    # so future targets can bypass historical MMM project templates.
     from . import complete_orchestrator as orchestrator_module
     from .platform_live_execution_contract import install as install_live_execution
 
     install_live_execution(orchestrator_module)
 
-    # External runtime readers must run while the disposable Minecraft server/client
-    # are still alive, so hook the playtest call before the orchestrator cleanup block.
     from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
 
     install_mcp_runtime(orchestrator_module)
 
-    # External Minecraft MCPs are capability-routed supplements, not a replacement
-    # for the host PlatformLock or deterministic JDT/Gradle/GameTest gates. Install
-    # after live execution so coder target ContextVars and migration lowering already
-    # exist when federation hooks are attached.
     from . import complete_planner as complete_planner_module
     from . import custom_module_generator as custom_module_generator_module
     from . import mcp_tools as mcp_tools_module
@@ -56,6 +47,13 @@ def install(api_module: Any, plan_render_module: Any) -> None:
         repair_engine_module=repair_engine_module,
         mcp_tools_module=mcp_tools_module,
     )
+
+    # Replace the generic per-call repair federation with a provider-batched lane:
+    # minecraft-dev initializes once and validates source/mixins/AW/AT over the same
+    # MCP session. This prevents one npx/JVM setup per file.
+    from .minecraft_mcp_repair_batch_contract import install as install_mcp_repair_batch
+
+    install_mcp_repair_batch(repair_engine_module)
 
     # Skill markdown/package snapshots pre-date dynamic target selection. Compile both
     # source and wheel Skills through the same target-neutral policy overlay so no
@@ -74,8 +72,6 @@ def _install_complete_session(api_module: Any) -> None:
 
     @wraps(original)
     def init(self: Any, *args: Any, **kwargs: Any) -> None:
-        # The historical constructor still checks 1.20.1 internally. Omission now means
-        # auto; only a genuinely explicit caller value becomes a host constraint.
         explicit_version = kwargs.pop("minecraft_version", None)
         if explicit_version is not None:
             explicit_version = str(explicit_version).strip()
@@ -86,6 +82,8 @@ def _install_complete_session(api_module: Any) -> None:
                     adapter_for_target(explicit_version, "fabric")
                 except ValueError as exc:
                     raise api_module.SpecValidationError(str(exc)) from exc
+        # Historical constructor compatibility only; planner target selection is
+        # authoritative after initialization and does not inherit this placeholder.
         kwargs["minecraft_version"] = "1.20.1"
         original(self, *args, **kwargs)
 
