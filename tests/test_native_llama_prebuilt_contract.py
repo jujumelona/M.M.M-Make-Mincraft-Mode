@@ -65,6 +65,20 @@ def test_bundle_workflow_builds_graph_enabled_shared_cuda_for_supported_colab_ar
     assert "sha256sum -c" in workflow
 
 
+def test_bundle_workflow_uses_driver_stub_only_for_linking() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "build-native-llama-cuda.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "/usr/local/cuda/lib64/stubs/libcuda.so" in workflow
+    assert 'ln -sf libcuda.so "$stub_dir/libcuda.so.1"' in workflow
+    assert "-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" in workflow
+    assert "Shared library: [libcuda.so.1]" in workflow
+    assert "forbidden runtime path to the CI CUDA stub" in workflow
+    assert "test ! -e bundle/bin/libcuda.so" in workflow
+    assert "test ! -e bundle/bin/libcuda.so.1" in workflow
+
+
 def test_bundle_loader_requires_graph_enabled_v2_manifest(tmp_path: Path) -> None:
     helper = _load_bundle_helper()
     assert helper.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v2"
