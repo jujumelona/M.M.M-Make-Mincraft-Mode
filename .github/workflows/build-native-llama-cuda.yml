@@ -1,0 +1,149 @@
+name: Build native llama CUDA bundles
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-native-llama-cuda.yml
+      - tools/colab_runtime_setup.py
+      - tools/native_llama_bundle.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-llama-b10375-cuda12.4
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: CUDA SM${{ matrix.cuda_arch }}
+    runs-on: ubuntu-22.04
+    container: nvidia/cuda:12.4.1-devel-ubuntu22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda_arch: ["75", "80", "89"]
+    env:
+      LLAMA_SOURCE_REF: ba360efe1f574ebae727aad64112d18ecedca85a
+      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v1
+      BUNDLE_PREFIX: llama-b10375-cuda12.4
+    steps:
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates cmake git ninja-build python3
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Build pinned native llama-server
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git llama.cpp
+          git -C llama.cpp fetch --depth 1 origin "$LLAMA_SOURCE_REF"
+          git -C llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_SOURCE_REF"
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.cuda_arch }}" \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_APP=OFF \
+            -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_CURL=OFF
+          cmake --build llama.cpp/build --target llama-server -j "$(nproc)"
+
+      - name: Package server and shared libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/bin dist
+          cp -L llama.cpp/build/bin/llama-server bundle/bin/llama-server
+          find llama.cpp/build/bin -maxdepth 1 -type f -name '*.so*' -print0 \
+            | xargs -0 -r -I{} cp -L '{}' bundle/bin/
+          test -x bundle/bin/llama-server
+          find bundle/bin -maxdepth 1 -type f -name 'libggml-cuda.so*' | grep -q .
+          BUNDLE_ARCH="${{ matrix.cuda_arch }}" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("bundle")
+          files = {}
+          for path in sorted((root / "bin").iterdir()):
+              if path.is_file():
+                  files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+          manifest = {
+              "schema_version": os.environ["BUNDLE_SCHEMA"],
+              "llama_source_ref": os.environ["LLAMA_SOURCE_REF"],
+              "cuda_arch": os.environ["BUNDLE_ARCH"],
+              "cuda_toolkit": "12.4",
+              "platform": "linux-x86_64",
+              "files": files,
+          }
+          (root / "manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          asset="${BUNDLE_PREFIX}-sm${{ matrix.cuda_arch }}-linux-x86_64.tar.gz"
+          tar -C bundle -czf "dist/$asset" .
+          (cd dist && sha256sum "$asset" > "$asset.sha256")
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-llama-sm${{ matrix.cuda_arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified bundles
+    runs-on: ubuntu-22.04
+    needs: build
+    env:
+      RELEASE_TAG: native-llama-b10375-cuda12.4-v1
+    steps:
+      - name: Download built bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Verify release payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in 75 80 89; do
+            asset="llama-b10375-cuda12.4-sm${arch}-linux-x86_64.tar.gz"
+            test -s "dist/$asset"
+            test -s "dist/$asset.sha256"
+            (cd dist && sha256sum -c "$asset.sha256")
+          done
+
+      - name: Publish stable release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Native llama.cpp CUDA b10375" \
+              --notes "Verified native llama-server CUDA 12.4 bundles for Colab. Source: ggml-org/llama.cpp ba360efe1f574ebae727aad64112d18ecedca85a."
+          fi
+          gh release upload "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
