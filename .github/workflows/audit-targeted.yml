@@ -1,0 +1,48 @@
+name: Targeted Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/audit-targeted.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Reproduce known failures on current main
+        run: |
+          python -m pytest -vv --tb=short --maxfail=25 \
+            tests/test_agentic_optimization_contract.py::test_plan_search_is_adaptive \
+            tests/test_colab_native_llama_prebuilt_integration.py::test_bundle_loader_is_source_local_and_exposes_verified_installer \
+            tests/test_colab_run_modes.py::test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_four_modes \
+            tests/test_complete_planner_scaling.py::test_initial_outline_repairs_without_replanning_design_or_research \
+            tests/test_complete_planner_scaling.py::test_module_pagination_skips_qwen_scratch_before_final_page \
+            tests/test_complete_planner_scaling.py::test_legacy_module_batch_repairs_only_the_cut_page \
+            tests/test_complete_planner_scaling.py::test_production_batch_repairs_only_the_cut_page_with_same_cursor \
+            tests/test_complete_planner_scaling.py::test_production_batch_stops_after_one_page_local_repair \
+            tests/test_complete_planner_scaling.py::test_production_outline_repairs_only_the_cut_continuation_page \
+            tests/test_complete_production.py::test_v2_source_only_persists_fail_closed_quality_convergence \
+            tests/test_complete_production.py::test_prepare_project_recovers_one_nested_release_source_zip \
+            tests/test_complete_technology_integration.py::test_complete_plan_binds_dynamic_technology_radar_and_typed_candidate_facts \
+            tests/test_durable_work_graph.py::test_large_proposal_becomes_more_bounded_shards_without_global_cap \
+            tests/test_durable_work_graph.py::test_named_checkpoint_reuses_valid_output_and_rebuilds_missing_output \
+            tests/test_evidence_capabilities.py::test_evidence_search_is_version_scoped_deterministic_and_data_only \
+            tests/test_evidence_capabilities.py::test_untrusted_hosts_and_instruction_bearing_records_are_rejected \
+            tests/test_execution_efficiency_contract.py::test_production_batch_has_no_fixed_four_deliverable_page_width \
+            tests/test_hardened_release_gates.py::test_every_platform_component_is_exactly_pinned \
+            tests/test_hardened_release_gates.py::test_recipe_string_is_not_coerced_to_boolean
