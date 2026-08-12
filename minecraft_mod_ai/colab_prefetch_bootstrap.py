@@ -5,7 +5,15 @@ from typing import Any
 
 
 def start(model_registry_module: Any) -> None:
-    """Resolve the selected Colab profile early so its GGUF prefetch can overlap I/O."""
+    """Install Colab llama routing, then overlap selected-model prefetch with setup."""
+
+    # The hardware-policy wrapper is already installed before this bootstrap is
+    # imported. Add the request-mode router now so every later local llama call uses
+    # baseline decoding for structured JSON and only verified MTP for free text/code.
+    from . import llama_server_hardware_policy as hardware_policy_module
+    from .colab_llama_request_routing_contract import install as install_request_routing
+
+    install_request_routing(hardware_policy_module)
 
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
