@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -43,6 +44,39 @@ def _node(
         },
         resource_class=resource_class,
     )
+
+
+def test_ledger_reuses_one_sqlite_connection_per_thread(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(_node("node", "generate:content", "cpu_io"))
+    ledger = DurableWorkLedger(
+        tmp_path / "run.sqlite",
+        proposal_hash=plan.proposal_hash,
+    )
+    ledger.sync_plan(plan)
+
+    with ledger._connect() as first:
+        first_id = id(first)
+    with ledger._connect() as second:
+        assert id(second) == first_id
+        assert second.execute("SELECT 1").fetchone()[0] == 1
+
+    worker_connection_ids: list[int] = []
+
+    def worker() -> None:
+        with ledger._connect() as first_worker:
+            worker_connection_ids.append(id(first_worker))
+        with ledger._connect() as second_worker:
+            worker_connection_ids.append(id(second_worker))
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert len(worker_connection_ids) == 2
+    assert worker_connection_ids[0] == worker_connection_ids[1]
+    assert worker_connection_ids[0] != first_id
 
 
 def test_orchestrator_claim_does_not_overqueue_a_saturated_lane(
