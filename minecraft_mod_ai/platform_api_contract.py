@@ -3,20 +3,36 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any
 
-from .platform_catalog import adapter_for_target, supported_minecraft_versions
+from .platform_catalog import (
+    PLATFORM_ADAPTERS,
+    adapter_for_target,
+    supported_minecraft_versions as discover_supported_minecraft_versions,
+)
 
 
 def install(api_module: Any, plan_render_module: Any) -> None:
-    versions = supported_minecraft_versions(loader="fabric")
-    api_module.SUPPORTED_MINECRAFT_VERSIONS = versions
+    # Package import must remain offline-safe. This constant is only a legacy snapshot
+    # for old callers; the public function below performs live official discovery when
+    # the caller actually asks for current targets.
+    api_module.SUPPORTED_MINECRAFT_VERSIONS = tuple(
+        item.minecraft_version for item in PLATFORM_ADAPTERS
+    )
 
     def supported_versions() -> tuple[str, ...]:
-        return versions
+        return discover_supported_minecraft_versions(loader="fabric")
 
     api_module.supported_minecraft_versions = supported_versions
     _install_complete_session(api_module)
     _install_legacy_session(api_module)
     _install_plan_render(plan_render_module)
+
+    # The orchestrator has already been imported when this API contract is installed.
+    # Install the live official-template wrapper after the older runtime target wrapper
+    # so future targets can bypass historical MMM project templates.
+    from . import complete_orchestrator as orchestrator_module
+    from .platform_live_execution_contract import install as install_live_execution
+
+    install_live_execution(orchestrator_module)
 
 
 def _install_complete_session(api_module: Any) -> None:
@@ -27,10 +43,8 @@ def _install_complete_session(api_module: Any) -> None:
 
     @wraps(original)
     def init(self: Any, *args: Any, **kwargs: Any) -> None:
-        # minecraft_version used to default to 1.20.1 and was rejected otherwise. We
-        # treat omission as auto; an explicitly supplied value remains a hard user/API
-        # constraint. The legacy constructor receives 1.20.1 only to pass its obsolete
-        # precondition, then the router carries the real target constraint.
+        # The historical constructor still checks 1.20.1 internally. Omission now means
+        # auto; only a genuinely explicit caller value becomes a host constraint.
         explicit_version = kwargs.pop("minecraft_version", None)
         if explicit_version is not None:
             explicit_version = str(explicit_version).strip()
@@ -111,12 +125,16 @@ def _install_plan_render(module: Any) -> None:
         if not isinstance(target, dict):
             return rendered
         korean = any("가" <= char <= "힣" for char in requested_prompt)
+        mappings_kind = target.get("mappings_kind") or (
+            "mojang" if target.get("mappings") == "mojang" else "yarn"
+        )
         if korean:
             block = (
                 "플랫폼 타깃\n"
                 f"- Minecraft Java {target.get('minecraft_version')} / {target.get('loader')}\n"
-                f"- Java {target.get('java_version')} / {target.get('mappings')}\n"
+                f"- Java {target.get('java_version')} / mappings {mappings_kind}:{target.get('mappings')}\n"
                 f"- Fabric Loader {target.get('fabric_loader')} / Fabric API {target.get('fabric_api')}\n"
+                f"- 선택 방식: {selection.get('source', '')}\n"
                 f"- 선택 이유: {selection.get('reason', '')}"
             )
             marker = "\n\n플레이 흐름"
@@ -124,8 +142,9 @@ def _install_plan_render(module: Any) -> None:
             block = (
                 "Platform target\n"
                 f"- Minecraft Java {target.get('minecraft_version')} / {target.get('loader')}\n"
-                f"- Java {target.get('java_version')} / {target.get('mappings')}\n"
+                f"- Java {target.get('java_version')} / mappings {mappings_kind}:{target.get('mappings')}\n"
                 f"- Fabric Loader {target.get('fabric_loader')} / Fabric API {target.get('fabric_api')}\n"
+                f"- Selection: {selection.get('source', '')}\n"
                 f"- Reason: {selection.get('reason', '')}"
             )
             marker = "\n\nPlayer loop"
