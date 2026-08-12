@@ -61,6 +61,22 @@ def install() -> None:
 
     install_live_execution(orchestrator_module)
 
+    # Specialized deterministic templates still contain Fabric-1.20.1-specific API
+    # code.  Guard both their public functions and the copies already imported by the
+    # orchestrator so a newer target is routed to custom_java instead of receiving a
+    # silently incompatible source tree.
+    from . import geckolib_generator as geckolib_module
+    from . import system_pack_generator as system_module
+    from .platform_specialized_generator_contract import (
+        install as install_specialized_generator_guards,
+    )
+
+    install_specialized_generator_guards(
+        system_module=system_module,
+        geckolib_module=geckolib_module,
+        orchestrator_module=orchestrator_module,
+    )
+
     # Finally install the fail-closed atomic requirement/evidence/release architecture.
     # It deliberately runs after platform lowering so acceptance evidence is bound to
     # the actual implementation graph that will execute.
