@@ -34,6 +34,37 @@ def _part_path(manifest_path: Path, record: dict) -> Path:
     return manifest_path.parent / record["path"]
 
 
+def test_incremental_path_updates_preserve_sorted_tuple_and_exact_membership(
+    tmp_path: Path,
+) -> None:
+    index = _indexed_project(tmp_path, count=16)
+    assert getattr(ProjectIndex.update_files, "_mmm_incremental_sorted_update", False)
+
+    modified = tmp_path / "src/main/java/example/Generated0008.java"
+    modified.write_text(
+        "package example; final class Generated0008 { int value = 8; }\n",
+        encoding="utf-8",
+    )
+    inserted = tmp_path / "src/main/java/example/Generated0008A.java"
+    inserted.write_text(
+        "package example; final class Generated0008A {}\n",
+        encoding="utf-8",
+    )
+    removed = tmp_path / "src/main/java/example/Generated0003.java"
+    removed.unlink()
+
+    index.update_files((modified, inserted, removed))
+
+    assert isinstance(index.files, tuple)
+    paths = [item.path for item in index.files]
+    assert paths == sorted(paths)
+    assert "src/main/java/example/Generated0008A.java" in paths
+    assert "src/main/java/example/Generated0003.java" not in paths
+    assert index._by_path["src/main/java/example/Generated0008.java"].sha256 == (
+        "sha256:" + hashlib.sha256(modified.read_bytes()).hexdigest()
+    )
+
+
 def test_same_process_exact_snapshot_is_zero_write_fast_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
