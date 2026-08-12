@@ -1,0 +1,70 @@
+name: Restore API and typecheck imports
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/restore-api-typecheck.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Restore exact pre-clobber API and apply minimal type-only patch
+        run: |
+          set -euo pipefail
+          git show 2d53d63ac6201679ea144ee2868ec9006ba0e333:minecraft_mod_ai/api.py > minecraft_mod_ai/api.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('minecraft_mod_ai/api.py')
+          s = p.read_text(encoding='utf-8')
+          needle = 'from pathlib import Path\n\n'
+          replacement = 'from pathlib import Path\nfrom typing import TYPE_CHECKING\n\n'
+          if s.count(needle) != 1:
+              raise SystemExit('api import insertion target changed')
+          s = s.replace(needle, replacement, 1)
+          marker = ')\n\nSUPPORTED_MINECRAFT_VERSIONS = ("1.20.1",)\n'
+          addition = ')\n\nif TYPE_CHECKING:\n    from .complete_orchestrator import CompleteExecutionOptions, CompletePipelineResult\n    from .complete_spec import CompleteProposal\n\nSUPPORTED_MINECRAFT_VERSIONS = ("1.20.1",)\n'
+          if s.count(marker) != 1:
+              raise SystemExit('api TYPE_CHECKING insertion target changed')
+          p.write_text(s.replace(marker, addition, 1), encoding='utf-8')
+          Path('.github/workflows/restore-api-typecheck.yml').unlink()
+          PY
+      - name: Verify only intended API diff remains
+        run: |
+          set -euo pipefail
+          git diff 2d53d63ac6201679ea144ee2868ec9006ba0e333 -- minecraft_mod_ai/api.py > /tmp/api.diff
+          cat /tmp/api.diff
+          python - <<'PY'
+          from pathlib import Path
+          d=Path('/tmp/api.diff').read_text()
+          required=['from typing import TYPE_CHECKING','if TYPE_CHECKING:','CompleteExecutionOptions, CompletePipelineResult','CompleteProposal']
+          assert all(x in d for x in required)
+          # Guard against accidental method/body churn.
+          changed=[line for line in d.splitlines() if line.startswith(('+','-')) and not line.startswith(('+++','---'))]
+          assert len(changed) <= 6, changed
+          PY
+      - name: Static and API tests
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]' ruff
+          python -m ruff check minecraft_mod_ai/api.py --select E9,F63,F7,F82
+          python -m pytest -q tests/test_api.py tests/test_cli_ux.py --tb=short
+      - name: Commit verified restoration
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/api.py .github/workflows/restore-api-typecheck.yml
+          git commit -m 'Restore API behavior and define deferred types'
+          git pull --rebase origin main
+          git push origin HEAD:main
