@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ SERVER_CONFIG_PATH = Path("/content/mmm_llama_mtp_server_v0_3_34.json")
 SERVER_LOG_PATH = Path("/content/mmm_llama_mtp_server.log")
 SERVER_ORIGIN = "http://127.0.0.1:8910"
 SERVER_API_URL = f"{SERVER_ORIGIN}/v1"
+SERVER_CONTEXT_CAP = 16384
 ENABLED_ENV = "MMM_COLAB_MTP_SERVER_ENABLED"
 START_TIMEOUT_ENV = "MMM_COLAB_MTP_SERVER_START_TIMEOUT"
 
@@ -169,7 +171,7 @@ def _write_config(config: Any, model_path: str) -> int:
         "model": {
             "path": model_path,
             "alias": "local",
-            "n_ctx": min(int(config.max_context), 16384),
+            "n_ctx": min(int(config.max_context), SERVER_CONTEXT_CAP),
             "max_output_tokens": int(config.max_new_tokens),
             "n_seq_max": 1,
             "n_batch": 512,
@@ -315,4 +317,42 @@ def start_colab_mtp_server(config: Any) -> str:
     )
 
 
+def _install_planner_request_budget() -> None:
+    """Make request paging respect the actual managed-server context window."""
+
+    from . import game_design as game_design_module
+
+    original = game_design_module._request_page_bytes
+    if getattr(original, "_mmm_mtp_context_budget", False):
+        return
+
+    @wraps(original)
+    def request_page_bytes(router: Any = None, role: str = "planner") -> int:
+        baseline = int(original(router, role))
+        if router is None or not colab_mtp_server_enabled():
+            return baseline
+        try:
+            config = router.registry.role(router.profile, role)
+            configured_context = int(getattr(config, "max_context", 0) or 0)
+            if configured_context <= 0:
+                return baseline
+            context = min(configured_context, SERVER_CONTEXT_CAP)
+            max_output = max(0, int(getattr(config, "max_new_tokens", 0) or 0))
+            # The server context is prompt + completion. Reserve the configured
+            # completion budget and fixed chat/schema overhead instead of pretending
+            # the registry's larger native model context is the active server context.
+            available_tokens = max(1024, context - max_output - 2048)
+            server_page_budget = max(
+                4 * 1024,
+                min(64 * 1024, int(available_tokens * 3.5)),
+            )
+            return min(baseline, server_page_budget)
+        except Exception:
+            return baseline
+
+    request_page_bytes._mmm_mtp_context_budget = True
+    game_design_module._request_page_bytes = request_page_bytes
+
+
+_install_planner_request_budget()
 atexit.register(lambda: stop_colab_mtp_server(keep_enabled=False))
