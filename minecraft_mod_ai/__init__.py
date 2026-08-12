@@ -199,9 +199,17 @@ _install_parallel_result_determinism_contract(
 # target; proposal-bound runtime/playtest derives the target from the approved spec.
 from . import mcp_tools as _mcp_tools_module
 from . import production_tools as _production_tools_module
+from . import platform_mcp_contract as _platform_mcp_contract_module
 from .platform_mcp_contract import install as _install_platform_mcp_contract
+from .platform_mcp_compatibility_contract import (
+    install as _install_platform_mcp_compatibility_contract,
+)
 
 _install_platform_mcp_contract(_mcp_tools_module, _production_tools_module)
+_install_platform_mcp_compatibility_contract(
+    mcp_tools_module=_mcp_tools_module,
+    platform_contract_module=_platform_mcp_contract_module,
+)
 
 # Public sessions no longer interpret the historical default 1.20.1 parameter as a
 # global target. Omitted target means auto-selection; Revise preserves the imported
