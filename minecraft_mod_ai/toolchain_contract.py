@@ -52,6 +52,13 @@ def install(spec_module: Any, runner_module: Any) -> None:
     )
     runner_module.GRADLE_SHA256 = GRADLE_SHA256
 
+    # Cache synchronization must be crash-safe before any Gradle runner can execute.
+    # Kernel advisory locks release automatically when a worker exits and avoid the
+    # stale-path deletion race of the legacy O_EXCL lock file.
+    from .runner_lock_contract import install as install_runner_lock
+
+    install_runner_lock(runner_module)
+
     # Import after spec/runner are initialized. Generator imports this module for
     # dependency predicates, so installing here keeps one early, deterministic patch
     # point without creating a second target-selection authority.
