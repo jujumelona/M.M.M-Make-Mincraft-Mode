@@ -27,8 +27,25 @@ def test_runtime_prefers_verified_prebuilt_before_source_toolchain() -> None:
     prebuilt = source.index("ensure_prebuilt_native_server")
     source_toolchain = source.index('for tool in ("git", "cmake", "nvcc")')
     assert prebuilt < source_toolchain
-    assert "prebuilt CUDA bundle ready" in source
-    assert "falling back to source build" in source
+    assert "using verified prebuilt" in source
+    assert "falling back to pinned source build" in source
+
+
+def test_runtime_package_never_rebuilds_native_llama() -> None:
+    runtime_root = ROOT / "minecraft_mod_ai"
+    forbidden = (
+        'shutil.which("cmake")',
+        '["cmake", "--build"',
+        '"cmake",\n            "--build"',
+        "MMM_LLAMA_CUDA_GRAPHS_BUILD",
+    )
+    offenders: list[str] = []
+    for path in runtime_root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if any(token in source for token in forbidden):
+            offenders.append(path.relative_to(ROOT).as_posix())
+    assert offenders == []
+    assert not (runtime_root / "llama_server_max_performance.py").exists()
 
 
 def test_bundle_workflow_builds_graph_enabled_shared_cuda_for_supported_colab_arches() -> None:
