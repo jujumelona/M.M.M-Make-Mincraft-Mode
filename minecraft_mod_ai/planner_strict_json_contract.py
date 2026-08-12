@@ -99,9 +99,6 @@ def _aggregate_outline_pages(pages: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     terminal = pages[-1]
     cursor = terminal["next_cursor"]
-    # For pages emitted in the same response, only the terminal page controls the
-    # next host request. A non-empty cursor unambiguously means more work remains,
-    # even if the model accidentally copied complete=true from an earlier template.
     complete = bool(terminal["complete"]) and not cursor
     if not complete and not cursor:
         raise ValueError(
@@ -128,13 +125,7 @@ def _extract_outline_sequence(text: str) -> dict[str, Any]:
 
 
 def _extract_outline_prefix(text: str) -> tuple[dict[str, Any] | None, str]:
-    """Return the valid outline prefix before the first bad page.
-
-    Repair uses this to checkpoint work already produced by the model. The accepted
-    pages are never regenerated; only the first invalid page/remainder is requested
-    again. The returned prefix is host-normalized to ``complete=false`` because the
-    presence of a later invalid fragment proves the response has not safely finished.
-    """
+    """Return the valid outline prefix before the first bad page."""
 
     containers = _outermost_complete_json_containers(text)
     if not containers:
@@ -233,8 +224,10 @@ def install(runtime_module: Any) -> None:
         runtime_module._extract_with_safe_empty_defaults = extract_strict
 
     from .planner_outline_prompt_contract import install as install_outline_prompt
+    from .planner_incremental_repair_contract import install as install_incremental_repair
 
     install_outline_prompt(runtime_module)
+    install_incremental_repair(runtime_module)
 
 
 __all__ = [
