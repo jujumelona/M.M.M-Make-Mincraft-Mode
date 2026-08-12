@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -49,4 +49,4 @@ jobs:
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
 
       - name: Run unit and contract tests
-        run: python -m pytest -q
+        run: python -m pytest -vv --tb=short --durations=25
