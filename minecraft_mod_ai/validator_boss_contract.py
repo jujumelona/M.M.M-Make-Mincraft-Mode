@@ -6,12 +6,9 @@ from typing import Any
 
 
 def install(module: Any) -> None:
-    """Install corrected boss and selected-platform validator contracts."""
+    """Install only the corrected boss validator behavior."""
 
     module.ProjectValidator._validate_boss = _validate_boss
-    from .platform_validation_contract import install as install_platform_validation
-
-    install_platform_validation(module)
 
 
 def _validate_boss(
