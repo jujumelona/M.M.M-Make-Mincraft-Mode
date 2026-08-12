@@ -66,10 +66,26 @@ def _composition_calls(path: Path) -> tuple[set[str], set[str]]:
 
 
 def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
-    source = _text("__init__.py")
+    path = PACKAGE / "__init__.py"
+    source = path.read_text(encoding="utf-8")
     assert source.count("initialize_runtime()") == 1
     assert "_install_" not in source
-    assert "_contract import" not in source
+
+    # Public API modules may legitimately end in ``_contract`` (for example
+    # production_contract). Reject only imports that are actually invoked as policy
+    # installers from package __init__, rather than matching a filename substring.
+    installers, modules = _policy_imports(path)
+    direct_calls, module_calls = _composition_calls(path)
+    assert not {
+        local_name: module
+        for local_name, module in installers.items()
+        if local_name in direct_calls
+    }
+    assert not {
+        local_name: module
+        for local_name, module in modules.items()
+        if local_name in module_calls
+    }
     assert "integrated_contract_bootstrap" not in source
     assert "platform_mcp_compatibility_contract" not in source
 
