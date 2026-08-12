@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import gc
 import os
 import threading
-from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 from typing import Any, Sequence
@@ -29,12 +27,11 @@ def _env_bool(name: str, default: bool = True) -> bool:
 
 
 def install() -> None:
-    """Install quality-neutral runtime reuse for expensive local model backends.
+    """Install quality-neutral reuse for expensive image/retrieval runtimes.
 
-    The selected model IDs, prompts, seeds and diffusion step count are unchanged.
-    This contract only removes repeated weight/tokenizer/pipeline construction and
-    prevents local image work from alternating with the resident llama.cpp model
-    inside one asset shard.
+    Native llama-server exclusively owns GGUF model residency and GPU handoff. This
+    contract caches only diffusion, embedding and reranker runtimes and prevents
+    independent local GPU work from interleaving inside one asset shard.
     """
 
     from . import complete_orchestrator_services as services
@@ -42,53 +39,15 @@ def install() -> None:
     from .model_adapters import base as base_module
     from .model_adapters.embedding import EmbeddingAdapter
     from .model_adapters.image_diffusion import ImageDiffusionAdapter
-    from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
     from .model_adapters.reranker import RerankerAdapter
 
-    _install_llama_resident_sessions(LlamaCppAdapter)
-    _install_cached_image_runtime(
-        ImageDiffusionAdapter,
-        LlamaCppAdapter,
-        base_module,
-    )
+    _install_cached_image_runtime(ImageDiffusionAdapter, base_module)
     _install_cached_embedding(EmbeddingAdapter)
     _install_cached_reranker(RerankerAdapter)
     _install_asset_gpu_session(services, router_module, base_module)
 
 
-def _install_llama_resident_sessions(cls: Any) -> None:
-    if callable(getattr(cls, "generation_session", None)):
-        return
-
-    @contextmanager
-    def generation_session(self: Any):
-        # ModelRouter will not call close() when the adapter exposes its own bounded
-        # session. The class-level llama.cpp cache can therefore survive transitions
-        # from planner -> researcher -> coder when all roles share the same GGUF.
-        yield self
-
-    generation_session._mmm_resident_llama_session = True
-    cls.generation_session = generation_session
-
-
-def _evict_llama(cls: Any, release_cuda: Any) -> None:
-    if getattr(cls, "_llm", None) is None:
-        return
-    try:
-        del cls._llm
-    except Exception:
-        pass
-    cls._llm = None
-    cls._current_model_path = None
-    gc.collect()
-    release_cuda()
-
-
-def _install_cached_image_runtime(
-    cls: Any,
-    llama_cls: Any,
-    base_module: Any,
-) -> None:
+def _install_cached_image_runtime(cls: Any, base_module: Any) -> None:
     original = cls.generate_image
     if getattr(original, "_mmm_cached_image_pipeline", False):
         return
@@ -121,10 +80,9 @@ def _install_cached_image_runtime(
                     "Image dimensions must be 256-1024 and divisible by 16."
                 )
 
-            # The router already holds the exclusive local-GPU lock here. Drop a
-            # resident llama.cpp allocation before the first diffusion call rather
-            # than letting preflight fail or forcing repeated OOM/reload cycles.
-            _evict_llama(llama_cls, base_module._release_cuda)
+            # Native llama-server eviction is owned by the GPU handoff contracts.
+            # This layer only manages the diffusion runtime, so it must not mutate
+            # text-model state or duplicate CUDA/model teardown work.
             base_module.preflight_cuda(cfg)
 
             import torch
