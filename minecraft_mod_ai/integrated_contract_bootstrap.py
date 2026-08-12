@@ -11,6 +11,14 @@ than once cannot stack duplicate wrappers.
 
 
 def install() -> None:
+    # The optional Colab server cell can start before CompleteModAISession applies the
+    # selected KV-cache quantization. Reuse must therefore be bound to the exact model,
+    # context/output limits, baseline/MTP lane and KV-cache type rather than only mode.
+    from . import colab_mtp_server as colab_server_module
+    from .colab_server_config_contract import install as install_colab_server_config
+
+    install_colab_server_config(colab_server_module)
+
     # Platform generation/validation must agree with the exact approved adapter.
     from . import generator as generator_module
     from . import validator as validator_module
