@@ -32,6 +32,7 @@ class PlatformSelection:
     explicit_version: bool
     explicit_loader: bool
     preserved_existing_target: bool = False
+    migration_requested: bool = False
 
     @property
     def lock(self) -> PlatformLock:
@@ -42,13 +43,14 @@ class PlatformSelection:
             "mojang" if self.adapter.yarn_mappings == "mojang" else "yarn"
         )
         return {
-            "schema_version": "mmm/platform-selection-v2",
+            "schema_version": "mmm/platform-selection-v3",
             "adapter_id": self.adapter.adapter_id,
             "source": self.source,
             "reason": self.reason,
             "explicit_version": self.explicit_version,
             "explicit_loader": self.explicit_loader,
             "preserved_existing_target": self.preserved_existing_target,
+            "migration_requested": self.migration_requested,
             "target": {
                 "edition": self.adapter.edition,
                 "loader": self.adapter.loader,
@@ -90,15 +92,16 @@ def resolve_platform(
 ) -> PlatformSelection:
     """Resolve an immutable target without a Minecraft-version source allowlist.
 
-    Explicit user targets and existing-project targets are hard constraints. For a new
-    unpinned project, the host first resolves complete official toolchain profiles for
-    recent stable Fabric game versions. Only those ready profiles are shown to the
-    central planner AI. The model can select one but cannot invent any coordinate.
+    Explicit user targets and existing-project targets are hard constraints. A Revise
+    target mismatch is permitted only when the request explicitly asks for a version
+    migration/port. For a new unpinned project, the host first resolves complete
+    official toolchain profiles and the central planner AI chooses only among them.
     """
 
     text = str(prompt or "")
     explicit_version = _explicit_minecraft_version(text)
     explicit_loader = _explicit_loader(text)
+    migration_requested = bool(existing_version and _MIGRATION_RE.search(text))
 
     if explicit_loader and explicit_loader != "fabric":
         raise SpecValidationError(
@@ -114,13 +117,23 @@ def resolve_platform(
         _require_supported_kinds(adapter, module_kinds, explicit=True)
         return PlatformSelection(
             adapter=adapter,
-            source="user_explicit_target",
-            reason=f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다.",
+            source=(
+                "user_explicit_migration_target"
+                if migration_requested
+                else "user_explicit_target"
+            ),
+            reason=(
+                f"기존 프로젝트를 사용자가 명시한 Minecraft {adapter.minecraft_version} "
+                f"{adapter.loader} target으로 migration합니다."
+                if migration_requested
+                else f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다."
+            ),
             explicit_version=True,
             explicit_loader=bool(explicit_loader),
+            migration_requested=migration_requested,
         )
 
-    if existing_version and not _MIGRATION_RE.search(text):
+    if existing_version and not migration_requested:
         loader = (existing_loader or "fabric").strip().lower()
         try:
             adapter = adapter_for_target(existing_version, loader)
@@ -139,6 +152,7 @@ def resolve_platform(
             explicit_version=False,
             explicit_loader=False,
             preserved_existing_target=True,
+            migration_requested=False,
         )
 
     ready = _ready_live_profiles(limit=8)
@@ -165,10 +179,15 @@ def resolve_platform(
     _require_supported_kinds(adapter, module_kinds, explicit=False)
     return PlatformSelection(
         adapter=adapter,
-        source="central_ai_over_live_discovery",
+        source=(
+            "central_ai_migration_over_live_discovery"
+            if migration_requested
+            else "central_ai_over_live_discovery"
+        ),
         reason=ai_reason,
         explicit_version=False,
         explicit_loader=bool(explicit_loader),
+        migration_requested=migration_requested,
     )
 
 
@@ -182,8 +201,6 @@ def _ready_live_profiles(*, limit: int) -> tuple[PlatformAdapter, ...]:
         try:
             adapter = adapter_for_target(version, "fabric")
         except ValueError:
-            # A game version can appear in Fabric Meta before Fabric API or another
-            # required build coordinate is ready. It is not an executable candidate yet.
             continue
         result.append(adapter)
         if len(result) >= max(1, int(limit)):
