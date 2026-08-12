@@ -172,6 +172,18 @@ from .integrated_contract_bootstrap import install as _install_integrated_contra
 
 _install_integrated_contract_bootstrap()
 
+# validation_execution_contract still binds its historical no-argument Gradle cache
+# wrapper before the target-aware runner API is finalized. Rebind after all integrated
+# validation overlays so selected Gradle version/SHA flow end-to-end and only shared
+# distribution/template mutation or the same project root is serialized. Distinct
+# generated projects may build and GameTest concurrently.
+from .runner_parallel_validation_contract import install as _install_runner_parallel_validation_contract
+
+_install_runner_parallel_validation_contract(
+    runner_module=_runner_module,
+    validation_module=_validation_execution_contract_module,
+)
+
 # Parallel worker completion order is intentionally nondeterministic. Canonicalize
 # audio batches before registry emission and canonicalize aggregate generation
 # receipts after all late architecture/runtime wrappers have been installed.
