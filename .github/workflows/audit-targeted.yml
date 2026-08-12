@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# Audit generation 3: fail fast on composition regressions, then re-run known failures.
+# Audit generation 4: current-main regression snapshot.
 jobs:
   audit:
     runs-on: ubuntu-latest
