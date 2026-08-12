@@ -59,7 +59,7 @@ def _install_thread_local_connections(work_graph_module: Any) -> None:
     ``with self._connect()`` call. sqlite3.Connection.__exit__ commits or rolls
     back but does not close the handle, so a 50 ms scheduler poll over a large
     DAG can create an unbounded stream of connections while also repeating the
-    WAL/pragma setup.  The scheduler already uses a bounded thread topology, so
+    WAL/pragma setup. The scheduler already uses a bounded thread topology, so
     a thread-local connection gives both correct sqlite thread affinity and a
     fixed connection count.
     """
@@ -312,10 +312,6 @@ def _install_index_commit_order(
                             shared_index.update_files(touched)
                             shared_index.write_manifest()
                     except Exception as exc:
-                        # A dependent node may start as soon as SUCCEEDED becomes
-                        # visible. Publishing success with a stale shared index is
-                        # therefore a correctness violation, not best-effort cache
-                        # maintenance. The outer failure path keeps the task failed.
                         raise orchestrator_module.CompleteProductionError(
                             f"Shared ProjectIndex commit failed for {node.node_id}: "
                             f"{type(exc).__name__}: {exc}"
@@ -345,6 +341,13 @@ def install(
 ) -> None:
     _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
+
+    # Re-run the idempotent polling optimizer after the final lane-aware claim has
+    # replaced claim_ready. This wraps the authoritative claim with snapshot fences;
+    # task-state snapshots themselves remain one-scan-only and read-only.
+    from .scheduler_poll_efficiency_contract import install as install_poll_efficiency
+
+    install_poll_efficiency(work_graph_module)
     _install_index_commit_order(
         work_graph_module,
         orchestrator_module,
