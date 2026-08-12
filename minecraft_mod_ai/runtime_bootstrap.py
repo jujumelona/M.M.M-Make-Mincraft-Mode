@@ -255,7 +255,6 @@ def _install_planner_contracts() -> None:
     from .planner_strict_json_contract import install as install_planner_strict_json
     from .production_stream_efficiency_contract import install as install_production_stream_efficiency
     from .production_stream_resume_contract import install as install_production_stream_resume
-    from .scheduler_poll_efficiency_contract import install as install_scheduler_poll_efficiency
 
     install_planner_json_runtime(complete_planner)
     install_planner_strict_json(planner_json_runtime_contract)
@@ -267,7 +266,6 @@ def _install_planner_contracts() -> None:
     install_asset_resume_efficiency(complete_orchestrator_services)
     install_audio_resume_efficiency(audio_generator)
     complete_orchestrator.synthesize_audio_files = audio_generator.synthesize_audio_files
-    install_scheduler_poll_efficiency(work_graph)
     install_production_stream_efficiency(complete_planner)
     install_production_stream_resume(complete_planner)
     install_execution_efficiency(
@@ -383,11 +381,15 @@ def _install_late_safety_contracts() -> None:
     from .scheduler_parallel_safety_contract import (
         install as install_scheduler_parallel_safety,
     )
+    from .scheduler_poll_efficiency_contract import (
+        install as install_scheduler_poll_efficiency,
+    )
 
     install_scheduler_parallel_safety(
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,
     )
+    install_scheduler_poll_efficiency(work_graph)
     install_llama_parallel_runtime(model_router, scheduler_parallel_safety_contract)
     install_scheduler_claim_fencing(
         work_graph_module=work_graph,
