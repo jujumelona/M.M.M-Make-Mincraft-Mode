@@ -5,7 +5,7 @@ import threading
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class ReentrantReadWriteLock:
@@ -92,6 +92,47 @@ class ReentrantReadWriteLock:
             self.release_read()
 
 
+class ReentrantCapacityGate:
+    """Bound concurrent callers to a dynamic capacity without blocking re-entry."""
+
+    def __init__(self, capacity: Callable[[], int]) -> None:
+        self._capacity = capacity
+        self._condition = threading.Condition(threading.RLock())
+        self._owners: dict[int, int] = {}
+
+    def acquire(self) -> bool:
+        owner = threading.get_ident()
+        with self._condition:
+            depth = self._owners.get(owner, 0)
+            if depth:
+                self._owners[owner] = depth + 1
+                return True
+            while len(self._owners) >= max(1, int(self._capacity())):
+                self._condition.wait()
+            self._owners[owner] = 1
+            return True
+
+    def release(self) -> None:
+        owner = threading.get_ident()
+        with self._condition:
+            depth = self._owners.get(owner, 0)
+            if depth <= 0:
+                raise RuntimeError("cannot release unowned llama inference slot")
+            if depth == 1:
+                self._owners.pop(owner, None)
+                self._condition.notify_all()
+            else:
+                self._owners[owner] = depth - 1
+
+    def __enter__(self) -> ReentrantCapacityGate:
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.release()
+        return False
+
+
 def _active_parallelism() -> int:
     raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
     try:
@@ -106,6 +147,9 @@ def _install_router(model_router_module: Any) -> None:
         return
 
     model_router_module._GPU_EXCLUSIVE_LOCK = ReentrantReadWriteLock()
+    model_router_module._LLAMA_INFERENCE_SLOTS = ReentrantCapacityGate(
+        _active_parallelism
+    )
 
     @contextmanager
     def generation_session(self: Any, role: str):
@@ -171,8 +215,12 @@ def _install_router(model_router_module: Any) -> None:
             and _active_parallelism() > 1
         )
         if shared_llama:
-            with model_router_module._GPU_EXCLUSIVE_LOCK.shared():
-                return adapter.generate(request)
+            # Take a native-server slot before the shared GPU lock.  This keeps
+            # scheduler-external callers out of llama-server's internal queue while
+            # preserving writer preference for image/speech GPU handoff.
+            with model_router_module._LLAMA_INFERENCE_SLOTS:
+                with model_router_module._GPU_EXCLUSIVE_LOCK.shared():
+                    return adapter.generate(request)
         with self._gpu_scope(config.exclusive_gpu):
             return adapter.generate(request)
 
@@ -203,6 +251,7 @@ def install(model_router_module: Any, scheduler_module: Any) -> None:
 
 
 __all__ = [
+    "ReentrantCapacityGate",
     "ReentrantReadWriteLock",
     "_active_parallelism",
     "install",
