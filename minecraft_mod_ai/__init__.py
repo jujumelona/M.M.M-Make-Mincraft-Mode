@@ -132,6 +132,16 @@ _install_performance_final_contract(
     _source_patch_module,
 )
 
+# The generation DAG has four executor lanes (CPU/I/O, LLM, image GPU and commit).
+# Claim only free lane capacity, heartbeat only this process's active leases, and
+# publish shared ProjectIndex changes before dependent work can observe success.
+from .scheduler_parallel_safety_contract import install as _install_scheduler_parallel_safety_contract
+
+_install_scheduler_parallel_safety_contract(
+    work_graph_module=_work_graph_module,
+    orchestrator_module=_complete_orchestrator_module,
+)
+
 # Runtime, server/client playtest and Mineflayer use the same approved platform lock.
 # A 1.21.1 plan can never be certified by a 1.20.1 runtime profile.
 from . import mineflayer_bridge as _mineflayer_bridge_module
