@@ -114,3 +114,17 @@ def install() -> None:
         repair_module=repair_module,
         validation_module=validation_module,
     )
+
+    # final_architecture installs scheduler_fairness_contract late, which replaces
+    # DurableWorkLedger.claim_ready. Re-apply the idempotent safety layer after that
+    # replacement so the real orchestrator keeps executor-lane capacity balancing
+    # *and* process-unique lease ownership/heartbeat. It also restores the shared
+    # ProjectIndex-before-SUCCEEDED ordering if a late contract replaced that hook.
+    from .scheduler_parallel_safety_contract import (
+        install as install_scheduler_parallel_safety,
+    )
+
+    install_scheduler_parallel_safety(
+        work_graph_module=work_graph_module,
+        orchestrator_module=orchestrator_module,
+    )
