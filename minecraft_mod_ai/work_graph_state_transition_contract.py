@@ -142,6 +142,95 @@ def install(work_graph_module: Any) -> None:
         fail._mmm_fenced_transition = True  # type: ignore[attr-defined]
         cls.fail = fail
 
+    current_begin_checkpoint = cls.begin_checkpoint
+    if not getattr(current_begin_checkpoint, "_mmm_fenced_transition", False):
+
+        @wraps(current_begin_checkpoint)
+        def begin_checkpoint(
+            self: Any,
+            checkpoint_id: str,
+            *,
+            stage: str,
+            input_hash: str,
+        ) -> None:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """
+                    SELECT input_hash, state FROM checkpoints
+                    WHERE checkpoint_id = ?
+                    """,
+                    (checkpoint_id,),
+                ).fetchone()
+                if row is None:
+                    connection.execute(
+                        """
+                        INSERT INTO checkpoints(
+                            checkpoint_id, stage, input_hash, state, attempt, updated_at
+                        ) VALUES (?, ?, ?, ?, 1, ?)
+                        """,
+                        (
+                            checkpoint_id,
+                            stage,
+                            input_hash,
+                            work_graph_module.WorkState.RUNNING.value,
+                            time.time(),
+                        ),
+                    )
+                    connection.commit()
+                    return
+
+                old_hash, old_state = str(row[0]), str(row[1])
+                if old_hash == input_hash:
+                    if old_state == work_graph_module.WorkState.SUCCEEDED.value:
+                        connection.rollback()
+                        raise work_graph_module.WorkGraphError(
+                            f"Checkpoint already succeeded for this input: {checkpoint_id}"
+                        )
+                    if old_state == work_graph_module.WorkState.RUNNING.value:
+                        connection.rollback()
+                        raise work_graph_module.WorkGraphError(
+                            f"Checkpoint is already running: {checkpoint_id}"
+                        )
+                    if old_state == work_graph_module.WorkState.CANCELLED.value:
+                        connection.rollback()
+                        raise work_graph_module.WorkGraphError(
+                            f"Checkpoint is cancelled and requires explicit retry: {checkpoint_id}"
+                        )
+                elif old_state == work_graph_module.WorkState.RUNNING.value:
+                    connection.rollback()
+                    raise work_graph_module.WorkGraphError(
+                        f"Checkpoint input changed while another attempt is running: {checkpoint_id}"
+                    )
+
+                cursor = connection.execute(
+                    """
+                    UPDATE checkpoints
+                    SET stage = ?, input_hash = ?, state = ?,
+                        attempt = attempt + 1, receipt_json = NULL,
+                        output_hash = NULL, error = NULL, updated_at = ?
+                    WHERE checkpoint_id = ? AND state = ? AND input_hash = ?
+                    """,
+                    (
+                        stage,
+                        input_hash,
+                        work_graph_module.WorkState.RUNNING.value,
+                        time.time(),
+                        checkpoint_id,
+                        old_state,
+                        old_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    raise work_graph_module.WorkGraphError(
+                        f"Checkpoint changed while starting: {checkpoint_id}"
+                    )
+                connection.commit()
+
+        begin_checkpoint._mmm_fenced_transition = True  # type: ignore[attr-defined]
+        cls.begin_checkpoint = begin_checkpoint
+
     current_succeed_checkpoint = cls.succeed_checkpoint
     if not getattr(current_succeed_checkpoint, "_mmm_fenced_transition", False):
 
