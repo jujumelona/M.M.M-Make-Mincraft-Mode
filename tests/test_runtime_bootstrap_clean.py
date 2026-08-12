@@ -13,30 +13,56 @@ def _text(name: str) -> str:
     return (PACKAGE / name).read_text(encoding="utf-8")
 
 
-def _composition_imports(path: Path) -> dict[str, str]:
-    """Return local names that import installer functions from policy modules."""
+def _is_policy_module(name: str) -> bool:
+    leaf = name.rsplit(".", 1)[-1]
+    return "contract" in leaf or leaf.endswith("_tuning")
+
+
+def _policy_imports(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Return direct installer aliases and imported policy-module aliases."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    aliases: dict[str, str] = {}
+    installers: dict[str, str] = {}
+    modules: dict[str, str] = {}
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or not node.module:
+        if isinstance(node, ast.ImportFrom):
+            if node.module and _is_policy_module(node.module):
+                for imported in node.names:
+                    if imported.name == "install":
+                        installers[imported.asname or imported.name] = node.module
+            if node.level and node.module is None:
+                for imported in node.names:
+                    if _is_policy_module(imported.name):
+                        modules[imported.asname or imported.name] = imported.name
             continue
-        module = node.module
-        if not ("contract" in module or module.endswith("_tuning")):
-            continue
-        for imported in node.names:
-            if imported.name != "install":
-                continue
-            aliases[imported.asname or imported.name] = module
-    return aliases
+
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                if not _is_policy_module(imported.name):
+                    continue
+                local_name = imported.asname or imported.name.split(".")[-1]
+                modules[local_name] = imported.name
+
+    return installers, modules
 
 
-def _called_names(path: Path) -> set[str]:
+def _composition_calls(path: Path) -> tuple[set[str], set[str]]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
+    direct: set[str] = set()
+    module_calls: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            direct.add(node.func.id)
+            continue
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "install"
+            and isinstance(node.func.value, ast.Name)
+        ):
+            module_calls.add(node.func.value.id)
+    return direct, module_calls
 
 
 def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
@@ -67,13 +93,18 @@ def test_contract_composition_exists_only_in_runtime_bootstrap() -> None:
     for path in sorted(PACKAGE.glob("*.py")):
         if path == _BOOTSTRAP:
             continue
-        imported_installers = _composition_imports(path)
-        if not imported_installers:
-            continue
-        called = _called_names(path)
-        for local_name, module in imported_installers.items():
-            if local_name in called:
-                offenders.append(f"{path.name}: {module}.install via {local_name}()")
+        installers, modules = _policy_imports(path)
+        direct_calls, module_calls = _composition_calls(path)
+        offenders.extend(
+            f"{path.name}: {module}.install via {local_name}()"
+            for local_name, module in installers.items()
+            if local_name in direct_calls
+        )
+        offenders.extend(
+            f"{path.name}: {module}.install via {local_name}.install()"
+            for local_name, module in modules.items()
+            if local_name in module_calls
+        )
     assert offenders == [], "nested contract composition:\n" + "\n".join(offenders)
 
 
@@ -96,4 +127,5 @@ def test_specialized_installers_are_single_responsibility() -> None:
 
     assert not (PACKAGE / "integrated_contract_bootstrap.py").exists()
     assert not (PACKAGE / "platform_mcp_compatibility_contract.py").exists()
+    assert not (PACKAGE / "final_architecture_contract.py").exists()
     assert not (PACKAGE / "llama_server_max_performance.py").exists()
