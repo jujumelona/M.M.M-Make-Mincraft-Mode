@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -96,10 +97,9 @@ def _target_state(target: Path) -> tuple[str, str | None]:
     return "file", _sha256(target)
 
 
-def _atomic_commit(staged: Path, target: Path, project_root: Path) -> str:
-    if not staged.is_file() or staged.is_symlink():
-        raise RuntimeError("Asset staging did not produce a regular file.")
-    target.parent.mkdir(parents=True, exist_ok=True)
+def _copy_atomic_fallback(staged: Path, target: Path) -> None:
+    """Cross-device fallback when atomic rename cannot move the staged file."""
+
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     try:
         with staged.open("rb") as source, os.fdopen(fd, "wb") as output:
@@ -111,6 +111,35 @@ def _atomic_commit(staged: Path, target: Path, project_root: Path) -> str:
     finally:
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
+
+
+def _atomic_commit(staged: Path, target: Path, project_root: Path) -> str:
+    if not staged.is_file() or staged.is_symlink():
+        raise RuntimeError("Asset staging did not produce a regular file.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # concept_dir and generated project normally live under the same run root. In that
+    # common case the staged image itself is already a complete final file, so copying
+    # every byte through a second temporary file wastes I/O and lock time. Flush the
+    # staged inode and atomically rename it into place. Keep the copy path only for a
+    # genuinely different filesystem (or an EXDEV race after the device check).
+    try:
+        same_filesystem = staged.stat().st_dev == target.parent.stat().st_dev
+    except OSError:
+        same_filesystem = False
+
+    if same_filesystem:
+        with staged.open("rb") as source:
+            os.fsync(source.fileno())
+        try:
+            os.replace(staged, target)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            _copy_atomic_fallback(staged, target)
+    else:
+        _copy_atomic_fallback(staged, target)
+
     return _sha256(target)
 
 
@@ -237,4 +266,5 @@ __all__ = [
     "_CachedImageRouter",
     "_project_root_for_target",
     "_target_state",
+    "_atomic_commit",
 ]
