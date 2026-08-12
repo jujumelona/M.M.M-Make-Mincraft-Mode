@@ -10,15 +10,15 @@ from typing import Any, Mapping
 
 import anyio
 
+from .external_agent_bridge import ExternalAgentBridge, TOOL_NAMES as EXTERNAL_TOOL_NAMES
+
 
 class AgentToolRuntimeError(RuntimeError):
     pass
 
 
-# These tools either recurse back into the same planning/execution model loop or
-# transfer control that must remain owned by the durable host workflow. Tool calls
-# themselves never require user approval; the model may call every other tool exposed
-# by the active MCP stage directly.
+# Recursive top-level orchestration is not a model tool. This is not an approval
+# gate: every ordinary stage tool is executed immediately when Qwen calls it.
 _BLOCKED_MODEL_TOOLS = frozenset(
     {
         "plan_game",
@@ -28,6 +28,8 @@ _BLOCKED_MODEL_TOOLS = frozenset(
         "approve_plan",
         "approve_complete_plan",
         "execute_complete_project",
+        # These start another heavyweight model/GPU workflow. Keep them in the
+        # durable host pipeline rather than nesting a second model into this turn.
         "generate_assets",
         "repair_project",
         "run_model_smoke",
@@ -49,11 +51,12 @@ _MAX_TOOL_RESULT_BYTES = 128 * 1024
 
 
 class AgentToolRuntime:
-    """Expose the existing stage-scoped MMM MCP server to a local/remote LLM.
+    """Expose stage-scoped first-party and reviewed external MCP tools to Qwen.
 
-    The MCP server remains the single source of truth for tool schemas and execution.
-    This host only converts MCP tool schemas to the OpenAI function-tool shape and
-    bridges synchronous model generation to the asynchronous MCP Python client.
+    The MCP servers remain the source of truth for tool schemas and execution. This
+    host converts them to the OpenAI function-tool shape and bridges synchronous model
+    generation to the asynchronous MCP Python client. Tool calls do not require a
+    user-approval round trip.
     """
 
     def __init__(
@@ -76,6 +79,7 @@ class AgentToolRuntime:
         self.workspace_root = str(Path(configured_workspace).expanduser().resolve())
         self.timeout_seconds = float(timeout_seconds)
         self._schema_cache: dict[str, tuple[dict[str, Any], ...]] = {}
+        self._external_bridge = ExternalAgentBridge(timeout_seconds=timeout_seconds)
         self._lock = threading.RLock()
 
     def tool_schemas(self, stage: str) -> tuple[dict[str, Any], ...]:
@@ -103,6 +107,7 @@ class AgentToolRuntime:
                         },
                     }
                 )
+            schemas.extend(self._external_bridge.tool_schemas(selected))
             result = tuple(schemas)
             self._schema_cache[selected] = result
             return result
@@ -130,6 +135,10 @@ class AgentToolRuntime:
                 f"Tool {tool_name!r} is not exposed in stage {selected!r}."
             )
         payload = dict(arguments or {})
+        if tool_name in EXTERNAL_TOOL_NAMES:
+            return _bounded_result(
+                self._external_bridge.call(selected, tool_name, payload)
+            )
         result = self._run_async(
             self._call_tool_async,
             selected,
