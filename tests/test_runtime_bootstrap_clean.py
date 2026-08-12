@@ -96,7 +96,10 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
     assert "final_architecture_contract" not in source
     assert "platform_mcp_compatibility_contract" not in source
 
+    # Flatness is not enough: every policy that used to be hidden behind a child
+    # installer must still exist exactly once at the explicit runtime root.
     required_once = (
+        "install_runner_lock(",
         "install_scheduler_parallel_safety(",
         "install_llama_parallel_runtime(",
         "install_llama_efficiency(",
@@ -105,6 +108,11 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
         "install_llama_stream_efficiency(",
         "install_project_index_execution_reuse(",
         "install_proposal_deserialization(",
+        "install_external_mcp_target_validation(",
+        "install_platform_live_rag(",
+        "install_platform_technology(",
+        "install_platform_ecosystem(",
+        "install_platform_prompts(",
         "install_planner_json_runtime(",
         "install_planner_strict_json(",
         "install_planner_outline_prompt(",
@@ -120,12 +128,22 @@ def test_runtime_bootstrap_is_flat_not_nested() -> None:
         "install_incremental_resume(",
         "install_planner_pagination_safety(",
         "install_planner_production_page(",
+        "install_runtime_helpers(",
+        "install_runtime_helper_json_deadline(",
+        "install_mcp_runtime(",
+        "install_mcp_federation(",
+        "install_mcp_repair_batch(",
+        "install_mcp_repair_diagnostic_shape(",
+        "install_skill_policy(",
     )
     for call in required_once:
         assert source.count(call) == 1, call
 
     assert source.index("install_planner_pagination_safety(") < source.index(
         "install_planner_production_page("
+    )
+    assert source.index("install_external_mcp_target_validation(") < source.index(
+        "install_external_mcp_bridge_safety("
     )
 
 
