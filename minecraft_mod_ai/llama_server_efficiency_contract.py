@@ -37,11 +37,15 @@ def _drive_cache_from_setup_receipt() -> Path | None:
     output_root = str(receipt.get("output_root", "")).strip()
     if not output_root:
         return None
-    return Path(output_root).expanduser().resolve() / ".mmm-cache" / "llama-server-autotune.json"
+    return (
+        Path(output_root).expanduser().resolve()
+        / ".mmm-cache"
+        / "llama-server-autotune.json"
+    )
 
 
 def install(autotune_module: Any, hardware_policy_module: Any) -> None:
-    """Remove duplicate probe work and make native prompt/cache reuse explicit."""
+    """Install correctness-safe native llama-server efficiency policies."""
 
     probe = autotune_module._probe_server
     if getattr(probe, "_mmm_correctness_sentinel", False):
@@ -120,5 +124,18 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         stable_fingerprint._mmm_stable_model_signature = True  # type: ignore[attr-defined]
         autotune_module._fingerprint = stable_fingerprint
 
+    # Final native-server tuning is layered after the basic safety/telemetry policy so
+    # it can benchmark the authoritative server args instead of creating a second
+    # execution path.
+    from .llama_server_max_performance import install as install_max_performance
 
-__all__ = ["install"]
+    install_max_performance(autotune_module)
+
+    # The server can only benefit from multiple slots when MMM is allowed to issue
+    # concurrent requests. Share the resident llama-server GPU allocation between
+    # those requests while keeping image/speech/other local GPU runtimes exclusive.
+    from . import model_router as model_router_module
+    from . import scheduler_parallel_safety_contract as scheduler_module
+    from .llama_parallel_runtime_contract import install as install_parallel_runtime
+
+    install_parallel_runtime(model_router_module, scheduler_module)
