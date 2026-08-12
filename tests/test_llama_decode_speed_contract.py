@@ -3,10 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_autotune as autotune
+from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
 from minecraft_mod_ai.llama_decode_speed_contract import (
     SpeedServerVariant,
     _decode_ratio,
     _explicit_parallel_requested,
+    _kv_autotune_enabled,
+    _kv_candidates,
     _mtp_p_min_candidates,
     _representative_benchmark_request,
     _tuning_objective,
@@ -19,6 +22,7 @@ def test_decode_speed_contract_is_installed() -> None:
     assert getattr(autotune._benchmark, "_mmm_mtp_p_min_stage", False)
     assert getattr(autotune._variant_args, "_mmm_mtp_p_min_tuning", False)
     assert getattr(autotune._fingerprint, "_mmm_decode_objective_fingerprint", False)
+    assert getattr(autotune.ensure_tuned_server, "_mmm_kv_decode_autotune", False)
     assert autotune._BENCHMARK_OUTPUT_TOKENS >= 256
 
 
@@ -69,3 +73,32 @@ def test_decode_ratio_ignores_prompt_prefill_speed() -> None:
     baseline = SimpleNamespace(predicted_tps=20.0, prompt_tps=1000.0)
     faster_decode_slower_prefill = SimpleNamespace(predicted_tps=24.0, prompt_tps=1.0)
     assert _decode_ratio(faster_decode_slower_prefill, baseline) == 1.2
+
+
+def test_kv_autotune_tries_all_supported_types_with_selected_type_first(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_KV_CACHE_QUANT", "q8_0")
+    monkeypatch.setenv("MMM_LLAMA_KV_CANDIDATES", "q4_0,q8_0,f16")
+    assert _kv_candidates() == ("q8_0", "q4_0", "f16")
+
+
+def test_kv_autotune_can_be_explicitly_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_KV_AUTOTUNE", "0")
+    monkeypatch.setenv("MMM_LLAMA_SERVER_AUTOTUNE", "1")
+    monkeypatch.delenv("MMM_LLAMA_TUNING_OBJECTIVE", raising=False)
+    assert _kv_autotune_enabled(autotune) is False
+
+
+def test_structured_local_payload_is_host_validated_without_server_json_grammar() -> None:
+    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": "return json"},),
+        response_format="json",
+    )
+    payload = hardware_policy._server_payload(adapter, request)
+    assert "response_format" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert getattr(
+        hardware_policy._server_payload,
+        "_mmm_host_validated_json_no_gbnf",
+        False,
+    )
