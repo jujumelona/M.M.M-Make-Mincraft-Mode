@@ -207,22 +207,21 @@ def test_editable_and_packaged_external_mcp_registries_are_identical() -> None:
     assert editable.read_bytes() == packaged.read_bytes()
 
 
-def test_effective_skill_policy_is_target_dynamic_and_mcp_aware() -> None:
+def test_effective_skill_policy_is_target_dynamic() -> None:
     contract = compile_skill_contract("generate-fabric-core")
     flattened = str(contract.to_dict())
     assert "1.20.1" not in flattened
     assert "Java 17" not in flattened
     assert "Yarn 1.20.1" not in flattened
-    assert "minecraft_mcp_capabilities" in contract.allowed_tools
-    assert "research_minecraft_mcp" in contract.allowed_tools
-    assert contract.authorize_tool(
-        "research_minecraft_mcp",
-        "generation",
-        write_approved=False,
-    ).allowed
-
-
-def test_runtime_skill_can_discover_mcp_without_gaining_research_mutation() -> None:
-    contract = compile_skill_contract("runtime-playtest")
-    assert "minecraft_mcp_capabilities" in contract.allowed_tools
+    # External MCP federation is internal to reviewed MMM tools; Skills must not
+    # receive phantom direct tool names that the staged MCP server does not expose.
+    assert "minecraft_mcp_capabilities" not in contract.allowed_tools
     assert "research_minecraft_mcp" not in contract.allowed_tools
+
+
+def test_runtime_skill_is_target_dynamic_without_new_authority() -> None:
+    contract = compile_skill_contract("runtime-playtest")
+    flattened = str(contract.to_dict())
+    assert "1.20.1" not in flattened
+    assert "Java 17" not in flattened
+    assert "Yarn 1.20.1" not in flattened
