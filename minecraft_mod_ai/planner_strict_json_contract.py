@@ -224,10 +224,13 @@ def install(runtime_module: Any) -> None:
         runtime_module._extract_with_safe_empty_defaults = extract_strict
 
     from .planner_outline_prompt_contract import install as install_outline_prompt
+    from . import planner_incremental_repair_contract as incremental_module
     from .planner_incremental_repair_contract import install as install_incremental_repair
+    from .planner_incremental_resume_contract import install as install_incremental_resume
 
     install_outline_prompt(runtime_module)
     install_incremental_repair(runtime_module)
+    install_incremental_resume(incremental_module)
 
 
 __all__ = [
