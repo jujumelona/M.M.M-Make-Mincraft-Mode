@@ -7,9 +7,7 @@ on:
     paths:
       - .github/workflows/build-native-llama-cuda-all.yml
       - .github/workflows/build-native-llama-cuda.yml
-      - tools/*llama*.py
-      - minecraft_mod_ai/llama*.py
-      - minecraft_mod_ai/**/llama*.py
+      - tools/native_llama_bundle.py
 
 permissions:
   contents: write
