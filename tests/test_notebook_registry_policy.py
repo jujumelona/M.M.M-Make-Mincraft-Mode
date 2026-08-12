@@ -31,19 +31,22 @@ def test_notebook_builder_matches_checked_in_notebooks() -> None:
     assert Path("Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb").read_text(encoding="utf-8") == rendered
 
 
-def test_existing_zip_upload_is_explicit_and_opt_in() -> None:
+def test_existing_zip_upload_is_explicit_and_bound_to_revise_mode() -> None:
     module = runpy.run_path("tools/build_colab_notebook.py")
     notebook = module["build_notebook"]()
     cells = {cell["id"]: cell["source"] for cell in notebook.cells}
+    run_modes = Path("minecraft_mod_ai/colab_run_modes.py").read_text(encoding="utf-8")
 
-    assert "PATCH_EXISTING" in cells["configuration"]
-    assert "if PATCH_EXISTING:" in cells["existing-input"]
-    assert "colab_files.upload()" in cells["existing-input"]
-    assert "len(uploaded) != 1" in cells["existing-input"]
-    assert 'suffix.lower() != ".zip"' in cells["existing-input"]
-    assert "inspect_existing_project_archive(EXISTING_INPUT)" in cells["existing-input"]
-    assert "existing_report.has_sources" in cells["existing-input"]
-    assert "existing_report.has_gradle_project" in cells["existing-input"]
+    assert 'RUN_MODE = "Full"' in cells["configuration"]
+    assert '"Revise"' in cells["configuration"]
+    assert "prepare_existing_mod_input(RUN_MODE)" in cells["existing-input"]
+    assert "PATCH_EXISTING" not in "\n".join(cells.values())
+    assert "colab_files.upload()" in run_modes
+    assert "len(uploaded) != 1" in run_modes
+    assert 'suffix=".zip"' in run_modes
+    assert "inspect_existing_project_archive(source)" in run_modes
+    assert "report.has_sources" in run_modes
+    assert "report.has_gradle_project" in run_modes
     assert "existing_input=EXISTING_INPUT" in cells["plan"]
     assert "approval_hash" not in "\n".join(cells.values())
     assert "complete_proposal" not in "\n".join(cells.values())
