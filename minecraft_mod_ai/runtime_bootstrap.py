@@ -153,12 +153,14 @@ def _install_platform_contracts() -> None:
         complete_planner,
         complete_spec,
         custom_module_generator,
+        ecosystem_discovery,
         external_mcp_router,
         game_design,
         geckolib_generator,
         generator,
         mineflayer_bridge,
         platform_central_ai_contract,
+        platform_planning_contract,
         platform_resolver,
         production_contract,
         repair_engine,
@@ -173,11 +175,17 @@ def _install_platform_contracts() -> None:
     from .external_mcp_bridge_safety_contract import (
         install as install_external_mcp_bridge_safety,
     )
+    from .external_mcp_target_validation_contract import (
+        install as install_external_mcp_target_validation,
+    )
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
+    from .platform_ecosystem_contract import install as install_platform_ecosystem
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
+    from .platform_live_rag_contract import install as install_platform_live_rag
     from .platform_planning_contract import install as install_platform_planning
+    from .platform_prompt_contract import install as install_platform_prompts
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
     from .platform_selection_efficiency_contract import (
@@ -186,6 +194,7 @@ def _install_platform_contracts() -> None:
     from .platform_specialized_generator_contract import (
         install as install_specialized_generator_guards,
     )
+    from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
     from .proposal_deserialization_contract import install as install_proposal_deserialization
     from .system_quality_contract import install as install_system_quality
@@ -195,6 +204,7 @@ def _install_platform_contracts() -> None:
         runtime_manager_module=runtime_manager,
         mineflayer_module=mineflayer_bridge,
     )
+    install_external_mcp_target_validation(external_mcp_router)
     install_external_mcp_bridge_safety(external_mcp_router)
     install_proposal_deserialization(spec, complete_spec)
     install_platform_generation(generator)
@@ -206,6 +216,13 @@ def _install_platform_contracts() -> None:
         retrieval_module=retrieval,
         technology_module=technology_radar,
     )
+    install_platform_live_rag(
+        retrieval_module=retrieval,
+        platform_planning_module=platform_planning_contract,
+    )
+    install_platform_technology(technology_radar)
+    install_platform_ecosystem(ecosystem_discovery, complete_planner)
+    install_platform_prompts(complete_planner)
     install_platform_selection_efficiency(
         resolver_module=platform_resolver,
         central_contract_module=platform_central_ai_contract,
@@ -419,7 +436,6 @@ def _install_public_boundary_contracts() -> None:
         complete_orchestrator,
         complete_planner,
         custom_module_generator,
-        external_mcp_router,
         mcp_tools,
         minecraft_mcp_repair_batch_contract,
         minecraft_mcp_runtime_helper_contract,
@@ -428,9 +444,6 @@ def _install_public_boundary_contracts() -> None:
         repair_engine,
         runtime_manager,
         skill_catalog,
-    )
-    from .external_mcp_target_validation_contract import (
-        install as install_mcp_target_validation,
     )
     from .mcp_repair_diagnostic_shape_contract import (
         install as install_mcp_repair_diagnostic_shape,
@@ -447,15 +460,8 @@ def _install_public_boundary_contracts() -> None:
         install as install_runtime_helper_json_deadline,
     )
 
-    install_platform_mcp(mcp_tools, production_tools)
-    install_platform_release(mcp_tools)
-    install_platform_api(api, plan_render)
-
-    # These policies used to be nested inside platform_api_contract. Keep their
-    # original public-boundary timing while making composition explicit and unique.
     install_runtime_helpers(runtime_manager)
     install_runtime_helper_json_deadline(minecraft_mcp_runtime_helper_contract)
-    install_mcp_target_validation(external_mcp_router)
     install_mcp_runtime(complete_orchestrator)
     install_mcp_federation(
         complete_planner_module=complete_planner,
@@ -466,6 +472,9 @@ def _install_public_boundary_contracts() -> None:
     install_mcp_repair_batch(repair_engine)
     install_mcp_repair_diagnostic_shape(minecraft_mcp_repair_batch_contract)
     install_skill_policy(skill_catalog)
+    install_platform_mcp(mcp_tools, production_tools)
+    install_platform_release(mcp_tools)
+    install_platform_api(api, plan_render)
 
 
 __all__ = ["initialize_runtime", "runtime_initialized"]
