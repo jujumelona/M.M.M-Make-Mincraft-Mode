@@ -15,11 +15,8 @@ _ARRAY_FIELDS = (
     "acceptance_tests",
     "completed_deliverables",
 )
-_ITEM_KIND = {
-    "modules": "module",
-    "assets": "asset",
-    "audio": "audio",
-}
+_ITEM_KIND = {"modules": "module", "assets": "asset", "audio": "audio"}
+_KIND_FIELD = {value: key for key, value in _ITEM_KIND.items()}
 
 
 def _canonical(value: Any) -> str:
@@ -42,14 +39,12 @@ def _skip_ws(text: str, position: int) -> int:
     return position
 
 
-def _parse_array_prefix(
-    text: str,
-    position: int,
-) -> tuple[list[Any], int, str]:
-    """Parse only already-complete JSON elements from one array prefix.
+def _parse_array_prefix(text: str, position: int) -> tuple[list[Any], int, str]:
+    """Return strict complete array elements plus the exact unresolved tail.
 
-    ``position`` points at ``[``.  No closing token is invented.  If the last
-    element is truncated, its exact raw fragment is returned separately.
+    No brace/bracket is invented and no malformed element is accepted.  A completed
+    sibling can therefore be committed even when the following child was cut by the
+    model output limit.
     """
 
     decoder = json.JSONDecoder()
@@ -65,18 +60,14 @@ def _parse_array_prefix(
             position = _skip_ws(text, position + 1)
             if position >= len(text):
                 return values, position, ""
-
         start = position
         try:
             value, end = decoder.raw_decode(text, position)
         except json.JSONDecodeError:
             return values, len(text), text[start:].strip()
         values.append(value)
-        position = int(end)
-        position = _skip_ws(text, position)
+        position = _skip_ws(text, int(end))
         if position < len(text) and text[position] not in {",", "]"}:
-            # A complete value followed by malformed/truncated material. Preserve the
-            # complete value and expose only the unresolved suffix.
             return values, len(text), text[position:].strip()
 
 
@@ -96,7 +87,6 @@ def _scan_root_candidate(text: str, start: int) -> dict[str, Any]:
             position = _skip_ws(text, position + 1)
         if position >= len(text):
             break
-
         try:
             key, key_end = decoder.raw_decode(text, position)
         except json.JSONDecodeError:
@@ -121,22 +111,13 @@ def _scan_root_candidate(text: str, start: int) -> dict[str, Any]:
                 break
             continue
 
-        # Scalar bookkeeping or unrelated fields are skipped only if Python's strict
-        # decoder can already parse the complete value. A truncated unknown value ends
-        # this candidate; it is never repaired implicitly.
         try:
-            _value, end = decoder.raw_decode(text, position)
+            _ignored, end = decoder.raw_decode(text, position)
         except json.JSONDecodeError:
             break
         position = int(end)
 
-    score = (
-        len(seen) * 1000
-        + sum(len(values[field]) for field in _ARRAY_FIELDS) * 10
-        + (1 if incomplete_fragment else 0)
-    )
     return {
-        "score": score,
         "start": start,
         "seen": seen,
         "values": values,
@@ -146,15 +127,16 @@ def _scan_root_candidate(text: str, start: int) -> dict[str, Any]:
 
 
 def _best_truncated_root(text: str) -> dict[str, Any] | None:
-    candidates = [
-        _scan_root_candidate(text, index)
-        for index, character in enumerate(text)
-        if character == "{"
-    ]
-    candidates = [candidate for candidate in candidates if candidate["seen"]]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda candidate: (candidate["score"], candidate["start"]))
+    # The intended structured response root appears before any nested config object.
+    # Prefer the earliest candidate that actually exposes a production top-level array;
+    # this avoids mistaking nested config keys such as "assets" for the page root.
+    for index, character in enumerate(text):
+        if character != "{":
+            continue
+        candidate = _scan_root_candidate(text, index)
+        if candidate["seen"]:
+            return candidate
+    return None
 
 
 def _stream_event_path(stage: str, request: dict[str, Any]) -> Path:
@@ -173,13 +155,13 @@ def _append_stream_event(
     diagnostic: str,
 ) -> Path:
     path = _stream_event_path(stage, request)
+    path.parent.mkdir(parents=True, exist_ok=True)
     event = {
         "round": round_index,
         "sha256": _fingerprint(text),
         "diagnostic": diagnostic,
         "text": text,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(_canonical(event))
         handle.write("\n")
@@ -210,7 +192,8 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _item_parser(module: Any, kind: str):
-    return getattr(module, {"module": "_module", "asset": "_asset", "audio": "_audio"}[kind])
+    name = {"module": "_module", "asset": "_asset", "audio": "_audio"}[kind]
+    return getattr(module, name)
 
 
 def _repair_truncated_item(
@@ -224,11 +207,7 @@ def _repair_truncated_item(
     fragment: str,
     targets: Sequence[str],
 ) -> dict[str, Any]:
-    """Replace only the one syntactically incomplete child object.
-
-    A partial JSON object has no safe field-level representation yet, so replacing this
-    child is the smallest sound repair unit. The exact fragment remains durably stored.
-    """
+    """Repair only one syntactically incomplete child; backend errors propagate."""
 
     from .planner_strict_json_contract import _extract_one_complete_object
     from .production_page_durable_contract import page_checkpoint_path
@@ -255,6 +234,7 @@ def _repair_truncated_item(
     }
     round_index = int(saved.get("round", 0)) if saved.get("fingerprint") == fingerprint else 0
     previous_error = str(saved.get("error", "")) if saved else ""
+    target_set = set(targets)
 
     while True:
         round_index += 1
@@ -270,14 +250,12 @@ def _repair_truncated_item(
                 "error": previous_error,
             },
         )
-        prompt = (
-            f"Repair exactly ONE truncated Minecraft production {kind}. The host has already "
-            "saved every complete sibling object, so NEVER emit a page or sibling. Return "
-            "exactly target_fingerprint and replacement. Reconstruct only this incomplete "
-            "child from its saved fragment. Preserve every recoverable field/value. The "
-            "replacement must include implements_deliverables as a non-empty array containing "
-            "only exact names from remaining_deliverables that this object implements. Return "
-            "JSON only, no Markdown or explanation."
+        system = (
+            f"Repair exactly ONE truncated Minecraft production {kind}. Complete siblings are "
+            "already saved: never emit a page or sibling. Return exactly target_fingerprint "
+            "and replacement. Reconstruct only this child from saved_truncated_fragment and "
+            "preserve every recoverable value. replacement must include a non-empty "
+            "implements_deliverables array using only exact remaining_deliverables. JSON only."
         )
         user = {
             "target_fingerprint": fingerprint,
@@ -285,20 +263,13 @@ def _repair_truncated_item(
             "saved_truncated_fragment": fragment,
             "remaining_deliverables": list(targets),
             "previous_validation_error": previous_error,
-            "output_contract": {
-                "target_fingerprint": fingerprint,
-                "replacement": {
-                    "same_item_reconstructed": True,
-                    "implements_deliverables": ["exact remaining deliverable name"],
-                },
-            },
         }
         token = runtime._JSON_SCHEMA.set(schema)
         try:
             text = router.generate_text(
                 "planner",
                 [
-                    {"role": "system", "content": prompt},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": _canonical(user)},
                 ],
                 media_paths=(),
@@ -307,6 +278,8 @@ def _repair_truncated_item(
         finally:
             runtime._JSON_SCHEMA.reset(token)
 
+        # Only semantic/format errors loop here. router/backend exceptions occur above
+        # this block and propagate, leaving the fsynced fragment/state for next run.
         try:
             patch = _extract_one_complete_object(text)
             if set(patch) != {"target_fingerprint", "replacement"}:
@@ -319,30 +292,31 @@ def _repair_truncated_item(
             claims = replacement.get("implements_deliverables")
             if not isinstance(claims, list) or not claims:
                 raise ValueError("replacement must declare implements_deliverables")
-            target_set = set(targets)
-            normalized_claims = [
+            normalized = [
                 str(value).strip()
                 for value in claims
                 if isinstance(value, str) and str(value).strip()
             ]
-            if not normalized_claims or any(value not in target_set for value in normalized_claims):
-                raise ValueError("replacement deliverable attribution is outside the host target")
-            replacement["implements_deliverables"] = normalized_claims
+            if not normalized or any(value not in target_set for value in normalized):
+                raise ValueError("replacement attribution is outside the host target")
+            replacement["implements_deliverables"] = normalized
             _item_parser(module, kind)(replacement)
-            _atomic_json(
-                state_path,
-                {
-                    "fingerprint": fingerprint,
-                    "status": "resolved",
-                    "round": round_index,
-                    "kind": kind,
-                    "fragment": fragment,
-                    "resolved": replacement,
-                },
-            )
-            return replacement
         except Exception as exc:
             previous_error = f"{type(exc).__name__}: {exc}"
+            continue
+
+        _atomic_json(
+            state_path,
+            {
+                "fingerprint": fingerprint,
+                "status": "resolved",
+                "round": round_index,
+                "kind": kind,
+                "fragment": fragment,
+                "resolved": replacement,
+            },
+        )
+        return replacement
 
 
 def _dedupe(values: Sequence[Any]) -> list[Any]:
@@ -350,10 +324,9 @@ def _dedupe(values: Sequence[Any]) -> list[Any]:
     seen: set[str] = set()
     for value in values:
         key = _fingerprint(value)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(value)
+        if key not in seen:
+            seen.add(key)
+            result.append(value)
     return result
 
 
@@ -364,7 +337,7 @@ def _repair_missing_attribution(
     items: list[tuple[str, dict[str, Any]]],
     targets: Sequence[str],
 ) -> None:
-    """Patch only attribution metadata on salvaged complete objects when needed."""
+    """Patch attribution metadata only; never rewrite salvaged production objects."""
 
     if len(targets) <= 1 or not items:
         return
@@ -372,15 +345,15 @@ def _repair_missing_attribution(
     unresolved: list[tuple[str, dict[str, Any], str]] = []
     for kind, item in items:
         claims = item.get("implements_deliverables")
-        normalized = [
+        valid = [
             str(value).strip()
             for value in claims
             if isinstance(value, str) and str(value).strip() in target_set
         ] if isinstance(claims, list) else []
-        if normalized:
-            item["implements_deliverables"] = normalized
-            continue
-        unresolved.append((kind, item, _fingerprint(item)))
+        if valid:
+            item["implements_deliverables"] = valid
+        else:
+            unresolved.append((kind, item, _fingerprint(item)))
     if not unresolved:
         return
 
@@ -410,12 +383,6 @@ def _repair_missing_attribution(
 
     previous_error = ""
     while True:
-        prompt = (
-            "Return attribution patches only. Do NOT rewrite any production object. For every "
-            "saved object fingerprint, choose the exact remaining_deliverables it implements. "
-            "Every assignment must use only host-provided fingerprints and exact deliverable "
-            "names. Return one JSON object with assignments only."
-        )
         user = {
             "remaining_deliverables": list(targets),
             "saved_objects": [
@@ -429,7 +396,14 @@ def _repair_missing_attribution(
             text = router.generate_text(
                 "planner",
                 [
-                    {"role": "system", "content": prompt},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return attribution patches only; never rewrite production objects. "
+                            "For every saved fingerprint assign one or more exact host remaining "
+                            "deliverables it implements. Return one JSON object with assignments."
+                        ),
+                    },
                     {"role": "user", "content": _canonical(user)},
                 ],
                 media_paths=(),
@@ -437,6 +411,7 @@ def _repair_missing_attribution(
             )
         finally:
             runtime._JSON_SCHEMA.reset(token)
+
         try:
             raw = _extract_one_complete_object(text)
             if set(raw) != {"assignments"} or not isinstance(raw["assignments"], list):
@@ -444,7 +419,10 @@ def _repair_missing_attribution(
             expected = {fingerprint for _kind, _item, fingerprint in unresolved}
             assignments: dict[str, list[str]] = {}
             for value in raw["assignments"]:
-                if not isinstance(value, dict) or set(value) != {"fingerprint", "implements_deliverables"}:
+                if not isinstance(value, dict) or set(value) != {
+                    "fingerprint",
+                    "implements_deliverables",
+                }:
                     raise ValueError("attribution assignment is invalid")
                 fingerprint = str(value["fingerprint"])
                 claims = value["implements_deliverables"]
@@ -458,11 +436,13 @@ def _repair_missing_attribution(
                 assignments[fingerprint] = normalized
             if set(assignments) != expected:
                 raise ValueError("attribution omitted a saved production object")
-            for _kind, item, fingerprint in unresolved:
-                item["implements_deliverables"] = assignments[fingerprint]
-            return
         except Exception as exc:
             previous_error = f"{type(exc).__name__}: {exc}"
+            continue
+
+        for _kind, item, fingerprint in unresolved:
+            item["implements_deliverables"] = assignments[fingerprint]
+        return
 
 
 def _merge_complete_production_pages(
@@ -508,10 +488,10 @@ def _salvage_production_stream(
     stage: str,
 ) -> dict[str, Any] | None:
     merged, complete_end = _merge_complete_production_pages(module, runtime, text, request)
-
     tail = text[complete_end:] if complete_end else text
     prefix = _best_truncated_root(tail)
     prefix_items: list[tuple[str, dict[str, Any]]] = []
+
     if prefix is not None:
         values = prefix["values"]
         for field in _ARRAY_FIELDS:
@@ -535,20 +515,14 @@ def _salvage_production_stream(
                 fragment=fragment,
                 targets=targets,
             )
-            field = {value: key for key, value in _ITEM_KIND.items()}[kind]
-            merged[field].append(repaired)
+            merged[_KIND_FIELD[kind]].append(repaired)
             prefix_items.append((kind, repaired))
 
     for field in _ARRAY_FIELDS:
         merged[field] = _dedupe(merged[field])
 
     targets = runtime._target_names(request)
-    _repair_missing_attribution(
-        runtime,
-        router,
-        items=prefix_items,
-        targets=targets,
-    )
+    _repair_missing_attribution(runtime, router, items=prefix_items, targets=targets)
 
     modules = [value for value in merged["modules"] if isinstance(value, dict)]
     assets = [value for value in merged["assets"] if isinstance(value, dict)]
@@ -625,7 +599,8 @@ def install(complete_planner_module: Any) -> None:
         production = (
             isinstance(request, dict)
             and len(expected_contracts) == 1
-            and expected_contracts[0] == frozenset(complete_planner_module._PRODUCTION_PAGE_CONTRACT)
+            and expected_contracts[0]
+            == frozenset(complete_planner_module._PRODUCTION_PAGE_CONTRACT)
         )
         if not production:
             return current(
@@ -642,10 +617,12 @@ def install(complete_planner_module: Any) -> None:
         contract_text = (
             json.dumps(view, ensure_ascii=False, separators=(",", ":"))
             if view is not None
-            else "required top-level fields: " + ", ".join(sorted(complete_planner_module._PRODUCTION_PAGE_CONTRACT))
+            else "required top-level fields: "
+            + ", ".join(sorted(complete_planner_module._PRODUCTION_PAGE_CONTRACT))
         )
         previous_diagnostic = ""
         round_index = 0
+
         while True:
             prompt = (
                 system_prompt
@@ -653,26 +630,26 @@ def install(complete_planner_module: Any) -> None:
                 + "compatible value types: "
                 + contract_text
                 + ". The host imposes NO fixed item/deliverable width. Choose any coherent "
-                + "non-empty subset of the remaining work that you can finish as valid JSON. "
-                + "Finish the current child object before starting another one; if output budget "
-                + "is getting tight, stop after a complete child/page instead of beginning an "
-                + "object you cannot finish. Do not repeat host catalog IDs."
+                + "non-empty subset of remaining work that you can finish as valid JSON. "
+                + "Finish the current child before starting another; when budget is tight, stop "
+                + "after a complete child/page instead of starting one you cannot finish. Never "
+                + "repeat IDs already present in host catalogs."
             )
             if round_index:
                 prompt += (
                     "\nCORRECTION: the previous raw stream was durably saved but contained no "
-                    "host-verifiable production progress after lossless salvage: "
+                    "host-verifiable object after strict lossless salvage: "
                     + previous_diagnostic
-                    + ". Return a clean production page now. Do not pad, explain, or echo the request."
+                    + ". Return a clean page; do not pad, explain, or echo the request."
                 )
-            request_text = json.dumps(request, ensure_ascii=False)
+
             token = runtime._JSON_SCHEMA.set(schema)
             try:
                 text = router.generate_text(
                     "planner",
                     [
                         {"role": "system", "content": prompt},
-                        {"role": "user", "content": request_text},
+                        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
                     ],
                     media_paths=media_paths if round_index == 0 else (),
                     response_format="json",
@@ -702,30 +679,32 @@ def install(complete_planner_module: Any) -> None:
                     text=text,
                     diagnostic=diagnostic,
                 )
-                try:
-                    salvaged = _salvage_production_stream(
-                        complete_planner_module,
-                        runtime,
-                        router,
-                        text=text,
-                        request=request,
-                        stage=stage,
-                    )
-                except Exception as salvage_exc:
-                    previous_diagnostic = (
-                        diagnostic
-                        + "; salvage="
-                        + f"{type(salvage_exc).__name__}: {salvage_exc}"
-                    )
-                    round_index += 1
-                    continue
-                if salvaged is not None:
-                    return salvaged
-                previous_diagnostic = diagnostic + "; salvage=no verified production item"
-                round_index += 1
+
+            # Do not catch exceptions from salvage. Semantic repair errors are handled
+            # inside the child/attribution loops; backend/process failures propagate so
+            # the fsynced stream remains the restart point instead of triggering a new
+            # expensive full-page decode.
+            salvaged = _salvage_production_stream(
+                complete_planner_module,
+                runtime,
+                router,
+                text=text,
+                request=request,
+                stage=stage,
+            )
+            if salvaged is not None:
+                return salvaged
+
+            previous_diagnostic = diagnostic + "; salvage=no verified production item"
+            round_index += 1
 
     generate_json_page_lossless._mmm_lossless_production_stream = True  # type: ignore[attr-defined]
     complete_planner_module._generate_json_page_with_repair = generate_json_page_lossless
 
 
-__all__ = ["install"]
+__all__ = [
+    "install",
+    "_append_stream_event",
+    "_salvage_production_stream",
+    "_stream_event_path",
+]
