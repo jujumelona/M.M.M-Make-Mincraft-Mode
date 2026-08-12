@@ -16,6 +16,24 @@ def _stall_seconds() -> float:
     return min(600.0, max(30.0, value))
 
 
+def _transient_managed_failure(exc: BaseException) -> bool:
+    cause = getattr(exc, "cause", "")
+    text = f"{exc}\n{cause}".lower()
+    markers = (
+        "no output delta",
+        "readtimeout",
+        "connecttimeout",
+        "connecterror",
+        "connection reset",
+        "server disconnected",
+        "stream ended before the [done] marker",
+        "stream produced no text content",
+        "timed out",
+        "timeout",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
     current = hardware_policy_module._strict_server_generate
     if getattr(current, "_mmm_local_stream_watchdog", False):
@@ -26,6 +44,9 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
         from .colab_mtp_server import (
             SERVER_API_URL,
             current_server_mode,
+            decode_log_summary,
+            server_log_offset,
+            server_log_since,
             server_log_tail,
         )
 
@@ -34,6 +55,7 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
 
         from .model_adapters import ModelBackendError
 
+        request_log_offset = server_log_offset()
         try:
             import httpx
 
@@ -171,10 +193,12 @@ def _install_local_stream_watchdog(hardware_policy_module: Any) -> None:
         except Exception as exc:
             if isinstance(exc, ModelBackendError):
                 raise
-            tail = server_log_tail(120)
-            detail = f"{type(exc).__name__}: {exc}"
+            fresh_log = server_log_since(request_log_offset)
+            telemetry = decode_log_summary(fresh_log)
+            tail = fresh_log.strip() or server_log_tail(120)
+            detail = f"{type(exc).__name__}: {exc}\nrequest decode telemetry: {telemetry}"
             if tail:
-                detail += "\nmanaged llama server log tail:\n" + tail
+                detail += "\nmanaged llama server request log:\n" + tail
             raise ModelBackendError(
                 role=adapter.config.role,
                 model_id=adapter.config.model_id,
@@ -212,16 +236,26 @@ def _install_request_mode_router(hardware_policy_module: Any) -> None:
         try:
             return current(self, request)
         except ModelBackendError as exc:
-            if selected_mode != "mtp":
-                raise
-            mark_mtp_unhealthy(f"request failed in MTP mode: {exc}")
-            stop_colab_mtp_server(keep_enabled=True)
-            start_colab_mtp_server(self.config, mode="baseline")
-            print(
-                "llama server: retrying failed MTP request in baseline mode",
-                flush=True,
-            )
-            return current(self, request)
+            if selected_mode == "mtp":
+                mark_mtp_unhealthy(f"request failed in MTP mode: {exc}")
+                stop_colab_mtp_server(keep_enabled=True)
+                start_colab_mtp_server(self.config, mode="baseline")
+                print(
+                    "llama server: retrying failed MTP request in baseline mode",
+                    flush=True,
+                )
+                return current(self, request)
+
+            if selected_mode == "baseline" and _transient_managed_failure(exc):
+                stop_colab_mtp_server(keep_enabled=True)
+                start_colab_mtp_server(self.config, mode="baseline")
+                print(
+                    "llama server: transient baseline decode failure; restarted "
+                    "server and retrying request once",
+                    flush=True,
+                )
+                return current(self, request)
+            raise
 
     routed_generate._mmm_colab_request_mode_router = True
     LlamaCppAdapter.generate = routed_generate
