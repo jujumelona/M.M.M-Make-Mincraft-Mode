@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,39 @@ class _Request:
     response_format = "text"
 
 
-def test_colab_mtp_hot_path_skips_repeated_restart_and_local_fallback() -> None:
+class _StreamResponse:
+    def __init__(self, *, status_code: int = 200, lines=(), text: str = "") -> None:
+        self.status_code = status_code
+        self._lines = list(lines)
+        self.text = text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def iter_lines(self):
+        yield from self._lines
+
+    def read(self):
+        return self.text.encode("utf-8")
+
+
+def _sse(content: str) -> list[str]:
+    chunk = {
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": None,
+                "delta": {"content": content},
+            }
+        ]
+    }
+    return ["data: " + json.dumps(chunk), "data: [DONE]"]
+
+
+def test_colab_llama_hot_path_uses_explicit_managed_server_without_local_fallback() -> None:
     text = POLICY.read_text(encoding="utf-8")
     assert "colab_mtp_server_running" in text
     assert 'os.environ["LLAMA_SERVER_URL"] = SERVER_API_URL' in text
@@ -37,18 +70,14 @@ def test_colab_mtp_hot_path_skips_repeated_restart_and_local_fallback() -> None:
     assert "return _strict_server_generate(self, request, explicit)" in text
 
 
-def test_strict_server_generate_returns_openai_message(monkeypatch) -> None:
-    class Response:
-        status_code = 200
-        text = ""
-
-        @staticmethod
-        def json():
-            return {"choices": [{"message": {"content": "ok"}}]}
-
+def test_strict_server_generate_consumes_openai_sse_stream(monkeypatch) -> None:
     import httpx
 
-    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        lambda *args, **kwargs: _StreamResponse(lines=_sse("ok")),
+    )
     adapter = _Adapter()
     assert (
         llama_server_hardware_policy._strict_server_generate(
@@ -60,18 +89,17 @@ def test_strict_server_generate_returns_openai_message(monkeypatch) -> None:
     )
 
 
-def test_strict_server_generate_surfaces_server_failure(monkeypatch) -> None:
-    class Response:
-        status_code = 500
-        text = "server failed"
-
-        @staticmethod
-        def json():
-            return {}
-
+def test_strict_server_generate_surfaces_stream_server_failure(monkeypatch) -> None:
     import httpx
 
-    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        lambda *args, **kwargs: _StreamResponse(
+            status_code=500,
+            text="server failed",
+        ),
+    )
     with pytest.raises(ModelBackendError):
         llama_server_hardware_policy._strict_server_generate(
             _Adapter(),
