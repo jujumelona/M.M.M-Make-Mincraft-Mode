@@ -2,6 +2,11 @@ name: Build native llama CUDA bundles
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-native-llama-cuda.yml
+      - tools/native_llama_bundle.py
 
 permissions:
   contents: write
@@ -30,7 +35,7 @@ jobs:
           set -euo pipefail
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates cmake git ninja-build python3
+            binutils ca-certificates cmake git ninja-build python3
           rm -rf /var/lib/apt/lists/*
 
       - name: Prepare CUDA driver stubs for link-only build
@@ -39,6 +44,10 @@ jobs:
           set -euo pipefail
           stub_dir=/usr/local/cuda/lib64/stubs
           test -f "$stub_dir/libcuda.so"
+          # Hosted GitHub runners have the CUDA toolkit but no NVIDIA kernel driver.
+          # The toolkit stub has the correct driver ABI but is shipped only as
+          # libcuda.so; llama.cpp's shared CUDA backend records libcuda.so.1.
+          # Add the SONAME alias for link time only. Nothing from stub_dir is packaged.
           ln -sf libcuda.so "$stub_dir/libcuda.so.1"
           test -e "$stub_dir/libcuda.so.1"
 
@@ -67,6 +76,24 @@ jobs:
             -DLLAMA_CURL=OFF
           cmake --build llama.cpp/build --target llama-server -j "$(nproc)"
 
+      - name: Verify native linkage contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x llama.cpp/build/bin/llama-server
+          cuda_so="$(find llama.cpp/build/bin -maxdepth 1 -type f -name 'libggml-cuda.so.*' | sort | head -n 1)"
+          test -n "$cuda_so"
+          readelf -d "$cuda_so" | grep -F 'Shared library: [libcuda.so.1]'
+          if readelf -d llama.cpp/build/bin/llama-server | grep -F '/usr/local/cuda/lib64/stubs'; then
+            echo 'llama-server contains a forbidden runtime path to the CI CUDA stub' >&2
+            exit 1
+          fi
+          if readelf -d "$cuda_so" | grep -F '/usr/local/cuda/lib64/stubs'; then
+            echo 'libggml-cuda contains a forbidden runtime path to the CI CUDA stub' >&2
+            exit 1
+          fi
+          grep -q '^GGML_CUDA_GRAPHS:BOOL=ON$' llama.cpp/build/CMakeCache.txt
+
       - name: Package server and shared libraries
         shell: bash
         run: |
@@ -81,7 +108,8 @@ jobs:
           done
           test -x bundle/bin/llama-server
           find bundle/bin -maxdepth 1 -type f -name 'libggml-cuda.so*' | grep -q .
-          grep -q '^GGML_CUDA_GRAPHS:BOOL=ON$' llama.cpp/build/CMakeCache.txt
+          test ! -e bundle/bin/libcuda.so
+          test ! -e bundle/bin/libcuda.so.1
           BUNDLE_ARCH="${{ matrix.cuda_arch }}" python3 - <<'PY'
           import hashlib
           import json
