@@ -6,6 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import colab_mtp_server
+from minecraft_mod_ai.colab_llama_request_routing_contract import (
+    _transient_managed_failure,
+)
+from minecraft_mod_ai.model_adapters import ModelBackendError
 
 
 def _config(*, model_id: str, filename: str = "model.gguf") -> SimpleNamespace:
@@ -113,3 +117,76 @@ def test_decode_log_summary_distinguishes_first_token_stall_from_server_progress
     assert "max=1" in stalled
     assert "advanced beyond the first token" in progressed
     assert "last=42" in progressed
+
+
+class _StreamResponse:
+    status_code = 200
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def iter_lines(self):
+        yield from self.lines
+
+    def read(self):
+        return b""
+
+
+def _delta(content: str) -> str:
+    return "data: " + json.dumps(
+        {"choices": [{"delta": {"content": content}}]}
+    )
+
+
+def test_mtp_probe_requires_completed_multi_step_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        colab_mtp_server.httpx,
+        "stream",
+        lambda *args, **kwargs: _StreamResponse(
+            [_delta("1 2 3 "), _delta("4 5 6 7 8 9 10"), "data: [DONE]"]
+        ),
+    )
+
+    ok, detail = colab_mtp_server._probe_mtp_server()
+
+    assert ok is True
+    assert "events=2" in detail
+
+
+def test_mtp_probe_rejects_first_delta_then_broken_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        colab_mtp_server.httpx,
+        "stream",
+        lambda *args, **kwargs: _StreamResponse([_delta("1 2 3 4 5")]),
+    )
+
+    ok, detail = colab_mtp_server._probe_mtp_server()
+
+    assert ok is False
+    assert "before [DONE]" in detail
+
+
+def test_transient_decode_stall_is_restartable_but_http_400_is_not() -> None:
+    stalled = ModelBackendError(
+        role="planner",
+        model_id="model",
+        cause=RuntimeError("llama server produced no output delta for 90s"),
+    )
+    bad_request = ModelBackendError(
+        role="planner",
+        model_id="model",
+        cause=RuntimeError("llama server returned HTTP 400: malformed request"),
+    )
+
+    assert _transient_managed_failure(stalled) is True
+    assert _transient_managed_failure(bad_request) is False
