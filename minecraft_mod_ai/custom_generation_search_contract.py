@@ -41,10 +41,12 @@ class _HostEvidenceRouter:
         require_fresh_evidence: bool = False,
     ) -> "_HostEvidenceRouter":
         del require_fresh_evidence
-        self._router.bind_agent_workspace(
-            workspace_root,
-            require_fresh_evidence=False,
-        )
+        binder = getattr(self._router, "bind_agent_workspace", None)
+        if callable(binder):
+            binder(
+                workspace_root,
+                require_fresh_evidence=False,
+            )
         return self
 
     def generate_text(
@@ -120,7 +122,8 @@ def _width(module: Any) -> int:
     # generated candidate 1 and candidate 2 in a Python for-loop, so a complex custom
     # module paid roughly twice the LLM wall time before verification even started.
     # Explicit MMM_AGENTIC_SEARCH=on remains the opt-in quality-over-latency mode.
-    if _active_native_slots() <= 1:
+    slots = _active_native_slots()
+    if slots <= 1:
         return 1
 
     kind = str(getattr(module, "kind", ""))
@@ -156,7 +159,7 @@ def _width(module: Any) -> int:
         )
     ):
         risk += 1
-    return min(configured, _active_native_slots()) if risk >= 2 else 1
+    return min(configured, slots) if risk >= 2 else 1
 
 
 def _json_size(value: Any) -> int:
