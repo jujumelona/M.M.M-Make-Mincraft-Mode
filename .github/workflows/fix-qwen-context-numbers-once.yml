@@ -1,0 +1,58 @@
+name: Fix Qwen context numbers once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-qwen-context-numbers-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-qwen-context-numbers-once
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+      - name: Change only context numeric constants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('minecraft_mod_ai/qwen35_mtp_hotpath_contract.py')
+          s = p.read_text(encoding='utf-8')
+          if s.count('_DEFAULT_CTX = 8192') != 1:
+              raise SystemExit('expected latest _DEFAULT_CTX = 8192 exactly once')
+          if s.count('_MAX_CTX = 32768') != 1:
+              raise SystemExit('expected latest _MAX_CTX = 32768 exactly once')
+          t = s.replace('_DEFAULT_CTX = 8192', '_DEFAULT_CTX = 32768', 1)
+          t = t.replace('_MAX_CTX = 32768', '_MAX_CTX = 2147483647', 1)
+          p.write_text(t, encoding='utf-8')
+          PY
+          git diff -- minecraft_mod_ai/qwen35_mtp_hotpath_contract.py
+          changed="$(git diff --numstat -- minecraft_mod_ai/qwen35_mtp_hotpath_contract.py)"
+          test "$changed" = $'2\t2\tminecraft_mod_ai/qwen35_mtp_hotpath_contract.py'
+          python -m py_compile minecraft_mod_ai/qwen35_mtp_hotpath_contract.py
+      - name: Commit only numeric fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-qwen-context-numbers-once.yml
+          git config user.name 'juju-mmm-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add minecraft_mod_ai/qwen35_mtp_hotpath_contract.py .github/workflows/fix-qwen-context-numbers-once.yml
+          git diff --cached --check
+          git commit -m 'Raise Qwen context numeric bounds only'
+          git pull --rebase origin main
+          git push origin HEAD:main
