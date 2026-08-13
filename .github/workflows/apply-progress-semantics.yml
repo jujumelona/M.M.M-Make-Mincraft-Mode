@@ -24,12 +24,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Repair execution-efficiency bootstrap call
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('minecraft_mod_ai/runtime_bootstrap.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    install_execution_efficiency(
+              complete_planner_module=complete_planner,
+              work_graph_module=work_graph,
+          )
+          '''
+          new = '''    install_execution_efficiency(
+              work_graph_module=work_graph,
+          )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'execution efficiency bootstrap shape changed: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Apply remaining progress semantics
         run: python .github/scripts/apply_progress_semantics.py
       - name: Verify progress semantics
         run: |
           python -m pip install --prefer-binary -e '.[dev]'
           python -m ruff check \
+            minecraft_mod_ai/runtime_bootstrap.py \
             minecraft_mod_ai/planner_incremental_resume_contract.py \
             minecraft_mod_ai/complete_planner.py \
             tests/test_planner_incremental_repair_contract.py \
