@@ -8,7 +8,7 @@ import tempfile
 import threading
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 import anyio
 
@@ -125,6 +125,42 @@ class AgentToolRuntime:
         name: str,
         arguments: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Host-stage call. ModelRouter uses call_scoped for model-owned execution."""
+        return self._call(
+            stage,
+            name,
+            arguments,
+            external_server_ids=None,
+        )
+
+    def call_scoped(
+        self,
+        stage: str,
+        name: str,
+        arguments: Mapping[str, Any] | None = None,
+        *,
+        external_server_ids: Collection[str],
+    ) -> dict[str, Any]:
+        """Execute a model tool while enforcing its reviewed external MCP providers."""
+        return self._call(
+            stage,
+            name,
+            arguments,
+            external_server_ids=frozenset(
+                value
+                for raw in external_server_ids
+                if (value := str(raw).strip())
+            ),
+        )
+
+    def _call(
+        self,
+        stage: str,
+        name: str,
+        arguments: Mapping[str, Any] | None,
+        *,
+        external_server_ids: frozenset[str] | None,
+    ) -> dict[str, Any]:
         selected = self._stage(stage)
         tool_name = name.strip()
         if not tool_name:
@@ -133,8 +169,6 @@ class AgentToolRuntime:
             raise AgentToolRuntimeError(
                 f"Tool {tool_name!r} is intentionally not model-callable."
             )
-        # Materialize the authoritative stage schema once. Keep the immutable name
-        # set beside it so hot-path calls do not rebuild the same set repeatedly.
         self.tool_schemas(selected)
         with self._lock:
             allowed = self._allowed_tool_cache[selected]
@@ -145,7 +179,12 @@ class AgentToolRuntime:
         payload = dict(arguments or {})
         if tool_name in EXTERNAL_TOOL_NAMES:
             return _bounded_result(
-                self._external_bridge.call(selected, tool_name, payload)
+                self._external_bridge.call(
+                    selected,
+                    tool_name,
+                    payload,
+                    allowed_server_ids=external_server_ids,
+                )
             )
         result = self._run_async(
             self._call_tool_async,

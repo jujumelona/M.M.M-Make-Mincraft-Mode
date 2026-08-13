@@ -74,3 +74,13 @@ def test_real_stdio_planning_stage_exposes_paged_complete_plan(
     assert "build_technology_radar" in tools
     assert "inspect_huggingface_model" in tools
     assert "assess_technology_compatibility" in tools
+
+
+def test_real_stdio_generation_stage_exposes_coder_evidence_tools(tmp_path: Path) -> None:
+    tools = asyncio.run(_handshake(tmp_path / "workspace", "generation"))
+    assert "inspect_existing_mod" in tools
+    assert "search_project_rag" in tools
+    assert "search_code_rag" in tools
+    assert "runtime_start_server" not in tools
+    assert "package_release" not in tools
+    assert "plan_complete_game" not in tools

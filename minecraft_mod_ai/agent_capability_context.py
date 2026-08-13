@@ -43,6 +43,15 @@ def _policy_model_role(stage: str, model_role: str) -> str:
     return selected_role
 
 
+def reviewed_mcp_servers_for_model_role(
+    stage: str, model_role: str
+) -> frozenset[str]:
+    """Return reviewed external MCP servers for this logical agent turn."""
+    return frozenset(
+        mcp_servers_for_model_role(_policy_model_role(stage, model_role))
+    )
+
+
 @lru_cache(maxsize=8)
 def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
     selected = stage.strip().lower()
@@ -152,7 +161,7 @@ def build_agent_capability_context(
     policy_role = _policy_model_role(selected, model_role)
     exposed_tools = frozenset(_tool_names(tool_schemas))
     role_routes = routes_for_model_role(policy_role)
-    reviewed_servers = mcp_servers_for_model_role(policy_role)
+    reviewed_servers = reviewed_mcp_servers_for_model_role(selected, model_role)
 
     skills: list[dict[str, Any]] = []
     for contract in _request_contracts(selected, policy_role):

@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import threading
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 import anyio
 
@@ -28,7 +28,9 @@ class ExternalAgentBridge:
             raise ValueError("timeout_seconds must be between 1 and 600")
         self.timeout_seconds = float(timeout_seconds)
         self._router: Any | None = None
-        self._schema_cache: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        self._schema_cache: dict[
+            tuple[str, str, str, str, str, tuple[str, ...] | None], dict[str, Any]
+        ] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -140,6 +142,8 @@ class ExternalAgentBridge:
         stage: str,
         name: str,
         payload: Mapping[str, Any],
+        *,
+        allowed_server_ids: Collection[str] | None = None,
     ) -> dict[str, Any]:
         if stage not in AGENT_STAGES:
             raise ExternalAgentBridgeError(
@@ -154,12 +158,22 @@ class ExternalAgentBridge:
         if stage != "runtime" and max_access != "read":
             raise ExternalAgentBridgeError("Non-runtime external MCP access is read-only")
         router = self._external_router()
+        allowed_servers = (
+            None
+            if allowed_server_ids is None
+            else frozenset(
+                value
+                for raw in allowed_server_ids
+                if (value := str(raw).strip())
+            )
+        )
 
         if name == CAPABILITIES_TOOL:
             return router.capability_manifest(
                 stage=stage,
                 target=target,
                 max_access=max_access,
+                allowed_server_ids=allowed_servers,
             )
 
         capability = str(payload.get("capability", "")).strip()
@@ -173,6 +187,7 @@ class ExternalAgentBridge:
                 target["minecraft_version"],
                 target["loader"],
                 target["mappings"],
+                None if allowed_servers is None else tuple(sorted(allowed_servers)),
             )
             with self._lock:
                 cached = self._schema_cache.get(key)
@@ -184,6 +199,7 @@ class ExternalAgentBridge:
                 capability,
                 target,
                 max_access,
+                allowed_servers,
             )
             with self._lock:
                 self._schema_cache[key] = result
@@ -206,6 +222,7 @@ class ExternalAgentBridge:
             required=False,
             max_access=max_access,
             disposable_runtime=bool(payload.get("disposable_runtime", False)),
+            allowed_server_ids=allowed_servers,
         )
 
     def _external_router(self) -> Any:
@@ -250,6 +267,7 @@ class ExternalAgentBridge:
         capability: str,
         target: Mapping[str, str],
         max_access: str,
+        allowed_server_ids: Collection[str] | None,
     ) -> dict[str, Any]:
         from .external_mcp_router import MCPRouteTarget
 
@@ -262,6 +280,12 @@ class ExternalAgentBridge:
             loader=resolved.loader,
             max_access=max_access,
         )
+        if allowed_server_ids is not None:
+            routes = [
+                route
+                for route in routes
+                if str(route["server"]) in allowed_server_ids
+            ]
         attempts: list[dict[str, Any]] = []
         for route in routes:
             server = str(route["server"])

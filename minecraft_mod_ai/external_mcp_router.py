@@ -6,7 +6,7 @@ import json
 import os
 import threading
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 import anyio
 
@@ -15,6 +15,16 @@ from .external_mcp import ExternalMCPRegistry
 
 class ExternalMCPError(RuntimeError):
     pass
+
+
+def _server_scope(values: Collection[str] | None) -> frozenset[str] | None:
+    if values is None:
+        return None
+    return frozenset(
+        value
+        for raw in values
+        if (value := str(raw).strip())
+    )
 
 
 @dataclass(frozen=True)
@@ -87,8 +97,10 @@ class ExternalMCPRouter:
         stage: str,
         target: Any = None,
         max_access: str = "read",
+        allowed_server_ids: Collection[str] | None = None,
     ) -> dict[str, Any]:
         resolved = MCPRouteTarget.from_value(target)
+        allowed_servers = _server_scope(allowed_server_ids)
         capabilities: dict[str, list[dict[str, Any]]] = {}
         all_capabilities = sorted(
             {
@@ -105,6 +117,12 @@ class ExternalMCPRouter:
                 loader=resolved.loader,
                 max_access=max_access,
             )
+            if allowed_servers is not None:
+                routes = [
+                    route
+                    for route in routes
+                    if str(route["server"]) in allowed_servers
+                ]
             if routes:
                 capabilities[capability] = [
                     {
@@ -135,10 +153,12 @@ class ExternalMCPRouter:
         required: bool = False,
         max_access: str = "read",
         disposable_runtime: bool = False,
+        allowed_server_ids: Collection[str] | None = None,
     ) -> dict[str, Any]:
         if type(corroborate) is not int or corroborate < 1 or corroborate > 4:
             raise ValueError("corroborate must be between 1 and 4.")
         resolved = MCPRouteTarget.from_value(target)
+        allowed_servers = _server_scope(allowed_server_ids)
         if stage != "runtime" and max_access != "read":
             raise ExternalMCPError("Non-runtime MCP federation is read-only.")
         if stage == "runtime" and max_access in {"write", "admin"} and not disposable_runtime:
@@ -153,6 +173,12 @@ class ExternalMCPRouter:
             loader=resolved.loader,
             max_access=max_access,
         )
+        if allowed_servers is not None:
+            routes = [
+                route
+                for route in routes
+                if str(route["server"]) in allowed_servers
+            ]
         attempts: list[dict[str, Any]] = []
         successes: list[dict[str, Any]] = []
         for route in routes:

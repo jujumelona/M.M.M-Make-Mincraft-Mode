@@ -245,7 +245,10 @@ class ModelRouter:
         role: str,
     ) -> str:
         """Run adaptive retrieve/act/observe production until semantic convergence."""
-        from .agent_capability_context import skills_for_tool
+        from .agent_capability_context import (
+            reviewed_mcp_servers_for_model_role,
+            skills_for_tool,
+        )
 
         messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
         exposed_tools = frozenset(_tool_schema_names(request.tools))
@@ -259,6 +262,7 @@ class ModelRouter:
             and role in {"coder", "coder_safe"}
             and exposed_tools & _RAG_EVIDENCE_TOOLS
         )
+        reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
         while True:
             turn_request = GenerationRequest(
@@ -344,7 +348,20 @@ class ModelRouter:
                             f"Agent attempted hidden tool {call.name!r} outside its "
                             f"reviewed role routes for {role!r}/{stage!r}."
                         )
-                    result = runtime.call(stage, call.name, call.arguments)
+                    scoped_call = getattr(runtime, "call_scoped", None)
+                    if callable(scoped_call):
+                        result = scoped_call(
+                            stage,
+                            call.name,
+                            call.arguments,
+                            external_server_ids=reviewed_external_servers,
+                        )
+                    elif call.name.startswith("external_mcp_"):
+                        raise ModelConfigurationError(
+                            "External MCP execution requires a role-scoped agent runtime."
+                        )
+                    else:
+                        result = runtime.call(stage, call.name, call.arguments)
                     payload: Mapping[str, Any] = {
                         "ok": True,
                         "tool": call.name,
