@@ -32,9 +32,14 @@ class NativeLlamaTuningPipeline:
         from .llama_server_efficiency_contract import install as install_efficiency
         from .llama_server_hardware_policy import install as install_hardware
         from .llama_server_runtime_tuning import install as install_runtime_tuning
+        from .llama_structured_decode_policy import bind_structured_decode_policy
+
+        def install_hardware_stage() -> None:
+            install_hardware(self.autotune)
+            bind_structured_decode_policy(self.hardware_policy)
 
         return (
-            TuningStage("hardware", lambda: install_hardware(self.autotune)),
+            TuningStage("hardware", install_hardware_stage),
             TuningStage(
                 "efficiency",
                 lambda: install_efficiency(self.autotune, self.hardware_policy),
