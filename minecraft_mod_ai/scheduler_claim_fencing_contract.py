@@ -6,6 +6,8 @@ import time
 from functools import wraps
 from typing import Any, Callable
 
+from .project_write_lock import project_write_lock
+
 _INDEX_COMMIT_LOCK = threading.RLock()
 
 
@@ -191,23 +193,35 @@ def install(*, work_graph_module: Any, orchestrator_module: Any) -> None:
         )
 
         try:
-            receipt = action()
-            if not isinstance(receipt, dict):
-                raise orchestrator_module.CompleteProductionError(
-                    f"Work node {node.node_id} returned a non-object receipt."
-                )
-            ledger.raise_if_cancelled()
-            _commit_success(
-                work_graph_module,
-                orchestrator_module,
-                ledger,
-                node.node_id,
-                receipt,
-                attempt=claim_attempt,
-                owner=claim_owner,
-                shared_index=shared_index,
+            project_root = (
+                getattr(shared_index, "root", None)
+                if node.resource_class == "commit" and shared_index is not None
+                else None
             )
-            return receipt
+
+            def execute_and_commit() -> dict[str, Any]:
+                receipt = action()
+                if not isinstance(receipt, dict):
+                    raise orchestrator_module.CompleteProductionError(
+                        f"Work node {node.node_id} returned a non-object receipt."
+                    )
+                ledger.raise_if_cancelled()
+                _commit_success(
+                    work_graph_module,
+                    orchestrator_module,
+                    ledger,
+                    node.node_id,
+                    receipt,
+                    attempt=claim_attempt,
+                    owner=claim_owner,
+                    shared_index=shared_index,
+                )
+                return receipt
+
+            if project_root is not None:
+                with project_write_lock(project_root):
+                    return execute_and_commit()
+            return execute_and_commit()
         except BaseException as exc:
             _fenced_fail(
                 work_graph_module,

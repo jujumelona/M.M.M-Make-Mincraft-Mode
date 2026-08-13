@@ -363,7 +363,21 @@ class ExternalMCPRouter:
     ) -> None:
         if not target.minecraft_version:
             return
-        reported = _collect_target_values(result, route.get("response_target_fields", []))
+        explicit_fields = route.get("response_target_fields", [])
+        tool = str(route.get("tool", "")).strip()
+        authoritative = bool(explicit_fields) or bool(route.get("require_reported_target")) or tool in {
+            "server_get_status",
+            "client_get_status",
+        }
+        if not authoritative:
+            # Search/docs results routinely contain historical Minecraft versions.
+            # Those references are evidence content, not provider runtime authority.
+            return
+        reported = _collect_target_values(result, explicit_fields)
+        if not reported:
+            raise ExternalMCPError(
+                f"External MCP authoritative tool {tool!r} did not report a Minecraft target."
+            )
         conflicts = sorted(
             value for value in reported
             if value and value != target.minecraft_version

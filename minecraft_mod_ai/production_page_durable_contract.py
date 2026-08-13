@@ -10,7 +10,6 @@ from typing import Any, Callable, Sequence
 
 _VERSION = 1
 _ITEM_VERSION = 2
-_DEFAULT_MODEL_REPAIR_ATTEMPTS = 2
 _FIELD_PATCH_KEYS = frozenset({"target_fingerprint", "set_fields", "delete_fields"})
 _REPLACE_PATCH_KEYS = frozenset({"target_fingerprint", "replacement"})
 _ID_SAFE = re.compile(r"[^a-z0-9_]+")
@@ -199,20 +198,6 @@ def _patch_schema(*, fields: Sequence[str], replacement: bool) -> dict[str, Any]
         "required": sorted(_FIELD_PATCH_KEYS),
         "additionalProperties": False,
     }
-
-
-def _repair_attempt_budget() -> int:
-    raw = os.environ.get(
-        "MMM_PLANNER_ITEM_REPAIR_ATTEMPTS",
-        str(_DEFAULT_MODEL_REPAIR_ATTEMPTS),
-    ).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _DEFAULT_MODEL_REPAIR_ATTEMPTS
-    # There are exactly two meaningful semantic actions: patch fields, then regenerate
-    # the one item. More calls only repeat an already-failed action.
-    return max(1, min(value, 2))
 
 
 def _safe_identifier(value: Any, *, fallback: str) -> str:
@@ -468,7 +453,7 @@ def _patch_one_item(
     catalog: Any,
     page_path: Path,
 ) -> tuple[Any, dict[str, Any]]:
-    """Resolve one production item without retry cycles or avoidable LLM calls."""
+    """Resolve one production item with progress-driven semantic repair."""
 
     from . import planner_json_runtime_contract as runtime
     from .planner_strict_json_contract import _extract_one_complete_object
@@ -533,13 +518,14 @@ def _patch_one_item(
 
     seen_states: set[str] = set()
     seen_patch_hashes: set[str] = set()
-    max_attempts = _repair_attempt_budget()
     round_index = 0
     last_patch_sha256 = ""
 
-    for attempt_index in range(1, max_attempts + 1):
-        round_index = attempt_index
-        replacement_mode = not isinstance(current, dict) or attempt_index > 1
+    while True:
+        round_index += 1
+        # Mapping-shaped items can always be repaired field-by-field. Whole-object
+        # regeneration is reserved for non-object values that cannot be field patched.
+        replacement_mode = not isinstance(current, dict)
         repair_mode = "replacement" if replacement_mode else "field_patch"
         state_fingerprint = _fingerprint(
             {"current": current, "error": error, "repair_mode": repair_mode}
@@ -553,7 +539,7 @@ def _patch_one_item(
                 original_fingerprint=original_fingerprint,
                 current=current,
                 error=error,
-                round_index=round_index - 1,
+                round_index=max(0, round_index - 1),
                 reason="repeated_validation_state",
                 last_patch_sha256=last_patch_sha256,
             )
@@ -714,19 +700,6 @@ def _patch_one_item(
                 current = candidate
             error = f"{type(exc).__name__}: {exc}"
 
-    _raise_repair_failure(
-        module,
-        kind=kind,
-        index=index,
-        state_path=state_path,
-        original_fingerprint=original_fingerprint,
-        current=current,
-        error=error,
-        round_index=round_index,
-        reason="repair_budget_exhausted",
-        last_patch_sha256=last_patch_sha256,
-    )
-    raise AssertionError("unreachable")
 
 
 def resolve_page_items(

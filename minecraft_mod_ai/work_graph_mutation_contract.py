@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 
 _LOCAL_AI_SIDECAR = "mmm_local_ai_sidecar"
-_LLM_CAPABLE_STAGES = frozenset({"custom", "audio-binding"})
+_LLM_CAPABLE_STAGES = frozenset({"custom"})
 
 
 def install(work_graph_module: Any) -> None:

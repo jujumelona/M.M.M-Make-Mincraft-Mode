@@ -35,7 +35,7 @@ def _project(root: Path, mod_id: str = "example_mod") -> Path:
 def test_validation_runtime_contracts_are_installed() -> None:
     assert getattr(GradleRunner.build, "_mmm_incremental_validation", False)
     assert getattr(GradleRunner.build, "_mmm_exact_input_cache", False)
-    assert getattr(GradleRunner._ensure_gradle, "_mmm_verified_distribution_cache", False)
+    assert getattr(GradleRunner._ensure_gradle, "_mmm_target_parallel_distribution", False)
     assert getattr(JavaLanguageService.diagnostics, "_mmm_exact_java_cache", False)
     assert getattr(RepairEngine._evidence, "_mmm_progressive_evidence", False)
     assert getattr(RepairEngine._request_patch, "_mmm_tracks_repair_scope", False)

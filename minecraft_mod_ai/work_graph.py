@@ -1380,6 +1380,13 @@ def _node(
         res_class = "image_gpu"
     elif kind == "audio-finalize":
         res_class = "commit"
+    elif kind == "module-shard" and gen_stage in {
+        "content",
+        "system",
+        "entity",
+        "audio-binding",
+    }:
+        res_class = "commit"
     elif kind == "module-shard" and gen_stage == "custom":
         res_class = "llm"
     elif stage.startswith("validate:"):

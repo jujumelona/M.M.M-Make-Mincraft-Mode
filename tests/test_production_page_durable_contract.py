@@ -5,7 +5,7 @@ import json
 import pytest
 
 from minecraft_mod_ai import complete_planner, work_graph
-from minecraft_mod_ai.execution_efficiency_contract import install
+from minecraft_mod_ai.planner_production_page_contract import install
 
 
 class _NeverRouter:
@@ -45,25 +45,15 @@ class _EscalatingRouter:
                 "response_format": response_format,
             }
         )
-        if request["repair_mode"] == "field_patch":
-            return json.dumps(
-                {
-                    "target_fingerprint": request["target_fingerprint"],
-                    "set_fields": {"kind": "still_not_a_real_kind"},
-                    "delete_fields": [],
-                }
-            )
+        if len(self.calls) == 1:
+            set_fields = {"kind": "item"}
+        else:
+            set_fields = {"config": {}}
         return json.dumps(
             {
                 "target_fingerprint": request["target_fingerprint"],
-                "replacement": {
-                    "module_id": "semantic_fixed",
-                    "kind": "item",
-                    "config": {},
-                    "depends_on": [],
-                    "required_gates": [],
-                    "implements_deliverables": ["d1"],
-                },
+                "set_fields": set_fields,
+                "delete_fields": [],
             }
         )
 
@@ -113,7 +103,7 @@ def _run_batch(
     router,
 ):
     monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
-    install(complete_planner_module=complete_planner, work_graph_module=work_graph)
+    install(complete_planner)
 
     page_calls = {"count": 0}
 
@@ -268,13 +258,13 @@ def test_asset_audio_parser_contract_mismatches_are_normalized_without_llm(
     assert parts.audio[0].loop is False
 
 
-def test_semantic_validation_uses_field_patch_then_single_item_regeneration(
+def test_semantic_validation_keeps_field_patching_while_state_changes(
     monkeypatch,
     tmp_path,
 ) -> None:
     router = _EscalatingRouter()
     page = {
-        "modules": [_module("semantic_bad", kind="not_a_real_kind")],
+        "modules": [dict(_module("semantic_bad", kind="not_a_real_kind"), config="invalid")],
         "assets": [],
         "audio": [],
         "acceptance_tests": ["semantic item exists"],
@@ -293,17 +283,16 @@ def test_semantic_validation_uses_field_patch_then_single_item_regeneration(
 
     assert [call["request"]["repair_mode"] for call in router.calls] == [
         "field_patch",
-        "replacement",
+        "field_patch",
     ]
-    assert [item.module_id for item in parts.modules] == ["semantic_fixed"]
+    assert [item.module_id for item in parts.modules] == ["semantic_bad"]
     assert parts.modules[0].kind == "item"
 
 
-def test_repeated_invalid_state_is_cut_off_after_two_distinct_repair_modes(
+def test_repeated_invalid_model_output_stops_exact_cycle(
     monkeypatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("MMM_PLANNER_ITEM_REPAIR_ATTEMPTS", "4")
     router = _StuckRouter()
     page = {
         "modules": [_module("stuck", kind="not_a_real_kind")],
@@ -317,7 +306,7 @@ def test_repeated_invalid_state_is_cut_off_after_two_distinct_repair_modes(
 
     with pytest.raises(
         complete_planner.SpecValidationError,
-        match="repeated_model_output",
+        match="repeated_(validation_state|model_output)",
     ):
         _run_batch(
             monkeypatch,
@@ -327,4 +316,4 @@ def test_repeated_invalid_state_is_cut_off_after_two_distinct_repair_modes(
             router=router,
         )
 
-    assert len(router.calls) == 2
+    assert len(router.calls) == 1

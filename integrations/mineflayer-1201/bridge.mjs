@@ -270,25 +270,98 @@ async function clickSlot(params) {
 
 async function waitFor(params) {
   const current = requireBot();
-  const condition = String(params.condition || "");
-  const timeoutMs = boundedInteger(params.timeout_ms ?? 10000, "wait timeout", 1, 60000);
+  const spec = (params.condition && typeof params.condition === "object" && !Array.isArray(params.condition))
+    ? params.condition
+    : { type: String(params.condition || "") };
+  const type = String(spec.type || "");
+  const supported = new Set([
+    "inventory_contains",
+    "held_item",
+    "health",
+    "food",
+    "position_near",
+    "block_at",
+    "entity_present",
+    "window_open",
+    "window_closed",
+    "spawned",
+    "healthy"
+  ]);
+  if (!supported.has(type)) {
+    throw new Error(`Unsupported wait_for condition: ${type || "<empty>"}`);
+  }
+  const timeoutMs = boundedInteger(params.timeout_ms ?? 30000, "wait timeout", 1, 60000);
   const started = Date.now();
+
+  const numericRangeMatches = (actual, conditionSpec) => {
+    if (conditionSpec.value != null && actual !== finiteNumber(conditionSpec.value, `${type} value`)) return false;
+    if (conditionSpec.min != null && actual < finiteNumber(conditionSpec.min, `${type} min`)) return false;
+    if (conditionSpec.max != null && actual > finiteNumber(conditionSpec.max, `${type} max`)) return false;
+    return conditionSpec.value != null || conditionSpec.min != null || conditionSpec.max != null;
+  };
+
   while (Date.now() - started < timeoutMs) {
-    if (condition === "spawned" && current.entity) {
-      return { matched: true, condition };
-    }
-    if (condition === "window_open" && current.currentWindow) {
-      return { matched: true, condition };
-    }
-    if (condition === "window_closed" && !current.currentWindow) {
-      return { matched: true, condition };
-    }
-    if (condition === "healthy" && current.health > 0) {
-      return { matched: true, condition, health: current.health };
+    if (type === "inventory_contains") {
+      const raw = safeRegistryName(spec.item ?? spec.name, "inventory item");
+      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      const minimum = boundedInteger(spec.count ?? spec.min_count ?? 1, "inventory count", 1, 2304);
+      const total = current.inventory.items()
+        .filter(item => item.name === shortName)
+        .reduce((sum, item) => sum + item.count, 0);
+      if (total >= minimum) return { matched: true, type, item: raw, count: total };
+    } else if (type === "held_item") {
+      const raw = safeRegistryName(spec.item ?? spec.name, "held item");
+      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      if (current.heldItem?.name === shortName) {
+        return { matched: true, type, item: raw };
+      }
+    } else if (type === "health") {
+      if (numericRangeMatches(Number(current.health), spec)) {
+        return { matched: true, type, health: current.health };
+      }
+    } else if (type === "food") {
+      if (numericRangeMatches(Number(current.food), spec)) {
+        return { matched: true, type, food: current.food };
+      }
+    } else if (type === "position_near") {
+      const x = finiteNumber(spec.x, "position x");
+      const y = finiteNumber(spec.y, "position y");
+      const z = finiteNumber(spec.z, "position z");
+      const range = Math.max(0, Math.min(64, finiteNumber(spec.range ?? 1, "position range")));
+      const distance = current.entity.position.distanceTo(new Vec3(x, y, z));
+      if (distance <= range) return { matched: true, type, distance };
+    } else if (type === "block_at") {
+      const { block, x, y, z } = blockAtParams(current, spec);
+      const expectedRaw = spec.name ?? spec.block;
+      if (expectedRaw == null) {
+        return { matched: true, type, name: block.name, position: { x, y, z } };
+      }
+      const raw = safeRegistryName(expectedRaw, "block name");
+      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      if (block.name === shortName) {
+        return { matched: true, type, name: block.name, position: { x, y, z } };
+      }
+    } else if (type === "entity_present") {
+      const raw = safeRegistryName(spec.name ?? spec.entity, "entity name");
+      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      const maxDistance = Math.max(1, Math.min(64, finiteNumber(spec.max_distance ?? spec.range ?? 16, "entity distance")));
+      const entity = current.nearestEntity(candidate => {
+        const candidateName = String(candidate.name || candidate.mobType || "").toLowerCase();
+        return candidateName === shortName && candidate.position.distanceTo(current.entity.position) <= maxDistance;
+      });
+      if (entity) return { matched: true, type, name: raw, entityId: entity.id };
+    } else if (type === "window_open") {
+      if (current.currentWindow) return { matched: true, type };
+    } else if (type === "window_closed") {
+      if (!current.currentWindow) return { matched: true, type };
+    } else if (type === "spawned") {
+      if (current.entity) return { matched: true, type };
+    } else if (type === "healthy") {
+      if (current.health > 0) return { matched: true, type, health: current.health };
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  return { matched: false, condition };
+  return { matched: false, type };
 }
 
 async function disconnect() {

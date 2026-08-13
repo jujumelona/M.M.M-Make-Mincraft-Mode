@@ -11,8 +11,10 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .project_write_lock import project_write_lock
 
-_PROJECT_MUTATION_LOCK = threading.RLock()
+
+_SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
 _CAPTURE = threading.local()
 _FICLONE = 0x40049409
 _SKIP_STAGE_SUFFIXES = {
@@ -89,12 +91,30 @@ def _install_locked_source_patcher(source_patch_module: Any) -> None:
                 }
             )
             return original(self, operation_list)
-        with _PROJECT_MUTATION_LOCK:
+        with project_write_lock(root):
             return original(self, operation_list)
 
     locked_apply._mmm_path_commit_contract = True
     patcher.apply = locked_apply
 
+
+
+def _project_root_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Path | None:
+    candidates: list[Any] = []
+    for key in ("project_root", "root", "workspace_root"):
+        if key in kwargs:
+            candidates.append(kwargs[key])
+    candidates.extend(args)
+    for value in candidates:
+        if not isinstance(value, (str, Path)):
+            continue
+        try:
+            candidate = Path(value).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if candidate.is_dir() and not candidate.is_symlink():
+            return candidate
+    return None
 
 def _install_serial_shared_writers(orchestrator_module: Any) -> None:
     # These functions read-modify-write shared Java, JSON, language, registry or
@@ -115,7 +135,13 @@ def _install_serial_shared_writers(orchestrator_module: Any) -> None:
 
         @wraps(original)
         def serialized(*args: Any, __original: Callable[..., Any] = original, **kwargs: Any):
-            with _PROJECT_MUTATION_LOCK:
+            project_root = _project_root_from_call(args, kwargs)
+            if project_root is None:
+                # Keep safety for an unusual writer signature we cannot bind to a
+                # project, without forcing normal independent projects through this lock.
+                with _SHARED_WRITER_FALLBACK_LOCK:
+                    return __original(*args, **kwargs)
+            with project_write_lock(project_root):
                 return __original(*args, **kwargs)
 
         serialized._mmm_shared_writer = True
@@ -139,7 +165,7 @@ def _install_staged_custom_generator(
 
         # A consistent source snapshot is needed only while the cheap clone is made;
         # the long LLM call then runs without holding the project mutation lock.
-        with _PROJECT_MUTATION_LOCK:
+        with project_write_lock(live_root):
             staging_root = _clone_source_snapshot(live_root)
 
         previous_index = getattr(self, "_cached_index", None)
@@ -156,7 +182,7 @@ def _install_staged_custom_generator(
                     "Custom generator returned a non-object staged result."
                 )
             captured = _select_custom_patch_capture(records, result)
-            with _PROJECT_MUTATION_LOCK:
+            with project_write_lock(live_root):
                 commit_receipt = _commit_staged_operations(
                     live_root=live_root,
                     staging_root=staging_root,
