@@ -17,6 +17,51 @@ _STRATEGIES = (
 )
 
 
+class _HostEvidenceRouter:
+    """Keep coder tools optional when the host already supplied fresh exact evidence.
+
+    CustomModuleGenerator builds a current ProjectIndex, indexes project RAG and sends
+    bounded source observations plus research_context before asking the coder to emit a
+    patch. Requiring a model-driven RAG call after that host work turns every custom
+    module into model -> tool -> model even when no new uncertainty exists. This proxy
+    preserves the same tool surface but marks the host evidence as satisfying the
+    mandatory-freshness precondition; the model may still choose tools normally.
+    """
+
+    def __init__(self, router: Any) -> None:
+        self._router = router
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._router, name)
+
+    def bind_agent_workspace(
+        self,
+        workspace_root: str | Path,
+        *,
+        require_fresh_evidence: bool = False,
+    ) -> "_HostEvidenceRouter":
+        del require_fresh_evidence
+        self._router.bind_agent_workspace(
+            workspace_root,
+            require_fresh_evidence=False,
+        )
+        return self
+
+    def generate_text(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        return self._router.generate_text(role, messages, **kwargs)
+
+
+def _host_evidence_router(router: Any) -> Any:
+    if isinstance(router, _HostEvidenceRouter):
+        return router
+    return _HostEvidenceRouter(router)
+
+
 class _StrategyRouter:
     def __init__(self, router: Any, *, strategy: str, candidate_index: int, count: int) -> None:
         self._router = router
@@ -51,6 +96,14 @@ def _mode() -> str:
     return value if value in {"auto", "on", "off"} else "auto"
 
 
+def _active_native_slots() -> int:
+    raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
+    try:
+        return max(1, min(8, int(raw)))
+    except ValueError:
+        return 1
+
+
 def _width(module: Any) -> int:
     mode = _mode()
     if mode == "off":
@@ -62,6 +115,13 @@ def _width(module: Any) -> int:
     configured = max(1, min(3, configured))
     if mode == "on":
         return configured
+
+    # Auto search must never multiply a single native decode lane. The old path
+    # generated candidate 1 and candidate 2 in a Python for-loop, so a complex custom
+    # module paid roughly twice the LLM wall time before verification even started.
+    # Explicit MMM_AGENTIC_SEARCH=on remains the opt-in quality-over-latency mode.
+    if _active_native_slots() <= 1:
+        return 1
 
     kind = str(getattr(module, "kind", ""))
     config = getattr(module, "config", {})
@@ -96,7 +156,7 @@ def _width(module: Any) -> int:
         )
     ):
         risk += 1
-    return configured if risk >= 2 else 1
+    return min(configured, _active_native_slots()) if risk >= 2 else 1
 
 
 def _json_size(value: Any) -> int:
@@ -201,13 +261,7 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
 
 
 def install(custom_module_generator_module: Any) -> None:
-    """Search only complex first-pass custom generation and commit one verified winner.
-
-    This installer runs before the outer staged-live-commit wrapper. Install the
-    patcher's thread-local capture hook here as well, so inner candidate snapshots
-    can expose their exact original operations without widening edits into full-file
-    replacements. The later performance installer sees the marker and reuses it.
-    """
+    """Search complex custom generation without duplicating a single decode lane."""
 
     from . import performance_final_contract as performance_module
     from . import source_patch as source_patch_module
@@ -215,12 +269,24 @@ def install(custom_module_generator_module: Any) -> None:
     performance_module._install_locked_source_patcher(source_patch_module)
 
     cls = custom_module_generator_module.CustomModuleGenerator
+    original_init = cls.__init__
+    if not getattr(original_init, "_mmm_host_evidence_router", False):
+
+        @wraps(original_init)
+        def init_with_host_evidence(self: Any, *args: Any, **kwargs: Any) -> None:
+            original_init(self, *args, **kwargs)
+            self.router = _host_evidence_router(self.router)
+
+        init_with_host_evidence._mmm_host_evidence_router = True  # type: ignore[attr-defined]
+        cls.__init__ = init_with_host_evidence
+
     original = cls.generate
     if getattr(original, "_mmm_custom_verifier_search", False):
         return
 
     @wraps(original)
     def generate_with_search(self: Any, project_root: str | Path, *args: Any, **kwargs: Any):
+        self.router = _host_evidence_router(self.router)
         module = kwargs.get("module")
         count = _width(module)
         if count <= 1:
@@ -328,7 +394,8 @@ def install(custom_module_generator_module: Any) -> None:
                 shutil.rmtree(candidate_root, ignore_errors=True)
 
     generate_with_search._mmm_custom_verifier_search = True  # type: ignore[attr-defined]
+    generate_with_search._mmm_host_evidence_router = True  # type: ignore[attr-defined]
     cls.generate = generate_with_search
 
 
-__all__ = ["install"]
+__all__ = ["_active_native_slots", "_host_evidence_router", "_width", "install"]
