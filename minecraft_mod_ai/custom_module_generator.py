@@ -626,61 +626,95 @@ def _collect_initial_observations(
     byte_budget: int,
     diagnostic_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Retrieve top-K exact source observations for the target query or diagnostic paths."""
+    """Retrieve exact source observations from every bound ProjectIndex page."""
 
+    del router
     records: list[dict[str, Any]] = []
     record_keys: set[tuple[str, int, int]] = set()
     source_page_digest = hashlib.sha256()
+    cursor = ""
+    seen_cursors: set[str] = set()
+    page_count = 0
+    project_sha256 = ""
+    query_sha256 = ""
 
-    page = index.select_page(
-        query=query,
-        diagnostic_paths=diagnostic_paths,
-        byte_budget=byte_budget,
-        cursor="",
-    )
-    if _json_size(page) > byte_budget:
-        raise CustomModuleGenerationError(
-            "Host project context page exceeded its byte budget."
+    while True:
+        page = index.select_page(
+            query=query,
+            diagnostic_paths=diagnostic_paths,
+            byte_budget=byte_budget,
+            cursor=cursor,
         )
-    project_sha256 = str(page["project_sha256"])
-    query_sha256 = str(page["query_sha256"])
-    page_commitment = {
-        "page_index": page["page_index"],
-        "project_sha256": project_sha256,
-        "query_sha256": query_sha256,
-        "start_position": page["start_position"],
-        "start_offset": page["start_offset"],
-        "next_cursor": page["next_cursor"],
-        "files": [
-            {
-                "path": item["path"],
-                "sha256": item["sha256"],
-                "content_start_bytes": item["content_start_bytes"],
-                "content_end_bytes": item["content_end_bytes"],
-            }
-            for item in page["files"]
-        ],
-    }
-    _update_digest(source_page_digest, page_commitment)
+        if _json_size(page) > byte_budget:
+            raise CustomModuleGenerationError(
+                "Host project context page exceeded its byte budget."
+            )
 
-    # Host-side Top-K exact observation extraction (no LLM inspection overhead)
-    for item in page.get("files", []):
-        if (
-            isinstance(item, dict)
-            and "path" in item
-            and ("content" in item or "text" in item)
+        current_project_sha256 = str(page["project_sha256"])
+        current_query_sha256 = str(page["query_sha256"])
+        if page_count == 0:
+            project_sha256 = current_project_sha256
+            query_sha256 = current_query_sha256
+        elif (
+            current_project_sha256 != project_sha256
+            or current_query_sha256 != query_sha256
         ):
-            content_str = str(
-                item.get("content", item.get("text", ""))
+            raise CustomModuleGenerationError(
+                "Project context pagination changed its bound identity."
             )
-            record = _exact_observation(
-                path=str(item["path"]),
-                sha256=str(item.get("sha256", "")),
-                start=int(item.get("content_start_bytes", 0)),
-                content=content_str.encode("utf-8"),
-                source_page=int(page.get("page_index", 0)),
+
+        page_commitment = {
+            "page_index": page["page_index"],
+            "project_sha256": current_project_sha256,
+            "query_sha256": current_query_sha256,
+            "start_position": page["start_position"],
+            "start_offset": page["start_offset"],
+            "next_cursor": page["next_cursor"],
+            "files": [
+                {
+                    "path": item["path"],
+                    "sha256": item["sha256"],
+                    "content_start_bytes": item["content_start_bytes"],
+                    "content_end_bytes": item["content_end_bytes"],
+                }
+                for item in page["files"]
+            ],
+        }
+        _update_digest(source_page_digest, page_commitment)
+
+        for item in page.get("files", []):
+            if (
+                isinstance(item, dict)
+                and "path" in item
+                and ("content" in item or "text" in item)
+            ):
+                content_str = str(
+                    item.get("content", item.get("text", ""))
+                )
+                record = _exact_observation(
+                    path=str(item["path"]),
+                    sha256=str(item.get("sha256", "")),
+                    start=int(item.get("content_start_bytes", 0)),
+                    content=content_str.encode("utf-8"),
+                    source_page=int(page.get("page_index", page_count)),
+                )
+                _append_observation(records, record_keys, record)
+
+        page_count += 1
+        if bool(page.get("complete", False)):
+            break
+
+        next_cursor = str(page.get("next_cursor", "")).strip()
+        if (
+            not next_cursor
+            or next_cursor == cursor
+            or next_cursor in seen_cursors
+        ):
+            raise CustomModuleGenerationError(
+                "Project context pagination made no progress."
             )
-            _append_observation(records, record_keys, record)
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
 
     observation_digest = hashlib.sha256()
     for record in records:
@@ -689,7 +723,7 @@ def _collect_initial_observations(
         "schema_version": "mmm/source-observation-receipt-v1",
         "project_sha256": project_sha256,
         "query_sha256": query_sha256,
-        "source_page_count": 1,
+        "source_page_count": page_count,
         "observation_count": len(records),
         "source_pages_sha256": (
             "sha256:" + source_page_digest.hexdigest()
