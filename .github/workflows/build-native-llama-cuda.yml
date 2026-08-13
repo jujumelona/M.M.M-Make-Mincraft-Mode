@@ -55,7 +55,7 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_GRAPHS=ON \
-            -DGGML_CUDA_CUB_3DOT2=ON \
+            -DGGML_CUDA_CUB_3DOT2:BOOL=ON \
             -DGGML_CUDA_FA=ON \
             -DGGML_CUDA_FA_ALL_QUANTS=OFF \
             -DGGML_LTO=ON \
