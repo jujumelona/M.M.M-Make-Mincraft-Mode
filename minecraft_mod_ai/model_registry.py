@@ -180,7 +180,9 @@ class ModelRegistry:
             provider=provider,
             quantization=(str(raw["quantization"]) if raw.get("quantization") else None),
             torch_dtype=str(raw.get("torch_dtype", "auto")),
-            max_context=_positive_int(raw.get("max_context", 8192), f"{role}.max_context"),
+            max_context=_nonnegative_int(
+                raw.get("max_context", 0), f"{role}.max_context"
+            ),
             max_input_tokens=_nonnegative_int(
                 raw.get("max_input_tokens", 0), f"{role}.max_input_tokens"
             ),
