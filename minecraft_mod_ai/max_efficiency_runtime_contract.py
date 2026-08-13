@@ -4,8 +4,9 @@ from __future__ import annotations
 
 The production graph already owns dependency safety, durable leases and narrow commits.
 This contract removes the remaining execution bottlenecks without weakening those
-boundaries: exact executor capacity, same-GPU LLM read sharing, exact integration
-routing, and isolated parallel custom candidate generation with a single winner commit.
+boundaries: exact executor capacity, exact integration routing, and isolated parallel
+custom candidate generation with a single winner commit. Scheduler claim ownership
+stays exclusively in scheduler_parallel_safety_contract.
 """
 
 import concurrent.futures
@@ -15,12 +16,10 @@ import json
 import os
 import shutil
 import tempfile
-import time
-from collections import Counter
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 _FORCE_SINGLE_CUSTOM_SEARCH: ContextVar[bool] = ContextVar(
@@ -54,9 +53,6 @@ def _install_exact_llm_executor() -> None:
             initializer: Any = None,
             initargs: tuple[Any, ...] = (),
         ) -> None:
-            # CompleteProductionOrchestrator intentionally names its scarce pools.
-            # Only the exact LLM pool is widened; every other stdlib executor keeps
-            # the caller's requested capacity unchanged.
             if thread_name_prefix == "llm":
                 max_workers = _active_parallelism()
             super().__init__(
@@ -80,9 +76,6 @@ def _install_module_routing(work_graph_module: Any) -> None:
 
     @wraps(current_stage)
     def module_stage(module: Any) -> str:
-        # Research ledger modules are code-owned deterministic evidence even when an
-        # upstream schema represents them using integration-like metadata. Preserve
-        # that owner before applying the generic integration exception.
         from .research_ledger import is_research_shard
 
         if is_research_shard(module) or str(getattr(module, "kind", "")) == "research_shard":
@@ -97,218 +90,6 @@ def _install_module_routing(work_graph_module: Any) -> None:
 
     module_stage._mmm_exact_integration_stage = True  # type: ignore[attr-defined]
     work_graph_module._module_stage = module_stage
-
-
-def _fairness_owner(safety_module: Any, ledger: Any) -> str:
-    resolver = getattr(safety_module, "_orchestrator_owner", None)
-    if callable(resolver):
-        return str(resolver(ledger))
-    owner = getattr(ledger, "_mmm_parallel_lease_owner", "")
-    return str(owner or "mmm-orchestrator")
-
-
-def _clear_poll_snapshot(ledger: Any) -> None:
-    setattr(ledger, "_mmm_generation_poll_snapshot", None)
-    setattr(ledger, "_mmm_generation_poll_reads_left", 0)
-
-
-def _find_fairness_wrapper(function: Any) -> Any:
-    seen: set[int] = set()
-    current = function
-    while callable(current) and id(current) not in seen:
-        seen.add(id(current))
-        if getattr(current, "_mmm_exact_executor_fairness", False):
-            return current
-        current = getattr(current, "__wrapped__", None)
-    return function
-
-
-def _install_max_efficiency_claim(work_graph_module: Any, safety_module: Any) -> None:
-    """Use every free LLM slot while still excluding image work on a shared GPU."""
-
-    cls = work_graph_module.DurableWorkLedger
-    current = cls.claim_ready
-    if getattr(current, "_mmm_max_efficiency_claim", False):
-        return
-    fairness_wrapper = _find_fairness_wrapper(current)
-
-    @wraps(current)
-    def claim_ready(
-        self: Any,
-        worker_id: str,
-        *,
-        stages: Sequence[str] = (),
-        lease_seconds: int = 900,
-    ) -> dict[str, Any] | None:
-        if worker_id != "mmm-orchestrator":
-            return current(
-                self,
-                worker_id,
-                stages=stages,
-                lease_seconds=lease_seconds,
-            )
-        if not worker_id.strip():
-            raise work_graph_module.WorkGraphError("worker_id must not be empty.")
-        if lease_seconds < 1:
-            raise work_graph_module.WorkGraphError("lease_seconds must be positive.")
-
-        _clear_poll_snapshot(self)
-        now = time.time()
-        owner = _fairness_owner(safety_module, self)
-        capacities = dict(safety_module._capacities())
-        renew_before = now + max(1.0, lease_seconds * 0.5)
-        resource_sql = safety_module._resource_sql
-
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                UPDATE tasks
-                SET lease_until = ?, updated_at = ?
-                WHERE state = ? AND lease_owner = ?
-                  AND lease_until IS NOT NULL
-                  AND lease_until >= ? AND lease_until <= ?
-                """,
-                (
-                    now + lease_seconds,
-                    now,
-                    work_graph_module.WorkState.RUNNING.value,
-                    owner,
-                    now,
-                    renew_before,
-                ),
-            )
-            connection.execute(
-                """
-                UPDATE tasks
-                SET state = ?, lease_owner = NULL, lease_until = NULL,
-                    error = 'expired worker lease', updated_at = ?
-                WHERE state = ? AND lease_until IS NOT NULL AND lease_until < ?
-                """,
-                (
-                    work_graph_module.WorkState.PENDING.value,
-                    now,
-                    work_graph_module.WorkState.RUNNING.value,
-                    now,
-                ),
-            )
-
-            running: Counter[str] = Counter(
-                {
-                    str(resource): int(count)
-                    for resource, count in connection.execute(
-                        f"""
-                        SELECT {resource_sql('')}, COUNT(*)
-                        FROM tasks
-                        WHERE state = ? AND stage LIKE 'generate:%'
-                        GROUP BY {resource_sql('')}
-                        """,
-                        (work_graph_module.WorkState.RUNNING.value,),
-                    )
-                }
-            )
-            free_lanes = {
-                lane
-                for lane, capacity in capacities.items()
-                if running.get(lane, 0) < max(1, int(capacity))
-            }
-
-            if safety_module._SHARED_LOCAL_GPU_LANE.get():
-                # llama.cpp/vLLM slots are read-sharing users of one resident text
-                # model, so LLM+LLM is allowed up to capacity. Diffusion is a writer
-                # on the same device and remains mutually exclusive with the text lane.
-                if running.get("image_gpu", 0) > 0:
-                    free_lanes.discard("llm")
-                if running.get("llm", 0) > 0:
-                    free_lanes.discard("image_gpu")
-
-            if not free_lanes:
-                connection.commit()
-                _clear_poll_snapshot(self)
-                return None
-
-            stage_sql = ""
-            params: list[Any] = [
-                work_graph_module.WorkState.PENDING.value,
-                work_graph_module.WorkState.SUCCEEDED.value,
-            ]
-            if stages:
-                placeholders = ",".join("?" for _ in stages)
-                stage_sql = f" AND task.stage IN ({placeholders})"
-                params.extend(stages)
-            lane_placeholders = ",".join("?" for _ in sorted(free_lanes))
-            params.extend(sorted(free_lanes))
-            task_resource = resource_sql("task")
-            rows = connection.execute(
-                f"""
-                SELECT task.node_id, {task_resource}
-                FROM tasks AS task
-                WHERE task.state = ?
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM edges
-                    JOIN tasks AS dependency
-                      ON dependency.node_id = edges.dependency_id
-                    WHERE edges.node_id = task.node_id
-                      AND dependency.state != ?
-                  )
-                  {stage_sql}
-                  AND {task_resource} IN ({lane_placeholders})
-                ORDER BY task.node_id
-                LIMIT 256
-                """,
-                tuple(params),
-            ).fetchall()
-            if not rows:
-                connection.commit()
-                _clear_poll_snapshot(self)
-                return None
-
-            priority = {"llm": 0, "image_gpu": 1, "cpu_io": 2, "commit": 3}
-            candidates = sorted(
-                (
-                    running.get(str(resource), 0)
-                    / max(1, int(capacities.get(str(resource), 1))),
-                    priority.get(str(resource), 9),
-                    str(node_id),
-                    str(resource),
-                )
-                for node_id, resource in rows
-            )
-            _utilization, _priority, node_id, _resource = candidates[0]
-            cursor = connection.execute(
-                """
-                UPDATE tasks
-                SET state = ?, attempt = attempt + 1, lease_owner = ?,
-                    lease_until = ?, error = NULL, updated_at = ?
-                WHERE node_id = ? AND state = ?
-                """,
-                (
-                    work_graph_module.WorkState.RUNNING.value,
-                    owner,
-                    now + lease_seconds,
-                    now,
-                    node_id,
-                    work_graph_module.WorkState.PENDING.value,
-                ),
-            )
-            if cursor.rowcount != 1:
-                connection.rollback()
-                _clear_poll_snapshot(self)
-                return None
-            connection.commit()
-
-        # task() on the scheduler main thread uses a one-scan cache. Return the exact
-        # claimed row, then fence that cache so the next poll sees worker completion.
-        result = self.task(node_id)
-        _clear_poll_snapshot(self)
-        return result
-
-    claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
-    claim_ready._mmm_parallel_lane_claim = True  # type: ignore[attr-defined]
-    claim_ready._mmm_exact_executor_fairness = True  # type: ignore[attr-defined]
-    claim_ready.__wrapped__ = fairness_wrapper  # type: ignore[attr-defined]
-    cls.claim_ready = claim_ready
 
 
 def _sha256_receipt(data: bytes) -> str:
@@ -478,8 +259,6 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
         module = kwargs.get("module")
         count = int(search_module._width(module))
 
-        # Even a width-one module can run concurrently with another DAG node. Never
-        # expose the orchestrator's shared mutable generator cache to worker threads.
         if count <= 1:
             worker = copy.copy(self)
             worker._cached_index = None
@@ -616,20 +395,19 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
 
 
 def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
-    """Install the final throughput layer after scheduler and llama safety contracts."""
+    """Install throughput features after scheduler and llama safety contracts."""
 
     from . import custom_module_generator
 
+    del scheduler_module
     _install_exact_llm_executor()
     _install_module_routing(work_graph_module)
-    _install_max_efficiency_claim(work_graph_module, scheduler_module)
     _install_parallel_custom_search(custom_module_generator)
 
 
 __all__ = [
     "_active_parallelism",
     "_install_exact_llm_executor",
-    "_install_max_efficiency_claim",
     "_install_module_routing",
     "_install_parallel_custom_search",
     "enhance_runtime",
