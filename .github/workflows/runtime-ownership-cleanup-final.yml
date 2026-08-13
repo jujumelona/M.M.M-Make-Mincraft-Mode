@@ -1,0 +1,69 @@
+name: Verify runtime ownership cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/runtime-ownership-cleanup-final.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runtime-ownership-cleanup-final
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply reviewed cleanup transform
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/runtime-ownership-cleanup-once.yml').read_text(encoding='utf-8')
+          marker = "          python3 - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index('\n          PY\n', start)
+          transform = textwrap.dedent(workflow[start:end])
+          exec(compile(transform, '<runtime-ownership-cleanup>', 'exec'), {})
+          PY
+
+      - name: Verify cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          python -m vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python -c 'import minecraft_mod_ai'
+          python -m pytest -q \
+            tests/test_runtime_bootstrap_clean.py \
+            tests/test_agentic_research_game_design.py \
+            tests/test_research_coordinator.py \
+            tests/test_llama_parallel_runtime_contract.py
+
+      - name: Commit verified cleanup and remove transient workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/runtime-ownership-cleanup-once.yml
+          git rm .github/workflows/runtime-ownership-cleanup-final.yml
+          git add minecraft_mod_ai tests/test_llama_parallel_runtime_contract.py
+          git commit -m 'Consolidate research runtime ownership'
+          git pull --rebase origin main
+          git push origin main
