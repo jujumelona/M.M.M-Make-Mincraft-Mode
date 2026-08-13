@@ -88,68 +88,7 @@ def test_ecosystem_routes_run_concurrently_and_keep_route_order(monkeypatch) -> 
     ]
 
 
-def test_planner_overlaps_evidence_with_ecosystem_prefetch() -> None:
-    evidence_started = threading.Event()
-    ecosystem_started = threading.Event()
-    brief = {"schema_version": "test"}
-    design = {"title": "demo"}
-
-    def parallel_retrieve(_brief):
-        evidence_started.set()
-        assert ecosystem_started.wait(timeout=2)
-        return {"evidence": "ready"}
-
-    def original_radar(prompt, research_brief, *args, **kwargs):
-        assert prompt == "prompt"
-        assert research_brief is brief
-        assert evidence_started.wait(timeout=2)
-        return {"radar": "ready"}
-
-    def original_impl(prompt, game_design, research_brief=None):
-        raise AssertionError("wrapped implementation path should be used")
-
-    def original_collect(
-        prompt,
-        game_design,
-        *,
-        research_brief=None,
-        page_builder=None,
-        planning_seed_only=False,
-        **kwargs,
-    ):
-        assert prompt == "prompt"
-        assert game_design is design
-        assert research_brief is brief
-        assert callable(page_builder)
-        assert planning_seed_only is True
-        ecosystem_started.set()
-        return {"ecosystem": "ready"}
-
-    fake_module = SimpleNamespace(
-        retrieve_domain_evidence=parallel_retrieve,
-        discover_seed_bundle=lambda *args, **kwargs: {},
-        collect_technology_radar=original_radar,
-        _retrieve_implementation_evidence=original_impl,
-        collect_ecosystem_seed_bundle=original_collect,
-        normalize_research_brief=lambda prompt, game_design: brief,
-    )
-
-    parallel._PLANNER_STATE.evidence = None
-    parallel._PLANNER_STATE.ecosystem = None
-    parallel._install_planner_overlap(
-        complete_planner_module=fake_module,
-        parallel_retrieve=parallel_retrieve,
-        parallel_discover=lambda *args, **kwargs: {},
-    )
-
-    assert fake_module.collect_technology_radar("prompt", brief) == {"radar": "ready"}
-    assert fake_module._retrieve_implementation_evidence(
-        "prompt", design, brief
-    ) == {"evidence": "ready"}
-    assert fake_module.collect_ecosystem_seed_bundle(
-        "prompt",
-        design,
-        research_brief=brief,
-        page_builder=fake_module.discover_seed_bundle,
-        planning_seed_only=True,
-    ) == {"ecosystem": "ready"}
+def test_planner_runtime_has_no_optional_future_overlap_owner() -> None:
+    assert not hasattr(parallel, "_PLANNER_STATE")
+    assert not hasattr(parallel, "_PLANNER_AUX_EXECUTOR")
+    assert not hasattr(parallel, "_install_planner_overlap")
