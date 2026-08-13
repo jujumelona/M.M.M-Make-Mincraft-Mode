@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.game_design as game_design
