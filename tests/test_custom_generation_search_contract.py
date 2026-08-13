@@ -22,9 +22,10 @@ class _Router:
         return "ok"
 
 
-def test_custom_search_width_is_risk_adaptive(monkeypatch) -> None:
+def test_custom_search_width_is_risk_adaptive_when_native_slots_exist(monkeypatch) -> None:
     monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
     monkeypatch.setenv("MMM_CUSTOM_SEARCH_WIDTH", "2")
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     assert custom_search._width(_Module(kind="item")) == 1
     risky = _Module(
         kind="custom_java",
@@ -32,6 +33,18 @@ def test_custom_search_width_is_risk_adaptive(monkeypatch) -> None:
         depends_on=("state", "protocol"),
     )
     assert custom_search._width(risky) == 2
+
+
+def test_custom_search_auto_never_serializes_candidates_on_one_slot(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
+    monkeypatch.setenv("MMM_CUSTOM_SEARCH_WIDTH", "3")
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
+    risky = _Module(
+        kind="custom_java",
+        config={"networking": "server authoritative", "persistence": True},
+        depends_on=("state", "protocol"),
+    )
+    assert custom_search._width(risky) == 1
 
 
 def test_strategy_router_only_augments_coder_role() -> None:
