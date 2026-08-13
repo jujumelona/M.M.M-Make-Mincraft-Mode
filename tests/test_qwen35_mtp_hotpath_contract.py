@@ -20,6 +20,7 @@ def _qwen_config():
     return SimpleNamespace(
         model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
         extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        max_context=32768,
     )
 
 
@@ -33,7 +34,7 @@ def test_qwen35_mtp_detection_is_profile_specific() -> None:
     ) is False
 
 
-def test_measured_fast_args_remove_generic_cache_and_bound_context(monkeypatch) -> None:
+def test_measured_fast_args_preserve_model_profile_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
 
@@ -60,7 +61,7 @@ def test_measured_fast_args_remove_generic_cache_and_bound_context(monkeypatch) 
     assert args[args.index("--flash-attn") + 1] == "on"
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
-    assert args[args.index("--ctx-size") + 1] == "8192"
+    assert args[args.index("--ctx-size") + 1] == "32768"
     assert "--cache-type-k" not in args
     assert "--cache-type-v" not in args
     assert "--load-mode" not in args
@@ -68,13 +69,16 @@ def test_measured_fast_args_remove_generic_cache_and_bound_context(monkeypatch) 
     assert "--metrics" in args
 
 
-def test_qwen_context_is_explicitly_overridable(monkeypatch) -> None:
+def test_qwen_context_uses_profile_and_only_explicit_positive_override(monkeypatch) -> None:
+    config = _qwen_config()
+    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+    assert _context_size(config) == 32768
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
-    assert _context_size() == 16384
+    assert _context_size(config) == 16384
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "999999")
-    assert _context_size() == 32768
+    assert _context_size(config) == 999999
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "bad")
-    assert _context_size() == 8192
+    assert _context_size(config) == 32768
 
 
 def test_qwen35_hotpath_launches_exactly_one_mtp3_server(monkeypatch) -> None:

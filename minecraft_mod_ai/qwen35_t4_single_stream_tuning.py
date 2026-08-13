@@ -92,7 +92,7 @@ def _fingerprint(
         "schema": _SCHEMA_VERSION,
         "base": base,
         "hardware": _hardware_identity(autotune),
-        "ctx": _context_size(),
+        "ctx": _context_size(config),
         "ubatch": ubatch,
         "probe_tokens": _probe_tokens(autotune, config),
         "widths": list(_widths()),

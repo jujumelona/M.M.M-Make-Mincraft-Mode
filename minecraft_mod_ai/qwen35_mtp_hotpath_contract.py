@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 
 _DEFAULT_WIDTH = 3
-_DEFAULT_CTX = 8192
+_DEFAULT_CTX_FALLBACK = 32768
 _MARKER = "_mmm_qwen35_mtp3_hotpath_v3"
 _BASE_MARKER = "_mmm_qwen35_measured_fast_args_v2"
 _ACTIVE_RUNTIME_KEYS = (
@@ -46,13 +46,24 @@ def _width(autotune: Any) -> int:
     return autotune._env_int("MMM_QWEN35_MTP_WIDTH", _DEFAULT_WIDTH, minimum=1)
 
 
-def _context_size() -> int:
-    raw = os.environ.get("MMM_QWEN35_MTP_CTX", str(_DEFAULT_CTX)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _DEFAULT_CTX
-    return max(4096, min(32768, value))
+def _context_size(config: Any | None = None) -> int:
+    """Use the model profile context unless the operator explicitly overrides it.
+
+    The Qwen3.5 T4 hot path is a decode optimization and must not silently shrink
+    the model's usable context window.  An explicit positive environment override
+    remains available for operators who intentionally want a different server size.
+    """
+
+    raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
+    if raw:
+        try:
+            override = int(raw)
+        except ValueError:
+            override = 0
+        if override > 0:
+            return override
+    configured = int(getattr(config, "max_context", 0) or 0) if config is not None else 0
+    return configured if configured > 0 else _DEFAULT_CTX_FALLBACK
 
 
 def _drop_option(args: list[str], names: tuple[str, ...], *, takes_value: bool = True) -> None:
@@ -79,9 +90,9 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
 
     Production startup must not reload a 6 GB checkpoint repeatedly to discover a
     speculative width that was already benchmarked. The hot path is one server:
-    full GPU offload, FlashAttention, batch 2048, ubatch 512, native KV and an 8K
-    context window. Large host tasks are already paginated; operators can explicitly
-    raise MMM_QWEN35_MTP_CTX when a single request genuinely needs more context.
+    full GPU offload, FlashAttention, batch 2048, ubatch 512, native KV and the model profile context window. The decode hot path must not
+    impose a smaller semantic context cap; operators may explicitly override
+    MMM_QWEN35_MTP_CTX only when they intentionally want a different size.
     """
 
     current = getattr(autotune, "_base_args", None)
@@ -98,7 +109,7 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--flash-attn", "-fa"), "on")
         _set_option(args, ("--batch-size", "-b"), "2048")
         _set_option(args, ("--ubatch-size", "-ub"), "512")
-        _set_option(args, ("--ctx-size", "-c"), str(_context_size()))
+        _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))
 
         # Keep the measured native KV/server path. Generic cache/load experiments
         # materially changed the old fast command and consumed T4 VRAM/launch time.
@@ -254,7 +265,7 @@ def install(autotune: Any) -> None:
             os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = "native-default"
             print(
                 "llama server: Qwen3.5 fixed production profile",
-                f"spec=draft-mtp n_max={width} parallel=1 ctx={_context_size()} ubatch={ubatch}",
+                f"spec=draft-mtp n_max={width} parallel=1 ctx={_context_size(config)} ubatch={ubatch}",
                 flush=True,
             )
             return url
