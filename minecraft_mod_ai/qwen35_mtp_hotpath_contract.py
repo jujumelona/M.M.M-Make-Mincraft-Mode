@@ -10,10 +10,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _DEFAULT_WIDTH = 3
-_DEFAULT_CTX_FALLBACK = 32768
-_MARKER = "_mmm_qwen35_mtp3_hotpath_v4"
-_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v3"
-_KV_OVERRIDE_ENV = "MMM_QWEN35_T4_KV_OVERRIDE"
+_DEFAULT_CTX = 8192
+_MIN_CTX = 4096
+_MAX_CTX = 32768
+_MARKER = "_mmm_qwen35_mtp3_hotpath_v5"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v4"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -23,7 +24,6 @@ _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_MTP_P_MIN",
     "MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE",
     "MMM_LLAMA_ACTIVE_KV_CACHE",
-    _KV_OVERRIDE_ENV,
 )
 
 
@@ -43,31 +43,21 @@ def _is_qwen35_mtp(config: Any) -> bool:
     return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
 
 
-def _width(autotune: Any) -> int:
-    return autotune._env_int("MMM_QWEN35_MTP_WIDTH", _DEFAULT_WIDTH, minimum=1)
-
-
 def _context_size(config: Any | None = None) -> int:
-    """Use the model profile context without an artificial MMM clamp.
+    """Return the bounded production KV window for the Qwen3.5 T4 hot path.
 
-    A positive MMM_QWEN35_MTP_CTX is forwarded exactly. Otherwise the model
-    profile max_context is authoritative; 32768 is only a compatibility fallback.
+    MMM pages planning and source evidence, so the default server should not reserve
+    the model's entire context window. Operators may explicitly raise the window for
+    an exceptional request without enabling any runtime search sweep.
     """
 
+    del config
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
-    if raw:
-        try:
-            override = int(raw)
-        except ValueError:
-            override = 0
-        if override > 0:
-            return override
-    configured = (
-        int(getattr(config, "max_context", 0) or 0)
-        if config is not None
-        else 0
-    )
-    return configured if configured > 0 else _DEFAULT_CTX_FALLBACK
+    try:
+        value = int(raw) if raw else _DEFAULT_CTX
+    except ValueError:
+        value = _DEFAULT_CTX
+    return max(_MIN_CTX, min(_MAX_CTX, value))
 
 
 def _drop_option(
@@ -94,13 +84,8 @@ def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
     args.extend([names[0], value])
 
 
-def _kv_override() -> str:
-    value = os.environ.get(_KV_OVERRIDE_ENV, "").strip().lower()
-    return value if value in {"f16", "q8_0", "q4_0"} else ""
-
-
 def _install_measured_fast_base_args(autotune: Any) -> None:
-    """Install the fast Qwen3.5 server shape; T4 tuning may override KV format."""
+    """Install the measured single-stream Qwen3.5 server launch shape."""
 
     current = getattr(autotune, "_base_args", None)
     if not callable(current) or getattr(current, _BASE_MARKER, False):
@@ -123,17 +108,10 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--ubatch-size", "-ub"), "512")
         _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))
 
-        kv = _kv_override()
-        if kv:
-            _set_option(args, ("--cache-type-k", "-ctk"), kv)
-            _set_option(args, ("--cache-type-v", "-ctv"), kv)
-        else:
-            _drop_option(args, ("--cache-type-k", "-ctk"))
-            _drop_option(args, ("--cache-type-v", "-ctv"))
-
-        # Load-mode/prompt-cache experiments are deliberately excluded from the
-        # single-stream decode path. They affect startup/reuse, not target TG speed,
-        # and have caused avoidable VRAM/compatibility regressions on hybrid models.
+        # Preserve llama.cpp's native KV format. Runtime KV sweeps repeatedly reload
+        # a large model and belong in offline benchmarking, not production requests.
+        _drop_option(args, ("--cache-type-k", "-ctk"))
+        _drop_option(args, ("--cache-type-v", "-ctv"))
         _drop_option(args, ("--load-mode", "-lm"))
         _drop_option(args, ("--cache-prompt",), takes_value=False)
         if "--metrics" not in args:
@@ -227,7 +205,7 @@ def _reclaim_prior_mmm_server() -> None:
 
 
 def install(autotune: Any) -> None:
-    """Install the low-startup Qwen3.5 MTP-3 fallback server."""
+    """Install one fixed Qwen3.5 MTP-3 single-stream production server."""
 
     _install_measured_fast_base_args(autotune)
     current = autotune.ensure_tuned_server
@@ -262,32 +240,28 @@ def install(autotune: Any) -> None:
             if binary is None:
                 raise RuntimeError("native llama-server binary is unavailable")
             model_path = autotune._resolve_model_path(config)
-            width = _width(autotune)
-            batch = autotune._env_int("MMM_LLAMA_BATCH", 2048)
-            ubatch = min(batch, autotune._env_int("MMM_LLAMA_UBATCH", 512))
             selected = autotune.ServerVariant(
-                name=f"qwen35-production-mtp-{width}",
+                name="qwen35-production-mtp-3",
                 spec_type="draft-mtp",
-                draft_n_max=width,
-                ubatch=ubatch,
+                draft_n_max=_DEFAULT_WIDTH,
+                ubatch=512,
                 parallel=1,
                 cache_reuse=0,
                 draft_p_min=0.0,
             )
-            os.environ.pop(_KV_OVERRIDE_ENV, None)
             url = autotune._launch_selected(binary, model_path, config, selected)
             os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = "draft-mtp"
-            os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(width)
+            os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(_DEFAULT_WIDTH)
             os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = "1"
-            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(ubatch)
+            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = "512"
             os.environ["MMM_LLAMA_ACTIVE_MTP_P_MIN"] = "0"
             os.environ["MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE"] = "single_stream"
             os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = "native-default"
             print(
                 "llama server: Qwen3.5 fixed production profile",
                 (
-                    f"spec=draft-mtp n_max={width} parallel=1 "
-                    f"ctx={_context_size(config)} ubatch={ubatch} kv=native-default"
+                    "spec=draft-mtp n_max=3 parallel=1 "
+                    f"ctx={_context_size(config)} ubatch=512 kv=native-default"
                 ),
                 flush=True,
             )
