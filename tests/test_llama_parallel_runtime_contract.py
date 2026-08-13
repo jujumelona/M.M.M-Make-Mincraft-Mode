@@ -210,7 +210,7 @@ def test_parallel_router_preserves_real_generation_mcp_tools_and_enable_tools(
     assert request.response_format == "json"
     assert any(
         message.get("role") == "system"
-        and "mmm/agent-capability-context-v4" in str(message.get("content", ""))
+        and "mmm/agent-capability-context-v5" in str(message.get("content", ""))
         and "ground-production-with-live-evidence" in str(message.get("content", ""))
         and "inspect_existing_mod" in str(message.get("content", ""))
         for message in request.messages
