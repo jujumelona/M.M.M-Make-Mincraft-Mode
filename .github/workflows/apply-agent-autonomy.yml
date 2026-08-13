@@ -66,7 +66,7 @@ jobs:
       - name: Commit and self-delete
         run: |
           git rm .github/workflows/apply-agent-autonomy.yml
-          git rm .github/scripts/apply_agent_autonomy.py
+          git rm -f .github/scripts/apply_agent_autonomy.py
           git add -A
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
