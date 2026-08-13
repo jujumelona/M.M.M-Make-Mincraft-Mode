@@ -26,6 +26,7 @@ jobs:
           python -m pip install -q -e '.[dev]'
           python -m py_compile .github/scripts/finalize_adaptive_production_agent.py
           python .github/scripts/finalize_adaptive_production_agent.py
+          sed -i 's/[[:space:]]\+$//' minecraft_mod_ai/model_router.py minecraft_mod_ai/agent_capability_context.py
           python -m compileall -q minecraft_mod_ai tests
           python -m ruff check \
             minecraft_mod_ai/model_router.py \
