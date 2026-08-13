@@ -36,7 +36,7 @@ LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-aud
 # native llama-server binary from the verified prebuilt bundle. Source compilation is
 # emergency-only and must be explicitly enabled; there is no Python binding fallback.
 LLAMA_SERVER_SOURCE_REPOSITORY = "https://github.com/ggml-org/llama.cpp.git"
-LLAMA_SERVER_SOURCE_REF = "f65e568fd83712c92babbb096b57e572af0ec357"
+LLAMA_SERVER_SOURCE_REF = "4a84b0ad108204f17f3232e26e5c802fb172b492"
 LLAMA_SERVER_DEFAULT_SOURCE_DIR = Path("/content/llama.cpp")
 _NATIVE_VERIFY_CACHE: dict[tuple[object, ...], tuple[bool, str]] = {}
 _NATIVE_VERIFY_CACHE_LIMIT = 16

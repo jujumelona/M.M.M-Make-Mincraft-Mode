@@ -14,12 +14,12 @@ from typing import Callable
 
 
 BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v3-max-t4"
-BUNDLE_RELEASE_TAG = "native-llama-f65e568-cuda12.4-max-v3"
+BUNDLE_RELEASE_TAG = "native-llama-4a84b0a-cuda12.4-max-v3"
 BUNDLE_RELEASE_BASE = (
     "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/releases/download/"
     + BUNDLE_RELEASE_TAG
 )
-BUNDLE_NAME_PREFIX = "llama-f65e568-cuda12.4-max"
+BUNDLE_NAME_PREFIX = "llama-4a84b0a-cuda12.4-max"
 SUPPORTED_CUDA_ARCHES = frozenset({"75", "80", "89"})
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 CACHE_RECEIPT_NAME = ".archive.sha256"
