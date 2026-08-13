@@ -8,7 +8,9 @@ runtime contract is intentionally installed twice.
 """
 
 import os
+from functools import wraps
 from threading import RLock
+from typing import Any
 
 _BOOTSTRAP_LOCK = RLock()
 _INITIALIZED = False
@@ -155,6 +157,7 @@ def _install_platform_contracts() -> None:
         geckolib_generator,
         generator,
         mineflayer_bridge,
+        model_router,
         platform_central_ai_contract,
         platform_planning_contract,
         platform_resolver,
@@ -218,6 +221,10 @@ def _install_platform_contracts() -> None:
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
     central_intelligence_amplifier.install(agentic_research_game_design)
     agentic_research_game_design.bind_game_design_planner(game_design)
+    _gate_research_first_to_production_router(
+        game_design_module=game_design,
+        model_router_module=model_router,
+    )
     install_platform_central_ai(
         game_design_module=game_design,
         complete_planner_module=complete_planner,
@@ -245,6 +252,73 @@ def _install_platform_contracts() -> None:
         runtime_module=runtime_manager,
         orchestrator_module=complete_orchestrator,
     )
+
+
+def _gate_research_first_to_production_router(
+    *,
+    game_design_module: Any,
+    model_router_module: Any,
+) -> None:
+    """Keep legacy/fake-router contracts stable while production gets research-first AI."""
+
+    def enabled(router: Any) -> bool:
+        return isinstance(router, model_router_module.ModelRouter) or bool(
+            getattr(router, "_mmm_enable_research_first", False)
+        )
+
+    cls = game_design_module.GameDesignPlanner
+    current_plan = cls.plan
+    legacy_plan = getattr(current_plan, "__wrapped__", None)
+    if callable(legacy_plan) and not getattr(current_plan, "_mmm_production_router_gate", False):
+
+        @wraps(current_plan)
+        def plan(self: Any, prompt: str, *, media_paths=()):
+            if enabled(self.router):
+                return current_plan(self, prompt, media_paths=media_paths)
+            return legacy_plan(self, prompt, media_paths=media_paths)
+
+        plan._mmm_agentic_research_sectioned = True  # type: ignore[attr-defined]
+        plan._mmm_production_router_gate = True  # type: ignore[attr-defined]
+        plan.__wrapped__ = legacy_plan  # type: ignore[attr-defined]
+        cls.plan = plan
+
+    current_sharded = game_design_module._generate_sharded_design_page
+    legacy_sharded = getattr(current_sharded, "__wrapped__", None)
+    if callable(legacy_sharded) and not getattr(
+        current_sharded,
+        "_mmm_production_router_gate",
+        False,
+    ):
+
+        @wraps(current_sharded)
+        def sharded_page(
+            router: Any,
+            *,
+            request_text: str,
+            media_paths: Any,
+            page_index: int,
+            page_count: int,
+        ):
+            if enabled(router):
+                return current_sharded(
+                    router,
+                    request_text=request_text,
+                    media_paths=media_paths,
+                    page_index=page_index,
+                    page_count=page_count,
+                )
+            return legacy_sharded(
+                router,
+                request_text=request_text,
+                media_paths=media_paths,
+                page_index=page_index,
+                page_count=page_count,
+            )
+
+        sharded_page._mmm_agentic_research_sectioned = True  # type: ignore[attr-defined]
+        sharded_page._mmm_production_router_gate = True  # type: ignore[attr-defined]
+        sharded_page.__wrapped__ = legacy_sharded  # type: ignore[attr-defined]
+        game_design_module._generate_sharded_design_page = sharded_page
 
 
 def _install_planner_contracts() -> None:
