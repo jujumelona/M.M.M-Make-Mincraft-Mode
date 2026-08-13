@@ -51,17 +51,17 @@ def test_local_shared_gpu_lane_claims_only_one_gpu_class_at_a_time(tmp_path: Pat
     try:
         first = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)
         assert first is not None
-        assert first["node_id"] == "generate-assets-00000000"
+        assert first["node_id"] == "generate-custom-00000000"
 
-        # The LLM lane is independently free, but it shares the same physical GPU.
-        # Do not mark it RUNNING just to block later on the router's GPU writer lock.
+        # Resource priority deliberately chooses the LLM lane first. The image lane
+        # must still remain pending while that same physical GPU is occupied.
         assert ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60) is None
-        assert ledger.task("generate-custom-00000000")["state"] == "pending"
+        assert ledger.task("generate-assets-00000000")["state"] == "pending"
 
         ledger.succeed(first["node_id"], {"status": "PASS"})
         second = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)
         assert second is not None
-        assert second["node_id"] == "generate-custom-00000000"
+        assert second["node_id"] == "generate-assets-00000000"
     finally:
         safety._SHARED_LOCAL_GPU_LANE.reset(token)
 
