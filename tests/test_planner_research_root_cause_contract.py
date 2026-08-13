@@ -68,7 +68,7 @@ def test_planner_seed_does_not_exhaust_route_catalog() -> None:
         research_brief=_brief(),
         route_limit=2,
         page_builder=page_builder,
-        allow_legacy_terminal=True,
+        planning_seed_only=True,
     )
 
     assert calls == [""]
