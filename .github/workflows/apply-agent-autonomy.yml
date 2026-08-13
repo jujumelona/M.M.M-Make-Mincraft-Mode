@@ -25,173 +25,576 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Remove arbitrary agent and planner ceilings
+      - name: Remove arbitrary semantic ceilings
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              if text.count(old) != 1:
+                  raise SystemExit(f"{label}: expected one match, got {text.count(old)}")
               return text.replace(old, new, 1)
 
-          def replace_between(text: str, start: str, end: str, replacement: str, label: str) -> str:
-              i = text.find(start)
-              if i < 0:
-                  raise SystemExit(f"{label}: start marker not found")
-              j = text.find(end, i)
-              if j < 0:
-                  raise SystemExit(f"{label}: end marker not found")
-              return text[:i] + replacement + text[j:]
+          def replace_section(text: str, start: str, end: str, new: str, label: str) -> str:
+              a = text.find(start)
+              b = text.find(end, a + len(start)) if a >= 0 else -1
+              if a < 0 or b < 0:
+                  raise SystemExit(f"{label}: section markers not found")
+              return text[:a] + new + text[b:]
 
-          # ------------------------------------------------------------------
-          # ModelRouter: no fixed tool-round/tool-call budget. Stop only on a
-          # proven identical request/call/result fixed point.
-          # ------------------------------------------------------------------
-          path = Path("minecraft_mod_ai/model_router.py")
-          text = path.read_text(encoding="utf-8")
-          if "import hashlib\n" not in text:
-              text = replace_once(text, "import json\n", "import hashlib\nimport json\n", "model_router hashlib import")
-          text = text.replace("_DEFAULT_MAX_TOOL_ROUNDS = 8\n_DEFAULT_MAX_TOOL_CALLS = 24\n", "")
+          # 1) Agent tool loop: model owns completion; no round/call budget.
+          p = Path("minecraft_mod_ai/model_router.py")
+          t = p.read_text(encoding="utf-8")
+          if "import hashlib\n" not in t:
+              t = replace_once(t, "import json\n", "import hashlib\nimport json\n", "hashlib import")
+          t = t.replace("_DEFAULT_MAX_TOOL_ROUNDS = 8\n_DEFAULT_MAX_TOOL_CALLS = 24\n", "")
+          tool_loop = '''    def _generate_with_tools(
+        self,
+        *,
+        adapter: Any,
+        request: GenerationRequest,
+        runtime: Any,
+        stage: str,
+    ) -> str:
+        """Let the model gather evidence until it decides the turn is complete.
 
-          new_generate_with_tools = '''    def _generate_with_tools(\n        self,\n        *,\n        adapter: Any,\n        request: GenerationRequest,\n        runtime: Any,\n        stage: str,\n    ) -> str:\n        \"\"\"Let the model gather evidence until it decides the turn is complete.\n\n        There is deliberately no host-owned round/call ceiling.  A long research or\n        planning turn may use any number of distinct tool calls.  The only terminating\n        guard below is semantic: if the model emits the same tool-call set and receives\n        the same observations again, the loop has reached an exact fixed point and can\n        no longer gather new information.\n        \"\"\"\n\n        messages: list[dict[str, Any]] = [dict(message) for message in request.messages]\n        seen_exchange_states: set[str] = set()\n        round_index = 0\n\n        while True:\n            turn_request = GenerationRequest(\n                messages=messages,\n                media_paths=request.media_paths if round_index == 0 else (),\n                response_format=request.response_format,\n                tools=request.tools,\n                tool_choice=request.tool_choice,\n                parallel_tool_calls=request.parallel_tool_calls,\n            )\n            turn = adapter.generate_turn(turn_request)\n            if not turn.tool_calls:\n                if not turn.content.strip():\n                    raise ModelConfigurationError(\n                        \"Tool-capable model returned an empty final response.\"\n                    )\n                return turn.content.strip()\n\n            assistant_message: dict[str, Any] = {\n                \"role\": \"assistant\",\n                \"content\": turn.content or None,\n                \"tool_calls\": [\n                    {\n                        \"id\": call.id,\n                        \"type\": \"function\",\n                        \"function\": {\n                            \"name\": call.name,\n                            \"arguments\": call.raw_arguments\n                            or json.dumps(\n                                dict(call.arguments),\n                                ensure_ascii=False,\n                                separators=(\",\", \":\"),\n                            ),\n                        },\n                    }\n                    for call in turn.tool_calls\n                ],\n            }\n            messages.append(assistant_message)\n\n            observations: list[dict[str, Any]] = []\n            for call in turn.tool_calls:\n                try:\n                    result = runtime.call(stage, call.name, call.arguments)\n                    tool_payload: Mapping[str, Any] = {\n                        \"ok\": True,\n                        \"tool\": call.name,\n                        \"result\": result,\n                    }\n                except Exception as exc:\n                    # Tool failures are observations.  Qwen may repair arguments, select\n                    # another tool, or decide it already has enough information.\n                    tool_payload = {\n                        \"ok\": False,\n                        \"tool\": call.name,\n                        \"error\": f\"{type(exc).__name__}: {exc}\",\n                    }\n\n                encoded_payload = json.dumps(\n                    tool_payload,\n                    ensure_ascii=False,\n                    sort_keys=True,\n                    default=str,\n                )\n                messages.append(\n                    {\n                        \"role\": \"tool\",\n                        \"tool_call_id\": call.id,\n                        \"name\": call.name,\n                        \"content\": encoded_payload,\n                    }\n                )\n                observations.append(\n                    {\n                        \"name\": call.name,\n                        \"arguments\": dict(call.arguments),\n                        \"observation\": tool_payload,\n                    }\n                )\n\n            exchange_state = hashlib.sha256(\n                json.dumps(\n                    {\n                        \"assistant_content\": turn.content or \"\",\n                        \"tool_exchanges\": observations,\n                    },\n                    ensure_ascii=False,\n                    sort_keys=True,\n                    separators=(\",\", \":\"),\n                    default=str,\n                ).encode(\"utf-8\")\n            ).hexdigest()\n            if exchange_state in seen_exchange_states:\n                raise ModelConfigurationError(\n                    \"Agent entered an exact no-progress tool cycle: identical tool \"\n                    \"calls produced identical observations. No fixed round or call \"\n                    \"budget was reached.\"\n                )\n            seen_exchange_states.add(exchange_state)\n            round_index += 1\n\n'''
-          text = replace_between(
-              text,
+        There is no host-owned tool-round or tool-call ceiling. A long research or
+        planning turn may use any number of distinct calls. The guard is semantic:
+        two consecutive identical call/result exchanges prove an exact no-progress
+        fixed point rather than consuming an arbitrary numeric budget.
+        """
+        messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
+        previous_exchange_state: str | None = None
+        round_index = 0
+        while True:
+            turn_request = GenerationRequest(
+                messages=messages,
+                media_paths=request.media_paths if round_index == 0 else (),
+                response_format=request.response_format,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+                parallel_tool_calls=request.parallel_tool_calls,
+            )
+            turn = adapter.generate_turn(turn_request)
+            if not turn.tool_calls:
+                if not turn.content.strip():
+                    raise ModelConfigurationError(
+                        "Tool-capable model returned an empty final response."
+                    )
+                return turn.content.strip()
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": turn.content or None,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.raw_arguments
+                                or json.dumps(
+                                    dict(call.arguments),
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            },
+                        }
+                        for call in turn.tool_calls
+                    ],
+                }
+            )
+
+            observations: list[dict[str, Any]] = []
+            for call in turn.tool_calls:
+                try:
+                    result = runtime.call(stage, call.name, call.arguments)
+                    payload: Mapping[str, Any] = {
+                        "ok": True,
+                        "tool": call.name,
+                        "result": result,
+                    }
+                except Exception as exc:
+                    payload = {
+                        "ok": False,
+                        "tool": call.name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "name": call.name,
+                        "content": json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    }
+                )
+                observations.append(
+                    {
+                        "name": call.name,
+                        "arguments": dict(call.arguments),
+                        "observation": payload,
+                    }
+                )
+
+            exchange_state = hashlib.sha256(
+                json.dumps(
+                    {
+                        "assistant_content": turn.content or "",
+                        "tool_exchanges": observations,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            if exchange_state == previous_exchange_state:
+                raise ModelConfigurationError(
+                    "Agent reached an exact no-progress tool fixed point: identical "
+                    "tool calls produced identical observations on consecutive turns."
+                )
+            previous_exchange_state = exchange_state
+            round_index += 1
+
+'''
+          t = replace_section(
+              t,
               "    def _generate_with_tools(\n",
               "    def _tool_runtime(",
-              new_generate_with_tools,
-              "model_router tool loop",
+              tool_loop,
+              "agent tool loop",
           )
-          helper = "\n\ndef _positive_env_int(name: str, default: int) -> int:\n"
-          if helper in text:
-              text = text[: text.index(helper)] + "\n"
-          path.write_text(text, encoding="utf-8")
-
-          # ------------------------------------------------------------------
-          # Planner repair/resume: validator-driven repair with exact cycle
-          # detection, never a 2-attempt/4-attempt budget.
-          # ------------------------------------------------------------------
-          path = Path("minecraft_mod_ai/planner_incremental_resume_contract.py")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace("import os\n", "")
-          marker = "_DEFAULT_BATCH_REPAIR_ATTEMPTS = 2\n"
-          if marker in text:
-              start = text.index(marker)
-              end = text.index("def _batch_schema", start)
-              text = text[:start] + text[end:]
-
-          progressive_repair = '''def _install_progressive_batch_repair(incremental_module: Any) -> None:\n    current = incremental_module._patch_one_invalid_batch\n    if getattr(current, \"_mmm_progressive_semantic_batch_repair\", False):\n        return\n\n    def patch_one_invalid_batch(\n        runtime_module: Any,\n        module: Any,\n        router: Any,\n        *,\n        raw_batch: Any,\n        validation_error: str,\n        accepted_batch_ids: Sequence[str],\n        checkpoint_path: Any,\n        checkpoint_state: dict[str, Any],\n    ) -> dict[str, Any]:\n        \"\"\"Repair until the real validator accepts or an exact state repeats.\"\"\"\n\n        original_fingerprint = incremental_module._fingerprint(raw_batch)\n        pending = checkpoint_state.get(\"pending_patch\")\n        seen_states: set[str] = set()\n        if (\n            isinstance(pending, dict)\n            and pending.get(\"target_fingerprint\") == original_fingerprint\n        ):\n            current_value = pending.get(\"current_value\", raw_batch)\n            current_error = str(pending.get(\"validation_error\", validation_error))\n            attempt = int(pending.get(\"round\", 0))\n            prior_state = str(pending.get(\"state_sha256\", \"\")).strip()\n            if prior_state:\n                seen_states.add(prior_state)\n        else:\n            current_value = raw_batch\n            current_error = validation_error\n            attempt = 0\n\n        while True:\n            attempt += 1\n            replacement = not isinstance(current_value, dict)\n            repair_mode = \"replacement\" if replacement else \"field_patch\"\n            state_sha256 = incremental_module._fingerprint(\n                {\n                    \"repair_mode\": repair_mode,\n                    \"current_value\": current_value,\n                    \"validation_error\": current_error,\n                    \"accepted_batch_ids\": list(accepted_batch_ids),\n                }\n            )\n            if state_sha256 in seen_states:\n                _save_failed_patch(\n                    incremental_module,\n                    checkpoint_path,\n                    checkpoint_state,\n                    target_fingerprint=original_fingerprint,\n                    round_index=attempt - 1,\n                    current_value=current_value,\n                    validation_error=current_error,\n                    reason=\"repeated_validation_state\",\n                )\n                raise module.SpecValidationError(\n                    \"Production batch repair reached an identical semantic state \"\n                    \"without progress.\"\n                )\n            seen_states.add(state_sha256)\n\n            checkpoint_state.update(\n                {\n                    \"status\": \"patching\",\n                    \"pending_patch\": {\n                        \"target_fingerprint\": original_fingerprint,\n                        \"round\": attempt,\n                        \"repair_mode\": repair_mode,\n                        \"current_value\": current_value,\n                        \"validation_error\": current_error,\n                        \"state_sha256\": state_sha256,\n                    },\n                }\n            )\n            incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)\n\n            if replacement:\n                system_prompt = (\n                    \"You regenerate exactly ONE invalid production batch. Return only \"\n                    \"target_fingerprint and replacement_batch. Preserve every valid part of \"\n                    \"the batch purpose, dependencies, deliverables and exports, but emit one \"\n                    \"complete object that fixes validation_error. No page, sibling, Markdown, \"\n                    \"or explanation.\"\n                )\n                output_contract: dict[str, Any] = {\n                    \"target_fingerprint\": original_fingerprint,\n                    \"replacement_batch\": {\n                        \"batch_id\": \"string\",\n                        \"scope\": \"string\",\n                        \"depends_on_batches\": [\"string\"],\n                        \"deliverables\": [\"string\"],\n                        \"exports\": [\"string\"],\n                    },\n                }\n            else:\n                system_prompt = (\n                    \"You are a deterministic field-level JSON patcher. Fix exactly ONE \"\n                    \"invalid production batch. Return only target_fingerprint, set_fields, \"\n                    \"and delete_fields. DO NOT rewrite the whole batch. Change every field \"\n                    \"required by validation_error and preserve every other field exactly. \"\n                    \"If more than one correction round is necessary, the host will continue \"\n                    \"from the newly validated state rather than imposing an attempt budget.\"\n                )\n                output_contract = {\n                    \"target_fingerprint\": original_fingerprint,\n                    \"set_fields\": {\"only_invalid_or_missing_fields\": \"corrected value\"},\n                    \"delete_fields\": [\"only_invalid_extra_field_names\"],\n                }\n\n            request = {\n                \"target_fingerprint\": original_fingerprint,\n                \"repair_mode\": repair_mode,\n                \"current_batch\": current_value,\n                \"validation_error\": current_error,\n                \"accepted_batch_ids\": list(accepted_batch_ids),\n                \"required_fields\": sorted(_BATCH_FIELDS),\n                \"rules\": {\n                    \"batch_id\": \"unique non-empty descriptive snake_case string\",\n                    \"scope\": \"non-empty string\",\n                    \"depends_on_batches\": \"unique non-empty strings; no self dependency\",\n                    \"deliverables\": \"NON-EMPTY unique non-empty strings\",\n                    \"exports\": \"unique non-empty snake_case strings\",\n                },\n                \"output_contract\": output_contract,\n            }\n\n            token = runtime_module._JSON_SCHEMA.set(_batch_schema(replacement=replacement))\n            try:\n                text = router.generate_text(\n                    \"planner\",\n                    [\n                        {\"role\": \"system\", \"content\": system_prompt},\n                        {\"role\": \"user\", \"content\": json.dumps(request, ensure_ascii=False)},\n                    ],\n                    media_paths=(),\n                    response_format=\"json\",\n                )\n            finally:\n                runtime_module._JSON_SCHEMA.reset(token)\n\n            candidate: Any = current_value\n            try:\n                patch = incremental_module._extract_one_complete_object(text)\n                if patch.get(\"target_fingerprint\") != original_fingerprint:\n                    raise ValueError(\"target_fingerprint does not match saved invalid batch\")\n\n                if replacement:\n                    if frozenset(str(key) for key in patch) != _REPLACE_PATCH_FIELDS:\n                        raise ValueError(\"replacement patch has invalid top-level keys\")\n                    candidate = patch.get(\"replacement_batch\")\n                    if not isinstance(candidate, dict):\n                        raise ValueError(\"replacement_batch must be an object\")\n                    candidate = dict(candidate)\n                else:\n                    if frozenset(str(key) for key in patch) != _FIELD_PATCH_FIELDS:\n                        raise ValueError(\"field patch has invalid top-level keys\")\n                    set_fields = patch.get(\"set_fields\")\n                    delete_fields = patch.get(\"delete_fields\")\n                    if not isinstance(set_fields, dict):\n                        raise ValueError(\"set_fields must be an object\")\n                    if not isinstance(delete_fields, list) or any(\n                        not isinstance(value, str) for value in delete_fields\n                    ):\n                        raise ValueError(\"delete_fields must be an array of field names\")\n                    if any(str(key) not in _BATCH_FIELDS for key in set_fields):\n                        raise ValueError(\"set_fields contains a non-batch field\")\n                    if any(field in _BATCH_FIELDS for field in delete_fields):\n                        raise ValueError(\"required batch fields may not be deleted\")\n                    if not set_fields and not delete_fields:\n                        raise ValueError(\"field patch must change at least one field\")\n                    candidate = dict(current_value)\n                    for field in delete_fields:\n                        candidate.pop(field, None)\n                    candidate.update(set_fields)\n\n                next_error = _contextual_batch_error(\n                    incremental_module,\n                    module,\n                    candidate,\n                    accepted_batch_ids,\n                )\n                if next_error:\n                    current_value = candidate\n                    current_error = next_error\n                    continue\n\n                checkpoint_state[\"pending_patch\"] = None\n                checkpoint_state[\"status\"] = \"collecting\"\n                incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)\n                return dict(candidate)\n            except Exception as exc:\n                if isinstance(candidate, dict):\n                    current_value = candidate\n                current_error = f\"{type(exc).__name__}: {exc}\"\n\n    patch_one_invalid_batch._mmm_progressive_semantic_batch_repair = True  # type: ignore[attr-defined]\n    patch_one_invalid_batch.__wrapped__ = current  # type: ignore[attr-defined]\n    incremental_module._patch_one_invalid_batch = patch_one_invalid_batch\n\n\n'''
-          text = replace_between(
-              text,
-              "def _install_bounded_batch_repair(",
-              "def _install_pending_queue(",
-              progressive_repair,
-              "progressive batch repair",
+          t = re.sub(
+              r"\n\ndef _positive_env_int\(name: str, default: int\) -> int:\n(?:    .*\n?)+\Z",
+              "\n",
+              t,
           )
+          p.write_text(t, encoding="utf-8")
 
-          progress_guard = '''def _install_outline_cycle_guard(incremental_module: Any) -> None:\n    from . import complete_planner\n\n    current = complete_planner._generate_json_page_with_repair\n    if getattr(current, \"_mmm_outline_cycle_guard\", False):\n        return\n\n    class _GuardedRouter:\n        def __init__(self, router: Any) -> None:\n            self._router = router\n            self._seen_exchanges: set[str] = set()\n\n        def __getattr__(self, name: str) -> Any:\n            return getattr(self._router, name)\n\n        def generate_text(\n            self,\n            role: str,\n            messages: Any,\n            *,\n            media_paths=(),\n            response_format=\"text\",\n        ) -> str:\n            system_content = \"\"\n            user_content = \"\"\n            if isinstance(messages, (list, tuple)) and messages:\n                first = messages[0]\n                last = messages[-1]\n                if isinstance(first, dict):\n                    system_content = str(first.get(\"content\", \"\"))\n                if isinstance(last, dict):\n                    user_content = str(last.get(\"content\", \"\"))\n\n            is_batch_repair = (\n                \"field-level JSON patcher\" in system_content\n                or \"regenerate exactly ONE invalid production batch\" in system_content\n            )\n            output = self._router.generate_text(\n                role,\n                messages,\n                media_paths=media_paths,\n                response_format=response_format,\n            )\n            if not is_batch_repair:\n                exchange_sha256 = incremental_module._fingerprint(\n                    {\n                        \"role\": role,\n                        \"system\": system_content,\n                        \"user\": user_content,\n                        \"response_format\": response_format,\n                        \"media_paths\": [str(path) for path in media_paths],\n                        \"model_output\": output,\n                    }\n                )\n                if exchange_sha256 in self._seen_exchanges:\n                    raise complete_planner.SpecValidationError(\n                        \"Planner reached an identical request/response fixed point \"\n                        \"without semantic progress.\"\n                    )\n                self._seen_exchanges.add(exchange_sha256)\n            return output\n\n    @wraps(current)\n    def generate_cycle_safe(\n        router: Any,\n        *,\n        system_prompt: str,\n        request: dict[str, Any] | str,\n        media_paths: Sequence[Any],\n        expected_contracts: Sequence[frozenset[str]],\n        stage: str,\n    ) -> dict[str, Any]:\n        if not incremental_module._outline_allowed(expected_contracts):\n            return current(\n                router,\n                system_prompt=system_prompt,\n                request=request,\n                media_paths=media_paths,\n                expected_contracts=expected_contracts,\n                stage=stage,\n            )\n        return current(\n            _GuardedRouter(router),\n            system_prompt=system_prompt,\n            request=request,\n            media_paths=media_paths,\n            expected_contracts=expected_contracts,\n            stage=stage,\n        )\n\n    generate_cycle_safe._mmm_outline_cycle_guard = True  # type: ignore[attr-defined]\n    generate_cycle_safe.__wrapped__ = current  # type: ignore[attr-defined]\n    complete_planner._generate_json_page_with_repair = generate_cycle_safe\n\n\n'''
-          text = replace_between(
-              text,
+          # 2) Planner batch repair: keep semantic cycle detection, remove the
+          # two-attempt budget. Field repair may escalate to full-item repair, but
+          # either mode can keep going while validator state changes.
+          p = Path("minecraft_mod_ai/planner_incremental_resume_contract.py")
+          t = p.read_text(encoding="utf-8")
+          old = '''        max_attempts = _bounded_env(
+            "MMM_PLANNER_BATCH_REPAIR_ATTEMPTS",
+            _DEFAULT_BATCH_REPAIR_ATTEMPTS,
+            maximum=2,
+        )
+        seen_states: set[str] = set()
+        seen_outputs: set[str] = set()
+        last_output_sha256 = ""
+
+        for attempt in range(1, max_attempts + 1):
+'''
+          new = '''        seen_states: set[str] = set()
+        seen_outputs: set[str] = set()
+        last_output_sha256 = ""
+        attempt = 0
+
+        while True:
+            attempt += 1
+'''
+          t = replace_once(t, old, new, "batch repair loop")
+          tail_start = t.find('        _save_failed_patch(\n', t.find('def _install_bounded_batch_repair'))
+          while tail_start >= 0:
+              probe = t[tail_start:t.find('    patch_one_invalid_batch._mmm_bounded_semantic_batch_repair', tail_start)]
+              if 'reason="repair_budget_exhausted"' in probe:
+                  tail_end = t.find('    patch_one_invalid_batch._mmm_bounded_semantic_batch_repair', tail_start)
+                  t = t[:tail_start] + t[tail_end:]
+                  break
+              tail_start = t.find('        _save_failed_patch(\n', tail_start + 1)
+          if "repair_budget_exhausted" in t or "for attempt in range(1, max_attempts + 1)" in t:
+              raise SystemExit("batch repair budget removal incomplete")
+
+          # Outline guard becomes request+output fixed-point detection, not >2 calls.
+          guard = '''def _install_outline_cycle_guard(incremental_module: Any) -> None:
+    from . import complete_planner
+
+    current = complete_planner._generate_json_page_with_repair
+    if getattr(current, "_mmm_outline_cycle_guard", False):
+        return
+
+    class _GuardedRouter:
+        def __init__(self, router: Any) -> None:
+            self._router = router
+            self._seen_exchanges: set[str] = set()
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._router, name)
+
+        def generate_text(
+            self,
+            role: str,
+            messages: Any,
+            *,
+            media_paths=(),
+            response_format="text",
+        ) -> str:
+            system_content = ""
+            user_content = ""
+            if isinstance(messages, (list, tuple)) and messages:
+                first = messages[0]
+                last = messages[-1]
+                if isinstance(first, dict):
+                    system_content = str(first.get("content", ""))
+                if isinstance(last, dict):
+                    user_content = str(last.get("content", ""))
+            is_batch_repair = (
+                "field-level JSON patcher" in system_content
+                or "regenerate exactly ONE invalid production batch" in system_content
+            )
+            output = self._router.generate_text(
+                role,
+                messages,
+                media_paths=media_paths,
+                response_format=response_format,
+            )
+            if not is_batch_repair:
+                exchange = incremental_module._fingerprint(
+                    {
+                        "role": role,
+                        "system": system_content,
+                        "user": user_content,
+                        "response_format": response_format,
+                        "media_paths": [str(path) for path in media_paths],
+                        "model_output": output,
+                    }
+                )
+                if exchange in self._seen_exchanges:
+                    raise complete_planner.SpecValidationError(
+                        "Planner reached an identical request/response fixed point "
+                        "without semantic progress."
+                    )
+                self._seen_exchanges.add(exchange)
+            return output
+
+    @wraps(current)
+    def generate_cycle_safe(
+        router: Any,
+        *,
+        system_prompt: str,
+        request: dict[str, Any] | str,
+        media_paths: Sequence[Any],
+        expected_contracts: Sequence[frozenset[str]],
+        stage: str,
+    ) -> dict[str, Any]:
+        if not incremental_module._outline_allowed(expected_contracts):
+            return current(
+                router,
+                system_prompt=system_prompt,
+                request=request,
+                media_paths=media_paths,
+                expected_contracts=expected_contracts,
+                stage=stage,
+            )
+        return current(
+            _GuardedRouter(router),
+            system_prompt=system_prompt,
+            request=request,
+            media_paths=media_paths,
+            expected_contracts=expected_contracts,
+            stage=stage,
+        )
+
+    generate_cycle_safe._mmm_outline_cycle_guard = True  # type: ignore[attr-defined]
+    generate_cycle_safe.__wrapped__ = current  # type: ignore[attr-defined]
+    complete_planner._generate_json_page_with_repair = generate_cycle_safe
+
+
+'''
+          t = replace_section(
+              t,
               "def _install_outline_cycle_guard(",
               "def install(",
-              progress_guard,
-              "outline progress guard",
+              guard,
+              "outline guard",
           )
-          text = text.replace("_install_bounded_batch_repair(incremental_module)", "_install_progressive_batch_repair(incremental_module)")
-          text = text.replace('"""Install resume plus terminating outline/batch repair semantics."""', '"""Install resume plus progress-driven outline/batch repair semantics."""')
-          path.write_text(text, encoding="utf-8")
+          p.write_text(t, encoding="utf-8")
 
-          # ------------------------------------------------------------------
-          # Complete planner: unlimited total pagination.  Per-response context is
-          # finite, but the host never decides that a plan has only 1/2/4 pages or
-          # records.  Model + validator decide completion.
-          # ------------------------------------------------------------------
-          path = Path("minecraft_mod_ai/complete_planner.py")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace(
-              '        """Plan every authoritative request page with bounded, fail-closed calls."""',
-              '        """Plan every authoritative request page with paginated, fail-closed calls."""',
-          )
-          text = text.replace(
-              '                    "Generate up to 4 NEW production batches in one response to complete the plan efficiently. "',
-              '                    "Generate as many NEW production batches as fit without truncating this JSON page. "\n                    "There is no host-owned batch-count limit; if more work remains, continue with another cursor page. "',
-          )
-          text = text.replace(
-              'CRITICAL RULE: Emit EXACTLY ONE (1) production batch per response page. Never emit multiple batches in one go. If more batches or requirements remain, set complete=false and supply a next_cursor.\n',
-              'Emit as many complete production batches as fit safely in the current JSON response. There is no fixed one-batch page width. If more batches or requirements remain, set complete=false and supply a next_cursor so planning continues across additional JSON pages.\n',
-          )
+          # 3) Generic JSON page repair: unlimited progressive retries, exact
+          # invalid-output fixed point only.
+          p = Path("minecraft_mod_ai/complete_planner.py")
+          t = p.read_text(encoding="utf-8")
+          json_repair = '''def _generate_json_page_with_repair(
+    router: ModelRouter,
+    *,
+    system_prompt: str,
+    request: dict[str, Any] | str,
+    media_paths: Sequence[str | Path],
+    expected_contracts: Sequence[frozenset[str]],
+    stage: str,
+) -> dict[str, Any]:
+    """Repair a JSON page until valid or an exact invalid fixed point repeats."""
+    request_text = (
+        request
+        if isinstance(request, str)
+        else json.dumps(request, ensure_ascii=False)
+    )
+    seen_failures: set[str] = set()
+    last_error = ""
+    first_attempt = True
+    while True:
+        prompt = system_prompt
+        if last_error:
+            prompt += (
+                " CRITICAL: The previous response was invalid or truncated. Output ONLY "
+                "a JSON object matching the contract. Repair the validator error below. "
+                "If this page is too large, emit fewer complete records on THIS page, "
+                "set complete=false, and continue remaining work with next_cursor instead "
+                "of dropping requirements. Validator error: " + last_error
+            )
+        text = router.generate_text(
+            "planner",
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": request_text},
+            ],
+            media_paths=media_paths if first_attempt else (),
+            response_format="json",
+        )
+        first_attempt = False
+        try:
+            return _extract_json(text, expected_contracts=expected_contracts)
+        except SpecValidationError as exc:
+            last_error = str(exc)
+            failure = _canonical_json_sha256(
+                {"model_output": text, "validation_error": last_error}
+            )
+            if failure in seen_failures:
+                raise SpecValidationError(
+                    f"{stage} reached an identical invalid JSON fixed point: {exc}"
+                ) from exc
+            seen_failures.add(failure)
 
-          old_target = '''            # Batch multiple deliverables per LLM call to minimize total calls\n            batch_size = min(len(remaining), 4)\n            target_deliverables = remaining[:batch_size]\n            target_list_str = ", ".join(f'\"{d}\"' for d in target_deliverables)\n'''
-          new_target = '''            # Present the full unfinished checklist. The model chooses how many whole\n            # deliverables fit in this JSON page; the host never fixes that width.\n            target_deliverables = list(remaining)\n'''
-          text = replace_once(text, old_target, new_target, "dynamic deliverable page width")
-          text = text.replace("        page_count = 0\n", "")
-          text = text.replace("            page_count += 1\n", "")
 
-          old_prompt = '''                system_prompt=(\n                    "Return exactly one production-batch JSON page. "\n                    f"Your task is to implement ALL of these deliverables in one response: [{target_list_str}]. "\n                    f"Generate one module per deliverable ({batch_size} modules total). "\n                    f"Put all completed deliverable names in completed_deliverables. "\n                    f"There are {len(remaining)} deliverables total remaining. "\n                    f"Set complete={'true' if len(remaining) <= batch_size else 'false'}. "\n                    f"{'Set next_cursor to any non-empty string.' if len(remaining) > batch_size else 'Set next_cursor to empty string.'} "\n                    "Never repeat an ID or file path."\n                ),\n'''
-          new_prompt = '''                system_prompt=(\n                    "Return exactly one production-batch JSON page. "\n                    "remaining_deliverables is the authoritative unfinished checklist. "\n                    "Implement as many WHOLE deliverables as fit in this response without "\n                    "truncating JSON; there is no host-owned deliverable-count limit. "\n                    "Put exactly the deliverables actually completed on this page in "\n                    "completed_deliverables and provide concrete module/asset/audio/test "\n                    "evidence for them. If unfinished deliverables remain, set complete=false "\n                    "and provide a non-empty next_cursor. If none remain, set complete=true "\n                    "and next_cursor to an empty string. Never repeat an ID or file path."\n                ),\n'''
-          text = replace_once(text, old_prompt, new_prompt, "dynamic production page prompt")
-
-          old_remaining = "            remaining = [v for v in remaining if v not in completed_set]\n"
-          new_remaining = '''            previous_remaining = tuple(remaining)\n            remaining = [v for v in remaining if v not in completed_set]\n            produced_any = bool(page_modules or page_assets or page_audio or tests)\n            next_cursor_value = page.get("next_cursor")\n            next_cursor = next_cursor_value if isinstance(next_cursor_value, str) else ""\n            if remaining:\n                if tuple(remaining) == previous_remaining and not produced_any:\n                    raise SpecValidationError(\n                        "Production batch page reached a no-progress state: it completed "\n                        "no deliverable and produced no new implementation evidence."\n                    )\n                if next_cursor:\n                    cursor = next_cursor\n                else:\n                    cursor = "host_resume_" + _canonical_json_sha256(\n                        {\n                            "batch_id": batch.batch_id,\n                            "remaining": remaining,\n                            "modules": module_catalog.receipt(),\n                            "assets": asset_catalog.receipt(),\n                            "audio": audio_catalog.receipt(),\n                            "test_count": len(test_catalog),\n                        }\n                    )[:20]\n'''
-          text = replace_once(text, old_remaining, new_remaining, "production page progress")
-
-          repeated_cursor = '''            if next_cursor in seen_cursors:\n                break\n'''
-          progress_cursor = '''            if next_cursor in seen_cursors:\n                # Do not silently truncate a long plan because the model reused an\n                # opaque cursor.  Derive continuation from the host-owned catalog.\n                next_cursor = "host_resume_" + catalog.receipt()["sha256"][:20]\n                if next_cursor in seen_cursors:\n                    raise SpecValidationError(\n                        "Production outline pagination reached a repeated cursor with "\n                        "no new catalog state."\n                    )\n'''
-          if text.count(repeated_cursor) != 1:
-              raise SystemExit(f"request-page repeated cursor shape changed: {text.count(repeated_cursor)}")
-          text = text.replace(repeated_cursor, progress_cursor, 1)
-          repeated_cursor_comment = '''            if next_cursor in seen_cursors:\n                break  # pagination stalled\n'''
-          if repeated_cursor_comment in text:
-              text = text.replace(repeated_cursor_comment, progress_cursor, 1)
-
-          progressive_json_repair = '''def _generate_json_page_with_repair(\n    router: ModelRouter,\n    *,\n    system_prompt: str,\n    request: dict[str, Any] | str,\n    media_paths: Sequence[str | Path],\n    expected_contracts: Sequence[frozenset[str]],\n    stage: str,\n) -> dict[str, Any]:\n    \"\"\"Generate one page and keep repairing while the response makes progress.\n\n    There is no fixed retry count.  A malformed/cut page may be regenerated as many\n    times as needed.  The only terminal guard is an exact invalid-output fixed point:\n    the same invalid model text producing the same validator error again.\n    \"\"\"\n\n    request_text = (\n        request\n        if isinstance(request, str)\n        else json.dumps(request, ensure_ascii=False)\n    )\n    seen_failures: set[str] = set()\n    last_error = \"\"\n    first_attempt = True\n    while True:\n        prompt = system_prompt\n        if last_error:\n            prompt += (\n                \" CRITICAL: The previous response was missing valid JSON or did not \"\n                \"match the contract. Repair the page and output ONLY a valid JSON object. \"\n                \"If the prior response was cut off, put fewer records in THIS page and \"\n                \"continue remaining work with complete=false and next_cursor. Do not \"\n                \"drop requirements merely to fit one response. Validator error: \"\n                + last_error\n            )\n        text = router.generate_text(\n            \"planner\",\n            [\n                {\"role\": \"system\", \"content\": prompt},\n                {\"role\": \"user\", \"content\": request_text},\n            ],\n            media_paths=media_paths if first_attempt else (),\n            response_format=\"json\",\n        )\n        first_attempt = False\n        try:\n            return _extract_json(text, expected_contracts=expected_contracts)\n        except SpecValidationError as exc:\n            last_error = str(exc)\n            failure_sha256 = hashlib.sha256(\n                json.dumps(\n                    {\"model_output\": text, \"validation_error\": last_error},\n                    ensure_ascii=False,\n                    sort_keys=True,\n                    separators=(\",\", \":\"),\n                ).encode(\"utf-8\")\n            ).hexdigest()\n            if failure_sha256 in seen_failures:\n                raise SpecValidationError(\n                    f\"{stage} reached an identical invalid JSON fixed point: {exc}\"\n                ) from exc\n            seen_failures.add(failure_sha256)\n\n\n'''
-          text = replace_between(
-              text,
+'''
+          t = replace_section(
+              t,
               "def _generate_json_page_with_repair(\n",
               "def _clean_json_text(",
-              progressive_json_repair,
-              "progressive JSON page repair",
+              json_repair,
+              "JSON repair",
           )
-          path.write_text(text, encoding="utf-8")
 
-          # ------------------------------------------------------------------
-          # Tests: prove >8 tool rounds, >2 outline generations and progressive
-          # field repair are allowed. Exact fixed points still terminate.
-          # ------------------------------------------------------------------
-          path = Path("tests/test_agent_tool_calling.py")
-          text = path.read_text(encoding="utf-8")
-          if "import pytest\n" not in text:
-              text = replace_once(text, "import json\n", "import json\n\nimport pytest\n", "pytest import")
-          text = text.replace(
+          t = t.replace(
+              "CRITICAL RULE: Emit EXACTLY ONE (1) production batch per response page. Never emit multiple batches in one go. If more batches or requirements remain, set complete=false and supply a next_cursor.\n",
+              "Emit as many COMPLETE production batches as fit safely in this JSON page. There is no fixed batch-count width. If more batches or requirements remain, set complete=false and supply a next_cursor so the plan continues across more JSON pages.\n",
+          )
+          t = t.replace(
+              '                    "Generate up to 4 NEW production batches in one response to complete the plan efficiently. "',
+              '                    "Generate as many NEW complete production batches as safely fit in this JSON page. "\n                    "There is no host-owned total or per-page batch-count ceiling; use next_cursor for remaining work. "',
+          )
+
+          width_old = '''            # Batch multiple deliverables per LLM call to minimize total calls
+            batch_size = min(len(remaining), 4)
+            target_deliverables = remaining[:batch_size]
+            target_list_str = ", ".join(f'"{d}"' for d in target_deliverables)
+'''
+          width_new = '''            # The model chooses the current page width. The host supplies the whole
+            # unfinished checklist and validates actual progress across pages.
+            target_deliverables = list(remaining)
+'''
+          t = replace_once(t, width_old, width_new, "deliverable width")
+          t = t.replace("        page_count = 0\n", "")
+          t = t.replace("            page_count += 1\n", "")
+
+          prompt_old = '''                system_prompt=(
+                    "Return exactly one production-batch JSON page. "
+                    f"Your task is to implement ALL of these deliverables in one response: [{target_list_str}]. "
+                    f"Generate one module per deliverable ({batch_size} modules total). "
+                    f"Put all completed deliverable names in completed_deliverables. "
+                    f"There are {len(remaining)} deliverables total remaining. "
+                    f"Set complete={'true' if len(remaining) <= batch_size else 'false'}. "
+                    f"{'Set next_cursor to any non-empty string.' if len(remaining) > batch_size else 'Set next_cursor to empty string.'} "
+                    "Never repeat an ID or file path."
+                ),
+'''
+          prompt_new = '''                system_prompt=(
+                    "Return exactly one production-batch JSON page. "
+                    "remaining_deliverables is the authoritative unfinished checklist. "
+                    "Implement as many WHOLE deliverables as safely fit in this response; "
+                    "there is no host-owned deliverable-count ceiling. Record only actually "
+                    "completed items in completed_deliverables and include concrete evidence. "
+                    "If unfinished work remains, set complete=false and provide next_cursor. "
+                    "When everything is complete, set complete=true and next_cursor empty. "
+                    "Never repeat an ID or file path."
+                ),
+'''
+          t = replace_once(t, prompt_old, prompt_new, "production page prompt")
+
+          remaining_old = "            remaining = [v for v in remaining if v not in completed_set]\n"
+          remaining_new = '''            before_state = _canonical_json_sha256(
+                {
+                    "remaining": remaining,
+                    "modules": module_catalog.receipt(),
+                    "assets": asset_catalog.receipt(),
+                    "audio": audio_catalog.receipt(),
+                    "test_count": len(test_catalog) - len(tests),
+                    "cursor": cursor,
+                }
+            )
+            remaining = [v for v in remaining if v not in completed_set]
+            next_cursor_value = page.get("next_cursor")
+            if isinstance(next_cursor_value, str) and next_cursor_value:
+                cursor = next_cursor_value
+            elif remaining:
+                cursor = "host_resume_" + _canonical_json_sha256(
+                    {
+                        "batch_id": batch.batch_id,
+                        "remaining": remaining,
+                        "modules": module_catalog.receipt(),
+                        "assets": asset_catalog.receipt(),
+                        "audio": audio_catalog.receipt(),
+                        "test_count": len(test_catalog),
+                    }
+                )[:20]
+            after_state = _canonical_json_sha256(
+                {
+                    "remaining": remaining,
+                    "modules": module_catalog.receipt(),
+                    "assets": asset_catalog.receipt(),
+                    "audio": audio_catalog.receipt(),
+                    "test_count": len(test_catalog),
+                    "cursor": cursor,
+                }
+            )
+            if remaining and after_state == before_state:
+                raise SpecValidationError(
+                    "Production batch page reached an exact no-progress state."
+                )
+'''
+          t = replace_once(t, remaining_old, remaining_new, "production page progress")
+
+          # A repeated model cursor is not itself a length limit. Continue from a
+          # host cursor keyed by the changed catalog; fail only if catalog state also repeats.
+          repeated_plain = '''            if next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+'''
+          repeated_comment = '''            if next_cursor in seen_cursors:
+                break  # pagination stalled
+            seen_cursors.add(next_cursor)
+'''
+          replacement = '''            if next_cursor in seen_cursors:
+                host_cursor = "host_resume_" + catalog.receipt()["sha256"][:20]
+                if host_cursor in seen_cursors:
+                    raise SpecValidationError(
+                        "Production outline pagination repeated both cursor and catalog state."
+                    )
+                next_cursor = host_cursor
+            seen_cursors.add(next_cursor)
+'''
+          if repeated_plain in t:
+              t = t.replace(repeated_plain, replacement, 1)
+          if repeated_comment in t:
+              t = t.replace(repeated_comment, replacement, 1)
+          p.write_text(t, encoding="utf-8")
+
+          # 4) Tests now assert progress-driven semantics rather than numeric budgets.
+          p = Path("tests/test_agent_tool_calling.py")
+          t = p.read_text(encoding="utf-8")
+          if "import pytest\n" not in t:
+              t = t.replace("import json\n", "import json\n\nimport pytest\n", 1)
+          t = t.replace(
               "from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall\n",
               "from minecraft_mod_ai.model_adapters import GenerationResponse, ModelConfigurationError, ToolCall\n",
           )
-          extra = '''\n\ndef test_tool_agent_can_use_more_than_eight_rounds_when_evidence_keeps_changing(monkeypatch) -> None:\n    class LongAdapter:\n        def __init__(self) -> None:\n            self.requests = []\n\n        def generate_turn(self, request):\n            self.requests.append(request)\n            index = len(self.requests)\n            if index <= 12:\n                query = f\"evidence_{index}\"\n                return GenerationResponse(\n                    tool_calls=(\n                        ToolCall(\n                            id=f\"call_{index}\",\n                            name=\"search_code_rag\",\n                            arguments={\"query\": query},\n                            raw_arguments=json.dumps({\"query\": query}),\n                        ),\n                    )\n                )\n            return GenerationResponse(content=\"finished after enough evidence\")\n\n    adapter = LongAdapter()\n    runtime = _ToolRuntime()\n    monkeypatch.setattr(\n        ModelRouter,\n        \"_new_text_adapter\",\n        staticmethod(lambda config, *, role: adapter),\n    )\n    router = ModelRouter(\n        profile=\"test\",\n        registry=_Registry(),\n        agent_tool_runtime_factory=lambda **_: runtime,\n    )\n\n    assert router.generate_text(\"coder\", [{\"role\": \"user\", \"content\": \"research deeply\"}]) == (\n        \"finished after enough evidence\"\n    )\n    assert len(runtime.calls) == 12\n    assert len(adapter.requests) == 13\n\n\ndef test_tool_agent_stops_only_on_exact_no_progress_fixed_point(monkeypatch) -> None:\n    class CyclingAdapter:\n        def generate_turn(self, request):\n            return GenerationResponse(\n                tool_calls=(\n                    ToolCall(\n                        id=\"different_ids_do_not_define_progress\",\n                        name=\"search_code_rag\",\n                        arguments={\"query\": \"same\"},\n                        raw_arguments='{\"query\":\"same\"}',\n                    ),\n                )\n            )\n\n    adapter = CyclingAdapter()\n    runtime = _ToolRuntime()\n    monkeypatch.setattr(\n        ModelRouter,\n        \"_new_text_adapter\",\n        staticmethod(lambda config, *, role: adapter),\n    )\n    router = ModelRouter(\n        profile=\"test\",\n        registry=_Registry(),\n        agent_tool_runtime_factory=lambda **_: runtime,\n    )\n\n    with pytest.raises(ModelConfigurationError, match=\"exact no-progress tool cycle\"):\n        router.generate_text(\"coder\", [{\"role\": \"user\", \"content\": \"research\"}])\n    assert len(runtime.calls) == 2\n'''
-          if "test_tool_agent_can_use_more_than_eight_rounds_when_evidence_keeps_changing" not in text:
-              text += extra
-          path.write_text(text, encoding="utf-8")
+          if "test_agent_can_exceed_eight_tool_rounds" not in t:
+              t += '''
 
-          path = Path("tests/test_planner_incremental_repair_contract.py")
-          text = path.read_text(encoding="utf-8")
-          old = '''def test_invalid_field_patch_escalates_to_one_complete_batch_regeneration(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    bad = _batch("broken_scope", scope="")\n    repaired = _batch("broken_scope", scope="Implement the corrected scope.")\n    router = _Router(\n        _outline(bad),\n        _field_patch(bad, scope=""),\n        _replacement_patch(bad, repaired),\n    )\n\n    page = _run(router, stage="field patch then regenerate")\n\n    assert page["complete"] is True\n    assert page["production_batches"] == [repaired]\n    assert len(router.calls) == 3\n    assert "field-level JSON patcher" in str(router.calls[1]["messages"][0]["content"])\n    assert "regenerate exactly ONE invalid production batch" in str(\n        router.calls[2]["messages"][0]["content"]\n    )\n    second_request = json.loads(str(router.calls[2]["messages"][1]["content"]))\n    assert second_request["repair_mode"] == "replacement"\n'''
-          new = '''def test_invalid_field_patch_can_continue_until_validator_accepts(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    bad = _batch("broken_scope", scope="")\n    repaired = _batch("broken_scope", scope="Implement the corrected scope.")\n    first_candidate = dict(bad)\n    router = _Router(\n        _outline(bad),\n        _field_patch(bad, scope="still invalid only after trimming"),\n        _field_patch(first_candidate | {"scope": "still invalid only after trimming"}, scope=repaired["scope"]),\n    )\n\n    page = _run(router, stage="progressive field patch")\n\n    assert page["complete"] is True\n    assert page["production_batches"] == [repaired]\n    assert len(router.calls) == 3\n    assert "field-level JSON patcher" in str(router.calls[1]["messages"][0]["content"])\n    assert "field-level JSON patcher" in str(router.calls[2]["messages"][0]["content"])\n'''
-          # The first patch above is actually valid for scope. Use an extra invalid field\n          # progression instead so the validator genuinely requires two rounds.\n          new = new.replace(
-              '_field_patch(bad, scope="still invalid only after trimming"),\n        _field_patch(first_candidate | {"scope": "still invalid only after trimming"}, scope=repaired["scope"]),',
-              '_field_patch(bad, scope=""),\n        _field_patch(first_candidate, scope=repaired["scope"]),',
-          )
-          # Progressive repair detects the unchanged first patch as a fixed point before\n          # making the second call, so use two distinct invalid states: repair scope then\n          # expose an invalid empty deliverables field.
-          new = '''def test_invalid_field_patch_can_continue_until_validator_accepts(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    bad = _batch("broken_scope", scope="", deliverables=[])\n    intermediate = dict(bad)\n    intermediate["scope"] = "Implement the corrected scope."\n    repaired = dict(intermediate)\n    repaired["deliverables"] = ["broken_scope_done"]\n    router = _Router(\n        _outline(bad),\n        _field_patch(bad, scope=intermediate["scope"]),\n        _field_patch(intermediate, deliverables=repaired["deliverables"]),\n    )\n\n    page = _run(router, stage="progressive field patch")\n\n    assert page["complete"] is True\n    assert page["production_batches"] == [repaired]\n    assert len(router.calls) == 3\n    assert "field-level JSON patcher" in str(router.calls[1]["messages"][0]["content"])\n    assert "field-level JSON patcher" in str(router.calls[2]["messages"][0]["content"])\n'''
-          text = replace_once(text, old, new, "progressive repair test")
 
-          old = '''def test_identical_bad_patch_output_is_not_sent_or_consumed_forever(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    bad = _batch("broken_scope", scope="")\n    repeated = _field_patch(bad, scope="")\n    router = _Router(_outline(bad), repeated, repeated)\n\n    with pytest.raises(SpecValidationError, match="repeated identical model output"):\n        _run(router, stage="repeated batch patch output")\n\n    # One outline call + exactly two distinct repair modes. No third repair call exists.\n    assert len(router.calls) == 3\n'''
-          new = '''def test_identical_bad_patch_state_is_not_consumed_forever(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    bad = _batch("broken_scope", scope="")\n    repeated = _field_patch(bad, scope="")\n    router = _Router(_outline(bad), repeated)\n\n    with pytest.raises(SpecValidationError, match="identical semantic state"):\n        _run(router, stage="repeated batch patch state")\n\n    # The first unchanged patch proves a semantic fixed point. No arbitrary retry budget\n    # is involved and no identical third request is sent.\n    assert len(router.calls) == 2\n'''
-          text = replace_once(text, old, new, "batch cycle test")
+def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
+    class LongAdapter:
+        def __init__(self) -> None:
+            self.count = 0
+        def generate_turn(self, request):
+            self.count += 1
+            if self.count <= 12:
+                q = f"evidence_{self.count}"
+                return GenerationResponse(tool_calls=(ToolCall(
+                    id=f"call_{self.count}", name="search_code_rag",
+                    arguments={"query": q}, raw_arguments=json.dumps({"query": q}),
+                ),))
+            return GenerationResponse(content="enough evidence")
 
-          old = '''def test_broken_outline_envelope_is_cut_off_before_third_identical_request(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    # The host allows one diagnostic regeneration for the same semantic outline.\n    router = _Router("{}", "{}")\n\n    with pytest.raises(SpecValidationError, match="cycle detected"):\n        _run(router, stage="outline cycle cut off")\n\n    # Initial generation + one diagnostic regeneration. The third identical request is\n    # rejected by the host before it reaches the model.\n    assert len(router.calls) == 2\n'''
-          new = '''def test_broken_outline_stops_only_after_exact_request_response_fixed_point(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    router = _Router("{}", "{}", "{}")\n\n    with pytest.raises(SpecValidationError, match="fixed point"):\n        _run(router, stage="outline fixed point")\n\n    # The first failure changes the diagnostic request. Only when that same semantic\n    # request returns the same output again is no-progress proven.\n    assert len(router.calls) == 3\n\n\ndef test_outline_may_use_more_than_two_generations_when_each_response_changes(\n    monkeypatch, tmp_path: Path\n) -> None:\n    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))\n    final = _batch("eventual_valid_outline")\n    router = _Router(\n        '{"diagnostic":1}',\n        '{"diagnostic":2}',\n        '{"diagnostic":3}',\n        '{"diagnostic":4}',\n        _outline(final),\n    )\n\n    page = _run(router, stage="long progressive outline")\n    assert page["production_batches"] == [final]\n    assert page["complete"] is True\n    assert len(router.calls) == 5\n'''
-          text = replace_once(text, old, new, "outline fixed point test")
-          path.write_text(text, encoding="utf-8")
+    adapter = LongAdapter()
+    runtime = _ToolRuntime()
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
+    assert router.generate_text("coder", [{"role": "user", "content": "research deeply"}]) == "enough evidence"
+    assert len(runtime.calls) == 12
+
+
+def test_agent_stops_on_consecutive_exact_tool_fixed_point(monkeypatch) -> None:
+    class LoopAdapter:
+        def generate_turn(self, request):
+            return GenerationResponse(tool_calls=(ToolCall(
+                id="call", name="search_code_rag",
+                arguments={"query": "same"}, raw_arguments='{"query":"same"}',
+            ),))
+
+    adapter = LoopAdapter()
+    runtime = _ToolRuntime()
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
+    with pytest.raises(ModelConfigurationError, match="no-progress tool fixed point"):
+        router.generate_text("coder", [{"role": "user", "content": "research"}])
+    assert len(runtime.calls) == 2
+'''
+          p.write_text(t, encoding="utf-8")
+
+          p = Path("tests/test_planner_incremental_repair_contract.py")
+          t = p.read_text(encoding="utf-8")
+          old = '''def test_broken_outline_envelope_is_cut_off_before_third_identical_request(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    # The host allows one diagnostic regeneration for the same semantic outline.
+    router = _Router("{}", "{}")
+
+    with pytest.raises(SpecValidationError, match="cycle detected"):
+        _run(router, stage="outline cycle cut off")
+
+    # Initial generation + one diagnostic regeneration. The third identical request is
+    # rejected by the host before it reaches the model.
+    assert len(router.calls) == 2
+'''
+          new = '''def test_broken_outline_stops_only_at_exact_request_response_fixed_point(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    router = _Router("{}", "{}", "{}")
+    with pytest.raises(SpecValidationError, match="fixed point"):
+        _run(router, stage="outline fixed point")
+    assert len(router.calls) == 3
+
+
+def test_outline_can_keep_repairing_beyond_two_generations(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    final = _batch("eventual_valid_outline")
+    router = _Router(
+        '{"diagnostic":1}',
+        '{"diagnostic":2}',
+        '{"diagnostic":3}',
+        '{"diagnostic":4}',
+        _outline(final),
+    )
+    page = _run(router, stage="long progressive outline")
+    assert page["production_batches"] == [final]
+    assert len(router.calls) == 5
+'''
+          t = replace_once(t, old, new, "outline tests")
+          p.write_text(t, encoding="utf-8")
           PY
 
       - name: Verify autonomy contracts
