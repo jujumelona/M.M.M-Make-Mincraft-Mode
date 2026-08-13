@@ -1,0 +1,210 @@
+name: Repair Colab stale-main bootstrap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/repair-colab-stale-main.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Make Colab checkout self-healing
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('M.M.M_Make_Mincraft_Mode_Colab.ipynb')
+          nb = json.loads(path.read_text(encoding='utf-8'))
+          cells = {cell.get('id'): cell for cell in nb['cells']}
+          setup = cells['setup']['source']
+
+          setup = setup.replace('import importlib.util\n', 'import importlib\nimport importlib.util\n', 1)
+
+          old_update = '''    subprocess.run(["git", "-C", str(REPO_DIR), "checkout", "main"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_DIR),
+            "merge",
+            "--ff-only",
+            "refs/remotes/origin/main",
+        ],
+        check=True,
+    )'''
+          new_update = '''    subprocess.run(["git", "-C", str(REPO_DIR), "checkout", "-f", "main"], check=True)
+    subprocess.run(
+        ["git", "-C", str(REPO_DIR), "reset", "--hard", "refs/remotes/origin/main"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(REPO_DIR), "clean", "-fd"], check=True)'''
+          if old_update not in setup:
+              raise SystemExit('setup checkout block not recognized')
+          setup = setup.replace(old_update, new_update, 1)
+
+          anchor = 'print("GitHub commit:", USED_COMMIT, flush=True)\n\nsetup_script = REPO_DIR / "tools" / "colab_runtime_setup.py"\n'
+          purge = '''print("GitHub commit:", USED_COMMIT, flush=True)
+
+# A failed/partial import from an older checkout must never survive a main sync.
+for _name in list(sys.modules):
+    if _name == "minecraft_mod_ai" or _name.startswith("minecraft_mod_ai."):
+        sys.modules.pop(_name, None)
+importlib.invalidate_caches()
+
+setup_script = REPO_DIR / "tools" / "colab_runtime_setup.py"
+'''
+          if anchor not in setup:
+              raise SystemExit('setup import-purge anchor not recognized')
+          setup = setup.replace(anchor, purge, 1)
+          cells['setup']['source'] = setup
+
+          cells['existing-input']['source'] = '''# @title 3. 기존 모드 입력
+# main이 2번 셀 이후 갱신됐더라도 구버전 엔진을 import하지 않는다.
+import importlib
+import importlib.util
+import subprocess
+import sys
+
+subprocess.run(
+    [
+        "git",
+        "-C",
+        str(REPO_DIR),
+        "fetch",
+        "origin",
+        "+main:refs/remotes/origin/main",
+    ],
+    check=True,
+)
+LATEST_MAIN_COMMIT = subprocess.check_output(
+    ["git", "-C", str(REPO_DIR), "rev-parse", "refs/remotes/origin/main"],
+    text=True,
+).strip()
+CURRENT_ENGINE_COMMIT = subprocess.check_output(
+    ["git", "-C", str(REPO_DIR), "rev-parse", "HEAD"],
+    text=True,
+).strip()
+
+if CURRENT_ENGINE_COMMIT != LATEST_MAIN_COMMIT:
+    print(
+        "GitHub main changed after setup; refreshing engine:",
+        CURRENT_ENGINE_COMMIT[:12],
+        "->",
+        LATEST_MAIN_COMMIT[:12],
+        flush=True,
+    )
+    subprocess.run(["git", "-C", str(REPO_DIR), "checkout", "-f", "main"], check=True)
+    subprocess.run(
+        ["git", "-C", str(REPO_DIR), "reset", "--hard", "refs/remotes/origin/main"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(REPO_DIR), "clean", "-fd"], check=True)
+
+    for _name in list(sys.modules):
+        if _name == "minecraft_mod_ai" or _name.startswith("minecraft_mod_ai."):
+            sys.modules.pop(_name, None)
+    importlib.invalidate_caches()
+
+    previous_commit = CURRENT_ENGINE_COMMIT
+    USED_COMMIT = LATEST_MAIN_COMMIT
+    REMOTE_COMMIT = LATEST_MAIN_COMMIT
+    setup_script = REPO_DIR / "tools" / "colab_runtime_setup.py"
+    setup_module_name = f"_mmm_colab_runtime_setup_{USED_COMMIT[:12]}"
+    setup_spec = importlib.util.spec_from_file_location(setup_module_name, setup_script)
+    if setup_spec is None or setup_spec.loader is None:
+        raise RuntimeError(f"Cannot reload Colab setup script: {setup_script}")
+    COLAB_SETUP_MODULE = importlib.util.module_from_spec(setup_spec)
+    sys.modules[setup_module_name] = COLAB_SETUP_MODULE
+    setup_spec.loader.exec_module(COLAB_SETUP_MODULE)
+    SETUP_STATE = COLAB_SETUP_MODULE.setup_colab_runtime(
+        repo_dir=REPO_DIR,
+        used_commit=USED_COMMIT,
+        model_profile=MODEL_PROFILE,
+        save_to_google_drive=SAVE_TO_GOOGLE_DRIVE,
+        remote_base_url=REMOTE_BASE_URL,
+        remote_text_model=REMOTE_TEXT_MODEL,
+        remote_image_model=REMOTE_IMAGE_MODEL,
+        remote_speech_model=REMOTE_SPEECH_MODEL,
+        transformers_was_loaded="transformers" in sys.modules,
+        engine_was_loaded=False,
+        engine_module_file="",
+        previous_commit=previous_commit,
+    )
+    REPO_DIR = Path(SETUP_STATE["repo_dir"])
+    OUTPUT_ROOT = SETUP_STATE["output_root"]
+    SETUP_RECEIPT = SETUP_STATE["receipt"]
+    SETUP_FINGERPRINT = SETUP_STATE["setup_fingerprint"]
+
+COLAB_SETUP_MODULE.assert_setup_state(
+    SETUP_STATE,
+    repo_dir=REPO_DIR,
+    used_commit=USED_COMMIT,
+    model_profile=MODEL_PROFILE,
+    save_to_google_drive=SAVE_TO_GOOGLE_DRIVE,
+    remote_base_url=REMOTE_BASE_URL,
+    remote_text_model=REMOTE_TEXT_MODEL,
+    remote_image_model=REMOTE_IMAGE_MODEL,
+    remote_speech_model=REMOTE_SPEECH_MODEL,
+)
+
+from minecraft_mod_ai.colab_run_modes import prepare_existing_mod_input
+
+EXISTING_INPUT = prepare_existing_mod_input(RUN_MODE)
+'''
+
+          path.write_text(json.dumps(nb, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
+
+          # Notebook code must remain syntactically valid before it can reach Colab.
+          checked = 0
+          for cell in nb['cells']:
+              if cell.get('cell_type') != 'code':
+                  continue
+              source = cell.get('source', '')
+              compile(source, f"<cell:{cell.get('id', '?')}>", 'exec')
+              checked += 1
+          if checked < 7:
+              raise SystemExit(f'unexpected code-cell count: {checked}')
+
+          refreshed = json.loads(path.read_text(encoding='utf-8'))
+          by_id = {cell.get('id'): cell for cell in refreshed['cells']}
+          assert 'reset", "--hard", "refs/remotes/origin/main' in by_id['setup']['source']
+          assert 'LATEST_MAIN_COMMIT' in by_id['existing-input']['source']
+          assert 'COLAB_SETUP_MODULE.assert_setup_state' in by_id['existing-input']['source']
+          PY
+
+          python -m json.tool M.M.M_Make_Mincraft_Mode_Colab.ipynb >/dev/null
+          python -m compileall -q minecraft_mod_ai tools
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('minecraft_mod_ai/runtime_bootstrap.py').read_text(encoding='utf-8')
+          forbidden = (
+              'agent_tool_calling_contract',
+              'platform_mcp_compatibility_contract',
+              'platform_policy_runtime_contract',
+          )
+          bad = [name for name in forbidden if name in source]
+          if bad:
+              raise SystemExit(f'stale bootstrap owners remain: {bad}')
+          PY
+
+      - name: Commit repair to main and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/repair-colab-stale-main.yml
+          git add M.M.M_Make_Mincraft_Mode_Colab.ipynb .github/workflows/repair-colab-stale-main.yml
+          git diff --cached --check
+          git commit -m "Make Colab bootstrap self-heal stale main checkout"
+          git push origin HEAD:main
