@@ -43,8 +43,7 @@ jobs:
             tests/test_large_request_ingestion.py \
             tests/test_llama_structured_reasoning_stream.py \
             tests/test_llama_server_streaming.py \
-            tests/test_llama_cpp_adapter_request_contract.py \
-            tests/test_model_router_tools.py
+            tests/test_llama_cpp_adapter_request_contract.py
       - name: Full test suite
         run: python -m pytest -q
       - name: Commit verified integration and self-delete
