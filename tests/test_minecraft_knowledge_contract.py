@@ -151,6 +151,27 @@ def test_common_mod_features_have_dedicated_contracts() -> None:
     } <= _ids(plan)
 
 
+def test_pre_design_knowledge_does_not_pin_version_before_platform_resolution() -> None:
+    plan = compile_minecraft_knowledge_plan(
+        "Minecraft 1.21.1 Fabric에서 새 보스 몬스터를 추가해줘."
+    )
+    routed_text = "\n".join(
+        [
+            str(item["objective"])
+            for item in plan["requirements"]
+        ]
+        + [
+            str(query)
+            for domain in plan["research_domains"]
+            for query in domain["queries"]
+        ]
+    )
+    assert "1.20.1" not in routed_text
+    assert "1.21.1" not in routed_text
+    assert "Java 17" not in routed_text
+    assert "host-resolved" in routed_text
+
+
 def test_runtime_normalizer_injects_minecraft_domains_before_forced_rag() -> None:
     assert getattr(agentic.normalize_research_brief, "_mmm_minecraft_knowledge_contract_v2", False)
     brief = agentic.normalize_research_brief(

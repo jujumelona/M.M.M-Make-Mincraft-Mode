@@ -26,7 +26,10 @@ class KnowledgeNode:
 
     @property
     def query(self) -> str:
-        return f"Fabric Minecraft 1.20.1 Yarn {self.id.replace('.', ' ')}: {self.objective}"
+        return (
+            "Fabric Minecraft requested existing host-resolved target mappings "
+            f"{self.id.replace('.', ' ')}: {self.objective}"
+        )
 
 
 def _n(
@@ -51,8 +54,8 @@ def _n(
 NODES = {
     node.id: node
     for node in (
-        _n("platform.fabric_target", "platform", "Lock MC 1.20.1, Fabric Loader/API, Loom, Yarn and Java 17.", mcp=("version_diff", "official_mod_docs"), checks=("platform_lock", "gradle_configuration"), kinds=("minecraft_api", "dependency", "compatibility", "testing")),
-        _n("platform.mappings", "platform", "Resolve exact Yarn names/signatures instead of guessing symbols.", deps=("platform.fabric_target",), mcp=("mapping_resolution", "source_search"), checks=("mapping_target_match",), kinds=("minecraft_api", "source_code", "compatibility")),
+        _n("platform.fabric_target", "platform", "Lock the exact host-resolved Minecraft version, Fabric Loader/API, Loom, mappings, Java and Gradle profile.", mcp=("version_diff", "official_mod_docs"), checks=("platform_lock", "gradle_configuration"), kinds=("minecraft_api", "dependency", "compatibility", "testing")),
+        _n("platform.mappings", "platform", "Resolve exact mappings names/signatures instead of guessing symbols.", deps=("platform.fabric_target",), mcp=("mapping_resolution", "source_search"), checks=("mapping_target_match",), kinds=("minecraft_api", "source_code", "compatibility")),
         _n("project.structure", "project", "Reuse current namespace, entrypoints, source sets, helpers and dependency boundaries.", deps=("platform.fabric_target",), mcp=("workspace_validation",), checks=("project_index_current",), kinds=("local_project", "source_code", "dependency", "testing"), providers=("project_rag", "github")),
         _n("registry.content", "registry", "Use target-correct registries and unique identifiers.", deps=("platform.mappings",), mcp=("registry_lookup", "source_search"), checks=("registry_ids_unique",)),
         _n("lifecycle.common", "lifecycle", "Keep common/server/client/world lifecycle and ticks on the correct logical side.", deps=("project.structure", "platform.mappings"), mcp=("official_mod_docs", "source_search"), checks=("client_server_boundary", "lifecycle_smoke"), kinds=("minecraft_api", "source_code", "runtime_behavior", "testing")),
@@ -102,7 +105,7 @@ NODES = {
         _n("config.persistence", "data", "Persist mod config separately from authoritative game state.", deps=("project.structure",), checks=("config_roundtrip",), kinds=("local_project", "source_code", "testing"), providers=("project_rag", "github")),
         _n("input.keybinding", "ui", "Register keybindings client-side; server-validate gameplay mutation.", deps=("rendering.client_boundary",), mcp=("official_mod_docs",), checks=("client_only_classloading",), side="client"),
         _n("library.integration", "library", "Pin external libraries to compatible artifacts and isolate their API boundary.", deps=("platform.fabric_target",), mcp=("mod_jar_analysis",), checks=("dependency_resolution", "license_origin"), kinds=("dependency", "compatibility", "license", "source_code")),
-        _n("quality.compile", "quality", "Compile the exact project with Java 17 and locked Fabric toolchain.", deps=("platform.fabric_target", "project.structure"), mcp=("workspace_validation",), checks=("gradle_build",), kinds=("testing", "local_project", "compatibility"), providers=("official_docs", "project_rag", "runtime")),
+        _n("quality.compile", "quality", "Compile the exact project with the host-resolved Java version and locked Fabric toolchain.", deps=("platform.fabric_target", "project.structure"), mcp=("workspace_validation",), checks=("gradle_build",), kinds=("testing", "local_project", "compatibility"), providers=("official_docs", "project_rag", "runtime")),
         _n("quality.gametest", "quality", "Turn observable gameplay requirements into GameTest/equivalent assertions.", deps=("quality.compile",), mcp=("official_mod_docs",), checks=("gametest",), kinds=("testing", "runtime_behavior"), providers=("official_docs", "project_rag", "runtime")),
         _n("quality.runtime", "quality", "Run disposable dedicated-server/client smoke tests and inspect behavior.", deps=("quality.compile",), mcp=("runtime_inspection", "runtime_server_status", "runtime_visual"), checks=("dedicated_server_smoke", "client_smoke"), kinds=("testing", "runtime_behavior", "local_project"), providers=("official_docs", "project_rag", "runtime")),
         _n("release.packaging", "release", "Validate fabric.mod.json, dependency bounds, resources and remapped JAR.", deps=("quality.compile",), mcp=("mod_jar_analysis", "workspace_validation"), checks=("jar_contents", "metadata_validation"), kinds=("release", "dependency", "compatibility", "testing")),
