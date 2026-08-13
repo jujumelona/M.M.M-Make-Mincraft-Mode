@@ -1,0 +1,94 @@
+name: Restore T4 six-axis tuning once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/restore-t4-six-axis-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: restore-t4-six-axis-once
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore verified tuner and current ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --depth 1 origin 6ca4785797268cb9eafd3a7229d90c5ff4d55b2d
+          git show 6ca4785797268cb9eafd3a7229d90c5ff4d55b2d:minecraft_mod_ai/qwen35_t4_single_stream_tuning.py > minecraft_mod_ai/qwen35_t4_single_stream_tuning.py
+          git show 6ca4785797268cb9eafd3a7229d90c5ff4d55b2d:tests/test_qwen35_t4_single_stream_tuning.py > tests/test_qwen35_t4_single_stream_tuning.py
+          git show 0ea5eee9848f995d8892c4af8cee4c5907315d5e:README.md > README.md
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('minecraft_mod_ai/llama_tuning_pipeline.py')
+          s = p.read_text(encoding='utf-8')
+          s = re.sub(r'_TUNING_PIPELINE_VERSION = \d+', '_TUNING_PIPELINE_VERSION = 12', s, count=1)
+          if 'qwen35_t4_single_stream_tuning' not in s:
+              needle = '        from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath\n'
+              repl = needle + '        from .qwen35_t4_single_stream_tuning import (\n            install as install_qwen35_t4_single_stream,\n        )\n'
+              if needle not in s:
+                  raise SystemExit('pipeline hotpath import anchor missing')
+              s = s.replace(needle, repl, 1)
+          if 'install_qwen35_t4_single_stream(self.autotune)' not in s:
+              needle = '            install_qwen35_hotpath(self.autotune)\n'
+              repl = needle + '            install_qwen35_t4_single_stream(self.autotune)\n'
+              if needle not in s:
+                  raise SystemExit('pipeline hotpath call anchor missing')
+              s = s.replace(needle, repl, 1)
+          s = s.replace(
+              '# Qwen3.5 production uses one measured MTP-3 server. Exhaustive T4\n            # benchmarking is deliberately not installed into the request path.\n',
+              '# Qwen3.5 keeps the fixed hotpath as fallback, then Tesla T4 measures\n            # and caches the six-axis maximum-speed production profile.\n',
+          )
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('tests/test_runtime_bootstrap_clean.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              '        "qwen35_mtp_hotpath_contract",\n        "planner_single_stream_search_contract",\n',
+              '        "qwen35_mtp_hotpath_contract",\n        "qwen35_t4_single_stream_tuning",\n        "planner_single_stream_search_contract",\n',
+          )
+          s = s.replace('    assert "qwen35_t4_single_stream_tuning" not in source\n', '')
+          s = s.replace('    assert "install_qwen35_t4_single_stream" not in source\n', '')
+          old = '        < source.index("install_qwen35_hotpath(")\n        < source.index("install_single_stream_agentic_policy(")\n'
+          new = '        < source.index("install_qwen35_hotpath(")\n        < source.index("install_qwen35_t4_single_stream(")\n        < source.index("install_single_stream_agentic_policy(")\n'
+          if old in s:
+              s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validate restored six-axis path
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m py_compile minecraft_mod_ai/qwen35_t4_single_stream_tuning.py minecraft_mod_ai/llama_tuning_pipeline.py tests/test_qwen35_t4_single_stream_tuning.py tests/test_runtime_bootstrap_clean.py
+          python -m ruff check minecraft_mod_ai/qwen35_t4_single_stream_tuning.py minecraft_mod_ai/llama_tuning_pipeline.py tests/test_qwen35_t4_single_stream_tuning.py tests/test_runtime_bootstrap_clean.py --select F,E7,E9
+          python -m pytest -q tests/test_qwen35_t4_single_stream_tuning.py tests/test_runtime_bootstrap_clean.py
+
+      - name: Push restored runtime files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'juju-mmm-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add README.md minecraft_mod_ai/qwen35_t4_single_stream_tuning.py minecraft_mod_ai/llama_tuning_pipeline.py tests/test_qwen35_t4_single_stream_tuning.py tests/test_runtime_bootstrap_clean.py
+          git diff --cached --check
+          git commit -m 'Restore six-axis T4 runtime calibration'
+          git pull --rebase origin main
+          git push origin HEAD:main
