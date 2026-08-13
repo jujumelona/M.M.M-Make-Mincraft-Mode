@@ -424,7 +424,10 @@ def _install_post_bootstrap_contracts() -> None:
     from .agent_security_contract import install as install_agent_security
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
+    from .small_model_compacting_adapter import CompactingAdapter
+    from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
+    from .small_model_relation_index_contract import install as install_small_model_relation_index
     from .small_model_research_contract import install as install_small_model_research
     from .small_model_tool_guard_contract import install as install_small_model_tool_guard
 
@@ -450,5 +453,32 @@ def _install_post_bootstrap_contracts() -> None:
         optimization_module=agentic_optimization_contract,
     )
     install_small_model_tool_guard(install_small_model_max_agent)
+    install_small_model_relation_index(production_tools)
+    install_small_model_hybrid_search(production_tools)
+
+    current_tool_loop = model_router.ModelRouter._generate_with_tools
+    if not getattr(current_tool_loop, "_mmm_lossless_context_compaction", False):
+        def _generate_with_compaction(
+            self,
+            *,
+            adapter,
+            request,
+            runtime,
+            stage,
+            role,
+        ):
+            return current_tool_loop(
+                self,
+                adapter=CompactingAdapter(adapter),
+                request=request,
+                runtime=runtime,
+                stage=stage,
+                role=role,
+            )
+
+        _generate_with_compaction._mmm_lossless_context_compaction = True
+        _generate_with_compaction.__wrapped__ = current_tool_loop
+        model_router.ModelRouter._generate_with_tools = _generate_with_compaction
+
     research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
