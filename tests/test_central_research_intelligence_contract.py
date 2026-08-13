@@ -107,12 +107,13 @@ def test_specialist_committee_and_adversarial_review_really_overlap() -> None:
     assert router.review_max >= 2
 
 
-def test_provider_and_domain_research_fanout_is_parallel_and_merge_is_deterministic() -> None:
+def test_provider_domain_and_design_fanout_are_parallel_with_deterministic_merge() -> None:
     provider_barrier = threading.Barrier(3)
     domain_barrier = threading.Barrier(3)
+    design_barrier = threading.Barrier(3)
     lock = threading.Lock()
-    active = {"provider": 0, "domain": 0}
-    maxima = {"provider": 0, "domain": 0}
+    active = {"provider": 0, "domain": 0, "design": 0}
+    maxima = {"provider": 0, "domain": 0, "design": 0}
 
     def overlap(kind: str, barrier: threading.Barrier) -> None:
         with lock:
@@ -146,6 +147,21 @@ def test_provider_and_domain_research_fanout_is_parallel_and_merge_is_determinis
             "sufficient": True,
         }
 
+    def section_worker(
+        _router,
+        *,
+        prompt,
+        section_id,
+        fields,
+        properties,
+        research,
+        media_paths,
+        trace_metadata,
+    ):
+        del prompt, properties, research, media_paths, trace_metadata
+        overlap("design", design_barrier)
+        return {fields[0]: section_id}
+
     def old_collect(_router, prompt, *, trace_metadata=None):
         del prompt, trace_metadata
         return {"old": True}
@@ -168,8 +184,12 @@ def test_provider_and_domain_research_fanout_is_parallel_and_merge_is_determinis
         _research_domain_with_agent=domain_worker,
         _error=lambda stage, exc: {"stage": stage, "error": str(exc)},
         _json_sha256=lambda _value: "sha256:test",
-        _SECTION_SPECS=(),
-        _generate_section=lambda *_args, **_kwargs: {},
+        _SECTION_SPECS=(
+            ("identity", ("title",), {}),
+            ("systems", ("progression",), {}),
+            ("quality", ("acceptance_tests",), {}),
+        ),
+        _generate_section=section_worker,
     )
 
     install_parallel_core(module)
@@ -179,3 +199,17 @@ def test_provider_and_domain_research_fanout_is_parallel_and_merge_is_determinis
     assert maxima["domain"] >= 3
     assert [row["domain_id"] for row in result["domain_notes"]] == ["a", "b", "c"]
     assert result["method"]["parallel_specialists"]
+
+    game_design_module = SimpleNamespace(_validate_design=lambda _value: None)
+    design = module.generate_sectioned_game_design(
+        game_design_module,
+        object(),
+        "test",
+        research=result,
+    )
+    assert maxima["design"] >= 3
+    assert design == {
+        "title": "identity",
+        "progression": "systems",
+        "acceptance_tests": "quality",
+    }
