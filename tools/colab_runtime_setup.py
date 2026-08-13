@@ -16,7 +16,7 @@ exec(compile(_CORE_PATH.read_text(encoding="utf-8"), str(_CORE_PATH), "exec"), g
 SETUP_API_VERSION = "mmm/colab-runtime-setup-v4-latest-llama-cub3dot2"
 LLAMA_SERVER_SOURCE_REF = "0d0bfcd4fd8828e3e7906b6fc4561725b534511e"
 
-_core_run_logged = _run_logged
+_core_run_logged = globals()["_run_logged"]
 
 
 def _run_logged(command: list[str], *, cwd: Path | None = None) -> None:
