@@ -10,6 +10,7 @@ owned by agentic_optimization_contract so search-width policy has one owner.
 import hashlib
 import json
 import os
+import stat
 import threading
 from collections import deque
 from functools import wraps
@@ -18,7 +19,12 @@ from typing import Any, Mapping, Sequence
 
 
 _LOCK = threading.RLock()
+_DISK_LOCK = threading.RLock()
 _SESSION: deque[dict[str, Any]] = deque(maxlen=128)
+_DISK_CACHE: dict[
+    tuple[Path, int],
+    tuple[tuple[int, int], tuple[dict[str, Any], ...], frozenset[str]],
+] = {}
 _MARKERS = (
     "networking",
     "multiplayer",
@@ -106,11 +112,36 @@ def _memory_path() -> Path | None:
     return Path(workspace).expanduser() / ".minecraft_ai" / "agent-workflows.jsonl"
 
 
-def _disk_rows(limit: int = 128) -> list[dict[str, Any]]:
-    path = _memory_path()
-    if path is None or not path.is_file() or path.is_symlink():
-        return []
-    rows: deque[dict[str, Any]] = deque(maxlen=limit)
+def _file_fingerprint(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    return int(info.st_mtime_ns), int(info.st_size)
+
+
+def _disk_snapshot_locked(
+    path: Path,
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Return recent rows and all known IDs, rescanning only when the file changed."""
+
+    bounded_limit = max(1, int(limit))
+    cache_key = (path, bounded_limit)
+    fingerprint = _file_fingerprint(path)
+    if fingerprint is None:
+        _DISK_CACHE.pop(cache_key, None)
+        return [], set()
+
+    cached = _DISK_CACHE.get(cache_key)
+    if cached is not None and cached[0] == fingerprint:
+        return list(cached[1]), set(cached[2])
+
+    rows: deque[dict[str, Any]] = deque(maxlen=bounded_limit)
+    identities: set[str] = set()
     try:
         with path.open("r", encoding="utf-8") as handle:
             for raw in handle:
@@ -118,16 +149,38 @@ def _disk_rows(limit: int = 128) -> list[dict[str, Any]]:
                     value = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(value, dict) and value.get("schema_version") == "mmm/small-agent-workflow-v1":
-                    rows.append(value)
+                if not isinstance(value, dict) or value.get("schema_version") != "mmm/small-agent-workflow-v1":
+                    continue
+                identity = str(value.get("workflow_id", "")).strip()
+                if identity:
+                    identities.add(identity)
+                rows.append(value)
     except OSError:
+        return [], set()
+
+    refreshed = _file_fingerprint(path)
+    if refreshed is not None:
+        _DISK_CACHE[cache_key] = (refreshed, tuple(rows), frozenset(identities))
+    return list(rows), identities
+
+
+def _disk_snapshot(path: Path, *, limit: int = 128) -> tuple[list[dict[str, Any]], set[str]]:
+    with _DISK_LOCK:
+        return _disk_snapshot_locked(path, limit=limit)
+
+
+def _disk_rows(limit: int = 128) -> list[dict[str, Any]]:
+    path = _memory_path()
+    if path is None:
         return []
-    return list(rows)
+    rows, _identities = _disk_snapshot(path, limit=limit)
+    return rows
 
 
 def _matches(features: Sequence[str], limit: int = 3) -> list[dict[str, Any]]:
     with _LOCK:
-        rows = [*list(_SESSION), *_disk_rows()]
+        session_rows = list(_SESSION)
+    rows = [*session_rows, *_disk_rows()]
     ranked: list[tuple[float, str, dict[str, Any]]] = []
     seen: set[str] = set()
     for row in rows:
@@ -259,27 +312,31 @@ def _record(
         if any(item.get("workflow_id") == row["workflow_id"] for item in _SESSION):
             return
         _SESSION.append(row)
-        path = _memory_path()
-        if path is None:
+
+    path = _memory_path()
+    if path is None:
+        return
+    with _DISK_LOCK:
+        recent_rows, existing = _disk_snapshot_locked(path, limit=128)
+        if row["workflow_id"] in existing:
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            existing: set[str] = set()
-            if path.is_file() and not path.is_symlink():
-                with path.open("r", encoding="utf-8") as handle:
-                    for raw in handle:
-                        try:
-                            value = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
-                        if isinstance(value, Mapping):
-                            existing.add(str(value.get("workflow_id", "")))
-            if row["workflow_id"] in existing:
-                return
             with path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         except OSError:
             return
+
+        recent: deque[dict[str, Any]] = deque(recent_rows, maxlen=128)
+        recent.append(row)
+        existing.add(str(row["workflow_id"]))
+        fingerprint = _file_fingerprint(path)
+        if fingerprint is not None:
+            _DISK_CACHE[(path, 128)] = (
+                fingerprint,
+                tuple(recent),
+                frozenset(existing),
+            )
 
 
 def enhance_planner(complete_planner_module: Any) -> None:
