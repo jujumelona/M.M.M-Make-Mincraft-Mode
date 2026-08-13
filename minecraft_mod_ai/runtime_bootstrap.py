@@ -43,6 +43,7 @@ def _install_runtime_contracts() -> None:
     _install_architecture_contracts()
     _install_late_safety_contracts()
     _install_public_boundary_contracts()
+    _install_post_bootstrap_contracts()
 
 
 def _install_core_contracts() -> None:
@@ -175,7 +176,6 @@ def _install_platform_contracts() -> None:
     from .colab_auto_platform_contract import install as install_colab_auto_platform
     from .mod_scope_contract import install as install_mod_scope
     from .parallel_platform_rag_contract import install as install_parallel_platform_rag
-    from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_ecosystem_contract import install as install_platform_ecosystem
@@ -238,9 +238,6 @@ def _install_platform_contracts() -> None:
         central_module=central_research,
         retrieval_module=retrieval,
     )
-    # This latency guard intentionally sits outside the final platform-RAG wrappers
-    # so it can bound their joined futures without bypassing target-aware evidence.
-    install_planning_stall_guard()
     if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         install_colab_auto_platform(game_design)
     install_platform_custom_coder(custom_module_generator)
@@ -497,3 +494,10 @@ def _install_public_boundary_contracts() -> None:
 
     install_platform_mcp(mcp_tools, production_tools)
     install_platform_release(mcp_tools)
+
+
+def _install_post_bootstrap_contracts() -> None:
+    """Install wrappers that must observe the fully composed runtime."""
+    from .planning_stall_guard_contract import install as install_planning_stall_guard
+
+    install_planning_stall_guard()
