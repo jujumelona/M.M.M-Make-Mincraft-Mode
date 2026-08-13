@@ -5,7 +5,6 @@ from pathlib import Path
 
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.work_graph as work_graph_module
-from minecraft_mod_ai.scheduler_fairness_contract import install as install_fairness
 from minecraft_mod_ai.scheduler_parallel_safety_contract import install
 from minecraft_mod_ai.work_graph import (
     DurableWorkLedger,
@@ -47,24 +46,11 @@ def _node(
     )
 
 
-def test_safety_layer_rewraps_late_scheduler_fairness() -> None:
-    # final_architecture_contract installs fairness after the first safety install.
-    # Reinstalling safety must make the orchestrator heartbeat-aware outer layer
-    # while keeping the fairness wrapper immediately underneath for delegation.
-    install_fairness(work_graph_module)
-    assert getattr(
-        work_graph_module.DurableWorkLedger.claim_ready,
-        "_mmm_exact_executor_fairness",
-        False,
-    )
-
-    install(
-        work_graph_module=work_graph_module,
-        orchestrator_module=orchestrator_module,
-    )
-    outer = work_graph_module.DurableWorkLedger.claim_ready
-    assert getattr(outer, "_mmm_parallel_lane_claim", False)
-    assert getattr(outer.__wrapped__, "_mmm_exact_executor_fairness", False)
+def test_safety_layer_owns_fairness_without_legacy_wrapper() -> None:
+    claimant = work_graph_module.DurableWorkLedger.claim_ready
+    assert getattr(claimant, "_mmm_parallel_lane_claim", False)
+    assert getattr(claimant, "_mmm_exact_executor_fairness", False)
+    assert getattr(claimant, "_mmm_max_efficiency_claim", False)
 
 
 def test_ledger_reuses_one_sqlite_connection_per_thread(
@@ -131,9 +117,6 @@ def test_orchestrator_claim_does_not_overqueue_a_saturated_lane(
     assert second is not None
     assert second["node_id"] == "c-cpu"
 
-    # The second image is ready by dependency, but its one-worker image lane
-    # already owns a running task. It must remain pending instead of sitting in
-    # an executor queue with a ticking lease.
     assert (
         ledger.claim_ready(
             "mmm-orchestrator",
@@ -187,8 +170,6 @@ def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(
         connection.commit()
     before = float(ledger.task("a-image")["lease_until"])
 
-    # No second image may be claimed, but this scheduler poll must renew the
-    # currently running future owned by this exact process/run token.
     assert (
         ledger.claim_ready(
             "mmm-orchestrator",
@@ -200,8 +181,6 @@ def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(
     after = float(ledger.task("a-image")["lease_until"])
     assert after > before + 40.0
 
-    # Once the lease is genuinely expired, heartbeat must not revive it. The
-    # durable recovery path resets it to pending and claims it as a new attempt.
     with sqlite3.connect(ledger.path) as connection:
         connection.execute(
             "UPDATE tasks SET lease_until = ? WHERE node_id = ?",
