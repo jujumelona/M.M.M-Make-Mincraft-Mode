@@ -4,12 +4,13 @@ from __future__ import annotations
 
 The production graph already owns dependency safety, durable leases and narrow commits.
 This contract removes the remaining execution bottlenecks without weakening those
-boundaries: exact executor capacity, same-GPU LLM read sharing, finer custom DAG shards,
-and isolated parallel custom candidate generation with a single winner commit.
+boundaries: exact executor capacity, same-GPU LLM read sharing, exact integration
+routing, and isolated parallel custom candidate generation with a single winner commit.
 """
 
 import concurrent.futures
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -34,15 +35,6 @@ def _active_parallelism() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
-
-
-def _env_size(name: str, default: int, upper: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    try:
-        value = int(raw) if raw else default
-    except ValueError:
-        value = default
-    return max(1, min(max(1, upper), value))
 
 
 def _install_exact_llm_executor() -> None:
@@ -79,40 +71,31 @@ def _install_exact_llm_executor() -> None:
 
 
 def _install_module_routing(work_graph_module: Any) -> None:
-    """Expose independent custom work as DAG nodes only when slots can consume it."""
+    """Route only genuinely model-backed integrations into the custom LLM lane."""
 
     current_stage = work_graph_module._module_stage
-    if not getattr(current_stage, "_mmm_exact_integration_stage", False):
-
-        @wraps(current_stage)
-        def module_stage(module: Any) -> str:
-            if str(getattr(module, "kind", "")) == "integration":
-                config = getattr(module, "config", {})
-                config = config if isinstance(config, Mapping) else {}
-                if str(config.get("integration_type", "")) == "mmm_local_ai_sidecar":
-                    return "content"
-                return "custom"
-            return current_stage(module)
-
-        module_stage._mmm_exact_integration_stage = True  # type: ignore[attr-defined]
-        work_graph_module._module_stage = module_stage
-
-    current_shards = work_graph_module._module_shards
-    if getattr(current_shards, "_mmm_slot_aware_custom_shards", False):
+    if getattr(current_stage, "_mmm_exact_integration_stage", False):
         return
 
-    @wraps(current_shards)
-    def module_shards(modules: Any, *, policy: Any):
-        for stage, members in current_shards(modules, policy=policy):
-            if stage != "custom" or _active_parallelism() <= 1 or len(members) <= 1:
-                yield stage, members
-                continue
-            size = _env_size("MMM_CUSTOM_PIPELINE_SHARD_SIZE", 1, len(members))
-            for offset in range(0, len(members), size):
-                yield stage, tuple(members[offset : offset + size])
+    @wraps(current_stage)
+    def module_stage(module: Any) -> str:
+        # Research ledger modules are code-owned deterministic evidence even when an
+        # upstream schema represents them using integration-like metadata. Preserve
+        # that owner before applying the generic integration exception.
+        from .research_ledger import is_research_shard
 
-    module_shards._mmm_slot_aware_custom_shards = True  # type: ignore[attr-defined]
-    work_graph_module._module_shards = module_shards
+        if is_research_shard(module) or str(getattr(module, "kind", "")) == "research_shard":
+            return current_stage(module)
+        if str(getattr(module, "kind", "")) == "integration":
+            config = getattr(module, "config", {})
+            config = config if isinstance(config, Mapping) else {}
+            if str(config.get("integration_type", "")) == "mmm_local_ai_sidecar":
+                return "content"
+            return "custom"
+        return current_stage(module)
+
+    module_stage._mmm_exact_integration_stage = True  # type: ignore[attr-defined]
+    work_graph_module._module_stage = module_stage
 
 
 def _fairness_owner(safety_module: Any, ledger: Any) -> str:
@@ -285,13 +268,13 @@ def _install_max_efficiency_claim(work_graph_module: Any, safety_module: Any) ->
                 (
                     running.get(str(resource), 0)
                     / max(1, int(capacities.get(str(resource), 1))),
-                    priority.get(str(resource), 9),
                     str(node_id),
+                    priority.get(str(resource), 9),
                     str(resource),
                 )
                 for node_id, resource in rows
             )
-            _utilization, _priority, node_id, _resource = candidates[0]
+            _utilization, node_id, _priority, _resource = candidates[0]
             cursor = connection.execute(
                 """
                 UPDATE tasks
@@ -314,14 +297,15 @@ def _install_max_efficiency_claim(work_graph_module: Any, safety_module: Any) ->
                 return None
             connection.commit()
 
+        # task() on the scheduler main thread uses a one-scan cache. Return the exact
+        # claimed row, then fence that cache so the next poll sees worker completion.
+        result = self.task(node_id)
         _clear_poll_snapshot(self)
-        return self.task(node_id)
+        return result
 
     claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
     claim_ready._mmm_parallel_lane_claim = True  # type: ignore[attr-defined]
     claim_ready._mmm_exact_executor_fairness = True  # type: ignore[attr-defined]
-    # Keep architecture tests and introspection attached to the actual fairness owner,
-    # while the closure still delegates non-orchestrator workers through the full chain.
     claim_ready.__wrapped__ = fairness_wrapper  # type: ignore[attr-defined]
     cls.claim_ready = claim_ready
 
@@ -331,7 +315,6 @@ def _candidate_patch_capture(
     base_root: Path,
     candidate_root: Path,
     result: Mapping[str, Any],
-    source_patch_module: Any,
 ) -> dict[str, Any]:
     receipt = result.get("patch_receipt")
     receipt_ops = receipt.get("operations") if isinstance(receipt, Mapping) else None
@@ -369,7 +352,7 @@ def _candidate_patch_capture(
                 }
             )
             continue
-        if base_bytes is None or source_patch_module.sha256_bytes(base_bytes) != str(before_sha):
+        if base_bytes is None or hashlib.sha256(base_bytes).hexdigest() != str(before_sha):
             raise RuntimeError(f"Custom candidate base hash drifted for {relative}")
         if after_sha is None:
             operations.append(
@@ -506,7 +489,6 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                 base_root=base_root,
                 candidate_root=winner_root,
                 result=result,
-                source_patch_module=source_patch_module,
             )
             commit_receipt = performance_module._commit_staged_operations(
                 live_root=live_root,
