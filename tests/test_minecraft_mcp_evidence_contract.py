@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from minecraft_mod_ai import agentic_research_game_design
 from minecraft_mod_ai.central_research import normalize_research_brief
+from minecraft_mod_ai import minecraft_mcp_evidence_contract as mcp_contract
 from minecraft_mod_ai.minecraft_mcp_evidence_contract import (
     collect_external_minecraft_evidence,
 )
@@ -44,7 +46,6 @@ class _FakeRouter:
 
 def test_minecraft_evidence_skill_keeps_external_mcp_out_of_skill_allowlist() -> None:
     """External MCP is role-scoped evidence, not a canonical Skill authorization."""
-
     contract = compile_skill_contract("gather-adaptive-minecraft-evidence")
     assert _EXTERNAL_AGENT_TOOLS.isdisjoint(contract.allowed_tools)
     assert {
@@ -63,6 +64,23 @@ def test_minecraft_technical_domains_gain_external_mcp_route() -> None:
     assert "external_mcp" in request["providers"]
 
 
+def test_official_research_does_not_eagerly_invoke_external_mcp(monkeypatch) -> None:
+    """Optional MCP evidence must not own the pre-design provider critical path."""
+    def fail_if_called(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("external MCP eager sweep entered official RAG")
+
+    monkeypatch.setattr(
+        mcp_contract,
+        "collect_external_minecraft_evidence",
+        fail_if_called,
+    )
+    brief = normalize_research_brief("Add a custom Fabric entity", {"title": "x"})
+    result = agentic_research_game_design.retrieve_domain_evidence(brief)
+    assert isinstance(result, dict)
+    assert result.get("domains")
+
+
 def test_external_evidence_is_batched_scoped_and_compact() -> None:
     brief = normalize_research_brief("Add a custom Fabric entity", {"title": "x"})
     router = _FakeRouter()
@@ -70,6 +88,7 @@ def test_external_evidence_is_batched_scoped_and_compact() -> None:
 
     assert result["execution"]["parallel"] is True
     assert result["execution"]["single_flight_cache"] is True
+    assert result["execution"]["planning_critical_path"] is False
     assert router.requests
     scopes = {tuple(sorted(row["allowed_server_ids"])) for row in router.requests}
     assert ("mcmodding-docs",) in scopes
@@ -84,3 +103,30 @@ def test_external_evidence_is_batched_scoped_and_compact() -> None:
     assert "result" not in evidence
     assert evidence["result_excerpt"]
     assert evidence["result_sha256"] == "sha256:result"
+
+
+def test_explicit_external_batch_deduplicates_identical_provider_calls() -> None:
+    brief = {
+        "brief_sha256": "sha256:test",
+        "domains": [
+            {
+                "domain_id": "one",
+                "providers": ["external_mcp"],
+                "evidence_kinds": ["minecraft_api"],
+                "queries": ["same exact query"],
+            },
+            {
+                "domain_id": "two",
+                "providers": ["external_mcp"],
+                "evidence_kinds": ["minecraft_api"],
+                "queries": ["same exact query"],
+            },
+        ],
+    }
+    router = _FakeRouter()
+    result = collect_external_minecraft_evidence(brief, router=router)
+
+    assert result["execution"]["request_count"] == 4
+    assert result["execution"]["unique_request_count"] == 2
+    assert result["execution"]["deduplicated_request_count"] == 2
+    assert len(router.requests) == 2
