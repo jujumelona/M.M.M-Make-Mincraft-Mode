@@ -17,11 +17,11 @@ jobs:
     runs-on: ubuntu-22.04
     container: nvidia/cuda:12.4.1-devel-ubuntu22.04
     env:
-      LLAMA_SOURCE_REF: ba360efe1f574ebae727aad64112d18ecedca85a
-      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v2
-      BUNDLE_PREFIX: llama-b10375-cuda12.4
+      LLAMA_SOURCE_REF: f65e568fd83712c92babbb096b57e572af0ec357
+      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v3-max-t4
+      BUNDLE_PREFIX: llama-f65e568-cuda12.4-max
       BUNDLE_ARCH: ${{ inputs.cuda_arch }}
-      RELEASE_TAG: native-llama-b10375-cuda12.4-v2
+      RELEASE_TAG: native-llama-f65e568-cuda12.4-max-v3
     steps:
       - name: Install build and release tools
         shell: bash
@@ -55,6 +55,10 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_GRAPHS=ON \
+            -DGGML_CUDA_CUB_3DOT2=ON \
+            -DGGML_CUDA_FA=ON \
+            -DGGML_CUDA_FA_ALL_QUANTS=OFF \
+            -DGGML_LTO=ON \
             -DCMAKE_CUDA_ARCHITECTURES="$BUNDLE_ARCH" \
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib64/stubs" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib64/stubs" \
@@ -84,6 +88,9 @@ jobs:
             exit 1
           fi
           grep -q '^GGML_CUDA_GRAPHS:BOOL=ON$' llama.cpp/build/CMakeCache.txt
+          grep -q '^GGML_CUDA_CUB_3DOT2:BOOL=ON$' llama.cpp/build/CMakeCache.txt
+          grep -q '^GGML_CUDA_FA:BOOL=ON$' llama.cpp/build/CMakeCache.txt
+          grep -q '^GGML_LTO:BOOL=ON$' llama.cpp/build/CMakeCache.txt
 
       - name: Package one copy of each shared library
         shell: bash
@@ -148,6 +155,9 @@ jobs:
               "cuda_arch": os.environ["BUNDLE_ARCH"],
               "cuda_toolkit": "12.4",
               "cuda_graphs": True,
+              "cuda_cub_3dot2": True,
+              "cuda_fa": True,
+              "lto": True,
               "platform": "linux-x86_64",
               "files": files,
               "aliases": dict(sorted(aliases.items())),
@@ -191,8 +201,8 @@ jobs:
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Native llama.cpp CUDA b10375 + CUDA Graphs" \
-              --notes "Verified native llama-server CUDA 12.4 bundles with GGML_CUDA_GRAPHS=ON. Source: ggml-org/llama.cpp ba360efe1f574ebae727aad64112d18ecedca85a." \
+              --title "Native llama.cpp latest CUDA max-throughput" \
+              --notes "Verified native llama-server CUDA 12.4 max-throughput bundles. Source: ggml-org/llama.cpp f65e568fd83712c92babbb096b57e572af0ec357. CUDA Graphs + CUB 3.2 dot path + FlashAttention + LTO." \
             || gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           fi
 
