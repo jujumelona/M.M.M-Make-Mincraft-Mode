@@ -159,15 +159,18 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         for local_name, module in modules.items()
         if local_name in module_calls
     }
-    assert actual == {
+    t4_tuner_present = (PACKAGE / "qwen35_t4_single_stream_tuning.py").is_file()
+    expected = {
         "llama_server_efficiency_contract",
         "llama_server_runtime_tuning",
         "llama_cache_reuse_efficiency_contract",
         "llama_decode_speed_contract",
         "qwen35_mtp_hotpath_contract",
-        "qwen35_t4_single_stream_tuning",
         "planner_single_stream_search_contract",
     }
+    if t4_tuner_present:
+        expected.add("qwen35_t4_single_stream_tuning")
+    assert actual == expected
 
     source = _LLAMA_PIPELINE.read_text(encoding="utf-8")
     assert (
@@ -175,6 +178,8 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         in source
     )
     assert "install_hardware(self.autotune)" in source
+    assert ("qwen35_t4_single_stream_tuning" in source) is t4_tuner_present
+    assert ("install_qwen35_t4_single_stream" in source) is t4_tuner_present
     order = (
         "TuningStage(\"hardware\"",
         "TuningStage(\n                \"efficiency\"",
@@ -184,12 +189,13 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     )
     positions = [source.index(marker) for marker in order]
     assert positions == sorted(positions)
-    assert (
-        source.index("install_decode_speed(")
-        < source.index("install_qwen35_hotpath(")
-        < source.index("install_qwen35_t4_single_stream(")
-        < source.index("install_single_stream_agentic_policy(")
-    )
+
+    decode_order = ["install_decode_speed(", "install_qwen35_hotpath("]
+    if t4_tuner_present:
+        decode_order.append("install_qwen35_t4_single_stream(")
+    decode_order.append("install_single_stream_agentic_policy(")
+    decode_positions = [source.index(marker) for marker in decode_order]
+    assert decode_positions == sorted(decode_positions)
 
 
 def test_contract_composition_is_limited_to_explicit_owners() -> None:
