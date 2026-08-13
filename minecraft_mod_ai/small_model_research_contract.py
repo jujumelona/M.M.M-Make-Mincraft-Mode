@@ -11,6 +11,25 @@ _EVIDENCE_FIELDS = (
     "audio_ids",
     "acceptance_tests",
 )
+_PRODUCTION_KEYS = frozenset(
+    {
+        "modules",
+        "assets",
+        "audio",
+        "acceptance_tests",
+        "completed_deliverables",
+        "complete",
+        "next_cursor",
+    }
+)
+_EVIDENCE_CONTRACT_HINT = {
+    "<exact deliverable name>": {
+        "module_ids": ["<observable module id>"],
+        "asset_ids": ["<observable asset id>"],
+        "audio_ids": ["<observable audio id>"],
+        "acceptance_tests": ["<observable acceptance test>"],
+    }
+}
 
 
 def _string_set(value: Any) -> set[str]:
@@ -82,14 +101,7 @@ def _sanitize_production_page(
     page: Mapping[str, Any],
     request: dict[str, Any] | str,
 ) -> dict[str, Any]:
-    """Keep completion claims only when they point at observable production evidence.
-
-    A small model is allowed to propose a completion, but host code owns the decision
-    to advance the authoritative deliverable checklist. Evidence may refer to an item
-    produced on the current page, a bounded recent catalog item, or a declared
-    dependency export. Unsupported completion claims are removed rather than retried
-    as if they were facts.
-    """
+    """Keep completion claims only when they point at observable production evidence."""
 
     result = dict(page)
     completed = result.get("completed_deliverables")
@@ -141,11 +153,26 @@ def _sanitize_production_page(
     return result
 
 
-def _install_evidence_contract(complete_planner_module: Any) -> None:
-    contract = getattr(complete_planner_module, "_PRODUCTION_PAGE_CONTRACT", None)
-    if isinstance(contract, dict):
-        contract.setdefault("deliverable_evidence", {})
+def _is_production_decode(
+    request: dict[str, Any] | str,
+    expected_contracts: Sequence[frozenset[str]],
+) -> bool:
+    if not isinstance(request, Mapping) or "remaining_deliverables" not in request:
+        return False
+    return any(set(contract) == set(_PRODUCTION_KEYS) for contract in expected_contracts)
 
+
+def _augment_production_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    augmented = dict(request)
+    contract = request.get("contract")
+    if isinstance(contract, Mapping):
+        contract = dict(contract)
+        contract["deliverable_evidence"] = _EVIDENCE_CONTRACT_HINT
+        augmented["contract"] = contract
+    return augmented
+
+
+def _install_evidence_contract(complete_planner_module: Any) -> None:
     current = complete_planner_module._generate_json_page_with_repair
     if getattr(current, "_mmm_small_model_evidence_guard", False):
         return
@@ -160,17 +187,32 @@ def _install_evidence_contract(complete_planner_module: Any) -> None:
         expected_contracts: Sequence[frozenset[str]],
         stage: str,
     ) -> dict[str, Any]:
+        if not _is_production_decode(request, expected_contracts):
+            return current(
+                router,
+                system_prompt=system_prompt,
+                request=request,
+                media_paths=media_paths,
+                expected_contracts=expected_contracts,
+                stage=stage,
+            )
+
+        augmented_request = _augment_production_request(request)
+        augmented_contracts = tuple(
+            frozenset(set(contract) | {"deliverable_evidence"})
+            for contract in expected_contracts
+        )
         page = current(
             router,
             system_prompt=system_prompt,
-            request=request,
+            request=augmented_request,
             media_paths=media_paths,
-            expected_contracts=expected_contracts,
+            expected_contracts=augmented_contracts,
             stage=stage,
         )
-        if "completed_deliverables" not in page:
-            return page
-        return _sanitize_production_page(page, request)
+        sanitized = _sanitize_production_page(page, request)
+        sanitized.pop("deliverable_evidence", None)
+        return sanitized
 
     generate_with_evidence_guard._mmm_small_model_evidence_guard = True  # type: ignore[attr-defined]
     complete_planner_module._generate_json_page_with_repair = generate_with_evidence_guard
@@ -219,8 +261,6 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
             ):
                 grounded += 1
 
-        # Verifier-guided test-time selection: reward completion that can be checked
-        # against concrete outputs, while strongly penalizing unsupported "done" claims.
         score = (
             base_score
             + 10.0 * declared
@@ -250,10 +290,6 @@ def _install_compute_optimal_width(agentic_module: Any) -> None:
         if width <= 1 or os.environ.get("MMM_AGENTIC_SEARCH", "auto").strip().lower() == "on":
             return width
 
-        # In automatic mode, do not turn adaptive Best-of-N into serial duplicate
-        # decoding on a single local llama slot. The verifier search expands when
-        # the runtime exposes parallel decode capacity; explicit mode=on still lets
-        # operators force extra test-time compute.
         raw_slots = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip()
         if not raw_slots:
             return width
@@ -272,8 +308,9 @@ def install() -> None:
 
     The base runtime already supplies adaptive Best-of-N planning, verifier-guided
     repair, bounded reflection/retry, project memory, preference traces, RAG/tool
-    grounding and fail-closed deterministic gates. This layer closes the remaining
-    planning-evidence gap and makes automatic test-time scaling resource-aware.
+    grounding and fail-closed deterministic gates. This layer adds verifier-grounded
+    completion claims without changing the durable production-page schema and makes
+    automatic test-time scaling resource-aware.
     """
 
     from . import agentic_optimization_contract, complete_planner
