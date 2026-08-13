@@ -180,10 +180,18 @@ def _ecosystem_key(
     research_brief: dict[str, Any],
     page_builder: Any,
 ) -> tuple[str, int, str, int]:
+    identity_brief = research_brief
+    if not isinstance(research_brief.get("_mmm_platform_target"), dict):
+        selection = game_design.get("_platform_selection")
+        if isinstance(selection, dict) and isinstance(selection.get("target"), dict):
+            identity_brief = {
+                **research_brief,
+                "_mmm_platform_target": dict(selection["target"]),
+            }
     return (
         prompt,
         id(game_design),
-        _brief_identity(research_brief),
+        _brief_identity(identity_brief),
         id(page_builder),
     )
 

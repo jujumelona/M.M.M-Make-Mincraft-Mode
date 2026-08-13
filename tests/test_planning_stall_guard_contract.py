@@ -3,7 +3,10 @@ from __future__ import annotations
 import minecraft_mod_ai.complete_planner as complete_planner
 import minecraft_mod_ai.parallel_runtime_contract as parallel_runtime
 from minecraft_mod_ai.ecosystem_discovery import EcosystemDiscoveryClient
-from minecraft_mod_ai.planning_stall_guard_contract import _planning_seed_brief
+from minecraft_mod_ai.planning_stall_guard_contract import (
+    _ecosystem_key,
+    _planning_seed_brief,
+)
 
 
 def _brief() -> dict:
@@ -70,6 +73,45 @@ def test_large_route_fanout_compacts_automatically(monkeypatch) -> None:
     assert projected["_mmm_planning_seed_projection"]["reason"] == "route_budget"
     assert len(projected["domains"][0]["queries"]) < 20
     assert projected["domains"][0]["providers"] == original["domains"][0]["providers"]
+
+
+def test_ecosystem_key_reuses_effective_platform_target() -> None:
+    game_design = {
+        "_platform_selection": {
+            "target": {
+                "minecraft_version": "1.20.1",
+                "loader": "fabric",
+                "mappings": "yarn-1.20.1+build.1",
+            }
+        }
+    }
+    original = _brief()
+    targeted = {
+        **original,
+        "_mmm_platform_target": dict(game_design["_platform_selection"]["target"]),
+    }
+    page_builder = object()
+
+    assert _ecosystem_key("prompt", game_design, original, page_builder) == _ecosystem_key(
+        "prompt",
+        game_design,
+        targeted,
+        page_builder,
+    )
+
+    other_target = {
+        **original,
+        "_mmm_platform_target": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+        },
+    }
+    assert _ecosystem_key("prompt", game_design, original, page_builder) != _ecosystem_key(
+        "prompt",
+        game_design,
+        other_target,
+        page_builder,
+    )
 
 
 def test_stall_guard_is_live_on_complete_planner() -> None:
