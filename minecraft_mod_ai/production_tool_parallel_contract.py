@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 _INDEX_BUILD_LOCKS = tuple(threading.RLock() for _ in range(64))
+_BUILT_TARGETS_LOCK = threading.RLock()
+_BUILT_TARGETS: set[Path] = set()
 _MISSING = object()
 
 
@@ -30,27 +32,31 @@ def install(production_tools_module: Any) -> None:
             metadata: dict[str, Any],
             semantic: bool = False,
         ) -> dict[str, Any]:
-            # _resolve is side-effect free. Resolve before taking the stripe so only
-            # equivalent canonical output paths serialize with each other.
+            # Resolve before taking the stripe so unrelated canonical paths may build
+            # concurrently. A target that pre-existed before this process first
+            # touched it remains refreshable once. After this process successfully
+            # builds the target, later same-target callers must consume/recheck that
+            # fresh artifact rather than immediately rebuilding it. Tracking the
+            # successful build removes scheduler timing from this decision.
             target = self._resolve(index_path)
-            existed_before_wait = target.exists()
             with _index_lock(target):
-                # If this caller observed no index before waiting but the same canonical
-                # target appeared while it was queued, another builder won the race. Do
-                # not immediately rebuild that fresh artifact: report the collision so
-                # the caller rechecks/consumes it. Pre-existing live indexes remain
-                # replaceable derived artifacts and may be intentionally refreshed.
-                if not existed_before_wait and target.exists():
+                with _BUILT_TARGETS_LOCK:
+                    built_here = target in _BUILT_TARGETS
+                if built_here and target.exists():
                     raise FileExistsError(
-                        f"RAG index was created by a concurrent builder: {target}"
+                        f"RAG index was created by this process and must be rechecked: {target}"
                     )
-                return current(
+                result = current(
                     self,
                     roots,
                     index_path=index_path,
                     metadata=metadata,
                     semantic=semantic,
                 )
+                with _BUILT_TARGETS_LOCK:
+                    if target.exists():
+                        _BUILT_TARGETS.add(target)
+                return result
 
         index_project_rag._mmm_path_serialized_rag_build = True
         service_cls.index_project_rag = index_project_rag
