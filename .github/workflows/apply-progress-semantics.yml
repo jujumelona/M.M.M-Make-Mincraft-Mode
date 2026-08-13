@@ -30,10 +30,11 @@ jobs:
           from pathlib import Path
           path = Path('minecraft_mod_ai/runtime_bootstrap.py')
           text = path.read_text(encoding='utf-8')
-          target = '        complete_planner_module=complete_planner,\n'
-          if text.count(target) != 1:
-              raise SystemExit(f'execution efficiency bootstrap arg count: {text.count(target)}')
-          path.write_text(text.replace(target, '', 1), encoding='utf-8')
+          old = "    install_execution_efficiency(\n        complete_planner_module=complete_planner,\n        work_graph_module=work_graph,\n    )"
+          new = "    install_execution_efficiency(\n        work_graph_module=work_graph,\n    )"
+          if text.count(old) != 1:
+              raise SystemExit(f'execution efficiency bootstrap block count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Apply remaining progress semantics
         run: python .github/scripts/apply_progress_semantics.py
