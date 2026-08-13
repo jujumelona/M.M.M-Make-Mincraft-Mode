@@ -57,6 +57,31 @@ def _string_list(value: Any) -> list[str]:
     ]
 
 
+def _upgrade_legacy_evidence_page(
+    page: dict[str, Any],
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Upgrade only the immediately previous durable page schema in memory.
+
+    Current structured generation receives the live contract and therefore must emit
+    ``deliverable_evidence``. A cached page written before that field was introduced
+    can still be resumed safely under its previously accepted completion semantics.
+    No other missing or extra field is normalized here.
+    """
+
+    expected = set(contract)
+    legacy = expected - {"deliverable_evidence"}
+    if (
+        "deliverable_evidence" in expected
+        and "deliverable_evidence" not in page
+        and set(page) == legacy
+    ):
+        upgraded = dict(page)
+        upgraded["deliverable_evidence"] = {}
+        return upgraded
+    return page
+
+
 def install(complete_planner_module: Any) -> None:
     """Make model-owned page width the final durable production-page policy."""
 
@@ -157,6 +182,10 @@ def install(complete_planner_module: Any) -> None:
                 generate=generate_page,
             )
             first_page = False
+            page = _upgrade_legacy_evidence_page(
+                page,
+                complete_planner_module._PRODUCTION_PAGE_CONTRACT,
+            )
 
             if set(page) != set(complete_planner_module._PRODUCTION_PAGE_CONTRACT):
                 raise complete_planner_module.SpecValidationError(
