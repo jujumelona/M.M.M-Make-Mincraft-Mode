@@ -102,7 +102,13 @@ def _commit_success(
             )
 
         if shared_index is not None:
-            touched = receipt.get("touched_paths") or receipt.get("written_files") or []
+            # Generator receipts are nested (page -> child receipts -> operations).
+            # Use the canonical recursive extractor rather than looking only at the
+            # top-level touched_paths/written_files fields. The index publication stays
+            # inside the exact attempt/owner SQLite fence.
+            from .scheduler_parallel_safety_contract import _receipt_touched_paths
+
+            touched = _receipt_touched_paths(receipt)
             if touched:
                 try:
                     with _INDEX_COMMIT_LOCK:
@@ -145,10 +151,10 @@ def _commit_success(
 def install(*, work_graph_module: Any, orchestrator_module: Any) -> None:
     """Fence each generation result to the exact claim that launched it.
 
-    A task can be reclaimed after a lease expires.  Looking only at ``state=RUNNING``
-    lets a slow result from attempt N publish into attempt N+1.  Capture the task's
+    A task can be reclaimed after a lease expires. Looking only at ``state=RUNNING``
+    lets a slow result from attempt N publish into attempt N+1. Capture the task's
     ``attempt`` and ``lease_owner`` before invoking the action and require both values
-    at publication time.  The shared ProjectIndex is committed under the same SQLite
+    at publication time. The shared ProjectIndex is committed under the same SQLite
     write transaction so a stale attempt cannot publish index state before its durable
     completion is rejected.
     """
