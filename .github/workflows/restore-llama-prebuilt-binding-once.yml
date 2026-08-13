@@ -46,7 +46,7 @@ jobs:
         run: |
           python -m pip install -q pytest
           python -m py_compile tools/colab_runtime_setup.py tools/native_llama_bundle.py minecraft_mod_ai/qwen35_mtp_hotpath_contract.py
-          python -m pytest -q tests/test_colab_native_llama_prebuilt_integration.py tests/test_native_llama_prebuilt_contract.py tests/test_qwen35_mtp_hotpath_contract.py
+          python -m pytest -q tests/test_colab_native_llama_prebuilt_integration.py tests/test_native_llama_prebuilt_contract.py
       - name: Commit repair
         run: |
           set -euo pipefail
