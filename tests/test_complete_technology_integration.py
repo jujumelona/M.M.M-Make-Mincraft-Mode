@@ -87,8 +87,15 @@ def _discovery_bundle() -> dict:
     return {
         "schema_version": "mmm/ecosystem-seed-bundle-v1",
         "status": "available",
+        "query_sha256": "a" * 64,
         "route_sha256": "b" * 64,
         "route_count": 1,
+        "route_offset": 0,
+        "processed_route_count": 1,
+        "remaining_route_count": 0,
+        "next_route_cursor": "",
+        "routes_complete": True,
+        "candidate_count": 1,
         "pages": [
             {
                 "research_domain_id": "requested_technology",
@@ -141,6 +148,8 @@ def _discovery_bundle() -> dict:
         ],
         "errors": [],
         "coverage": "seed_only",
+        "authorization": "none",
+        "download_performed": False,
     }
 
 
