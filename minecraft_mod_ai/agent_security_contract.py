@@ -78,6 +78,8 @@ def _install_scoped_domain_receipt(pre_design_rag_module: Any, agentic_module: A
 
     def scoped_slice(domain_id: str, deterministic: Mapping[str, Any]) -> dict[str, Any]:
         result = dict(current(domain_id, deterministic))
+        if isinstance(result.get("evidence_document"), Mapping):
+            return result
         if isinstance(result.get("forced_project_rag"), Mapping):
             return result
 
