@@ -1,36 +1,61 @@
-schema_version: mmm/agent-roles-v2
+schema_version: mmm/agent-roles-v3
 agents:
   GameDesignPlanner:
     model_role: planner
-    skills: [intake-mod-brief, plan-game-design, freeze-approved-spec]
-    purpose: gameplay loop, progression, combat, quest, vanilla integration and acceptance-test design
-    mcp_servers: [mmm-frontdoor, mmm-research, minecraft-dev, playwright]
+    skills:
+      - intake-mod-brief
+      - plan-game-design
+      - freeze-approved-spec
+      - compile-massive-work-graph
+    purpose: gameplay loop, progression, combat, quest, vanilla integration, acceptance-test design and scalable production graph planning
+    mcp_servers: [mmm-frontdoor, mmm-research, minecraft-dev, mcmodding-docs, minecraft-wiki, playwright]
   ResearchAgent:
     model_role: researcher
-    skills: [research-minecraft-evidence, inspect-existing-project]
-    purpose: version-pinned Fabric, Yarn, library, source and license evidence
-    mcp_servers: [mmm-research, minecraft-dev, playwright, github]
+    skills:
+      - research-minecraft-evidence
+      - inspect-existing-project
+      - gather-adaptive-minecraft-evidence
+      - route-generic-game-research
+      - select-compatible-ai-technique
+    purpose: version-pinned Minecraft, loader, mappings, library, source, compatibility, license and AI-technique evidence
+    mcp_servers: [mmm-research, minecraft-dev, minecraft-modding, mcmodding-docs, minecraft-wiki, github, playwright]
   MinecraftCoder:
     model_role: coder
     safe_model_role: coder_safe
-    skills: [generate-fabric-core, generate-datagen, generate-worldgen, generate-geckolib-entity, generate-quest-progression, generate-gui-networking, compile-and-repair]
-    purpose: Fabric Java, datagen, GeckoLib, GameTest and minimal build repair
-    mcp_servers: [mmm-generation, mmm-quality, minecraft-dev, jdtls, github]
+    skills:
+      - generate-fabric-core
+      - generate-datagen
+      - generate-worldgen
+      - generate-geckolib-entity
+      - generate-quest-progression
+      - generate-gui-networking
+      - generate-audio
+      - patch-existing-project
+      - compile-and-repair
+    purpose: Minecraft mod source/resources, datagen, worldgen, GeckoLib, gameplay systems, audio, exact patching, diagnostics and minimal repair
+    mcp_servers: [mmm-generation, mmm-quality, minecraft-dev, minecraft-modding, mcmodding-docs, minecraft-wiki, jdtls, blockbench, github]
   VisualCritic:
     model_role: visual_critic
     skills: [visual-review, model-with-blockbench]
     purpose: texture, UV, model, animation, GUI and in-game screenshot validation
-    mcp_servers: [mmm-quality, mmm-runtime, blockbench, minecraft-runtime-1201]
+    mcp_servers: [mmm-quality, mmm-runtime, blockbench, mcdev-runtime, minecraft-mod-runtime, fabric-game-client-runtime]
   AssetGenerator:
     model_role: image_generator
     skills: [generate-textures, model-with-blockbench]
-    purpose: original concept art and texture candidates; never shares T4 residency with an LLM
+    purpose: original concept art and texture candidates; image generation remains outside text-model residency
     mcp_servers: [mmm-generation, mmm-quality, blockbench]
   RuntimeTester:
     model_role: coder_safe
-    skills: [runtime-playtest, compile-and-repair, release-security]
-    purpose: bounded runtime lifecycle, log-driven repair and player task completion
-    mcp_servers: [mmm-quality, mmm-runtime, mmm-release, minecraft-runtime-1201, mineflayer-1201, minecraft-dev]
+    skills:
+      - runtime-playtest
+      - compile-and-repair
+      - release-security
+      - execute-complete-production
+      - resume-production-run
+      - converge-game-quality
+      - publish-release
+    purpose: resumable production, bounded runtime lifecycle, player task completion, evidence-driven quality convergence and release
+    mcp_servers: [mmm-quality, mmm-runtime, mmm-release, minecraft-dev, mcdev-runtime, fabric-game-runtime, fabric-game-client-runtime, minecraft-mod-runtime, minecraft-player-agent, minecraft-rcon]
   SpeechAgent:
     model_role: speech_recognition
     skills: [intake-mod-brief]
@@ -44,3 +69,5 @@ routing_policy:
   writes_require_approval_hash: true
   retrieved_context_can_authorize: false
   runtime_targets_disposable_instances_only: true
+  relevant_skills_must_be_visible_to_model_tool_choice: true
+  unrelated_skills_must_not_be_invoked_for_coverage_only: true
