@@ -79,7 +79,7 @@ def test_prebuilt_success_never_touches_source_build_toolchain(
     assert os.environ["MMM_LLAMA_SERVER_DISTRIBUTION"] == "prebuilt-test"
 
 
-def test_prebuilt_failure_falls_back_to_exact_pinned_source_build(
+def test_prebuilt_failure_uses_source_build_only_when_explicitly_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -90,6 +90,7 @@ def test_prebuilt_failure_falls_back_to_exact_pinned_source_build(
     monkeypatch.delenv("MMM_LLAMA_SERVER_BIN", raising=False)
     monkeypatch.delenv("MMM_LLAMA_SERVER_SOURCE_DIR", raising=False)
     monkeypatch.delenv("MMM_LLAMA_SERVER_DISTRIBUTION", raising=False)
+    monkeypatch.setenv("MMM_LLAMA_ALLOW_SOURCE_BUILD", "1")
     monkeypatch.setattr(module, "_find_verified_native_server", lambda: None)
     monkeypatch.setattr(
         module,
