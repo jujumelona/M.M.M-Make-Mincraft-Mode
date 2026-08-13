@@ -4,12 +4,13 @@ import hashlib
 import json
 import math
 from functools import wraps
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-_INSTALL_MARKER = "_mmm_agent_security_contract_v3"
+_INSTALL_MARKER = "_mmm_agent_security_contract_v4"
 _SLICE_MARKER = "_mmm_scoped_forced_rag_receipt_v1"
-_MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v2"
+_MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v3"
 _SKILL_MARKER = "_mmm_compact_skill_context_v1"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _TERMINAL_RAG_WARNINGS = frozenset({"required_metadata_mismatch"})
@@ -197,6 +198,7 @@ def _install_repair_memory_boundary(agentic_module: Any, runtime_module: Any) ->
         *,
         limit: int = 4,
     ) -> list[dict[str, Any]]:
+        _guard_memory_path(agentic_module, root)
         try:
             requested_limit = int(limit)
         except (TypeError, ValueError, OverflowError):
@@ -245,6 +247,7 @@ def _install_repair_memory_boundary(agentic_module: Any, runtime_module: Any) ->
 
     @wraps(current_write)
     def write_scoped_memory(root: Any, trace: Mapping[str, Any]) -> None:
+        _guard_memory_path(agentic_module, root)
         sanitized = sanitizer(trace) if callable(sanitizer) else dict(trace)
         if not isinstance(sanitized, Mapping):
             return
@@ -277,6 +280,22 @@ def _install_repair_memory_boundary(agentic_module: Any, runtime_module: Any) ->
     setattr(write_scoped_memory, _MEMORY_MARKER, True)
     agentic_module._read_memory = read_scoped_memory
     agentic_module._write_memory = write_scoped_memory
+
+
+def _guard_memory_path(agentic_module: Any, root: Any) -> Path:
+    root_path = Path(root).expanduser().resolve()
+    path = Path(agentic_module._memory_path(root_path))
+    parent = path.parent
+    if parent.is_symlink() or path.is_symlink():
+        raise RuntimeError("Refusing repair memory access through a symlink.")
+    if parent.exists() and not parent.is_dir():
+        raise RuntimeError("Repair memory parent is not a directory.")
+    resolved_parent = parent.resolve(strict=False)
+    try:
+        resolved_parent.relative_to(root_path)
+    except ValueError as exc:
+        raise RuntimeError("Repair memory path escaped the project root.") from exc
+    return path
 
 
 def _bounded_repair_pattern(value: Any) -> list[dict[str, Any]]:
