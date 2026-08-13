@@ -82,6 +82,40 @@ def test_research_context_connects_role_skills_tools_and_external_mcp() -> None:
     assert "player_e2e_interact" not in capabilities
 
 
+def test_resident_planner_research_turn_uses_research_agent_policy() -> None:
+    schemas = (
+        _schema("search_code_rag"),
+        _schema("java_diagnostics"),
+        *_external_proxy_schemas(),
+    )
+    filtered = filter_tool_schemas_for_role("research", "planner", schemas)
+    names = _tool_names(filtered)
+    assert "search_code_rag" in names
+    assert "java_diagnostics" not in names
+
+    context = _decode_context(
+        build_agent_capability_context(
+            "research",
+            filtered,
+            model_role="planner",
+        )
+    )
+    assert context["execution_model_role"] == "planner"
+    assert context["model_role"] == "researcher"
+    assert context["agent_roles"] == ["ResearchAgent"]
+
+    skills = {item["name"]: item for item in context["eligible_skills"]}
+    assert "gather-adaptive-minecraft-evidence" in skills
+    inspect = skills["inspect-existing-project"]
+    assert "java_diagnostics" not in inspect["model_tools"]
+    assert "java_diagnostics" not in inspect["host_owned_tools"]
+    assert "gather-adaptive-minecraft-evidence" in skills_for_tool(
+        "research",
+        "search_code_rag",
+        model_role="planner",
+    )
+
+
 def test_runtime_context_discovers_gated_write_and_admin_minecraft_mcp_routes() -> None:
     context = _decode_context(
         build_agent_capability_context(
