@@ -1,5 +1,6 @@
 name: Upgrade adaptive production agent
 
+# One-shot validated migration; removed automatically after success.
 on:
   push:
     branches:
