@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import heapq
 import math
 import os
 from collections import Counter
@@ -126,14 +125,16 @@ def _adaptive_expand_one_production_batch_factory(module: Any):
             test_catalog.update(tests)
 
             completed_raw = page.get("completed_deliverables", [])
+            remaining_set = set(remaining)
             completed = {
                 str(value).strip()
                 for value in completed_raw
-                if isinstance(value, str) and str(value).strip() in set(remaining)
+                if isinstance(value, str) and str(value).strip() in remaining_set
             }
             if not completed:
                 raise module.SpecValidationError(
-                    f"Production batch {batch.batch_id!r} page made no verified progress."
+                    f"Production batch {batch.batch_id!r} page made no host-verifiable "
+                    "deliverable progress."
                 )
 
             remaining = [value for value in remaining if value not in completed]
@@ -151,13 +152,13 @@ def _dependency_wave_shards(
     *,
     policy: Any,
 ) -> Iterator[tuple[str, tuple[Any, ...]]]:
-    """Create bounded, ready-safe shards without rescanning all prior groups.
+    """Create bounded shards and emit complete dependency-ready waves in order.
 
     Consecutive modules may share one durable shard only when doing so cannot add an
     unrelated external dependency. Exact external dependency sets are indexed in O(1),
     while chain extension checks only groups that the current module actually depends
-    on. This preserves the previous newest-qualifying-group rule but avoids an
-    O(module_count * group_count) reverse scan on dependency-diverse projects.
+    on. Emission is level-synchronous: groups already ready at the start of a wave are
+    all emitted before any group unlocked by that wave.
 
     Custom LLM work is sized to expose the native decode slots selected by autotuning,
     while the normal Java/entity shard ceilings keep SQLite/checkpoint overhead bounded.
@@ -182,7 +183,11 @@ def _dependency_wave_shards(
         return max(1, int(policy.java_shard_size))
 
     for item, stage in staged:
-        missing = [dependency for dependency in item.depends_on if dependency not in module_group]
+        missing = [
+            dependency
+            for dependency in item.depends_on
+            if dependency not in module_group
+        ]
         if missing:
             raise work_graph_module.WorkGraphError(
                 "Module sharding requires topological order; unresolved dependencies for "
@@ -200,10 +205,6 @@ def _dependency_wave_shards(
         if exact is not None and len(groups[exact]["members"]) < shard_size:
             candidates.add(exact)
 
-        # A dependency group may absorb this module when the module already waits for
-        # that group, and every other dependency is transitively covered by that
-        # group's own external dependencies. Only actual dependency groups can satisfy
-        # this internal-chain case; there is no reason to scan unrelated prior groups.
         for index in dependency_groups:
             group = groups[index]
             if group["stage"] != stage or len(group["members"]) >= shard_size:
@@ -234,8 +235,6 @@ def _dependency_wave_shards(
             if open_by_key.get(group_key) == chosen:
                 open_by_key.pop(group_key, None)
         else:
-            # Keep the newest still-open group for exact dependency-set lookup, which
-            # matches the previous reverse-search tie rule.
             previous = open_by_key.get(group_key)
             if previous is None or chosen > previous:
                 open_by_key[group_key] = chosen
@@ -248,27 +247,30 @@ def _dependency_wave_shards(
         for dependency in dependencies:
             dependents[dependency].append(index)
 
-    ready: list[tuple[int, int]] = []
-    for index, degree in enumerate(indegree):
-        if degree == 0:
-            heapq.heappush(ready, (int(groups[index]["first_order"]), index))
-
+    ready = sorted(
+        (index for index, degree in enumerate(indegree) if degree == 0),
+        key=lambda index: int(groups[index]["first_order"]),
+    )
     emitted = 0
     while ready:
-        _, index = heapq.heappop(ready)
-        group = groups[index]
-        yield str(group["stage"]), tuple(group["members"])
-        emitted += 1
-        for dependent in dependents[index]:
-            indegree[dependent] -= 1
-            if indegree[dependent] == 0:
-                heapq.heappush(
-                    ready,
-                    (int(groups[dependent]["first_order"]), dependent),
-                )
+        next_ready: set[int] = set()
+        for index in ready:
+            group = groups[index]
+            yield str(group["stage"]), tuple(group["members"])
+            emitted += 1
+            for dependent in dependents[index]:
+                indegree[dependent] -= 1
+                if indegree[dependent] == 0:
+                    next_ready.add(dependent)
+        ready = sorted(
+            next_ready,
+            key=lambda index: int(groups[index]["first_order"]),
+        )
 
     if emitted != len(groups):
-        raise work_graph_module.WorkGraphError("Module shard dependency graph contains a cycle.")
+        raise work_graph_module.WorkGraphError(
+            "Module shard dependency graph contains a cycle."
+        )
 
 
 def install(*, complete_planner_module: Any, work_graph_module: Any) -> None:
@@ -283,6 +285,7 @@ def install(*, complete_planner_module: Any, work_graph_module: Any) -> None:
 
     current_shards = work_graph_module._module_shards
     if not getattr(current_shards, "_mmm_dependency_wave_shards", False):
+
         def module_shards(modules: Sequence[Any], *, policy: Any):
             yield from _dependency_wave_shards(
                 work_graph_module,
