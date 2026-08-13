@@ -1,50 +1,23 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import threading
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
-_INDEX_BUILD_LOCKS = tuple(threading.RLock() for _ in range(64))
-_BUILT_TARGETS_LOCK = threading.RLock()
-_BUILT_TARGET_FINGERPRINTS: dict[Path, str] = {}
+_TARGET_LOCKS_GUARD = threading.RLock()
+_TARGET_LOCKS: dict[Path, threading.RLock] = {}
 _MISSING = object()
 
 
-def _index_lock(path: Path) -> threading.RLock:
-    digest = hashlib.sha256(str(path).encode("utf-8")).digest()
-    slot = int.from_bytes(digest[:2], "big") % len(_INDEX_BUILD_LOCKS)
-    return _INDEX_BUILD_LOCKS[slot]
-
-
-def _build_fingerprint(
-    roots: Any,
-    *,
-    metadata: dict[str, Any],
-    semantic: bool,
-) -> str:
-    """Identify one logical index build without inspecting mutable output state."""
-    if isinstance(roots, (list, tuple)):
-        root_values = [str(value) for value in roots]
-    else:
-        # ProductionToolService accepts a Sequence. Keep compatibility with narrow
-        # test doubles without consuming an arbitrary one-shot iterable.
-        root_values = [str(roots)]
-    payload = {
-        "roots": root_values,
-        "metadata": metadata,
-        "semantic": bool(semantic),
-    }
-    rendered = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+def _target_lock(path: Path) -> threading.RLock:
+    """Return one stable lock per canonical RAG output target."""
+    with _TARGET_LOCKS_GUARD:
+        lock = _TARGET_LOCKS.get(path)
+        if lock is None:
+            lock = threading.RLock()
+            _TARGET_LOCKS[path] = lock
+        return lock
 
 
 def install(production_tools_module: Any) -> None:
@@ -61,37 +34,30 @@ def install(production_tools_module: Any) -> None:
             metadata: dict[str, Any],
             semantic: bool = False,
         ) -> dict[str, Any]:
-            # Serialize only conflicting canonical targets. If another caller asks
-            # for the exact same logical build, the fresh artifact is rechecked
-            # instead of rebuilt. A changed source revision/metadata/roots is a real
-            # refresh and is therefore allowed to replace the index in place.
+            # Only overlapping builds of the same canonical target conflict. A later,
+            # sequential call is an intentional refresh and is allowed even when its
+            # roots/metadata are identical to the previous build. Different targets
+            # never share a lock and therefore remain fully parallel.
             target = self._resolve(index_path)
-            fingerprint = _build_fingerprint(
-                roots,
-                metadata=metadata,
-                semantic=semantic,
-            )
-            with _index_lock(target):
-                with _BUILT_TARGETS_LOCK:
-                    previous = _BUILT_TARGET_FINGERPRINTS.get(target)
-                if previous == fingerprint and target.exists():
+            lock = _target_lock(target)
+            waited_for_builder = not lock.acquire(blocking=False)
+            if waited_for_builder:
+                lock.acquire()
+            try:
+                if waited_for_builder and target.exists():
                     raise FileExistsError(
-                        "Identical RAG index build already completed and must be "
-                        f"rechecked: {target}"
+                        "RAG index was completed by an overlapping builder and must be "
+                        f"rechecked before rebuilding: {target}"
                     )
-                result = current(
+                return current(
                     self,
                     roots,
                     index_path=index_path,
                     metadata=metadata,
                     semantic=semantic,
                 )
-                with _BUILT_TARGETS_LOCK:
-                    if target.exists():
-                        _BUILT_TARGET_FINGERPRINTS[target] = fingerprint
-                    else:
-                        _BUILT_TARGET_FINGERPRINTS.pop(target, None)
-                return result
+            finally:
+                lock.release()
 
         index_project_rag._mmm_path_serialized_rag_build = True
         service_cls.index_project_rag = index_project_rag
