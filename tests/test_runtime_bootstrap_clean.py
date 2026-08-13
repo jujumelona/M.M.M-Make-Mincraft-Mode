@@ -188,7 +188,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     assert positions == sorted(positions)
     assert source.index("install_decode_speed(") < source.index(
         "install_qwen35_hotpath("
-    ) < source.index("install_single_stream_plan_search(")
+    ) < source.index("install_single_stream_agentic_policy(")
 
 
 def test_contract_composition_is_limited_to_explicit_owners() -> None:
