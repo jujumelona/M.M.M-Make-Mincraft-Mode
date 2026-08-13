@@ -1,0 +1,47 @@
+name: Debug repository audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/debug-repo-audit.yml
+      - .github/scripts/debug_repo_audit.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: debug-repo-audit-main
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Static internal import audit
+        run: python .github/scripts/debug_repo_audit.py
+      - name: Compile all Python
+        run: python -m compileall -q minecraft_mod_ai tests tools
+      - name: Undefined-name and syntax lint
+        run: python -m ruff check minecraft_mod_ai tests tools --select F,E7,E9
+      - name: Package and Colab import smoke
+        run: |
+          python -c "import minecraft_mod_ai; print('package import OK')"
+          python -c "from minecraft_mod_ai.colab_run_modes import prepare_existing_mod_input; print('colab import OK')"
+      - name: Bootstrap and agent/planner regression
+        run: |
+          python -m pytest -q \
+            tests/test_runtime_bootstrap_clean.py \
+            tests/test_agent_tool_calling.py \
+            tests/test_agent_tool_runtime_colab_stdio.py \
+            tests/test_planner_incremental_repair_contract.py \
+            tests/test_complete_planner_scaling.py
+      - name: Full test suite
+        run: python -m pytest -q
