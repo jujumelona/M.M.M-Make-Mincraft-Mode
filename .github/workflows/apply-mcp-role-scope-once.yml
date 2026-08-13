@@ -43,6 +43,7 @@ jobs:
           tests/test_agent_capability_context.py
           tests/test_llama_parallel_runtime_contract.py
           tests/test_mcp_stdio.py
+          tests/test_runtime_bootstrap_clean.py
       - name: Commit tested patch to main
         run: |
           git config user.name juju-mmm-bot
