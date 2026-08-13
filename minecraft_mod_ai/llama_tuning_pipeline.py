@@ -8,13 +8,14 @@ which makes ordering explicit and prevents cross-module re-entry or accidental
 multiple installation.
 """
 
+import os
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 15
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v1"
+_TUNING_PIPELINE_VERSION = 16
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v2"
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class NativeLlamaTuningPipeline:
         self.runtime_tuning = runtime_tuning
 
     def _install_profile_context_authority(self) -> None:
-        """Keep decode presets from shrinking the selected model profile context."""
+        """Keep the profile context unless Qwen has an explicit operator override."""
         current = getattr(self.autotune, "_base_args", None)
         if not callable(current) or getattr(current, _PROFILE_CONTEXT_MARKER, False):
             return
@@ -51,6 +52,13 @@ class NativeLlamaTuningPipeline:
                 "mtp" not in model_id and "mtp" not in filename
             ):
                 return args
+
+            # The latest profile policy intentionally defaults Qwen3.5 to its full
+            # registry context. An explicit Qwen-only override remains authoritative;
+            # do not silently overwrite it in this final composition wrapper.
+            if os.environ.get("MMM_QWEN35_MTP_CTX", "").strip():
+                return args
+
             try:
                 context = max(0, int(getattr(config, "max_context", 0) or 0))
             except (TypeError, ValueError):
@@ -92,8 +100,8 @@ class NativeLlamaTuningPipeline:
                 self.hardware_policy,
             )
             install_qwen35_hotpath(self.autotune)
-            # Qwen hotpath owns MTP/decode mechanics only. The registry/profile owns
-            # context size, so restore it last after every speed wrapper has composed.
+            # The profile is the default context owner; a Qwen-specific explicit
+            # override is preserved by the authority wrapper above.
             self._install_profile_context_authority()
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
