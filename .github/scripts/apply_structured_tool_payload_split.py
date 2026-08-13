@@ -121,7 +121,6 @@ replace_function(
 ''',
 )
 
-# Replace tool test so it proves schema is intentionally suppressed only for tool turns.
 replace_function(
     "tests/test_llama_structured_reasoning_stream.py",
     "test_tool_request_uses_same_minimal_native_payload",
@@ -155,8 +154,51 @@ replace_function(
 ''',
 )
 
-# Existing direct-adapter tool test remains the compatibility proof. Add a no-tool
-# adapter test to prove direct generate_turn shares the same schema-capable owner.
+replace_function(
+    "tests/test_llama_decode_speed_contract.py",
+    "test_structured_local_payload_is_host_validated_without_server_json_grammar",
+    '''def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
+    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    structured = SimpleNamespace(
+        messages=({"role": "user", "content": "return json"},),
+        response_format="json",
+        response_schema=schema,
+        tools=(),
+    )
+    payload = hardware_policy._server_payload(adapter, structured)
+    assert payload["response_format"] == {
+        "type": "json_object",
+        "schema": schema,
+    }
+
+    tool_request = SimpleNamespace(
+        messages=({"role": "user", "content": "inspect then return json"},),
+        response_format="json",
+        response_schema=schema,
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "lookup",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+        tool_choice="auto",
+    )
+    tool_payload = hardware_policy._server_payload(adapter, tool_request)
+    assert "response_format" not in tool_payload
+    assert tool_payload["tools"][0]["function"]["name"] == "lookup"
+''',
+)
+
 adapter_test = ROOT / "tests/test_llama_cpp_adapter_request_contract.py"
 source = adapter_test.read_text(encoding="utf-8")
 if "test_generate_turn_preserves_schema_for_non_tool_json" not in source:
@@ -195,7 +237,6 @@ if "test_generate_turn_preserves_schema_for_non_tool_json" not in source:
 ''' + "\n"
     adapter_test.write_text(source, encoding="utf-8")
 
-# Strengthen the game-design contract: it must not instantiate the agent-tool loop.
 game_test = ROOT / "tests/test_game_design_router.py"
 source = game_test.read_text(encoding="utf-8")
 old = '''    schema = router.calls[0][1]["response_schema"]\n    assert schema["required"] == ["game_design"]\n'''
@@ -208,6 +249,7 @@ for rel in (
     "minecraft_mod_ai/llama_server_hardware_policy.py",
     "minecraft_mod_ai/game_design.py",
     "tests/test_llama_structured_reasoning_stream.py",
+    "tests/test_llama_decode_speed_contract.py",
     "tests/test_llama_cpp_adapter_request_contract.py",
     "tests/test_game_design_router.py",
 ):
