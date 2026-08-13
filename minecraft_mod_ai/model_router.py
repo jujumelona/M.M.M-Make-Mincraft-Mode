@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -30,8 +31,6 @@ _ROLE_TOOL_STAGE = {
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
-_DEFAULT_MAX_TOOL_ROUNDS = 8
-_DEFAULT_MAX_TOOL_CALLS = 24
 
 
 class ModelRouter:
@@ -148,18 +147,17 @@ class ModelRouter:
         runtime: Any,
         stage: str,
     ) -> str:
-        messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
-        total_calls = 0
-        max_rounds = _positive_env_int(
-            "MMM_AGENT_MAX_TOOL_ROUNDS",
-            _DEFAULT_MAX_TOOL_ROUNDS,
-        )
-        max_calls = _positive_env_int(
-            "MMM_AGENT_MAX_TOOL_CALLS",
-            _DEFAULT_MAX_TOOL_CALLS,
-        )
+        """Gather tool evidence until the model itself returns a final answer.
 
-        for round_index in range(max_rounds + 1):
+        No host-owned tool-round or tool-call ceiling exists. The only loop guard
+        is semantic: two consecutive identical tool-call/result exchanges prove
+        an exact no-progress fixed point.
+        """
+        messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
+        previous_exchange_state: str | None = None
+        round_index = 0
+
+        while True:
             turn_request = GenerationRequest(
                 messages=messages,
                 media_paths=request.media_paths if round_index == 0 else (),
@@ -176,46 +174,40 @@ class ModelRouter:
                     )
                 return turn.content.strip()
 
-            assistant_message: dict[str, Any] = {
-                "role": "assistant",
-                "content": turn.content or None,
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": call.raw_arguments
-                            or json.dumps(
-                                dict(call.arguments),
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        },
-                    }
-                    for call in turn.tool_calls
-                ],
-            }
-            messages.append(assistant_message)
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": turn.content or None,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.raw_arguments
+                                or json.dumps(
+                                    dict(call.arguments),
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            },
+                        }
+                        for call in turn.tool_calls
+                    ],
+                }
+            )
 
+            observations: list[dict[str, Any]] = []
             for call in turn.tool_calls:
-                total_calls += 1
-                if total_calls > max_calls:
-                    raise ModelConfigurationError(
-                        f"Agent exceeded the tool-call limit ({max_calls})."
-                    )
                 try:
                     result = runtime.call(stage, call.name, call.arguments)
-                    tool_payload: Mapping[str, Any] = {
+                    payload: Mapping[str, Any] = {
                         "ok": True,
                         "tool": call.name,
                         "result": result,
                     }
                 except Exception as exc:
-                    # Tool failures are observations, not a reason to kill the agent.
-                    # Feeding the exact error back lets Qwen repair arguments or select
-                    # another stage-allowed tool on the next turn.
-                    tool_payload = {
+                    payload = {
                         "ok": False,
                         "tool": call.name,
                         "error": f"{type(exc).__name__}: {exc}",
@@ -226,17 +218,40 @@ class ModelRouter:
                         "tool_call_id": call.id,
                         "name": call.name,
                         "content": json.dumps(
-                            tool_payload,
+                            payload,
                             ensure_ascii=False,
                             sort_keys=True,
                             default=str,
                         ),
                     }
                 )
+                observations.append(
+                    {
+                        "name": call.name,
+                        "arguments": dict(call.arguments),
+                        "observation": payload,
+                    }
+                )
 
-        raise ModelConfigurationError(
-            f"Agent did not finish after {max_rounds} tool rounds."
-        )
+            exchange_state = hashlib.sha256(
+                json.dumps(
+                    {
+                        "assistant_content": turn.content or "",
+                        "tool_exchanges": observations,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            if exchange_state == previous_exchange_state:
+                raise ModelConfigurationError(
+                    "Agent reached an exact no-progress tool fixed point: identical "
+                    "tool calls produced identical observations on consecutive turns."
+                )
+            previous_exchange_state = exchange_state
+            round_index += 1
 
     def _tool_runtime(self) -> Any:
         if self._agent_tool_runtime is not None:

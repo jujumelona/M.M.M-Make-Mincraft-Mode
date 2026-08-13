@@ -239,16 +239,28 @@ def test_identical_bad_patch_output_is_not_sent_or_consumed_forever(
     assert len(router.calls) == 3
 
 
-def test_broken_outline_envelope_is_cut_off_before_third_identical_request(
+def test_broken_outline_stops_only_at_exact_request_response_fixed_point(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
-    # The host allows one diagnostic regeneration for the same semantic outline.
-    router = _Router("{}", "{}")
+    router = _Router("{}", "{}", "{}")
+    with pytest.raises(SpecValidationError, match="fixed point"):
+        _run(router, stage="outline fixed point")
+    assert len(router.calls) == 3
 
-    with pytest.raises(SpecValidationError, match="cycle detected"):
-        _run(router, stage="outline cycle cut off")
 
-    # Initial generation + one diagnostic regeneration. The third identical request is
-    # rejected by the host before it reaches the model.
-    assert len(router.calls) == 2
+def test_outline_can_keep_repairing_beyond_two_generations(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    final = _batch("eventual_valid_outline")
+    router = _Router(
+        '{"diagnostic":1}',
+        '{"diagnostic":2}',
+        '{"diagnostic":3}',
+        '{"diagnostic":4}',
+        _outline(final),
+    )
+    page = _run(router, stage="long progressive outline")
+    assert page["production_batches"] == [final]
+    assert len(router.calls) == 5

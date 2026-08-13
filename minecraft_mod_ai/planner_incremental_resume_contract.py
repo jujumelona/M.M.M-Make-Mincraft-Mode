@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from functools import wraps
 from typing import Any, Sequence
 
@@ -11,16 +10,6 @@ _REPLACE_PATCH_FIELDS = frozenset({"target_fingerprint", "replacement_batch"})
 _BATCH_FIELDS = frozenset(
     {"batch_id", "scope", "depends_on_batches", "deliverables", "exports"}
 )
-_DEFAULT_BATCH_REPAIR_ATTEMPTS = 2
-
-
-def _bounded_env(name: str, default: int, *, maximum: int) -> int:
-    raw = os.environ.get(name, str(default)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = default
-    return max(1, min(value, maximum))
 
 
 def _batch_schema(*, replacement: bool) -> dict[str, Any]:
@@ -144,16 +133,13 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
             current_value = raw_batch
             current_error = validation_error
 
-        max_attempts = _bounded_env(
-            "MMM_PLANNER_BATCH_REPAIR_ATTEMPTS",
-            _DEFAULT_BATCH_REPAIR_ATTEMPTS,
-            maximum=2,
-        )
         seen_states: set[str] = set()
         seen_outputs: set[str] = set()
         last_output_sha256 = ""
+        attempt = 0
 
-        for attempt in range(1, max_attempts + 1):
+        while True:
+            attempt += 1
             replacement = not isinstance(current_value, dict) or attempt > 1
             repair_mode = "replacement" if replacement else "field_patch"
             state_sha256 = incremental_module._fingerprint(
@@ -331,22 +317,6 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                     current_value = candidate
                 current_error = f"{type(exc).__name__}: {exc}"
 
-        _save_failed_patch(
-            incremental_module,
-            checkpoint_path,
-            checkpoint_state,
-            target_fingerprint=original_fingerprint,
-            round_index=max_attempts,
-            current_value=current_value,
-            validation_error=current_error,
-            reason="repair_budget_exhausted",
-            last_output_sha256=last_output_sha256,
-        )
-        raise module.SpecValidationError(
-            "Production batch could not satisfy the host contract after one field repair "
-            f"and one complete-item regeneration: {current_error}"
-        )
-
     patch_one_invalid_batch._mmm_bounded_semantic_batch_repair = True  # type: ignore[attr-defined]
     patch_one_invalid_batch.__wrapped__ = current  # type: ignore[attr-defined]
     incremental_module._patch_one_invalid_batch = patch_one_invalid_batch
@@ -446,7 +416,7 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
     class _GuardedRouter:
         def __init__(self, router: Any) -> None:
             self._router = router
-            self._outline_calls = 0
+            self._seen_exchanges: set[str] = set()
 
         def __getattr__(self, name: str) -> Any:
             return getattr(self._router, name)
@@ -460,28 +430,43 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
             response_format="text",
         ) -> str:
             system_content = ""
+            user_content = ""
             if isinstance(messages, (list, tuple)) and messages:
                 first = messages[0]
+                last = messages[-1]
                 if isinstance(first, dict):
                     system_content = str(first.get("content", ""))
+                if isinstance(last, dict):
+                    user_content = str(last.get("content", ""))
 
             is_batch_repair = (
                 "field-level JSON patcher" in system_content
                 or "regenerate exactly ONE invalid production batch" in system_content
             )
-            if not is_batch_repair:
-                self._outline_calls += 1
-                if self._outline_calls > 2:
-                    raise complete_planner.SpecValidationError(
-                        "Planner repair cycle detected before a third semantic outline request."
-                    )
-
-            return self._router.generate_text(
+            output = self._router.generate_text(
                 role,
                 messages,
                 media_paths=media_paths,
                 response_format=response_format,
             )
+            if not is_batch_repair:
+                exchange = incremental_module._fingerprint(
+                    {
+                        "role": role,
+                        "system": system_content,
+                        "user": user_content,
+                        "response_format": response_format,
+                        "media_paths": [str(path) for path in media_paths],
+                        "model_output": output,
+                    }
+                )
+                if exchange in self._seen_exchanges:
+                    raise complete_planner.SpecValidationError(
+                        "Planner reached an identical request/response fixed point "
+                        "without semantic progress."
+                    )
+                self._seen_exchanges.add(exchange)
+            return output
 
     @wraps(current)
     def generate_cycle_safe(

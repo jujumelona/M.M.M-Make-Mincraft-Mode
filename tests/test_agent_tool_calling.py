@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from types import SimpleNamespace
 
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
-from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
+from minecraft_mod_ai.model_adapters import (
+    GenerationResponse,
+    ModelConfigurationError,
+    ToolCall,
+)
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_tool_calls
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -174,3 +180,74 @@ def test_llama_openai_tool_call_parser_accepts_json_arguments() -> None:
     assert calls[0].id == "call_map"
     assert calls[0].name == "external_mcp_call"
     assert calls[0].arguments["capability"] == "mapping_resolution"
+
+
+
+def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
+    class LongAdapter:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def generate_turn(self, request):
+            self.count += 1
+            if self.count <= 12:
+                query = f"evidence_{self.count}"
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id=f"call_{self.count}",
+                            name="search_code_rag",
+                            arguments={"query": query},
+                            raw_arguments=json.dumps({"query": query}),
+                        ),
+                    )
+                )
+            return GenerationResponse(content="enough evidence")
+
+    adapter = LongAdapter()
+    runtime = _ToolRuntime()
+    monkeypatch.setattr(
+        ModelRouter,
+        "_new_text_adapter",
+        staticmethod(lambda config, *, role: adapter),
+    )
+    router = ModelRouter(
+        profile="test",
+        registry=_Registry(),
+        agent_tool_runtime_factory=lambda **_: runtime,
+    )
+    assert router.generate_text(
+        "coder", [{"role": "user", "content": "research deeply"}]
+    ) == "enough evidence"
+    assert len(runtime.calls) == 12
+
+
+def test_agent_stops_on_consecutive_exact_tool_fixed_point(monkeypatch) -> None:
+    class LoopAdapter:
+        def generate_turn(self, request):
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="call",
+                        name="search_code_rag",
+                        arguments={"query": "same"},
+                        raw_arguments='{"query":"same"}',
+                    ),
+                )
+            )
+
+    adapter = LoopAdapter()
+    runtime = _ToolRuntime()
+    monkeypatch.setattr(
+        ModelRouter,
+        "_new_text_adapter",
+        staticmethod(lambda config, *, role: adapter),
+    )
+    router = ModelRouter(
+        profile="test",
+        registry=_Registry(),
+        agent_tool_runtime_factory=lambda **_: runtime,
+    )
+    with pytest.raises(ModelConfigurationError, match="no-progress tool fixed point"):
+        router.generate_text("coder", [{"role": "user", "content": "research"}])
+    assert len(runtime.calls) == 2
