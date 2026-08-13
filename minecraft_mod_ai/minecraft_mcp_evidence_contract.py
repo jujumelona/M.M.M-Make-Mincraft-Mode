@@ -255,8 +255,11 @@ def collect_external_minecraft_evidence(
                 )
                 owners.append((domain_id, query_sha256, capability))
 
-    selected_router = router or _shared_router()
-    bundles = selected_router.invoke_many(requests) if requests and _enabled() else ()
+    enabled = _enabled()
+    bundles: tuple[dict[str, Any], ...] = ()
+    if requests and enabled:
+        selected_router = router or _shared_router()
+        bundles = selected_router.invoke_many(requests)
     if bundles and len(bundles) != len(owners):
         from .spec import SpecValidationError
 
@@ -275,7 +278,7 @@ def collect_external_minecraft_evidence(
             by_query[(domain_id, query_sha256)]["capabilities"].append(compact)
 
     status = "SKIPPED"
-    if requests and not _enabled():
+    if requests and not enabled:
         status = "DISABLED"
     elif requests:
         status = "PASS" if pass_count else "UNAVAILABLE"
@@ -418,7 +421,6 @@ def _install_router_parallel_cache() -> None:
         if type(workers) is not int or workers < 1:
             raise ValueError("max_workers must be a positive integer.")
         workers = min(16, workers, len(rows))
-        ordered: list[dict[str, Any] | None] = [None] * len(rows)
 
         def run(index: int, request: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
             payload = dict(request)
@@ -427,6 +429,11 @@ def _install_router_parallel_cache() -> None:
                 raise ValueError("Each MCP batch request requires capability.")
             return index, self.invoke(capability, **payload)
 
+        if len(rows) == 1:
+            _, bundle = run(0, rows[0])
+            return (bundle,)
+
+        ordered: list[dict[str, Any] | None] = [None] * len(rows)
         with ThreadPoolExecutor(
             max_workers=workers,
             thread_name_prefix="mmm_external_mcp",
