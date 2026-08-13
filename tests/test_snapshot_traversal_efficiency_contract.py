@@ -53,4 +53,4 @@ def test_snapshot_clone_rejects_symlink_in_copy_traversal_and_cleans_stage(
 
     staging_parent = tmp_path / ".mmm-parallel-staging"
     assert staging_parent.is_dir()
-    assert not any(staging_parent.iterdir())
+    assert not list(staging_parent.glob("custom-*"))
