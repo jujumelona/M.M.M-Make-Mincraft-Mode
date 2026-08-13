@@ -33,9 +33,17 @@ def install(production_tools_module: Any) -> None:
         # _resolve is side-effect free. Resolve before taking the stripe so only
         # equivalent canonical output paths serialize with each other.
         target = self._resolve(index_path)
+        existed_before_wait = target.exists()
         with _index_lock(target):
-            # A live production index is a replaceable derived artifact. Serialize
-            # rebuilds by canonical path and let ProjectRAGIndex atomically replace it.
+            # If this caller observed no index before waiting but the same canonical
+            # target appeared while it was queued, another builder won the race. Do
+            # not immediately rebuild that fresh artifact: report the collision so
+            # the caller rechecks/consumes it. Pre-existing live indexes remain
+            # replaceable derived artifacts and may be intentionally refreshed.
+            if not existed_before_wait and target.exists():
+                raise FileExistsError(
+                    f"RAG index was created by a concurrent builder: {target}"
+                )
             return current(
                 self,
                 roots,
