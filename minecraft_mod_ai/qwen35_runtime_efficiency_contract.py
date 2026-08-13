@@ -5,7 +5,7 @@ from functools import wraps
 from typing import Any, Mapping
 
 
-_ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v1"
+_ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
 _PAYLOAD_MARKER = "_mmm_qwen35_unbounded_output_v2"
 _CACHE_MARKER = "_mmm_qwen35_skip_cold_cache_reuse_probe_v1"
 _KV_MARKER = "_mmm_qwen35_skip_main_kv_probe_v1"
@@ -58,11 +58,6 @@ def _restore_env(name: str, previous: str | None) -> None:
         os.environ.pop(name, None)
     else:
         os.environ[name] = previous
-
-
-def _install_qwen_width_default() -> None:
-    from . import qwen35_mtp_hotpath_contract as qwen_hotpath
-    qwen_hotpath._DEFAULT_MTP_WIDTHS = _EXHAUSTIVE_MTP_WIDTHS if _tuning_mode() == "exhaustive" else _FAST_MTP_WIDTHS
 
 
 def _bounded_section_request(request: Any) -> bool:
@@ -143,7 +138,12 @@ def _install_cold_tuning_policy(autotune: Any) -> None:
         for name, value in defaults.items():
             existing = os.environ.get(name)
             previous[name] = existing
-            if not (existing or "").strip():
+            replace_outer_default = (
+                name == "MMM_LLAMA_MTP_WIDTHS"
+                and _tuning_mode() != "exhaustive"
+                and (existing or "").strip() == _EXHAUSTIVE_MTP_WIDTHS
+            )
+            if not (existing or "").strip() or replace_outer_default:
                 os.environ[name] = value
                 changed.append(name)
         try:
@@ -157,7 +157,6 @@ def _install_cold_tuning_policy(autotune: Any) -> None:
 
 
 def install(autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
-    _install_qwen_width_default()
     _install_output_policy(hardware_policy)
     _install_main_kv_probe_policy()
     _install_cache_probe_policy(runtime_tuning)
