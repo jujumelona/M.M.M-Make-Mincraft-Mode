@@ -57,12 +57,13 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
 
 
 def _render(request: Mapping[str, Any] | str) -> str:
+    """Render the complete request; paging owns bounded model execution."""
     if isinstance(request, str):
-        return request[:24_000]
+        return request
     try:
-        return json.dumps(request, ensure_ascii=False, sort_keys=True)[:24_000]
+        return json.dumps(request, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError):
-        return repr(request)[:24_000]
+        return repr(request)
 
 
 def _features(
