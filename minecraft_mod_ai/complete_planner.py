@@ -766,7 +766,6 @@ class CompleteGameDesignPlanner:
      ) -> None:
         remaining = list(batch.deliverables)
         cursor = ""
-        seen_cursors: set[str] = set()
         first_page = True
         page_count = 0
         while remaining:

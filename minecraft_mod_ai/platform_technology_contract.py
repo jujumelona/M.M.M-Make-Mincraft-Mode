@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import wraps
 from typing import Any, Mapping
 
 from .platform_catalog import adapter_for_target

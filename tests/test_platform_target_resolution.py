@@ -12,7 +12,6 @@ from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.platform_catalog import (
     FABRIC_1201,
     FABRIC_1211,
-    PlatformAdapter,
     adapter_from_project,
 )
 from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget

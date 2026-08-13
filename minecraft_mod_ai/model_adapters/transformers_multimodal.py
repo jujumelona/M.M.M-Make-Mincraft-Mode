@@ -133,9 +133,9 @@ class TransformersMultimodalAdapter(ModelAdapter):
 
             AutoProcessor = getattr(transformers, "AutoProcessor", None)
             AutoTokenizer = getattr(transformers, "AutoTokenizer", None)
-            AutoModelForCausalLM = getattr(transformers, "AutoModelForCausalLM", None)
-            AutoModel = getattr(transformers, "AutoModel", None)
-            AutoModelForMultimodalLM = getattr(transformers, "AutoModelForMultimodalLM", None)
+            getattr(transformers, "AutoModelForCausalLM", None)
+            getattr(transformers, "AutoModel", None)
+            getattr(transformers, "AutoModelForMultimodalLM", None)
 
             torch_module = torch
             if _is_qwen35(cfg.model_id):

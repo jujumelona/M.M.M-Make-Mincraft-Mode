@@ -9,8 +9,6 @@ cannot add sources, instructions, capabilities, or permissions.
 from __future__ import annotations
 
 import hashlib
-import json
-import math
 import re
 import sqlite3
 from dataclasses import asdict, dataclass

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import uuid
 import zipfile
@@ -749,7 +748,7 @@ class MinecraftModPipeline:
             encoding="utf-8",
         )
         (docs_root / "ADMIN_KO.md").write_text(
-            f"""# 관리자 가이드
+            """# 관리자 가이드
 
 이 릴리스는 사용자 월드를 생성하거나 변경하지 않습니다.
 서버에 설치하기 전 별도 테스트 인스턴스에서 기능을 검증하세요.

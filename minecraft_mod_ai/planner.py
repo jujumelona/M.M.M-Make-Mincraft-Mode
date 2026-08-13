@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import gc
 import json
-import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, Protocol
 
 from .capabilities import capability_manifest_hash

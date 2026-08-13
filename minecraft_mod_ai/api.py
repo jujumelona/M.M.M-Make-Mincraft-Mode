@@ -289,7 +289,6 @@ class CompleteModAISession:
                 except Exception:
                     pass
 
-        from dataclasses import replace
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
             workspace_root=self.output_root,
@@ -358,7 +357,6 @@ class CompleteModAISession:
         )
 
     def save_plan(self, target_path: str | Path | None = None) -> Path:
-        import json
 
         if self.complete_proposal is None:
             raise SpecValidationError("No complete proposal to save.")
@@ -376,7 +374,6 @@ class CompleteModAISession:
         return path
 
     def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:
-        import json
         from .complete_spec import CompleteProposal
         from .plan_render import render_complete_plan
 

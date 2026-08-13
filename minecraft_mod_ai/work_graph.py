@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence, TypeVar
 
 from .complete_spec import (
-    AssetRequest,
-    AudioRequest,
     CompleteProposal,
     ProductionModule,
 )

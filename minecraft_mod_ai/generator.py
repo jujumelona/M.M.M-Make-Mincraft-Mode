@@ -6,7 +6,6 @@ import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from .spec import BossSpec, ContentKind, ContentSpec, ModSpec
 from .toolchain_contract import fabric_dependency_predicates

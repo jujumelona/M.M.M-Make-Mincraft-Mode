@@ -5,9 +5,7 @@ import hashlib
 import json
 import os
 import threading
-from copy import deepcopy
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping
 
 import anyio

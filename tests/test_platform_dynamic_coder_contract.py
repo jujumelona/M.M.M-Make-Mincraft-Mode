@@ -4,7 +4,6 @@ import json
 
 import pytest
 
-from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerationError,
     CustomModuleGenerator,

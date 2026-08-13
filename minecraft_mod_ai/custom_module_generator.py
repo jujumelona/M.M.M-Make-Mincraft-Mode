@@ -837,7 +837,7 @@ def _verified_model_observation(
                 len(frag_text[:text_char_idx].encode("utf-8"))
                 + fragment_start
             )
-            actual_end_byte = actual_start_byte + len(quoted)
+            actual_start_byte + len(quoted)
             return _exact_observation(
                 path=path,
                 sha256=sha256,

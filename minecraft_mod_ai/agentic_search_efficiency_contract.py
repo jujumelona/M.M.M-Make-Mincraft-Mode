@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from functools import wraps

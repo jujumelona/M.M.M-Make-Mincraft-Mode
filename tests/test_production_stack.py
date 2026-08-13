@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from minecraft_mod_ai.blockbench_client import allowed_blockbench_operations
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry

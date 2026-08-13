@@ -12,8 +12,6 @@ from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
 )
 from minecraft_mod_ai.complete_spec import (
-    AssetRequest,
-    AudioRequest,
     CompleteProposal,
     CompleteProposalStatus,
     ProductionModule,

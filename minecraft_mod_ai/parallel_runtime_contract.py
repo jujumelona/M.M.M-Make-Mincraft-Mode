@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
 
 
 _T = TypeVar("_T")
