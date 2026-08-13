@@ -133,8 +133,6 @@ def ensure_main_initializer_call(
             try:
                 changed = _insert_import(with_call, import_line)
             except ProjectEditError:
-                # A source file without a parseable package/import section is not
-                # modified. The isolated generated ModInitializer below remains safe.
                 changed = text
                 inserted = False
             if inserted:
@@ -427,6 +425,7 @@ def ensure_dependency(
     )
 
 
+@_atomic_shared_edit
 def write_text_files(
     info: FabricProjectInfo,
     files: dict[str, str],
