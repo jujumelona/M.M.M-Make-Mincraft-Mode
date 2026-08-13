@@ -1,0 +1,289 @@
+name: Apply progress semantics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-progress-semantics.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-progress-semantics-main
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Remove remaining host-owned planner decisions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, got {count}")
+              return text.replace(old, new, 1)
+
+          # Batch repair: an object stays field-patchable for as many changing
+          # validator states as needed. Whole-object replacement is only for a
+          # non-object value that cannot be field-patched at all.
+          path = Path('minecraft_mod_ai/planner_incremental_resume_contract.py')
+          text = path.read_text(encoding='utf-8')
+          text = once(
+              text,
+              'def _install_bounded_batch_repair(incremental_module: Any) -> None:\n',
+              'def _install_progressive_batch_repair(incremental_module: Any) -> None:\n',
+              'repair installer name',
+          )
+          text = once(
+              text,
+              '    if getattr(current, "_mmm_bounded_semantic_batch_repair", False):\n',
+              '    if getattr(current, "_mmm_progressive_semantic_batch_repair", False):\n',
+              'repair marker read',
+          )
+          text = once(
+              text,
+              '        """Field-patch once, then regenerate this one batch once; never retry a mode."""\n',
+              '        """Repair until validation succeeds; object batches remain field-patchable."""\n',
+              'repair docstring',
+          )
+          text = once(
+              text,
+              '            replacement = not isinstance(current_value, dict) or attempt > 1\n',
+              '            replacement = not isinstance(current_value, dict)\n',
+              'forced replacement policy',
+          )
+          text = once(
+              text,
+              '    patch_one_invalid_batch._mmm_bounded_semantic_batch_repair = True  # type: ignore[attr-defined]\n',
+              '    patch_one_invalid_batch._mmm_progressive_semantic_batch_repair = True  # type: ignore[attr-defined]\n',
+              'repair marker write',
+          )
+          text = once(
+              text,
+              '    _install_bounded_batch_repair(incremental_module)\n',
+              '    _install_progressive_batch_repair(incremental_module)\n',
+              'repair install call',
+          )
+          text = text.replace(
+              '    """Install resume plus terminating outline/batch repair semantics."""',
+              '    """Install resume plus progress-driven outline/batch repair semantics."""',
+          )
+          if 'attempt > 1' in text or '_install_bounded_batch_repair' in text:
+              raise SystemExit('forced repair-mode policy still present')
+          path.write_text(text, encoding='utf-8')
+
+          # Legacy module pagination: cursor text is transport metadata, not proof
+          # of semantic progress. New unique modules are progress. If the model
+          # omits/repeats a cursor, derive one from the updated catalog state.
+          path = Path('minecraft_mod_ai/complete_planner.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''            complete = page["complete"]
+            next_cursor = page["next_cursor"]
+            if type(complete) is not bool or not isinstance(next_cursor, str):
+                raise SpecValidationError("Module batch pagination contract is invalid.")
+            if complete:
+                if next_cursor:
+                    raise SpecValidationError("Complete module page may not have next_cursor.")
+            elif not next_cursor or next_cursor in seen_cursors:
+                raise SpecValidationError("Module batch pagination did not advance.")
+            for module in page_modules:
+                module_catalog.add(module.module_id)
+            generated.extend(page_modules)
+            if complete:
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+'''
+          new = '''            complete = page["complete"]
+            next_cursor = page["next_cursor"]
+            if type(complete) is not bool or not isinstance(next_cursor, str):
+                raise SpecValidationError("Module batch pagination contract is invalid.")
+            if complete and next_cursor:
+                raise SpecValidationError("Complete module page may not have next_cursor.")
+
+            for module in page_modules:
+                module_catalog.add(module.module_id)
+            generated.extend(page_modules)
+            if complete:
+                break
+
+            # The page already produced new globally-unique module IDs, so semantic
+            # progress occurred even if the model reused or omitted its opaque cursor.
+            # Continue from a host cursor committed to the new catalog instead of
+            # truncating a long plan because of transport metadata.
+            if not next_cursor or next_cursor in seen_cursors:
+                next_cursor = "host_resume_" + _canonical_json_sha256(
+                    {
+                        "batch_id": batch_id,
+                        "catalog": module_catalog.receipt(),
+                    }
+                )[:20]
+                if next_cursor in seen_cursors:
+                    raise SpecValidationError(
+                        "Module batch pagination repeated both cursor and catalog state."
+                    )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+'''
+          text = once(text, old, new, 'legacy cursor progress')
+          if 'elif not next_cursor or next_cursor in seen_cursors' in text:
+              raise SystemExit('cursor-only truncation still present')
+          path.write_text(text, encoding='utf-8')
+
+          # Regression: two separate invalid fields may be repaired in two field
+          # patches; host does not force whole-object replacement after patch #1.
+          path = Path('tests/test_planner_incremental_repair_contract.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def test_invalid_field_patch_escalates_to_one_complete_batch_regeneration(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    bad = _batch("broken_scope", scope="")
+    repaired = _batch("broken_scope", scope="Implement the corrected scope.")
+    router = _Router(
+        _outline(bad),
+        _field_patch(bad, scope=""),
+        _replacement_patch(bad, repaired),
+    )
+
+    page = _run(router, stage="field patch then regenerate")
+
+    assert page["complete"] is True
+    assert page["production_batches"] == [repaired]
+    assert len(router.calls) == 3
+    assert "field-level JSON patcher" in str(router.calls[1]["messages"][0]["content"])
+    assert "regenerate exactly ONE invalid production batch" in str(
+        router.calls[2]["messages"][0]["content"]
+    )
+    second_request = json.loads(str(router.calls[2]["messages"][1]["content"]))
+    assert second_request["repair_mode"] == "replacement"
+'''
+          new = '''def test_invalid_batch_keeps_field_patching_while_validation_state_changes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    bad = _batch("broken_scope", scope="", deliverables=[])
+    repaired = _batch(
+        "broken_scope",
+        scope="Implement the corrected scope.",
+        deliverables=["broken_scope_done"],
+    )
+    router = _Router(
+        _outline(bad),
+        _field_patch(bad, scope=repaired["scope"]),
+        _field_patch(bad, deliverables=repaired["deliverables"]),
+    )
+
+    page = _run(router, stage="progressive field patch")
+
+    assert page["complete"] is True
+    assert page["production_batches"] == [repaired]
+    assert len(router.calls) == 3
+    assert "field-level JSON patcher" in str(router.calls[1]["messages"][0]["content"])
+    assert "field-level JSON patcher" in str(router.calls[2]["messages"][0]["content"])
+    second_request = json.loads(str(router.calls[2]["messages"][1]["content"]))
+    assert second_request["repair_mode"] == "field_patch"
+    assert second_request["current_batch"]["scope"] == repaired["scope"]
+'''
+          text = once(text, old, new, 'progressive field-patch test')
+          text = text.replace(
+              '    # One outline call + exactly two distinct repair modes. No third repair call exists.\n',
+              '    # One outline call + two identical field-patch outputs prove no progress.\n',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          # Regression: repeated model cursor does not cap a plan if each page adds
+          # a new unique module. The third request must use a host-derived cursor.
+          path = Path('tests/test_complete_planner_scaling.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''def test_module_pagination_rejects_duplicate_ids_within_page() -> None:
+'''
+          test = '''def test_module_pagination_reused_cursor_does_not_cap_semantic_progress() -> None:
+    router = _ResponseRouter(
+        [
+            {
+                "modules": [_module("page_one")],
+                "complete": False,
+                "next_cursor": "model_cursor",
+            },
+            {
+                "modules": [_module("page_two")],
+                "complete": False,
+                "next_cursor": "model_cursor",
+            },
+            {
+                "modules": [_module("page_three")],
+                "complete": True,
+                "next_cursor": "",
+            },
+        ]
+    )
+
+    modules = CompleteGameDesignPlanner(router)._expand_batches(
+        prompt="Keep planning while new modules are produced.",
+        game_design={"title": "Progress-driven cursor"},
+        batches=[
+            {
+                "batch_id": "core",
+                "scope": "Produce all three modules.",
+                "depends_on_batches": [],
+            }
+        ],
+        media_paths=(),
+    )
+
+    assert [module.module_id for module in modules] == [
+        "page_one",
+        "page_two",
+        "page_three",
+    ]
+    assert router.requests[0]["cursor"] == ""
+    assert router.requests[1]["cursor"] == "model_cursor"
+    assert str(router.requests[2]["cursor"]).startswith("host_resume_")
+
+
+'''
+          if 'test_module_pagination_reused_cursor_does_not_cap_semantic_progress' not in text:
+              if anchor not in text:
+                  raise SystemExit('pagination test anchor missing')
+              text = text.replace(anchor, test + anchor, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify progress semantics
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check \
+            minecraft_mod_ai/planner_incremental_resume_contract.py \
+            minecraft_mod_ai/complete_planner.py \
+            tests/test_planner_incremental_repair_contract.py \
+            tests/test_complete_planner_scaling.py \
+            --select F,E7,E9
+          python -m pytest -q \
+            tests/test_planner_incremental_repair_contract.py \
+            tests/test_complete_planner_scaling.py \
+            tests/test_agent_tool_calling.py
+          git diff --check
+
+      - name: Commit and self-delete
+        run: |
+          git rm .github/workflows/apply-progress-semantics.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Remove remaining planner progress ceilings'
+          git pull --rebase origin main
+          git push origin HEAD:main
