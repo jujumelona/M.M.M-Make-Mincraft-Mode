@@ -4,6 +4,7 @@ import json
 
 from minecraft_mod_ai.agent_capability_context import (
     build_agent_capability_context,
+    filter_tool_schemas_for_role,
     skills_for_tool,
 )
 from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS, REVIEWED_STAGES
@@ -26,7 +27,11 @@ def _decode_context(text: str) -> dict[str, object]:
     return json.loads(text[len(prefix) :])
 
 
-def test_research_context_connects_skills_tools_and_external_mcp() -> None:
+def _tool_names(schemas) -> set[str]:
+    return {str(item["function"]["name"]) for item in schemas}
+
+
+def test_research_context_connects_role_skills_tools_and_external_mcp() -> None:
     context = _decode_context(
         build_agent_capability_context(
             "research",
@@ -36,18 +41,44 @@ def test_research_context_connects_skills_tools_and_external_mcp() -> None:
                 _schema("external_mcp_schema"),
                 _schema("external_mcp_call"),
             ),
+            model_role="researcher",
         )
     )
+
+    assert context["agent_roles"] == ["ResearchAgent"]
+    assert "minecraft-dev" in context["reviewed_mcp_servers"]
+    assert "minecraft-wiki" in context["reviewed_mcp_servers"]
 
     skills = {item["name"]: item for item in context["eligible_skills"]}
     assert "gather-adaptive-minecraft-evidence" in skills
     assert "search_code_rag" in skills["gather-adaptive-minecraft-evidence"]["model_tools"]
 
-    capabilities = set(context["external_minecraft_mcp_capabilities"])
-    assert "official_mod_docs" in capabilities
-    assert "source_search" in capabilities
-    assert "mapping_resolution" in capabilities
-    assert "vanilla_knowledge" in capabilities
+    capabilities = context["external_minecraft_mcp_capabilities"]
+    assert capabilities["official_mod_docs"] == ["mcmodding-docs"]
+    assert capabilities["source_search"] == ["minecraft-dev"]
+    assert "minecraft-dev" in capabilities["mapping_resolution"]
+    assert capabilities["vanilla_knowledge"] == ["minecraft-wiki"]
+
+
+def test_role_filter_removes_unassigned_tools_but_keeps_external_bridge() -> None:
+    schemas = (
+        _schema("search_code_rag"),
+        _schema("java_diagnostics"),
+        _schema("external_mcp_capabilities"),
+        _schema("external_mcp_schema"),
+        _schema("external_mcp_call"),
+    )
+    filtered = filter_tool_schemas_for_role("research", "researcher", schemas)
+    names = _tool_names(filtered)
+    assert "search_code_rag" in names
+    assert "java_diagnostics" not in names
+    assert {
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+        "external_mcp_call",
+    } <= names
+
+    assert filter_tool_schemas_for_role("research", "unknown-role", schemas) == schemas
 
 
 def test_every_canonical_skill_is_reachable_in_at_least_one_stage_context() -> None:
@@ -121,7 +152,20 @@ def test_every_canonical_skill_is_reachable_in_at_least_one_stage_context() -> N
     assert reachable == set(CANONICAL_SKILLS)
 
 
-def test_tool_receipt_can_identify_all_skill_routes_for_tool() -> None:
-    routes = skills_for_tool("research", "search_code_rag")
+def test_tool_receipt_is_role_scoped() -> None:
+    routes = skills_for_tool(
+        "research",
+        "search_code_rag",
+        model_role="researcher",
+    )
     assert "gather-adaptive-minecraft-evidence" in routes
-    assert skills_for_tool("research", "external_mcp_call") == ()
+    assert skills_for_tool(
+        "research",
+        "java_diagnostics",
+        model_role="researcher",
+    ) == ()
+    assert skills_for_tool(
+        "research",
+        "external_mcp_call",
+        model_role="researcher",
+    ) == ()
