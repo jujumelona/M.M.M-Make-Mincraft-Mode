@@ -4,6 +4,14 @@ from minecraft_mod_ai.central_research import normalize_research_brief
 from minecraft_mod_ai.minecraft_mcp_evidence_contract import (
     collect_external_minecraft_evidence,
 )
+from minecraft_mod_ai.skill_catalog import compile_skill_contract
+
+
+_EXTERNAL_AGENT_TOOLS = {
+    "external_mcp_capabilities",
+    "external_mcp_schema",
+    "external_mcp_call",
+}
 
 
 class _FakeRouter:
@@ -32,6 +40,19 @@ class _FakeRouter:
             }
             for request in self.requests
         )
+
+
+def test_minecraft_evidence_skill_keeps_external_mcp_out_of_skill_allowlist() -> None:
+    """External MCP is role-scoped evidence, not a canonical Skill authorization."""
+
+    contract = compile_skill_contract("gather-adaptive-minecraft-evidence")
+    assert _EXTERNAL_AGENT_TOOLS.isdisjoint(contract.allowed_tools)
+    assert {
+        "search_project_rag",
+        "index_project_rag",
+        "search_code_rag",
+        "inspect_existing_mod",
+    }.issubset(contract.allowed_tools)
 
 
 def test_minecraft_technical_domains_gain_external_mcp_route() -> None:
