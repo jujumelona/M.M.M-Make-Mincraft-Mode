@@ -19,4 +19,10 @@ replace_once(
     "    _system_prompt,\n    _validate_design,\n",
     "    _system_prompt,\n",
 )
+
+router_test = Path("tests/test_game_design_router.py")
+router_test.write_text(
+    router_test.read_text(encoding="utf-8").rstrip() + "\n",
+    encoding="utf-8",
+)
 print("game-design hardening lint follow-up applied")
