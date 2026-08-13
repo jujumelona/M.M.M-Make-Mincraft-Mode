@@ -37,21 +37,20 @@ def test_exact_llm_executor_uses_selected_native_slots(monkeypatch) -> None:
         assert pool._max_workers == 1
 
 
-def test_custom_dag_shards_follow_native_parallel_capacity(monkeypatch) -> None:
+def test_max_efficiency_preserves_existing_dependency_wave_shards(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
-    monkeypatch.delenv("MMM_CUSTOM_PIPELINE_SHARD_SIZE", raising=False)
     modules = tuple(
         ProductionModule(
             module_id=f"custom_{index}",
             kind="custom_java",
             config={"summary": str(index)},
         )
-        for index in range(5)
+        for index in range(10)
     )
     policy = type("Policy", (), {"entity_shard_size": 24, "java_shard_size": 48})()
     shards = list(work_graph._module_shards(modules, policy=policy))
-    assert [stage for stage, _members in shards] == ["custom"] * 5
-    assert [len(members) for _stage, members in shards] == [1, 1, 1, 1, 1]
+    assert [stage for stage, _members in shards] == ["custom", "custom", "custom"]
+    assert [len(members) for _stage, members in shards] == [4, 4, 2]
 
 
 def test_one_slot_keeps_bounded_custom_shards(monkeypatch) -> None:
