@@ -157,6 +157,7 @@ def _install_platform_contracts() -> None:
         geckolib_generator,
         generator,
         mineflayer_bridge,
+        minecraft_knowledge_contract,
         model_router,
         platform_central_ai_contract,
         platform_planning_contract,
@@ -220,6 +221,7 @@ def _install_platform_contracts() -> None:
     central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
     central_intelligence_amplifier.install(agentic_research_game_design)
+    minecraft_knowledge_contract.install(agentic_research_game_design, complete_planner)
     agentic_research_game_design.bind_game_design_planner(game_design)
     _gate_research_first_to_production_router(
         game_design_module=game_design,
