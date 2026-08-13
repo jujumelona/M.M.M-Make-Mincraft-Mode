@@ -16,7 +16,6 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 TOMBSTONED_OWNER_MODULES = (
     "minecraft_mod_ai/colab_mtp_server.py",
     "minecraft_mod_ai/production_stream_resume_contract.py",
-    "minecraft_mod_ai/qwen35_t4_single_stream_tuning.py",
 )
 
 # Direct-main development must not use self-deleting patch workflows. They race with
