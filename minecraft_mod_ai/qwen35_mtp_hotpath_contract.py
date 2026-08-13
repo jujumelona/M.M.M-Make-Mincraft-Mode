@@ -10,11 +10,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _DEFAULT_WIDTH = 3
-_DEFAULT_CTX = 8192
-_MIN_CTX = 4096
 _MAX_CTX = 2147483647
-_MARKER = "_mmm_qwen35_mtp3_hotpath_v5"
-_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v4"
+_MARKER = "_mmm_qwen35_mtp3_hotpath_v6"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v5"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -44,26 +42,31 @@ def _is_qwen35_mtp(config: Any) -> bool:
 
 
 def _context_size(config: Any | None = None) -> int:
-    """Return the bounded production KV window for the Qwen3.5 T4 hot path.
+    """Return the authoritative llama.cpp context window for this model profile.
 
-    MMM pages planning and source evidence, so the default server should not reserve
-    the model's entire context window. Operators may explicitly raise the window for
-    an exceptional request without enabling any runtime search sweep.
+    There is deliberately no Qwen-specific fallback window here. A positive
+    MMM_QWEN35_MTP_CTX is an explicit operator override; otherwise the selected
+    model profile owns the context size. Zero means llama.cpp/model-native auto.
     """
 
-    configured_max = getattr(config, "max_context", _MAX_CTX)
-    try:
-        upper = int(configured_max)
-    except (TypeError, ValueError):
-        upper = _MAX_CTX
-    upper = max(_MIN_CTX, min(_MAX_CTX, upper))
-
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError("MMM_QWEN35_MTP_CTX must be a non-negative integer") from exc
+        if value < 0:
+            raise ValueError("MMM_QWEN35_MTP_CTX must be a non-negative integer")
+        return min(_MAX_CTX, value)
+
+    configured = getattr(config, "max_context", 0) if config is not None else 0
     try:
-        value = int(raw) if raw else _DEFAULT_CTX
-    except ValueError:
-        value = _DEFAULT_CTX
-    return max(_MIN_CTX, min(upper, value))
+        value = int(configured)
+    except (TypeError, ValueError):
+        value = 0
+    if value < 0:
+        value = 0
+    return min(_MAX_CTX, value)
 
 
 def _drop_option(
