@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 10
+_TUNING_PIPELINE_VERSION = 11
 
 
 @dataclass(frozen=True)
@@ -41,9 +41,6 @@ class NativeLlamaTuningPipeline:
             install as install_single_stream_agentic_policy,
         )
         from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
-        from .qwen35_t4_single_stream_tuning import (
-            install as install_qwen35_t4_single_stream,
-        )
 
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)
@@ -55,12 +52,9 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
                 self.hardware_policy,
             )
-            # The fixed Qwen hotpath remains the fail-safe. On Tesla T4, the measured
-            # tuner owns maximum single-stream selection across MTP width, confidence,
-            # ubatch, and context-aware KV. Its decisions are fingerprinted and cached,
-            # so exhaustive work happens only when engine/model/hardware policy changes.
+            # Qwen3.5 production uses one measured MTP-3 server. Exhaustive T4
+            # benchmarking is deliberately not installed into the request path.
             install_qwen35_hotpath(self.autotune)
-            install_qwen35_t4_single_stream(self.autotune)
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
                 repair_engine,
