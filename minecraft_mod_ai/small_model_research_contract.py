@@ -21,14 +21,6 @@ _PRODUCTION_KEYS = frozenset(
         "next_cursor",
     }
 )
-_EVIDENCE_CONTRACT_HINT = {
-    "<exact deliverable name>": {
-        "module_ids": ["<observable module id>"],
-        "asset_ids": ["<observable asset id>"],
-        "audio_ids": ["<observable audio id>"],
-        "acceptance_tests": ["<observable acceptance test>"],
-    }
-}
 
 
 def _string_set(value: Any) -> set[str]:
@@ -100,19 +92,19 @@ def _sanitize_production_page(
     page: Mapping[str, Any],
     request: dict[str, Any] | str,
 ) -> dict[str, Any]:
-    """Keep completion claims only when they point at observable production evidence."""
+    """Validate explicit evidence without weakening legacy host-owned bookkeeping."""
     result = dict(page)
+    evidence_value = result.get("deliverable_evidence")
+    if not isinstance(evidence_value, Mapping):
+        return result
+
     completed = result.get("completed_deliverables")
     if not isinstance(completed, list):
-        result["completed_deliverables"] = []
         completed = []
 
-    evidence = result.get("deliverable_evidence")
-    if not isinstance(evidence, Mapping):
-        evidence = {}
     evidence = {
         str(key): dict(value)
-        for key, value in evidence.items()
+        for key, value in evidence_value.items()
         if isinstance(key, str) and isinstance(value, Mapping)
     }
     result["deliverable_evidence"] = evidence
@@ -160,16 +152,6 @@ def _is_production_decode(
     return any(set(contract) == set(_PRODUCTION_KEYS) for contract in expected_contracts)
 
 
-def _augment_production_request(request: Mapping[str, Any]) -> dict[str, Any]:
-    augmented = dict(request)
-    contract = request.get("contract")
-    if isinstance(contract, Mapping):
-        contract = dict(contract)
-        contract["deliverable_evidence"] = _EVIDENCE_CONTRACT_HINT
-        augmented["contract"] = contract
-    return augmented
-
-
 def _install_evidence_contract(complete_planner_module: Any) -> None:
     current = complete_planner_module._generate_json_page_with_repair
     if getattr(current, "_mmm_small_model_evidence_guard", False):
@@ -185,29 +167,22 @@ def _install_evidence_contract(complete_planner_module: Any) -> None:
         expected_contracts: Sequence[frozenset[str]],
         stage: str,
     ) -> dict[str, Any]:
-        if not _is_production_decode(request, expected_contracts):
-            return current(
-                router,
-                system_prompt=system_prompt,
-                request=request,
-                media_paths=media_paths,
-                expected_contracts=expected_contracts,
-                stage=stage,
-            )
-
-        augmented_request = _augment_production_request(request)
-        augmented_contracts = tuple(
-            frozenset(set(contract) | {"deliverable_evidence"})
-            for contract in expected_contracts
-        )
+        # Production evidence is optional input to the host-owned bookkeeping layer.
+        # Never widen the strict top-level contract here: doing so turns an optional
+        # quality signal into a required model field and can create pointless repair
+        # decodes for otherwise valid pages.
         page = current(
             router,
             system_prompt=system_prompt,
-            request=augmented_request,
+            request=request,
             media_paths=media_paths,
-            expected_contracts=augmented_contracts,
+            expected_contracts=expected_contracts,
             stage=stage,
         )
+        if not _is_production_decode(request, expected_contracts):
+            return page
+        if "deliverable_evidence" not in page:
+            return page
         sanitized = _sanitize_production_page(page, request)
         sanitized.pop("deliverable_evidence", None)
         return sanitized
