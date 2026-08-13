@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import os
 from functools import wraps
 from typing import Any, Mapping
 
 
-_MARKER = "_mmm_host_validated_json_fastpath_v3"
+_MARKER = "_mmm_host_validated_json_fastpath_v4"
+
+
+def _bounded_section_output_tokens(adapter: Any) -> int:
+    configured = max(1, int(getattr(adapter.config, "max_new_tokens", 1) or 1))
+    raw = os.environ.get("MMM_LLAMA_BOUNDED_SECTION_MAX_TOKENS", "").strip()
+    try:
+        requested = int(raw) if raw else 2048
+    except ValueError:
+        requested = 2048
+    if requested <= 0:
+        requested = 2048
+    return min(configured, requested)
 
 
 def bind_structured_decode_policy(hardware_module: Any) -> None:
@@ -42,8 +55,14 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
 
         properties = schema.get("properties") if isinstance(schema, Mapping) else None
         if isinstance(properties, Mapping) and "section" in properties:
-            # This is a transport budget for one bounded serialization call, not a
-            # project/plan-size limit. Deep reasoning already happened in research.
+            # This is a transport budget for one explicitly bounded serialization
+            # call, not a project/plan-size or input-context limit. Large/schema-less
+            # paginated JSON retains the model profile's full output budget.
+            current_max = max(1, int(result.get("max_tokens", 1) or 1))
+            result["max_tokens"] = min(
+                current_max,
+                _bounded_section_output_tokens(adapter),
+            )
             result["thinking_budget_tokens"] = 0
             result["reasoning_effort"] = "none"
         return result
