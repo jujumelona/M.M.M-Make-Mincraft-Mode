@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _DEFAULT_WIDTH = 3
-_DEFAULT_CTX = 32768
+_DEFAULT_CTX = 8192
 _MIN_CTX = 4096
 _MAX_CTX = 2147483647
 _MARKER = "_mmm_qwen35_mtp3_hotpath_v5"
@@ -51,13 +51,19 @@ def _context_size(config: Any | None = None) -> int:
     an exceptional request without enabling any runtime search sweep.
     """
 
-    del config
+    configured_max = getattr(config, "max_context", _MAX_CTX)
+    try:
+        upper = int(configured_max)
+    except (TypeError, ValueError):
+        upper = _MAX_CTX
+    upper = max(_MIN_CTX, min(_MAX_CTX, upper))
+
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
     try:
         value = int(raw) if raw else _DEFAULT_CTX
     except ValueError:
         value = _DEFAULT_CTX
-    return max(_MIN_CTX, min(_MAX_CTX, value))
+    return max(_MIN_CTX, min(upper, value))
 
 
 def _drop_option(
