@@ -403,16 +403,10 @@ def _install_late_safety_contracts() -> None:
 
 
 def _install_public_boundary_contracts() -> None:
-    """Install MCP/release/platform boundary adapters last."""
-    from . import mcp_server, mcp_tools, model_router, platform_resolver, production_tools
-    from .agent_tool_calling_contract import install as install_agent_tools
-    from .platform_mcp_compatibility_contract import install as install_platform_mcp_compatibility
+    """Install the live MCP/release boundary owners last."""
+    from . import mcp_tools, production_tools
     from .platform_mcp_contract import install as install_platform_mcp
-    from .platform_policy_runtime_contract import install as install_platform_policy_runtime
     from .platform_release_contract import install as install_platform_release
 
-    install_platform_policy_runtime(platform_resolver)
-    install_platform_mcp(mcp_tools)
-    install_platform_mcp_compatibility(mcp_tools)
+    install_platform_mcp(mcp_tools, production_tools)
     install_platform_release(mcp_tools)
-    install_agent_tools(model_router, mcp_server, production_tools)
