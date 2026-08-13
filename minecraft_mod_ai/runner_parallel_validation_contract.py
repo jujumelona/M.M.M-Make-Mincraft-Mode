@@ -11,12 +11,19 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
-_PROJECT_BUILD_LOCKS = tuple(threading.RLock() for _ in range(64))
+_PROJECT_BUILD_LOCKS_GUARD = threading.Lock()
+_PROJECT_BUILD_LOCKS: dict[str, threading.RLock] = {}
 
 
 def _path_lock(path: Path) -> threading.RLock:
-    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).digest()
-    return _PROJECT_BUILD_LOCKS[int.from_bytes(digest[:2], "big") % len(_PROJECT_BUILD_LOCKS)]
+    """Return the exact single-writer lock for one canonical project root."""
+    key = str(path.expanduser().resolve())
+    with _PROJECT_BUILD_LOCKS_GUARD:
+        lock = _PROJECT_BUILD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PROJECT_BUILD_LOCKS[key] = lock
+        return lock
 
 
 def _marker_path(cache_dir: Path, version: str, sha256: str) -> Path:
