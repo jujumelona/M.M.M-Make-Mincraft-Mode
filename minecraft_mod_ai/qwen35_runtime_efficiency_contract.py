@@ -8,8 +8,11 @@ from typing import Any
 _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v1"
 _PAYLOAD_MARKER = "_mmm_qwen35_unbounded_output_v1"
 _CACHE_MARKER = "_mmm_qwen35_skip_cold_cache_reuse_probe_v1"
+_KV_MARKER = "_mmm_qwen35_skip_main_kv_probe_v1"
 _FAST_TUNING_ENV = "MMM_QWEN35_FAST_TUNING_ACTIVE"
+_QWEN_ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _FAST_MTP_WIDTHS = "2,4,8"
+_EXHAUSTIVE_MTP_WIDTHS = "1,2,3,4,5,6,8"
 
 
 def _is_qwen35_mtp(config: Any) -> bool:
@@ -46,13 +49,17 @@ def _fast_tuning_defaults() -> dict[str, str]:
     if _tuning_mode() == "exhaustive":
         return {}
     return {
+        # Width is also installed into Qwen's outer default below. Keeping it here
+        # handles direct/non-standard call paths consistently.
         "MMM_LLAMA_MTP_WIDTHS": _FAST_MTP_WIDTHS,
         "MMM_LLAMA_MTP_CONFIDENCE_WIDTHS": "",
         "MMM_LLAMA_MTP_P_MIN_CANDIDATES": "0",
         "MMM_LLAMA_UBATCH_CANDIDATES": "512",
-        "MMM_LLAMA_KV_AUTOTUNE": "0",
         "MMM_LLAMA_NGRAM_SPEC_TYPES": "",
         "MMM_LLAMA_AUTOTUNE_TOKENS": "96",
+        # Draft KV search added three more full model/server reloads. q4_0 is the
+        # memory-bandwidth-oriented T4 default; exhaustive mode retains measurement.
+        "MMM_QWEN35_MTP_DRAFT_KV": "q4_0",
         _FAST_TUNING_ENV: "1",
     }
 
@@ -62,6 +69,18 @@ def _restore_env(name: str, previous: str | None) -> None:
         os.environ.pop(name, None)
     else:
         os.environ[name] = previous
+
+
+def _install_qwen_width_default() -> None:
+    """Make the outer Qwen wrapper choose the fast width set before inner tuners run."""
+
+    from . import qwen35_mtp_hotpath_contract as qwen_hotpath
+
+    qwen_hotpath._DEFAULT_MTP_WIDTHS = (
+        _EXHAUSTIVE_MTP_WIDTHS
+        if _tuning_mode() == "exhaustive"
+        else _FAST_MTP_WIDTHS
+    )
 
 
 def _install_output_policy(hardware_policy: Any) -> None:
@@ -81,6 +100,28 @@ def _install_output_policy(hardware_policy: Any) -> None:
 
     setattr(payload, _PAYLOAD_MARKER, True)
     hardware_policy._server_payload = payload
+
+
+def _install_main_kv_probe_policy() -> None:
+    """Skip generic main-KV search only inside Qwen's default fast cold tune."""
+
+    from . import llama_decode_speed_contract as decode_speed
+
+    current = decode_speed._kv_autotune_enabled
+    if getattr(current, _KV_MARKER, False):
+        return
+
+    @wraps(current)
+    def kv_autotune_enabled(autotune: Any) -> bool:
+        if (
+            _tuning_mode() != "exhaustive"
+            and os.environ.get(_QWEN_ACTIVE_TUNING_ENV, "").strip() == "1"
+        ):
+            return False
+        return bool(current(autotune))
+
+    setattr(kv_autotune_enabled, _KV_MARKER, True)
+    decode_speed._kv_autotune_enabled = kv_autotune_enabled
 
 
 def _install_cache_probe_policy(runtime_tuning: Any) -> None:
@@ -135,13 +176,15 @@ def _install_cold_tuning_policy(autotune: Any) -> None:
 def install(autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
     """Remove Qwen's 8K output cap and bound expensive cold-start measurements.
 
-    Fast mode still measures baseline plus MTP widths 2/4/8, but skips duplicate
-    confidence/p-min/KV/ubatch/ngram/cache-reuse reload stages. Explicit environment
-    settings override every default, and MMM_QWEN35_MTP_TUNING=exhaustive restores the
-    full generic search for deliberate offline tuning.
+    Fast mode measures baseline plus native MTP widths 2/4/8, while duplicate
+    confidence/p-min/main-KV/draft-KV/ubatch/ngram/cache-reuse reload stages are
+    suppressed. Explicit environment settings remain authoritative, and
+    MMM_QWEN35_MTP_TUNING=exhaustive restores the full measured search.
     """
 
+    _install_qwen_width_default()
     _install_output_policy(hardware_policy)
+    _install_main_kv_probe_policy()
     _install_cache_probe_policy(runtime_tuning)
     _install_cold_tuning_policy(autotune)
 
