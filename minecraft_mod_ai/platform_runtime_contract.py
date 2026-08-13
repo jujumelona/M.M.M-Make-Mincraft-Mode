@@ -103,7 +103,12 @@ def _install_runtime_manager(module: Any) -> None:
         self.instance_root = None
         self._server_log = []
         self._client_log = []
+        # Preserve the base runtime-manager synchronization contract when this
+        # target-aware adapter replaces __init__.  Process/state mutations and
+        # log readers deliberately use separate locks so a blocking log stream
+        # cannot stall runtime status, cleanup or command handling.
         self._lock = threading.RLock()
+        self._log_lock = threading.RLock()
 
     init._mmm_dynamic_platform_runtime = True
     cls.__init__ = init
