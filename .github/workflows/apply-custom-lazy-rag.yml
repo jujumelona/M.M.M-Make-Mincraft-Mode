@@ -1,4 +1,4 @@
-name: Apply custom lazy RAG critical path optimization
+name: Apply custom lazy RAG critical path optimization v2
 
 on:
   push:
