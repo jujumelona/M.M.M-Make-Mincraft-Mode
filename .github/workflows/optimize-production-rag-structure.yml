@@ -27,6 +27,7 @@ jobs:
           python -m py_compile .github/scripts/optimize_production_rag_structure.py
           python .github/scripts/optimize_production_rag_structure.py
           python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9 --fix
           python -m ruff check minecraft_mod_ai tests --select F,E7,E9
           python -m pytest -q
       - name: Commit optimized structure to main
