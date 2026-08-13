@@ -9,12 +9,12 @@ from minecraft_mod_ai import small_model_agent_policy as small_policy
 from minecraft_mod_ai import small_model_research_contract as frontier
 
 
-def test_semantic_single_flight_ignores_object_identity() -> None:
+def test_semantic_planner_keys_ignore_object_identity() -> None:
     target = SimpleNamespace(
         _planner_key=lambda prompt, brief: (prompt, id(brief)),
         _ecosystem_key=lambda prompt, design, brief: (prompt, id(design), id(brief)),
     )
-    frontier._install_semantic_single_flight(target)
+    frontier._install_semantic_keys(target)
 
     brief_a = {"domains": [{"id": "fabric", "queries": ["api", "mapping"]}]}
     brief_b = {"domains": [{"queries": ["api", "mapping"], "id": "fabric"}]}
