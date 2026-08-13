@@ -38,9 +38,14 @@ def harden_pre_design_research(agentic_module: Any) -> None:
     if getattr(current_collect, _MARKER, False):
         return
 
-    # If v1 was installed already in a hot Colab process, unwrap it before installing
-    # the concurrency-safe v2 wrapper rather than stacking two forced-RAG passes.
-    original_collect = getattr(current_collect, "__wrapped__", current_collect)
+    # Hot Colab v1 wrappers should be unwrapped, but the central intelligence parallel
+    # collector is an execution owner rather than an obsolete forced-RAG layer. Preserve
+    # it so forced evidence wraps the parallel provider/domain fan-out instead of silently
+    # restoring the older sequential collector.
+    if getattr(current_collect, "_mmm_parallel_research_design_core_v1", False):
+        original_collect = current_collect
+    else:
+        original_collect = getattr(current_collect, "__wrapped__", current_collect)
     current_slice = agentic_module._domain_evidence_slice
     original_domain_slice = getattr(current_slice, "__wrapped__", current_slice)
 
