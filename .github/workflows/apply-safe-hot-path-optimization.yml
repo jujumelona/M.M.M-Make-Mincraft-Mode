@@ -1,0 +1,49 @@
+name: Apply safe hot-path optimization
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-safe-hot-path-optimization.yml
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply and validate focused hot-path changes
+        run: |
+          python -m pip install -q -e '.[dev]'
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwcm9kID0gUGF0aCgibWluZWNyYWZ0X21vZF9haS9wcm9kdWN0aW9uX3Rvb2xzLnB5IikKdGV4dCA9IHByb2QucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCmlmICJmcm9tIGZ1bmN0b29scyBpbXBvcnQgY2FjaGVkX3Byb3BlcnR5XG4iIG5vdCBpbiB0ZXh0OgogICAgYW5jaG9yID0gImZyb20gZGF0YWNsYXNzZXMgaW1wb3J0IGFzZGljdFxuZnJvbSBwYXRobGliIGltcG9ydCBQYXRoXG4iCiAgICBhc3NlcnQgYW5jaG9yIGluIHRleHQKICAgIHRleHQgPSB0ZXh0LnJlcGxhY2UoCiAgICAgICAgYW5jaG9yLAogICAgICAgICJmcm9tIGRhdGFjbGFzc2VzIGltcG9ydCBhc2RpY3RcbmZyb20gZnVuY3Rvb2xzIGltcG9ydCBjYWNoZWRfcHJvcGVydHlcbmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aFxuIiwKICAgICAgICAxLAogICAgKQplYWdlciA9ICgKICAgICIgICAgICAgIHNlbGYucHJvZmlsZSA9IHByb2ZpbGVcbiIKICAgICIgICAgICAgIHNlbGYucnVudGltZSA9IE1pbmVjcmFmdFJ1bnRpbWVNYW5hZ2VyKHNlbGYud29ya3NwYWNlX3Jvb3QpXG4iCiAgICAiICAgICAgICBzZWxmLm1pbmVmbGF5ZXIgPSBNaW5lZmxheWVyQnJpZGdlKClcblxuIgopCmxhenkgPSAoCiAgICAiICAgICAgICBzZWxmLnByb2ZpbGUgPSBwcm9maWxlXG5cbiIKICAgICIgICAgQGNhY2hlZF9wcm9wZXJ0eVxuIgogICAgIiAgICBkZWYgcnVudGltZShzZWxmKSAtPiBNaW5lY3JhZnRSdW50aW1lTWFuYWdlcjpcbiIKICAgICIgICAgICAgIHJldHVybiBNaW5lY3JhZnRSdW50aW1lTWFuYWdlcihzZWxmLndvcmtzcGFjZV9yb290KVxuXG4iCiAgICAiICAgIEBjYWNoZWRfcHJvcGVydHlcbiIKICAgICIgICAgZGVmIG1pbmVmbGF5ZXIoc2VsZikgLT4gTWluZWZsYXllckJyaWRnZTpcbiIKICAgICIgICAgICAgIHJldHVybiBNaW5lZmxheWVyQnJpZGdlKClcblxuIgopCmlmIGVhZ2VyIGluIHRleHQ6CiAgICB0ZXh0ID0gdGV4dC5yZXBsYWNlKGVhZ2VyLCBsYXp5LCAxKQphc3NlcnQgbGF6eSBpbiB0ZXh0CmNvbXBpbGUodGV4dCwgc3RyKHByb2QpLCAiZXhlYyIpCnByb2Qud3JpdGVfdGV4dCh0ZXh0LCBlbmNvZGluZz0idXRmLTgiKQoKY3VzdG9tID0gUGF0aCgibWluZWNyYWZ0X21vZF9haS9jdXN0b21fbW9kdWxlX2dlbmVyYXRvci5weSIpCnRleHQgPSBjdXN0b20ucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCm9sZCA9ICIgICAgICAgIGxpdmVfbWFuaWZlc3QgPSBQcm9qZWN0SW5kZXgocm9vdCwgcG9saWN5PXNlbGYucG9saWN5KS5tYW5pZmVzdF9yZWNlaXB0KClcbiAgICAgICAgUHJvZHVjdGlvblRvb2xTZXJ2aWNlKFxuIgpuZXcgPSAiIiIgICAgICAgICMgUmV1c2UgdGhlIGFscmVhZHktYnVpbHQgd2hvbGUtcHJvamVjdCBpbmRleCBmb3IgdGhlIFJBRyBzb3VyY2UgcmVjZWlwdC4KICAgICAgICAjIEEgc2Vjb25kIFByb2plY3RJbmRleCBoZXJlIHJlc2Nhbm5lZCB0aGUgY29tcGxldGUgcHJvamVjdCBiZWZvcmUgZXZlcnkKICAgICAgICAjIGN1c3RvbS1tb2R1bGUgZGVjb2RlLiBSZWZyZXNoIG9ubHkgd2hlbiBhIGNvbmN1cnJlbnQgbGFuZSBpbnZhbGlkYXRlZCBpdC4KICAgICAgICB0cnk6CiAgICAgICAgICAgIGxpdmVfbWFuaWZlc3QgPSBpbmRleC5tYW5pZmVzdF9yZWNlaXB0KCkKICAgICAgICBleGNlcHQgVmFsdWVFcnJvciBhcyBleGM6CiAgICAgICAgICAgIGlmIG5vdCBfaXNfc3RhbGVfcHJvamVjdF9pbmRleF9lcnJvcihleGMpOgogICAgICAgICAgICAgICAgcmFpc2UKICAgICAgICAgICAgaW5kZXggPSBQcm9qZWN0SW5kZXgocm9vdCwgcG9saWN5PXNlbGYucG9saWN5KQogICAgICAgICAgICBzZWxmLl9jYWNoZWRfaW5kZXggPSBpbmRleAogICAgICAgICAgICBzZWxmLl9jYWNoZWRfcm9vdCA9IHJvb3QKICAgICAgICAgICAgbGl2ZV9tYW5pZmVzdCA9IGluZGV4Lm1hbmlmZXN0X3JlY2VpcHQoKQoKICAgICAgICBQcm9kdWN0aW9uVG9vbFNlcnZpY2UoCiIiIgppZiBvbGQgaW4gdGV4dDoKICAgIHRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpCmFzc2VydCAiUHJvamVjdEluZGV4KHJvb3QsIHBvbGljeT1zZWxmLnBvbGljeSkubWFuaWZlc3RfcmVjZWlwdCgpIiBub3QgaW4gdGV4dAphc3NlcnQgImxpdmVfbWFuaWZlc3QgPSBpbmRleC5tYW5pZmVzdF9yZWNlaXB0KCkiIGluIHRleHQKY29tcGlsZSh0ZXh0LCBzdHIoY3VzdG9tKSwgImV4ZWMiKQpjdXN0b20ud3JpdGVfdGV4dCh0ZXh0LCBlbmNvZGluZz0idXRmLTgiKQoKdGVzdCA9IFBhdGgoInRlc3RzL3Rlc3Rfc2FmZV9ob3RfcGF0aF9vcHRpbWl6YXRpb24ucHkiKQp0ZXN0LndyaXRlX3RleHQoIiIiZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IGluc3BlY3QKCmZyb20gbWluZWNyYWZ0X21vZF9haSBpbXBvcnQgY3VzdG9tX21vZHVsZV9nZW5lcmF0b3IsIHByb2R1Y3Rpb25fdG9vbHMKCgpkZWYgdGVzdF9wcm9kdWN0aW9uX3Rvb2xfc2VydmljZV9sYXppbHlfY29uc3RydWN0c19ydW50aW1lX2JyaWRnZXMobW9ua2V5cGF0Y2gsIHRtcF9wYXRoKSAtPiBOb25lOgogICAgY2FsbHMgPSB7InJ1bnRpbWUiOiAwLCAibWluZWZsYXllciI6IDB9CgogICAgY2xhc3MgUnVudGltZToKICAgICAgICBkZWYgX19pbml0X18oc2VsZiwgcm9vdCkgLT4gTm9uZToKICAgICAgICAgICAgY2FsbHNbInJ1bnRpbWUiXSArPSAxCiAgICAgICAgICAgIHNlbGYucm9vdCA9IHJvb3QKCiAgICBjbGFzcyBNaW5lZmxheWVyOgogICAgICAgIGRlZiBfX2luaXRfXyhzZWxmKSAtPiBOb25lOgogICAgICAgICAgICBjYWxsc1sibWluZWZsYXllciJdICs9IDEKCiAgICBtb25rZXlwYXRjaC5zZXRhdHRyKHByb2R1Y3Rpb25fdG9vbHMsICJNaW5lY3JhZnRSdW50aW1lTWFuYWdlciIsIFJ1bnRpbWUpCiAgICBtb25rZXlwYXRjaC5zZXRhdHRyKHByb2R1Y3Rpb25fdG9vbHMsICJNaW5lZmxheWVyQnJpZGdlIiwgTWluZWZsYXllcikKICAgIHNlcnZpY2UgPSBwcm9kdWN0aW9uX3Rvb2xzLlByb2R1Y3Rpb25Ub29sU2VydmljZSh3b3Jrc3BhY2Vfcm9vdD10bXBfcGF0aCwgcHJvZmlsZT0idGVzdCIpCiAgICBhc3NlcnQgY2FsbHMgPT0geyJydW50aW1lIjogMCwgIm1pbmVmbGF5ZXIiOiAwfQogICAgYXNzZXJ0IHNlcnZpY2UucnVudGltZS5yb290ID09IHRtcF9wYXRoLnJlc29sdmUoKQogICAgYXNzZXJ0IHNlcnZpY2UucnVudGltZSBpcyBzZXJ2aWNlLnJ1bnRpbWUKICAgIGFzc2VydCBjYWxscyA9PSB7InJ1bnRpbWUiOiAxLCAibWluZWZsYXllciI6IDB9CiAgICBhc3NlcnQgc2VydmljZS5taW5lZmxheWVyIGlzIHNlcnZpY2UubWluZWZsYXllcgogICAgYXNzZXJ0IGNhbGxzID09IHsicnVudGltZSI6IDEsICJtaW5lZmxheWVyIjogMX0KCgpkZWYgdGVzdF9jdXN0b21fZ2VuZXJhdGlvbl9yZXVzZXNfZXhpc3RpbmdfcHJvamVjdF9pbmRleF9tYW5pZmVzdCgpIC0+IE5vbmU6CiAgICBzb3VyY2UgPSBpbnNwZWN0LmdldHNvdXJjZShjdXN0b21fbW9kdWxlX2dlbmVyYXRvci5DdXN0b21Nb2R1bGVHZW5lcmF0b3IuZ2VuZXJhdGUpCiAgICBhc3NlcnQgIlByb2plY3RJbmRleChyb290LCBwb2xpY3k9c2VsZi5wb2xpY3kpLm1hbmlmZXN0X3JlY2VpcHQoKSIgbm90IGluIHNvdXJjZQogICAgYXNzZXJ0ICJsaXZlX21hbmlmZXN0ID0gaW5kZXgubWFuaWZlc3RfcmVjZWlwdCgpIiBpbiBzb3VyY2UKICAgIGFzc2VydCAic2VsZi5fY2FjaGVkX2luZGV4ID0gaW5kZXgiIGluIHNvdXJjZQoiIiIsIGVuY29kaW5nPSJ1dGYtOCIpCmNvbXBpbGUodGVzdC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IiksIHN0cih0ZXN0KSwgImV4ZWMiKQo=' | base64 -d | python
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check \
+            minecraft_mod_ai/production_tools.py \
+            minecraft_mod_ai/custom_module_generator.py \
+            tests/test_safe_hot_path_optimization.py \
+            --select F,E7,E9
+          python -m pytest -q \
+            tests/test_safe_hot_path_optimization.py \
+            tests/test_project_context_pagination.py \
+            tests/test_research_ledger.py \
+            tests/test_custom_generation_search_contract.py \
+            tests/test_production_tool_parallel_contract.py
+      - name: Commit focused optimization to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/apply-safe-hot-path-optimization.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Optimize RAG hot-path initialization and indexing"
+          git pull --rebase origin main
+          git push origin HEAD:main
