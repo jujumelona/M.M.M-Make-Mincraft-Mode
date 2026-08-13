@@ -4,16 +4,16 @@ import json
 import os
 import signal
 import time
-from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import urlsplit
 
 
 _DEFAULT_WIDTH = 3
-_MARKER = "_mmm_qwen35_adaptive_mtp_hotpath_v2"
-_BASE_MARKER = "_mmm_qwen35_measured_fast_args"
+_DEFAULT_CTX = 8192
+_MARKER = "_mmm_qwen35_mtp3_hotpath_v3"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v2"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -24,23 +24,6 @@ _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE",
     "MMM_LLAMA_ACTIVE_KV_CACHE",
 )
-_QWEN_SEARCH_DEFAULTS = {
-    # Qwen3.5 MTP has a native draft head. Compare the old width-3 path against
-    # nearby widths and confidence-gated wider drafts instead of assuming one
-    # historical benchmark remains optimal on every CUDA/runtime combination.
-    "MMM_LLAMA_MTP_WIDTHS": "2,3",
-    "MMM_LLAMA_MTP_CONFIDENCE_WIDTHS": "3,6,8",
-    "MMM_LLAMA_MTP_SEED_P_MIN": "0.8",
-    "MMM_LLAMA_MTP_P_MIN_CANDIDATES": "0,0.6,0.8,0.9",
-    # Native MTP is the relevant speculative family for this checkpoint. N-gram
-    # candidates only add repeated 6 GB model reloads to first-run tuning.
-    "MMM_LLAMA_NGRAM_SPEC_TYPES": "",
-    # The Qwen measured base args intentionally use llama.cpp's native KV layout.
-    # The generic KV sweep would benchmark q4/q8/f16 labels after those CLI flags
-    # have already been removed, so it would reload the same effective server.
-    "MMM_LLAMA_KV_AUTOTUNE": "0",
-    "MMM_LLAMA_TUNING_OBJECTIVE": "single_stream",
-}
 
 
 def _enabled() -> bool:
@@ -60,9 +43,16 @@ def _is_qwen35_mtp(config: Any) -> bool:
 
 
 def _width(autotune: Any) -> int:
-    """Compatibility helper for callers that explicitly pin a historical width."""
-
     return autotune._env_int("MMM_QWEN35_MTP_WIDTH", _DEFAULT_WIDTH, minimum=1)
+
+
+def _context_size() -> int:
+    raw = os.environ.get("MMM_QWEN35_MTP_CTX", str(_DEFAULT_CTX)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_CTX
+    return max(4096, min(32768, value))
 
 
 def _drop_option(args: list[str], names: tuple[str, ...], *, takes_value: bool = True) -> None:
@@ -85,11 +75,13 @@ def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
 
 
 def _install_measured_fast_base_args(autotune: Any) -> None:
-    """Keep the server-side Qwen3.5 launch shape that previously measured fastest.
+    """Install the measured Qwen3.5 server shape without runtime search.
 
-    Full GPU offload, FlashAttention, batch 2048 and a single decode slot remain
-    fixed. Speculative width/confidence are deliberately *not* fixed here: the
-    adaptive decode benchmark chooses them from byte-identical candidates.
+    Production startup must not reload a 6 GB checkpoint repeatedly to discover a
+    speculative width that was already benchmarked. The hot path is one server:
+    full GPU offload, FlashAttention, batch 2048, ubatch 512, native KV and an 8K
+    context window. Large host tasks are already paginated; operators can explicitly
+    raise MMM_QWEN35_MTP_CTX when a single request genuinely needs more context.
     """
 
     current = getattr(autotune, "_base_args", None)
@@ -106,9 +98,10 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--flash-attn", "-fa"), "on")
         _set_option(args, ("--batch-size", "-b"), "2048")
         _set_option(args, ("--ubatch-size", "-ub"), "512")
+        _set_option(args, ("--ctx-size", "-c"), str(_context_size()))
 
-        # Preserve the actual historical fast launch rather than inheriting generic
-        # cache experiments. Context is intentionally untouched for correctness.
+        # Keep the measured native KV/server path. Generic cache/load experiments
+        # materially changed the old fast command and consumed T4 VRAM/launch time.
         _drop_option(args, ("--cache-type-k", "-ctk"))
         _drop_option(args, ("--cache-type-v", "-ctv"))
         _drop_option(args, ("--load-mode", "-lm"))
@@ -121,26 +114,7 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
     autotune._base_args = measured_base_args
 
 
-@contextmanager
-def _qwen_speed_search_defaults() -> Iterator[None]:
-    """Apply focused first-run search defaults without overriding user tuning."""
-
-    inserted: list[str] = []
-    for name, value in _QWEN_SEARCH_DEFAULTS.items():
-        if os.environ.get(name, "").strip():
-            continue
-        os.environ[name] = value
-        inserted.append(name)
-    try:
-        yield
-    finally:
-        for name in inserted:
-            os.environ.pop(name, None)
-
-
 def _prior_mmm_loopback_port() -> int | None:
-    """Return the port of a server left by an earlier MMM Colab engine load."""
-
     receipt_raw = os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip()
     endpoint = os.environ.get("LLAMA_SERVER_URL", "").strip()
     if not receipt_raw or not endpoint:
@@ -221,28 +195,21 @@ def _reclaim_prior_mmm_server() -> None:
         os.environ.pop(name, None)
 
 
-def _active_runtime_summary() -> str:
-    spec = os.environ.get("MMM_LLAMA_ACTIVE_SPEC_TYPE", "none") or "none"
-    width = os.environ.get("MMM_LLAMA_ACTIVE_DRAFT_N_MAX", "0") or "0"
-    p_min = os.environ.get("MMM_LLAMA_ACTIVE_MTP_P_MIN", "0") or "0"
-    ubatch = os.environ.get("MMM_LLAMA_ACTIVE_UBATCH", "")
-    fields = [f"spec={spec}", f"n_max={width}", f"p_min={p_min}"]
-    if ubatch:
-        fields.append(f"ubatch={ubatch}")
-    return " ".join(fields)
-
-
 def install(autotune: Any) -> None:
-    """Autotune Qwen3.5 MTP instead of pinning one historical speculative width."""
+    """Select one deterministic Qwen3.5 MTP-3 production server.
+
+    Runtime Best-of-N/autotuning is intentionally forbidden here. The old adaptive
+    path benchmarked multiple MTP widths/confidence thresholds serially, repeatedly
+    launching the same 6 GB model before useful work began.
+    """
 
     _install_measured_fast_base_args(autotune)
-
     current = autotune.ensure_tuned_server
     if getattr(current, _MARKER, False):
         return
 
     @wraps(current)
-    def ensure_qwen35_fastest(config: Any, request: Any) -> str:
+    def ensure_qwen35_mtp3(config: Any, request: Any) -> str:
         if not _enabled() or not _is_qwen35_mtp(config):
             return current(config, request)
 
@@ -251,33 +218,56 @@ def install(autotune: Any) -> None:
         if managed_process is not None and managed_process.poll() is None and managed_url:
             return managed_url
 
-        # A stale MMM server may have been recorded by a previous notebook engine
-        # import. Reclaim only that exact loopback process before benchmarking.
         _reclaim_prior_mmm_server()
+        if os.environ.get("LLAMA_SERVER_URL", "").strip():
+            return current(config, request)
 
-        with _qwen_speed_search_defaults():
-            url = current(config, request)
+        with autotune._AUTOTUNE_LOCK:
+            managed_process = getattr(autotune, "_MANAGED_PROCESS", None)
+            managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")
+            if managed_process is not None and managed_process.poll() is None and managed_url:
+                return managed_url
 
-        # The Qwen base profile deliberately uses llama.cpp's native KV layout.
-        os.environ.setdefault("MMM_LLAMA_ACTIVE_KV_CACHE", "native-default")
-        print(
-            "llama server: Qwen3.5 decode profile selected",
-            _active_runtime_summary(),
-            flush=True,
-        )
-        return url
+            binary = autotune._server_binary()
+            if binary is None:
+                raise RuntimeError("native llama-server binary is unavailable")
+            model_path = autotune._resolve_model_path(config)
+            width = _width(autotune)
+            batch = autotune._env_int("MMM_LLAMA_BATCH", 2048)
+            ubatch = min(batch, autotune._env_int("MMM_LLAMA_UBATCH", 512))
+            selected = autotune.ServerVariant(
+                name=f"qwen35-production-mtp-{width}",
+                spec_type="draft-mtp",
+                draft_n_max=width,
+                ubatch=ubatch,
+                parallel=1,
+                cache_reuse=0,
+                draft_p_min=0.0,
+            )
+            url = autotune._launch_selected(binary, model_path, config, selected)
+            os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = "draft-mtp"
+            os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(width)
+            os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = "1"
+            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(ubatch)
+            os.environ["MMM_LLAMA_ACTIVE_MTP_P_MIN"] = "0"
+            os.environ["MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE"] = "single_stream"
+            os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = "native-default"
+            print(
+                "llama server: Qwen3.5 fixed production profile",
+                f"spec=draft-mtp n_max={width} parallel=1 ctx={_context_size()} ubatch={ubatch}",
+                flush=True,
+            )
+            return url
 
-    setattr(ensure_qwen35_fastest, _MARKER, True)
-    # Preserve the old marker as a compatibility signal for older runtime guards,
-    # while no longer implying that width 3 is forcibly selected.
-    ensure_qwen35_fastest._mmm_qwen35_mtp3_hotpath = True  # type: ignore[attr-defined]
-    autotune.ensure_tuned_server = ensure_qwen35_fastest
+    setattr(ensure_qwen35_mtp3, _MARKER, True)
+    ensure_qwen35_mtp3._mmm_qwen35_mtp3_hotpath = True  # type: ignore[attr-defined]
+    autotune.ensure_tuned_server = ensure_qwen35_mtp3
 
 
 __all__ = [
+    "_context_size",
     "_install_measured_fast_base_args",
     "_is_qwen35_mtp",
     "_prior_mmm_loopback_port",
-    "_qwen_speed_search_defaults",
     "install",
 ]
