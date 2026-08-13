@@ -9,21 +9,21 @@ actual uncertainty requires it. This avoids turning every research-domain query 
 fresh external MCP process cold start before planning can continue.
 
 Explicit callers may still request a batched external evidence graph. Those calls are
-read-only, role-scoped, single-flight cached, and duplicate requests are collapsed before
-provider execution.
+read-only, role-scoped, cached after completion, and duplicate requests are collapsed
+before provider execution. A caller never waits on another caller's in-flight request.
 """
 
 import hashlib
 import json
 import os
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from functools import wraps
 from typing import Any, Collection, Mapping
 
 
-_MARKER = "_mmm_minecraft_mcp_evidence_v2"
+_MARKER = "_mmm_minecraft_mcp_evidence_v3"
 _MAX_RESULT_CHARS = 6000
 _TECHNICAL_KINDS = frozenset(
     {
@@ -190,6 +190,7 @@ def _shared_router() -> Any:
         with _SHARED_ROUTER_LOCK:
             if _SHARED_ROUTER is None:
                 from .external_mcp_router import ExternalMCPRouter
+
                 _SHARED_ROUTER = ExternalMCPRouter()
     return _SHARED_ROUTER
 
@@ -207,15 +208,11 @@ def collect_external_minecraft_evidence(
     *,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Explicitly collect reviewed external evidence, deduplicating cold starts.
-
-    This function is intentionally not called by the normal pre-design official-RAG
-    provider. Research agents already have reviewed role-scoped external MCP tools and
-    invoke them adaptively when local/official evidence leaves a real gap.
-    """
+    """Explicitly collect reviewed external evidence, deduplicating cold starts."""
     raw_domains = research_brief.get("domains")
     if not isinstance(raw_domains, list) or not raw_domains:
         from .spec import SpecValidationError
+
         raise SpecValidationError("Central research brief has no domains.")
 
     target = _target(research_brief)
@@ -277,6 +274,7 @@ def collect_external_minecraft_evidence(
         bundles = selected_router.invoke_many(requests)
         if len(bundles) != len(identities):
             from .spec import SpecValidationError
+
             raise SpecValidationError(
                 "External MCP batch changed deterministic result cardinality."
             )
@@ -301,7 +299,7 @@ def collect_external_minecraft_evidence(
     elif unique_requests:
         status = "PASS" if pass_count else "UNAVAILABLE"
     payload: dict[str, Any] = {
-        "schema_version": "mmm/external-minecraft-evidence-graph-v2",
+        "schema_version": "mmm/external-minecraft-evidence-graph-v3",
         "brief_sha256": str(research_brief.get("brief_sha256", "")),
         "target": target,
         "domains": domain_rows,
@@ -312,7 +310,8 @@ def collect_external_minecraft_evidence(
             "unique_request_count": unique_request_count,
             "deduplicated_request_count": max(0, logical_request_count - unique_request_count),
             "pass_count": pass_count,
-            "single_flight_cache": True,
+            "completed_read_cache": True,
+            "single_flight_wait": False,
             "deterministic_merge_order": True,
             "read_only": True,
             "planning_critical_path": False,
@@ -326,7 +325,7 @@ def collect_external_minecraft_evidence(
 
 
 def _install_router_parallel_cache() -> None:
-    """Add shared read caching and an explicit batch API without changing MCP lifecycle."""
+    """Add completed-read caching and a parallel batch API without in-flight waits."""
     from .external_mcp_router import ExternalMCPRouter, MCPRouteTarget
 
     if getattr(ExternalMCPRouter.invoke, _MARKER, False):
@@ -385,46 +384,30 @@ def _install_router_parallel_cache() -> None:
             state_lock = threading.RLock()
             self._mmm_external_cache_lock = state_lock
             self._mmm_external_read_cache = {}
-            self._mmm_external_inflight = {}
 
         with state_lock:
             cached = self._mmm_external_read_cache.get(key)
             if cached is not None:
                 return deepcopy(cached)
-            inflight = self._mmm_external_inflight.get(key)
-            owner = inflight is None
-            if owner:
-                inflight = Future()
-                self._mmm_external_inflight[key] = inflight
-        assert inflight is not None
-        if not owner:
-            return deepcopy(inflight.result())
 
-        try:
-            result = original_invoke(
-                self,
-                capability,
-                stage=stage,
-                arguments=arguments,
-                target=target,
-                corroborate=corroborate,
-                required=required,
-                max_access=max_access,
-                disposable_runtime=disposable_runtime,
-                allowed_server_ids=allowed_server_ids,
-            )
-        except BaseException as exc:
+        # Deliberately do not wait for an identical in-flight call. Explicit batches
+        # already collapse duplicate requests. Independent adaptive callers must be
+        # allowed to make progress even if another provider process wedges.
+        result = original_invoke(
+            self,
+            capability,
+            stage=stage,
+            arguments=arguments,
+            target=target,
+            corroborate=corroborate,
+            required=required,
+            max_access=max_access,
+            disposable_runtime=disposable_runtime,
+            allowed_server_ids=allowed_server_ids,
+        )
+        if result.get("status") in {"PASS", "PARTIAL"}:
             with state_lock:
-                self._mmm_external_inflight.pop(key, None)
-                if not inflight.done():
-                    inflight.set_exception(exc)
-            raise
-        with state_lock:
-            self._mmm_external_inflight.pop(key, None)
-            if result.get("status") in {"PASS", "PARTIAL"}:
                 self._mmm_external_read_cache[key] = deepcopy(result)
-            if not inflight.done():
-                inflight.set_result(deepcopy(result))
         return result
 
     setattr(invoke_cached, _MARKER, True)
@@ -469,7 +452,7 @@ def _install_router_parallel_cache() -> None:
                 ordered[index] = bundle
         return tuple(item for item in ordered if item is not None)
 
-    invoke_many._mmm_minecraft_mcp_evidence_v2 = True  # type: ignore[attr-defined]
+    invoke_many._mmm_minecraft_mcp_evidence_v3 = True  # type: ignore[attr-defined]
     ExternalMCPRouter.invoke_many = invoke_many
 
 
