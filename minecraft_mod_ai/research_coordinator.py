@@ -181,12 +181,15 @@ def collect_ecosystem_seed_bundle(
     page_builder: EcosystemPageBuilder = discover_seed_bundle,
     allow_legacy_terminal: bool = False,
 ) -> dict[str, Any]:
-    """Collect every request-derived ecosystem route page.
+    """Collect ecosystem route pages, or exactly one planning seed page.
 
-    Provider result cursors intentionally remain in each seed page for specialist
-    inspection.  This coordinator exhausts the separate route-catalog cursor so
-    no research domain disappears merely because it was not on the first route
-    page.
+    The normal coordinator is exhaustive because specialist callers may require the
+    complete request-derived route catalog.  ``allow_legacy_terminal`` is the planner
+    compatibility path used by ``CompleteGameDesignPlanner``: planning consumes only
+    the first bounded seed page and preserves ``next_route_cursor`` plus
+    ``remaining_route_count`` for later specialist work.  This prevents the planning
+    critical path from accidentally turning seed discovery into a full internet
+    research crawl.
     """
 
     if type(route_limit) is not int or not 1 <= route_limit <= 100:
@@ -324,6 +327,30 @@ def collect_ecosystem_seed_bundle(
                 "candidate_count": declared_candidates,
             }
         )
+
+        if allow_legacy_terminal:
+            planning_seed = deepcopy(first_page)
+            planning_seed["aggregate_schema_version"] = (
+                "mmm/ecosystem-planning-seed-v1"
+            )
+            planning_seed["status"] = _aggregate_ecosystem_status(
+                statuses, pages, candidate_count
+            )
+            planning_seed["candidate_count"] = candidate_count
+            planning_seed["pages"] = pages
+            planning_seed["errors"] = errors
+            planning_seed["coverage"] = (
+                "planning seed only; remaining route catalog and provider cursors are "
+                "intentionally deferred to specialist dependency/asset research"
+            )
+            planning_seed["collection_receipt"] = {
+                "schema_version": "mmm/ecosystem-route-collection-receipt-v1",
+                "route_page_count": 1,
+                "route_limit": route_limit,
+                "route_pages_sha256": _sha256(route_receipts),
+                "planning_seed_only": True,
+            }
+            return planning_seed
 
         if not next_cursor:
             if not disabled_page and (
