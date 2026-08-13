@@ -25,7 +25,6 @@ servers:
     federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mod_generation_mcp_server]
-    env: {MMM_MCP_STAGE: generation}
     version_policy: dynamic
     loaders: [fabric]
     trust: first_party
@@ -220,7 +219,7 @@ servers:
     trust: reviewed_open_source
     source_repo: chapmanjw/minecraft-java-fabric-mcp-server
     test_harness_only: true
-    purpose: inspect the real target Fabric server/world API in a disposable test runtime
+    purpose: inspect the real target Fabric server/world API in a disposable target server
     capabilities:
       runtime_server_status:
         tool: server_get_status
