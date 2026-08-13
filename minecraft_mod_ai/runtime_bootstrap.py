@@ -398,7 +398,7 @@ def _install_late_safety_contracts() -> None:
     )
     install_parallel_result_determinism(
         orchestrator_module=complete_orchestrator,
-        audio_module=audio_generator,
+        audio_generator_module=audio_generator,
     )
 
 
