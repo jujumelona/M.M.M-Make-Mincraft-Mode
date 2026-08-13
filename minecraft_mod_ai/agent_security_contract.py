@@ -7,7 +7,7 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 
-_INSTALL_MARKER = "_mmm_agent_security_contract_v2"
+_INSTALL_MARKER = "_mmm_agent_security_contract_v3"
 _SLICE_MARKER = "_mmm_scoped_forced_rag_receipt_v1"
 _MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v1"
 _SKILL_MARKER = "_mmm_compact_skill_context_v1"
@@ -38,6 +38,16 @@ def install(
     if getattr(model_router_module, _INSTALL_MARKER, False):
         return
 
+    # Keep package composition narrow: callers only need to supply the already-live RAG
+    # owners. Secondary owners are resolved here instead of spreading imports through
+    # package __init__ or creating another bootstrap path.
+    if agentic_optimization_module is None:
+        from . import agentic_optimization_contract as agentic_optimization_module
+    if agent_tool_runtime_module is None:
+        from . import agent_tool_runtime as agent_tool_runtime_module
+    if capability_context_module is None:
+        from . import agent_capability_context as capability_context_module
+
     original_harden = pre_design_rag_module.harden_pre_design_research
 
     def harden(agentic_module: Any) -> None:
@@ -51,14 +61,11 @@ def install(
     # is installed, so harden its current outermost evidence slice once as well.
     _install_scoped_domain_receipt(pre_design_rag_module, agentic_research_module)
     model_router_module._usable_rag_result = usable_rag_result
-
-    if agentic_optimization_module is not None and agent_tool_runtime_module is not None:
-        _install_repair_memory_boundary(
-            agentic_optimization_module,
-            agent_tool_runtime_module,
-        )
-    if capability_context_module is not None:
-        _install_compact_skill_context(capability_context_module)
+    _install_repair_memory_boundary(
+        agentic_optimization_module,
+        agent_tool_runtime_module,
+    )
+    _install_compact_skill_context(capability_context_module)
 
     setattr(model_router_module, _INSTALL_MARKER, True)
 
