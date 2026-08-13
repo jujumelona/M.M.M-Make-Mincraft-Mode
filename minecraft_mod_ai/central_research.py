@@ -10,8 +10,8 @@ from .spec import SpecValidationError, canonical_json
 
 
 _DOMAIN_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
-_MAX_TEXT_BYTES = 16 * 1024
 _MAX_QUERY_BYTES = 2 * 1024
+_QUERY_BOUNDARIES = frozenset("\n\r\t .!?;:,。！？；，、")
 _ALLOWED_EVIDENCE_KINDS = frozenset(
     {
         "minecraft_api",
@@ -107,8 +107,8 @@ def normalize_research_brief(
     """Validate the planner's generic classification or build a safe fallback.
 
     Domains are derived from the request and design, never from a fixed genre or
-    content template.  A model may group a huge catalog into a domain here; the
-    complete planner later expands it into any number of production batches.
+    content template. A model may group a huge catalog into a domain here; execution
+    queries are losslessly paged instead of truncating any authoritative research text.
     """
 
     if candidate is None:
@@ -335,12 +335,13 @@ def _research_domain(value: Any) -> ResearchDomain:
         raise SpecValidationError(
             f"Research domain {domain_id} has unknown providers: {unknown_providers}"
         )
-    queries = _string_list(value["queries"], f"{domain_id}.queries")
-    for query in queries:
-        if len(query.encode("utf-8")) > _MAX_QUERY_BYTES:
-            raise SpecValidationError(
-                f"{domain_id}.queries contains an item over the query byte policy."
-            )
+    source_queries = _string_list(value["queries"], f"{domain_id}.queries")
+    queries = tuple(
+        page
+        for query in source_queries
+        for page in _lossless_query_pages(query, _MAX_QUERY_BYTES)
+        if page.strip()
+    )
     return ResearchDomain(
         domain_id=domain_id,
         objective=_text(value["objective"], f"{domain_id}.objective"),
@@ -524,11 +525,11 @@ def _requested_media_routes(
 ) -> dict[str, tuple[str, ...]]:
     """Return explicit media requests without inventing presentation categories.
 
-    The generic request domain must stay media-neutral.  Otherwise words injected
-    by the research router itself (for example ``audio`` or
-    ``openverse_audio``) activate downstream quality gates even when a user only
-    asked for a simple item.  Asset entries are routed independently below, so
-    this helper considers the prompt plus non-asset design text.
+    The generic request domain must stay media-neutral. Otherwise words injected
+    by the research router itself (for example ``audio`` or ``openverse_audio``)
+    activate downstream quality gates even when a user only asked for a simple item.
+    Asset entries are routed independently below, so this helper considers the prompt
+    plus non-asset design text.
     """
 
     sources = [prompt.strip()]
@@ -776,7 +777,7 @@ def _augment_domain_routes(domain: ResearchDomain) -> ResearchDomain:
 def _requested_technology_kinds(prompt: str) -> tuple[str, ...]:
     """Infer only explicit technology families for the deterministic fallback.
 
-    The model classifier remains the primary route.  This fallback prevents an
+    The model classifier remains the primary route. This fallback prevents an
     explicit AI or voice request from collapsing into the generic dependency
     bucket when model output is missing or invalid.
     """
@@ -893,14 +894,46 @@ def _string_list(value: Any, field: str, *, allow_empty: bool = False) -> tuple[
 def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SpecValidationError(f"{field} must be a non-empty string.")
-    return _bounded_text(value.strip(), field=field)
+    return value.strip()
 
 
-def _bounded_text(value: str, *, field: str = "research text") -> str:
-    raw_bytes = value.encode("utf-8")
-    if len(raw_bytes) > _MAX_TEXT_BYTES:
-        return raw_bytes[:_MAX_TEXT_BYTES].decode("utf-8", errors="ignore").strip()
-    return value
+def _lossless_query_pages(statement: str, max_bytes: int) -> tuple[str, ...]:
+    """Bound one search execution page without dropping any source code point."""
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    if len(statement.encode("utf-8")) <= max_bytes:
+        return (statement,)
+
+    pages: list[str] = []
+    current: list[str] = []
+    current_bytes = 0
+    for character in statement:
+        size = len(character.encode("utf-8"))
+        if current and current_bytes + size > max_bytes:
+            minimum = max_bytes // 2
+            consumed = 0
+            boundary = 0
+            for index, value in enumerate(current, start=1):
+                consumed += len(value.encode("utf-8"))
+                if consumed >= minimum and value in _QUERY_BOUNDARIES:
+                    boundary = index
+            cut = boundary or len(current)
+            pages.append("".join(current[:cut]))
+            current = current[cut:]
+            current_bytes = len("".join(current).encode("utf-8"))
+            if current and current_bytes + size > max_bytes:
+                pages.append("".join(current))
+                current = []
+                current_bytes = 0
+        current.append(character)
+        current_bytes += size
+    if current:
+        pages.append("".join(current))
+    if "".join(pages) != statement:
+        raise RuntimeError("Research query paging changed source text.")
+    if any(len(page.encode("utf-8")) > max_bytes for page in pages):
+        raise RuntimeError("Research query page exceeded its byte budget.")
+    return tuple(pages)
 
 
 def _query_chunks(statement: str) -> tuple[str, ...]:
@@ -911,20 +944,11 @@ def _query_chunks(statement: str) -> tuple[str, ...]:
     budget = _MAX_QUERY_BYTES - len(suffix.encode("utf-8"))
     if budget <= 0:
         raise RuntimeError("Central research query suffix exceeds its byte policy.")
-    chunks: list[str] = []
-    current: list[str] = []
-    current_bytes = 0
-    for character in statement:
-        size = len(character.encode("utf-8"))
-        if current and current_bytes + size > budget:
-            chunks.append("".join(current).strip() + suffix)
-            current = []
-            current_bytes = 0
-        current.append(character)
-        current_bytes += size
-    if current:
-        chunks.append("".join(current).strip() + suffix)
-    return tuple(query for query in chunks if query.strip())
+    return tuple(
+        page.strip() + suffix
+        for page in _lossless_query_pages(statement, budget)
+        if page.strip()
+    )
 
 
 def _sha256(value: str) -> str:
