@@ -424,6 +424,10 @@ def _install_public_boundary_contracts() -> None:
 
 def _install_post_bootstrap_contracts() -> None:
     """Install wrappers that must observe the fully composed runtime."""
+    from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
+    from .small_model_research_contract import install as install_small_model_research
 
     install_planning_stall_guard()
+    install_small_model_research()
+    install_minecraft_mcp_evidence()
