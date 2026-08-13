@@ -114,14 +114,14 @@ def test_planner_overlaps_evidence_with_ecosystem_prefetch() -> None:
         *,
         research_brief=None,
         page_builder=None,
-        allow_legacy_terminal=False,
+        planning_seed_only=False,
         **kwargs,
     ):
         assert prompt == "prompt"
         assert game_design is design
         assert research_brief is brief
         assert callable(page_builder)
-        assert allow_legacy_terminal is True
+        assert planning_seed_only is True
         ecosystem_started.set()
         return {"ecosystem": "ready"}
 
@@ -151,5 +151,5 @@ def test_planner_overlaps_evidence_with_ecosystem_prefetch() -> None:
         design,
         research_brief=brief,
         page_builder=fake_module.discover_seed_bundle,
-        allow_legacy_terminal=True,
+        planning_seed_only=True,
     ) == {"ecosystem": "ready"}
