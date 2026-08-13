@@ -184,6 +184,9 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
     @wraps(current)
     def score_with_evidence(page: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
         base_score, verifier = current(page)
+        if "deliverable_evidence" not in page:
+            return base_score, dict(verifier)
+
         completed = page.get("completed_deliverables")
         completed_values = (
             [str(item).strip() for item in completed if str(item).strip()]
