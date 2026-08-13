@@ -31,12 +31,21 @@ def _target_parallel_retrieve_factory(
     ) -> dict[str, Any]:
         adapter = _adapter_from_brief(research_brief)
         if adapter is None:
-            # Pre-target classification keeps the legacy conceptual 1.20.1 lane.
-            # Once a target is frozen, all evidence uses the target-aware agentic lane.
-            return (
-                legacy_retrieve(research_brief, retrieve=retrieve)
-                if retrieve
-                else legacy_retrieve(research_brief)
+            # Keep explicit injected retrievers on the legacy path for deterministic
+            # contract tests and callers that intentionally control call ordering.
+            if retrieve is not None:
+                return legacy_retrieve(research_brief, retrieve=retrieve)
+            # Normal pre-design research is still a real runtime lane. Run the reviewed
+            # conceptual 1.20.1 corpus through the same parallel agentic fusion layer
+            # instead of silently falling back to serial retrieval.
+            return retrieve_target_agentic_evidence(
+                research_brief,
+                central_module=central_module,
+                retrieve=retrieval_module.retrieve_official_evidence,
+                minecraft_version="1.20.1",
+                loader="fabric",
+                mappings="yarn-1.20.1+build.1",
+                include_target=False,
             )
 
         selected_retrieve = retrieve or retrieval_module.retrieve_official_evidence
@@ -73,6 +82,16 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
         central_module.retrieve_domain_evidence = target_retrieve
 
     complete_planner_module.retrieve_domain_evidence = target_retrieve
+
+    # platform_prompt_contract imports the research-first game-design helper before
+    # this late target-RAG installer runs. Repair that captured function reference so
+    # pre-design research cannot bypass the parallel/fusion owner.
+    try:
+        from . import agentic_research_game_design as research_design_module
+    except ImportError:
+        research_design_module = None
+    if research_design_module is not None:
+        research_design_module.retrieve_domain_evidence = target_retrieve
 
     current_radar = complete_planner_module.collect_technology_radar
     base_radar = getattr(current_radar, "__wrapped__", current_radar)
