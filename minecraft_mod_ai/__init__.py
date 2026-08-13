@@ -1,14 +1,8 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Fabric mod production tools."""
 
 from .runtime_bootstrap import initialize_runtime
-from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
-from .small_model_research_contract import install as install_small_model_research
 
-# Initialize the composed runtime first, then bind the small-model research guard and
-# keep the final reviewed Minecraft evidence layer outermost.
 initialize_runtime()
-install_small_model_research()
-install_minecraft_mcp_evidence()
 
 from .api import (
     ChatReply,
