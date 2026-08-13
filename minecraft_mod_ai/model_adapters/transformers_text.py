@@ -37,7 +37,10 @@ class TransformersTextAdapter(ModelAdapter):
                 truncation=False,
             )
             input_tokens = int(inputs["input_ids"].shape[-1])
-            if input_tokens + cfg.max_new_tokens > cfg.max_context:
+            if (
+                cfg.max_context > 0
+                and input_tokens + cfg.max_new_tokens > cfg.max_context
+            ):
                 raise ModelConfigurationError(
                     "Rendered text request exceeds the model context: "
                     f"{input_tokens} input + {cfg.max_new_tokens} reserved output "
