@@ -55,7 +55,7 @@ def test_generation_nodes_use_resource_specific_lanes() -> None:
 
     assert custom.resource_class == "llm"
     assert deterministic.resource_class == "commit"
-    assert audio_binding.resource_class == "llm"
+    assert audio_binding.resource_class == "commit"
     assert asset.resource_class == "image_gpu"
     assert audio.resource_class == "cpu_io"
     assert finalize.resource_class == "commit"

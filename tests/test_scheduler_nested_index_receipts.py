@@ -2,51 +2,23 @@ from __future__ import annotations
 
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.scheduler_parallel_safety_contract import _receipt_touched_paths
-from minecraft_mod_ai.work_graph import WorkNode
-
-
-class _Ledger:
-    def __init__(self) -> None:
-        self.state = "running"
-        self.events: list[str] = []
-
-    def cached_receipt(self, *_args, **_kwargs):
-        return None
-
-    def task(self, _node_id):
-        return {"state": self.state}
-
-    def raise_if_cancelled(self):
-        self.events.append("cancel-check")
-
-    def begin(self, *_args, **_kwargs):
-        self.state = "running"
-
-    def retry(self, *_args, **_kwargs):
-        self.state = "pending"
-
-    def invalidate(self, *_args, **_kwargs):
-        pass
-
-    def succeed(self, *_args, **_kwargs):
-        self.events.append("ledger-succeed")
-        self.state = "succeeded"
-
-    def fail(self, *_args, **_kwargs):
-        self.state = "failed"
+from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
 
 
 class _Index:
-    def __init__(self, ledger: _Ledger) -> None:
+    def __init__(self, ledger: DurableWorkLedger) -> None:
         self.ledger = ledger
         self.paths: tuple[str, ...] = ()
+        self.events: list[str] = []
 
     def update_files(self, paths):
+        assert self.ledger.task("nested")["state"] == "running"
         self.paths = tuple(paths)
-        self.ledger.events.append("index-update")
+        self.events.append("index-update")
 
     def write_manifest(self):
-        self.ledger.events.append("index-manifest")
+        assert self.ledger.task("nested")["state"] == "running"
+        self.events.append("index-manifest")
 
 
 def _node() -> WorkNode:
@@ -100,13 +72,22 @@ def test_nested_generator_receipts_expose_all_touched_source_paths() -> None:
     )
 
 
-def test_nested_paths_are_committed_before_node_success() -> None:
-    ledger = _Ledger()
+def test_nested_paths_are_committed_before_node_success(tmp_path) -> None:
+    node = _node()
+    plan = WorkGraphPlan(
+        schema_version="mmm/production-work-graph-v1",
+        proposal_hash="sha256:nested",
+        graph_hash="sha256:nested-graph",
+        module_count=0,
+        nodes=(node,),
+    )
+    ledger = DurableWorkLedger(tmp_path / "run.sqlite", proposal_hash=plan.proposal_hash)
+    ledger.sync_plan(plan)
     index = _Index(ledger)
 
     receipt = CompleteProductionOrchestrator._run_work_node(
         ledger,
-        _node(),
+        node,
         action=_nested_receipt,
         validate_cached=lambda _cached: False,
         shared_index=index,
@@ -119,5 +100,5 @@ def test_nested_paths_are_committed_before_node_success() -> None:
         "src/main/resources/fabric.mod.json",
         "src/main/java/Old.java",
     )
-    assert ledger.events.index("index-update") < ledger.events.index("ledger-succeed")
-    assert ledger.events.index("index-manifest") < ledger.events.index("ledger-succeed")
+    assert index.events == ["index-update", "index-manifest"]
+    assert ledger.task("nested")["state"] == "succeeded"

@@ -47,7 +47,7 @@ def test_production_batch_requires_monotonic_deliverable_progress(monkeypatch) -
         ),
     )
     parts = planner_module._ProductionParts([], [], [], [])
-    with pytest.raises(SpecValidationError, match="no host-verifiable deliverable progress"):
+    with pytest.raises(SpecValidationError, match="made no verified progress"):
         planner._expand_one_production_batch(
             batch=planner_module._ProductionBatch(
                 "core", "scope", (), ("first", "second"), ()

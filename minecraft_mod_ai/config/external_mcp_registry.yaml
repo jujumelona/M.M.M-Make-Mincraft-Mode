@@ -219,7 +219,7 @@ servers:
     trust: reviewed_open_source
     source_repo: chapmanjw/minecraft-java-fabric-mcp-server
     test_harness_only: true
-    purpose: inspect the real target Fabric server/world API in a disposable target server
+    purpose: inspect the real target Fabric server/world API in a disposable test runtime
     capabilities:
       runtime_server_status:
         tool: server_get_status

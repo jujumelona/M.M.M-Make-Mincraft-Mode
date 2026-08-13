@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 import json
 from pathlib import Path
 
 import pytest
 
-from minecraft_mod_ai.complete_spec import (
-    ProductionModule,
-    complete_proposal_from_parts,
-)
+from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
 from minecraft_mod_ai.mcp_tools import MMMToolService
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
@@ -24,9 +20,7 @@ from minecraft_mod_ai.spec import SpecValidationError
 
 
 def _proposal(module_count: int = 73):
-    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(
-        "Create one frost item."
-    )
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan("Create one frost item.")
     return complete_proposal_from_parts(
         requested_prompt="Create a scalable frost content mod.",
         base_proposal=base,
@@ -54,19 +48,13 @@ def _quality_proposal():
     return complete_proposal_from_parts(
         requested_prompt=legacy.requested_prompt,
         base_proposal=legacy.base_proposal,
-        game_design={
-            **legacy.game_design,
-            "_production_contract": compiled.contract,
-        },
+        game_design={**legacy.game_design, "_production_contract": compiled.contract},
         modules=legacy.modules,
         acceptance_tests=compiled.acceptance_tests,
     )
 
 
-def test_complete_plan_uses_opaque_ref_and_paged_sections(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_complete_plan_uses_opaque_ref_and_paged_sections(tmp_path: Path, monkeypatch) -> None:
     proposal = _proposal()
     monkeypatch.setattr(
         "minecraft_mod_ai.mcp_tools.CompleteGameDesignPlanner.plan",
@@ -85,92 +73,77 @@ def test_complete_plan_uses_opaque_ref_and_paged_sections(
     assert result["proposal_ref"].startswith("plan_")
     assert result["counts"]["modules"] == 73
 
-    first = service.read_complete_plan_section(
-        result["proposal_ref"],
-        "modules",
-        limit=11,
-    )
+    first = service.read_complete_plan_section(result["proposal_ref"], "modules", limit=11)
     second = service.read_complete_plan_section(
-        result["proposal_ref"],
-        "modules",
-        cursor=first["next_cursor"],
-        limit=11,
+        result["proposal_ref"], "modules", cursor=first["next_cursor"], limit=11
     )
     assert len(first["items"]) == 11
     assert first["remaining"] == 62
     assert second["items"][0]["module_id"] == "frost_module_00011"
 
     approved = service.approve_complete_plan(
-        approval_hash=result["approval_hash"],
-        proposal_ref=result["proposal_ref"],
+        approval_hash=result["approval_hash"], proposal_ref=result["proposal_ref"]
     )
     assert approved["status"] == "approved"
     assert "complete_proposal" not in approved
     assert approved["proposal_ref"] == result["proposal_ref"]
 
 
-def test_complete_execution_accepts_ref_without_inline_payload(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_complete_execution_accepts_ref_without_inline_payload(tmp_path: Path, monkeypatch) -> None:
     proposal = _proposal(2)
     service = MMMToolService(
         workspace_root=tmp_path / "workspace",
         router_factory=lambda: object(),
     )
     proposal_ref = service._store_complete_proposal(proposal)
-
     called = {}
 
-    @dataclass
     class Result:
-        summary: str = "done"
+        def to_dict(self):
+            return {"summary": "done"}
 
-    def execute(proposal, **kwargs):
-        called["proposal"] = proposal
-        called["kwargs"] = kwargs
-        return Result()
+    class Orchestrator:
+        def __init__(self, **_kwargs):
+            pass
 
-    monkeypatch.setattr(service, "_complete_orchestrator", lambda *_args, **_kwargs: type("O", (), {"execute": staticmethod(execute)})())
-    result = service.execute_complete_game(proposal_ref=proposal_ref)
+        def execute(self, value, **kwargs):
+            called["proposal"] = value
+            called["kwargs"] = kwargs
+            return Result()
 
-    assert called["proposal"].approval_hash == proposal.approval_hash
+    monkeypatch.setattr("minecraft_mod_ai.mcp_tools.CompleteProductionOrchestrator", Orchestrator)
+    result = service.execute_complete_project(
+        proposal_ref=proposal_ref,
+        approval_hash=proposal.calculate_hash(),
+        run_name="ref-execution",
+    )
+
+    assert called["proposal"].calculate_hash() == proposal.calculate_hash()
     assert result["summary"] == "done"
 
 
-def test_quality_contract_and_run_status_are_bounded_read_only_views(
-    tmp_path: Path,
-) -> None:
+def test_quality_contract_and_run_status_are_bounded_read_only_views(tmp_path: Path) -> None:
     proposal = _quality_proposal()
-    root = tmp_path / "run"
-    root.mkdir(parents=True)
-    report = evaluate_quality_contract(
-        proposal,
-        root,
-        {
-            "build_validation": {"status": "passed", "evidence": ["build"]},
-            "runtime_validation": {"status": "passed", "evidence": ["runtime"]},
-            "asset_validation": {"status": "passed", "evidence": ["asset"]},
-            "playtest_validation": {"status": "passed", "evidence": ["playtest"]},
-        },
-    )
-    persist_quality_report(root, report)
     service = MMMToolService(
         workspace_root=tmp_path / "workspace",
         router_factory=lambda: object(),
     )
+    proposal_ref = service._store_complete_proposal(proposal)
+    quality = service.read_quality_contract(proposal_ref)
 
-    quality = service.read_quality_contract(root)
-    status = service.read_run_status(root)
+    contract = proposal.game_design["_production_contract"]
+    report = evaluate_quality_contract(contract, {}, proposal.calculate_hash())
+    report_path = service.workspace_root / "run" / ".minecraft_ai" / "quality-convergence.json"
+    persist_quality_report(report_path, report)
+    status = service.quality_status("run")
 
-    assert quality["schema_version"].startswith("mmm/")
-    assert "dimensions" in quality
-    assert status["root"] == str(root.resolve())
+    assert quality["proposal_ref"] == proposal_ref
+    assert quality["quality_dimensions"]
+    assert status["run_name"] == "run"
+    assert status["overall_status"] in {"MISSING", "FAIL", "PASS"}
 
 
-def test_complete_plan_ref_is_not_a_caller_controlled_path(
-    tmp_path: Path,
-) -> None:
+def test_complete_plan_ref_is_not_a_caller_controlled_path(tmp_path: Path) -> None:
     service = MMMToolService(
         workspace_root=tmp_path / "workspace",
         router_factory=lambda: object(),
@@ -192,14 +165,13 @@ def test_complete_plan_requires_exactly_one_transport_form(tmp_path: Path) -> No
     )
     proposal = _proposal(2)
     ref = service._store_complete_proposal(proposal)
-    payload = base64.b64encode(
-        json.dumps(proposal.to_dict(), ensure_ascii=False).encode("utf-8")
-    ).decode("ascii")
 
-    with pytest.raises(ValueError):
-        service.execute_complete_game(
+    with pytest.raises(SpecValidationError, match="exactly one"):
+        service.execute_complete_project(
+            complete_proposal=proposal.to_dict(),
             proposal_ref=ref,
-            complete_proposal_base64=payload,
+            approval_hash=proposal.calculate_hash(),
+            run_name="invalid-transport",
         )
 
 
@@ -208,52 +180,56 @@ def test_complete_plan_ref_binds_the_exact_root_index_bytes(tmp_path: Path) -> N
         workspace_root=tmp_path / "workspace",
         router_factory=lambda: object(),
     )
-    proposal = _proposal(2)
-    ref = service._store_complete_proposal(proposal)
-    path = service._complete_plan_root(ref) / "index.json"
-    original = path.read_bytes()
-    path.write_bytes(original + b" ")
+    ref = service._store_complete_proposal(_proposal(2))
+    digest = ref.split("_", 2)[1]
+    index = service.workspace_root / ".minecraft_ai" / "plans" / digest / "complete-proposal.json"
+    index.write_bytes(index.read_bytes() + b" ")
 
-    with pytest.raises(SpecValidationError):
+    with pytest.raises(SpecValidationError, match="opaque reference"):
         service.read_complete_plan_section(ref, "modules")
 
 
-def test_complete_plan_page_is_byte_bounded_and_resumes_large_item(
-    tmp_path: Path,
-) -> None:
-    policy = ScalePolicy(max_mcp_page_bytes=1_500, max_mcp_page_items=16)
+def test_complete_plan_page_is_byte_bounded_and_resumes_large_item(tmp_path: Path) -> None:
+    policy = ScalePolicy(mcp_page_bytes=8 * 1024)
+    legacy = _proposal(1)
+    proposal = complete_proposal_from_parts(
+        requested_prompt=legacy.requested_prompt,
+        base_proposal=legacy.base_proposal,
+        game_design=legacy.game_design,
+        modules=(ProductionModule("huge", "item", {"description": "x" * 32_000}),),
+        acceptance_tests=legacy.acceptance_tests,
+    )
     service = MMMToolService(
         workspace_root=tmp_path / "workspace",
         router_factory=lambda: object(),
         policy=policy,
     )
-    proposal = _proposal(1)
     ref = service._store_complete_proposal(proposal)
-    root = service._complete_plan_root(ref)
-    section = root / "sections" / "modules.jsonl"
-    huge = {
-        "module_id": "huge",
-        "kind": "item",
-        "config": {"description": "x" * 8_000},
-        "depends_on": [],
-    }
-    section.write_text(json.dumps(huge) + "\n", encoding="utf-8")
-    service._refresh_complete_plan_root_index(ref)
 
     cursor = ""
-    pieces: list[str] = []
-    seen = 0
-    while True:
+    chunks: list[bytes] = []
+    item_sha = ""
+    for _ in range(20):
         page = service.read_complete_plan_section(ref, "modules", cursor=cursor, limit=16)
-        encoded = json.dumps(page, ensure_ascii=False).encode("utf-8")
-        assert len(encoded) <= policy.max_mcp_page_bytes
-        pieces.extend(item.get("chunk", "") for item in page["items"])
-        seen += len(page["items"])
+        encoded = json.dumps(
+            page, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        assert len(encoded) <= policy.mcp_page_bytes
+        fragment = page["item_fragment"]
+        assert fragment is not None
+        if item_sha:
+            assert fragment["item_sha256"] == item_sha
+        item_sha = fragment["item_sha256"]
+        chunks.append(base64.b64decode(fragment["data"]))
         cursor = page["next_cursor"]
         if not cursor:
             break
-        assert seen < 100
-    assert pieces
+    else:
+        raise AssertionError("large item fragment cursor did not terminate")
+
+    reconstructed = json.loads(b"".join(chunks).decode("utf-8"))
+    assert reconstructed["module_id"] == "huge"
+    assert len(reconstructed["config"]["description"]) == 32_000
 
 
 def test_complete_plan_cursor_cannot_be_forged_to_skip_items(tmp_path: Path) -> None:
@@ -264,6 +240,8 @@ def test_complete_plan_cursor_cannot_be_forged_to_skip_items(tmp_path: Path) -> 
     ref = service._store_complete_proposal(_proposal(3))
     first = service.read_complete_plan_section(ref, "modules", limit=1)
     assert first["next_cursor"]
-    forged = first["next_cursor"][:-1] + ("A" if first["next_cursor"][-1] != "A" else "B")
+    forged = first["next_cursor"][:-1] + (
+        "A" if first["next_cursor"][-1] != "A" else "B"
+    )
     with pytest.raises(SpecValidationError):
         service.read_complete_plan_section(ref, "modules", cursor=forged, limit=1)

@@ -4,39 +4,7 @@ import pytest
 
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_orchestrator_support import CompleteProductionError
-from minecraft_mod_ai.work_graph import WorkNode
-
-
-class _Ledger:
-    def __init__(self) -> None:
-        self.state = "running"
-        self.events: list[str] = []
-
-    def cached_receipt(self, *_args, **_kwargs):
-        return None
-
-    def task(self, _node_id):
-        return {"state": self.state}
-
-    def raise_if_cancelled(self):
-        pass
-
-    def begin(self, *_args, **_kwargs):
-        self.state = "running"
-
-    def retry(self, *_args, **_kwargs):
-        self.state = "pending"
-
-    def invalidate(self, *_args, **_kwargs):
-        pass
-
-    def succeed(self, *_args, **_kwargs):
-        self.events.append("succeed")
-        self.state = "succeeded"
-
-    def fail(self, *_args, **_kwargs):
-        self.events.append("fail")
-        self.state = "failed"
+from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
 
 
 class _BrokenIndex:
@@ -47,8 +15,7 @@ class _BrokenIndex:
         raise AssertionError("manifest must not run after update failure")
 
 
-def test_shared_index_failure_cannot_publish_succeeded_state() -> None:
-    ledger = _Ledger()
+def test_shared_index_failure_cannot_publish_succeeded_state(tmp_path) -> None:
     node = WorkNode(
         node_id="node",
         stage="generate:content",
@@ -57,6 +24,15 @@ def test_shared_index_failure_cannot_publish_succeeded_state() -> None:
         payload={"resource_class": "cpu_io"},
         resource_class="cpu_io",
     )
+    plan = WorkGraphPlan(
+        schema_version="mmm/production-work-graph-v1",
+        proposal_hash="sha256:index-fail",
+        graph_hash="sha256:index-fail-graph",
+        module_count=0,
+        nodes=(node,),
+    )
+    ledger = DurableWorkLedger(tmp_path / "run.sqlite", proposal_hash=plan.proposal_hash)
+    ledger.sync_plan(plan)
 
     with pytest.raises(CompleteProductionError, match="Shared ProjectIndex commit failed"):
         CompleteProductionOrchestrator._run_work_node(
@@ -70,5 +46,6 @@ def test_shared_index_failure_cannot_publish_succeeded_state() -> None:
             shared_index=_BrokenIndex(),
         )
 
-    assert ledger.state == "failed"
-    assert ledger.events == ["fail"]
+    task = ledger.task("node")
+    assert task["state"] == "failed"
+    assert not ledger.cached_receipt("node", input_hash=node.input_hash)

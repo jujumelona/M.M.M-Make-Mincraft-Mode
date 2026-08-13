@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.spec import SpecValidationError, canonical_json
 from minecraft_mod_ai.technology_radar import (
     _assess_technology_candidate_with_receipt_key,
@@ -271,30 +272,45 @@ def test_realtime_voice_requires_capture_cancellation_and_transport_stress_tests
 
 
 def test_target_and_authority_contract_are_exact_for_every_requirement() -> None:
-    radar = build_technology_radar("Add speech recognition to NPC dialogue.")
+    adapter = adapter_for_target("1.20.1", "fabric")
+    target = {
+        "edition": adapter.edition,
+        "minecraft_version": adapter.minecraft_version,
+        "loader": adapter.loader,
+        "mappings": adapter.yarn_mappings,
+        "java_version": adapter.java_version,
+        "fabric_loader": adapter.fabric_loader,
+        "fabric_api": adapter.fabric_api,
+    }
+    radar = build_technology_radar(
+        "Add speech recognition to NPC dialogue.",
+        target=target,
+    )
 
     for requirement in radar["requirements"]:
-        assert requirement["target"] == {
-            "edition": "java",
-            "minecraft_version": "1.20.1",
-            "loader": "fabric",
-            "mappings": "yarn-1.20.1+build.1",
-            "java_version": "17",
-            "fabric_loader": "0.16.10",
-            "fabric_api": "0.92.11+1.20.1",
-        }
+        assert requirement["target"] == target
         assert requirement["authority"]["game_state_mutation"] == "server_only"
         assert (
             requirement["authority"]["client_messages"]
             == "schema_validated_and_rate_limited_by_server"
         )
 
-    with pytest.raises(SpecValidationError, match="exact Minecraft 1.20.1"):
-        build_technology_radar(
-            "AI NPC",
-            target={"minecraft_version": "1.21.1"},
-        )
-
+    newer = adapter_for_target("1.21.1", "fabric")
+    newer_target = {
+        "edition": newer.edition,
+        "minecraft_version": newer.minecraft_version,
+        "loader": newer.loader,
+        "mappings": newer.yarn_mappings,
+        "java_version": newer.java_version,
+        "fabric_loader": newer.fabric_loader,
+        "fabric_api": newer.fabric_api,
+    }
+    newer_radar = build_technology_radar("AI NPC", target=newer_target)
+    assert newer_radar["requirements"]
+    assert all(
+        requirement["target"] == newer_target
+        for requirement in newer_radar["requirements"]
+    )
 
 def test_offline_request_removes_remote_api_without_removing_other_options() -> None:
     radar = build_technology_radar(

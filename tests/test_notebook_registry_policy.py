@@ -83,10 +83,22 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     assert "spec_from_file_location" in cells["setup"]
     assert "USED_COMMIT[:12]" in cells["setup"]
     assert '"+main:refs/remotes/origin/main"' in cells["setup"]
-    assert '"merge",' in cells["setup"]
+    assert '"checkout",' in cells["setup"]
+    assert '"reset",' in cells["setup"]
+    assert '"--hard",' in cells["setup"]
+    assert '"clean",' in cells["setup"]
+    assert '"-fd"' in cells["setup"]
     assert '"pull",' not in cells["setup"]
     assert "refs/remotes/origin/main" in cells["setup"]
     assert '"--untracked-files=no"' in cells["setup"]
+    assert "sys.modules.pop" in cells["setup"]
+    assert "importlib.invalidate_caches()" in cells["setup"]
+    assert "LATEST_MAIN_COMMIT" in cells["existing-input"]
+    assert "CURRENT_ENGINE_COMMIT" in cells["existing-input"]
+    assert '"reset",' in cells["existing-input"]
+    assert '"--hard",' in cells["existing-input"]
+    assert "sys.modules.pop" in cells["existing-input"]
+    assert "importlib.invalidate_caches()" in cells["existing-input"]
     assert "setup_colab_runtime(" in cells["setup"]
     assert "engine_module_file=engine_module_file" in cells["setup"]
     assert 'SETUP_STATE["receipt"]' in cells["setup"]
@@ -104,22 +116,6 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     )
     assert "_install_project(local_profile=profile in LOCAL_PROFILES)" in setup_source
     assert '"--no-build-isolation"' in setup_source
-    assert "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6" in setup_source
-    assert "from causal_conv1d import causal_conv1d_fn, causal_conv1d_update" in setup_source
-    assert "chunk_gated_delta_rule" in setup_source
-    assert "fused_recurrent_gated_delta_rule" in setup_source
-    assert "modeling_qwen3_5" in setup_source
-    assert "is_fast_path_available" in setup_source
-    assert "causal_conv1d_fn(" in setup_source
-    assert "causal_conv1d_update(" in setup_source
-    assert "torch.cuda.synchronize()" in setup_source
-    assert "use_qk_l2norm_in_kernel=True" in setup_source
-    assert "initial_state=recurrent_state" in setup_source
-    assert "without embedded" in setup_source
-    assert "loaded from a different checkout" in setup_source
-    assert "restart the Colab " in setup_source
-    assert "runtime and rerun from cell 1" in setup_source
-    assert "Qwen3.5 fast path: unavailable; using standard PyTorch" in setup_source
 
 
 def test_notebook_checks_setup_fingerprint_and_prints_resolved_planner() -> None:

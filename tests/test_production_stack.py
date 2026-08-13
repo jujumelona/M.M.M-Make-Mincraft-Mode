@@ -8,14 +8,18 @@ from minecraft_mod_ai.system_pack_generator import supported_system_packs
 def test_external_mcp_registry_is_version_locked() -> None:
     registry = ExternalMCPRegistry().public_dict()["servers"]
     assert registry["mmm-frontdoor"]["env"]["MMM_MCP_STAGE"] == "frontdoor"
-    assert registry["mmm-generation"]["env"]["MMM_MCP_STAGE"] == "generation"
-    assert registry["minecraft-dev"]["status"] == "enabled"
-    assert registry["minecraft-dev"]["command"][-1].endswith("@1.2.4")
+    generation = registry["mmm-generation"]
+    assert generation["command"] == [
+        "python", "-m", "minecraft_mod_ai.mod_generation_mcp_server"
+    ]
+    assert "env" not in generation
+    minecraft_dev = registry["minecraft-dev"]
+    assert minecraft_dev["status"] == "enabled"
+    assert minecraft_dev["version_policy"] == "provider_reported"
+    assert minecraft_dev["command"][-1] == "@mcdxai/minecraft-dev-mcp"
+    assert "fabric" in minecraft_dev["loaders"]
     assert registry["playwright"]["command"][2] == "@playwright/mcp@0.0.78"
-    assert "1.20.1" in registry["minecraft-dev"]["target_versions"]
-    assert "1.20.1" in registry["mineflayer-1201"]["target_versions"]
     assert registry["gdmc"]["status"] == "incompatible_by_default"
-
 
 def test_canonical_skill_catalog_is_complete() -> None:
     report = validate_skill_catalog()

@@ -264,14 +264,23 @@ class _FakeIndex:
         self.events.append("index-manifest")
 
 
-def test_shared_index_commit_precedes_dependency_visible_success() -> None:
-    from minecraft_mod_ai.complete_orchestrator import (
-        CompleteProductionOrchestrator,
-    )
+def test_shared_index_commit_precedes_dependency_visible_success(tmp_path: Path) -> None:
+    from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 
-    ledger = _FakeLedger()
-    index = _FakeIndex(ledger.events)
     node = _node("node", "generate:content", "cpu_io")
+    plan = _plan(node)
+    ledger = DurableWorkLedger(tmp_path / "commit.sqlite", proposal_hash=plan.proposal_hash)
+    ledger.sync_plan(plan)
+    events: list[str] = []
+
+    class Index:
+        def update_files(self, _paths):
+            assert ledger.task("node")["state"] == "running"
+            events.append("index-update")
+
+        def write_manifest(self):
+            assert ledger.task("node")["state"] == "running"
+            events.append("index-manifest")
 
     receipt = CompleteProductionOrchestrator._run_work_node(
         ledger,
@@ -281,13 +290,9 @@ def test_shared_index_commit_precedes_dependency_visible_success() -> None:
             "touched_paths": ["src/main/java/X.java"],
         },
         validate_cached=lambda _cached: False,
-        shared_index=index,
+        shared_index=Index(),
     )
 
     assert receipt["status"] == "PASS"
-    assert ledger.events.index("index-update") < ledger.events.index(
-        "ledger-succeed"
-    )
-    assert ledger.events.index("index-manifest") < ledger.events.index(
-        "ledger-succeed"
-    )
+    assert events == ["index-update", "index-manifest"]
+    assert ledger.task("node")["state"] == "succeeded"
