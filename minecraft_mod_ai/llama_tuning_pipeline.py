@@ -14,8 +14,8 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 16
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v2"
+_TUNING_PIPELINE_VERSION = 17
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
 @dataclass(frozen=True)
@@ -32,8 +32,49 @@ class NativeLlamaTuningPipeline:
         self.hardware_policy = hardware_policy
         self.runtime_tuning = runtime_tuning
 
+    @staticmethod
+    def _context_value(config: Any) -> int:
+        """Resolve the one final llama context value without inventing a host cap.
+
+        Precedence is model-specific explicit override, generic explicit override,
+        then the model profile. Zero is meaningful and means llama.cpp/model-native
+        context selection; it must never be rewritten to one token or a historical
+        fixed window.
+        """
+
+        model_id = str(getattr(config, "model_id", "")).casefold()
+        extra = getattr(config, "extra", {})
+        filename = (
+            str(extra.get("gguf_filename", "")).casefold()
+            if isinstance(extra, dict)
+            else ""
+        )
+        qwen35_mtp = "qwen3.5-9b" in model_id and (
+            "mtp" in model_id or "mtp" in filename
+        )
+        override_names = (
+            ("MMM_QWEN35_MTP_CTX", "MMM_LLAMA_SERVER_CTX")
+            if qwen35_mtp
+            else ("MMM_LLAMA_SERVER_CTX",)
+        )
+        for name in override_names:
+            raw = os.environ.get(name, "").strip()
+            if not raw:
+                continue
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            if value >= 0:
+                return value
+
+        try:
+            return max(0, int(getattr(config, "max_context", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
     def _install_profile_context_authority(self) -> None:
-        """Keep the profile context unless Qwen has an explicit operator override."""
+        """Install the final context owner after every lower-level tuning wrapper."""
         current = getattr(self.autotune, "_base_args", None)
         if not callable(current) or getattr(current, _PROFILE_CONTEXT_MARKER, False):
             return
@@ -41,28 +82,7 @@ class NativeLlamaTuningPipeline:
         @wraps(current)
         def profile_context(binary: str, model_path: str, config: Any, port: int) -> list[str]:
             args = list(current(binary, model_path, config, port))
-            model_id = str(getattr(config, "model_id", "")).casefold()
-            extra = getattr(config, "extra", {})
-            filename = (
-                str(extra.get("gguf_filename", "")).casefold()
-                if isinstance(extra, dict)
-                else ""
-            )
-            if "qwen3.5-9b" not in model_id or (
-                "mtp" not in model_id and "mtp" not in filename
-            ):
-                return args
-
-            # The latest profile policy intentionally defaults Qwen3.5 to its full
-            # registry context. An explicit Qwen-only override remains authoritative;
-            # do not silently overwrite it in this final composition wrapper.
-            if os.environ.get("MMM_QWEN35_MTP_CTX", "").strip():
-                return args
-
-            try:
-                context = max(0, int(getattr(config, "max_context", 0) or 0))
-            except (TypeError, ValueError):
-                context = 0
+            context = self._context_value(config)
             for name in ("--ctx-size", "-c"):
                 if name in args:
                     index = args.index(name)
@@ -100,8 +120,8 @@ class NativeLlamaTuningPipeline:
                 self.hardware_policy,
             )
             install_qwen35_hotpath(self.autotune)
-            # The profile is the default context owner; a Qwen-specific explicit
-            # override is preserved by the authority wrapper above.
+            # This is intentionally last: the profile/native context is the default
+            # authority and explicit operator overrides retain their exact value.
             self._install_profile_context_authority()
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
