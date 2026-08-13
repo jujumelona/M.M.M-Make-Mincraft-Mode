@@ -424,7 +424,15 @@ def _install_public_boundary_contracts() -> None:
 
 def _install_post_bootstrap_contracts() -> None:
     """Install wrappers that must observe the fully composed runtime."""
-    from . import central_research, ecosystem_discovery, research_coordinator
+    from . import (
+        agentic_pre_design_rag,
+        agentic_research_game_design,
+        central_research,
+        ecosystem_discovery,
+        model_router,
+        research_coordinator,
+    )
+    from .agent_security_contract import install as install_agent_security
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .small_model_research_contract import install as install_small_model_research
@@ -441,6 +449,11 @@ def _install_post_bootstrap_contracts() -> None:
 
     install_planning_stall_guard()
     install_small_model_research()
+    install_agent_security(
+        pre_design_rag_module=agentic_pre_design_rag,
+        agentic_research_module=agentic_research_game_design,
+        model_router_module=model_router,
+    )
     # research_coordinator imported the ecosystem builder by value. Rebind it after
     # the lossless installer so specialist calls use the same paged implementation.
     research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
