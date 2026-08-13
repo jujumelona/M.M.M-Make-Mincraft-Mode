@@ -104,9 +104,9 @@ def build_agent_capability_context(
     The routing table in ``config/agent_roles.yaml`` is an execution contract, not
     documentation. Known model roles only see Skills assigned to their agent role(s)
     and external Minecraft MCP routes hosted by reviewed servers assigned to those
-    roles. Unknown roles retain the stage-level fallback for backwards-compatible
-    callers. Full Skill markdown and provider schemas stay out of the prompt; live
-    schemas are requested on demand through the generic external MCP bridge.
+    roles. The selected Skill policies include their activation conditions, validators,
+    retry semantics, approvals, forbidden actions and exit conditions without injecting
+    whole markdown files or every provider schema into each model call.
     """
 
     selected = stage.strip().lower()
@@ -126,8 +126,14 @@ def build_agent_capability_context(
             {
                 "name": contract.name,
                 "description": contract.description,
+                "activate_when": contract.activate_when,
                 "model_tools": model_tools,
                 "host_owned_tools": host_tools,
+                "validators": contract.validators,
+                "retry": contract.retry.to_dict(),
+                "approvals": dict(contract.approvals),
+                "forbidden_actions": contract.forbidden_actions,
+                "exit": contract.exit.to_dict(),
             }
         )
 
@@ -167,7 +173,7 @@ def build_agent_capability_context(
             external_capabilities = {}
 
     payload = {
-        "schema_version": "mmm/agent-capability-context-v2",
+        "schema_version": "mmm/agent-capability-context-v3",
         "stage": selected,
         "model_role": model_role,
         "agent_roles": [route.name for route in role_routes],
@@ -176,13 +182,14 @@ def build_agent_capability_context(
         "external_minecraft_mcp_capabilities": external_capabilities,
         "routing_policy": (
             "Choose every relevant Skill route, not every route indiscriminately. "
-            "Use model_tools directly. host_owned_tools belong to the durable host "
-            "pipeline and must not be recreated recursively. For an external MCP "
-            "capability, use external_mcp_schema when its live arguments are unknown, "
-            "then external_mcp_call. The capability map lists reviewed provider servers "
-            "available to this agent role. Prefer independent relevant evidence in "
-            "parallel when it materially improves correctness; skip unrelated tools to "
-            "avoid latency and token waste."
+            "Obey the selected Skill's validators, approvals, forbidden_actions, retry "
+            "and exit contract. Use model_tools directly. host_owned_tools belong to "
+            "the durable host pipeline and must not be recreated recursively. For an "
+            "external MCP capability, use external_mcp_schema when its live arguments "
+            "are unknown, then external_mcp_call. The capability map lists reviewed "
+            "provider servers available to this agent role. Prefer independent relevant "
+            "evidence in parallel when it materially improves correctness; skip unrelated "
+            "tools to avoid latency and token waste."
         ),
     }
     return "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n" + json.dumps(
