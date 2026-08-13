@@ -281,6 +281,27 @@ class _ImplementationRouter:
         )
 
 
+def _empty_discovery_page() -> dict[str, object]:
+    return {
+        "schema_version": "mmm/ecosystem-seed-bundle-v1",
+        "status": "empty",
+        "query_sha256": "sha256:test-query",
+        "route_sha256": "sha256:test-routes",
+        "route_count": 0,
+        "route_offset": 0,
+        "processed_route_count": 0,
+        "remaining_route_count": 0,
+        "next_route_cursor": "",
+        "routes_complete": True,
+        "candidate_count": 0,
+        "pages": [],
+        "errors": [],
+        "coverage": "test-empty",
+        "authorization": "none",
+        "download_performed": False,
+    }
+
+
 def _patch_frontdoor(monkeypatch: pytest.MonkeyPatch, prompt: str) -> None:
     base = _base_proposal()
     game_design = {
@@ -316,7 +337,7 @@ def _patch_frontdoor(monkeypatch: pytest.MonkeyPatch, prompt: str) -> None:
     monkeypatch.setattr(
         planner_module,
         "discover_seed_bundle",
-        lambda *args, **kwargs: {"schema_version": "test/discovery-v1"},
+        lambda *args, **kwargs: _empty_discovery_page(),
     )
 
 
