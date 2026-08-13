@@ -265,6 +265,7 @@ def _install_router(model_router_module: Any) -> None:
                     request=request,
                     runtime=runtime,
                     stage=stage,
+                    role=role,
                 )
             return adapter.generate(request)
 
