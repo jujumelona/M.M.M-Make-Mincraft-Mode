@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/debug-repo-audit.yml
       - .github/scripts/debug_repo_audit.py
+      - tests/test_project_write_concurrency_contract.py
 
 permissions:
   contents: read
