@@ -101,7 +101,6 @@ def _sanitize_production_page(
     request: dict[str, Any] | str,
 ) -> dict[str, Any]:
     """Keep completion claims only when they point at observable production evidence."""
-
     result = dict(page)
     completed = result.get("completed_deliverables")
     if not isinstance(completed, list):
@@ -260,9 +259,6 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
             ):
                 grounded += 1
 
-        # Only directly verifiable evidence earns search preference. A declared but
-        # currently unresolvable identifier gets no bonus; the outer host sanitizer
-        # can still accept it when it resolves against prior catalogs/dependencies.
         score = base_score + 24.0 * grounded - 36.0 * unsupported
         details = {
             **dict(verifier),
@@ -277,18 +273,13 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
 
 
 def install() -> None:
-    """Bind verifier-grounded completion to the live small-model planner.
-
-    Adaptive Best-of-N, single-stream collapse, verifier-guided repair, bounded retry,
-    project memory, preference traces, RAG/tool grounding and deterministic gates are
-    already owned by their dedicated runtime contracts. This layer adds only the
-    missing completion-evidence bridge so policy ownership stays non-overlapping.
-    """
-
+    """Bind research-derived small-model amplification to the live planner."""
     from . import agentic_optimization_contract, complete_planner
+    from .small_model_agent_policy import enhance_planner
 
     _install_evidence_aware_scoring(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
+    enhance_planner(complete_planner)
 
 
 __all__ = ["install"]
