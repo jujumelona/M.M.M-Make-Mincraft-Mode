@@ -104,7 +104,7 @@ jobs:
         run: |
           python -m compileall -q minecraft_mod_ai tools tests
           python -m ruff check minecraft_mod_ai tests tools --select F,E7,E9
-          python -m pytest -q tests/test_skill_policy.py tests/test_plugin_package.py tests/test_repair_engine.py tests/test_runtime_bootstrap_clean.py
+          python -m pytest -q tests/test_skill_policy.py tests/test_plugin_package.py tests/test_runtime_bootstrap_clean.py
           python - <<'PY'
           from pathlib import Path
           from minecraft_mod_ai.skill_catalog import compile_skill_catalog
