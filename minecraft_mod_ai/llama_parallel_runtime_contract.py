@@ -341,7 +341,7 @@ def _install_planner_search_parallelism() -> None:
             return score, candidate_index, page, verifier
 
         candidates: list[tuple[float, int, dict[str, Any], dict[str, Any]]] = []
-        errors: dict[int, BaseException] = {}
+        errors: dict[int, Exception] = {}
         with ThreadPoolExecutor(
             max_workers=parallel,
             thread_name_prefix="mmm_plan_search",
@@ -350,7 +350,7 @@ def _install_planner_search_parallelism() -> None:
             for candidate_index, future in enumerate(futures):
                 try:
                     candidates.append(future.result())
-                except BaseException as exc:
+                except Exception as exc:
                     errors[candidate_index] = exc
 
         if not candidates:
