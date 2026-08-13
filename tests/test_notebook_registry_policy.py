@@ -44,7 +44,6 @@ def test_notebook_has_stable_unique_cell_contract() -> None:
         "setup",
         "existing-input",
         "registry",
-        "mtp-server",
         "plan",
         "build",
         "download",
@@ -75,6 +74,7 @@ def test_existing_zip_upload_is_explicit_and_bound_to_revise_mode() -> None:
 
 def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     cells = _cells()
+    setup = runpy.run_path("tools/colab_runtime_setup.py")
     setup_source = Path("tools/colab_runtime_setup.py").read_text(encoding="utf-8")
 
     assert 'MODEL_PROFILE = "Qwen3.5-9B_6GB"' in cells["configuration"]
@@ -95,10 +95,13 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     )
     assert "flash-linear-attention" not in cells["setup"]
 
-    assert "LOCAL_PROFILES = frozenset(" in setup_source
-    assert '"Qwen3.5-9B_6GB"' in setup_source
-    assert 'REMOTE_PROJECT_INSTALL_TARGET = (\n    ".[ui,rag,' in setup_source
-    assert 'LOCAL_PROJECT_INSTALL_TARGET = (\n    ".[ui,local-model,rag,' in setup_source
+    assert "Qwen3.5-9B_6GB" in setup["LOCAL_PROFILES"]
+    assert setup["REMOTE_PROJECT_INSTALL_TARGET"] == (
+        ".[ui,rag,image,speech,production-audio,training]"
+    )
+    assert setup["LOCAL_PROJECT_INSTALL_TARGET"] == (
+        ".[ui,local-model,rag,image,speech,production-audio,training]"
+    )
     assert "_install_project(local_profile=profile in LOCAL_PROFILES)" in setup_source
     assert '"--no-build-isolation"' in setup_source
     assert "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6" in setup_source
@@ -161,6 +164,7 @@ def test_colab_setup_fingerprint_is_stable_and_receipt_excludes_secrets() -> Non
         output_root="/content/mmm-output",
         setup_fingerprint=first,
         torch=None,
+        llama_server_binary="",
     )
     serialized = json.dumps(receipt, sort_keys=True)
     assert "TOPSECRET" not in serialized
