@@ -5,6 +5,12 @@ from .runtime_bootstrap import initialize_runtime
 # One package-wide bootstrap replaces the previous import-order patch chain.
 initialize_runtime()
 
+# The stall guard is deliberately installed after the canonical bootstrap because
+# it tunes the final composed planner/RAG wrappers rather than their raw modules.
+from .planning_stall_guard_contract import install as _install_planning_stall_guard
+
+_install_planning_stall_guard()
+
 from .api import (
     ChatReply,
     CompleteChatReply,
