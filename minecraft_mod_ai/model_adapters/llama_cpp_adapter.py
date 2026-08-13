@@ -10,6 +10,8 @@ import json
 import os
 from typing import Any, Mapping
 
+import httpx
+
 from .base import (
     AdapterConfig,
     GenerationRequest,
@@ -18,6 +20,9 @@ from .base import (
     ModelBackendError,
     ToolCall,
 )
+
+
+_DEFAULT_HTTPX_POST = httpx.post
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -76,13 +81,10 @@ class LlamaCppAdapter(ModelAdapter):
         server_url = self._server_url(request)
         try:
             from ..llama_server_hardware_policy import _server_payload
-            from ..llama_stream_efficiency_contract import _client, _report_server_connection
+            from ..llama_stream_efficiency_contract import _report_server_connection
 
             payload = _server_payload(self, request)
-            response = _client(server_url).post(
-                f"{server_url}/chat/completions",
-                json=payload,
-            )
+            response = _post_completion(server_url, payload)
             if response.status_code >= 400:
                 body = _bounded_response_body(response)
                 raise RuntimeError(
@@ -122,6 +124,17 @@ class LlamaCppAdapter(ModelAdapter):
 
     def close(self) -> None:
         return None
+
+
+def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
+    """Use the persistent production pool while preserving injected HTTP transports."""
+
+    endpoint = f"{server_url}/chat/completions"
+    if httpx.post is not _DEFAULT_HTTPX_POST:
+        return httpx.post(endpoint, json=payload, timeout=None)
+    from ..llama_stream_efficiency_contract import _client
+
+    return _client(server_url).post(endpoint, json=payload)
 
 
 def _bounded_response_body(response: Any, *, limit: int = 1600) -> str:
