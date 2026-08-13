@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import minecraft_mod_ai.agentic_pre_design_rag as paged_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.game_design as game_design
 
@@ -103,7 +105,9 @@ def test_sectioned_game_design_uses_four_small_schema_calls() -> None:
     assert "art_direction" not in result
 
 
-def test_research_domain_uses_research_tools_before_declaring_sufficient(monkeypatch) -> None:
+def test_research_domain_reads_bounded_document_pages_before_tool_synthesis(
+    monkeypatch, tmp_path: Path
+) -> None:
     router = _ResearchRouter()
 
     class _Trace:
@@ -116,6 +120,7 @@ def test_research_domain_uses_research_tools_before_declaring_sufficient(monkeyp
         def record_success(self, value):
             self.success = value
 
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
     monkeypatch.setattr(agentic, "PlannerStageTrace", _Trace)
 
     result = agentic._research_domain_with_agent(
@@ -135,12 +140,104 @@ def test_research_domain_uses_research_tools_before_declaring_sufficient(monkeyp
     )
 
     assert result["sufficient"] is True
-    assert len(router.calls) == 1
-    call = router.calls[0]
-    assert call["tool_stage"] == "research"
-    assert call["enable_tools"] is True
-    assert call["response_format"] == "json"
-    assert call["response_schema"] == agentic._RESEARCH_NOTE_SCHEMA
+    assert len(router.calls) >= 2
+    page_calls = router.calls[:-1]
+    synthesis_call = router.calls[-1]
+    assert all(call["tool_stage"] == "research" for call in router.calls)
+    assert all(call["response_format"] == "json" for call in router.calls)
+    assert all(call["response_schema"] == agentic._RESEARCH_NOTE_SCHEMA for call in router.calls)
+    assert all(call["enable_tools"] is False for call in page_calls)
+    assert synthesis_call["enable_tools"] is True
+    assert "evidence_document" in result
+
+
+def test_evidence_document_preserves_full_raw_and_bounds_every_page(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    huge_official = "official:" + ("A" * 45_000)
+    huge_forced = "forced:" + ("B" * 55_000)
+    evidence = {
+        "official_rag": {
+            "domain_id": "mk_combat",
+            "queries": [{"query": "damage", "raw": huge_official}],
+        },
+        "forced_project_rag": {
+            "domain_id": "mk_combat",
+            "queries": [{"query": "bossbar", "raw": huge_forced}],
+        },
+        "technology_radar": {"status": "available"},
+    }
+
+    document = paged_rag._materialize_domain_evidence_document("mk_combat", evidence)
+    raw = json.loads(Path(document["raw_path"]).read_text(encoding="utf-8"))
+    pages = paged_rag._read_evidence_pages(document)
+
+    assert raw == evidence
+    assert document["page_count"] == len(pages)
+    assert len(pages) > 2
+    assert all(
+        len(str(page.get("content", ""))) <= paged_rag._EVIDENCE_PAGE_CHARS
+        for page in pages
+    )
+    assert [page["page_index"] for page in pages] == list(range(len(pages)))
+    assert all(page["page_count"] == len(pages) for page in pages)
+
+
+def test_domain_slice_persists_raw_forced_receipt_instead_of_inlining_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    huge_forced = "F" * 40_000
+    forced = {
+        "schema_version": "mmm/forced-pre-design-rag-v2",
+        "query_count": 1,
+        "domains": [
+            {
+                "domain_id": "request",
+                "queries": [{"query": "forced", "content": huge_forced}],
+            }
+        ],
+    }
+    token = paged_rag._FORCED_RAG_CONTEXT.set(forced)
+    try:
+        prompt_slice = agentic._domain_evidence_slice(
+            "request",
+            {"official_rag": {"domains": []}},
+        )
+    finally:
+        paged_rag._FORCED_RAG_CONTEXT.reset(token)
+
+    rendered = json.dumps(prompt_slice, ensure_ascii=False, sort_keys=True)
+    assert huge_forced not in rendered
+    assert set(prompt_slice) == {"evidence_document"}
+
+    document = prompt_slice["evidence_document"]
+    raw_text = Path(document["raw_path"]).read_text(encoding="utf-8")
+    assert huge_forced in raw_text
+
+
+def test_each_page_reader_prompt_stays_bounded(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    evidence = {
+        "forced_project_rag": {
+            "domain_id": "mk_entity",
+            "queries": [{"query": "entity AI", "content": "Z" * 120_000}],
+        }
+    }
+    document = paged_rag._materialize_domain_evidence_document("mk_entity", evidence)
+    pages = paged_rag._read_evidence_pages(document)
+
+    for page in pages:
+        messages = paged_rag._research_page_messages(
+            prompt="Build the requested mod without changing the authoritative scope.",
+            domain={"domain_id": "mk_entity", "queries": ["entity AI"]},
+            document=document,
+            page=page,
+        )
+        assert len(messages) == 2
+        assert len(messages[1]["content"]) < 20_000
+        assert str(page["page_ref"]) in messages[1]["content"]
 
 
 def test_runtime_binding_marks_game_design_as_research_first() -> None:
