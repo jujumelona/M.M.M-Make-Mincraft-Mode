@@ -6,19 +6,19 @@ from typing import Any, Iterable
 
 _LOCAL_AI_SIDECAR = "mmm_local_ai_sidecar"
 _LLM_CAPABLE_STAGES = frozenset({"custom"})
+_CPU_GENERATION_STAGES = frozenset({"content", "system", "entity"})
 
 
 def install(work_graph_module: Any) -> None:
     """Assign generation work to the narrowest safe execution lane.
 
-    Custom LLM generation is isolated by ``performance_final_contract`` and therefore
-    may run in the LLM lane while shared deterministic project mutations use the short
-    commit lane. Asset targets and synthesized OGG files are disjoint by contract, so
-    their expensive generation can overlap safely with both LLM and commit work.
+    Custom model-backed generation remains in the scarce LLM lane. Deterministic
+    content, system and entity generators belong in the CPU/I/O lane; the late
+    scheduler safety contract protects only their stage-local shared writes instead of
+    serializing unrelated domains through one global commit worker. Audio binding can
+    fall back to custom generation and therefore remains in the commit-safe lane.
 
-    Later safety contracts may refine a deterministic module shard from ``commit`` to
-    ``cpu_io`` while protecting only its stage-local shared writes. Explicit outer
-    resource assignments are therefore authoritative and must not be overwritten here.
+    Explicit outer resource assignments are authoritative and are never overwritten.
     """
 
     original_stage = work_graph_module._module_stage
@@ -29,8 +29,8 @@ def install(work_graph_module: Any) -> None:
             stage = original_stage(module)
             # Research shards and the code-owned local AI sidecar are deterministic.
             # Every other integration is model-backed in module_node_action; route it
-            # to the LLM lane up front instead of hiding a long coder call inside the
-            # serialized commit lane.
+            # to the LLM lane up front instead of hiding a long coder call inside a
+            # serialized mutation lane.
             if (
                 getattr(module, "kind", "") == "integration"
                 and not work_graph_module.is_research_shard(module)
@@ -60,11 +60,12 @@ def install(work_graph_module: Any) -> None:
 
         if "resource_class" not in normalized:
             if kind == "module-shard":
-                normalized["resource_class"] = (
-                    "llm"
-                    if generation_stage in _LLM_CAPABLE_STAGES
-                    else "commit"
-                )
+                if generation_stage in _LLM_CAPABLE_STAGES:
+                    normalized["resource_class"] = "llm"
+                elif generation_stage in _CPU_GENERATION_STAGES:
+                    normalized["resource_class"] = "cpu_io"
+                else:
+                    normalized["resource_class"] = "commit"
             elif kind == "asset-shard":
                 normalized["resource_class"] = "image_gpu"
             elif kind == "audio-synth":
@@ -75,4 +76,8 @@ def install(work_graph_module: Any) -> None:
         return original(node_id, stage, dependencies, normalized)
 
     mutation_safe_node._mmm_module_mutation_contract = True
+    mutation_safe_node._mmm_deterministic_cpu_lanes = True  # type: ignore[attr-defined]
     work_graph_module._node = mutation_safe_node
+
+
+__all__ = ["install"]
