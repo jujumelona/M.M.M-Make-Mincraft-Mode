@@ -119,7 +119,7 @@ def test_bundle_workflows_are_parallel_graph_enabled_cuda_builds() -> None:
     assert "cuda_arch:" in worker
     assert "nvidia/cuda:12.4.1-devel-ubuntu22.04" in worker
     assert "BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v3-max-t4" in worker
-    assert "RELEASE_TAG: native-llama-4a84b0a-cuda12.4-max-v3" in worker
+    assert "RELEASE_TAG: native-llama-1d2869c-cuda12.4-max-v3" in worker
     assert "-DBUILD_SHARED_LIBS=ON" in worker
     assert "-DGGML_CUDA=ON" in worker
     assert "-DGGML_CUDA_GRAPHS=ON" in worker
@@ -177,7 +177,7 @@ def test_bundle_workflow_uses_driver_stub_only_for_linking() -> None:
 def test_bundle_loader_requires_graph_enabled_v2_manifest(tmp_path: Path) -> None:
     helper = _load_bundle_helper()
     assert helper.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v3-max-t4"
-    assert helper.BUNDLE_RELEASE_TAG == "native-llama-4a84b0a-cuda12.4-max-v3"
+    assert helper.BUNDLE_RELEASE_TAG == "native-llama-1d2869c-cuda12.4-max-v3"
 
     root = tmp_path / "bundle"
     root.mkdir()
