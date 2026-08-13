@@ -127,7 +127,11 @@ class ModelRouter:
 
                     request_messages = _inject_system_context(
                         messages,
-                        build_agent_capability_context(stage, tools),
+                        build_agent_capability_context(
+                            stage,
+                            tools,
+                            model_role=role,
+                        ),
                     )
 
             request = GenerationRequest(
@@ -146,6 +150,7 @@ class ModelRouter:
                         request=request,
                         runtime=runtime,
                         stage=stage,
+                        role=role,
                     )
                 return adapter.generate(request)
 
@@ -156,6 +161,7 @@ class ModelRouter:
         request: GenerationRequest,
         runtime: Any,
         stage: str,
+        role: str,
     ) -> str:
         """Gather tool evidence until the model itself returns a final answer.
 
@@ -214,7 +220,9 @@ class ModelRouter:
             observations: list[dict[str, Any]] = []
             for call in turn.tool_calls:
                 route_metadata: dict[str, Any] = {
-                    "skills": list(skills_for_tool(stage, call.name)),
+                    "skills": list(
+                        skills_for_tool(stage, call.name, model_role=role)
+                    ),
                 }
                 if call.name == "external_mcp_call":
                     capability = str(call.arguments.get("capability", "")).strip()
@@ -345,6 +353,7 @@ class ModelRouter:
             return TransformersMultimodalAdapter(config)
         if config.adapter in ("llama_cpp", "vllm"):
             from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
+
             return LlamaCppAdapter(config)
         if config.adapter == "openai_compatible":
             return OpenAICompatibleAdapter(config)
