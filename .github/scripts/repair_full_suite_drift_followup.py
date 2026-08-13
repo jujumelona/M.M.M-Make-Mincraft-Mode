@@ -100,3 +100,16 @@ replace_function(
         for requirement in newer_radar["requirements"]
     )''',
 )
+
+# Function replacement intentionally separates neighboring functions with a blank line,
+# but when the replaced function is the last one in a file that can leave an extra blank
+# line at EOF. Normalize generated test files before git diff --check.
+for migrated_path in (
+    "tests/test_scheduler_parallel_safety_contract.py",
+    "tests/test_technology_radar.py",
+):
+    target = Path(migrated_path)
+    target.write_text(
+        target.read_text(encoding="utf-8").rstrip() + "\n",
+        encoding="utf-8",
+    )
