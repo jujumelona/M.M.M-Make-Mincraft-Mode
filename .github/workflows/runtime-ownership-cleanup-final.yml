@@ -38,6 +38,15 @@ jobs:
           end = workflow.index('\n          PY\n', start)
           transform = textwrap.dedent(workflow[start:end])
           exec(compile(transform, '<runtime-ownership-cleanup>', 'exec'), {})
+
+          # This test is about paged technology aggregation, not legacy ecosystem schemas.
+          test_path = Path('tests/test_research_coordinator.py')
+          source = test_path.read_text(encoding='utf-8')
+          old = '''    monkeypatch.setattr(\n        planner_module,\n        "discover_seed_bundle",\n        lambda *args, **kwargs: {"schema_version": "test/discovery-v1"},\n    )\n'''
+          new = '''    monkeypatch.setattr(\n        planner_module,\n        "discover_seed_bundle",\n        lambda *args, **kwargs: _ecosystem_page(\n            offset=0, advanced_to=0, total=0, next_cursor=""\n        ),\n    )\n'''
+          if source.count(old) != 1:
+              raise RuntimeError('stale ecosystem test fixture shape changed')
+          test_path.write_text(source.replace(old, new, 1), encoding='utf-8')
           PY
 
       - name: Verify cleanup
@@ -63,7 +72,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/runtime-ownership-cleanup-once.yml
           git rm .github/workflows/runtime-ownership-cleanup-final.yml
-          git add minecraft_mod_ai tests/test_llama_parallel_runtime_contract.py
+          git add minecraft_mod_ai tests/test_llama_parallel_runtime_contract.py tests/test_research_coordinator.py
           git commit -m 'Consolidate research runtime ownership'
           git pull --rebase origin main
           git push origin main
