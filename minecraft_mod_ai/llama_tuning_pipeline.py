@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 13
+_TUNING_PIPELINE_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class NativeLlamaTuningPipeline:
         self.runtime_tuning = runtime_tuning
 
     def stages(self) -> tuple[TuningStage, ...]:
-        from . import agentic_optimization_contract, repair_engine
+        from . import agentic_optimization_contract, qwen35_mtp_hotpath_contract, repair_engine
         from .llama_cache_reuse_efficiency_contract import install as install_cache_reuse
         from .llama_decode_speed_contract import install as install_decode_speed
         from .llama_server_efficiency_contract import install as install_efficiency
@@ -52,8 +52,12 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
                 self.hardware_policy,
             )
-            # Production uses the bounded Qwen3.5 MTP hotpath. Exhaustive T4
-            # benchmarking belongs offline and must not be installed in requests.
+            # The selected model profile owns context size. The Qwen hotpath may tune
+            # decode mechanics, but it must never shrink a 32k/64k/native context to a
+            # speed preset such as 8k. Setting the legacy bounds this way makes its
+            # existing _context_size() resolve to the configured profile maximum.
+            qwen35_mtp_hotpath_contract._DEFAULT_CTX = qwen35_mtp_hotpath_contract._MAX_CTX
+            qwen35_mtp_hotpath_contract._MIN_CTX = 0
             install_qwen35_hotpath(self.autotune)
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
