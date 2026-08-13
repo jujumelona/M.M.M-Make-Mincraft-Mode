@@ -1,0 +1,252 @@
+name: Fix Minecraft knowledge parallel research recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-minecraft-knowledge-parallel-recovery.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Patch parallel research recovery and add regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("minecraft_mod_ai/central_intelligence_amplifier.py")
+          text = path.read_text(encoding="utf-8")
+          domain_marker = '                    thread_name_prefix="mmm_research_domain",\n'
+          marker_index = text.index(domain_marker)
+          start = text.index("                    for future in as_completed(futures):\n", marker_index)
+          end = text.index("            domain_notes =", start)
+          replacement = '''                    failed_domains: dict[int, Exception] = {}
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        try:
+                            indexed_notes[index] = future.result()
+                        except Exception as exc:
+                            # Parallel execution is an optimization, not research semantics.
+                            # Preserve the failed index and retry it in the caller context
+                            # after the fan-out. This recovers transient/shared-router failures
+                            # without marking an unexecuted route as covered.
+                            failed_domains[index] = exc
+
+                # A local/native model or stage-scoped tool runtime may reject a concurrent
+                # request even though the same canonical domain research succeeds serially.
+                # Retry only infrastructure-level exceptions that escaped the domain agent;
+                # schema/gap convergence remains owned by _research_domain_with_agent.
+                for index in sorted(failed_domains):
+                    domain = domains[index]
+                    parallel_exc = failed_domains[index]
+                    try:
+                        indexed_notes[index] = agentic_module._research_domain_with_agent(
+                            router,
+                            prompt=prompt,
+                            domain=domain,
+                            deterministic=deterministic,
+                            trace_metadata=trace_metadata,
+                        )
+                    except Exception as retry_exc:
+                        domain_id = str(
+                            domain.get("domain_id", "unknown")
+                        ).strip() or "unknown"
+                        indexed_notes[index] = {
+                            "domain_id": domain_id,
+                            "claims": [],
+                            "gaps": [
+                                "parallel research failed: "
+                                f"{type(parallel_exc).__name__}: {parallel_exc}",
+                                "serial recovery failed: "
+                                f"{type(retry_exc).__name__}: {retry_exc}",
+                            ],
+                            "next_queries": list(domain.get("queries", [])),
+                            "sufficient": False,
+                            "worker_error": True,
+                            "parallel_error": (
+                                f"{type(parallel_exc).__name__}: {parallel_exc}"
+                            ),
+                            "retry_error": f"{type(retry_exc).__name__}: {retry_exc}",
+                        }
+'''
+          text = text[:start] + replacement + text[end:]
+          compile(text, str(path), "exec")
+          path.write_text(text, encoding="utf-8")
+
+          test = Path("tests/test_parallel_research_recovery.py")
+          test.write_text('''from __future__ import annotations
+
+import hashlib
+import json
+import threading
+from types import SimpleNamespace
+
+from minecraft_mod_ai import central_intelligence_amplifier as amplifier
+from minecraft_mod_ai.minecraft_knowledge_contract import (
+    compile_minecraft_knowledge_plan,
+    evaluate_route_coverage,
+)
+
+
+def _sha(value: object) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _fake_agentic(research_domain):
+    domains = [
+        {
+            "domain_id": "mk_entity",
+            "objective": "entity",
+            "requirements": ["mk:entity.registration"],
+            "evidence_kinds": ["minecraft_api"],
+            "queries": ["entity registration"],
+            "providers": ["official_docs"],
+            "depends_on": [],
+        },
+        {
+            "domain_id": "mk_quality",
+            "objective": "quality",
+            "requirements": ["mk:quality.compile"],
+            "evidence_kinds": ["testing"],
+            "queries": ["gradle build"],
+            "providers": ["official_docs"],
+            "depends_on": [],
+        },
+    ]
+
+    def collect(*args, **kwargs):
+        raise AssertionError("parallel core must own collection")
+
+    return SimpleNamespace(
+        collect_pre_design_research=collect,
+        normalize_research_brief=lambda prompt, design: {"domains": domains},
+        retrieve_domain_evidence=lambda brief: {},
+        collect_technology_radar=lambda *args, **kwargs: {},
+        build_technology_radar=lambda *args, **kwargs: {},
+        collect_ecosystem_seed_bundle=lambda *args, **kwargs: {},
+        discover_seed_bundle=lambda *args, **kwargs: {},
+        _research_domain_with_agent=research_domain,
+        _error=lambda key, exc: {"stage": key, "error": str(exc)},
+        _json_sha256=_sha,
+        generate_sectioned_game_design=lambda *args, **kwargs: {},
+        _SECTION_SPECS=(),
+    )
+
+
+def test_parallel_domain_failure_recovers_serially_without_weakening_terminal_semantics() -> None:
+    attempts: dict[str, int] = {}
+
+    def research_domain(router, *, prompt, domain, deterministic, trace_metadata):
+        domain_id = domain["domain_id"]
+        attempts[domain_id] = attempts.get(domain_id, 0) + 1
+        if threading.current_thread().name.startswith("mmm_research_domain"):
+            raise RuntimeError("shared local router rejected concurrent request")
+        return {
+            "domain_id": domain_id,
+            "claims": [],
+            "gaps": ["exact API lookup deferred"],
+            "next_queries": [],
+            "sufficient": False,
+            "fixed_point": True,
+        }
+
+    fake = _fake_agentic(research_domain)
+    amplifier.install_parallel_core(fake)
+    result = fake.collect_pre_design_research(object(), "boss")
+
+    assert attempts == {"mk_entity": 2, "mk_quality": 2}
+    assert [note["domain_id"] for note in result["domain_notes"]] == [
+        "mk_entity",
+        "mk_quality",
+    ]
+    assert all(note.get("fixed_point") is True for note in result["domain_notes"])
+    assert all("worker_error" not in note for note in result["domain_notes"])
+
+
+def test_parallel_and_serial_failure_remains_strictly_unresolved() -> None:
+    def research_domain(router, *, prompt, domain, deterministic, trace_metadata):
+        raise RuntimeError("persistent research failure")
+
+    fake = _fake_agentic(research_domain)
+    amplifier.install_parallel_core(fake)
+    result = fake.collect_pre_design_research(object(), "boss")
+
+    assert all(note["sufficient"] is False for note in result["domain_notes"])
+    assert all(note["worker_error"] is True for note in result["domain_notes"])
+    assert all(not note.get("fixed_point", False) for note in result["domain_notes"])
+    assert all("parallel_error" in note and "retry_error" in note for note in result["domain_notes"])
+
+
+def test_fixed_point_recovery_is_accepted_only_with_real_route_receipts() -> None:
+    plan = compile_minecraft_knowledge_plan("새 보스 몬스터를 추가해줘.")
+    domains = list(plan["research_domains"])
+    research = {
+        "research_brief": {"domains": domains},
+        "deterministic": {
+            "forced_project_rag": {
+                "domains": [
+                    {
+                        "domain_id": domain["domain_id"],
+                        "queries": [
+                            {
+                                "query": query,
+                                "query_sha256": "sha256:" + hashlib.sha256(query.encode("utf-8")).hexdigest(),
+                            }
+                            for query in domain["queries"]
+                        ],
+                    }
+                    for domain in domains
+                ]
+            }
+        },
+        "domain_notes": [
+            {
+                "domain_id": domain["domain_id"],
+                "claims": [],
+                "gaps": ["deferred"],
+                "next_queries": [],
+                "sufficient": False,
+                "fixed_point": True,
+            }
+            for domain in domains
+        ],
+    }
+    assert evaluate_route_coverage(plan, research)["status"] == "PASS"
+
+    research["deterministic"]["forced_project_rag"]["domains"].pop()
+    assert evaluate_route_coverage(plan, research)["status"] == "BLOCK"
+''', encoding="utf-8")
+          compile(test.read_text(encoding="utf-8"), str(test), "exec")
+          PY
+      - name: Validate focused behavior
+        run: |
+          python -m pip install -q -e '.[dev]'
+          python -m py_compile minecraft_mod_ai/central_intelligence_amplifier.py tests/test_parallel_research_recovery.py
+          python -m ruff check minecraft_mod_ai/central_intelligence_amplifier.py tests/test_parallel_research_recovery.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_parallel_research_recovery.py \
+            tests/test_minecraft_knowledge_contract.py \
+            tests/test_agentic_research_game_design.py
+      - name: Commit validated recovery to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/fix-minecraft-knowledge-parallel-recovery.yml
+          git add minecraft_mod_ai/central_intelligence_amplifier.py tests/test_parallel_research_recovery.py .github/workflows/fix-minecraft-knowledge-parallel-recovery.yml
+          git diff --cached --check
+          git commit -m "Recover failed parallel Minecraft research domains"
+          git pull --rebase origin main
+          git push origin HEAD:main
