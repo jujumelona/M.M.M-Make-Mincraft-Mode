@@ -42,6 +42,39 @@ def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]
     return tuple(contract for contract in stage_contracts if contract.name in assigned)
 
 
+def filter_tool_schemas_for_role(
+    stage: str,
+    model_role: str,
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    """Expose only tools reachable through the reviewed Skill routes for a role.
+
+    Unknown model roles keep the stage-level schema set for backwards compatibility.
+    Known roles get the union of model-callable tools from their eligible Skills plus
+    the generic external MCP bridge when their routing contract includes reviewed MCP
+    servers. This makes the prompt-visible tool set and the executable role policy the
+    same set instead of relying on prompt instructions alone.
+    """
+
+    role_routes = routes_for_model_role(model_role)
+    if not role_routes:
+        return tuple(tool_schemas)
+
+    allowed = {
+        tool
+        for contract in _request_contracts(stage, model_role)
+        for tool in contract.allowed_tools
+    }
+    if mcp_servers_for_model_role(model_role):
+        allowed.update(_EXTERNAL_AGENT_TOOLS)
+
+    return tuple(
+        schema
+        for schema in tool_schemas
+        if (_schema_tool_name(schema) in allowed)
+    )
+
+
 def skills_for_tool(
     stage: str,
     tool: str,
@@ -159,16 +192,23 @@ def build_agent_capability_context(
     )
 
 
+def _schema_tool_name(schema: Mapping[str, Any]) -> str:
+    function = schema.get("function")
+    if not isinstance(function, Mapping):
+        return ""
+    return str(function.get("name", "")).strip()
+
+
 def _tool_names(tool_schemas: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
-    names: set[str] = set()
-    for schema in tool_schemas:
-        function = schema.get("function")
-        if not isinstance(function, Mapping):
-            continue
-        name = str(function.get("name", "")).strip()
-        if name:
-            names.add(name)
-    return tuple(sorted(names))
+    return tuple(
+        sorted(
+            {
+                name
+                for schema in tool_schemas
+                if (name := _schema_tool_name(schema))
+            }
+        )
+    )
 
 
 def _environment_target() -> dict[str, str]:
