@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 3
+_TUNING_PIPELINE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class NativeLlamaTuningPipeline:
         self.runtime_tuning = runtime_tuning
 
     def stages(self) -> tuple[TuningStage, ...]:
-        from . import agentic_optimization_contract
+        from . import agentic_optimization_contract, repair_engine
         from .llama_cache_reuse_efficiency_contract import install as install_cache_reuse
         from .llama_decode_speed_contract import install as install_decode_speed
         from .llama_server_efficiency_contract import install as install_efficiency
@@ -38,7 +38,7 @@ class NativeLlamaTuningPipeline:
         from .llama_server_runtime_tuning import install as install_runtime_tuning
         from .llama_structured_decode_policy import bind_structured_decode_policy
         from .planner_single_stream_search_contract import (
-            install as install_single_stream_plan_search,
+            install as install_single_stream_agentic_policy,
         )
         from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
 
@@ -52,11 +52,13 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
                 self.hardware_policy,
             )
-            # These two policies consume the selected native decode topology, so keep
-            # them inside the existing decode-speed ownership stage instead of adding
-            # another top-level tuning phase.
+            # Decode-topology-aware policies belong inside this existing ownership
+            # stage rather than another top-level bootstrap phase.
             install_qwen35_hotpath(self.autotune)
-            install_single_stream_plan_search(agentic_optimization_contract)
+            install_single_stream_agentic_policy(
+                agentic_optimization_contract,
+                repair_engine,
+            )
 
         return (
             TuningStage("hardware", install_hardware_stage),
