@@ -709,6 +709,81 @@ def _planner_plugin_manifest() -> dict[str, Any]:
     }
 
 
+def _first_nonempty_module_text(
+    value: dict[str, Any],
+    keys: Sequence[str],
+) -> str:
+    for key in keys:
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+def _module_text_is_missing(value: dict[str, Any], key: str) -> bool:
+    if key not in value or value[key] is None:
+        return True
+    return isinstance(value[key], str) and not value[key].strip()
+
+
+def _normalize_model_game_design(design: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize only recoverable module transport metadata.
+
+    The planner remains fail-closed for missing design fields, malformed collection
+    types, and non-object module entries. Local models sometimes preserve the module
+    selection itself while shortening its object to ``plugin_id`` or using harmless
+    aliases for the rationale. Those omissions are transport/schema noise rather than
+    missing game-design semantics, so fill only the canonical metadata for an already
+    model-authored module entry. Never add a module that the model did not emit.
+    """
+
+    normalized = dict(design)
+    modules = normalized.get("modules")
+    if not isinstance(modules, list):
+        return normalized
+
+    plugin_status = {
+        str(plugin.get("plugin_id", "")).strip(): str(plugin.get("status", "")).strip()
+        for plugin in _planner_plugin_manifest()["plugins"]
+        if str(plugin.get("plugin_id", "")).strip()
+        and str(plugin.get("status", "")).strip()
+    }
+    canonical_modules: list[Any] = []
+    for raw in modules:
+        if not isinstance(raw, dict):
+            canonical_modules.append(raw)
+            continue
+
+        module = dict(raw)
+        plugin_id = _first_nonempty_module_text(
+            module,
+            ("plugin_id", "module_id", "plugin", "id"),
+        )
+        if not plugin_id:
+            canonical_modules.append(module)
+            continue
+
+        if _module_text_is_missing(module, "plugin_id"):
+            module["plugin_id"] = plugin_id
+
+        if _module_text_is_missing(module, "status"):
+            module["status"] = plugin_status.get(plugin_id, "custom")
+
+        if _module_text_is_missing(module, "reason"):
+            reason = _first_nonempty_module_text(
+                module,
+                ("description", "purpose", "brief", "summary", "name", "label"),
+            )
+            # The identifier itself is the only safe deterministic fallback: it
+            # records the model-selected module without inventing a rationale.
+            module["reason"] = reason or plugin_id
+
+        canonical_modules.append(module)
+
+    normalized["modules"] = canonical_modules
+    return normalized
+
+
 def _extract_valid_game_design(text: str) -> dict[str, Any]:
     """Extract the final complete design spine from a model response.
 
@@ -734,6 +809,7 @@ def _extract_valid_game_design(text: str) -> dict[str, Any]:
         if not isinstance(possible, dict):
             continue
         if set(possible) & set(_GAME_DESIGN_FIELDS):
+            possible = _normalize_model_game_design(possible)
             _validate_design(possible)
             return possible
     if candidates:
@@ -772,10 +848,15 @@ Required shape:
 {
   "game_design": {
     "title": "string", "pitch": "string", "core_loop": [], "progression": [],
-    "combat": {}, "mod_context": {}, "modules": [], "assets": [],
+    "combat": {}, "mod_context": {},
+    "modules": [{"plugin_id":"from catalog or custom","status":"implemented|custom","reason":"why requested"}],
+    "assets": [{"id":"snake_case","kind":"item|block|entity|gui|environment","brief":"what to make"}],
     "acceptance_tests": []
   }
 }
+Every modules entry must contain non-empty plugin_id, status, and reason strings. Every
+assets entry must contain non-empty id, kind, and brief strings. Use [] when there are
+no modules or assets.
 combat and mod_context must be JSON objects whose values, when present, are arrays of
 non-empty strings. Use an empty object when the request has no relevant details; never
 replace an array with a scalar string or a nested object.
@@ -789,6 +870,7 @@ def _last_complete_standalone_design(text: str) -> dict[str, Any] | None:
         possible = nested if isinstance(nested, dict) else candidate
         if not set(_GAME_DESIGN_FIELDS) <= set(possible):
             continue
+        possible = _normalize_model_game_design(possible)
         try:
             _validate_design(possible)
         except SpecValidationError:

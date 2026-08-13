@@ -4,6 +4,7 @@ import pytest
 
 from minecraft_mod_ai.game_design import (
     GameDesignPlanner,
+    _extract_valid_game_design,
     _planner_plugin_manifest,
     _repair_system_prompt,
     _system_prompt,
@@ -347,6 +348,68 @@ def test_game_design_system_prompt_keeps_only_the_compact_design_contract() -> N
     assert '"research_brief"' not in prompt
     assert "later paginated production" in prompt
     assert '"required_mcp"' not in prompt
+
+
+
+
+
+def test_multimodal_design_repairs_compact_module_metadata_without_third_model_call() -> None:
+    """A local planner may keep the module choice while abbreviating its metadata."""
+
+    payload = _valid_planner_payload()
+    payload.pop("build_slice", None)
+    payload["game_design"]["modules"] = [
+        {"plugin_id": "custom_weather"},
+        {
+            "module_id": "seasonal_cooking",
+            "description": "계절별 요리 진행 시스템",
+        },
+    ]
+    router = _SequenceTextRouter(
+        "not a JSON object",
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+    design, proposal = GameDesignPlanner(router).plan(
+        "계절별 날씨와 요리 진행 시스템을 만들어줘."
+    )
+
+    assert len(router.calls) == 2
+    assert design["modules"] == [
+        {
+            "plugin_id": "custom_weather",
+            "status": "custom",
+            "reason": "custom_weather",
+        },
+        {
+            "module_id": "seasonal_cooking",
+            "description": "계절별 요리 진행 시스템",
+            "plugin_id": "seasonal_cooking",
+            "status": "custom",
+            "reason": "계절별 요리 진행 시스템",
+        },
+    ]
+    assert proposal.spec.mod_id
+
+
+def test_module_shape_recovery_does_not_accept_non_object_module_entries() -> None:
+    payload = _valid_planner_payload()
+    payload["game_design"]["modules"] = ["quest_system"]
+
+    with pytest.raises(
+        SpecValidationError,
+        match="game_design.modules entries must contain",
+    ):
+        _extract_valid_game_design(json.dumps(payload))
+
+
+def test_repair_prompt_restates_nested_module_and_asset_entry_contracts() -> None:
+    prompt = _repair_system_prompt()
+    assert '"plugin_id":"from catalog or custom"' in prompt
+    assert '"status":"implemented|custom"' in prompt
+    assert '"reason":"why requested"' in prompt
+    assert '"id":"snake_case"' in prompt
+    assert "Every modules entry must contain" in prompt
 
 
 def test_game_design_prompts_define_strict_nested_collection_types() -> None:
