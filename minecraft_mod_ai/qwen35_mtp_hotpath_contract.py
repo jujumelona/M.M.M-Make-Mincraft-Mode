@@ -10,9 +10,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _DEFAULT_WIDTH = 3
-_DEFAULT_CTX = 32768
+_DEFAULT_CTX = 8192
 _MIN_CTX = 4096
-_MAX_CTX = 2147483647
+_MAX_CTX = 32768
 _MARKER = "_mmm_qwen35_mtp3_hotpath_v5"
 _BASE_MARKER = "_mmm_qwen35_measured_fast_args_v4"
 _ACTIVE_RUNTIME_KEYS = (
