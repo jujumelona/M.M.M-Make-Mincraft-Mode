@@ -1,16 +1,10 @@
 from __future__ import annotations
 
 import json
-
-import pytest
 from types import SimpleNamespace
 
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
-from minecraft_mod_ai.model_adapters import (
-    GenerationResponse,
-    ModelConfigurationError,
-    ToolCall,
-)
+from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_tool_calls
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -180,7 +174,6 @@ def test_llama_openai_tool_call_parser_accepts_json_arguments() -> None:
     assert calls[0].id == "call_map"
     assert calls[0].name == "external_mcp_call"
     assert calls[0].arguments["capability"] == "mapping_resolution"
-
 
 
 def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
