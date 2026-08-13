@@ -11,9 +11,53 @@ from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 from minecraft_mod_ai.work_graph import WorkNode
 
 
+class _LedgerCursor:
+    def __init__(self, *, row=None, rowcount: int = 1) -> None:
+        self._row = row
+        self.rowcount = rowcount
+
+    def fetchone(self):
+        return self._row
+
+
+class _LedgerConnection:
+    def __init__(self, ledger: "_Ledger") -> None:
+        self._ledger = ledger
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql: str, params=()):
+        normalized = " ".join(sql.split()).upper()
+        if normalized.startswith("BEGIN"):
+            return _LedgerCursor()
+        if normalized.startswith("SELECT STATE, ATTEMPT, LEASE_OWNER"):
+            return _LedgerCursor(
+                row=(self._ledger.state, self._ledger.attempt, self._ledger.lease_owner)
+            )
+        if normalized.startswith("UPDATE TASKS"):
+            if params:
+                self._ledger.state = str(params[0])
+            if "LEASE_OWNER = NULL" in normalized:
+                self._ledger.lease_owner = ""
+            return _LedgerCursor(rowcount=1)
+        raise AssertionError(f"Unexpected fenced-ledger SQL in test: {normalized}")
+
+    def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        pass
+
+
 class _Ledger:
     def __init__(self) -> None:
         self.state = "running"
+        self.attempt = 1
+        self.lease_owner = "test-worker"
 
     def cached_receipt(self, *_args, **_kwargs):
         return None
@@ -22,22 +66,34 @@ class _Ledger:
         pass
 
     def task(self, _node_id):
-        return {"state": self.state}
+        return {
+            "state": self.state,
+            "attempt": self.attempt,
+            "lease_owner": self.lease_owner,
+        }
 
     def retry(self, *_args, **_kwargs):
         self.state = "pending"
+        self.lease_owner = ""
 
     def raise_if_cancelled(self):
         pass
 
-    def begin(self, *_args, **_kwargs):
+    def begin(self, *_args, worker_id="complete-orchestrator", **_kwargs):
         self.state = "running"
+        self.attempt += 1
+        self.lease_owner = worker_id
 
     def succeed(self, *_args, **_kwargs):
         self.state = "succeeded"
+        self.lease_owner = ""
 
     def fail(self, *_args, **_kwargs):
         self.state = "failed"
+        self.lease_owner = ""
+
+    def _connect(self):
+        return _LedgerConnection(self)
 
 
 class _Index:
