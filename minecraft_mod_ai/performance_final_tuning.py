@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -62,41 +63,45 @@ def install(performance_module: Any) -> None:
             tempfile.mkdtemp(prefix="custom-", dir=parent)
         ).resolve()
 
-        for directory, dirnames, filenames in os.walk(
-            live_root,
-            topdown=True,
-            followlinks=False,
-        ):
-            base = Path(directory)
-            relative_dir = base.relative_to(live_root)
-            retained: list[str] = []
-            for name in dirnames:
-                candidate = base / name
-                if candidate.is_symlink():
-                    raise performance_module.StagedCommitConflict(
-                        f"Staging refused project symlink: {candidate}"
-                    )
-                if name not in _STAGE_IGNORED_DIRS:
-                    retained.append(name)
-            dirnames[:] = retained
+        try:
+            for directory, dirnames, filenames in os.walk(
+                live_root,
+                topdown=True,
+                followlinks=False,
+            ):
+                base = Path(directory)
+                relative_dir = base.relative_to(live_root)
+                retained: list[str] = []
+                for name in dirnames:
+                    candidate = base / name
+                    if candidate.is_symlink():
+                        raise performance_module.StagedCommitConflict(
+                            f"Staging refused project symlink: {candidate}"
+                        )
+                    if name not in _STAGE_IGNORED_DIRS:
+                        retained.append(name)
+                dirnames[:] = retained
 
-            for name in filenames:
-                source = base / name
-                if source.is_symlink():
-                    raise performance_module.StagedCommitConflict(
-                        f"Staging refused project symlink: {source}"
+                for name in filenames:
+                    source = base / name
+                    if source.is_symlink():
+                        raise performance_module.StagedCommitConflict(
+                            f"Staging refused project symlink: {source}"
+                        )
+                    if (
+                        source.suffix.lower() not in _STAGE_TEXT_SUFFIXES
+                        and name not in _STAGE_TEXT_NAMES
+                    ):
+                        continue
+                    target = stage / relative_dir / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    performance_module._reflink_or_copy(
+                        str(source),
+                        str(target),
                     )
-                if (
-                    source.suffix.lower() not in _STAGE_TEXT_SUFFIXES
-                    and name not in _STAGE_TEXT_NAMES
-                ):
-                    continue
-                target = stage / relative_dir / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                performance_module._reflink_or_copy(
-                    str(source),
-                    str(target),
-                )
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
         return stage
 
     def three_way_merge(
