@@ -36,6 +36,7 @@ _AGENTIC_RISK_MARKERS = (
     "migration",
     "persistence",
 )
+_QUERY_BOUNDARIES = frozenset("\n\r\t .!?;:,。！？；，、")
 
 
 def _string_set(value: Any) -> set[str]:
@@ -182,10 +183,6 @@ def _install_evidence_contract(complete_planner_module: Any) -> None:
         expected_contracts: Sequence[frozenset[str]],
         stage: str,
     ) -> dict[str, Any]:
-        # Production evidence is optional input to the host-owned bookkeeping layer.
-        # Never widen the strict top-level contract here: doing so turns an optional
-        # quality signal into a required model field and can create pointless repair
-        # decodes for otherwise valid pages.
         page = current(
             router,
             system_prompt=system_prompt,
@@ -292,9 +289,8 @@ def _semantic_ecosystem_key(
     )
 
 
-def _install_semantic_single_flight(parallel_module: Any) -> None:
-    """Join equivalent planner prefetches by content rather than object identity."""
-
+def _install_semantic_keys(parallel_module: Any) -> None:
+    """Keep stable keys for diagnostics without joining planner futures."""
     parallel_module._planner_key = _semantic_planner_key
     parallel_module._ecosystem_key = _semantic_ecosystem_key
 
@@ -306,7 +302,7 @@ def _maximal_planner_risk(request: Any, stage: str) -> bool:
         else json.dumps(request, ensure_ascii=False, sort_keys=True, default=str)
     )
     size_risk = len(rendered.encode("utf-8")) >= 12 * 1024
-    lowered = (stage + "\n" + rendered[:24_000]).casefold()
+    lowered = (stage + "\n" + rendered).casefold()
     domain_risk = any(marker in lowered for marker in _AGENTIC_RISK_MARKERS)
     target_risk = False
     if isinstance(request, Mapping):
@@ -320,8 +316,6 @@ def _maximal_planner_risk(request: Any, stage: str) -> bool:
 
 
 def _install_trace_adaptive_search(agentic_module: Any) -> None:
-    """Use verified workflow history as a bounded utility signal for Best-of-N."""
-
     current = agentic_module._planner_candidate_count
     if getattr(current, "_mmm_trace_adaptive_width", False):
         return
@@ -351,27 +345,302 @@ def _install_trace_adaptive_search(agentic_module: Any) -> None:
     agentic_module._planner_candidate_count = candidate_count
 
 
+def _lossless_utf8_pages(text: str, max_bytes: int) -> tuple[str, ...]:
+    """Split text into bounded semantic pages while preserving every code point."""
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    if not text:
+        return ()
+    if len(text.encode("utf-8")) <= max_bytes:
+        return (text,)
+
+    pages: list[str] = []
+    current: list[str] = []
+    current_bytes = 0
+    for character in text:
+        size = len(character.encode("utf-8"))
+        if size > max_bytes:
+            raise ValueError("A UTF-8 code point exceeds the page byte budget.")
+        if current and current_bytes + size > max_bytes:
+            minimum = max_bytes // 2
+            consumed = 0
+            boundary = 0
+            for index, value in enumerate(current, start=1):
+                consumed += len(value.encode("utf-8"))
+                if consumed >= minimum and value in _QUERY_BOUNDARIES:
+                    boundary = index
+            cut = boundary or len(current)
+            pages.append("".join(current[:cut]))
+            current = current[cut:]
+            current_bytes = len("".join(current).encode("utf-8"))
+            if current and current_bytes + size > max_bytes:
+                pages.append("".join(current))
+                current = []
+                current_bytes = 0
+        current.append(character)
+        current_bytes += size
+    if current:
+        pages.append("".join(current))
+    if "".join(pages) != text:
+        raise RuntimeError("Lossless research query paging changed source text.")
+    if any(len(page.encode("utf-8")) > max_bytes for page in pages):
+        raise RuntimeError("Lossless research query page exceeded its byte budget.")
+    return tuple(pages)
+
+
+def _install_lossless_research_input(central_module: Any, ecosystem_module: Any) -> None:
+    """Preserve authoritative research text and shard only execution-sized queries."""
+    if not getattr(central_module._bounded_text, "_mmm_lossless_text", False):
+        def full_text(value: str, *, field: str = "research text") -> str:
+            del field
+            return value
+
+        full_text._mmm_lossless_text = True  # type: ignore[attr-defined]
+        central_module._bounded_text = full_text
+
+    current_domain = central_module._research_domain
+    if not getattr(current_domain, "_mmm_lossless_query_pages", False):
+        @wraps(current_domain)
+        def domain_with_query_pages(value: Any):
+            normalized = value
+            if isinstance(value, dict) and isinstance(value.get("queries"), list):
+                queries: list[Any] = []
+                for raw in value["queries"]:
+                    if (
+                        isinstance(raw, str)
+                        and raw.strip()
+                        and len(raw.encode("utf-8")) > central_module._MAX_QUERY_BYTES
+                    ):
+                        queries.extend(
+                            page
+                            for page in _lossless_utf8_pages(
+                                raw,
+                                central_module._MAX_QUERY_BYTES,
+                            )
+                            if page.strip()
+                        )
+                    else:
+                        queries.append(raw)
+                normalized = {**value, "queries": queries}
+            return current_domain(normalized)
+
+        domain_with_query_pages._mmm_lossless_query_pages = True  # type: ignore[attr-defined]
+        central_module._research_domain = domain_with_query_pages
+
+    def full_seed_query(prompt: str, game_design: dict[str, Any]) -> str:
+        parts = [
+            prompt,
+            str(game_design.get("title", "")),
+            str(game_design.get("pitch", "")),
+        ]
+        for item in game_design.get("modules", []):
+            if isinstance(item, dict):
+                parts.append(str(item.get("reason") or item.get("name") or ""))
+        for item in game_design.get("assets", []):
+            if isinstance(item, dict):
+                parts.append(str(item.get("brief") or ""))
+        return " ".join(part.strip() for part in parts if part.strip())
+
+    full_seed_query._mmm_lossless_seed_query = True  # type: ignore[attr-defined]
+    ecosystem_module._seed_query = full_seed_query
+
+    current_discover = ecosystem_module.discover_seed_bundle
+    if getattr(current_discover, "_mmm_lossless_seed_routes", False):
+        return
+
+    @wraps(current_discover)
+    def discover_seed_lossless(
+        prompt: str,
+        game_design: dict[str, Any],
+        *,
+        research_brief: dict[str, Any] | None = None,
+        client: Any = None,
+        route_cursor: str = "",
+        route_limit: int = 12,
+    ) -> dict[str, Any]:
+        if research_brief is not None:
+            return current_discover(
+                prompt,
+                game_design,
+                research_brief=research_brief,
+                client=client,
+                route_cursor=route_cursor,
+                route_limit=route_limit,
+            )
+
+        query = ecosystem_module._seed_query(prompt, game_design)
+        pages = _lossless_utf8_pages(query, central_module._MAX_QUERY_BYTES)
+        if len(pages) <= 1:
+            return current_discover(
+                prompt,
+                game_design,
+                research_brief=None,
+                client=client,
+                route_cursor=route_cursor,
+                route_limit=route_limit,
+            )
+
+        providers = ["modrinth", "openverse_images", "openverse_audio"]
+        if (client is not None and client.github_token) or __import__("os").environ.get("GITHUB_TOKEN"):
+            providers.append("github")
+        domains = [
+            {
+                "domain_id": f"request_page_{index + 1}",
+                "objective": "Search one lossless page of the complete request.",
+                "requirements": [page],
+                "evidence_kinds": ["gameplay_reference"],
+                "queries": [page],
+                "providers": providers,
+                "depends_on": [],
+            }
+            for index, page in enumerate(pages)
+        ]
+        synthetic_brief = {
+            "schema_version": "mmm/central-research-brief-v1",
+            "summary": "Lossless direct ecosystem query pages.",
+            "origin": "lossless_direct_seed",
+            "domains": domains,
+            "unresolved_questions": [],
+        }
+        result = current_discover(
+            prompt,
+            game_design,
+            research_brief=synthetic_brief,
+            client=client,
+            route_cursor=route_cursor,
+            route_limit=route_limit,
+        )
+        result = dict(result)
+        result["request_query_ingestion"] = {
+            "schema_version": "mmm/ecosystem-query-ingestion-v1",
+            "query_sha256": ecosystem_module._sha256_text(query),
+            "query_byte_length": len(query.encode("utf-8")),
+            "page_count": len(pages),
+            "lossless": "".join(pages) == query,
+            "pages": [
+                {
+                    "page_index": index,
+                    "byte_length": len(page.encode("utf-8")),
+                    "sha256": ecosystem_module._sha256_text(page),
+                }
+                for index, page in enumerate(pages)
+            ],
+        }
+        return result
+
+    discover_seed_lossless._mmm_lossless_seed_routes = True  # type: ignore[attr-defined]
+    ecosystem_module.discover_seed_bundle = discover_seed_lossless
+
+
+def _install_nonblocking_planner_research(
+    complete_planner_module: Any,
+    research_coordinator_module: Any,
+    central_module: Any,
+) -> None:
+    """Remove planner-level future joins; inner provider/RAG work may remain parallel."""
+    complete_planner_module.collect_technology_radar = (
+        research_coordinator_module.collect_technology_radar
+    )
+
+    retrieve = complete_planner_module.retrieve_domain_evidence
+
+    def implementation_evidence(
+        prompt: str,
+        game_design: dict[str, Any],
+        research_brief: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        brief = research_brief or complete_planner_module.normalize_research_brief(
+            prompt,
+            game_design,
+        )
+        return retrieve(brief)
+
+    implementation_evidence._mmm_nonblocking_planner_research = True  # type: ignore[attr-defined]
+    complete_planner_module._retrieve_implementation_evidence = implementation_evidence
+
+    def ecosystem_seed(
+        prompt: str,
+        game_design: dict[str, Any],
+        *,
+        research_brief: dict[str, Any] | None = None,
+        client: Any = None,
+        route_limit: int = 12,
+        page_builder: Any = None,
+        planning_seed_only: bool = False,
+    ) -> dict[str, Any]:
+        if planning_seed_only and isinstance(research_brief, dict):
+            routes = central_module.external_discovery_routes(research_brief)
+            receipts = [
+                {
+                    "domain_id": str(route.get("domain_id", "")),
+                    "provider": str(route.get("provider", "")),
+                    "target_profile": str(route.get("target_profile", "")),
+                    "query_sha256": central_module._sha256(str(route.get("query", ""))),
+                }
+                for route in routes
+            ]
+            return {
+                "schema_version": "mmm/ecosystem-planning-deferred-v1",
+                "status": "deferred",
+                "brief_sha256": str(research_brief.get("brief_sha256", "")),
+                "route_sha256": central_module._sha256(
+                    central_module.canonical_json(receipts)
+                ),
+                "route_count": len(routes),
+                "processed_route_count": 0,
+                "remaining_route_count": len(routes),
+                "routes_complete": not routes,
+                "candidate_count": 0,
+                "pages": [],
+                "errors": [],
+                "route_receipts": receipts,
+                "coverage": "full route graph retained; public provider I/O deferred",
+                "authorization": "none",
+                "download_performed": False,
+                "planning_critical_path": False,
+            }
+        builder = page_builder or research_coordinator_module.discover_seed_bundle
+        return research_coordinator_module.collect_ecosystem_seed_bundle(
+            prompt,
+            game_design,
+            research_brief=research_brief,
+            client=client,
+            route_limit=route_limit,
+            page_builder=builder,
+            planning_seed_only=False,
+        )
+
+    ecosystem_seed._mmm_nonblocking_planner_research = True  # type: ignore[attr-defined]
+    complete_planner_module.collect_ecosystem_seed_bundle = ecosystem_seed
+
+
 def install() -> None:
     """Bind research-derived small-model amplification to the fully composed runtime."""
     from . import (
         agentic_optimization_contract,
+        central_research,
         complete_planner,
+        ecosystem_discovery,
         parallel_runtime_contract,
+        research_coordinator,
         scheduler_parallel_safety_contract,
         work_graph,
     )
     from .max_efficiency_runtime_contract import enhance_runtime
     from .small_model_agent_policy import enhance_planner
 
+    _install_lossless_research_input(central_research, ecosystem_discovery)
+    _install_nonblocking_planner_research(
+        complete_planner,
+        research_coordinator,
+        central_research,
+    )
     _install_evidence_aware_scoring(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
-    _install_semantic_single_flight(parallel_runtime_contract)
+    _install_semantic_keys(parallel_runtime_contract)
     _install_trace_adaptive_search(agentic_optimization_contract)
     enhance_planner(complete_planner)
 
-    # Post-bootstrap is the first point where planner, scheduler, router and generator
-    # safety wrappers are all final. Bind the throughput layer here so it can align the
-    # real executor with native slots without import-time side effects or branch logic.
     enhance_runtime(
         work_graph_module=work_graph,
         scheduler_module=scheduler_parallel_safety_contract,
