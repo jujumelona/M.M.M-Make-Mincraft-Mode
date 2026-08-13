@@ -6,7 +6,10 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+
+_ROUTER_CONTRACT_VERSION = 2
 
 
 class ReentrantReadWriteLock:
@@ -161,7 +164,10 @@ def _planner_parallel_capacity(router: Any, width: int) -> int:
 
 def _install_router(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
-    if getattr(cls.generate_text, "_mmm_llama_shared_slots", False):
+    installed_version = int(
+        getattr(cls.generate_text, "_mmm_parallel_router_contract_version", 0) or 0
+    )
+    if installed_version >= _ROUTER_CONTRACT_VERSION:
         return
 
     model_router_module._GPU_EXCLUSIVE_LOCK = ReentrantReadWriteLock()
@@ -207,6 +213,7 @@ def _install_router(model_router_module: Any) -> None:
         *,
         media_paths: Any = (),
         response_format: str = "text",
+        response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
     ) -> str:
@@ -227,9 +234,9 @@ def _install_router(model_router_module: Any) -> None:
             else:
                 adapter = self._new_text_adapter(config, role=role)
 
-        # Preserve the complete ModelRouter tool contract. The parallel runtime layer
-        # is a lock/scheduling policy only; it must not silently remove Qwen's stage-
-        # scoped MCP tools, tool choice, or parallel tool-call capability.
+        # Preserve the complete ModelRouter tool/structured-output contract. The
+        # parallel runtime layer is a lock/scheduling policy only; it must not silently
+        # remove Qwen's stage-scoped MCP tools or JSON-schema constraints.
         stage = (tool_stage or model_router_module._ROLE_TOOL_STAGE.get(role, "")).strip().lower()
         runtime = None
         tools: tuple[Any, ...] = ()
@@ -245,6 +252,7 @@ def _install_router(model_router_module: Any) -> None:
             messages=messages,
             media_paths=tuple(Path(path) for path in media_paths),
             response_format=response_format,
+            response_schema=response_schema,
             tools=tools,
             tool_choice="auto" if tools else None,
             parallel_tool_calls=True,
@@ -278,6 +286,8 @@ def _install_router(model_router_module: Any) -> None:
 
     generate_text._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
     generate_text._mmm_preserves_agent_tools = True  # type: ignore[attr-defined]
+    generate_text._mmm_preserves_response_schema = True  # type: ignore[attr-defined]
+    generate_text._mmm_parallel_router_contract_version = _ROUTER_CONTRACT_VERSION  # type: ignore[attr-defined]
 
     cls.generation_session = generation_session
     cls.generate_text = generate_text
