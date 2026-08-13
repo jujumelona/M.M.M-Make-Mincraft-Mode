@@ -165,6 +165,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         "llama_cache_reuse_efficiency_contract",
         "llama_decode_speed_contract",
         "qwen35_mtp_hotpath_contract",
+        "qwen35_runtime_efficiency_contract",
         "planner_single_stream_search_contract",
     }
 
@@ -191,6 +192,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     decode_order = (
         "install_decode_speed(",
         "install_qwen35_hotpath(",
+        "install_qwen35_runtime_efficiency(",
         "install_single_stream_agentic_policy(",
     )
     decode_positions = [source.index(marker) for marker in decode_order]
