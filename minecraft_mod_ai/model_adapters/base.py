@@ -36,11 +36,11 @@ class AdapterConfig:
     provider: str = "local"
     quantization: str | None = None
     torch_dtype: str = "auto"
-    max_context: int = 8192
-    # Hardware-safe prefill budget for one paginated request. Zero means the
-    # native context window is the only bound. This is deliberately separate
-    # from max_context: projects grow through pages instead of one quadratic
-    # attention allocation.
+    # Zero means native/backend-auto context. Host code must never invent a smaller
+    # context window; large authoritative requests are handled losslessly in pages.
+    max_context: int = 0
+    # Legacy explicit prefill guard only. Zero disables it; it is never a truncation
+    # mechanism and production profiles should leave it disabled.
     max_input_tokens: int = 0
     max_new_tokens: int = 1200
     min_free_vram_mb: int = 0
