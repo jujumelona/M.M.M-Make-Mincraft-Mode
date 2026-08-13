@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-
 _DEFAULT_WIDTH = 3
 _DEFAULT_CTX_FALLBACK = 32768
-_MARKER = "_mmm_qwen35_mtp3_hotpath_v3"
-_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v2"
+_MARKER = "_mmm_qwen35_mtp3_hotpath_v4"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v3"
+_KV_OVERRIDE_ENV = "MMM_QWEN35_T4_KV_OVERRIDE"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -23,6 +23,7 @@ _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_MTP_P_MIN",
     "MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE",
     "MMM_LLAMA_ACTIVE_KV_CACHE",
+    _KV_OVERRIDE_ENV,
 )
 
 
@@ -47,12 +48,7 @@ def _width(autotune: Any) -> int:
 
 
 def _context_size(config: Any | None = None) -> int:
-    """Use the model profile context unless the operator explicitly overrides it.
-
-    The Qwen3.5 T4 hot path is a decode optimization and must not silently shrink
-    the model's usable context window.  An explicit positive environment override
-    remains available for operators who intentionally want a different server size.
-    """
+    """Use the model profile context unless explicitly overridden."""
 
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
     if raw:
@@ -62,11 +58,20 @@ def _context_size(config: Any | None = None) -> int:
             override = 0
         if override > 0:
             return override
-    configured = int(getattr(config, "max_context", 0) or 0) if config is not None else 0
+    configured = (
+        int(getattr(config, "max_context", 0) or 0)
+        if config is not None
+        else 0
+    )
     return configured if configured > 0 else _DEFAULT_CTX_FALLBACK
 
 
-def _drop_option(args: list[str], names: tuple[str, ...], *, takes_value: bool = True) -> None:
+def _drop_option(
+    args: list[str],
+    names: tuple[str, ...],
+    *,
+    takes_value: bool = True,
+) -> None:
     for name in names:
         while name in args:
             index = args.index(name)
@@ -85,22 +90,25 @@ def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
     args.extend([names[0], value])
 
 
-def _install_measured_fast_base_args(autotune: Any) -> None:
-    """Install the measured Qwen3.5 server shape without runtime search.
+def _kv_override() -> str:
+    value = os.environ.get(_KV_OVERRIDE_ENV, "").strip().lower()
+    return value if value in {"f16", "q8_0", "q4_0"} else ""
 
-    Production startup must not reload a 6 GB checkpoint repeatedly to discover a
-    speculative width that was already benchmarked. The hot path is one server:
-    full GPU offload, FlashAttention, batch 2048, ubatch 512, native KV and the model profile context window. The decode hot path must not
-    impose a smaller semantic context cap; operators may explicitly override
-    MMM_QWEN35_MTP_CTX only when they intentionally want a different size.
-    """
+
+def _install_measured_fast_base_args(autotune: Any) -> None:
+    """Install the fast Qwen3.5 server shape; T4 tuning may override KV format."""
 
     current = getattr(autotune, "_base_args", None)
     if not callable(current) or getattr(current, _BASE_MARKER, False):
         return
 
     @wraps(current)
-    def measured_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+    def measured_base_args(
+        binary: str,
+        model_path: str,
+        config: Any,
+        port: int,
+    ) -> list[str]:
         args = list(current(binary, model_path, config, port))
         if not _enabled() or not _is_qwen35_mtp(config):
             return args
@@ -111,10 +119,17 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--ubatch-size", "-ub"), "512")
         _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))
 
-        # Keep the measured native KV/server path. Generic cache/load experiments
-        # materially changed the old fast command and consumed T4 VRAM/launch time.
-        _drop_option(args, ("--cache-type-k", "-ctk"))
-        _drop_option(args, ("--cache-type-v", "-ctv"))
+        kv = _kv_override()
+        if kv:
+            _set_option(args, ("--cache-type-k", "-ctk"), kv)
+            _set_option(args, ("--cache-type-v", "-ctv"), kv)
+        else:
+            _drop_option(args, ("--cache-type-k", "-ctk"))
+            _drop_option(args, ("--cache-type-v", "-ctv"))
+
+        # Load-mode/prompt-cache experiments are deliberately excluded from the
+        # single-stream decode path. They affect startup/reuse, not target TG speed,
+        # and have caused avoidable VRAM/compatibility regressions on hybrid models.
         _drop_option(args, ("--load-mode", "-lm"))
         _drop_option(args, ("--cache-prompt",), takes_value=False)
         if "--metrics" not in args:
@@ -178,6 +193,7 @@ def _reclaim_prior_mmm_server() -> None:
         pids = [int(path.name) for path in proc_root.iterdir() if path.name.isdigit()]
     except OSError:
         pids = []
+
     for pid in pids:
         if pid == os.getpid() or not _process_is_llama_server_on_port(pid, port):
             continue
@@ -207,12 +223,7 @@ def _reclaim_prior_mmm_server() -> None:
 
 
 def install(autotune: Any) -> None:
-    """Select one deterministic Qwen3.5 MTP-3 production server.
-
-    Runtime Best-of-N/autotuning is intentionally forbidden here. The old adaptive
-    path benchmarked multiple MTP widths/confidence thresholds serially, repeatedly
-    launching the same 6 GB model before useful work began.
-    """
+    """Install the low-startup Qwen3.5 MTP-3 fallback server."""
 
     _install_measured_fast_base_args(autotune)
     current = autotune.ensure_tuned_server
@@ -236,7 +247,11 @@ def install(autotune: Any) -> None:
         with autotune._AUTOTUNE_LOCK:
             managed_process = getattr(autotune, "_MANAGED_PROCESS", None)
             managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")
-            if managed_process is not None and managed_process.poll() is None and managed_url:
+            if (
+                managed_process is not None
+                and managed_process.poll() is None
+                and managed_url
+            ):
                 return managed_url
 
             binary = autotune._server_binary()
@@ -255,6 +270,7 @@ def install(autotune: Any) -> None:
                 cache_reuse=0,
                 draft_p_min=0.0,
             )
+            os.environ.pop(_KV_OVERRIDE_ENV, None)
             url = autotune._launch_selected(binary, model_path, config, selected)
             os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = "draft-mtp"
             os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(width)
@@ -265,7 +281,10 @@ def install(autotune: Any) -> None:
             os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = "native-default"
             print(
                 "llama server: Qwen3.5 fixed production profile",
-                f"spec=draft-mtp n_max={width} parallel=1 ctx={_context_size(config)} ubatch={ubatch}",
+                (
+                    f"spec=draft-mtp n_max={width} parallel=1 "
+                    f"ctx={_context_size(config)} ubatch={ubatch} kv=native-default"
+                ),
                 flush=True,
             )
             return url

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 5
+_TUNING_PIPELINE_VERSION = 6
 
 
 @dataclass(frozen=True)

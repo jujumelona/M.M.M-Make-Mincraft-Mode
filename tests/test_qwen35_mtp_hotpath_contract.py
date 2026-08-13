@@ -24,6 +24,29 @@ def _qwen_config():
     )
 
 
+def _base_args(*_):
+    return [
+        "llama-server",
+        "--gpu-layers",
+        "all",
+        "--flash-attn",
+        "on",
+        "--batch-size",
+        "2048",
+        "--ubatch-size",
+        "512",
+        "--cache-type-k",
+        "q4_0",
+        "--cache-type-v",
+        "q4_0",
+        "--load-mode",
+        "auto",
+        "--cache-prompt",
+        "--ctx-size",
+        "16384",
+    ]
+
+
 def test_qwen35_mtp_detection_is_profile_specific() -> None:
     assert _is_qwen35_mtp(_qwen_config()) is True
     assert _is_qwen35_mtp(
@@ -37,23 +60,9 @@ def test_qwen35_mtp_detection_is_profile_specific() -> None:
 def test_measured_fast_args_preserve_model_profile_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+    monkeypatch.delenv("MMM_QWEN35_T4_KV_OVERRIDE", raising=False)
 
-    def base_args(binary, model_path, config, port):
-        del binary, model_path, config, port
-        return [
-            "llama-server",
-            "--gpu-layers", "all",
-            "--flash-attn", "on",
-            "--batch-size", "2048",
-            "--ubatch-size", "512",
-            "--cache-type-k", "q4_0",
-            "--cache-type-v", "q4_0",
-            "--load-mode", "auto",
-            "--cache-prompt",
-            "--ctx-size", "16384",
-        ]
-
-    autotune = SimpleNamespace(_base_args=base_args)
+    autotune = SimpleNamespace(_base_args=_base_args)
     _install_measured_fast_base_args(autotune)
     args = autotune._base_args("server", "model", _qwen_config(), 8910)
 
@@ -67,6 +76,16 @@ def test_measured_fast_args_preserve_model_profile_context(monkeypatch) -> None:
     assert "--load-mode" not in args
     assert "--cache-prompt" not in args
     assert "--metrics" in args
+
+
+def test_measured_fast_args_honor_t4_kv_override(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_QWEN35_T4_KV_OVERRIDE", "q8_0")
+    autotune = SimpleNamespace(_base_args=_base_args)
+    _install_measured_fast_base_args(autotune)
+    args = autotune._base_args("server", "model", _qwen_config(), 8910)
+
+    assert args[args.index("--cache-type-k") + 1] == "q8_0"
+    assert args[args.index("--cache-type-v") + 1] == "q8_0"
 
 
 def test_qwen_context_uses_profile_and_only_explicit_positive_override(monkeypatch) -> None:
@@ -85,6 +104,7 @@ def test_qwen35_hotpath_launches_exactly_one_mtp3_server(monkeypatch) -> None:
     monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_WIDTH", raising=False)
+    monkeypatch.delenv("MMM_QWEN35_T4_KV_OVERRIDE", raising=False)
     selected = []
 
     def env_int(name, default, minimum=1, maximum=None):
@@ -100,7 +120,13 @@ def test_qwen35_hotpath_launches_exactly_one_mtp3_server(monkeypatch) -> None:
     autotune = SimpleNamespace(
         ensure_tuned_server=lambda config, request: "generic-autotune-should-not-run",
         _base_args=lambda binary, model_path, config, port: [
-            binary, "-m", model_path, "--port", str(port), "--ctx-size", "16384"
+            binary,
+            "-m",
+            model_path,
+            "--port",
+            str(port),
+            "--ctx-size",
+            "16384",
         ],
         _MANAGED_PROCESS=None,
         _MANAGED_URL=None,
