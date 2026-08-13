@@ -24,9 +24,9 @@ def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> 
 
     def original_collect(router, prompt, *, trace_metadata=None):
         barrier.wait(timeout=2)
-        evidence = agentic._domain_evidence_slice("request", {})
-        forced = evidence["forced_project_rag"]
-        observed[prompt] = forced["owner"]
+        forced = forced_rag._FORCED_RAG_CONTEXT.get()
+        assert forced is not None
+        observed[prompt] = str(forced["owner"])
         return {
             "research_brief": {"domains": []},
             "deterministic": {},
