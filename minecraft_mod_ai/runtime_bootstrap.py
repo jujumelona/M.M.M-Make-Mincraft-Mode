@@ -142,6 +142,9 @@ def _install_generation_contracts() -> None:
 def _install_platform_contracts() -> None:
     """Bind planning, generation, runtime and quality to one Minecraft target."""
     from . import (
+        agentic_pre_design_rag,
+        agentic_research_game_design,
+        central_intelligence_amplifier,
         central_research,
         complete_orchestrator,
         complete_planner,
@@ -211,6 +214,10 @@ def _install_platform_contracts() -> None:
         resolver_module=platform_resolver,
         central_contract_module=platform_central_ai_contract,
     )
+    central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
+    agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
+    central_intelligence_amplifier.install(agentic_research_game_design)
+    agentic_research_game_design.bind_game_design_planner(game_design)
     install_platform_central_ai(
         game_design_module=game_design,
         complete_planner_module=complete_planner,
