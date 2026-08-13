@@ -2,20 +2,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from .agentic_pre_design_rag import harden_pre_design_research
 from .agentic_research_game_design import bind_game_design_planner
 
 
 def install(complete_planner_module: Any) -> None:
     """Keep planner prompts target-neutral and bind research-first game design.
 
-    The exact platform coordinates remain host-owned. Game-design generation is bound
-    here because this planner prompt layer is installed after target-neutral planning
-    semantics and before the outer live-platform selection wrapper. The binder is a
-    normal planner helper, not another contract composer.
+    The exact platform coordinates remain host-owned. Pre-design research is hardened
+    first so every research query receives deterministic project/code RAG evidence;
+    then the sectioned game-design path is bound. This remains a planner helper layer,
+    not a second runtime-contract composition chain.
     """
 
+    from . import agentic_research_game_design as agentic_module
     from . import game_design as game_design_module
 
+    harden_pre_design_research(agentic_module)
     bind_game_design_planner(game_design_module)
 
     replacements = (
