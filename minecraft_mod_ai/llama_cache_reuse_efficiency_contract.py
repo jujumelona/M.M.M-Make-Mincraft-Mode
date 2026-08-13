@@ -127,6 +127,17 @@ def install(
     runtime_tuning_module: Any,
 ) -> None:
     """Tune request-scoped KV cache reuse on one already-loaded llama server."""
+    from .qwen35_runtime_efficiency_contract import install as install_qwen35_efficiency
+
+    # This stage already owns autotune + hardware payload + runtime candidates, so it is
+    # the narrowest composition point for Qwen cold-start/output efficiency. Install it
+    # before the idempotency return so a hot notebook can receive the newer policy too.
+    install_qwen35_efficiency(
+        autotune_module,
+        hardware_policy_module,
+        runtime_tuning_module,
+    )
+
     if getattr(autotune_module, "_mmm_request_cache_reuse_tuning", False):
         return
 
