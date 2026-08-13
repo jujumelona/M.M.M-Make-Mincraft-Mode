@@ -20,29 +20,42 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Patch duplicate cycle ownership
+      - name: Simplify outline cycle ownership
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path('minecraft_mod_ai/planner_incremental_resume_contract.py')
           text = path.read_text(encoding='utf-8')
-          old_init = '''            self._seen_requests: set[str] = set()\n            self._outline_calls = 0\n'''
-          new_init = '''            self._request_counts: dict[str, int] = {}\n            self._outline_calls = 0\n'''
-          if text.count(old_init) != 1:
-              raise SystemExit('planner guard init shape changed')
-          text = text.replace(old_init, new_init)
+          edits = [
+              ('_DEFAULT_OUTLINE_GENERATION_ATTEMPTS = 2\n', ''),
+              (
+                  '''            self._seen_requests: set[str] = set()\n            self._outline_calls = 0\n            self._outline_limit = _bounded_env(\n                "MMM_PLANNER_OUTLINE_GENERATION_ATTEMPTS",\n                _DEFAULT_OUTLINE_GENERATION_ATTEMPTS,\n                maximum=4,\n            )\n''',
+                  '''            self._outline_calls = 0\n''',
+              ),
+              (
+                  '''            if not is_batch_repair:\n                self._outline_calls += 1\n                if self._outline_calls > self._outline_limit:\n                    raise complete_planner.SpecValidationError(\n                        "Production outline generation made no valid progress after the "\n                        "diagnostic regeneration path."\n                    )\n\n            request_sha256 = incremental_module._fingerprint(\n                {\n                    "role": role,\n                    "system": system_content,\n                    "user": user_content,\n                    "response_format": response_format,\n                    "media_paths": [str(path) for path in media_paths],\n                }\n            )\n            if request_sha256 in self._seen_requests:\n                raise complete_planner.SpecValidationError(\n                    "Planner repair cycle detected before repeating an identical model request."\n                )\n            self._seen_requests.add(request_sha256)\n\n''',
+                  '''            if not is_batch_repair:\n                self._outline_calls += 1\n                if self._outline_calls > 2:\n                    raise complete_planner.SpecValidationError(\n                        "Planner repair cycle detected before a third semantic outline request."\n                    )\n\n''',
+              ),
+          ]
+          for old, new in edits:
+              if text.count(old) != 1:
+                  raise SystemExit(f'planner guard shape changed: {old[:80]!r}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
 
-          old = '''            if not is_batch_repair:\n                self._outline_calls += 1\n                if self._outline_calls > self._outline_limit:\n                    raise complete_planner.SpecValidationError(\n                        "Production outline generation made no valid progress after the "\n                        "diagnostic regeneration path."\n                    )\n\n            request_sha256 = incremental_module._fingerprint(\n                {\n                    "role": role,\n                    "system": system_content,\n                    "user": user_content,\n                    "response_format": response_format,\n                    "media_paths": [str(path) for path in media_paths],\n                }\n            )\n            if request_sha256 in self._seen_requests:\n                raise complete_planner.SpecValidationError(\n                    "Planner repair cycle detected before repeating an identical model request."\n                )\n            self._seen_requests.add(request_sha256)\n\n'''
-          new = '''            if not is_batch_repair:\n                self._outline_calls += 1\n                if self._outline_calls > self._outline_limit:\n                    raise complete_planner.SpecValidationError(\n                        "Production outline generation made no valid progress after the "\n                        "diagnostic regeneration path."\n                    )\n\n                request_sha256 = incremental_module._fingerprint(\n                    {\n                        "role": role,\n                        "system": system_content,\n                        "user": user_content,\n                        "response_format": response_format,\n                        "media_paths": [str(path) for path in media_paths],\n                    }\n                )\n                request_count = self._request_counts.get(request_sha256, 0) + 1\n                if request_count > 2:\n                    raise complete_planner.SpecValidationError(\n                        "Planner repair cycle detected before a third identical model request."\n                    )\n                self._request_counts[request_sha256] = request_count\n\n'''
-          if text.count(old) != 1:
-              raise SystemExit('planner guard body shape changed')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          test_path = Path('tests/test_planner_incremental_repair_contract.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          old = '''    # Raise the broad generation ceiling so this test specifically exercises the exact\n    # request-cycle detector rather than the independent no-progress budget.\n    monkeypatch.setenv("MMM_PLANNER_OUTLINE_GENERATION_ATTEMPTS", "4")\n'''
+          new = '''    # The host allows one diagnostic regeneration for the same semantic outline.\n'''
+          if test_text.count(old) != 1:
+              raise SystemExit('planner cycle test shape changed')
+          test_path.write_text(test_text.replace(old, new), encoding='utf-8')
           PY
       - name: Verify planner repair semantics
         run: |
           python -m pip install --prefer-binary -e '.[dev]'
-          python -m ruff check minecraft_mod_ai/planner_incremental_resume_contract.py --select F,E7,E9
+          python -m ruff check minecraft_mod_ai/planner_incremental_resume_contract.py tests/test_planner_incremental_repair_contract.py --select F,E7,E9
           python -m pytest -q \
             tests/test_planner_incremental_repair_contract.py \
             tests/test_complete_planner_scaling.py::test_initial_outline_repairs_without_replanning_design_or_research
