@@ -17,7 +17,7 @@ _RESOURCE_CAPACITIES = {
     "commit": 1,
 }
 # These stages mutate some stage-global registries, so work within the same stage is
-# serialized.  They no longer share one global commit lane: content, systems and
+# serialized. They no longer share one global commit lane: content, systems and
 # entities can execute concurrently because their shared files are disjoint domains.
 _STAGE_WRITE_LOCKS = {
     "content": threading.RLock(),
@@ -29,6 +29,15 @@ _INDEX_COMMIT_LOCK = threading.RLock()
 
 def _cpu_capacity() -> int:
     return max(1, min(4, os.cpu_count() or 2))
+
+
+def _pipeline_shard_size(name: str, default: int, upper: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(1, min(max(1, upper), value))
 
 
 def _capacities() -> dict[str, int]:
@@ -112,8 +121,8 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
 def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
     """Keep unknown integration modules out of the CPU lane.
 
-    Normal extended content and research shards are deterministic.  The built-in local
-    AI sidecar integration is deterministic too.  Other integration modules can fall
+    Normal extended content and research shards are deterministic. The built-in local
+    AI sidecar integration is deterministic too. Other integration modules can fall
     back to CustomModuleGenerator and therefore must not bypass the one-request LLM
     lane merely because their topological stage is named ``content``.
     """
@@ -132,6 +141,48 @@ def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
         if str(config.get("integration_type", "")) != "mmm_local_ai_sidecar":
             return False
     return True
+
+
+def _install_pipeline_shards(work_graph_module: Any) -> None:
+    """Expose dependency progress instead of hiding dozens of modules in one node.
+
+    Custom modules are already generated one-by-one inside a shard, so a 48-member
+    custom shard does not reduce LLM calls; it only prevents downstream nodes from
+    starting until all 48 serial calls finish. One custom module per DAG node releases
+    dependencies immediately while the single LLM lane continues with the next one.
+
+    Entity generation is deterministic but each node also performs post-generation
+    review. Small entity shards let the next entity generation overlap the prior
+    node's review without concurrently mutating the same entity registry.
+    """
+
+    current = work_graph_module._module_shards
+    if getattr(current, "_mmm_pipeline_granularity", False):
+        return
+
+    @wraps(current)
+    def module_shards(modules: Any, *, policy: Any):
+        for stage, members in current(modules, policy=policy):
+            if stage == "custom":
+                size = _pipeline_shard_size(
+                    "MMM_CUSTOM_PIPELINE_SHARD_SIZE",
+                    1,
+                    len(members),
+                )
+            elif stage == "entity":
+                size = _pipeline_shard_size(
+                    "MMM_ENTITY_PIPELINE_SHARD_SIZE",
+                    2,
+                    len(members),
+                )
+            else:
+                yield stage, members
+                continue
+            for offset in range(0, len(members), size):
+                yield stage, tuple(members[offset : offset + size])
+
+    module_shards._mmm_pipeline_granularity = True  # type: ignore[attr-defined]
+    work_graph_module._module_shards = module_shards
 
 
 def _install_generation_lanes(work_graph_module: Any) -> None:
@@ -445,10 +496,16 @@ def install(
     work_graph_module: Any,
     orchestrator_module: Any,
 ) -> None:
+    _install_pipeline_shards(work_graph_module)
     _install_generation_lanes(work_graph_module)
     _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
     _install_index_commit_order(work_graph_module, orchestrator_module)
 
 
-__all__ = ["_content_node_is_cpu_safe", "_receipt_touched_paths", "install"]
+__all__ = [
+    "_content_node_is_cpu_safe",
+    "_receipt_touched_paths",
+    "_stage_write_lock",
+    "install",
+]
