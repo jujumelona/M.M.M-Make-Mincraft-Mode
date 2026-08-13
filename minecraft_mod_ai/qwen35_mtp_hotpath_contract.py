@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 _DEFAULT_WIDTH = 3
 _MARKER = "_mmm_qwen35_mtp3_hotpath"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -42,6 +43,65 @@ def _is_qwen35_mtp(config: Any) -> bool:
 
 def _width(autotune: Any) -> int:
     return autotune._env_int("MMM_QWEN35_MTP_WIDTH", _DEFAULT_WIDTH, minimum=1)
+
+
+def _drop_option(args: list[str], names: tuple[str, ...], *, takes_value: bool = True) -> None:
+    for name in names:
+        while name in args:
+            index = args.index(name)
+            del args[index]
+            if takes_value and index < len(args):
+                del args[index]
+
+
+def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
+    for name in names:
+        if name in args:
+            index = args.index(name)
+            if index + 1 < len(args):
+                args[index + 1] = value
+                return
+    args.extend([names[0], value])
+
+
+def _install_measured_fast_base_args(autotune: Any) -> None:
+    """Restore the server-side part of the Qwen3.5 profile that measured ~80 tok/s.
+
+    The measured profile used full GPU offload, FlashAttention, batch 2048, ubatch
+    512 and one native slot.  Later generic tuning added quantized KV, load-mode and
+    prompt-cache switches to every model.  Those switches make the command materially
+    different from the measured Qwen3.5 path, so remove them only for this profile.
+    Context sizing remains host-owned so correctness is not traded for a smaller
+    context window.
+    """
+
+    current = getattr(autotune, "_base_args", None)
+    if not callable(current) or getattr(current, _BASE_MARKER, False):
+        return
+
+    @wraps(current)
+    def measured_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+        args = list(current(binary, model_path, config, port))
+        if not _enabled() or not _is_qwen35_mtp(config):
+            return args
+
+        _set_option(args, ("--gpu-layers", "-ngl"), "all")
+        _set_option(args, ("--flash-attn", "-fa"), "on")
+        _set_option(args, ("--batch-size", "-b"), "2048")
+        _set_option(args, ("--ubatch-size", "-ub"), "512")
+
+        # Match the measured full-speed launch instead of inheriting later generic
+        # cache experiments.  llama.cpp's native default KV representation is used.
+        _drop_option(args, ("--cache-type-k", "-ctk"))
+        _drop_option(args, ("--cache-type-v", "-ctv"))
+        _drop_option(args, ("--load-mode", "-lm"))
+        _drop_option(args, ("--cache-prompt",), takes_value=False)
+        if "--metrics" not in args:
+            args.append("--metrics")
+        return args
+
+    setattr(measured_base_args, _BASE_MARKER, True)
+    autotune._base_args = measured_base_args
 
 
 def _prior_mmm_loopback_port() -> int | None:
@@ -87,12 +147,7 @@ def _process_is_llama_server_on_port(pid: int, port: int) -> bool:
 
 
 def _reclaim_prior_mmm_server() -> None:
-    """Stop only the loopback llama-server recorded by a prior MMM Colab setup.
-
-    Reloading GitHub main clears Python modules but cannot by itself terminate the
-    native child process created by the old module. Without this guard, the refreshed
-    engine can reconnect to that stale server and silently keep the old decode policy.
-    """
+    """Stop only the loopback llama-server recorded by a prior MMM Colab setup."""
 
     port = _prior_mmm_loopback_port()
     if port is None:
@@ -127,25 +182,15 @@ def _reclaim_prior_mmm_server() -> None:
             except (ProcessLookupError, PermissionError):
                 pass
 
-    # The receipt proves this loopback URL belonged to the prior MMM local setup.
-    # Clear all exported selection state so the refreshed engine cannot reuse it.
     os.environ.pop("LLAMA_SERVER_URL", None)
     for name in _ACTIVE_RUNTIME_KEYS:
         os.environ.pop(name, None)
 
 
 def install(autotune: Any) -> None:
-    """Keep the known-fast Qwen3.5-9B MTP path out of baseline re-selection.
+    """Keep the known-fast Qwen3.5-9B MTP path out of generic re-selection."""
 
-    MMM measured the local Qwen3.5-9B MTP-3 server at roughly 80 tok/s while the
-    non-speculative path was roughly 30 tok/s. The generic correctness/autotune stack
-    remains available for every other model and can be explicitly restored for this
-    profile with MMM_QWEN35_MTP_HOTPATH=0.
-
-    This wrapper deliberately selects one native server variant only. It does not
-    create a second GGUF engine, does not alter generation payloads, and preserves the
-    canonical managed-server lifecycle/export wrappers already installed underneath.
-    """
+    _install_measured_fast_base_args(autotune)
 
     current = autotune.ensure_tuned_server
     if getattr(current, _MARKER, False):
@@ -161,9 +206,6 @@ def install(autotune: Any) -> None:
         if managed_process is not None and managed_process.poll() is None and managed_url:
             return managed_url
 
-        # A GitHub-main refresh can leave the old native child alive after its Python
-        # module was discarded. Reclaim that exact prior MMM loopback server before
-        # honoring any external-server shortcut in the generic layer.
         _reclaim_prior_mmm_server()
         if os.environ.get("LLAMA_SERVER_URL", "").strip():
             return current(config, request)
@@ -194,10 +236,17 @@ def install(autotune: Any) -> None:
             os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = "draft-mtp"
             os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(width)
             os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = "1"
+            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(ubatch)
+            os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = "native-default"
             return url
 
     setattr(ensure_qwen35_mtp3, _MARKER, True)
     autotune.ensure_tuned_server = ensure_qwen35_mtp3
 
 
-__all__ = ["_is_qwen35_mtp", "_prior_mmm_loopback_port", "install"]
+__all__ = [
+    "_install_measured_fast_base_args",
+    "_is_qwen35_mtp",
+    "_prior_mmm_loopback_port",
+    "install",
+]
