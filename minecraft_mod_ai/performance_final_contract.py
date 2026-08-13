@@ -234,6 +234,12 @@ def _clone_source_snapshot(live_root: Path) -> Path:
         base = Path(directory)
         for name in names:
             path = base / name
+            # copytree already enumerates every source directory. Reject links in
+            # this traversal so staging safety does not require a second rglob pass.
+            if path.is_symlink():
+                raise StagedCommitConflict(
+                    f"Staging refused project symlink: {path}"
+                )
             if name in _SKIP_STAGE_DIRS and path.is_dir():
                 ignored.add(name)
                 continue
@@ -241,20 +247,16 @@ def _clone_source_snapshot(live_root: Path) -> Path:
                 ignored.add(name)
         return ignored
 
-    # Reject links rather than following an unexpected path outside the validated
-    # project. Generated projects should contain regular files/directories only.
-    for candidate in live_root.rglob("*"):
-        if candidate.is_symlink():
-            raise StagedCommitConflict(
-                f"Staging refused project symlink: {candidate}"
-            )
-
-    shutil.copytree(
-        live_root,
-        stage,
-        copy_function=_reflink_or_copy,
-        ignore=ignore,
-    )
+    try:
+        shutil.copytree(
+            live_root,
+            stage,
+            copy_function=_reflink_or_copy,
+            ignore=ignore,
+        )
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
     return stage
 
 
