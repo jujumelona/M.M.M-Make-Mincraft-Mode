@@ -94,6 +94,8 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
     assert "integrated_contract_bootstrap" not in source
     assert "final_architecture_contract" not in source
     assert "platform_mcp_compatibility_contract" not in source
+    assert "agent_tool_calling_contract" not in source
+    assert "platform_policy_runtime_contract" not in source
 
     required_once = (
         "install_runner_lock(",
@@ -125,15 +127,8 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
         "install_incremental_resume(",
         "install_planner_pagination_safety(",
         "install_planner_production_page(",
-        "install_runtime_helpers(",
-        "install_runtime_helper_json_deadline(",
-        "install_mcp_target_validation(",
-        "install_external_mcp_bridge_safety(",
-        "install_mcp_runtime(",
-        "install_mcp_federation(",
-        "install_mcp_repair_batch(",
-        "install_mcp_repair_diagnostic_shape(",
-        "install_skill_policy(",
+        "install_platform_mcp(",
+        "install_platform_release(",
     )
     for call in required_once:
         assert source.count(call) == 1, call
@@ -148,9 +143,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
 
     assert source.index("install_planner_pagination_safety(") < source.index(
         "install_planner_production_page("
-    )
-    assert source.index("install_mcp_target_validation(") < source.index(
-        "install_external_mcp_bridge_safety("
     )
 
 
