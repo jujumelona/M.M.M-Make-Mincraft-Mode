@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from .agentic_research_game_design import bind_game_design_planner
+
 
 def install(complete_planner_module: Any) -> None:
-    """Remove stale global 1.20.1 instructions after host target selection was added.
+    """Keep planner prompts target-neutral and bind research-first game design.
 
-    The actual selected coordinates are injected by the implementation/planning
-    contracts. Global planner prompts must describe the product, not override that
-    host-owned target with an obsolete fixed version.
+    The exact platform coordinates remain host-owned. Game-design generation is bound
+    here because this planner prompt layer is installed after target-neutral planning
+    semantics and before the outer live-platform selection wrapper. The binder is a
+    normal planner helper, not another contract composer.
     """
+
+    from . import game_design as game_design_module
+
+    bind_game_design_planner(game_design_module)
 
     replacements = (
         (
