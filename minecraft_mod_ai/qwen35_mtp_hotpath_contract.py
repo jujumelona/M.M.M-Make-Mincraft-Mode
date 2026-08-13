@@ -5,19 +5,23 @@ import json
 import os
 import signal
 import time
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 _MAX_CTX = 2147483647
-_MARKER = "_mmm_qwen35_measured_decode_hotpath_v10"
+_MARKER = "_mmm_qwen35_measured_decode_hotpath_v11"
 _BASE_MARKER = "_mmm_qwen35_measured_fast_args_v7"
-_VARIANT_MARKER = "_mmm_qwen35_full_draft_gpu_v1"
-_FINGERPRINT_MARKER = "_mmm_qwen35_draft_gpu_fingerprint_v1"
+_VARIANT_MARKER = "_mmm_qwen35_full_draft_gpu_v2"
+_FINGERPRINT_MARKER = "_mmm_qwen35_draft_gpu_fingerprint_v2"
+_DRAFT_KV_BENCHMARK_MARKER = "_mmm_qwen35_draft_kv_benchmark_v1"
+_DRAFT_KV_LAUNCH_MARKER = "_mmm_qwen35_draft_kv_launch_v1"
 _SLOT_POLL_MARKER = "_mmm_qwen35_no_decode_slot_poll_v1"
 _ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _DEFAULT_MTP_WIDTHS = "1,2,3,4,5,6,8"
+_ALLOWED_DRAFT_KV = ("f16", "q8_0", "q4_0")
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -27,6 +31,7 @@ _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_MTP_P_MIN",
     "MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE",
     "MMM_LLAMA_ACTIVE_KV_CACHE",
+    "MMM_LLAMA_ACTIVE_DRAFT_KV_CACHE",
 )
 
 
@@ -47,12 +52,7 @@ def _is_qwen35_mtp(config: Any) -> bool:
 
 
 def _context_size(config: Any | None = None) -> int:
-    """Return the authoritative llama.cpp context window for this model profile.
-
-    There is deliberately no Qwen-specific fallback window here. A non-negative
-    MMM_QWEN35_MTP_CTX is an explicit operator override; otherwise the selected
-    model profile owns the context size. Zero means llama.cpp/model-native auto.
-    """
+    """Return the authoritative llama.cpp context window for this model profile."""
 
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
     if raw:
@@ -75,7 +75,7 @@ def _context_size(config: Any | None = None) -> int:
 
 
 def _draft_gpu_layers() -> str:
-    """Return the Qwen MTP draft offload policy used by both tuning and launch."""
+    """Return the Qwen MTP draft offload policy used by tuning and launch."""
 
     raw = os.environ.get("MMM_QWEN35_MTP_DRAFT_NGL", "all").strip().lower() or "all"
     if raw in {"all", "auto"}:
@@ -91,6 +91,37 @@ def _draft_gpu_layers() -> str:
             "MMM_QWEN35_MTP_DRAFT_NGL must be 'all', 'auto', or a non-negative integer"
         )
     return str(value)
+
+
+def _draft_kv_candidates() -> tuple[str, ...]:
+    """Return draft-cache candidates; an explicit value disables the search."""
+
+    explicit = os.environ.get("MMM_QWEN35_MTP_DRAFT_KV", "").strip().lower()
+    if explicit:
+        if explicit not in _ALLOWED_DRAFT_KV:
+            raise ValueError(
+                "MMM_QWEN35_MTP_DRAFT_KV must be one of f16, q8_0, q4_0"
+            )
+        return (explicit,)
+
+    values: list[str] = []
+    for token in os.environ.get(
+        "MMM_QWEN35_MTP_DRAFT_KV_CANDIDATES", "f16,q8_0,q4_0"
+    ).split(","):
+        value = token.strip().lower()
+        if value in _ALLOWED_DRAFT_KV and value not in values:
+            values.append(value)
+    return tuple(values or ("f16",))
+
+
+def _draft_kv_from_variant(variant: Any) -> str:
+    name = str(getattr(variant, "name", ""))
+    marker = "|dkv-"
+    if marker in name:
+        value = name.split(marker, 1)[1].split("|", 1)[0].strip().lower()
+        if value in _ALLOWED_DRAFT_KV:
+            return value
+    return _draft_kv_candidates()[0]
 
 
 def _drop_option(
@@ -159,16 +190,10 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--parallel", "-np"), "1")
         _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))
 
-        # cache-type-k/v is deliberately preserved: the single-stream decode
-        # contract measures q4_0/q8_0/f16 and exports the winner through these
-        # exact llama.cpp options. Deleting them made every Qwen KV probe run the
-        # same native-default cache while reporting a fictitious selected format.
+        # Main KV cache options are owned by the decode-speed autotuner.
         _drop_option(args, ("--load-mode", "-lm"))
         _drop_option(args, ("--cache-prompt",), takes_value=False)
-        # /slots is diagnostic-only and the old 15 s progress sampler issued a
-        # second HTTP request to the same llama-server during active decoding.
-        # Qwen single-stream progress uses local SSE counters instead, so do not
-        # expose or poll the endpoint on this latency-sensitive path.
+        # Do not issue diagnostic HTTP requests to /slots during active decoding.
         _drop_option(args, ("--slots",), takes_value=False)
         if "--metrics" not in args:
             args.append("--metrics")
@@ -179,7 +204,7 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
 
 
 def _install_measured_fast_variant_args(autotune: Any) -> None:
-    """Undo generic auto-offload only for the active Qwen MTP tuning/launch."""
+    """Keep Qwen MTP draft compute and its selected KV cache on the GPU hot path."""
 
     current = getattr(autotune, "_variant_args", None)
     if not callable(current) or getattr(current, _VARIANT_MARKER, False):
@@ -202,6 +227,17 @@ def _install_measured_fast_variant_args(autotune: Any) -> None:
                 ),
                 _draft_gpu_layers(),
             )
+            draft_kv = _draft_kv_from_variant(variant)
+            _set_option(
+                args,
+                ("--spec-draft-type-k", "-ctkd", "--cache-type-k-draft"),
+                draft_kv,
+            )
+            _set_option(
+                args,
+                ("--spec-draft-type-v", "-ctvd", "--cache-type-v-draft"),
+                draft_kv,
+            )
         return args
 
     setattr(measured_variant_args, _VARIANT_MARKER, True)
@@ -209,7 +245,7 @@ def _install_measured_fast_variant_args(autotune: Any) -> None:
 
 
 def _install_qwen35_fingerprint(autotune: Any) -> None:
-    """Invalidate cached winners when the Qwen draft offload policy changes."""
+    """Invalidate cached winners when Qwen draft memory policy changes."""
 
     current = getattr(autotune, "_fingerprint", None)
     if not callable(current) or getattr(current, _FINGERPRINT_MARKER, False):
@@ -223,7 +259,8 @@ def _install_qwen35_fingerprint(autotune: Any) -> None:
         payload = {
             "base": base,
             "qwen35_mtp_draft_ngl": _draft_gpu_layers(),
-            "qwen35_hotpath": "v9",
+            "qwen35_mtp_draft_kv_candidates": list(_draft_kv_candidates()),
+            "qwen35_hotpath": "v11",
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -231,6 +268,122 @@ def _install_qwen35_fingerprint(autotune: Any) -> None:
 
     setattr(qwen35_fingerprint, _FINGERPRINT_MARKER, True)
     autotune._fingerprint = qwen35_fingerprint
+
+
+def _install_draft_kv_benchmark(autotune: Any) -> None:
+    """Measure draft KV only after native MTP has already won the decode search."""
+
+    current = getattr(autotune, "_benchmark", None)
+    if not callable(current) or getattr(current, _DRAFT_KV_BENCHMARK_MARKER, False):
+        return
+
+    @wraps(current)
+    def benchmark(
+        binary: str,
+        model_path: str,
+        config: Any,
+        request: Any,
+        fingerprint: str,
+    ) -> Any:
+        decision = current(binary, model_path, config, request, fingerprint)
+        if decision is None or not _enabled() or not _is_qwen35_mtp(config):
+            return decision
+        selected = getattr(decision, "selected", None)
+        if selected is None or str(getattr(selected, "spec_type", "")) != "draft-mtp":
+            return decision
+
+        candidates = _draft_kv_candidates()
+        run_variant = getattr(autotune, "_mmm_run_tuning_variant", None)
+        if len(candidates) <= 1 or not callable(run_variant):
+            return decision
+
+        benchmark_request = autotune._compact_benchmark_request(request)
+        probe_tokens = min(
+            int(config.max_new_tokens),
+            autotune._env_int(
+                "MMM_LLAMA_AUTOTUNE_TOKENS",
+                autotune._BENCHMARK_OUTPUT_TOKENS,
+            ),
+        )
+        base_name = str(getattr(selected, "name", "mtp")).split("|dkv-", 1)[0]
+        probes: list[Any] = []
+        for kv in candidates:
+            variant = replace(selected, name=f"{base_name}|dkv-{kv}")
+            probe = run_variant(
+                binary,
+                model_path,
+                config,
+                benchmark_request,
+                variant,
+                probe_tokens=probe_tokens,
+            )
+            probes.append(probe)
+
+        reference = next(
+            (
+                probe
+                for probe in probes
+                if bool(getattr(probe, "ok", False))
+                and float(getattr(probe, "predicted_tps", 0.0)) > 0
+            ),
+            None,
+        )
+        if reference is None:
+            return decision
+        reference_hash = str(getattr(reference, "output_sha256", ""))
+        eligible = [
+            probe
+            for probe in probes
+            if bool(getattr(probe, "ok", False))
+            and float(getattr(probe, "predicted_tps", 0.0)) > 0
+            and str(getattr(probe, "output_sha256", "")) == reference_hash
+        ]
+        if not eligible:
+            return decision
+
+        best = max(eligible, key=lambda probe: float(getattr(probe, "predicted_tps", 0.0)))
+        minimum_gain = max(
+            1.0,
+            autotune._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01),
+        )
+        reference_tps = max(1e-9, float(getattr(reference, "predicted_tps", 0.0)))
+        if (
+            best is not reference
+            and float(getattr(best, "predicted_tps", 0.0)) / reference_tps < minimum_gain
+        ):
+            best = reference
+
+        selected_tps = float(getattr(best, "predicted_tps", 0.0))
+        baseline_tps = float(getattr(decision, "baseline_tps", 0.0))
+        return autotune.AutotuneDecision(
+            fingerprint=fingerprint,
+            selected=best.variant,
+            baseline_tps=baseline_tps,
+            selected_tps=selected_tps,
+            speedup=(selected_tps / baseline_tps if baseline_tps > 0 else 1.0),
+            probes=tuple(getattr(decision, "probes", ())) + tuple(probes),
+        )
+
+    setattr(benchmark, _DRAFT_KV_BENCHMARK_MARKER, True)
+    autotune._benchmark = benchmark
+
+
+def _install_draft_kv_launch_export(autotune: Any) -> None:
+    current = getattr(autotune, "_launch_selected", None)
+    if not callable(current) or getattr(current, _DRAFT_KV_LAUNCH_MARKER, False):
+        return
+
+    @wraps(current)
+    def launch_selected(binary: str, model_path: str, config: Any, selected: Any) -> str:
+        url = current(binary, model_path, config, selected)
+        if _is_qwen35_mtp(config) and str(getattr(selected, "spec_type", "")) == "draft-mtp":
+            os.environ["MMM_LLAMA_ACTIVE_DRAFT_KV_CACHE"] = _draft_kv_from_variant(selected)
+        else:
+            os.environ.pop("MMM_LLAMA_ACTIVE_DRAFT_KV_CACHE", None)
+        return url
+
+    setattr(launch_selected, _DRAFT_KV_LAUNCH_MARKER, True)
+    autotune._launch_selected = launch_selected
 
 
 def _prior_mmm_loopback_port() -> int | None:
@@ -329,6 +482,8 @@ def install(autotune: Any) -> None:
     _install_measured_fast_base_args(autotune)
     _install_measured_fast_variant_args(autotune)
     _install_qwen35_fingerprint(autotune)
+    _install_draft_kv_benchmark(autotune)
+    _install_draft_kv_launch_export(autotune)
     current = autotune.ensure_tuned_server
     if getattr(current, _MARKER, False):
         return
@@ -343,16 +498,7 @@ def install(autotune: Any) -> None:
         if managed_process is not None and managed_process.poll() is None and managed_url:
             return current(config, request)
 
-        # A previous Colab checkout can leave a process using obsolete flags.
-        # Reclaim only that MMM-owned loopback server. The already-composed
-        # runtime/decode/KV tuner then benchmarks or reuses its cached winner.
         _reclaim_prior_mmm_server()
-
-        # The generic KV tuner fingerprints MMM_LLAMA_SERVER_CTX. Qwen's final
-        # launch args are owned by MMM_QWEN35_MTP_CTX/profile context, so expose
-        # that exact effective value only while the composed tuner runs. This
-        # prevents a 16K fingerprint from reusing a KV winner on an actual 32K
-        # server (and likewise for explicit Qwen context overrides).
         previous_ctx = os.environ.get("MMM_LLAMA_SERVER_CTX")
         previous_widths = os.environ.get("MMM_LLAMA_MTP_WIDTHS")
         previous_active = os.environ.get(_ACTIVE_TUNING_ENV)
@@ -376,6 +522,9 @@ __all__ = [
     "_context_size",
     "_disable_decode_slot_polling",
     "_draft_gpu_layers",
+    "_draft_kv_candidates",
+    "_draft_kv_from_variant",
+    "_install_draft_kv_benchmark",
     "_install_measured_fast_base_args",
     "_install_measured_fast_variant_args",
     "_is_qwen35_mtp",
