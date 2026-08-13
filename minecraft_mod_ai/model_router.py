@@ -156,42 +156,15 @@ class ModelRouter:
             else:
                 adapter = self._new_text_adapter(config, role=role)
 
-            stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, "")).strip().lower()
-            runtime = None
-            tools: tuple[Mapping[str, Any], ...] = ()
-            request_messages: Sequence[Mapping[str, Any]] = messages
-            if self._tools_enabled(
-                enable_tools=enable_tools,
-                stage=stage,
-                adapter_name=config.adapter,
-            ):
-                runtime = self._tool_runtime()
-                raw_tools = tuple(runtime.tool_schemas(stage))
-                if raw_tools:
-                    from .agent_capability_context import (
-                        build_agent_capability_context,
-                        filter_tool_schemas_for_role,
-                    )
-
-                    tools = filter_tool_schemas_for_role(stage, role, raw_tools)
-                    if tools:
-                        request_messages = _inject_system_context(
-                            messages,
-                            build_agent_capability_context(
-                                stage,
-                                tools,
-                                model_role=role,
-                            ),
-                        )
-
-            request = GenerationRequest(
-                messages=request_messages,
-                media_paths=tuple(Path(path) for path in media_paths),
+            stage, runtime, tools, request = self._prepare_generation_request(
+                role,
+                messages,
+                config=config,
+                media_paths=media_paths,
                 response_format=response_format,
                 response_schema=response_schema,
-                tools=tools,
-                tool_choice="auto" if tools else None,
-                parallel_tool_calls=True,
+                tool_stage=tool_stage,
+                enable_tools=enable_tools,
             )
             with self._gpu_scope(config.exclusive_gpu):
                 if runtime is not None and tools:
@@ -203,6 +176,64 @@ class ModelRouter:
                         role=role,
                     )
                 return adapter.generate(request)
+
+    def _prepare_generation_request(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        config: Any,
+        media_paths: Sequence[str | Path] = (),
+        response_format: str = "text",
+        response_schema: Mapping[str, Any] | None = None,
+        tool_stage: str | None = None,
+        enable_tools: bool = True,
+    ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
+        """Build the canonical model request used by every text execution policy.
+
+        Locking/concurrency contracts may decide *when* generation runs, but tool
+        exposure, role filtering, Skill/MCP context and structured-output semantics
+        are prepared here once so late runtime wrappers cannot drift from the router.
+        """
+
+        stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, "")).strip().lower()
+        runtime = None
+        tools: tuple[Mapping[str, Any], ...] = ()
+        request_messages: Sequence[Mapping[str, Any]] = messages
+        if self._tools_enabled(
+            enable_tools=enable_tools,
+            stage=stage,
+            adapter_name=config.adapter,
+        ):
+            runtime = self._tool_runtime()
+            raw_tools = tuple(runtime.tool_schemas(stage))
+            if raw_tools:
+                from .agent_capability_context import (
+                    build_agent_capability_context,
+                    filter_tool_schemas_for_role,
+                )
+
+                tools = filter_tool_schemas_for_role(stage, role, raw_tools)
+                if tools:
+                    request_messages = _inject_system_context(
+                        messages,
+                        build_agent_capability_context(
+                            stage,
+                            tools,
+                            model_role=role,
+                        ),
+                    )
+
+        request = GenerationRequest(
+            messages=request_messages,
+            media_paths=tuple(Path(path) for path in media_paths),
+            response_format=response_format,
+            response_schema=response_schema,
+            tools=tools,
+            tool_choice="auto" if tools else None,
+            parallel_tool_calls=True,
+        )
+        return stage, runtime, tools, request
 
     def _generate_with_tools(
         self,
@@ -455,20 +486,24 @@ class ModelRouter:
             round_index += 1
 
     def _tool_runtime(self) -> Any:
-        if self._agent_tool_runtime is not None:
-            return self._agent_tool_runtime
-        if self._agent_tool_runtime_factory is not None:
-            self._agent_tool_runtime = self._agent_tool_runtime_factory(
-                profile=self.profile
-            )
-        else:
-            from .agent_tool_runtime import AgentToolRuntime
+        runtime = self._agent_tool_runtime
+        if runtime is not None:
+            return runtime
+        with self._generation_lock:
+            runtime = self._agent_tool_runtime
+            if runtime is not None:
+                return runtime
+            if self._agent_tool_runtime_factory is not None:
+                runtime = self._agent_tool_runtime_factory(profile=self.profile)
+            else:
+                from .agent_tool_runtime import AgentToolRuntime
 
-            self._agent_tool_runtime = AgentToolRuntime(
-                profile=self.profile,
-                workspace_root=self._agent_workspace_root,
-            )
-        return self._agent_tool_runtime
+                runtime = AgentToolRuntime(
+                    profile=self.profile,
+                    workspace_root=self._agent_workspace_root,
+                )
+            self._agent_tool_runtime = runtime
+            return runtime
 
     @staticmethod
     def _tools_enabled(
