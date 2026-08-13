@@ -3,6 +3,8 @@ from __future__ import annotations
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph_module
+from minecraft_mod_ai.complete_spec import ProductionModule
+from minecraft_mod_ai.scale_policy import ScalePolicy
 
 
 safety.install(
@@ -92,3 +94,33 @@ def test_stage_write_locks_are_domain_local_not_global() -> None:
     assert system_lock is not None
     assert entity_lock is not None
     assert len({id(content_lock), id(system_lock), id(entity_lock)}) == 3
+
+
+def test_custom_modules_are_released_one_per_dag_node(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_CUSTOM_PIPELINE_SHARD_SIZE", raising=False)
+    modules = tuple(
+        ProductionModule(
+            module_id=f"custom_{index}",
+            kind="custom_java",
+            config={"summary": f"custom {index}"},
+        )
+        for index in range(4)
+    )
+    shards = list(work_graph_module._module_shards(modules, policy=ScalePolicy()))
+    assert [stage for stage, _ in shards] == ["custom"] * 4
+    assert [len(members) for _, members in shards] == [1, 1, 1, 1]
+
+
+def test_entities_use_small_pipeline_shards(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_ENTITY_PIPELINE_SHARD_SIZE", raising=False)
+    modules = tuple(
+        ProductionModule(
+            module_id=f"entity_{index}",
+            kind="entity",
+            config={},
+        )
+        for index in range(5)
+    )
+    shards = list(work_graph_module._module_shards(modules, policy=ScalePolicy()))
+    assert [stage for stage, _ in shards] == ["entity", "entity", "entity"]
+    assert [len(members) for _, members in shards] == [2, 2, 1]
