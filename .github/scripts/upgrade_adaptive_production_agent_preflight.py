@@ -17,6 +17,11 @@ def patch_migration_regex() -> None:
         "rf'(\"{name}\"\\s*:\\s*frozenset\\()(?P<set>\\{{[^}}]+\\}})(\\))'",
         "rf'(\"{name}\"\\s*:\\s*frozenset\\()\\s*(?P<set>\\{{[^}}]+\\}})\\s*(\\))'",
     )
+    source = source.replace(
+        "\nimport json\nimport threading\n",
+        "\nimport threading\n",
+        1,
+    )
     MIGRATION.write_text(source, encoding="utf-8")
 
 
