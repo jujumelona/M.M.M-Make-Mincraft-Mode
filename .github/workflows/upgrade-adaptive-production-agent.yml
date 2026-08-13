@@ -24,6 +24,20 @@ jobs:
       - name: Apply adaptive production agent architecture
         run: |
           python -m pip install -q -e '.[dev]'
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/upgrade_adaptive_production_agent.py')
+          source = path.read_text(encoding='utf-8')
+          source = source.replace(
+              "rf'(\"{re.escape(name)}\"\\s*:\\s*frozenset\\()(?P<set>\\{{[^}}]+\\}})(\\))'",
+              "rf'(\"{re.escape(name)}\"\\s*:\\s*frozenset\\()\\s*(?P<set>\\{{[^}}]+\\}})\\s*(\\))'",
+          )
+          source = source.replace(
+              "rf'(\"{name}\"\\s*:\\s*frozenset\\()(?P<set>\\{{[^}}]+\\}})(\\))'",
+              "rf'(\"{name}\"\\s*:\\s*frozenset\\()\\s*(?P<set>\\{{[^}}]+\\}})\\s*(\\))'",
+          )
+          path.write_text(source, encoding='utf-8')
+          PY
           python -m py_compile .github/scripts/upgrade_adaptive_production_agent.py
           python .github/scripts/upgrade_adaptive_production_agent.py
           python -m compileall -q minecraft_mod_ai tests
