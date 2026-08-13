@@ -4,8 +4,30 @@ import ast
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "minecraft_mod_ai"
+WORKFLOWS = ROOT / ".github" / "workflows"
+
+# These owners were intentionally retired after their responsibility moved elsewhere.
+# Recreating them would reintroduce the exact split-ownership/stale-import failures that
+# this audit exists to prevent.
+TOMBSTONED_OWNER_MODULES = (
+    "minecraft_mod_ai/colab_mtp_server.py",
+    "minecraft_mod_ai/production_stream_resume_contract.py",
+    "minecraft_mod_ai/qwen35_t4_single_stream_tuning.py",
+)
+
+# Direct-main development must not use self-deleting patch workflows. They race with
+# normal commits and, when malformed, can create a failure on every subsequent push.
+_TRANSIENT_WORKFLOW_MARKERS = (
+    "one-time",
+    "one_time",
+    "onetime",
+    "-once",
+    "_once",
+)
 
 
 def _module_exists(parts: list[str]) -> bool:
@@ -108,15 +130,79 @@ def audit_bootstrap_owner_modules() -> list[str]:
     return errors
 
 
+def audit_tombstoned_owner_modules() -> list[str]:
+    errors: list[str] = []
+    for relative in TOMBSTONED_OWNER_MODULES:
+        if (ROOT / relative).exists():
+            errors.append(f"TOMBSTONED_OWNER_RESTORED {relative}")
+    return errors
+
+
+def _workflow_paths() -> list[Path]:
+    if not WORKFLOWS.is_dir():
+        return []
+    return sorted({*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")})
+
+
+def _top_level_mapping(node: yaml.Node) -> dict[str, yaml.Node]:
+    if not isinstance(node, yaml.MappingNode):
+        return {}
+    values: dict[str, yaml.Node] = {}
+    for key_node, value_node in node.value:
+        if isinstance(key_node, yaml.ScalarNode):
+            values[str(key_node.value)] = value_node
+    return values
+
+
+def audit_workflow_definitions() -> list[str]:
+    errors: list[str] = []
+    for path in _workflow_paths():
+        relative = path.relative_to(ROOT)
+        normalized_name = path.stem.casefold()
+        if any(marker in normalized_name for marker in _TRANSIENT_WORKFLOW_MARKERS):
+            errors.append(f"TRANSIENT_WORKFLOW_FORBIDDEN {relative}")
+
+        try:
+            node = yaml.compose(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            location = ""
+            if mark is not None:
+                location = f":{mark.line + 1}:{mark.column + 1}"
+            errors.append(f"WORKFLOW_YAML_INVALID {relative}{location}: {exc}")
+            continue
+
+        if node is None or not isinstance(node, yaml.MappingNode):
+            errors.append(f"WORKFLOW_ROOT_NOT_MAPPING {relative}")
+            continue
+
+        top = _top_level_mapping(node)
+        if "on" not in top:
+            errors.append(f"WORKFLOW_MISSING_ON {relative}")
+        jobs = top.get("jobs")
+        if not isinstance(jobs, yaml.MappingNode) or not jobs.value:
+            errors.append(f"WORKFLOW_MISSING_JOBS {relative}")
+    return errors
+
+
 def main() -> int:
-    errors = audit_internal_imports() + audit_bootstrap_owner_modules()
+    errors = (
+        audit_internal_imports()
+        + audit_bootstrap_owner_modules()
+        + audit_tombstoned_owner_modules()
+        + audit_workflow_definitions()
+    )
     if errors:
         print("STATIC DEBUG AUDIT FAILED")
         for error in errors:
             print(error)
         return 1
     py_count = sum(1 for _ in PKG.rglob("*.py"))
-    print(f"STATIC DEBUG AUDIT OK: {py_count} package Python files checked")
+    workflow_count = len(_workflow_paths())
+    print(
+        "STATIC DEBUG AUDIT OK: "
+        f"{py_count} package Python files and {workflow_count} workflows checked"
+    )
     return 0
 
 
