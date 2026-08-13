@@ -121,18 +121,23 @@ class ModelRouter:
                 adapter_name=config.adapter,
             ):
                 runtime = self._tool_runtime()
-                tools = tuple(runtime.tool_schemas(stage))
-                if tools:
-                    from .agent_capability_context import build_agent_capability_context
-
-                    request_messages = _inject_system_context(
-                        messages,
-                        build_agent_capability_context(
-                            stage,
-                            tools,
-                            model_role=role,
-                        ),
+                raw_tools = tuple(runtime.tool_schemas(stage))
+                if raw_tools:
+                    from .agent_capability_context import (
+                        build_agent_capability_context,
+                        filter_tool_schemas_for_role,
                     )
+
+                    tools = filter_tool_schemas_for_role(stage, role, raw_tools)
+                    if tools:
+                        request_messages = _inject_system_context(
+                            messages,
+                            build_agent_capability_context(
+                                stage,
+                                tools,
+                                model_role=role,
+                            ),
+                        )
 
             request = GenerationRequest(
                 messages=request_messages,
@@ -173,6 +178,7 @@ class ModelRouter:
         from .agent_capability_context import skills_for_tool
 
         messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
+        exposed_tools = frozenset(_tool_schema_names(request.tools))
         previous_exchange_state: str | None = None
         round_index = 0
 
@@ -229,6 +235,11 @@ class ModelRouter:
                     if capability:
                         route_metadata["external_mcp_capability"] = capability
                 try:
+                    if call.name not in exposed_tools:
+                        raise ModelConfigurationError(
+                            f"Agent attempted hidden tool {call.name!r} outside its "
+                            f"reviewed role routes for {role!r}/{stage!r}."
+                        )
                     result = runtime.call(stage, call.name, call.arguments)
                     payload: Mapping[str, Any] = {
                         "ok": True,
@@ -455,6 +466,20 @@ def _inject_system_context(
         insert_at += 1
     copied.insert(insert_at, {"role": "system", "content": content})
     return tuple(copied)
+
+
+def _tool_schema_names(
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    names: set[str] = set()
+    for schema in tool_schemas:
+        function = schema.get("function")
+        if not isinstance(function, Mapping):
+            continue
+        name = str(function.get("name", "")).strip()
+        if name:
+            names.add(name)
+    return tuple(sorted(names))
 
 
 def _positive_env_int(name: str, default: int) -> int:
