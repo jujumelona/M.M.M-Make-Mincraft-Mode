@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
@@ -12,8 +13,11 @@ def _name(schema: Mapping[str, Any]) -> str:
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
 
 
-def install(max_agent_module: Any) -> None:
-    current = max_agent_module.select_tool_schemas
+def install(max_agent_owner: Any) -> None:
+    module = max_agent_owner
+    if not hasattr(module, "select_tool_schemas"):
+        module = sys.modules[str(getattr(max_agent_owner, "__module__", ""))]
+    current = module.select_tool_schemas
     if getattr(current, "_mmm_required_tool_guard", False):
         return
 
@@ -56,7 +60,7 @@ def install(max_agent_module: Any) -> None:
 
     guarded._mmm_required_tool_guard = True  # type: ignore[attr-defined]
     guarded.__wrapped__ = current  # type: ignore[attr-defined]
-    max_agent_module.select_tool_schemas = guarded
+    module.select_tool_schemas = guarded
 
 
 __all__ = ["install"]
