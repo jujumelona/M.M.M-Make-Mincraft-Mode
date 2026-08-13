@@ -34,9 +34,11 @@ def test_json_request_uses_schema_when_no_tools_are_present() -> None:
         "type": "json_object",
         "schema": schema,
     }
-    assert "reasoning_effort" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
     assert payload["max_tokens"] == 8192
+
 
 def test_tool_request_uses_minimal_payload_even_when_schema_exists() -> None:
     request = SimpleNamespace(
@@ -65,6 +67,7 @@ def test_tool_request_uses_minimal_payload_even_when_schema_exists() -> None:
     assert "response_format" not in payload
     assert "reasoning_effort" not in payload
     assert "parallel_tool_calls" not in payload
+
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
     request = SimpleNamespace(
