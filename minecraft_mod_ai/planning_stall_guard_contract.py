@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-"""Keep planner research observable without owning or duplicating research work.
+"""Keep planner research observable and prevent optional I/O from owning planning.
 
-The canonical parallel runtime owns prefetch.  This late contract deliberately never
-submits research futures: it only tunes I/O defaults, reuses one HTTP connection pool
-per discovery client, and reports long-running host-side stages.  Planning seed
-breadth helpers remain available for explicit callers, but the normal planner now
-uses the coordinator's true one-page seed path.
+The canonical planner may use official/local evidence synchronously. Public ecosystem
+search and external MCP are optional evidence lanes: pre-design records their complete
+route graph without performing network I/O, and specialist stages execute those routes
+only when evidence is actually needed. Later explicit discovery keeps bounded provider
+I/O, connection reuse, and real parallel MCP sessions.
 """
 
 import os
@@ -98,54 +98,23 @@ def _estimated_external_routes(research_brief: dict[str, Any]) -> tuple[int, int
 
 
 def _planning_seed_brief(research_brief: dict[str, Any]) -> dict[str, Any]:
-    """Optional projection helper; the normal planner does not require this to terminate."""
+    """Return a lossless planning projection; execution breadth is deferred, not cut."""
 
     projected = deepcopy(research_brief)
-    raw_domains = projected.get("domains")
-    if not isinstance(raw_domains, list):
-        return projected
-
-    estimated_routes, provider_slots = _estimated_external_routes(projected)
+    estimated_routes, _provider_slots = _estimated_external_routes(projected)
     route_budget = _env_int(
         "MMM_ECOSYSTEM_SEED_ROUTE_BUDGET",
         96,
         minimum=16,
         maximum=512,
     )
-    explicit_raw = os.environ.get("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", "").strip()
-    if explicit_raw:
-        per_domain = _env_int(
-            "MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN",
-            1,
-            minimum=1,
-            maximum=64,
-        )
-        compact = True
-        reason = "explicit_query_limit"
-    elif estimated_routes > route_budget and provider_slots > 0:
-        per_domain = max(1, route_budget // provider_slots)
-        compact = True
-        reason = "route_budget"
-    else:
-        per_domain = 0
-        compact = False
-        reason = "within_route_budget"
-
-    if compact:
-        for raw_domain in raw_domains:
-            if not isinstance(raw_domain, dict):
-                continue
-            queries = raw_domain.get("queries")
-            if isinstance(queries, list) and len(queries) > per_domain:
-                raw_domain["queries"] = queries[:per_domain]
-
     projected["_mmm_planning_seed_projection"] = {
-        "schema_version": "mmm/planning-seed-projection-v2",
+        "schema_version": "mmm/planning-seed-projection-v3",
         "estimated_external_routes": estimated_routes,
         "route_budget": route_budget,
-        "compacted": compact,
-        "reason": reason,
-        "queries_per_domain": per_domain if compact else None,
+        "compacted": False,
+        "reason": "lossless_route_graph_external_io_deferred",
+        "queries_per_domain": None,
         "full_research_brief_retained": True,
         "domains_and_providers_preserved": True,
         "specialist_discovery_continues_full_brief": True,
@@ -201,6 +170,171 @@ def _heartbeat(label: str, stop: threading.Event, started: float) -> None:
             f"planner research: {label} still running elapsed={time.monotonic() - started:.1f}s",
             flush=True,
         )
+
+
+def _patch_pre_design_external_seed(agentic_module: Any, central_module: Any) -> None:
+    """Record the full external route graph without doing public network I/O."""
+
+    current = agentic_module.collect_ecosystem_seed_bundle
+    if getattr(current, "_mmm_pre_design_external_deferred", False):
+        return
+
+    @wraps(current)
+    def deferred_seed(
+        prompt: str,
+        game_design: dict[str, Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        research_brief = kwargs.get("research_brief")
+        planning_seed_only = bool(kwargs.get("planning_seed_only", False))
+        if not planning_seed_only or not isinstance(research_brief, dict):
+            return current(prompt, game_design, *args, **kwargs)
+
+        routes = central_module.external_discovery_routes(research_brief)
+        route_receipts = [
+            {
+                "domain_id": str(route.get("domain_id", "")),
+                "provider": str(route.get("provider", "")),
+                "target_profile": str(route.get("target_profile", "")),
+                "query_sha256": central_module._sha256(str(route.get("query", ""))),
+            }
+            for route in routes
+        ]
+        route_sha256 = central_module._sha256(
+            central_module.canonical_json(route_receipts)
+        )
+        print(
+            "planner research: ecosystem network deferred",
+            f" routes={len(routes)}",
+            flush=True,
+        )
+        return {
+            "schema_version": "mmm/ecosystem-planning-deferred-v1",
+            "status": "deferred",
+            "brief_sha256": str(research_brief.get("brief_sha256", "")),
+            "route_sha256": route_sha256,
+            "route_count": len(routes),
+            "processed_route_count": 0,
+            "remaining_route_count": len(routes),
+            "routes_complete": not routes,
+            "candidate_count": 0,
+            "pages": [],
+            "errors": [],
+            "route_receipts": route_receipts,
+            "coverage": (
+                "Complete external route graph retained; provider I/O is intentionally "
+                "deferred to adaptive specialist research outside the planning critical path."
+            ),
+            "authorization": "none",
+            "download_performed": False,
+            "planning_critical_path": False,
+        }
+
+    deferred_seed._mmm_pre_design_external_deferred = True  # type: ignore[attr-defined]
+    agentic_module.collect_ecosystem_seed_bundle = deferred_seed
+
+
+def _patch_pre_design_observability(agentic_module: Any) -> None:
+    current = agentic_module.collect_pre_design_research
+    if getattr(current, "_mmm_pre_design_heartbeat", False):
+        return
+
+    @wraps(current)
+    def observed(
+        router: Any,
+        prompt: str,
+        *,
+        trace_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=_heartbeat,
+            args=("pre-design", stop, started),
+            daemon=True,
+            name="mmm_pre_design_heartbeat",
+        )
+        print("planner research: pre-design start", flush=True)
+        heartbeat.start()
+        try:
+            result = current(router, prompt, trace_metadata=trace_metadata)
+        finally:
+            stop.set()
+        print(
+            "planner research: pre-design complete",
+            f" elapsed={time.monotonic() - started:.1f}s",
+            sep="",
+            flush=True,
+        )
+        return result
+
+    observed._mmm_pre_design_heartbeat = True  # type: ignore[attr-defined]
+    observed.__wrapped__ = current  # type: ignore[attr-defined]
+    agentic_module.collect_pre_design_research = observed
+
+
+def _patch_external_mcp_parallel(external_module: Any) -> None:
+    """Allow independent MCP sessions to overlap instead of holding one global lock."""
+
+    cls = external_module.ExternalMCPRouter
+    current = cls._call_provider
+    if getattr(current, "_mmm_parallel_sessions", False):
+        return
+
+    @wraps(current)
+    def call_provider_parallel(
+        self: Any,
+        server_name: str,
+        entry: dict[str, Any],
+        *,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        import asyncio
+        import anyio
+
+        async def run() -> dict[str, Any]:
+            return await self._call_provider_async(
+                server_name,
+                entry,
+                tool=tool,
+                arguments=arguments,
+            )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return anyio.run(run)
+
+        value: dict[str, Any] = {}
+        error: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                value["result"] = anyio.run(run)
+            except BaseException as exc:  # pragma: no cover - thread bridge
+                error.append(exc)
+
+        thread = threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"mmm_external_mcp_{server_name}",
+        )
+        thread.start()
+        # This retains the provider's existing safety envelope. The structural fix is
+        # that independent calls no longer serialize behind ExternalMCPRouter._lock.
+        thread.join(self.timeout_seconds + 5.0)
+        if thread.is_alive():
+            raise external_module.ExternalMCPError(
+                f"External MCP {server_name} exceeded the synchronous bridge timeout."
+            )
+        if error:
+            raise external_module.ExternalMCPError(str(error[0])) from error[0]
+        return value["result"]
+
+    call_provider_parallel._mmm_parallel_sessions = True  # type: ignore[attr-defined]
+    cls._call_provider = call_provider_parallel
 
 
 def _patch_discovery_http_pool(ecosystem_module: Any) -> None:
@@ -280,7 +414,6 @@ def _patch_discovery_http_pool(ecosystem_module: Any) -> None:
 
         client = getattr(self, "_mmm_http_client", None)
         if client is None:
-            # Hot-reload compatibility for an instance created before this contract.
             client = ecosystem_module.httpx.Client(
                 timeout=self.timeout_seconds,
                 follow_redirects=False,
@@ -441,11 +574,17 @@ def install() -> None:
 
         from . import (
             agentic_research_fusion,
+            agentic_research_game_design,
+            central_research,
             complete_planner,
             ecosystem_discovery,
+            external_mcp_router,
             parallel_runtime_contract,
         )
 
+        _patch_pre_design_external_seed(agentic_research_game_design, central_research)
+        _patch_pre_design_observability(agentic_research_game_design)
+        _patch_external_mcp_parallel(external_mcp_router)
         _patch_discovery_http_pool(ecosystem_discovery)
         _patch_worker_defaults(parallel_runtime_contract, agentic_research_fusion)
         _patch_complete_planner(complete_planner)
