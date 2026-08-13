@@ -1380,13 +1380,14 @@ def _node(
         res_class = "image_gpu"
     elif kind == "audio-finalize":
         res_class = "commit"
-    elif kind == "module-shard" and gen_stage in {
-        "content",
-        "system",
-        "entity",
-        "audio-binding",
-    }:
+    elif kind == "module-shard" and gen_stage == "audio-binding":
+        # Audio binding can enter model-backed fallback and owns shared final
+        # binding state, so keep it on the serialized commit lane.
         res_class = "commit"
+    elif kind == "module-shard" and gen_stage in {"content", "system", "entity"}:
+        # Deterministic generation overlaps on CPU. Shared Java/Gradle metadata
+        # edits are serialized narrowly by project_edit/source_patch locks.
+        res_class = "cpu_io"
     elif kind == "module-shard" and gen_stage == "custom":
         res_class = "llm"
     elif stage.startswith("validate:"):
