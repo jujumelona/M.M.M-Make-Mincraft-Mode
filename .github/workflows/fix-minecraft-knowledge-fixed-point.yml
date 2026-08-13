@@ -1,0 +1,162 @@
+name: Fix Minecraft knowledge fixed-point coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-minecraft-knowledge-fixed-point.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply route-coverage fix and regression test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('minecraft_mod_ai/minecraft_knowledge_contract.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''    receipts, blocking = [], []
+    for domain_id, domain in expected.items():
+        executed = forced_map.get(domain_id)
+        raw_queries = executed.get("queries", []) if isinstance(executed, Mapping) else []
+        got = {str(x.get("query_sha256", "")) for x in raw_queries if isinstance(x, Mapping)}
+        missing = sorted({_sha(str(q)) for q in domain["queries"]} - got)
+        note = notes.get(domain_id)
+        if domain_id not in brief_ids:
+            status = "MISSING_RESEARCH_DOMAIN"
+        elif executed is None:
+            status = "MISSING_FORCED_RAG_RECEIPT"
+        elif missing:
+            status = "MISSING_FORCED_RAG_QUERY"
+        elif note is None:
+            status = "MISSING_RESEARCH_AGENT_NOTE"
+        elif not bool(note.get("sufficient")):
+            status = "RESEARCH_UNRESOLVED"
+        else:
+            status = "ROUTES_EXECUTED"
+        if status != "ROUTES_EXECUTED":
+            blocking.extend(str(ref) for ref in domain["requirements"])
+        receipts.append(
+            {
+                "domain_id": domain_id,
+                "status": status,
+                "query_count": len(domain["queries"]),
+                "forced_query_count": len(raw_queries),
+                "missing_query_sha256": missing,
+                "research_agent_sufficient": bool(note.get("sufficient")) if isinstance(note, Mapping) else False,
+                "research_agent_fixed_point": bool(note.get("fixed_point")) if isinstance(note, Mapping) else False,
+            }
+        )
+    result = {
+        "schema_version": COVERAGE_SCHEMA_VERSION,
+        "plan_sha256": plan["plan_sha256"],
+        "status": "PASS" if not blocking else "BLOCK",
+        "blocking_requirement_refs": sorted(set(blocking)),
+        "domains": receipts,
+        "semantics": (
+            "PASS proves every host-required domain entered the brief, every deterministic forced-RAG query "
+            "has an execution receipt, and every domain research agent marked it sufficient. It does not "
+            "falsely claim optional/exact MCP lookups ran unless the research agent needed and used them."
+        ),
+        "coverage_sha256": "",
+    }
+'''
+          new = '''    receipts, blocking, deferred = [], [], []
+    for domain_id, domain in expected.items():
+        executed = forced_map.get(domain_id)
+        raw_queries = executed.get("queries", []) if isinstance(executed, Mapping) else []
+        got = {str(x.get("query_sha256", "")) for x in raw_queries if isinstance(x, Mapping)}
+        missing = sorted({_sha(str(q)) for q in domain["queries"]} - got)
+        note = notes.get(domain_id)
+        if domain_id not in brief_ids:
+            status = "MISSING_RESEARCH_DOMAIN"
+        elif executed is None:
+            status = "MISSING_FORCED_RAG_RECEIPT"
+        elif missing:
+            status = "MISSING_FORCED_RAG_QUERY"
+        elif note is None:
+            status = "MISSING_RESEARCH_AGENT_NOTE"
+        elif bool(note.get("sufficient")):
+            status = "ROUTES_EXECUTED"
+        elif bool(note.get("fixed_point")):
+            # A fixed point is a terminal research outcome, not evidence that the
+            # required route failed to execute. Preserve the gaps for downstream
+            # exact lookup/validation instead of deadlocking pre-design planning.
+            status = "ROUTES_EXECUTED_WITH_GAPS"
+        else:
+            status = "RESEARCH_UNRESOLVED"
+        if status in {
+            "MISSING_RESEARCH_DOMAIN",
+            "MISSING_FORCED_RAG_RECEIPT",
+            "MISSING_FORCED_RAG_QUERY",
+            "MISSING_RESEARCH_AGENT_NOTE",
+            "RESEARCH_UNRESOLVED",
+        }:
+            blocking.extend(str(ref) for ref in domain["requirements"])
+        elif status == "ROUTES_EXECUTED_WITH_GAPS":
+            deferred.extend(str(ref) for ref in domain["requirements"])
+        receipts.append(
+            {
+                "domain_id": domain_id,
+                "status": status,
+                "query_count": len(domain["queries"]),
+                "forced_query_count": len(raw_queries),
+                "missing_query_sha256": missing,
+                "research_agent_sufficient": bool(note.get("sufficient")) if isinstance(note, Mapping) else False,
+                "research_agent_fixed_point": bool(note.get("fixed_point")) if isinstance(note, Mapping) else False,
+            }
+        )
+    result = {
+        "schema_version": COVERAGE_SCHEMA_VERSION,
+        "plan_sha256": plan["plan_sha256"],
+        "status": "PASS" if not blocking else "BLOCK",
+        "blocking_requirement_refs": sorted(set(blocking)),
+        "deferred_requirement_refs": sorted(set(deferred)),
+        "domains": receipts,
+        "semantics": (
+            "PASS proves every host-required domain entered the brief, every deterministic forced-RAG query "
+            "has an execution receipt, and every domain research agent produced a terminal note. A terminal "
+            "fixed point may retain explicit deferred gaps for downstream exact lookup/validation; PASS does "
+            "not claim those gaps are resolved or that optional MCP lookups ran."
+        ),
+        "coverage_sha256": "",
+    }
+'''
+          if old not in s:
+              raise SystemExit('minecraft knowledge coverage target not found')
+          s = s.replace(old, new, 1)
+          compile(s, str(p), 'exec')
+          p.write_text(s, encoding='utf-8')
+
+          t = Path('tests/test_minecraft_knowledge_contract.py')
+          ts = t.read_text(encoding='utf-8')
+          test_name = 'test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps'
+          if test_name not in ts:
+              ts += '''\n\n\ndef test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps() -> None:\n    plan = compile_minecraft_knowledge_plan("새 보스 몬스터를 추가해줘.")\n    research = _fake_research(plan)\n    domain = plan["research_domains"][0]\n    note = next(\n        item for item in research["domain_notes"]\n        if item["domain_id"] == domain["domain_id"]\n    )\n    note["sufficient"] = False\n    note["fixed_point"] = True\n\n    coverage = evaluate_route_coverage(plan, research)\n\n    assert coverage["status"] == "PASS"\n    assert not coverage["blocking_requirement_refs"]\n    assert set(domain["requirements"]) <= set(coverage["deferred_requirement_refs"])\n    receipt = next(\n        item for item in coverage["domains"]\n        if item["domain_id"] == domain["domain_id"]\n    )\n    assert receipt["status"] == "ROUTES_EXECUTED_WITH_GAPS"\n    assert receipt["research_agent_sufficient"] is False\n    assert receipt["research_agent_fixed_point"] is True\n'''
+              t.write_text(ts, encoding='utf-8')
+          PY
+          python -m pip install -q -e '.[dev]'
+          python -m ruff check minecraft_mod_ai/minecraft_knowledge_contract.py tests/test_minecraft_knowledge_contract.py --select F,E7,E9
+          python -m pytest -q tests/test_minecraft_knowledge_contract.py tests/test_agentic_research_game_design.py tests/test_agentic_pre_design_rag.py
+      - name: Commit validated fix and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/fix-minecraft-knowledge-fixed-point.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "Allow terminal research gaps without route deadlock"
+          git pull --rebase origin main
+          git push origin HEAD:main
