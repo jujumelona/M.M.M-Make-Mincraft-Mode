@@ -34,11 +34,8 @@ def install(production_tools_module: Any) -> None:
         # equivalent canonical output paths serialize with each other.
         target = self._resolve(index_path)
         with _index_lock(target):
-            # The original method also checks via _new_file(), but that check was
-            # previously outside any mutual exclusion. Repeat it inside the lock to
-            # close the check/build/atomic-replace TOCTOU window.
-            if target.exists():
-                raise FileExistsError(target)
+            # A live production index is a replaceable derived artifact. Serialize
+            # rebuilds by canonical path and let ProjectRAGIndex atomically replace it.
             return current(
                 self,
                 roots,

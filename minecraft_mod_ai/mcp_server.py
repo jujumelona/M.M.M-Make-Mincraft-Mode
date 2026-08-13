@@ -54,21 +54,21 @@ _TOOL_STAGES: dict[str, frozenset[str]] = {
         {"frontdoor", "planning", "generation", "quality", "release"}
     ),
     "discover_ecosystem_resources": frozenset(
-        {"frontdoor", "planning", "research"}
+        {"frontdoor", "planning", "research", "generation"}
     ),
-    "inspect_modrinth_project": frozenset({"planning", "research"}),
-    "inspect_github_repository": frozenset({"planning", "research"}),
-    "inspect_huggingface_model": frozenset({"planning", "research"}),
+    "inspect_modrinth_project": frozenset({"planning", "research", "generation"}),
+    "inspect_github_repository": frozenset({"planning", "research", "generation"}),
+    "inspect_huggingface_model": frozenset({"planning", "research", "generation"}),
     "build_technology_radar": frozenset(
         {"frontdoor", "planning", "research"}
     ),
     "assess_technology_compatibility": frozenset(
-        {"planning", "research"}
+        {"planning", "research", "generation"}
     ),
-    "search_project_rag": frozenset({"frontdoor", "planning", "research"}),
+    "search_project_rag": frozenset({"frontdoor", "planning", "research", "generation", "quality"}),
     "search_code_rag": frozenset({"research", "generation", "quality"}),
     "index_project_rag": frozenset({"research"}),
-    "inspect_existing_mod": frozenset({"frontdoor", "planning", "research"}),
+    "inspect_existing_mod": frozenset({"frontdoor", "planning", "research", "generation", "quality"}),
     "work_status": frozenset({"frontdoor", "planning", "generation", "quality"}),
     "work_tasks": frozenset({"frontdoor", "planning", "generation", "quality"}),
     "work_cancel_run": frozenset({"frontdoor", "planning", "generation"}),
@@ -80,8 +80,8 @@ _TOOL_STAGES: dict[str, frozenset[str]] = {
     "generate_system_plugin": frozenset({"generation"}),
     "apply_source_patch": frozenset({"generation"}),
     "repair_project": frozenset({"quality"}),
-    "java_diagnostics": frozenset({"quality"}),
-    "java_workspace_symbols": frozenset({"quality"}),
+    "java_diagnostics": frozenset({"generation", "quality"}),
+    "java_workspace_symbols": frozenset({"generation", "quality"}),
     "blockbench_list_tools": frozenset({"quality"}),
     "blockbench_execute": frozenset({"quality"}),
     "run_static_validation": frozenset({"quality"}),

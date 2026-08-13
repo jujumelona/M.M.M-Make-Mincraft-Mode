@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
@@ -239,6 +240,23 @@ class RepairEngine:
         evidence: dict[str, Any],
         context: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        active = _ACTIVE_REPAIR_PROJECT_INDEX.get()
+        if active is None:
+            raise RepairEngineError("Repair model call has no active project index.")
+        root, project_index = active
+        self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
+        from .production_tools import ProductionToolService
+
+        manifest = project_index.manifest_receipt()
+        ProductionToolService(
+            workspace_root=root.parent,
+            profile=self.router.profile,
+        ).index_project_rag(
+            [root.name],
+            metadata=_repair_rag_metadata(manifest),
+            semantic=False,
+        )
+
         prompt = {
             "task": (
                 "Repair the approved Minecraft project target using exact minimal patches. "
@@ -253,6 +271,8 @@ class RepairEngine:
                 "Do not change platform versions merely to make the build pass.",
                 "Do not emit shell commands, scripts or markdown.",
                 "Use project-index paths; do not assume that omitted content means a file does not exist.",
+                "Use live code/project RAG and reviewed MCP evidence for unresolved APIs, symbols, dependency and version facts; inspect retrieval quality and reformulate weak searches.",
+                "Treat JDT/Gradle/GameTest failures as new observations and retrieve again when they introduce new uncertainty.",
             ],
             "evidence": evidence,
             "project_context": context,
@@ -316,3 +336,21 @@ def _extract_json(text: str) -> dict[str, Any]:
         if isinstance(value, dict):
             return value
     raise RepairEngineError("Coder repair response did not contain a JSON object.")
+
+
+def _repair_rag_metadata(manifest: dict[str, Any]) -> dict[str, Any]:
+    mappings = os.environ.get("MMM_MAPPING_NAMESPACE", os.environ.get("MMM_MAPPINGS", "yarn")).strip().lower()
+    if "intermediary" in mappings:
+        namespace = "intermediary"
+    elif "official" in mappings or "mojang" in mappings:
+        namespace = "official"
+    else:
+        namespace = "yarn"
+    return {
+        "minecraft_version": os.environ.get("MMM_MINECRAFT_VERSION", "1.20.1").strip() or "1.20.1",
+        "loader": os.environ.get("MMM_LOADER", "fabric").strip() or "fabric",
+        "mapping_namespace": namespace,
+        "java_version": os.environ.get("MMM_JAVA_VERSION", "17").strip() or "17",
+        "license": os.environ.get("MMM_PROJECT_LICENSE", "project-local").strip() or "project-local",
+        "source_commit": str(manifest["sha256"]),
+    }

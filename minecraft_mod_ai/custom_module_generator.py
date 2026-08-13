@@ -81,6 +81,26 @@ class CustomModuleGenerator:
             index = ProjectIndex(root, policy=self.policy)
             self._cached_root = root
             self._cached_index = index
+
+        self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
+        from .production_tools import ProductionToolService
+
+        live_manifest = ProjectIndex(root, policy=self.policy).manifest_receipt()
+        ProductionToolService(
+            workspace_root=root.parent,
+            profile=self.router.profile,
+        ).index_project_rag(
+            [root.name],
+            metadata={
+                "minecraft_version": minecraft_version,
+                "loader": loader,
+                "mapping_namespace": _mapping_namespace(mappings),
+                "java_version": "17",
+                "license": "project-local",
+                "source_commit": str(live_manifest["sha256"]),
+            },
+            semantic=False,
+        )
         query = json.dumps(
             {
                 "module_id": module.module_id,
@@ -238,8 +258,14 @@ class CustomModuleGenerator:
                             "after using that page. The host rejects module completion "
                             "before the final page. Operations may be empty when "
                             "completing a non-final context page. prior_patch_receipt "
-                            "is a code-owned commitment to earlier operations. When "
-                            "code output for the current page is too large, set "
+                            "is a code-owned commitment to earlier operations. Use the "
+                            "live RAG/MCP tools throughout implementation: current code RAG "
+                            "for repository facts, exact-version project/API evidence for "
+                            "Minecraft/Fabric facts, reviewed ecosystem/repository tools for "
+                            "dependencies, and JDT symbols/diagnostics for uncertain Java "
+                            "APIs. Inspect RAG receipts and reformulate or switch source when "
+                            "evidence is weak. When code output for the current page is too "
+                            "large, set "
                             "context_page_complete=false and return a new next_cursor."
                         ),
                     },
@@ -254,28 +280,24 @@ class CustomModuleGenerator:
             is_last_page = (
                 observation_page_index >= len(observation_pages) - 1
             )
-            # Auto-Repair & Feedback Retry Loop (Up to 3 attempts for model self-correction)
+            # Progress-driven response repair: no arbitrary model retry ceiling.
             repair_attempts = 0
+            repair_signatures: set[str] = set()
             payload: dict[str, Any] = {}
-            error_reason = ""
-            while repair_attempts <= 3:
+            while True:
+                error_reason = ""
                 try:
                     payload = _extract_json(text)
-                    # Synonym normalization
                     if "tests" in payload and "runtime_tests" not in payload:
                         payload["runtime_tests"] = payload["tests"]
                     if "cursor" in payload and "next_cursor" not in payload:
                         payload["next_cursor"] = payload["cursor"]
-                    if (
-                        "patch_operations" in payload
-                        and "operations" not in payload
-                    ):
+                    if "patch_operations" in payload and "operations" not in payload:
                         payload["operations"] = payload["patch_operations"]
                     if "patches" in payload and "operations" not in payload:
                         payload["operations"] = payload["patches"]
 
                     ops = payload.get("operations")
-                    # Empty operations are allowed on non-final observation context pages
                     if (
                         ops is None
                         or not isinstance(ops, list)
@@ -289,60 +311,50 @@ class CustomModuleGenerator:
                                 "on final page"
                             )
                         else:
-                            error_reason = (
-                                "response did not contain a valid 'operations' list"
-                            )
+                            error_reason = "response did not contain a valid 'operations' list"
                     else:
                         if ops:
                             self._validate_operations(ops)
                         break
                 except Exception as parse_err:
                     error_reason = str(parse_err)
-                    print(
-                        "⚠️ [CustomModule Auto-Repair] 검증/파싱 피드백 준비: "
-                        f"{error_reason}",
-                        flush=True,
+
+                signature = _normalized_generation_failure(error_reason)
+                if signature in repair_signatures:
+                    raise CustomModuleGenerationError(
+                        "Custom-module response repair stopped because the same "
+                        "normalized validation failure repeated without progress: "
+                        f"{error_reason}"
                     )
-
-                if repair_attempts >= 3:
-                    break
-
+                repair_signatures.add(signature)
                 repair_attempts += 1
                 print(
-                    "🔄 [CustomModule Auto-Repair] 모델 응답 및 상태 피드백 기반 "
-                    f"재시도 ({repair_attempts}/3) - 원인: {error_reason}",
+                    "🔄 [CustomModule Auto-Repair] 검증 피드백 기반 재시도 "
+                    f"({repair_attempts}) - 원인: {error_reason}",
                     flush=True,
                 )
-                repair_messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an expert Minecraft 1.20.1 Fabric Java mod "
-                            "developer. Return exactly one valid JSON object "
-                            "containing a non-empty 'operations' list with "
-                            "create/replace patch operations for Java source files."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(request, ensure_ascii=False),
-                    },
-                    {"role": "assistant", "content": text},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Execution & Validation Failure: Your previous response "
-                            f"failed with reason: \"{error_reason}\". Inspect this "
-                            "error trace and state, correct your patch response, and "
-                            "output a valid JSON object with a non-empty 'operations' "
-                            "array containing exact Java source file patches under "
-                            "'src/main/java/'."
-                        ),
-                    },
-                ]
                 text = self.router.generate_text(
                     "coder",
-                    repair_messages,
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an evidence-grounded Minecraft Fabric Java repair "
+                                "agent. Use live RAG/MCP evidence while correcting this "
+                                "response. Return exactly one valid JSON object."
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+                        {"role": "assistant", "content": text},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Execution & Validation Failure: the previous response "
+                                f"failed with reason: {error_reason}. Correct that exact "
+                                "failure while preserving the approved module and evidence."
+                            ),
+                        },
+                    ],
                     response_format="json",
                 )
 
@@ -1002,3 +1014,17 @@ def _json_size(value: Any) -> int:
             separators=(",", ":"),
         ).encode("utf-8")
     )
+
+def _mapping_namespace(value: str) -> str:
+    lowered = value.strip().lower()
+    if "intermediary" in lowered:
+        return "intermediary"
+    if "official" in lowered or "mojang" in lowered:
+        return "official"
+    return "yarn"
+
+
+def _normalized_generation_failure(value: str) -> str:
+    compact = " ".join(value.lower().split())
+    compact = re.sub(r"0x[0-9a-f]+|[0-9]+", "#", compact)
+    return compact[:2048]

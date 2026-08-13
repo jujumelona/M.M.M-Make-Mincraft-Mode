@@ -171,32 +171,33 @@ class AgentToolRuntime:
         return env
 
     def _run_async(self, function: Any, *args: Any) -> Any:
+        """Bridge one independent MCP stdio session without serializing read calls."""
+
         async def runner() -> Any:
             return await function(*args)
 
-        with self._lock:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return anyio.run(runner)
+
+        value: dict[str, Any] = {}
+        errors: list[BaseException] = []
+
+        def worker() -> None:
             try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return anyio.run(runner)
+                value["result"] = anyio.run(runner)
+            except BaseException as exc:  # pragma: no cover - event-loop bridge
+                errors.append(exc)
 
-            value: dict[str, Any] = {}
-            errors: list[BaseException] = []
-
-            def worker() -> None:
-                try:
-                    value["result"] = anyio.run(runner)
-                except BaseException as exc:  # pragma: no cover - event-loop bridge
-                    errors.append(exc)
-
-            thread = threading.Thread(target=worker, daemon=True)
-            thread.start()
-            thread.join(self.timeout_seconds + 5.0)
-            if thread.is_alive():
-                raise AgentToolRuntimeError("MCP synchronous bridge timed out")
-            if errors:
-                raise AgentToolRuntimeError(str(errors[0])) from errors[0]
-            return value["result"]
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(self.timeout_seconds + 5.0)
+        if thread.is_alive():
+            raise AgentToolRuntimeError("MCP synchronous bridge timed out")
+        if errors:
+            raise AgentToolRuntimeError(str(errors[0])) from errors[0]
+        return value["result"]
 
     async def _list_tools_async(self, stage: str) -> list[dict[str, Any]]:
         async with self._session(stage) as session:

@@ -19,7 +19,7 @@ from minecraft_mod_ai.skill_catalog import (
 def test_catalog_compiles_every_skill_into_runtime_contracts() -> None:
     report = validate_skill_catalog()
     assert report["passed"], report["findings"]
-    assert len(CANONICAL_SKILLS) == 27
+    assert len(CANONICAL_SKILLS) == 28
     assert set(report["contracts"]) == set(CANONICAL_SKILLS)
 
     contracts = compile_skill_catalog()
@@ -97,6 +97,20 @@ def test_adaptive_evidence_policy_is_read_only_and_fail_closed() -> None:
     assert contract.failed_validators(context) == ()
     context["source_provenance"] = False
     assert contract.failed_validators(context) == ("source_provenance",)
+
+
+def test_production_evidence_policy_is_read_only_and_role_scoped() -> None:
+    contract = compile_skill_contract("ground-production-with-live-evidence")
+    assert contract.stages == ("generation", "quality")
+    assert contract.authorize_tool("search_code_rag", "generation").allowed
+    assert contract.authorize_tool("search_project_rag", "quality").allowed
+    assert contract.authorize_tool("java_diagnostics", "generation").allowed
+    assert not contract.authorize_tool(
+        "apply_source_patch",
+        "generation",
+        write_approved=True,
+    ).allowed
+    assert contract.retry.require_fresh_evidence
 
 
 def test_ai_technique_policy_is_read_only_and_fail_closed() -> None:

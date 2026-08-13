@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -31,6 +32,28 @@ _ROLE_TOOL_STAGE = {
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
+_RAG_EVIDENCE_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
+_PARALLEL_READ_TOOLS = frozenset(
+    {
+        "search_code_rag",
+        "search_project_rag",
+        "discover_ecosystem_resources",
+        "inspect_modrinth_project",
+        "inspect_github_repository",
+        "inspect_huggingface_model",
+        "inspect_existing_mod",
+        "assess_technology_compatibility",
+        "java_diagnostics",
+        "java_workspace_symbols",
+        "read_complete_plan_section",
+        "read_quality_contract",
+        "quality_status",
+        "work_status",
+        "work_tasks",
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+    }
+)
 
 
 class ModelRouter:
@@ -51,6 +74,28 @@ class ModelRouter:
         self._active_generation_adapter: Any | None = None
         self._agent_tool_runtime_factory = agent_tool_runtime_factory
         self._agent_tool_runtime: Any | None = None
+        self._agent_workspace_root: Path | None = None
+        self._agent_require_fresh_evidence = False
+
+    def bind_agent_workspace(
+        self,
+        workspace_root: str | Path,
+        *,
+        require_fresh_evidence: bool = False,
+    ) -> "ModelRouter":
+        """Bind model-callable MCP/RAG tools to the actual production workspace."""
+
+        root = Path(workspace_root).expanduser().resolve()
+        if not root.is_dir() or root.is_symlink():
+            raise ModelConfigurationError(
+                f"Agent workspace must be a regular directory: {root}"
+            )
+        with self._generation_lock:
+            if root != self._agent_workspace_root:
+                self._agent_workspace_root = root
+                self._agent_tool_runtime = None
+            self._agent_require_fresh_evidence = bool(require_fresh_evidence)
+        return self
 
     @contextmanager
     def generation_session(self, role: str):
@@ -168,19 +213,21 @@ class ModelRouter:
         stage: str,
         role: str,
     ) -> str:
-        """Gather tool evidence until the model itself returns a final answer.
-
-        No host-owned tool-round or tool-call ceiling exists. The semantic loop
-        guard detects two consecutive identical tool-call/result exchanges. Exact
-        convergence closes tool use and forces a final synthesis from accumulated
-        observations instead of misclassifying convergence as model misconfiguration.
-        """
+        """Run adaptive retrieve/act/observe production until semantic convergence."""
         from .agent_capability_context import skills_for_tool
 
         messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
         exposed_tools = frozenset(_tool_schema_names(request.tools))
         previous_exchange_state: str | None = None
+        weak_fixed_point_seen = False
+        premature_final_state: str | None = None
+        rag_evidence_seen = False
         round_index = 0
+        require_rag = bool(
+            self._agent_require_fresh_evidence
+            and role in {"coder", "coder_safe"}
+            and exposed_tools & _RAG_EVIDENCE_TOOLS
+        )
 
         while True:
             turn_request = GenerationRequest(
@@ -194,11 +241,38 @@ class ModelRouter:
             )
             turn = adapter.generate_turn(turn_request)
             if not turn.tool_calls:
-                if not turn.content.strip():
+                content = turn.content.strip()
+                if not content:
                     raise ModelConfigurationError(
                         "Tool-capable model returned an empty final response."
                     )
-                return turn.content.strip()
+                if require_rag and not rag_evidence_seen:
+                    state = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    if state == premature_final_state:
+                        raise ModelConfigurationError(
+                            "Production coder repeated a final answer without gathering "
+                            "fresh RAG evidence."
+                        )
+                    premature_final_state = state
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": content},
+                            {
+                                "role": "system",
+                                "content": (
+                                    "This production coding turn requires fresh evidence before "
+                                    "finalization. Use search_code_rag and/or search_project_rag. "
+                                    "Inspect the retrieval receipt. If result_count/coverage/"
+                                    "relevance is weak or empty, change the query or reviewed "
+                                    "evidence source. Do not guess exact Minecraft/Fabric/mapping/"
+                                    "dependency/Java API facts from memory."
+                                ),
+                            },
+                        ]
+                    )
+                    round_index += 1
+                    continue
+                return content
 
             messages.append(
                 {
@@ -223,12 +297,11 @@ class ModelRouter:
                 }
             )
 
-            observations: list[dict[str, Any]] = []
-            for call in turn.tool_calls:
+            def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
                 route_metadata: dict[str, Any] = {
                     "skills": list(
                         skills_for_tool(stage, call.name, model_role=role)
-                    ),
+                    )
                 }
                 if call.name == "external_mcp_call":
                     capability = str(call.arguments.get("capability", "")).strip()
@@ -254,6 +327,22 @@ class ModelRouter:
                         **route_metadata,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
+                return call, payload
+
+            calls = tuple(turn.tool_calls)
+            if len(calls) > 1 and all(
+                call.name in _PARALLEL_READ_TOOLS for call in calls
+            ):
+                with ThreadPoolExecutor(
+                    max_workers=min(len(calls), _parallel_read_workers())
+                ) as executor:
+                    executed = tuple(executor.map(execute, calls))
+            else:
+                executed = tuple(execute(call) for call in calls)
+
+            observations: list[dict[str, Any]] = []
+            weak_rag_in_round = False
+            for call, payload in executed:
                 messages.append(
                     {
                         "role": "tool",
@@ -274,6 +363,25 @@ class ModelRouter:
                         "observation": payload,
                     }
                 )
+                if call.name in _RAG_EVIDENCE_TOOLS and bool(payload.get("ok")):
+                    if _usable_rag_result(payload.get("result")):
+                        rag_evidence_seen = True
+                    else:
+                        weak_rag_in_round = True
+
+            if require_rag and weak_rag_in_round and not rag_evidence_seen:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "The latest RAG observation is not usable fresh evidence. "
+                            "Use its receipt/correction fields to reformulate the query, "
+                            "or switch between current code RAG and reviewed exact-version "
+                            "project/API evidence. Do not finalize and do not repeat the "
+                            "identical weak retrieval."
+                        ),
+                    }
+                )
 
             exchange_state = hashlib.sha256(
                 json.dumps(
@@ -288,17 +396,36 @@ class ModelRouter:
                 ).encode("utf-8")
             ).hexdigest()
             if exchange_state == previous_exchange_state:
+                if require_rag and not rag_evidence_seen:
+                    if weak_fixed_point_seen:
+                        raise ModelConfigurationError(
+                            "Production RAG converged without usable fresh evidence after "
+                            "a corrective retrieval instruction."
+                        )
+                    weak_fixed_point_seen = True
+                    previous_exchange_state = None
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "An identical weak retrieval repeated. Change the query "
+                                "substantively or use a different reviewed evidence source "
+                                "before attempting a final production patch."
+                            ),
+                        }
+                    )
+                    round_index += 1
+                    continue
+
                 final_messages = [
                     *messages,
                     {
                         "role": "system",
                         "content": (
-                            "Tool use has converged: the immediately preceding tool "
-                            "exchange repeated an identical call and identical "
-                            "observation. Do not call any more tools. Return the final "
-                            "answer now using only the evidence already present in this "
-                            "conversation. Preserve the requested response format and "
-                            "do not mention this convergence instruction."
+                            "Tool use has converged after usable evidence was gathered. "
+                            "Do not call more tools. Return the final answer using only "
+                            "the evidence already present. Preserve the requested response "
+                            "format and do not mention this convergence instruction."
                         ),
                     },
                 ]
@@ -337,7 +464,10 @@ class ModelRouter:
         else:
             from .agent_tool_runtime import AgentToolRuntime
 
-            self._agent_tool_runtime = AgentToolRuntime(profile=self.profile)
+            self._agent_tool_runtime = AgentToolRuntime(
+                profile=self.profile,
+                workspace_root=self._agent_workspace_root,
+            )
         return self._agent_tool_runtime
 
     @staticmethod
@@ -454,6 +584,58 @@ class ModelRouter:
                 yield
         else:
             yield
+
+
+def _parallel_read_workers() -> int:
+    raw = os.environ.get("MMM_AGENT_PARALLEL_READS", "4").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 4
+    return max(1, min(value, 16))
+
+
+def _usable_rag_result(value: Any) -> bool:
+    """Treat RAG receipts as authoritative and accept other non-empty evidence packs."""
+
+    found_receipt = False
+    usable_receipt = False
+    found_hits = False
+
+    def visit(item: Any) -> None:
+        nonlocal found_receipt, usable_receipt, found_hits
+        if isinstance(item, Mapping):
+            receipt = item.get("receipt")
+            if isinstance(receipt, Mapping):
+                found_receipt = True
+                try:
+                    if (
+                        int(receipt.get("result_count", 0) or 0) > 0
+                        and float(receipt.get("coverage_score", 0.0) or 0.0) > 0.0
+                        and float(receipt.get("relevance_score", 0.0) or 0.0) > 0.0
+                    ):
+                        usable_receipt = True
+                except (TypeError, ValueError):
+                    pass
+            hits = item.get("hits")
+            if isinstance(hits, Sequence) and not isinstance(hits, (str, bytes)) and hits:
+                found_hits = True
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    if found_receipt:
+        return usable_receipt
+    if found_hits:
+        return True
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return bool(value)
+    return False
 
 
 def _inject_system_context(

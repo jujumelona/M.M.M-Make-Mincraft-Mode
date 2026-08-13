@@ -41,7 +41,7 @@ class ProductionToolService:
         semantic: bool = False,
     ) -> dict[str, Any]:
         resolved = [str(self._existing_path(root)) for root in roots]
-        target = self._new_file(index_path)
+        target = self._replaceable_file(index_path)
         router = ModelRouter(profile=self.profile) if semantic else None
         return ProjectRAGIndex(target).build(
             resolved,
@@ -327,6 +327,13 @@ class ProductionToolService:
         path = self._resolve(value)
         if not path.is_dir() or path.is_symlink():
             raise FileNotFoundError(path)
+        return path
+
+    def _replaceable_file(self, value: str) -> Path:
+        path = self._resolve(value)
+        if path.exists() and (path.is_symlink() or not path.is_file()):
+            raise FileExistsError(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
     def _new_file(self, value: str) -> Path:
