@@ -10,8 +10,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _MAX_CTX = 2147483647
-_MARKER = "_mmm_qwen35_measured_decode_hotpath_v7"
+_MARKER = "_mmm_qwen35_measured_decode_hotpath_v8"
 _BASE_MARKER = "_mmm_qwen35_measured_fast_args_v6"
+_DEFAULT_MTP_WIDTHS = "1,2,3,4,5,6,8"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -43,7 +44,7 @@ def _is_qwen35_mtp(config: Any) -> bool:
 def _context_size(config: Any | None = None) -> int:
     """Return the authoritative llama.cpp context window for this model profile.
 
-    There is deliberately no Qwen-specific fallback window here. A positive
+    There is deliberately no Qwen-specific fallback window here. A non-negative
     MMM_QWEN35_MTP_CTX is an explicit operator override; otherwise the selected
     model profile owns the context size. Zero means llama.cpp/model-native auto.
     """
@@ -213,6 +214,13 @@ def _reclaim_prior_mmm_server() -> None:
         os.environ.pop(name, None)
 
 
+def _restore_env(name: str, previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
+
+
 def install(autotune: Any) -> None:
     """Keep Qwen3.5 on the T4 hot path while delegating winner selection."""
 
@@ -235,7 +243,22 @@ def install(autotune: Any) -> None:
         # Reclaim only that MMM-owned loopback server. The already-composed
         # runtime/decode/KV tuner then benchmarks or reuses its cached winner.
         _reclaim_prior_mmm_server()
-        return current(config, request)
+
+        # The generic KV tuner fingerprints MMM_LLAMA_SERVER_CTX. Qwen's final
+        # launch args are owned by MMM_QWEN35_MTP_CTX/profile context, so expose
+        # that exact effective value only while the composed tuner runs. This
+        # prevents a 16K fingerprint from reusing a KV winner on an actual 32K
+        # server (and likewise for explicit Qwen context overrides).
+        previous_ctx = os.environ.get("MMM_LLAMA_SERVER_CTX")
+        previous_widths = os.environ.get("MMM_LLAMA_MTP_WIDTHS")
+        os.environ["MMM_LLAMA_SERVER_CTX"] = str(_context_size(config))
+        if not (previous_widths or "").strip():
+            os.environ["MMM_LLAMA_MTP_WIDTHS"] = _DEFAULT_MTP_WIDTHS
+        try:
+            return current(config, request)
+        finally:
+            _restore_env("MMM_LLAMA_SERVER_CTX", previous_ctx)
+            _restore_env("MMM_LLAMA_MTP_WIDTHS", previous_widths)
 
     setattr(ensure_qwen35_measured, _MARKER, True)
     ensure_qwen35_measured._mmm_qwen35_measured_decode_hotpath = True  # type: ignore[attr-defined]
