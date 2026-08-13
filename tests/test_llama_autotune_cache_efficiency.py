@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from minecraft_mod_ai import llama_server_autotune as autotune
+from minecraft_mod_ai import parallel_runtime_contract as parallel_runtime
 
 
 def _decision(fingerprint: str, name: str):
@@ -44,7 +45,13 @@ def test_autotune_cache_keeps_multiple_model_fingerprints(monkeypatch, tmp_path)
 
 
 def test_autotune_metadata_and_model_resolution_are_process_cached() -> None:
-    assert getattr(autotune._resolve_model_path, "_mmm_process_model_path_cache", False)
+    assert getattr(autotune._resolve_model_path, "_mmm_parallel_prefetch_resolver", False)
+    assert parallel_runtime._MODEL_RESOLVER is not None
+    assert getattr(
+        parallel_runtime._MODEL_RESOLVER,
+        "_mmm_process_model_path_cache",
+        False,
+    )
     assert getattr(autotune._server_version, "_mmm_process_metadata_cache", False)
     assert getattr(autotune._hardware_identity, "_mmm_process_metadata_cache", False)
     assert getattr(autotune._load_cached_decision, "_mmm_multi_decision_store", False)
