@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Sequence
 
 from .blockbench_client import BlockbenchMCPClient, allowed_blockbench_operations
 from .geckolib_generator import generate_geckolib_entity_assets
 from .java_lsp import JavaLanguageService
-from .mineflayer_bridge import MineflayerBridge
 from .model_router import ModelRouter
 from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
-from .runtime_manager import MinecraftRuntimeManager
 from .spec import Proposal, ProposalStatus, SpecValidationError
 from .system_pack_generator import generate_system_pack, supported_system_packs
 from .training import TrainingTraceStore
@@ -29,8 +28,22 @@ class ProductionToolService:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.profile = profile
-        self.runtime = MinecraftRuntimeManager(self.workspace_root)
-        self.mineflayer = MineflayerBridge()
+
+    @cached_property
+    def runtime(self):
+        """Create the Minecraft runtime manager only when a runtime tool is used."""
+
+        from .runtime_manager import MinecraftRuntimeManager
+
+        return MinecraftRuntimeManager(self.workspace_root)
+
+    @cached_property
+    def mineflayer(self):
+        """Start Mineflayer bridge ownership only when a bot tool is requested."""
+
+        from .mineflayer_bridge import MineflayerBridge
+
+        return MineflayerBridge()
 
     def index_project_rag(
         self,
