@@ -125,9 +125,17 @@ def test_ecosystem_key_reuses_effective_platform_target() -> None:
     )
 
 
-def test_stall_guard_is_live_on_complete_planner() -> None:
-    assert getattr(complete_planner._retrieve_implementation_evidence, "_mmm_stall_guard", False)
-    assert getattr(complete_planner.collect_ecosystem_seed_bundle, "_mmm_stall_guard", False)
+def test_nonblocking_research_guard_is_live_on_complete_planner() -> None:
+    assert getattr(
+        complete_planner._retrieve_implementation_evidence,
+        "_mmm_nonblocking_planner_research",
+        False,
+    )
+    assert getattr(
+        complete_planner.collect_ecosystem_seed_bundle,
+        "_mmm_nonblocking_planner_research",
+        False,
+    )
 
 
 def test_io_defaults_are_speed_tuned(monkeypatch) -> None:
