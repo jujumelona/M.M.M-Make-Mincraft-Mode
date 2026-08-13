@@ -24,8 +24,11 @@ jobs:
       - name: Apply and validate optimization
         run: |
           python -m pip install -q -e '.[dev]'
-          python -m py_compile .github/scripts/optimize_production_rag_structure.py
+          python -m py_compile \
+            .github/scripts/optimize_production_rag_structure.py \
+            .github/scripts/optimize_work_graph_core.py
           python .github/scripts/optimize_production_rag_structure.py
+          python .github/scripts/optimize_work_graph_core.py
           python -m compileall -q minecraft_mod_ai tests
           python -m ruff check minecraft_mod_ai tests --select F,E7,E9 --fix
           python -m ruff check minecraft_mod_ai tests --select F,E7,E9
@@ -36,8 +39,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm .github/workflows/optimize-production-rag-structure.yml
           rm .github/scripts/optimize_production_rag_structure.py
+          rm .github/scripts/optimize_work_graph_core.py
+          rm -f .github/scripts/fix_optimize_production_rag_lint.py
           git add -A
           git diff --cached --check
-          git commit -m "Optimize production RAG ownership and refresh path"
+          git commit -m "Optimize production ownership and execution graph"
           git pull --rebase origin main
           git push origin HEAD:main
