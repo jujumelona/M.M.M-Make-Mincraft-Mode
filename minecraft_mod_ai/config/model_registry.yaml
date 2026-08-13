@@ -210,26 +210,26 @@ profiles:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   t4_local:
-    description: "Legacy alias → Qwen3.6-35B_23GB"
+    description: "Default T4 alias → Qwen3.5-9B_6GB"
     roles:
-      planner: *qwen36_35b
-      researcher: *qwen36_35b
-      coder: *qwen36_35b
-      coder_safe: *qwen36_35b
-      visual_critic: *qwen36_35b
+      planner: *qwen35_9b
+      researcher: *qwen35_9b
+      coder: *qwen35_9b
+      coder_safe: *qwen35_9b
+      visual_critic: *qwen35_9b
       embedding: *shared_embedding
       reranker: *shared_reranker
       image_generator: *shared_image_gen
       speech_recognition: *shared_speech
 
   t4_quality:
-    description: "Legacy alias → Qwen3.6-35B_23GB"
+    description: "T4 quality alias → Qwen3.5-9B_6GB"
     roles:
-      planner: *qwen36_35b
-      researcher: *qwen36_35b
-      coder: *qwen36_35b
-      coder_safe: *qwen36_35b
-      visual_critic: *qwen36_35b
+      planner: *qwen35_9b
+      researcher: *qwen35_9b
+      coder: *qwen35_9b
+      coder_safe: *qwen35_9b
+      visual_critic: *qwen35_9b
       embedding: *shared_embedding
       reranker: *shared_reranker
       image_generator: *shared_image_gen
