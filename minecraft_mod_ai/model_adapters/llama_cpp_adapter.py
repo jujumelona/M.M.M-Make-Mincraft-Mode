@@ -93,7 +93,13 @@ class LlamaCppAdapter(ModelAdapter):
                 "temperature": 0.0,
             }
             if getattr(request, "response_format", None) == "json":
-                payload["response_format"] = {"type": "json_object"}
+                if request.response_schema is not None:
+                    payload["response_format"] = {
+                        "type": "json_object",
+                        "schema": dict(request.response_schema),
+                    }
+                else:
+                    payload["response_format"] = {"type": "json_object"}
                 payload["reasoning_effort"] = "none"
             if request.tools:
                 payload["tools"] = [dict(tool) for tool in request.tools]

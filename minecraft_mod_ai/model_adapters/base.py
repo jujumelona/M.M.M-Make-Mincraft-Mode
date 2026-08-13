@@ -71,6 +71,7 @@ class GenerationRequest:
     messages: Sequence[Mapping[str, Any]]
     media_paths: tuple[Path, ...] = ()
     response_format: str = "text"
+    response_schema: Mapping[str, Any] | None = None
     tools: tuple[Mapping[str, Any], ...] = ()
     tool_choice: str | Mapping[str, Any] | None = None
     parallel_tool_calls: bool = True

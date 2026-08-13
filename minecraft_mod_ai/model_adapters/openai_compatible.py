@@ -87,9 +87,19 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 "max_tokens": cfg.max_new_tokens,
             }
             if request.response_format == "json":
-                # Standard OpenAI-compatible structured-output hint. Keep it scoped
-                # to text generation so image and speech retain their contracts.
-                payload["response_format"] = {"type": "json_object"}
+                # Keep the schema host-owned and explicit. Validation still runs after
+                # generation because compatibility servers can differ in enforcement.
+                if request.response_schema is not None:
+                    payload["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "mmm_structured_response",
+                            "strict": True,
+                            "schema": dict(request.response_schema),
+                        },
+                    }
+                else:
+                    payload["response_format"] = {"type": "json_object"}
             if request.tools:
                 payload["tools"] = [dict(tool) for tool in request.tools]
                 payload["tool_choice"] = request.tool_choice or "auto"

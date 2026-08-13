@@ -270,11 +270,11 @@ class _MalformedSecondDesignPageRouter:
         )
 
 
-def test_malformed_large_request_page_fails_closed_after_local_repair() -> None:
+def test_malformed_large_request_page_fails_closed_at_exact_no_progress() -> None:
     prompt = "first requirement " + ("bounded filler " * 2500) + "last requirement"
     with pytest.raises(
         SpecValidationError,
-        match=r"page 2/.*failed after one page-local repair",
+        match=r"exact no-progress cycle",
     ):
         GameDesignPlanner(_MalformedSecondDesignPageRouter()).plan(prompt)
 

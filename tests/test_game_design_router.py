@@ -8,7 +8,6 @@ from minecraft_mod_ai.game_design import (
     _planner_plugin_manifest,
     _repair_system_prompt,
     _system_prompt,
-    _validate_design,
 )
 from minecraft_mod_ai.spec import SpecValidationError
 
@@ -311,8 +310,8 @@ def test_multimodal_design_recovery_uses_stable_non_latin_identity() -> None:
     assert first.spec.mod_name == "달빛 유물"
 
 
-def test_multimodal_design_does_not_bootstrap_without_essential_design() -> None:
-    """Format recovery must not replace a missing game design with a template."""
+def test_multimodal_design_stops_only_when_invalid_state_repeats() -> None:
+    """A repeated rejected structured state is a semantic no-progress proof."""
 
     incomplete_design = _valid_planner_payload()["game_design"]
     del incomplete_design["acceptance_tests"]
@@ -323,7 +322,7 @@ def test_multimodal_design_does_not_bootstrap_without_essential_design() -> None
     )
     router = _SequenceTextRouter(truncated, truncated)
 
-    with pytest.raises(SpecValidationError, match="complete game_design"):
+    with pytest.raises(SpecValidationError, match="no-progress cycle"):
         GameDesignPlanner(router).plan("Create a moon crystal item.")
 
     assert len(router.calls) == 2
@@ -424,8 +423,72 @@ def test_game_design_prompts_define_strict_nested_collection_types() -> None:
         "loader": "Fabric",
         "minecraft_version": "1.20.1",
     }
-    with pytest.raises(
-        SpecValidationError,
-        match="game_design.mod_context values must be lists",
-    ):
-        _validate_design(invalid)
+    recovered = _extract_valid_game_design(
+        json.dumps({"game_design": invalid}, ensure_ascii=False)
+    )
+    assert recovered["mod_context"] == {
+        "loader": ["Fabric"],
+        "minecraft_version": ["1.20.1"],
+    }
+
+
+def test_game_design_repair_can_progress_beyond_two_model_calls(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MMM_PLANNER_TRACE_DIR", str(tmp_path / "traces"))
+    payload = _valid_planner_payload()
+    payload.pop("build_slice", None)
+    invalid_one = json.loads(json.dumps(payload))
+    invalid_one["game_design"]["assets"] = [{"id": "moon", "kind": "item"}]
+    invalid_two = json.loads(json.dumps(payload))
+    invalid_two["game_design"]["modules"] = ["quest_system"]
+    router = _SequenceTextRouter(
+        "not json",
+        json.dumps(invalid_one),
+        json.dumps(invalid_two),
+        json.dumps(payload),
+    )
+
+    design, _proposal = GameDesignPlanner(router).plan("Create a moon crystal item.")
+
+    assert design["title"] == "Moon Forge"
+    assert len(router.calls) == 4
+    # The third request contains the preceding structured candidate and exact validator error.
+    messages = router.calls[2][0]
+    assert any("HOST VALIDATOR ERROR" in message["content"] for message in messages)
+    assert any(message["role"] == "assistant" for message in messages)
+
+
+def test_game_design_trace_persists_raw_failures_and_final_success(tmp_path, monkeypatch) -> None:
+    trace_root = tmp_path / "planner-traces"
+    monkeypatch.setenv("MMM_PLANNER_TRACE_DIR", str(trace_root))
+    payload = _valid_planner_payload()
+    payload.pop("build_slice", None)
+    router = _SequenceTextRouter("RAW_FAILURE_SENTINEL", json.dumps(payload))
+
+    GameDesignPlanner(router).plan("Create a moon crystal item.")
+
+    runs = list((trace_root / "game_design").iterdir())
+    assert len(runs) == 1
+    attempts = sorted(runs[0].glob("attempt-*.json"))
+    assert len(attempts) == 2
+    first = json.loads(attempts[0].read_text(encoding="utf-8"))
+    second = json.loads(attempts[1].read_text(encoding="utf-8"))
+    accepted = json.loads((runs[0] / "accepted.json").read_text(encoding="utf-8"))
+    assert first["raw_output"] == "RAW_FAILURE_SENTINEL"
+    assert first["validation_error"]
+    assert second["accepted"]["title"] == "Moon Forge"
+    assert accepted["accepted"]["title"] == "Moon Forge"
+
+
+def test_game_design_requests_host_schema_from_router(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MMM_PLANNER_TRACE_DIR", str(tmp_path / "traces"))
+    payload = _valid_planner_payload()
+    payload.pop("build_slice", None)
+    router = _SequenceTextRouter(json.dumps(payload))
+
+    GameDesignPlanner(router).plan("Create a moon crystal item.")
+
+    schema = router.calls[0][1]["response_schema"]
+    assert schema["required"] == ["game_design"]
+    game_design = schema["properties"]["game_design"]
+    assert "mod_context" in game_design["required"]
+    assert game_design["properties"]["mod_context"]["additionalProperties"]["type"] == "array"

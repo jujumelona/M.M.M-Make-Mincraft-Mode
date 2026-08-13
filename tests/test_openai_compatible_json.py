@@ -87,3 +87,32 @@ def test_openai_compatible_text_generation_keeps_standard_text_request(
     )
 
     assert "response_format" not in payload
+
+
+
+def test_openai_compatible_json_schema_is_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    payload = _capture_payload(
+        monkeypatch,
+        GenerationRequest(
+            messages=({"role": "user", "content": "Return structured JSON."},),
+            response_format="json",
+            response_schema=schema,
+        ),
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_structured_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
