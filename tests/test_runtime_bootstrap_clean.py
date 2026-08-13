@@ -159,8 +159,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         for local_name, module in modules.items()
         if local_name in module_calls
     }
-    t4_tuner_present = (PACKAGE / "qwen35_t4_single_stream_tuning.py").is_file()
-    expected = {
+    assert actual == {
         "llama_server_efficiency_contract",
         "llama_server_runtime_tuning",
         "llama_cache_reuse_efficiency_contract",
@@ -168,9 +167,6 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         "qwen35_mtp_hotpath_contract",
         "planner_single_stream_search_contract",
     }
-    if t4_tuner_present:
-        expected.add("qwen35_t4_single_stream_tuning")
-    assert actual == expected
 
     source = _LLAMA_PIPELINE.read_text(encoding="utf-8")
     assert (
@@ -178,8 +174,10 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         in source
     )
     assert "install_hardware(self.autotune)" in source
-    assert ("qwen35_t4_single_stream_tuning" in source) is t4_tuner_present
-    assert ("install_qwen35_t4_single_stream" in source) is t4_tuner_present
+    # A six-axis T4 calibration module may be kept for explicit/offline tuning,
+    # but production requests must never compose or execute that sweep.
+    assert "qwen35_t4_single_stream_tuning" not in source
+    assert "install_qwen35_t4_single_stream" not in source
     order = (
         "TuningStage(\"hardware\"",
         "TuningStage(\n                \"efficiency\"",
@@ -190,10 +188,11 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     positions = [source.index(marker) for marker in order]
     assert positions == sorted(positions)
 
-    decode_order = ["install_decode_speed(", "install_qwen35_hotpath("]
-    if t4_tuner_present:
-        decode_order.append("install_qwen35_t4_single_stream(")
-    decode_order.append("install_single_stream_agentic_policy(")
+    decode_order = (
+        "install_decode_speed(",
+        "install_qwen35_hotpath(",
+        "install_single_stream_agentic_policy(",
+    )
     decode_positions = [source.index(marker) for marker in decode_order]
     assert decode_positions == sorted(decode_positions)
 
