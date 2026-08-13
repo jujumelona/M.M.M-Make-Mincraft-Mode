@@ -1,0 +1,57 @@
+name: One-time planner guard cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-planner-guard-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Patch duplicate cycle ownership
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/planner_incremental_resume_contract.py')
+          text = path.read_text(encoding='utf-8')
+          old_init = '''            self._seen_requests: set[str] = set()\n            self._outline_calls = 0\n'''
+          new_init = '''            self._request_counts: dict[str, int] = {}\n            self._outline_calls = 0\n'''
+          if text.count(old_init) != 1:
+              raise SystemExit('planner guard init shape changed')
+          text = text.replace(old_init, new_init)
+
+          old = '''            if not is_batch_repair:\n                self._outline_calls += 1\n                if self._outline_calls > self._outline_limit:\n                    raise complete_planner.SpecValidationError(\n                        "Production outline generation made no valid progress after the "\n                        "diagnostic regeneration path."\n                    )\n\n            request_sha256 = incremental_module._fingerprint(\n                {\n                    "role": role,\n                    "system": system_content,\n                    "user": user_content,\n                    "response_format": response_format,\n                    "media_paths": [str(path) for path in media_paths],\n                }\n            )\n            if request_sha256 in self._seen_requests:\n                raise complete_planner.SpecValidationError(\n                    "Planner repair cycle detected before repeating an identical model request."\n                )\n            self._seen_requests.add(request_sha256)\n\n'''
+          new = '''            if not is_batch_repair:\n                self._outline_calls += 1\n                if self._outline_calls > self._outline_limit:\n                    raise complete_planner.SpecValidationError(\n                        "Production outline generation made no valid progress after the "\n                        "diagnostic regeneration path."\n                    )\n\n                request_sha256 = incremental_module._fingerprint(\n                    {\n                        "role": role,\n                        "system": system_content,\n                        "user": user_content,\n                        "response_format": response_format,\n                        "media_paths": [str(path) for path in media_paths],\n                    }\n                )\n                request_count = self._request_counts.get(request_sha256, 0) + 1\n                if request_count > 2:\n                    raise complete_planner.SpecValidationError(\n                        "Planner repair cycle detected before a third identical model request."\n                    )\n                self._request_counts[request_sha256] = request_count\n\n'''
+          if text.count(old) != 1:
+              raise SystemExit('planner guard body shape changed')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Verify planner repair semantics
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check minecraft_mod_ai/planner_incremental_resume_contract.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_planner_incremental_repair_contract.py \
+            tests/test_complete_planner_scaling.py::test_initial_outline_repairs_without_replanning_design_or_research
+          git diff --check
+      - name: Commit and remove maintenance workflow
+        run: |
+          git rm .github/workflows/one-time-planner-guard-cleanup.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Give planner cycle guards single ownership'
+          git push origin HEAD:main
