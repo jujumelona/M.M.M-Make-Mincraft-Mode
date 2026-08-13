@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from minecraft_mod_ai import complete_planner, work_graph
+from minecraft_mod_ai import complete_planner
 from minecraft_mod_ai.planner_production_page_contract import install
 
 
