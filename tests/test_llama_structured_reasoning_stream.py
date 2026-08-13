@@ -13,7 +13,7 @@ def _adapter(max_new_tokens: int = 8192):
     return SimpleNamespace(config=SimpleNamespace(max_new_tokens=max_new_tokens))
 
 
-def test_json_request_disables_reasoning_before_grammar_generation() -> None:
+def test_json_request_disables_reasoning_without_server_grammar() -> None:
     request = SimpleNamespace(
         messages=(
             {"role": "system", "content": "Return JSON."},
@@ -22,7 +22,7 @@ def test_json_request_disables_reasoning_before_grammar_generation() -> None:
         response_format="json",
     )
     payload = _server_payload(_adapter(), request)
-    assert payload["response_format"] == {"type": "json_object"}
+    assert "response_format" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["max_tokens"] == 8192
 
@@ -71,6 +71,4 @@ def test_planner_page_budget_uses_selected_native_model_context() -> None:
 
     router = SimpleNamespace(profile="Qwen3.5-9B_6GB", registry=Registry())
     budget = game_design._request_page_bytes(router)
-    # Host paging follows the selected model context and remains bounded per call;
-    # native llama-server is responsible for the actual runtime context allocation.
     assert budget == 64 * 1024
