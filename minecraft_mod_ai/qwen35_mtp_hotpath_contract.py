@@ -9,10 +9,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-_DEFAULT_WIDTH = 3
 _MAX_CTX = 2147483647
-_MARKER = "_mmm_qwen35_mtp3_hotpath_v6"
-_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v5"
+_MARKER = "_mmm_qwen35_measured_decode_hotpath_v7"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v6"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
     "MMM_LLAMA_ACTIVE_DRAFT_N_MAX",
@@ -94,7 +93,7 @@ def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
 
 
 def _install_measured_fast_base_args(autotune: Any) -> None:
-    """Install the measured single-stream Qwen3.5 server launch shape."""
+    """Install the Qwen3.5 T4 launch constraints without masking decode tuners."""
 
     current = getattr(autotune, "_base_args", None)
     if not callable(current) or getattr(current, _BASE_MARKER, False):
@@ -115,12 +114,13 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--flash-attn", "-fa"), "on")
         _set_option(args, ("--batch-size", "-b"), "2048")
         _set_option(args, ("--ubatch-size", "-ub"), "512")
+        _set_option(args, ("--parallel", "-np"), "1")
         _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))
 
-        # Preserve llama.cpp's native KV format. Runtime KV sweeps repeatedly reload
-        # a large model and belong in offline benchmarking, not production requests.
-        _drop_option(args, ("--cache-type-k", "-ctk"))
-        _drop_option(args, ("--cache-type-v", "-ctv"))
+        # cache-type-k/v is deliberately preserved: the single-stream decode
+        # contract measures q4_0/q8_0/f16 and exports the winner through these
+        # exact llama.cpp options. Deleting them made every Qwen KV probe run the
+        # same native-default cache while reporting a fictitious selected format.
         _drop_option(args, ("--load-mode", "-lm"))
         _drop_option(args, ("--cache-prompt",), takes_value=False)
         if "--metrics" not in args:
@@ -214,7 +214,7 @@ def _reclaim_prior_mmm_server() -> None:
 
 
 def install(autotune: Any) -> None:
-    """Install one fixed Qwen3.5 MTP-3 single-stream production server."""
+    """Keep Qwen3.5 on the T4 hot path while delegating winner selection."""
 
     _install_measured_fast_base_args(autotune)
     current = autotune.ensure_tuned_server
@@ -222,63 +222,24 @@ def install(autotune: Any) -> None:
         return
 
     @wraps(current)
-    def ensure_qwen35_mtp3(config: Any, request: Any) -> str:
+    def ensure_qwen35_measured(config: Any, request: Any) -> str:
         if not _enabled() or not _is_qwen35_mtp(config):
             return current(config, request)
 
         managed_process = getattr(autotune, "_MANAGED_PROCESS", None)
         managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")
         if managed_process is not None and managed_process.poll() is None and managed_url:
-            return managed_url
-
-        _reclaim_prior_mmm_server()
-        if os.environ.get("LLAMA_SERVER_URL", "").strip():
             return current(config, request)
 
-        with autotune._AUTOTUNE_LOCK:
-            managed_process = getattr(autotune, "_MANAGED_PROCESS", None)
-            managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")
-            if (
-                managed_process is not None
-                and managed_process.poll() is None
-                and managed_url
-            ):
-                return managed_url
+        # A previous Colab checkout can leave a process using obsolete flags.
+        # Reclaim only that MMM-owned loopback server. The already-composed
+        # runtime/decode/KV tuner then benchmarks or reuses its cached winner.
+        _reclaim_prior_mmm_server()
+        return current(config, request)
 
-            binary = autotune._server_binary()
-            if binary is None:
-                raise RuntimeError("native llama-server binary is unavailable")
-            model_path = autotune._resolve_model_path(config)
-            selected = autotune.ServerVariant(
-                name="qwen35-production-mtp-3",
-                spec_type="draft-mtp",
-                draft_n_max=_DEFAULT_WIDTH,
-                ubatch=512,
-                parallel=1,
-                cache_reuse=0,
-                draft_p_min=0.0,
-            )
-            url = autotune._launch_selected(binary, model_path, config, selected)
-            os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = "draft-mtp"
-            os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(_DEFAULT_WIDTH)
-            os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = "1"
-            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = "512"
-            os.environ["MMM_LLAMA_ACTIVE_MTP_P_MIN"] = "0"
-            os.environ["MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE"] = "single_stream"
-            os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = "native-default"
-            print(
-                "llama server: Qwen3.5 fixed production profile",
-                (
-                    "spec=draft-mtp n_max=3 parallel=1 "
-                    f"ctx={_context_size(config)} ubatch=512 kv=native-default"
-                ),
-                flush=True,
-            )
-            return url
-
-    setattr(ensure_qwen35_mtp3, _MARKER, True)
-    ensure_qwen35_mtp3._mmm_qwen35_mtp3_hotpath = True  # type: ignore[attr-defined]
-    autotune.ensure_tuned_server = ensure_qwen35_mtp3
+    setattr(ensure_qwen35_measured, _MARKER, True)
+    ensure_qwen35_measured._mmm_qwen35_measured_decode_hotpath = True  # type: ignore[attr-defined]
+    autotune.ensure_tuned_server = ensure_qwen35_measured
 
 
 __all__ = [
