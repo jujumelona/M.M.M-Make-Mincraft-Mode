@@ -248,13 +248,27 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
 
 
 def install() -> None:
-    """Bind research-derived small-model amplification to the live planner."""
-    from . import agentic_optimization_contract, complete_planner
+    """Bind research-derived small-model amplification to the fully composed runtime."""
+    from . import (
+        agentic_optimization_contract,
+        complete_planner,
+        scheduler_parallel_safety_contract,
+        work_graph,
+    )
+    from .max_efficiency_runtime_contract import enhance_runtime
     from .small_model_agent_policy import enhance_planner
 
     _install_evidence_aware_scoring(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
     enhance_planner(complete_planner)
+
+    # Post-bootstrap is the first point where planner, scheduler, router and generator
+    # safety wrappers are all final. Bind the throughput layer here so it can align the
+    # real executor with native slots without import-time side effects or branch logic.
+    enhance_runtime(
+        work_graph_module=work_graph,
+        scheduler_module=scheduler_parallel_safety_contract,
+    )
 
 
 __all__ = ["install"]
