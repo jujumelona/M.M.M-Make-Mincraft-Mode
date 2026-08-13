@@ -56,8 +56,9 @@ class RepairEngine:
     """Diagnostics -> indexed context -> exact patch -> rebuild loop.
 
     No file-count truncation is used. The whole project is indexed and relevant files
-    are selected within an explicit byte budget. Repair attempts and patch bytes are
-    operational policy values, not feature-schema limits.
+    are selected within an explicit byte budget. By default repair is progress-driven:
+    it continues while validation produces a new normalized failure state and stops on
+    PASS or repeated machine evidence. ``max_attempts`` is only an explicit caller cap.
     """
 
     def __init__(
@@ -86,9 +87,10 @@ class RepairEngine:
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir() or root.is_symlink():
             raise RepairEngineError("Repair target must be a regular project directory.")
-        attempts_limit = self.policy.repair_attempts if max_attempts is None else max_attempts
-        if type(attempts_limit) is not int or attempts_limit < 1:
-            raise RepairEngineError("max_attempts must be a positive integer.")
+        if max_attempts is not None and (
+            type(max_attempts) is not int or max_attempts < 1
+        ):
+            raise RepairEngineError("max_attempts must be null or a positive integer.")
 
         # Build the complete project index exactly once for this repair invocation.
         # ContextVar keeps concurrent/nested repairs isolated without storing mutable
@@ -98,10 +100,9 @@ class RepairEngine:
         try:
             receipts: list[dict[str, Any]] = []
             signatures: set[str] = set()
-            last_evidence: dict[str, Any] | None = None
-            for attempt in range(attempts_limit + 1):
+            while True:
+                attempt = len(receipts)
                 evidence = self._evidence(root, run_gametest=run_gametest)
-                last_evidence = evidence
                 if evidence["passed"]:
                     project_index.write_manifest()
                     return {
@@ -111,14 +112,25 @@ class RepairEngine:
                         "evidence": evidence,
                         "patch_receipts": receipts,
                     }
-                if attempt >= attempts_limit:
-                    break
+
                 signature = self._signature(evidence)
                 if signature in signatures:
                     raise RepairEngineError(
-                        "Repair stopped because the same normalized error signature repeated."
+                        "Repair stopped because the same normalized error signature repeated; "
+                        "there is no new machine-verifiable progress to justify another model call."
                     )
                 signatures.add(signature)
+
+                if max_attempts is not None and attempt >= max_attempts:
+                    return {
+                        "schema_version": "mmm/repair-result-v2",
+                        "status": "FAIL",
+                        "attempts": attempt,
+                        "stop_reason": "explicit_max_attempts",
+                        "evidence": evidence,
+                        "patch_receipts": receipts,
+                    }
+
                 context = self._context(root, evidence)
                 patch = self._request_patch(evidence, context)
                 self._validate_patch_scope(patch)
@@ -132,20 +144,8 @@ class RepairEngine:
                 # Only a successfully committed patch may mutate the in-memory index.
                 # The patch contract already rejects duplicate/unsafe paths, so this is
                 # the exact minimal touched set needed for the next repair attempt.
-                project_index.update_files(
-                    tuple(str(item["path"]) for item in patch)
-                )
+                project_index.update_files(tuple(str(item["path"]) for item in patch))
                 receipts.append(receipt)
-
-            if last_evidence is None:
-                raise AssertionError("Repair loop produced no validation evidence.")
-            return {
-                "schema_version": "mmm/repair-result-v2",
-                "status": "FAIL",
-                "attempts": attempts_limit,
-                "evidence": last_evidence,
-                "patch_receipts": receipts,
-            }
         finally:
             _ACTIVE_REPAIR_PROJECT_INDEX.reset(index_token)
 
@@ -240,12 +240,17 @@ class RepairEngine:
         context: dict[str, Any],
     ) -> list[dict[str, Any]]:
         prompt = {
-            "task": "Repair the Minecraft Java 1.20.1 Fabric project using exact minimal patches.",
+            "task": (
+                "Repair the approved Minecraft project target using exact minimal patches. "
+                "Derive the exact Minecraft version, loader, mappings and Java target from "
+                "the project context; never substitute a different target."
+            ),
             "constraints": [
                 "Return exactly one JSON object with key operations.",
                 "Use only create, replace or edit operations.",
                 "Every non-create operation must use the supplied exact SHA-256.",
-                "Do not delete requested functionality or mix loaders/versions.",
+                "Preserve the exact approved loader/version/mappings and requested functionality.",
+                "Do not change platform versions merely to make the build pass.",
                 "Do not emit shell commands, scripts or markdown.",
                 "Use project-index paths; do not assume that omitted content means a file does not exist.",
             ],
@@ -257,7 +262,7 @@ class RepairEngine:
             [
                 {
                     "role": "system",
-                    "content": "You are a hash-guarded Fabric source repair agent.",
+                    "content": "You are a hash-guarded Minecraft source repair agent.",
                 },
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
