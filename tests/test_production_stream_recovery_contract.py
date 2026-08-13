@@ -6,7 +6,6 @@ import pytest
 
 from minecraft_mod_ai import complete_planner
 from minecraft_mod_ai import production_stream_efficiency_contract as stream
-from minecraft_mod_ai.production_stream_resume_contract import install as install_resume
 
 
 def _module(module_id: str) -> dict[str, object]:
@@ -73,8 +72,6 @@ def test_saved_truncated_stream_is_salvaged_before_any_new_page_decode(
             )
 
     router = Router()
-    stream.install(complete_planner)
-    install_resume(complete_planner)
     page = complete_planner._generate_json_page_with_repair(
         router,
         system_prompt="PRODUCTION FULL PAGE SHOULD NOT RUN",
@@ -110,8 +107,6 @@ def test_saved_stream_backend_failure_never_falls_through_to_full_page_decode(
             raise RuntimeError("backend down")
 
     router = DownRouter()
-    stream.install(complete_planner)
-    install_resume(complete_planner)
 
     with pytest.raises(RuntimeError, match="backend down"):
         complete_planner._generate_json_page_with_repair(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from types import SimpleNamespace
 
 from minecraft_mod_ai import complete_planner, llama_server_hardware_policy
@@ -142,9 +144,9 @@ def test_large_production_page_keeps_ai_requested_target_width() -> None:
     assert "ACTIVE HOST PAGE WIDTH OVERRIDE" not in first_system
 
 
-def test_production_repair_keeps_requested_targets_after_truncated_first_page() -> None:
+def test_production_retry_keeps_requested_targets_after_invalid_first_page() -> None:
     router = _Router(
-        '{"modules":[{"module_id":"cut_off"',
+        "not json",
         json.dumps(
             {
                 "modules": [
@@ -170,30 +172,32 @@ def test_production_repair_keeps_requested_targets_after_truncated_first_page() 
     second_user = router.calls[1]["messages"][1]["content"]
     assert '"current_target_deliverables": ["entity_runtime", "ui_runtime"]' in second_user
     second_system = router.calls[1]["messages"][0]["content"]
-    assert "RECOVERY MODE is host-narrowed" not in second_system
+    assert "CORRECTION:" in second_system
     assert router.calls[1]["media_paths"] == ()
 
 
-def test_production_page_can_repair_more_than_once() -> None:
+def test_production_page_stops_after_one_full_page_retry() -> None:
     router = _Router(
         "not json",
         "still not json",
         json.dumps({"modules": [_module()]}),
     )
 
-    page = complete_planner._generate_json_page_with_repair(
-        router,
-        system_prompt="Return the production page.",
-        request=_request(),
-        media_paths=(),
-        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
-        stage="unit production page",
-    )
+    with pytest.raises(
+        complete_planner.SpecValidationError,
+        match="failed after one page-local repair",
+    ):
+        complete_planner._generate_json_page_with_repair(
+            router,
+            system_prompt="Return the production page.",
+            request=_request(),
+            media_paths=(),
+            expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),
+            stage="unit production page",
+        )
 
-    assert page["completed_deliverables"] == ["entity_runtime"]
-    assert len(router.calls) == 3
-    assert "REPAIR THIS PAGE" in router.calls[1]["messages"][0]["content"]
-    assert "REPAIR THIS PAGE" in router.calls[2]["messages"][0]["content"]
+    assert len(router.calls) == 2
+    assert "CORRECTION:" in router.calls[1]["messages"][0]["content"]
 
 
 def test_production_page_repairs_zero_progress_with_exact_host_diagnostic() -> None:

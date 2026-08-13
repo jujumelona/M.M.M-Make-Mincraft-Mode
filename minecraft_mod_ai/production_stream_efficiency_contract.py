@@ -17,6 +17,7 @@ _ARRAY_FIELDS = (
 )
 _ITEM_KIND = {"modules": "module", "assets": "asset", "audio": "audio"}
 _KIND_FIELD = {value: key for key, value in _ITEM_KIND.items()}
+_FULL_PAGE_DECODE_LIMIT = 2
 
 
 def _canonical(value: Any) -> str:
@@ -144,6 +145,27 @@ def _stream_event_path(stage: str, request: dict[str, Any]) -> Path:
 
     page_path = page_checkpoint_path(stage, request)
     return page_path.with_name(page_path.name + ".stream.jsonl")
+
+
+def _latest_saved_stream(path: Path) -> str:
+    if not path.is_file() or path.is_symlink():
+        return ""
+    latest = ""
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    break
+                if isinstance(value, dict) and isinstance(value.get("text"), str):
+                    latest = value["text"]
+    except OSError:
+        return ""
+    return latest
 
 
 def _append_stream_event(
@@ -612,6 +634,19 @@ def install(complete_planner_module: Any) -> None:
                 stage=stage,
             )
 
+        saved_text = _latest_saved_stream(_stream_event_path(stage, request))
+        if saved_text:
+            saved_page = _salvage_production_stream(
+                complete_planner_module,
+                runtime,
+                router,
+                text=saved_text,
+                request=request,
+                stage=stage,
+            )
+            if saved_page is not None:
+                return saved_page
+
         view = runtime._contract_view(request, expected_contracts)
         schema = runtime._schema_for_contract(view) if view is not None else None
         contract_text = (
@@ -623,7 +658,7 @@ def install(complete_planner_module: Any) -> None:
         previous_diagnostic = ""
         round_index = 0
 
-        while True:
+        while round_index < _FULL_PAGE_DECODE_LIMIT:
             prompt = (
                 system_prompt
                 + "\n\nHOST JSON CONTRACT: Return production JSON with these top-level fields and "
@@ -698,7 +733,14 @@ def install(complete_planner_module: Any) -> None:
             previous_diagnostic = diagnostic + "; salvage=no verified production item"
             round_index += 1
 
+        raise complete_planner_module.SpecValidationError(
+            "Production page failed after one page-local repair; durable stream/item "
+            "repair remains authoritative."
+        )
+
     generate_json_page_lossless._mmm_lossless_production_stream = True  # type: ignore[attr-defined]
+    generate_json_page_lossless._mmm_saved_stream_resume = True  # type: ignore[attr-defined]
+    generate_json_page_lossless._mmm_bounded_full_page_decode = True  # type: ignore[attr-defined]
     complete_planner_module._generate_json_page_with_repair = generate_json_page_lossless
 
 

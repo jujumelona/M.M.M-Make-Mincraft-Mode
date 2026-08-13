@@ -121,7 +121,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
         "install_audio_resume_efficiency(",
         "install_scheduler_poll_efficiency(",
         "install_production_stream_efficiency(",
-        "install_production_stream_resume(",
         "install_execution_efficiency(",
         "install_incremental_resume(",
         "install_planner_pagination_safety(",
@@ -248,3 +247,4 @@ def test_specialized_installers_are_single_responsibility() -> None:
     assert not (PACKAGE / "platform_mcp_compatibility_contract.py").exists()
     assert not (PACKAGE / "final_architecture_contract.py").exists()
     assert not (PACKAGE / "llama_server_max_performance.py").exists()
+    assert not (PACKAGE / "production_stream_resume_contract.py").exists()
