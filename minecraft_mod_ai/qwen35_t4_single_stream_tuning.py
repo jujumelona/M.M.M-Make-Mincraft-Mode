@@ -16,10 +16,10 @@ from .qwen35_mtp_hotpath_contract import (
     _reclaim_prior_mmm_server,
 )
 
-_SCHEMA_VERSION = "mmm/qwen35-t4-single-stream-tune-v2"
-_MARKER = "_mmm_qwen35_t4_single_stream_tune_v2"
+_SCHEMA_VERSION = "mmm/qwen35-t4-single-stream-tune-v3"
+_MARKER = "_mmm_qwen35_t4_single_stream_tune_v3"
 _DEFAULT_WIDTHS = (1, 2, 3, 4)
-_DEFAULT_P_MIN = 0.8
+_DEFAULT_P_MIN_CANDIDATES = (0.0, 0.6, 0.8, 0.9)
 _KV_OVERRIDE_ENV = "MMM_QWEN35_T4_KV_OVERRIDE"
 _DEFAULT_KV_CANDIDATES = ("native-default", "q8_0", "q4_0")
 _EXPECTED_OBJECT = {
@@ -70,13 +70,19 @@ def _widths() -> tuple[int, ...]:
     return tuple(values or _DEFAULT_WIDTHS)
 
 
-def _p_min() -> float:
-    raw = os.environ.get("MMM_QWEN35_T4_P_MIN", str(_DEFAULT_P_MIN))
-    try:
-        value = float(raw)
-    except ValueError:
-        value = _DEFAULT_P_MIN
-    return max(0.0, min(0.99, value))
+def _p_min_candidates() -> tuple[float, ...]:
+    values: list[float] = []
+    raw = os.environ.get("MMM_QWEN35_T4_P_MIN_CANDIDATES", "0,0.6,0.8,0.9")
+    for token in raw.split(","):
+        try:
+            value = round(float(token.strip()), 4)
+        except ValueError:
+            continue
+        if 0.0 <= value < 1.0 and value not in values:
+            values.append(value)
+    if 0.0 not in values:
+        values.insert(0, 0.0)
+    return tuple(values or _DEFAULT_P_MIN_CANDIDATES)
 
 
 def _probe_tokens(autotune: Any, config: Any) -> int:
@@ -160,7 +166,7 @@ def _fingerprint(
         "ubatch": ubatch,
         "probe_tokens": _probe_tokens(autotune, config),
         "widths": list(_widths()),
-        "p_min": _p_min(),
+        "p_min_candidates": list(_p_min_candidates()),
         "kv_candidates": list(_kv_candidates()),
         "benchmark_digest": _EXPECTED_DIGEST,
         "benchmark_shape": "exact-json-256-values-reasoning-off-v2",
@@ -186,20 +192,6 @@ def _variant(
         parallel=1,
         cache_reuse=0,
         draft_p_min=p_min if width else 0.0,
-    )
-
-
-def _same_variant(left: Any, right: Any) -> bool:
-    return (
-        str(getattr(left, "spec_type", "none"))
-        == str(getattr(right, "spec_type", "none"))
-        and int(getattr(left, "draft_n_max", 0) or 0)
-        == int(getattr(right, "draft_n_max", 0) or 0)
-        and abs(
-            float(getattr(left, "draft_p_min", 0.0) or 0.0)
-            - float(getattr(right, "draft_p_min", 0.0) or 0.0)
-        )
-        < 1e-9
     )
 
 
@@ -444,27 +436,30 @@ def _measure(
         if _valid(probe, baseline):
             mtp.append(probe)
 
-    if mtp and _p_min() > 0:
+    if mtp:
         fastest_mtp = max(
             mtp,
             key=lambda probe: float(getattr(probe, "predicted_tps", 0.0) or 0.0),
         )
         width = int(getattr(fastest_mtp.variant, "draft_n_max", 0) or 0)
-        probes.append(
-            _probe(
-                autotune,
-                binary,
-                model_path,
-                config,
-                _variant(
+        for p_min in _p_min_candidates():
+            if p_min == 0.0:
+                continue
+            probes.append(
+                _probe(
                     autotune,
-                    name=f"qwen35-t4-mtp-{width}|pm{_p_min():g}",
-                    ubatch=ubatch,
-                    width=width,
-                    p_min=_p_min(),
-                ),
+                    binary,
+                    model_path,
+                    config,
+                    _variant(
+                        autotune,
+                        name=f"qwen35-t4-mtp-{width}|pm{p_min:g}",
+                        ubatch=ubatch,
+                        width=width,
+                        p_min=p_min,
+                    ),
+                )
             )
-        )
 
     selected, baseline_tps, selected_tps = _select(baseline, probes)
     selected_kv = "native-default"
@@ -674,6 +669,7 @@ __all__ = [
     "_benchmark_request",
     "_is_t4_runtime",
     "_kv_candidates",
+    "_p_min_candidates",
     "_select",
     "_semantic_digest",
     "_widths",

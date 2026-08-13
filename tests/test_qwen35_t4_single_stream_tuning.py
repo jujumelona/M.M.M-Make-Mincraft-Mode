@@ -7,6 +7,7 @@ from minecraft_mod_ai.qwen35_t4_single_stream_tuning import (
     _EXPECTED_OBJECT,
     _is_t4_runtime,
     _kv_candidates,
+    _p_min_candidates,
     _select,
     _semantic_digest,
     _widths,
@@ -39,6 +40,14 @@ def test_t4_detection_uses_native_hardware_identity() -> None:
 def test_width_candidates_are_bounded_and_deduplicated(monkeypatch) -> None:
     monkeypatch.setenv("MMM_QWEN35_T4_WIDTHS", "4,3,3,0,9,bad,2")
     assert _widths() == (4, 3, 2)
+
+
+def test_p_min_candidates_are_bounded_deduplicated_and_keep_zero(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MMM_QWEN35_T4_P_MIN_CANDIDATES",
+        "0.9,0.8,0.8,1.0,-0.1,bad,0.6",
+    )
+    assert _p_min_candidates() == (0.0, 0.9, 0.8, 0.6)
 
 
 def test_kv_candidates_always_keep_native_reference(monkeypatch) -> None:
