@@ -11,6 +11,8 @@ from typing import Any
 _CLIENT_LOCK = threading.RLock()
 _CLIENTS: dict[str, Any] = {}
 _CLIENT_LIMIT = 4
+_REPORTED_URL_LOCK = threading.RLock()
+_REPORTED_SERVER_URLS: set[str] = set()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -46,6 +48,14 @@ def _client(server_url: str) -> Any:
             except Exception:
                 pass
         return client
+
+
+def _report_server_connection(server_url: str) -> None:
+    with _REPORTED_URL_LOCK:
+        if server_url in _REPORTED_SERVER_URLS:
+            return
+        _REPORTED_SERVER_URLS.add(server_url)
+    print("llama server: connected", server_url, flush=True)
 
 
 def _commit_usage(
@@ -87,9 +97,6 @@ def _install_host_validated_json_payload(hardware_module: Any) -> None:
     def host_validated_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload = dict(current_payload(adapter, request))
         if getattr(request, "response_format", None) == "json":
-            # Structural correctness belongs to the host strict parser + targeted repair.
-            # Do not attach llama.cpp's generic JSON grammar to CUDA decoding: that path
-            # previously stalled real planner generations after the first visible token.
             payload.pop("response_format", None)
             payload["reasoning_effort"] = "none"
         return payload
@@ -101,8 +108,6 @@ def _install_host_validated_json_payload(hardware_module: Any) -> None:
 def install(hardware_module: Any) -> None:
     """Use SSE-native usage and persistent HTTP connections on the llama hot path."""
 
-    # Apply this before the idempotence return: structured JSON must stay off the
-    # generic server grammar even if another layer already installed streaming.
     _install_host_validated_json_payload(hardware_module)
 
     current = hardware_module._strict_server_generate
@@ -111,8 +116,6 @@ def install(hardware_module: Any) -> None:
 
     @wraps(current)
     def fast_stream_generate(adapter: Any, request: Any, server_url: str) -> str:
-        # Retain the original exact native /metrics + /slots diagnostics as an explicit
-        # opt-in. The default production path avoids those extra HTTP requests.
         if _env_bool("MMM_LLAMA_DETAILED_TELEMETRY", False):
             return current(adapter, request, server_url)
 
@@ -147,9 +150,7 @@ def install(hardware_module: Any) -> None:
                         + (f": {body}" if body else "")
                     )
 
-                if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
-                    print("llama server: connected", server_url, flush=True)
-                    adapter.__class__._reported_server_url = server_url
+                _report_server_connection(server_url)
                 structured = getattr(request, "response_format", None) == "json"
                 reasoning_disabled = payload.get("reasoning_effort") == "none"
                 print(
@@ -209,9 +210,6 @@ def install(hardware_module: Any) -> None:
                         )
                         first_output_reported = True
                     if now - last_progress_report >= 15.0:
-                        # No /slots request here: progress logging must not compete with
-                        # the active decode for server work. Exact token usage arrives
-                        # in the final SSE usage event.
                         print(
                             "llama server: progress",
                             f" content_chars={generated_chars}",
