@@ -4,19 +4,6 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
-from . import agentic_pre_design_rag as _agentic_pre_design_rag
-from . import agentic_research_game_design as _agentic_research_game_design
-from . import model_router as _model_router_module
-from .agent_security_contract import install as _install_agent_security
-
-_install_agent_security(
-    pre_design_rag_module=_agentic_pre_design_rag,
-    agentic_research_module=_agentic_research_game_design,
-    model_router_module=_model_router_module,
-)
-del _agentic_pre_design_rag, _agentic_research_game_design, _model_router_module
-del _install_agent_security
-
 from .api import (
     ChatReply,
     CompleteChatReply,
