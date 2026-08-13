@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 17
+_TUNING_PIPELINE_VERSION = 18
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -108,6 +108,9 @@ class NativeLlamaTuningPipeline:
             install as install_single_stream_agentic_policy,
         )
         from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
+        from .qwen35_runtime_efficiency_contract import (
+            install as install_qwen35_runtime_efficiency,
+        )
 
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)
@@ -120,6 +123,15 @@ class NativeLlamaTuningPipeline:
                 self.hardware_policy,
             )
             install_qwen35_hotpath(self.autotune)
+            # Qwen efficiency is outermost over the generic decode/KV tuner so its
+            # request-local cold-start defaults are visible before any inner probe
+            # decides whether to reload the model. The central pipeline owns this
+            # composition; no policy contract installs another policy contract.
+            install_qwen35_runtime_efficiency(
+                self.autotune,
+                self.hardware_policy,
+                self.runtime_tuning,
+            )
             # This is intentionally last: the profile/native context is the default
             # authority and explicit operator overrides retain their exact value.
             self._install_profile_context_authority()
