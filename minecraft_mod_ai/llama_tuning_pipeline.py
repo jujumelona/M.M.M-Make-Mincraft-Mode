@@ -46,6 +46,18 @@ class NativeLlamaTuningPipeline:
             install_hardware(self.autotune)
             bind_structured_decode_policy(self.hardware_policy)
 
+        def install_decode_speed_stage() -> None:
+            install_decode_speed(
+                self.autotune,
+                self.runtime_tuning,
+                self.hardware_policy,
+            )
+            # These two policies consume the selected native decode topology, so keep
+            # them inside the existing decode-speed ownership stage instead of adding
+            # another top-level tuning phase.
+            install_qwen35_hotpath(self.autotune)
+            install_single_stream_plan_search(agentic_optimization_contract)
+
         return (
             TuningStage("hardware", install_hardware_stage),
             TuningStage(
@@ -61,24 +73,7 @@ class NativeLlamaTuningPipeline:
                     self.runtime_tuning,
                 ),
             ),
-            TuningStage(
-                "decode-speed",
-                lambda: install_decode_speed(
-                    self.autotune,
-                    self.runtime_tuning,
-                    self.hardware_policy,
-                ),
-            ),
-            TuningStage(
-                "qwen35-mtp-hotpath",
-                lambda: install_qwen35_hotpath(self.autotune),
-            ),
-            TuningStage(
-                "single-stream-plan-search",
-                lambda: install_single_stream_plan_search(
-                    agentic_optimization_contract
-                ),
-            ),
+            TuningStage("decode-speed", install_decode_speed_stage),
         )
 
     def install(self) -> None:
