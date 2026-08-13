@@ -42,9 +42,12 @@ def _install_asset_handoff(*, services_module: Any, model_router_module: Any) ->
                 local_exclusive_image = False
         if not local_exclusive_image:
             return current(router, *args, **kwargs)
-        # The inner asset path releases native llama-server while this global RLock is
-        # held, so no concurrent decode can be killed during GPU handoff.
+        # Own the same GPU lock used by text generation, then evict the managed
+        # llama-server exactly once before the asset shard starts. Image residency
+        # keeps the diffusion pipeline alive for all images/tiles in this shard, so
+        # neither model is repeatedly loaded and evicted per image.
         with model_router_module._GPU_EXCLUSIVE_LOCK:
+            _release_native_llama_server()
             return current(router, *args, **kwargs)
 
     generate_assets_atomic_gpu_handoff._mmm_atomic_gpu_handoff = True  # type: ignore[attr-defined]
