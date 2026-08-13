@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+_TUNING_PIPELINE_VERSION = 2
+
+
 @dataclass(frozen=True)
 class TuningStage:
     name: str
@@ -19,7 +22,7 @@ class TuningStage:
 
 
 class NativeLlamaTuningPipeline:
-    """Install the native llama tuning stack once, in dependency order."""
+    """Install the native llama tuning stack once per composition version."""
 
     def __init__(self, *, autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
         self.autotune = autotune
@@ -64,14 +67,20 @@ class NativeLlamaTuningPipeline:
         )
 
     def install(self) -> None:
-        if getattr(self.autotune, "_mmm_tuning_pipeline_installed", False):
+        installed_version = int(
+            getattr(self.autotune, "_mmm_tuning_pipeline_version", 0) or 0
+        )
+        if installed_version >= _TUNING_PIPELINE_VERSION:
             return
         installed: list[str] = []
         for stage in self.stages():
+            # Individual stage installers are idempotent, so an older live Colab
+            # process can safely receive newly-added policy without a full restart.
             stage.install()
             installed.append(stage.name)
         self.autotune._mmm_tuning_pipeline_stages = tuple(installed)
         self.autotune._mmm_tuning_pipeline_installed = True
+        self.autotune._mmm_tuning_pipeline_version = _TUNING_PIPELINE_VERSION
 
 
 def install_native_llama_tuning_pipeline(*, autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
