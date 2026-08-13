@@ -79,7 +79,8 @@ def test_outline_replaces_verbose_prompt_without_imposing_batch_limit() -> None:
     system = str(router.calls[0]["messages"][0]["content"])
     assert "VERBOSE_SENTINEL" not in system
     assert "NO fixed batch count and NO fixed page count" in system
-    assert "Choose the page size yourself" in system
+    assert "Choose page size yourself" in system
+    assert "available model context/output budget" in system
     assert "at most TWO" not in system
 
 
