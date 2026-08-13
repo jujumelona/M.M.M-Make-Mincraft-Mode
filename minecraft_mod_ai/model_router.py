@@ -378,15 +378,7 @@ class ModelRouter:
                 return call, payload
 
             calls = tuple(turn.tool_calls)
-            if len(calls) > 1 and all(
-                call.name in _PARALLEL_READ_TOOLS for call in calls
-            ):
-                with ThreadPoolExecutor(
-                    max_workers=min(len(calls), _parallel_read_workers())
-                ) as executor:
-                    executed = tuple(executor.map(execute, calls))
-            else:
-                executed = tuple(execute(call) for call in calls)
+            executed = _execute_tool_waves(calls, execute)
 
             observations: list[dict[str, Any]] = []
             weak_rag_in_round = False
@@ -645,6 +637,45 @@ def _parallel_read_workers() -> int:
     except ValueError:
         value = 4
     return max(1, min(value, 16))
+
+
+def _execute_tool_waves(
+    calls: Sequence[Any],
+    execute: Callable[[Any], tuple[Any, Mapping[str, Any]]],
+) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
+    """Execute maximal read waves concurrently while preserving serial barriers.
+
+    Unclassified or side-effectful tools remain ordered barriers. Independent read
+    calls on either side of those barriers still overlap instead of forcing the whole
+    model-emitted batch through the previous all-or-nothing serial fallback.
+    """
+
+    completed: list[tuple[Any, Mapping[str, Any]]] = []
+    pending_reads: list[Any] = []
+
+    def flush_reads() -> None:
+        if not pending_reads:
+            return
+        batch = tuple(pending_reads)
+        pending_reads.clear()
+        workers = min(len(batch), _parallel_read_workers())
+        if workers <= 1:
+            completed.extend(execute(call) for call in batch)
+            return
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="mmm_agent_read_wave",
+        ) as executor:
+            completed.extend(executor.map(execute, batch))
+
+    for call in calls:
+        if call.name in _PARALLEL_READ_TOOLS:
+            pending_reads.append(call)
+            continue
+        flush_reads()
+        completed.append(execute(call))
+    flush_reads()
+    return tuple(completed)
 
 
 def _usable_rag_result(value: Any) -> bool:
