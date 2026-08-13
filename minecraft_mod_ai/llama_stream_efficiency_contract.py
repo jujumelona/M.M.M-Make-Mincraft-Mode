@@ -88,28 +88,8 @@ def _commit_usage(
     }
 
 
-def _install_host_validated_json_payload(hardware_module: Any) -> None:
-    current_payload = hardware_module._server_payload
-    if getattr(current_payload, "_mmm_host_validated_json_no_gbnf", False):
-        return
-
-    @wraps(current_payload)
-    def host_validated_payload(adapter: Any, request: Any) -> dict[str, Any]:
-        payload = dict(current_payload(adapter, request))
-        if getattr(request, "response_format", None) == "json":
-            payload.pop("response_format", None)
-            payload["reasoning_effort"] = "none"
-        return payload
-
-    host_validated_payload._mmm_host_validated_json_no_gbnf = True
-    hardware_module._server_payload = host_validated_payload
-
-
 def install(hardware_module: Any) -> None:
     """Use SSE-native usage and persistent HTTP connections on the llama hot path."""
-
-    _install_host_validated_json_payload(hardware_module)
-
     current = hardware_module._strict_server_generate
     if getattr(current, "_mmm_sse_usage_fast_path", False):
         return

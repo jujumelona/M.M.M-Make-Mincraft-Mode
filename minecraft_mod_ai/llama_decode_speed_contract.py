@@ -308,28 +308,6 @@ def _probe_kv_types(
     return fastest_kv, serialized
 
 
-def _install_host_validated_json_payload(hardware_policy: Any | None) -> None:
-    if hardware_policy is None:
-        return
-    current_payload = hardware_policy._server_payload
-    if getattr(current_payload, "_mmm_host_validated_json_no_gbnf", False):
-        return
-
-    @wraps(current_payload)
-    def host_validated_payload(adapter: Any, request: Any) -> dict[str, Any]:
-        payload = dict(current_payload(adapter, request))
-        if getattr(request, "response_format", None) == "json":
-            # Generic server-side JSON grammar previously wedged/serialized the CUDA
-            # decode path on real planner pages. Host strict parsing and incremental
-            # repair own structural correctness; the server only needs reasoning off.
-            payload.pop("response_format", None)
-            payload["reasoning_effort"] = "none"
-        return payload
-
-    host_validated_payload._mmm_host_validated_json_no_gbnf = True
-    hardware_policy._server_payload = host_validated_payload
-
-
 def _probe_p_min(
     autotune: Any,
     binary: str,
@@ -419,7 +397,6 @@ def _probe_p_min(
 def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = None) -> None:
     """Optimize normal MMM local inference for one-response llama TG tok/s."""
     with _INSTALL_LOCK:
-        _install_host_validated_json_payload(hardware_policy)
         if getattr(autotune, "_mmm_decode_speed_contract_installed", False):
             return
 

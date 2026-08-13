@@ -86,32 +86,23 @@ class LlamaCppAdapter(ModelAdapter):
                 print("llama server: connected", server_url, flush=True)
                 LlamaCppAdapter._reported_server_url = server_url
 
-            payload: dict[str, Any] = {
-                "model": "local",
-                "messages": [dict(message) for message in request.messages],
-                "max_tokens": int(cfg.max_new_tokens),
-                "temperature": 0.0,
-            }
-            if getattr(request, "response_format", None) == "json":
-                if request.response_schema is not None:
-                    payload["response_format"] = {
-                        "type": "json_object",
-                        "schema": dict(request.response_schema),
-                    }
-                else:
-                    payload["response_format"] = {"type": "json_object"}
-                payload["reasoning_effort"] = "none"
-            if request.tools:
-                payload["tools"] = [dict(tool) for tool in request.tools]
-                payload["tool_choice"] = request.tool_choice or "auto"
-                payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
+            # Native llama-server request compatibility has exactly one owner.
+            # Tool-capable turns and ordinary text turns must use the same wire shape.
+            from ..llama_server_hardware_policy import _server_payload
+
+            payload = _server_payload(self, request)
 
             response = httpx.post(
                 f"{server_url}/chat/completions",
                 json=payload,
                 timeout=None,
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = _bounded_response_body(response)
+                raise RuntimeError(
+                    f"llama server returned HTTP {response.status_code}"
+                    + (f": {body}" if body else "")
+                )
             data = response.json()
             choices = data.get("choices") if isinstance(data, dict) else None
             if not isinstance(choices, list) or not choices:
@@ -146,6 +137,17 @@ class LlamaCppAdapter(ModelAdapter):
         # The managed native server owns model lifetime. GPU handoff is performed by
         # llama_server_hardware_policy/llama_server_autotune, not by adapter teardown.
         return None
+
+
+def _bounded_response_body(response: Any, *, limit: int = 1600) -> str:
+    """Keep server diagnostics bounded without echoing the model request."""
+
+    try:
+        body = str(response.text)
+    except Exception:
+        return ""
+    compact = " ".join(body.split())
+    return compact if len(compact) <= limit else compact[:limit] + "..."
 
 
 def _parse_tool_calls(value: Any) -> tuple[ToolCall, ...]:

@@ -13,7 +13,7 @@ def _adapter(max_new_tokens: int = 8192):
     return SimpleNamespace(config=SimpleNamespace(max_new_tokens=max_new_tokens))
 
 
-def test_json_request_disables_reasoning_without_server_grammar() -> None:
+def test_json_request_uses_host_validation_without_optional_transport_controls() -> None:
     request = SimpleNamespace(
         messages=(
             {"role": "system", "content": "Return JSON."},
@@ -23,9 +23,34 @@ def test_json_request_disables_reasoning_without_server_grammar() -> None:
     )
     payload = _server_payload(_adapter(), request)
     assert "response_format" not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
+    assert "parallel_tool_calls" not in payload
     assert payload["max_tokens"] == 8192
 
+
+def test_tool_request_uses_same_minimal_native_payload() -> None:
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": "inspect then plan"},),
+        response_format="json",
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "lookup evidence",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+        tool_choice="auto",
+        parallel_tool_calls=True,
+    )
+    payload = _server_payload(_adapter(), request)
+    assert payload["tools"][0]["function"]["name"] == "lookup"
+    assert payload["tool_choice"] == "auto"
+    assert "response_format" not in payload
+    assert "reasoning_effort" not in payload
+    assert "parallel_tool_calls" not in payload
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
     request = SimpleNamespace(
