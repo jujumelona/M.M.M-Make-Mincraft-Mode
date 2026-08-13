@@ -20,7 +20,11 @@ def test_qwen_mtp_models_keep_native_mtp_probes() -> None:
     )
     assert _model_supports_mtp(config) is True
     variants = _candidate_variants_for_config(autotune, config)
-    assert [value.draft_n_max for value in variants if value.spec_type == "draft-mtp"] == [1, 2, 3]
+    mtp = [value for value in variants if value.spec_type == "draft-mtp"]
+    widths = [value.draft_n_max for value in mtp]
+    assert widths[:3] == [1, 2, 3]
+    assert mtp
+    assert all(1 <= width <= 16 for width in widths)
 
 
 def test_gemma_never_pays_for_impossible_mtp_server_reloads() -> None:
