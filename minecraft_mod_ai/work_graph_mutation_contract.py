@@ -15,6 +15,10 @@ def install(work_graph_module: Any) -> None:
     may run in the LLM lane while shared deterministic project mutations use the short
     commit lane. Asset targets and synthesized OGG files are disjoint by contract, so
     their expensive generation can overlap safely with both LLM and commit work.
+
+    Later safety contracts may refine a deterministic module shard from ``commit`` to
+    ``cpu_io`` while protecting only its stage-local shared writes. Explicit outer
+    resource assignments are therefore authoritative and must not be overwritten here.
     """
 
     original_stage = work_graph_module._module_stage
@@ -54,18 +58,19 @@ def install(work_graph_module: Any) -> None:
         kind = str(normalized.get("kind", ""))
         generation_stage = str(normalized.get("generation_stage", ""))
 
-        if kind == "module-shard":
-            normalized["resource_class"] = (
-                "llm"
-                if generation_stage in _LLM_CAPABLE_STAGES
-                else "commit"
-            )
-        elif kind == "asset-shard":
-            normalized["resource_class"] = "image_gpu"
-        elif kind == "audio-synth":
-            normalized["resource_class"] = "cpu_io"
-        elif kind in {"audio-finalize", "audio-shard"}:
-            normalized["resource_class"] = "commit"
+        if "resource_class" not in normalized:
+            if kind == "module-shard":
+                normalized["resource_class"] = (
+                    "llm"
+                    if generation_stage in _LLM_CAPABLE_STAGES
+                    else "commit"
+                )
+            elif kind == "asset-shard":
+                normalized["resource_class"] = "image_gpu"
+            elif kind == "audio-synth":
+                normalized["resource_class"] = "cpu_io"
+            elif kind in {"audio-finalize", "audio-shard"}:
+                normalized["resource_class"] = "commit"
 
         return original(node_id, stage, dependencies, normalized)
 
