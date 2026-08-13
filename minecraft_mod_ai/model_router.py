@@ -149,9 +149,10 @@ class ModelRouter:
     ) -> str:
         """Gather tool evidence until the model itself returns a final answer.
 
-        No host-owned tool-round or tool-call ceiling exists. The only loop guard
-        is semantic: two consecutive identical tool-call/result exchanges prove
-        an exact no-progress fixed point.
+        No host-owned tool-round or tool-call ceiling exists. The semantic loop
+        guard detects two consecutive identical tool-call/result exchanges. Exact
+        convergence closes tool use and forces a final synthesis from accumulated
+        observations instead of misclassifying convergence as model misconfiguration.
         """
         messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
         previous_exchange_state: str | None = None
@@ -246,10 +247,41 @@ class ModelRouter:
                 ).encode("utf-8")
             ).hexdigest()
             if exchange_state == previous_exchange_state:
-                raise ModelConfigurationError(
-                    "Agent reached an exact no-progress tool fixed point: identical "
-                    "tool calls produced identical observations on consecutive turns."
+                final_messages = [
+                    *messages,
+                    {
+                        "role": "system",
+                        "content": (
+                            "Tool use has converged: the immediately preceding tool "
+                            "exchange repeated an identical call and identical "
+                            "observation. Do not call any more tools. Return the final "
+                            "answer now using only the evidence already present in this "
+                            "conversation. Preserve the requested response format and "
+                            "do not mention this convergence instruction."
+                        ),
+                    },
+                ]
+                final_request = GenerationRequest(
+                    messages=final_messages,
+                    media_paths=(),
+                    response_format=request.response_format,
+                    tools=(),
+                    tool_choice=None,
+                    parallel_tool_calls=False,
                 )
+                final_turn = adapter.generate_turn(final_request)
+                if final_turn.tool_calls:
+                    raise ModelConfigurationError(
+                        "Agent emitted tool calls after tools were disabled at an exact "
+                        "no-progress fixed point."
+                    )
+                final_content = final_turn.content.strip()
+                if not final_content:
+                    raise ModelConfigurationError(
+                        "Agent returned an empty final response after exact tool "
+                        "fixed-point convergence."
+                    )
+                return final_content
             previous_exchange_state = exchange_state
             round_index += 1
 

@@ -222,19 +222,33 @@ def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
     assert len(runtime.calls) == 12
 
 
-def test_agent_stops_on_consecutive_exact_tool_fixed_point(monkeypatch) -> None:
+def test_agent_synthesizes_final_answer_on_consecutive_exact_tool_fixed_point(
+    monkeypatch,
+) -> None:
     class LoopAdapter:
+        def __init__(self) -> None:
+            self.requests = []
+
         def generate_turn(self, request):
-            return GenerationResponse(
-                tool_calls=(
-                    ToolCall(
-                        id="call",
-                        name="search_code_rag",
-                        arguments={"query": "same"},
-                        raw_arguments='{"query":"same"}',
-                    ),
+            self.requests.append(request)
+            if len(self.requests) <= 2:
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id=f"call_{len(self.requests)}",
+                            name="search_code_rag",
+                            arguments={"query": "same"},
+                            raw_arguments='{"query":"same"}',
+                        ),
+                    )
                 )
-            )
+            assert request.tools == ()
+            assert request.tool_choice is None
+            assert request.parallel_tool_calls is False
+            assert request.media_paths == ()
+            assert request.messages[-1]["role"] == "system"
+            assert "Tool use has converged" in request.messages[-1]["content"]
+            return GenerationResponse(content="final answer from converged evidence")
 
     adapter = LoopAdapter()
     runtime = _ToolRuntime()
@@ -248,6 +262,8 @@ def test_agent_stops_on_consecutive_exact_tool_fixed_point(monkeypatch) -> None:
         registry=_Registry(),
         agent_tool_runtime_factory=lambda **_: runtime,
     )
-    with pytest.raises(ModelConfigurationError, match="no-progress tool fixed point"):
-        router.generate_text("coder", [{"role": "user", "content": "research"}])
+    assert router.generate_text(
+        "coder", [{"role": "user", "content": "research"}]
+    ) == "final answer from converged evidence"
     assert len(runtime.calls) == 2
+    assert len(adapter.requests) == 3
