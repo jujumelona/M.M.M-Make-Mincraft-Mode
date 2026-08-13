@@ -28,7 +28,7 @@ def test_generic_server_honors_only_explicit_context_override(monkeypatch) -> No
     assert args[args.index("--ctx-size") + 1] == "24576"
 
 
-def test_qwen_hotpath_cannot_shrink_profile_context(monkeypatch) -> None:
+def test_qwen_hotpath_uses_bounded_t4_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
 
     def base(binary, model, config, port):
@@ -42,4 +42,4 @@ def test_qwen_hotpath_cannot_shrink_profile_context(monkeypatch) -> None:
         max_context=32768,
     )
     args = holder._base_args("server", "model", config, 8910)
-    assert args[args.index("--ctx-size") + 1] == "32768"
+    assert args[args.index("--ctx-size") + 1] == "8192"
