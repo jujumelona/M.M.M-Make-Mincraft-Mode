@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 
-SETUP_API_VERSION = "mmm/colab-runtime-setup-v3-prebuilt-cache"
+SETUP_API_VERSION = "mmm/colab-runtime-setup-v4-max-native"
 RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v2"
 LOCAL_PROFILES = frozenset(
     {
@@ -36,7 +36,7 @@ LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-aud
 # native llama-server binary from the verified prebuilt bundle. Source compilation is
 # emergency-only and must be explicitly enabled; there is no Python binding fallback.
 LLAMA_SERVER_SOURCE_REPOSITORY = "https://github.com/ggml-org/llama.cpp.git"
-LLAMA_SERVER_SOURCE_REF = "ba360efe1f574ebae727aad64112d18ecedca85a"
+LLAMA_SERVER_SOURCE_REF = "f65e568fd83712c92babbb096b57e572af0ec357"
 LLAMA_SERVER_DEFAULT_SOURCE_DIR = Path("/content/llama.cpp")
 _NATIVE_VERIFY_CACHE: dict[tuple[object, ...], tuple[bool, str]] = {}
 _NATIVE_VERIFY_CACHE_LIMIT = 16
@@ -531,6 +531,10 @@ def _ensure_native_server(torch: Any) -> str:
             "-DCMAKE_BUILD_TYPE=Release",
             "-DGGML_CUDA=ON",
             "-DGGML_CUDA_GRAPHS=ON",
+            "-DGGML_CUDA_CUB_3DOT2=ON",
+            "-DGGML_CUDA_FA=ON",
+            "-DGGML_CUDA_FA_ALL_QUANTS=OFF",
+            "-DGGML_LTO=ON",
             f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}",
             "-DLLAMA_BUILD_TESTS=OFF",
             "-DLLAMA_BUILD_EXAMPLES=OFF",

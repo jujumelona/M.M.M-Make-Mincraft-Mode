@@ -44,11 +44,14 @@ def test_runtime_requires_verified_prebuilt_before_emergency_source_toolchain() 
     assert "falling back to pinned source build" not in source
 
 
-def test_emergency_source_build_enables_cuda_graphs() -> None:
+def test_emergency_source_build_enables_max_cuda_path() -> None:
     source = (ROOT / "tools" / "colab_runtime_setup.py").read_text(encoding="utf-8")
     fallback = source[source.index('for tool in ("git", "cmake", "nvcc")') :]
     assert '"-DGGML_CUDA=ON"' in fallback
     assert '"-DGGML_CUDA_GRAPHS=ON"' in fallback
+    assert '"-DGGML_CUDA_CUB_3DOT2=ON"' in fallback
+    assert '"-DGGML_CUDA_FA=ON"' in fallback
+    assert '"-DGGML_LTO=ON"' in fallback
 
 
 def test_colab_project_install_reuses_satisfied_packages_and_prefers_wheels() -> None:
@@ -115,11 +118,14 @@ def test_bundle_workflows_are_parallel_graph_enabled_cuda_builds() -> None:
     assert "workflow_call:" in worker
     assert "cuda_arch:" in worker
     assert "nvidia/cuda:12.4.1-devel-ubuntu22.04" in worker
-    assert "BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v2" in worker
-    assert "RELEASE_TAG: native-llama-b10375-cuda12.4-v2" in worker
+    assert "BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v3-max-t4" in worker
+    assert "RELEASE_TAG: native-llama-f65e568-cuda12.4-max-v3" in worker
     assert "-DBUILD_SHARED_LIBS=ON" in worker
     assert "-DGGML_CUDA=ON" in worker
     assert "-DGGML_CUDA_GRAPHS=ON" in worker
+    assert "-DGGML_CUDA_CUB_3DOT2=ON" in worker
+    assert "-DGGML_CUDA_FA=ON" in worker
+    assert "-DGGML_LTO=ON" in worker
     assert '"cuda_graphs": True' in worker
     assert "sha256sum -c" in worker
     assert "gh git" in worker
@@ -170,8 +176,8 @@ def test_bundle_workflow_uses_driver_stub_only_for_linking() -> None:
 
 def test_bundle_loader_requires_graph_enabled_v2_manifest(tmp_path: Path) -> None:
     helper = _load_bundle_helper()
-    assert helper.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v2"
-    assert helper.BUNDLE_RELEASE_TAG == "native-llama-b10375-cuda12.4-v2"
+    assert helper.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v3-max-t4"
+    assert helper.BUNDLE_RELEASE_TAG == "native-llama-f65e568-cuda12.4-max-v3"
 
     root = tmp_path / "bundle"
     root.mkdir()
@@ -183,6 +189,9 @@ def test_bundle_loader_requires_graph_enabled_v2_manifest(tmp_path: Path) -> Non
                 "cuda_arch": "75",
                 "platform": "linux-x86_64",
                 "cuda_graphs": False,
+                "cuda_cub_3dot2": True,
+                "cuda_fa": True,
+                "lto": True,
                 "files": {},
             }
         ),
@@ -211,6 +220,9 @@ def test_bundle_loader_materializes_only_verified_bin_aliases(tmp_path: Path) ->
         "cuda_arch": "75",
         "platform": "linux-x86_64",
         "cuda_graphs": True,
+        "cuda_cub_3dot2": True,
+        "cuda_fa": True,
+        "lto": True,
         "files": files,
         "aliases": {
             "bin/libggml-cuda.so": "bin/libggml-cuda.so.0.19.0",

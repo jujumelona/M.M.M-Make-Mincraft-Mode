@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import Callable
 
 
-BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v2"
-BUNDLE_RELEASE_TAG = "native-llama-b10375-cuda12.4-v2"
+BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v3-max-t4"
+BUNDLE_RELEASE_TAG = "native-llama-f65e568-cuda12.4-max-v3"
 BUNDLE_RELEASE_BASE = (
     "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/releases/download/"
     + BUNDLE_RELEASE_TAG
 )
-BUNDLE_NAME_PREFIX = "llama-b10375-cuda12.4"
+BUNDLE_NAME_PREFIX = "llama-f65e568-cuda12.4-max"
 SUPPORTED_CUDA_ARCHES = frozenset({"75", "80", "89"})
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 CACHE_RECEIPT_NAME = ".archive.sha256"
@@ -247,6 +247,14 @@ def _validate_bundle(root: Path, *, cuda_arch: str, source_ref: str) -> Path:
         raise RuntimeError(
             "prebuilt native llama manifest requires cuda_graphs=true"
         )
+    if manifest.get("cuda_cub_3dot2") is not True:
+        raise RuntimeError(
+            "prebuilt native llama manifest requires cuda_cub_3dot2=true"
+        )
+    if manifest.get("cuda_fa") is not True:
+        raise RuntimeError("prebuilt native llama manifest requires cuda_fa=true")
+    if manifest.get("lto") is not True:
+        raise RuntimeError("prebuilt native llama manifest requires lto=true")
     raw_files = manifest.get("files")
     if not isinstance(raw_files, dict) or not raw_files:
         raise RuntimeError("prebuilt native llama manifest contains no files")

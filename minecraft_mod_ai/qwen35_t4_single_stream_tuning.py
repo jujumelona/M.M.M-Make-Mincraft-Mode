@@ -16,12 +16,17 @@ from .qwen35_mtp_hotpath_contract import (
     _reclaim_prior_mmm_server,
 )
 
-_SCHEMA_VERSION = "mmm/qwen35-t4-single-stream-tune-v3"
-_MARKER = "_mmm_qwen35_t4_single_stream_tune_v3"
-_DEFAULT_WIDTHS = (1, 2, 3, 4)
-_DEFAULT_P_MIN_CANDIDATES = (0.0, 0.6, 0.8, 0.9)
+_SCHEMA_VERSION = "mmm/qwen35-t4-single-stream-tune-v4-max"
+_MARKER = "_mmm_qwen35_t4_single_stream_tune_v4_max"
+_DEFAULT_WIDTHS = (1, 2, 3, 4, 6, 8, 12, 16)
+_DEFAULT_P_MIN_CANDIDATES = (0.0, 0.5, 0.6, 0.7, 0.8, 0.9)
 _KV_OVERRIDE_ENV = "MMM_QWEN35_T4_KV_OVERRIDE"
-_DEFAULT_KV_CANDIDATES = ("native-default", "q8_0", "q4_0")
+_DEFAULT_KV_CANDIDATES = ("native-default", "f16", "q8_0", "q4_0")
+_DEFAULT_UBATCH_CANDIDATES = (512, 1024, 2048)
+_DEFAULT_CONTEXT_BUCKETS = (2048, 8192, 16384, 28672)
+_KV_BUCKET_CACHE_SCHEMA = "mmm/qwen35-t4-context-kv-v1"
+_BENCHMARK_PAD_ENV = "MMM_QWEN35_T4_BENCH_PAD_CHARS"
+_ACTIVE_KV_BUCKET_ENV = "MMM_LLAMA_ACTIVE_KV_BUCKET"
 _EXPECTED_OBJECT = {
     "values": list(range(256)),
     "checksum": "mmm-qwen35-t4-single-stream-v2",
@@ -59,20 +64,20 @@ def _is_t4_runtime(autotune: Any) -> bool:
 
 def _widths() -> tuple[int, ...]:
     values: list[int] = []
-    raw = os.environ.get("MMM_QWEN35_T4_WIDTHS", "1,2,3,4")
+    raw = os.environ.get("MMM_QWEN35_T4_WIDTHS", "1,2,3,4,6,8,12,16")
     for token in raw.split(","):
         try:
             value = int(token.strip())
         except ValueError:
             continue
-        if 1 <= value <= 8 and value not in values:
+        if 1 <= value <= 32 and value not in values:
             values.append(value)
     return tuple(values or _DEFAULT_WIDTHS)
 
 
 def _p_min_candidates() -> tuple[float, ...]:
     values: list[float] = []
-    raw = os.environ.get("MMM_QWEN35_T4_P_MIN_CANDIDATES", "0,0.6,0.8,0.9")
+    raw = os.environ.get("MMM_QWEN35_T4_P_MIN_CANDIDATES", "0,0.5,0.6,0.7,0.8,0.9")
     for token in raw.split(","):
         try:
             value = round(float(token.strip()), 4)
@@ -106,6 +111,116 @@ def _kv_candidates() -> tuple[str, ...]:
     return tuple(values or _DEFAULT_KV_CANDIDATES)
 
 
+
+def _ubatch_candidates(autotune: Any) -> tuple[int, ...]:
+    batch = autotune._env_int("MMM_LLAMA_BATCH", 2048)
+    values: list[int] = []
+    raw = os.environ.get(
+        "MMM_QWEN35_T4_UBATCH_CANDIDATES",
+        ",".join(str(value) for value in _DEFAULT_UBATCH_CANDIDATES),
+    )
+    for token in raw.split(","):
+        try:
+            value = int(token.strip())
+        except ValueError:
+            continue
+        if 64 <= value <= batch and value not in values:
+            values.append(value)
+    current = min(batch, autotune._env_int("MMM_LLAMA_UBATCH", 512))
+    if current not in values:
+        values.insert(0, current)
+    return tuple(values or (current,))
+
+
+def _kv_mode(config: Any) -> str:
+    aliases = {
+        "auto": "auto",
+        "native": "native-default",
+        "native-default": "native-default",
+        "f16": "f16",
+        "q8": "q8_0",
+        "q8_0": "q8_0",
+        "q4": "q4_0",
+        "q4_0": "q4_0",
+    }
+    raw = os.environ.get("MMM_QWEN35_T4_KV_MODE", "").strip().lower()
+    if raw:
+        return aliases.get(raw, "auto")
+    extra = getattr(config, "extra", {})
+    if isinstance(extra, dict) and extra.get("kv_cache_autotune") is False:
+        manual = str(extra.get("kv_cache_quant", "q4_0")).strip().lower()
+        return aliases.get(manual, "q4_0")
+    return "auto"
+
+
+def _context_buckets(config: Any) -> tuple[int, ...]:
+    max_context = max(2048, _context_size(config))
+    values: list[int] = []
+    raw = os.environ.get(
+        "MMM_QWEN35_T4_KV_CONTEXT_BUCKETS",
+        ",".join(str(value) for value in _DEFAULT_CONTEXT_BUCKETS),
+    )
+    for token in raw.split(","):
+        try:
+            value = int(token.strip())
+        except ValueError:
+            continue
+        if 512 <= value <= max_context and value not in values:
+            values.append(value)
+    cap = max(512, max_context - min(1536, max_context // 4))
+    clipped = sorted({min(value, cap) for value in values})
+    return tuple(value for value in clipped if value >= 512) or (min(2048, cap),)
+
+
+def _estimate_request_tokens(request: Any) -> int:
+    chars = 0
+    for message in getattr(request, "messages", ()) or ():
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            chars += len(content)
+        else:
+            try:
+                chars += len(json.dumps(content, ensure_ascii=False))
+            except Exception:
+                pass
+    return max(1, chars // 3)
+
+
+def _bucket_for_request(config: Any, request: Any) -> int:
+    estimate = _estimate_request_tokens(request)
+    buckets = _context_buckets(config)
+    for bucket in buckets:
+        if estimate <= bucket:
+            return bucket
+    return buckets[-1]
+
+
+def _benchmark_padding() -> str:
+    raw = os.environ.get(_BENCHMARK_PAD_ENV, "").strip()
+    try:
+        chars = max(0, min(160000, int(raw))) if raw else 0
+    except ValueError:
+        chars = 0
+    if chars <= 0:
+        return ""
+    pattern = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda "
+    filler = (pattern * ((chars // len(pattern)) + 1))[:chars]
+    return (
+        "Ignore the following calibration-only context. Never repeat it in the answer.\n"
+        + filler
+        + "\nCalibration context ends here. Perform the exact copy task below.\n"
+    )
+
+
+def _kv_bucket_cache_path() -> Path:
+    explicit = os.environ.get("MMM_QWEN35_T4_KV_BUCKET_CACHE", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return (Path.home() / ".cache" / "mmm" / "qwen35-t4-context-kv.json").resolve()
+
+
 def _benchmark_request() -> Any:
     return SimpleNamespace(
         messages=(
@@ -119,7 +234,7 @@ def _benchmark_request() -> Any:
             },
             {
                 "role": "user",
-                "content": "Copy this payload exactly:\n" + _EXPECTED_TEXT,
+                "content": _benchmark_padding() + "Copy this payload exactly:\n" + _EXPECTED_TEXT,
             },
         ),
         response_format="text",
@@ -164,10 +279,13 @@ def _fingerprint(
         "hardware": _hardware_identity(autotune),
         "ctx": _context_size(config),
         "ubatch": ubatch,
+        "ubatch_candidates": list(_ubatch_candidates(autotune)),
         "probe_tokens": _probe_tokens(autotune, config),
         "widths": list(_widths()),
         "p_min_candidates": list(_p_min_candidates()),
+        "kv_mode": _kv_mode(config),
         "kv_candidates": list(_kv_candidates()),
+        "context_buckets": list(_context_buckets(config)),
         "benchmark_digest": _EXPECTED_DIGEST,
         "benchmark_shape": "exact-json-256-values-reasoning-off-v2",
     }
@@ -402,6 +520,32 @@ def _log_probe(probe: Any) -> None:
     )
 
 
+
+
+def _probe_with_padding(
+    autotune: Any,
+    binary: str,
+    model_path: str,
+    config: Any,
+    candidate: Any,
+    *,
+    kv: str = "native-default",
+    pad_chars: int = 0,
+) -> Any:
+    original = os.environ.get(_BENCHMARK_PAD_ENV)
+    if pad_chars > 0:
+        os.environ[_BENCHMARK_PAD_ENV] = str(pad_chars)
+    else:
+        os.environ.pop(_BENCHMARK_PAD_ENV, None)
+    try:
+        return _probe(autotune, binary, model_path, config, candidate, kv=kv)
+    finally:
+        if original is None:
+            os.environ.pop(_BENCHMARK_PAD_ENV, None)
+        else:
+            os.environ[_BENCHMARK_PAD_ENV] = original
+
+
 def _measure(
     autotune: Any,
     binary: str,
@@ -409,7 +553,7 @@ def _measure(
     config: Any,
     *,
     ubatch: int,
-) -> tuple[Any, str, float, float, list[Any]]:
+) -> tuple[Any, float, float, list[Any]]:
     baseline = _probe(
         autotune,
         binary,
@@ -436,12 +580,24 @@ def _measure(
         if _valid(probe, baseline):
             mtp.append(probe)
 
-    if mtp:
-        fastest_mtp = max(
-            mtp,
-            key=lambda probe: float(getattr(probe, "predicted_tps", 0.0) or 0.0),
-        )
-        width = int(getattr(fastest_mtp.variant, "draft_n_max", 0) or 0)
+    p_min_seeds = sorted(
+        mtp,
+        key=lambda probe: float(getattr(probe, "predicted_tps", 0.0) or 0.0),
+        reverse=True,
+    )[:2]
+    widest = next(
+        (
+            probe
+            for probe in mtp
+            if int(getattr(probe.variant, "draft_n_max", 0) or 0) == max(_widths())
+        ),
+        None,
+    )
+    if widest is not None and widest not in p_min_seeds:
+        p_min_seeds.append(widest)
+
+    for seed in p_min_seeds:
+        width = int(getattr(seed.variant, "draft_n_max", 0) or 0)
         for p_min in _p_min_candidates():
             if p_min == 0.0:
                 continue
@@ -462,53 +618,54 @@ def _measure(
             )
 
     selected, baseline_tps, selected_tps = _select(baseline, probes)
-    selected_kv = "native-default"
-    kv_reference_tps = selected_tps
-
-    for kv in _kv_candidates():
-        if kv == "native-default":
+    selected_probe = next(
+        (
+            probe
+            for probe in reversed(probes)
+            if getattr(probe, "variant", None) == selected and _valid(probe, baseline)
+        ),
+        baseline,
+    )
+    ubatch_probes = [selected_probe]
+    for candidate_ubatch in _ubatch_candidates(autotune):
+        if candidate_ubatch == int(getattr(selected, "ubatch", ubatch) or ubatch):
             continue
-        width = int(getattr(selected, "draft_n_max", 0) or 0)
-        p_min = float(getattr(selected, "draft_p_min", 0.0) or 0.0)
-        candidate = _variant(
-            autotune,
-            name=f"{selected.name}|kv-{kv}",
-            ubatch=ubatch,
-            width=width,
-            p_min=p_min,
-        )
         probe = _probe(
             autotune,
             binary,
             model_path,
             config,
-            candidate,
-            kv=kv,
+            _variant(
+                autotune,
+                name=f"{selected.name}|ub{candidate_ubatch}",
+                ubatch=candidate_ubatch,
+                width=int(getattr(selected, "draft_n_max", 0) or 0),
+                p_min=float(getattr(selected, "draft_p_min", 0.0) or 0.0),
+            ),
         )
         probes.append(probe)
-        if not _valid(probe, baseline):
-            continue
-        tps = float(getattr(probe, "predicted_tps", 0.0) or 0.0)
-        if tps > selected_tps:
-            selected_tps = tps
-            selected_kv = kv
+        if _valid(probe, baseline):
+            ubatch_probes.append(probe)
 
-    if (
-        selected_kv != "native-default"
-        and selected_tps < kv_reference_tps * _minimum_gain()
-    ):
-        selected_kv = "native-default"
-        selected_tps = kv_reference_tps
+    winner = max(
+        ubatch_probes,
+        key=lambda probe: float(getattr(probe, "predicted_tps", 0.0) or 0.0),
+    )
+    winner_tps = float(getattr(winner, "predicted_tps", 0.0) or 0.0)
+    if winner is not selected_probe and winner_tps >= selected_tps * _minimum_gain():
+        selected = winner.variant
+        selected_tps = winner_tps
 
     for probe in probes:
         _log_probe(probe)
-    return selected, selected_kv, baseline_tps, selected_tps, probes
+    return selected, baseline_tps, selected_tps, probes
+
 
 
 def _load_cached(
     autotune: Any,
     fingerprint: str,
-) -> tuple[Any, str, float, float] | None:
+) -> tuple[Any, float, float] | None:
     try:
         payload = json.loads(_cache_path().read_text(encoding="utf-8"))
     except Exception:
@@ -516,14 +673,12 @@ def _load_cached(
     if payload.get("schema") != _SCHEMA_VERSION or payload.get("fingerprint") != fingerprint:
         return None
     raw = payload.get("selected")
-    selected_kv = str(payload.get("selected_kv", "")).strip().lower()
-    if not isinstance(raw, dict) or selected_kv not in _kv_candidates():
+    if not isinstance(raw, dict):
         return None
     try:
         selected = autotune.ServerVariant(**raw)
         return (
             selected,
-            selected_kv,
             float(payload.get("baseline_tps", 0.0) or 0.0),
             float(payload.get("selected_tps", 0.0) or 0.0),
         )
@@ -534,7 +689,6 @@ def _load_cached(
 def _save_cached(
     fingerprint: str,
     selected: Any,
-    selected_kv: str,
     baseline_tps: float,
     selected_tps: float,
 ) -> None:
@@ -547,7 +701,6 @@ def _save_cached(
                 "schema": _SCHEMA_VERSION,
                 "fingerprint": fingerprint,
                 "selected": asdict(selected),
-                "selected_kv": selected_kv,
                 "baseline_tps": baseline_tps,
                 "selected_tps": selected_tps,
             },
@@ -560,15 +713,147 @@ def _save_cached(
     os.replace(temporary, path)
 
 
-def _export(selected: Any, ubatch: int, selected_kv: str) -> None:
+def _load_kv_buckets(fingerprint: str) -> dict[str, str]:
+    try:
+        payload = json.loads(_kv_bucket_cache_path().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if (
+        payload.get("schema") != _KV_BUCKET_CACHE_SCHEMA
+        or payload.get("fingerprint") != fingerprint
+    ):
+        return {}
+    raw = payload.get("buckets")
+    if not isinstance(raw, dict):
+        return {}
+    allowed = set(_kv_candidates())
+    return {str(key): str(value) for key, value in raw.items() if str(value) in allowed}
+
+
+def _save_kv_buckets(fingerprint: str, buckets: dict[str, str]) -> None:
+    path = _kv_bucket_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "schema": _KV_BUCKET_CACHE_SCHEMA,
+                "fingerprint": fingerprint,
+                "buckets": dict(sorted(buckets.items(), key=lambda item: int(item[0]))),
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _shutdown_managed_server(autotune: Any) -> None:
+    shutdown = getattr(autotune, "_shutdown_managed_server", None)
+    if callable(shutdown):
+        shutdown()
+        return
+    process = getattr(autotune, "_MANAGED_PROCESS", None)
+    autotune._stop_server(process)
+    autotune._MANAGED_PROCESS = None
+    autotune._MANAGED_URL = None
+    os.environ.pop("LLAMA_SERVER_URL", None)
+
+
+def _measure_kv_bucket(
+    autotune: Any,
+    binary: str,
+    model_path: str,
+    config: Any,
+    selected: Any,
+    bucket: int,
+) -> str:
+    pad_chars = max(0, min(150000, bucket * 4 - 4096))
+    baseline = _probe_with_padding(
+        autotune,
+        binary,
+        model_path,
+        config,
+        selected,
+        kv="native-default",
+        pad_chars=pad_chars,
+    )
+    if not bool(getattr(baseline, "ok", False)) or float(
+        getattr(baseline, "predicted_tps", 0.0) or 0.0
+    ) <= 0:
+        raise RuntimeError(f"KV baseline failed for context bucket {bucket}")
+
+    probes = [baseline]
+    for kv in _kv_candidates():
+        if kv == "native-default":
+            continue
+        probes.append(
+            _probe_with_padding(
+                autotune,
+                binary,
+                model_path,
+                config,
+                selected,
+                kv=kv,
+                pad_chars=pad_chars,
+            )
+        )
+
+    for probe in probes:
+        _log_probe(probe)
+    eligible = [baseline] + [probe for probe in probes[1:] if _valid(probe, baseline)]
+    winner = max(
+        eligible,
+        key=lambda probe: float(getattr(probe, "predicted_tps", 0.0) or 0.0),
+    )
+    baseline_tps = float(getattr(baseline, "predicted_tps", 0.0) or 0.0)
+    winner_tps = float(getattr(winner, "predicted_tps", 0.0) or 0.0)
+    if winner is not baseline and winner_tps < baseline_tps * _minimum_gain():
+        return "native-default"
+    return str(getattr(winner, "kv", "native-default"))
+
+
+def _select_kv(
+    autotune: Any,
+    binary: str,
+    model_path: str,
+    config: Any,
+    request: Any,
+    selected: Any,
+    fingerprint: str,
+) -> tuple[str, int]:
+    bucket = _bucket_for_request(config, request)
+    mode = _kv_mode(config)
+    if mode != "auto":
+        return mode, bucket
+
+    buckets = _load_kv_buckets(fingerprint)
+    key = str(bucket)
+    cached = buckets.get(key)
+    if cached:
+        return cached, bucket
+
+    _shutdown_managed_server(autotune)
+    selected_kv = _measure_kv_bucket(
+        autotune, binary, model_path, config, selected, bucket
+    )
+    buckets[key] = selected_kv
+    _save_kv_buckets(fingerprint, buckets)
+    return selected_kv, bucket
+
+
+def _export(selected: Any, selected_kv: str, bucket: int) -> None:
     os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = str(selected.spec_type)
     os.environ["MMM_LLAMA_ACTIVE_DRAFT_N_MAX"] = str(selected.draft_n_max)
     os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = "1"
-    os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(ubatch)
+    os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(selected.ubatch)
     os.environ["MMM_LLAMA_ACTIVE_CACHE_REUSE"] = "0"
     os.environ["MMM_LLAMA_ACTIVE_MTP_P_MIN"] = f"{selected.draft_p_min:g}"
     os.environ["MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE"] = "single_stream"
     os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = selected_kv
+    os.environ[_ACTIVE_KV_BUCKET_ENV] = str(bucket)
     if selected_kv == "native-default":
         os.environ.pop(_KV_OVERRIDE_ENV, None)
     else:
@@ -576,7 +861,7 @@ def _export(selected: Any, ubatch: int, selected_kv: str) -> None:
 
 
 def install(autotune: Any) -> None:
-    """Measure the fastest correctness-preserving single-stream Qwen3.5 path on T4."""
+    """Measure the maximum correctness-preserving Qwen3.5 single-stream path on T4."""
     current = autotune.ensure_tuned_server
     if getattr(current, _MARKER, False):
         return
@@ -586,51 +871,32 @@ def install(autotune: Any) -> None:
         if not (_enabled() and _is_qwen35_mtp(config) and _is_t4_runtime(autotune)):
             return current(config, request)
 
-        process = getattr(autotune, "_MANAGED_PROCESS", None)
-        url = str(getattr(autotune, "_MANAGED_URL", "") or "")
-        if process is not None and process.poll() is None and url:
-            return url
-
-        _reclaim_prior_mmm_server()
-        if os.environ.get("LLAMA_SERVER_URL", "").strip():
-            return current(config, request)
-
         with autotune._AUTOTUNE_LOCK:
-            process = getattr(autotune, "_MANAGED_PROCESS", None)
-            url = str(getattr(autotune, "_MANAGED_URL", "") or "")
-            if process is not None and process.poll() is None and url:
-                return url
-
             binary = autotune._server_binary()
             if binary is None:
                 raise RuntimeError("native llama-server binary is unavailable")
             model_path = autotune._resolve_model_path(config)
             batch = autotune._env_int("MMM_LLAMA_BATCH", 2048)
-            ubatch = min(batch, autotune._env_int("MMM_LLAMA_UBATCH", 512))
+            seed_ubatch = min(batch, autotune._env_int("MMM_LLAMA_UBATCH", 512))
             fingerprint = _fingerprint(
                 autotune,
                 config,
                 binary,
                 model_path,
-                ubatch=ubatch,
+                ubatch=seed_ubatch,
             )
             cached = _load_cached(autotune, fingerprint)
             if cached is None:
+                _reclaim_prior_mmm_server()
                 try:
-                    selected, selected_kv, baseline_tps, selected_tps, _ = _measure(
+                    selected, baseline_tps, selected_tps, _ = _measure(
                         autotune,
                         binary,
                         model_path,
                         config,
-                        ubatch=ubatch,
+                        ubatch=seed_ubatch,
                     )
-                    _save_cached(
-                        fingerprint,
-                        selected,
-                        selected_kv,
-                        baseline_tps,
-                        selected_tps,
-                    )
+                    _save_cached(fingerprint, selected, baseline_tps, selected_tps)
                     source = "measured"
                 except Exception as exc:
                     print(
@@ -640,19 +906,49 @@ def install(autotune: Any) -> None:
                     )
                     return current(config, request)
             else:
-                selected, selected_kv, baseline_tps, selected_tps = cached
+                selected, baseline_tps, selected_tps = cached
                 source = "cache"
 
-            _export(selected, ubatch, selected_kv)
+            try:
+                selected_kv, bucket = _select_kv(
+                    autotune,
+                    binary,
+                    model_path,
+                    config,
+                    request,
+                    selected,
+                    fingerprint,
+                )
+            except Exception as exc:
+                print(
+                    "llama server: context-aware KV calibration failed; using native KV",
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                selected_kv = "native-default"
+                bucket = _bucket_for_request(config, request)
+
+            process = getattr(autotune, "_MANAGED_PROCESS", None)
+            url = str(getattr(autotune, "_MANAGED_URL", "") or "")
+            active_kv = os.environ.get("MMM_LLAMA_ACTIVE_KV_CACHE", "").strip().lower()
+            if process is not None and process.poll() is None and url:
+                if active_kv == selected_kv:
+                    os.environ[_ACTIVE_KV_BUCKET_ENV] = str(bucket)
+                    return url
+                _shutdown_managed_server(autotune)
+
+            _export(selected, selected_kv, bucket)
             url = autotune._launch_selected(binary, model_path, config, selected)
             speedup = selected_tps / baseline_tps if baseline_tps > 0 else 1.0
             print(
-                "llama server: T4 single-stream production profile",
+                "llama server: T4 maximum production profile",
                 f"source={source}",
                 f"spec={selected.spec_type}",
                 f"n_max={selected.draft_n_max}",
                 f"p_min={selected.draft_p_min:g}",
+                f"ubatch={selected.ubatch}",
                 f"kv={selected_kv}",
+                f"kv_bucket={bucket}",
                 f"baseline={baseline_tps:.2f}",
                 f"selected={selected_tps:.2f}",
                 f"speedup={speedup:.3f}x",
@@ -667,11 +963,15 @@ def install(autotune: Any) -> None:
 
 __all__ = [
     "_benchmark_request",
+    "_bucket_for_request",
+    "_context_buckets",
     "_is_t4_runtime",
     "_kv_candidates",
+    "_kv_mode",
     "_p_min_candidates",
     "_select",
     "_semantic_digest",
+    "_ubatch_candidates",
     "_widths",
     "install",
 ]
