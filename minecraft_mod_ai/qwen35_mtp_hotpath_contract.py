@@ -48,7 +48,11 @@ def _width(autotune: Any) -> int:
 
 
 def _context_size(config: Any | None = None) -> int:
-    """Use the model profile context unless explicitly overridden."""
+    """Use the model profile context without an artificial MMM clamp.
+
+    A positive MMM_QWEN35_MTP_CTX is forwarded exactly. Otherwise the model
+    profile max_context is authoritative; 32768 is only a compatibility fallback.
+    """
 
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
     if raw:
