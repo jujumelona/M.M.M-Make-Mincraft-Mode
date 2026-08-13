@@ -1,0 +1,71 @@
+name: Export validated llama max files once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/export-llama-max-artifact-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Reapply the already validated patch payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import re
+          import zlib
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-llama-max-once.yml').read_text(encoding='utf-8')
+          parts = []
+          for index in (1, 2, 3):
+              match = re.search(rf'^  PATCH_B64_{index}: (.+)$', workflow, re.MULTILINE)
+              if match is None:
+                  raise RuntimeError(f'PATCH_B64_{index} missing')
+              parts.append(match.group(1).strip())
+          source = zlib.decompress(base64.b64decode(''.join(parts))).decode('utf-8')
+          exec(compile(source, '<validated-llama-max-patch>', 'exec'))
+          PY
+
+      - name: Revalidate exact exported files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python -m pytest -q tests/test_qwen35_t4_single_stream_tuning.py tests/test_native_llama_prebuilt_contract.py tests/test_runtime_bootstrap_clean.py
+
+      - name: Stage validated files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p exported/.github/workflows exported/tools exported/minecraft_mod_ai exported/tests
+          cp .github/workflows/build-native-llama-cuda.yml exported/.github/workflows/
+          cp tools/colab_runtime_setup.py exported/tools/
+          cp tools/native_llama_bundle.py exported/tools/
+          cp minecraft_mod_ai/qwen35_t4_single_stream_tuning.py exported/minecraft_mod_ai/
+          cp minecraft_mod_ai/llama_tuning_pipeline.py exported/minecraft_mod_ai/
+          cp tests/test_native_llama_prebuilt_contract.py exported/tests/
+          cp tests/test_qwen35_t4_single_stream_tuning.py exported/tests/
+          printf '%s\n' "$(git rev-parse HEAD)" > exported/BASE_COMMIT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-llama-max-files
+          path: exported
+          if-no-files-found: error
+          retention-days: 1
