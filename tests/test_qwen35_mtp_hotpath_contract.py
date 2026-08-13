@@ -8,6 +8,7 @@ from minecraft_mod_ai.planner_single_stream_search_contract import (
     install as install_single_stream_plan_search,
 )
 from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
+    _install_measured_fast_base_args,
     _is_qwen35_mtp,
     install as install_qwen35_hotpath,
 )
@@ -30,6 +31,41 @@ def test_qwen35_mtp_detection_is_profile_specific() -> None:
     ) is False
 
 
+def test_measured_fast_args_remove_generic_cache_experiments(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
+
+    def base_args(binary, model_path, config, port):
+        del binary, model_path, config, port
+        return [
+            "llama-server",
+            "--gpu-layers", "all",
+            "--flash-attn", "on",
+            "--batch-size", "2048",
+            "--ubatch-size", "512",
+            "--cache-type-k", "q4_0",
+            "--cache-type-v", "q4_0",
+            "--load-mode", "auto",
+            "--cache-prompt",
+            "--ctx-size", "16384",
+        ]
+
+    autotune = SimpleNamespace(_base_args=base_args)
+    _install_measured_fast_base_args(autotune)
+    args = autotune._base_args("server", "model", _qwen_config(), 8910)
+
+    assert args[args.index("--gpu-layers") + 1] == "all"
+    assert args[args.index("--flash-attn") + 1] == "on"
+    assert args[args.index("--batch-size") + 1] == "2048"
+    assert args[args.index("--ubatch-size") + 1] == "512"
+    assert "--cache-type-k" not in args
+    assert "--cache-type-v" not in args
+    assert "--load-mode" not in args
+    assert "--cache-prompt" not in args
+    assert "--metrics" in args
+    # Context remains host-owned; speed restoration must not silently shrink it.
+    assert args[args.index("--ctx-size") + 1] == "16384"
+
+
 def test_qwen35_hotpath_selects_mtp3_single_stream(monkeypatch) -> None:
     monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
@@ -48,6 +84,9 @@ def test_qwen35_hotpath_selects_mtp3_single_stream(monkeypatch) -> None:
 
     autotune = SimpleNamespace(
         ensure_tuned_server=lambda config, request: "fallback",
+        _base_args=lambda binary, model_path, config, port: [
+            binary, "-m", model_path, "--port", str(port)
+        ],
         _MANAGED_PROCESS=None,
         _MANAGED_URL=None,
         _AUTOTUNE_LOCK=threading.RLock(),
