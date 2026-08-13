@@ -350,6 +350,10 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         kv,
         "--load-mode",
         "none",
+        # Tool-capable OpenAI chat requests require the Jinja chat engine.
+        # This belongs to the server launch contract itself because autotune,
+        # planner/coder priming and adapters can all be the first launch owner.
+        "--jinja",
         "--no-ui",
         "--log-disable",
     ]

@@ -475,10 +475,43 @@ def install(agentic_module: Any, complete_planner_module: Any | None = None) -> 
             coverage = evaluate_route_coverage(plan, result)
             if coverage["status"] != "PASS":
                 error = getattr(agentic_module, "SpecValidationError", RuntimeError)
-                raise error(
+                blocked_domains = [
+                    item
+                    for item in coverage.get("domains", [])
+                    if isinstance(item, Mapping)
+                    and str(item.get("status", "")) not in {
+                        "ROUTES_EXECUTED",
+                        "ROUTES_EXECUTED_WITH_GAPS",
+                    }
+                ]
+                domain_detail = "; ".join(
+                    f"{item.get('domain_id', 'unknown')}={item.get('status', 'unknown')}"
+                    for item in blocked_domains[:12]
+                )
+                notes = {
+                    str(item.get("domain_id", "")): item
+                    for item in result.get("domain_notes", [])
+                    if isinstance(item, Mapping)
+                }
+                failures = []
+                for item in blocked_domains[:4]:
+                    note = notes.get(str(item.get("domain_id", "")))
+                    if not isinstance(note, Mapping) or not note.get("worker_error"):
+                        continue
+                    failure = str(note.get("retry_error") or note.get("parallel_error") or "").strip()
+                    if failure:
+                        failures.append(
+                            f"{item.get('domain_id', 'unknown')}:{failure[:400]}"
+                        )
+                message = (
                     "Minecraft knowledge route coverage is incomplete: "
                     + ", ".join(coverage["blocking_requirement_refs"][:16])
                 )
+                if domain_detail:
+                    message += "; domains: " + domain_detail
+                if failures:
+                    message += "; research_errors: " + " | ".join(failures)
+                raise error(message)
             result["minecraft_knowledge_plan"] = plan
             result["minecraft_knowledge_route_coverage"] = coverage
             result["research_sha256"] = agentic_module._json_sha256(result)

@@ -166,6 +166,33 @@ def _installed_version(distribution: str) -> str | None:
         return None
 
 
+def _shutdown_loaded_managed_llama_server() -> bool:
+    """Stop the old managed native server before purging a hot Colab engine.
+
+    A source update can change server launch flags. Keeping the previous process alive
+    while replacing its Python owner leaves LLAMA_SERVER_URL pointing at a server with
+    stale capabilities and loses the process handle needed for a clean restart.
+    """
+
+    module = sys.modules.get("minecraft_mod_ai.llama_server_autotune")
+    if module is None:
+        return False
+    shutdown = getattr(module, "_shutdown_managed_server", None)
+    if not callable(shutdown):
+        return False
+    managed_url = str(getattr(module, "_MANAGED_URL", "") or "").strip()
+    try:
+        shutdown()
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to stop the managed llama-server before engine reload. "
+            "Restart the Colab runtime and rerun setup cell 2."
+        ) from exc
+    if managed_url and os.environ.get("LLAMA_SERVER_URL", "").strip() == managed_url:
+        os.environ.pop("LLAMA_SERVER_URL", None)
+    return True
+
+
 def _validate_checkout(
     *,
     repo_dir: Path,
@@ -196,6 +223,7 @@ def _validate_checkout(
             f"{used_commit[:7]}",
             flush=True,
         )
+        _shutdown_loaded_managed_llama_server()
         for name in list(sys.modules):
             if name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai."):
                 sys.modules.pop(name, None)

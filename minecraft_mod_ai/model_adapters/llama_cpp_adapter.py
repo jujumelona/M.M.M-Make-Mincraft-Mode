@@ -35,7 +35,6 @@ class LlamaCppAdapter(ModelAdapter):
         try:
             from .. import llama_server_autotune
 
-            _enable_jinja_tool_templates(llama_server_autotune)
             selected = llama_server_autotune.ensure_tuned_server(self.config, request)
         except Exception as exc:
             raise ModelBackendError(
@@ -191,25 +190,3 @@ def _parse_tool_calls(value: Any) -> tuple[ToolCall, ...]:
             )
         )
     return tuple(result)
-
-
-def _enable_jinja_tool_templates(autotune_module: Any) -> None:
-    """Ensure every managed llama-server starts with tool-aware Jinja templates.
-
-    llama.cpp requires ``--jinja`` for OpenAI-style function calling. Keeping this
-    adaptation next to the client avoids duplicating the large server autotuner and
-    applies equally to baseline and MTP variants.
-    """
-
-    base_args = getattr(autotune_module, "_base_args", None)
-    if not callable(base_args) or bool(getattr(base_args, "_mmm_jinja_enabled", False)):
-        return
-
-    def tool_aware_base_args(*args: Any, **kwargs: Any) -> list[str]:
-        values = list(base_args(*args, **kwargs))
-        if "--jinja" not in values:
-            values.append("--jinja")
-        return values
-
-    setattr(tool_aware_base_args, "_mmm_jinja_enabled", True)
-    setattr(autotune_module, "_base_args", tool_aware_base_args)
