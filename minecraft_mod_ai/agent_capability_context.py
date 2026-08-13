@@ -138,58 +138,78 @@ def build_agent_capability_context(
         )
 
     external_capabilities: dict[str, tuple[str, ...]] = {}
+    external_access: dict[str, dict[str, str]] = {}
     if exposed_tools & _EXTERNAL_AGENT_TOOLS:
         try:
+            manifest_max_access = "admin" if selected == "runtime" else "read"
             manifest = ExternalMCPRouter().capability_manifest(
                 stage=selected,
                 target=_environment_target(),
-                max_access="read",
+                max_access=manifest_max_access,
             )
             raw_capabilities = manifest.get("capabilities", {})
             if isinstance(raw_capabilities, Mapping):
                 for name, raw_routes in raw_capabilities.items():
                     if not isinstance(raw_routes, list):
                         continue
+                    selected_routes = tuple(
+                        route
+                        for route in raw_routes
+                        if isinstance(route, Mapping)
+                        and str(route.get("server", "")).strip()
+                        and (
+                            not role_routes
+                            or str(route.get("server", "")).strip()
+                            in reviewed_servers
+                        )
+                    )
                     servers = tuple(
                         sorted(
                             {
                                 str(route.get("server", "")).strip()
-                                for route in raw_routes
-                                if isinstance(route, Mapping)
-                                and str(route.get("server", "")).strip()
-                                and (
-                                    not role_routes
-                                    or str(route.get("server", "")).strip()
-                                    in reviewed_servers
-                                )
+                                for route in selected_routes
                             }
                         )
                     )
-                    if servers:
-                        external_capabilities[str(name)] = servers
+                    if not servers:
+                        continue
+                    capability = str(name)
+                    external_capabilities[capability] = servers
+                    external_access[capability] = {
+                        str(route.get("server", "")).strip(): str(
+                            route.get("access", "read")
+                        ).strip()
+                        or "read"
+                        for route in selected_routes
+                    }
         except Exception:
             # Local first-party tools remain usable when an optional external MCP
             # registry cannot be loaded. Provider execution itself stays fail-closed.
             external_capabilities = {}
+            external_access = {}
 
     payload = {
-        "schema_version": "mmm/agent-capability-context-v3",
+        "schema_version": "mmm/agent-capability-context-v4",
         "stage": selected,
         "model_role": model_role,
         "agent_roles": [route.name for route in role_routes],
         "reviewed_mcp_servers": sorted(reviewed_servers),
         "eligible_skills": skills,
         "external_minecraft_mcp_capabilities": external_capabilities,
+        "external_minecraft_mcp_access": external_access,
         "routing_policy": (
             "Choose every relevant Skill route, not every route indiscriminately. "
             "Obey the selected Skill's validators, approvals, forbidden_actions, retry "
             "and exit contract. Use model_tools directly. host_owned_tools belong to "
             "the durable host pipeline and must not be recreated recursively. For an "
             "external MCP capability, use external_mcp_schema when its live arguments "
-            "are unknown, then external_mcp_call. The capability map lists reviewed "
-            "provider servers available to this agent role. Prefer independent relevant "
-            "evidence in parallel when it materially improves correctness; skip unrelated "
-            "tools to avoid latency and token waste."
+            "are unknown, then external_mcp_call. The capability and access maps list "
+            "reviewed provider routes available to this agent role. Outside runtime, "
+            "external MCP access is read-only. Runtime write/admin capabilities are "
+            "discoverable only so disposable playtests can use them and must be called "
+            "with disposable_runtime=true; the execution router remains fail-closed. "
+            "Prefer independent relevant evidence in parallel when it materially "
+            "improves correctness; skip unrelated tools to avoid latency and token waste."
         ),
     }
     return "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n" + json.dumps(
