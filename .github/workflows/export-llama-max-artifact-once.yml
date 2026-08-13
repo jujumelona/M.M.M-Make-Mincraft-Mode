@@ -53,8 +53,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p exported/.github/workflows exported/tools exported/minecraft_mod_ai exported/tests
-          cp .github/workflows/build-native-llama-cuda.yml exported/.github/workflows/
+          mkdir -p exported/tools exported/minecraft_mod_ai exported/tests
+          cp .github/workflows/build-native-llama-cuda.yml exported/build-native-llama-cuda.yml
           cp tools/colab_runtime_setup.py exported/tools/
           cp tools/native_llama_bundle.py exported/tools/
           cp minecraft_mod_ai/qwen35_t4_single_stream_tuning.py exported/minecraft_mod_ai/
