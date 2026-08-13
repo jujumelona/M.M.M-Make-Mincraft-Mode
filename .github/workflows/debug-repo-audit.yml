@@ -8,6 +8,7 @@ on:
       - .github/scripts/debug_repo_audit.py
       - .github/scripts/refresh_bootstrap_contract_test.py
       - .github/scripts/apply_debug_batch1.py
+      - .github/scripts/apply_debug_batch1_followup.py
 
 permissions:
   contents: write
@@ -28,7 +29,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply first debug repair batch
-        run: python .github/scripts/apply_debug_batch1.py
+        run: |
+          python .github/scripts/apply_debug_batch1.py
+          python .github/scripts/apply_debug_batch1_followup.py
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Verify first debug repair batch
@@ -38,6 +41,7 @@ jobs:
             minecraft_mod_ai/platform_runtime_contract.py \
             minecraft_mod_ai/performance_final_contract.py \
             minecraft_mod_ai/work_graph.py \
+            minecraft_mod_ai/work_graph_mutation_contract.py \
             minecraft_mod_ai/scheduler_claim_fencing_contract.py \
             minecraft_mod_ai/production_page_durable_contract.py \
             minecraft_mod_ai/external_mcp_router.py \
@@ -55,7 +59,7 @@ jobs:
       - name: Commit verified first repair batch
         run: |
           if ! git diff --quiet; then
-            git add minecraft_mod_ai integrations tests
+            git add minecraft_mod_ai integrations skills tests
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git commit -m 'Fix runtime concurrency and progress-driven repair defects'
