@@ -1,0 +1,118 @@
+name: Remove artificial llama context cap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/remove-artificial-llama-context-cap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply context policy fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          hot = Path('minecraft_mod_ai/qwen35_mtp_hotpath_contract.py')
+          text = hot.read_text(encoding='utf-8')
+          text = text.replace('_DEFAULT_CTX = 8192\n', '_DEFAULT_CTX_FALLBACK = 32768\n')
+          old = '''def _context_size() -> int:\n    raw = os.environ.get("MMM_QWEN35_MTP_CTX", str(_DEFAULT_CTX)).strip()\n    try:\n        value = int(raw)\n    except ValueError:\n        value = _DEFAULT_CTX\n    return max(4096, min(32768, value))\n'''
+          new = '''def _context_size(config: Any | None = None) -> int:\n    \"\"\"Use the model profile context unless the operator explicitly overrides it.\n\n    The Qwen3.5 T4 hot path is a decode optimization and must not silently shrink\n    the model's usable context window.  An explicit positive environment override\n    remains available for operators who intentionally want a different server size.\n    \"\"\"\n\n    raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()\n    if raw:\n        try:\n            override = int(raw)\n        except ValueError:\n            override = 0\n        if override > 0:\n            return override\n    configured = int(getattr(config, "max_context", 0) or 0) if config is not None else 0\n    return configured if configured > 0 else _DEFAULT_CTX_FALLBACK\n'''
+          if old not in text:
+              raise SystemExit('qwen35 context function anchor not found')
+          text = text.replace(old, new)
+          text = text.replace('native KV and an 8K\n    context window. Large host tasks are already paginated; operators can explicitly\n    raise MMM_QWEN35_MTP_CTX when a single request genuinely needs more context.', 'native KV and the model profile context window. The decode hot path must not\n    impose a smaller semantic context cap; operators may explicitly override\n    MMM_QWEN35_MTP_CTX only when they intentionally want a different size.')
+          text = text.replace('str(_context_size()))', 'str(_context_size(config)))')
+          text = text.replace('f"spec=draft-mtp n_max={width} parallel=1 ctx={_context_size()} ubatch={ubatch}"', 'f"spec=draft-mtp n_max={width} parallel=1 ctx={_context_size(config)} ubatch={ubatch}"')
+          compile(text, str(hot), 'exec')
+          hot.write_text(text, encoding='utf-8')
+
+          t4 = Path('minecraft_mod_ai/qwen35_t4_single_stream_tuning.py')
+          text = t4.read_text(encoding='utf-8')
+          text = text.replace('"ctx": _context_size(),', '"ctx": _context_size(config),')
+          compile(text, str(t4), 'exec')
+          t4.write_text(text, encoding='utf-8')
+
+          auto = Path('minecraft_mod_ai/llama_server_autotune.py')
+          text = auto.read_text(encoding='utf-8')
+          old = '    context = min(int(config.max_context), _env_int("MMM_LLAMA_SERVER_CTX", 16384))\n'
+          new = '''    configured_context = max(1, int(config.max_context))\n    raw_context = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()\n    if raw_context:\n        try:\n            context = int(raw_context)\n        except ValueError:\n            context = configured_context\n        if context <= 0:\n            context = configured_context\n    else:\n        context = configured_context\n'''
+          if old not in text:
+              raise SystemExit('generic context anchor not found')
+          text = text.replace(old, new)
+          compile(text, str(auto), 'exec')
+          auto.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_qwen35_mtp_hotpath_contract.py')
+          text = test.read_text(encoding='utf-8')
+          text = text.replace('        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},\n    )', '        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},\n        max_context=32768,\n    )', 1)
+          text = text.replace('def test_measured_fast_args_remove_generic_cache_and_bound_context', 'def test_measured_fast_args_preserve_model_profile_context')
+          text = text.replace('assert args[args.index("--ctx-size") + 1] == "8192"', 'assert args[args.index("--ctx-size") + 1] == "32768"')
+          old = '''def test_qwen_context_is_explicitly_overridable(monkeypatch) -> None:\n    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")\n    assert _context_size() == 16384\n    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "999999")\n    assert _context_size() == 32768\n    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "bad")\n    assert _context_size() == 8192\n'''
+          new = '''def test_qwen_context_uses_profile_and_only_explicit_positive_override(monkeypatch) -> None:\n    config = _qwen_config()\n    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)\n    assert _context_size(config) == 32768\n    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")\n    assert _context_size(config) == 16384\n    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "999999")\n    assert _context_size(config) == 999999\n    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "bad")\n    assert _context_size(config) == 32768\n'''
+          if old not in text:
+              raise SystemExit('qwen test anchor not found')
+          text = text.replace(old, new)
+          compile(text, str(test), 'exec')
+          test.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_llama_server_autotune.py')
+          text = test.read_text(encoding='utf-8')
+          text = text.replace('assert args[args.index("--ctx-size") + 1] == "16384"', 'assert args[args.index("--ctx-size") + 1] == "32768"')
+          compile(text, str(test), 'exec')
+          test.write_text(text, encoding='utf-8')
+
+          policy = Path('tests/test_llama_context_policy.py')
+          policy.write_text('''from types import SimpleNamespace\n\nfrom minecraft_mod_ai import llama_server_autotune as autotune\nfrom minecraft_mod_ai.qwen35_mtp_hotpath_contract import (\n    _install_measured_fast_base_args,\n)\n\n\ndef test_generic_server_defaults_to_full_profile_context(monkeypatch) -> None:\n    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)\n    args = autotune._base_args(\n        "llama-server",\n        "/tmp/model.gguf",\n        SimpleNamespace(max_context=32768),\n        8910,\n    )\n    assert args[args.index("--ctx-size") + 1] == "32768"\n\n\ndef test_generic_server_honors_only_explicit_context_override(monkeypatch) -> None:\n    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "24576")\n    args = autotune._base_args(\n        "llama-server",\n        "/tmp/model.gguf",\n        SimpleNamespace(max_context=32768),\n        8910,\n    )\n    assert args[args.index("--ctx-size") + 1] == "24576"\n\n\ndef test_qwen_hotpath_cannot_shrink_profile_context(monkeypatch) -> None:\n    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)\n\n    def base(binary, model, config, port):\n        return [binary, "-m", model, "--port", str(port), "--ctx-size", "4096"]\n\n    holder = SimpleNamespace(_base_args=base)\n    _install_measured_fast_base_args(holder)\n    config = SimpleNamespace(\n        model_id="unsloth/Qwen3.5-9B-MTP-GGUF",\n        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},\n        max_context=32768,\n    )\n    args = holder._base_args("server", "model", config, 8910)\n    assert args[args.index("--ctx-size") + 1] == "32768"\n''', encoding='utf-8')
+          compile(policy.read_text(encoding='utf-8'), str(policy), 'exec')
+          PY
+      - name: Validate context contracts
+        run: |
+          python -m pip install -q -e '.[dev]'
+          python -m py_compile \
+            minecraft_mod_ai/llama_server_autotune.py \
+            minecraft_mod_ai/qwen35_mtp_hotpath_contract.py \
+            minecraft_mod_ai/qwen35_t4_single_stream_tuning.py \
+            tests/test_llama_context_policy.py
+          python -m ruff check \
+            minecraft_mod_ai/llama_server_autotune.py \
+            minecraft_mod_ai/qwen35_mtp_hotpath_contract.py \
+            minecraft_mod_ai/qwen35_t4_single_stream_tuning.py \
+            tests/test_llama_context_policy.py \
+            --select F,E7,E9
+          python -m pytest -q \
+            tests/test_llama_context_policy.py \
+            tests/test_qwen35_mtp_hotpath_contract.py \
+            tests/test_qwen35_t4_single_stream_tuning.py \
+            tests/test_llama_server_autotune.py \
+            tests/test_llama_tool_startup_contract.py \
+            tests/test_minecraft_knowledge_contract.py
+      - name: Commit validated context policy to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/remove-artificial-llama-context-cap.yml
+          git add \
+            minecraft_mod_ai/llama_server_autotune.py \
+            minecraft_mod_ai/qwen35_mtp_hotpath_contract.py \
+            minecraft_mod_ai/qwen35_t4_single_stream_tuning.py \
+            tests/test_llama_context_policy.py \
+            tests/test_qwen35_mtp_hotpath_contract.py \
+            tests/test_llama_server_autotune.py \
+            .github/workflows/remove-artificial-llama-context-cap.yml
+          git diff --cached --check
+          git commit -m "Use full model context for native llama servers"
+          git pull --rebase origin main
+          git push origin HEAD:main
