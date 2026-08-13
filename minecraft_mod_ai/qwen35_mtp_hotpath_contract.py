@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -10,8 +11,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _MAX_CTX = 2147483647
-_MARKER = "_mmm_qwen35_measured_decode_hotpath_v8"
+_MARKER = "_mmm_qwen35_measured_decode_hotpath_v9"
 _BASE_MARKER = "_mmm_qwen35_measured_fast_args_v6"
+_VARIANT_MARKER = "_mmm_qwen35_full_draft_gpu_v1"
+_FINGERPRINT_MARKER = "_mmm_qwen35_draft_gpu_fingerprint_v1"
+_ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _DEFAULT_MTP_WIDTHS = "1,2,3,4,5,6,8"
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
@@ -67,6 +71,25 @@ def _context_size(config: Any | None = None) -> int:
     if value < 0:
         value = 0
     return min(_MAX_CTX, value)
+
+
+def _draft_gpu_layers() -> str:
+    """Return the Qwen MTP draft offload policy used by both tuning and launch."""
+
+    raw = os.environ.get("MMM_QWEN35_MTP_DRAFT_NGL", "all").strip().lower() or "all"
+    if raw in {"all", "auto"}:
+        return raw
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "MMM_QWEN35_MTP_DRAFT_NGL must be 'all', 'auto', or a non-negative integer"
+        ) from exc
+    if value < 0:
+        raise ValueError(
+            "MMM_QWEN35_MTP_DRAFT_NGL must be 'all', 'auto', or a non-negative integer"
+        )
+    return str(value)
 
 
 def _drop_option(
@@ -130,6 +153,61 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
 
     setattr(measured_base_args, _BASE_MARKER, True)
     autotune._base_args = measured_base_args
+
+
+def _install_measured_fast_variant_args(autotune: Any) -> None:
+    """Undo generic auto-offload only for the active Qwen MTP tuning/launch."""
+
+    current = getattr(autotune, "_variant_args", None)
+    if not callable(current) or getattr(current, _VARIANT_MARKER, False):
+        return
+
+    @wraps(current)
+    def measured_variant_args(variant: Any) -> list[str]:
+        args = list(current(variant))
+        if (
+            os.environ.get(_ACTIVE_TUNING_ENV, "").strip() == "1"
+            and str(getattr(variant, "spec_type", "")) == "draft-mtp"
+        ):
+            _set_option(
+                args,
+                (
+                    "--spec-draft-ngl",
+                    "-ngld",
+                    "--gpu-layers-draft",
+                    "--n-gpu-layers-draft",
+                ),
+                _draft_gpu_layers(),
+            )
+        return args
+
+    setattr(measured_variant_args, _VARIANT_MARKER, True)
+    autotune._variant_args = measured_variant_args
+
+
+def _install_qwen35_fingerprint(autotune: Any) -> None:
+    """Invalidate cached winners when the Qwen draft offload policy changes."""
+
+    current = getattr(autotune, "_fingerprint", None)
+    if not callable(current) or getattr(current, _FINGERPRINT_MARKER, False):
+        return
+
+    @wraps(current)
+    def qwen35_fingerprint(config: Any, binary: str, model_path: str) -> str:
+        base = str(current(config, binary, model_path))
+        if not _enabled() or not _is_qwen35_mtp(config):
+            return base
+        payload = {
+            "base": base,
+            "qwen35_mtp_draft_ngl": _draft_gpu_layers(),
+            "qwen35_hotpath": "v9",
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    setattr(qwen35_fingerprint, _FINGERPRINT_MARKER, True)
+    autotune._fingerprint = qwen35_fingerprint
 
 
 def _prior_mmm_loopback_port() -> int | None:
@@ -225,6 +303,8 @@ def install(autotune: Any) -> None:
     """Keep Qwen3.5 on the T4 hot path while delegating winner selection."""
 
     _install_measured_fast_base_args(autotune)
+    _install_measured_fast_variant_args(autotune)
+    _install_qwen35_fingerprint(autotune)
     current = autotune.ensure_tuned_server
     if getattr(current, _MARKER, False):
         return
@@ -251,7 +331,9 @@ def install(autotune: Any) -> None:
         # server (and likewise for explicit Qwen context overrides).
         previous_ctx = os.environ.get("MMM_LLAMA_SERVER_CTX")
         previous_widths = os.environ.get("MMM_LLAMA_MTP_WIDTHS")
+        previous_active = os.environ.get(_ACTIVE_TUNING_ENV)
         os.environ["MMM_LLAMA_SERVER_CTX"] = str(_context_size(config))
+        os.environ[_ACTIVE_TUNING_ENV] = "1"
         if not (previous_widths or "").strip():
             os.environ["MMM_LLAMA_MTP_WIDTHS"] = _DEFAULT_MTP_WIDTHS
         try:
@@ -259,6 +341,7 @@ def install(autotune: Any) -> None:
         finally:
             _restore_env("MMM_LLAMA_SERVER_CTX", previous_ctx)
             _restore_env("MMM_LLAMA_MTP_WIDTHS", previous_widths)
+            _restore_env(_ACTIVE_TUNING_ENV, previous_active)
 
     setattr(ensure_qwen35_measured, _MARKER, True)
     ensure_qwen35_measured._mmm_qwen35_measured_decode_hotpath = True  # type: ignore[attr-defined]
@@ -267,7 +350,9 @@ def install(autotune: Any) -> None:
 
 __all__ = [
     "_context_size",
+    "_draft_gpu_layers",
     "_install_measured_fast_base_args",
+    "_install_measured_fast_variant_args",
     "_is_qwen35_mtp",
     "_prior_mmm_loopback_port",
     "install",
