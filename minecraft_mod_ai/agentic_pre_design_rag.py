@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
@@ -12,7 +13,11 @@ from .knowledge import AuthoritativeEvidenceRetriever, evidence_catalog_for_vers
 from .rag_index import ProjectRAGIndex
 
 
-_MARKER = "_mmm_forced_pre_design_rag_v1"
+_MARKER = "_mmm_forced_pre_design_rag_v2"
+_FORCED_RAG_CONTEXT: ContextVar[Mapping[str, Any] | None] = ContextVar(
+    "mmm_forced_pre_design_rag_context",
+    default=None,
+)
 
 
 def harden_pre_design_research(agentic_module: Any) -> None:
@@ -24,13 +29,20 @@ def harden_pre_design_research(agentic_module: Any) -> None:
     index exists, the same queries are searched there too. Full receipts stay in the
     pre-design research bundle; final section workers receive only compact receipts and
     the research agent's claims/gaps so prompt size cannot grow with raw retrieval data.
+
+    The forced evidence context is ContextVar-scoped so independent concurrent planning
+    calls cannot observe one another's receipts.
     """
 
-    if getattr(agentic_module.collect_pre_design_research, _MARKER, False):
+    current_collect = agentic_module.collect_pre_design_research
+    if getattr(current_collect, _MARKER, False):
         return
 
-    original_collect = agentic_module.collect_pre_design_research
-    original_domain_slice = agentic_module._domain_evidence_slice
+    # If v1 was installed already in a hot Colab process, unwrap it before installing
+    # the concurrency-safe v2 wrapper rather than stacking two forced-RAG passes.
+    original_collect = getattr(current_collect, "__wrapped__", current_collect)
+    current_slice = agentic_module._domain_evidence_slice
+    original_domain_slice = getattr(current_slice, "__wrapped__", current_slice)
 
     def collect(
         router: Any,
@@ -40,14 +52,13 @@ def harden_pre_design_research(agentic_module: Any) -> None:
     ) -> dict[str, Any]:
         # Run the established official/technology/ecosystem + ReAct research flow.
         # Its domain agents call _domain_evidence_slice dynamically, so expose the
-        # forced receipts to that helper through a short-lived module context.
+        # forced receipts in this execution context only.
         brief = agentic_module.normalize_research_brief(
             prompt,
             {"title": "pre-design research"},
         )
         forced = _forced_rag_bundle(router, brief)
-        previous = getattr(agentic_module, "_MMM_FORCED_RAG_CONTEXT", None)
-        agentic_module._MMM_FORCED_RAG_CONTEXT = forced
+        token = _FORCED_RAG_CONTEXT.set(forced)
         try:
             result = original_collect(
                 router,
@@ -55,13 +66,7 @@ def harden_pre_design_research(agentic_module: Any) -> None:
                 trace_metadata=trace_metadata,
             )
         finally:
-            if previous is None:
-                try:
-                    delattr(agentic_module, "_MMM_FORCED_RAG_CONTEXT")
-                except AttributeError:
-                    pass
-            else:
-                agentic_module._MMM_FORCED_RAG_CONTEXT = previous
+            _FORCED_RAG_CONTEXT.reset(token)
 
         deterministic = result.get("deterministic")
         if not isinstance(deterministic, dict):
@@ -78,7 +83,7 @@ def harden_pre_design_research(agentic_module: Any) -> None:
 
     def domain_slice(domain_id: str, deterministic: Mapping[str, Any]) -> dict[str, Any]:
         value = dict(original_domain_slice(domain_id, deterministic))
-        forced = getattr(agentic_module, "_MMM_FORCED_RAG_CONTEXT", None)
+        forced = _FORCED_RAG_CONTEXT.get()
         if not isinstance(forced, Mapping):
             forced = deterministic.get("forced_project_rag")
         if isinstance(forced, Mapping):
@@ -119,6 +124,10 @@ def harden_pre_design_research(agentic_module: Any) -> None:
         return {key: value[key] for key in keep if key in value}
 
     setattr(collect, _MARKER, True)
+    # Keep v1 marker for existing runtime guards while v2 is the authoritative version.
+    collect._mmm_forced_pre_design_rag_v1 = True  # type: ignore[attr-defined]
+    collect.__wrapped__ = original_collect  # type: ignore[attr-defined]
+    domain_slice.__wrapped__ = original_domain_slice  # type: ignore[attr-defined]
     agentic_module.collect_pre_design_research = collect
     agentic_module._domain_evidence_slice = domain_slice
     # Section workers must consume claims/gaps + receipts, not raw retrieval pages.
@@ -167,7 +176,7 @@ def _forced_rag_bundle(router: Any, research_brief: Mapping[str, Any]) -> dict[s
                 by_domain.setdefault(domain_id, []).append(result)
 
     payload = {
-        "schema_version": "mmm/forced-pre-design-rag-v1",
+        "schema_version": "mmm/forced-pre-design-rag-v2",
         "versions": list(versions),
         "domain_count": len(domains),
         "query_count": len(jobs),
