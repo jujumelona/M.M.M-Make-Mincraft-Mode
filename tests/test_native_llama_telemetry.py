@@ -34,37 +34,19 @@ llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\"0\"} 10
     assert "spec_decode_num_accepted_tokens_per_pos_total" not in values
 
 
-def test_slot_snapshot_reads_counters_without_tokenizing() -> None:
-    class Response:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return [
-                {
-                    "id": 0,
-                    "is_processing": True,
-                    "n_prompt_tokens": 901,
-                    "n_prompt_tokens_processed": 701,
-                    "n_prompt_tokens_cache": 200,
-                    "next_token": {"n_decoded": 321},
-                }
-            ]
-
+def test_slot_snapshot_hot_path_does_not_poll_slots_endpoint() -> None:
     calls: list[tuple[str, float]] = []
 
     def get(url: str, timeout: float):
         calls.append((url, timeout))
-        return Response()
+        raise AssertionError("the production hot path must not poll /slots")
 
-    snapshot = policy._slot_snapshot(SimpleNamespace(get=get), "http://127.0.0.1:8910/v1")
-    assert snapshot == {
-        "prompt_tokens": 901,
-        "prompt_processed": 701,
-        "prompt_cached": 200,
-        "output_tokens": 321,
-    }
-    assert calls == [("http://127.0.0.1:8910/slots", 0.75)]
+    snapshot = policy._slot_snapshot(
+        SimpleNamespace(get=get),
+        "http://127.0.0.1:8910/v1",
+    )
+    assert snapshot is None
+    assert calls == []
 
 
 def test_metrics_delta_accumulates_exact_native_counters(monkeypatch) -> None:
