@@ -1,0 +1,321 @@
+name: Apply llama max optimization once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-llama-max-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-llama-max-once
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply latest engine and six-axis T4 optimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+          import pathlib, re
+          ROOT = pathlib.Path('.')
+          LATEST = 'f65e568fd83712c92babbb096b57e572af0ec357'
+          BUNDLE_SCHEMA = 'mmm/native-llama-cuda-bundle-v3-max-t4'
+          BUNDLE_TAG = 'native-llama-f65e568-cuda12.4-max-v3'
+          BUNDLE_PREFIX = 'llama-f65e568-cuda12.4-max'
+          def read(path): return (ROOT/path).read_text(encoding='utf-8')
+          def write(path,text):
+              p=ROOT/path; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(text,encoding='utf-8')
+          def one(text,old,new,label):
+              c=text.count(old)
+              if c!=1: raise RuntimeError(f'{label}: expected 1 occurrence, found {c}')
+              return text.replace(old,new,1)
+
+          p='tools/colab_runtime_setup.py'; t=read(p)
+          t=t.replace('SETUP_API_VERSION = "mmm/colab-runtime-setup-v3-prebuilt-cache"','SETUP_API_VERSION = "mmm/colab-runtime-setup-v4-max-native"')
+          t=re.sub(r'LLAMA_SERVER_SOURCE_REF = "[0-9a-f]{40}"',f'LLAMA_SERVER_SOURCE_REF = "{LATEST}"',t,count=1)
+          if '-DGGML_CUDA_CUB_3DOT2=ON' not in t:
+              n='            "-DGGML_CUDA_GRAPHS=ON",\n'
+              t=one(t,n,n+'            "-DGGML_CUDA_CUB_3DOT2=ON",\n            "-DGGML_CUDA_FA=ON",\n            "-DGGML_CUDA_FA_ALL_QUANTS=OFF",\n            "-DGGML_LTO=ON",\n','colab cuda flags')
+          write(p,t)
+
+          p='.github/workflows/build-native-llama-cuda.yml'; t=read(p)
+          t=re.sub(r'LLAMA_SOURCE_REF: [0-9a-f]{40}',f'LLAMA_SOURCE_REF: {LATEST}',t,count=1)
+          t=re.sub(r'BUNDLE_SCHEMA: \S+',f'BUNDLE_SCHEMA: {BUNDLE_SCHEMA}',t,count=1)
+          t=re.sub(r'BUNDLE_PREFIX: \S+',f'BUNDLE_PREFIX: {BUNDLE_PREFIX}',t,count=1)
+          t=re.sub(r'RELEASE_TAG: \S+',f'RELEASE_TAG: {BUNDLE_TAG}',t,count=1)
+          if '-DGGML_CUDA_CUB_3DOT2=ON' not in t:
+              n='            -DGGML_CUDA_GRAPHS=ON \\\n'
+              t=one(t,n,n+'            -DGGML_CUDA_CUB_3DOT2=ON \\\n            -DGGML_CUDA_FA=ON \\\n            -DGGML_CUDA_FA_ALL_QUANTS=OFF \\\n            -DGGML_LTO=ON \\\n','workflow cuda flags')
+          if 'GGML_CUDA_CUB_3DOT2:BOOL=ON' not in t:
+              n="          grep -q '^GGML_CUDA_GRAPHS:BOOL=ON$' llama.cpp/build/CMakeCache.txt\n"
+              t=one(t,n,n+"          grep -q '^GGML_CUDA_CUB_3DOT2:BOOL=ON$' llama.cpp/build/CMakeCache.txt\n          grep -q '^GGML_CUDA_FA:BOOL=ON$' llama.cpp/build/CMakeCache.txt\n          grep -q '^GGML_LTO:BOOL=ON$' llama.cpp/build/CMakeCache.txt\n",'workflow verify')
+          if '"cuda_cub_3dot2": True' not in t:
+              n='              "cuda_graphs": True,\n'
+              t=one(t,n,n+'              "cuda_cub_3dot2": True,\n              "cuda_fa": True,\n              "lto": True,\n','manifest features')
+          t=re.sub(r'--title "Native llama\.cpp CUDA [^"]+"','--title "Native llama.cpp latest CUDA max-throughput"',t,count=1)
+          t=re.sub(r'--notes "Verified native llama-server CUDA 12\.4 bundles[^"]+"',f'--notes "Verified native llama-server CUDA 12.4 max-throughput bundles. Source: ggml-org/llama.cpp {LATEST}. CUDA Graphs + CUB 3.2 dot path + FlashAttention + LTO."',t,count=1)
+          write(p,t)
+
+          p='tools/native_llama_bundle.py'; t=read(p)
+          t=re.sub(r'BUNDLE_SCHEMA_VERSION = "[^"]+"',f'BUNDLE_SCHEMA_VERSION = "{BUNDLE_SCHEMA}"',t,count=1)
+          t=re.sub(r'BUNDLE_RELEASE_TAG = "[^"]+"',f'BUNDLE_RELEASE_TAG = "{BUNDLE_TAG}"',t,count=1)
+          t=re.sub(r'BUNDLE_NAME_PREFIX = "[^"]+"',f'BUNDLE_NAME_PREFIX = "{BUNDLE_PREFIX}"',t,count=1)
+          if 'requires cuda_cub_3dot2=true' not in t:
+              g='    if manifest.get("cuda_graphs") is not True:\n        raise RuntimeError(\n            "prebuilt native llama manifest requires cuda_graphs=true"\n        )\n'
+              r=g+'    if manifest.get("cuda_cub_3dot2") is not True:\n        raise RuntimeError("prebuilt native llama manifest requires cuda_cub_3dot2=true")\n    if manifest.get("cuda_fa") is not True:\n        raise RuntimeError("prebuilt native llama manifest requires cuda_fa=true")\n    if manifest.get("lto") is not True:\n        raise RuntimeError("prebuilt native llama manifest requires lto=true")\n'
+              t=one(t,g,r,'loader guards')
+          write(p,t)
+
+          p='minecraft_mod_ai/qwen35_t4_single_stream_tuning.py'; t=read(p)
+          if 'def _benchmark_padding()' not in t:
+              helper='''\ndef _benchmark_padding() -> str:\n    raw = os.environ.get("MMM_QWEN35_T4_BENCH_PAD_CHARS", "").strip()\n    try:\n        chars = max(0, min(160000, int(raw))) if raw else 0\n    except ValueError:\n        chars = 0\n    if chars <= 0:\n        return ""\n    pattern = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda "\n    filler = (pattern * ((chars // len(pattern)) + 1))[:chars]\n    return (\n        "Ignore the following calibration-only context. Never repeat it in the answer.\\n"\n        + filler\n        + "\\nCalibration context ends here. Perform the exact copy task below.\\n"\n    )\n\n\n'''
+              t=one(t,'def _benchmark_request() -> Any:\n',helper+'def _benchmark_request() -> Any:\n','padding helper')
+          if '_benchmark_padding() + "Copy this payload exactly' not in t:
+              t=one(t,'                "content": "Copy this payload exactly:\\n" + _EXPECTED_TEXT,\n','                "content": _benchmark_padding() + "Copy this payload exactly:\\n" + _EXPECTED_TEXT,\n','padded request')
+          write(p,t)
+
+          max_module = r'''from __future__ import annotations
+
+import hashlib, json, os, threading
+from dataclasses import asdict
+from functools import wraps
+from pathlib import Path
+from typing import Any
+
+from .qwen35_mtp_hotpath_contract import _is_qwen35_mtp, _reclaim_prior_mmm_server
+from . import qwen35_t4_single_stream_tuning as t4
+
+_SCHEMA_VERSION='mmm/qwen35-t4-max-speed-v3'
+_MARKER='_mmm_qwen35_t4_max_speed_v3'
+_LOCK=threading.RLock()
+_DEFAULT_WIDTHS=(1,2,3,4,6,8,12,16)
+_DEFAULT_P_MINS=(0.0,0.5,0.6,0.7,0.8,0.9)
+_DEFAULT_UBATCHES=(512,1024,2048)
+_DEFAULT_KV=('native-default','q8_0','q4_0')
+_DEFAULT_BUCKETS=(2048,8192,16384,28672)
+_KV_ENV='MMM_QWEN35_T4_KV_OVERRIDE'
+_PAD_ENV='MMM_QWEN35_T4_BENCH_PAD_CHARS'
+_BUCKET_ENV='MMM_LLAMA_ACTIVE_KV_BUCKET'
+
+def _enabled(): return os.environ.get('MMM_QWEN35_T4_MAX_SPEED','1').strip().lower() not in {'0','false','no','off'}
+def _ints(name,defaults,lo,hi):
+    vals=[]
+    for token in os.environ.get(name,','.join(map(str,defaults))).split(','):
+        try: v=int(token.strip())
+        except ValueError: continue
+        if lo<=v<=hi and v not in vals: vals.append(v)
+    return tuple(vals or defaults)
+def _widths(): return _ints('MMM_QWEN35_T4_MAX_WIDTHS',_DEFAULT_WIDTHS,1,32)
+def _ubatches(batch): return tuple(v for v in _ints('MMM_QWEN35_T4_UBATCHES',_DEFAULT_UBATCHES,64,max(64,batch)) if v<=batch) or (min(batch,512),)
+def _p_mins():
+    vals=[]
+    for token in os.environ.get('MMM_QWEN35_T4_MAX_P_MIN',','.join(map(str,_DEFAULT_P_MINS))).split(','):
+        try: v=round(float(token.strip()),4)
+        except ValueError: continue
+        if 0<=v<1 and v not in vals: vals.append(v)
+    if 0.0 not in vals: vals.insert(0,0.0)
+    return tuple(vals or _DEFAULT_P_MINS)
+def _gain():
+    try: return max(1.0,float(os.environ.get('MMM_QWEN35_T4_MAX_MIN_GAIN','1.005')))
+    except ValueError: return 1.005
+def _kv_candidates():
+    aliases={'native':'native-default','native-default':'native-default','f16':'f16','q8':'q8_0','q8_0':'q8_0','q4':'q4_0','q4_0':'q4_0'}; vals=[]
+    for token in os.environ.get('MMM_QWEN35_T4_MAX_KV',','.join(_DEFAULT_KV)).split(','):
+        v=aliases.get(token.strip().lower(),'')
+        if v and v not in vals: vals.append(v)
+    if 'native-default' not in vals: vals.insert(0,'native-default')
+    return tuple(vals or _DEFAULT_KV)
+def _kv_mode(config):
+    aliases={'auto':'auto','native':'native-default','native-default':'native-default','f16':'f16','q8':'q8_0','q8_0':'q8_0','q4':'q4_0','q4_0':'q4_0'}
+    raw=os.environ.get('MMM_QWEN35_T4_KV_MODE','').strip().lower()
+    if raw: return aliases.get(raw,'auto')
+    extra=getattr(config,'extra',{})
+    if isinstance(extra,dict) and extra.get('kv_cache_autotune') is False: return aliases.get(str(extra.get('kv_cache_quant','q4_0')).lower(),'q4_0')
+    return 'auto'
+def _context_buckets(config):
+    m=max(2048,int(getattr(config,'max_context',32768) or 32768)); cap=max(512,m-min(1536,m//4))
+    return tuple(sorted({min(v,cap) for v in _ints('MMM_QWEN35_T4_KV_CONTEXT_BUCKETS',_DEFAULT_BUCKETS,512,m)}))
+def _request_tokens(request):
+    chars=0
+    for msg in getattr(request,'messages',()) or ():
+        if isinstance(msg,dict):
+            value=msg.get('content',''); chars+=len(value) if isinstance(value,str) else len(json.dumps(value,ensure_ascii=False))
+    return max(1,chars//3)
+def _bucket_for_request(config,request):
+    n=_request_tokens(request); buckets=_context_buckets(config)
+    return next((b for b in buckets if n<=b),buckets[-1])
+def _core_path(): return (Path.home()/'.cache/mmm/qwen35-t4-max-speed-v3.json').resolve()
+def _kv_path(): return (Path.home()/'.cache/mmm/qwen35-t4-kv-buckets-v3.json').resolve()
+def _fp(autotune,config,binary,model):
+    batch=autotune._env_int('MMM_LLAMA_BATCH',2048)
+    payload={'schema':_SCHEMA_VERSION,'base':autotune._fingerprint(config,binary,model),'hardware':t4._hardware_identity(autotune),'server':autotune._server_version(binary),'widths':_widths(),'p':_p_mins(),'ub':_ubatches(batch),'kv':_kv_candidates(),'buckets':_context_buckets(config),'digest':t4._EXPECTED_DIGEST}
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+def _tps(p): return float(getattr(p,'predicted_tps',0.0) or 0.0)
+def _valid(p,b): return t4._valid(p,b)
+def _variant(a,name,ub,width=0,p=0.0): return t4._variant(a,name=name,ubatch=ub,width=width,p_min=p)
+def _probe(a,binary,model,config,candidate,kv='native-default',pad=0):
+    old=os.environ.get(_PAD_ENV)
+    if pad: os.environ[_PAD_ENV]=str(pad)
+    else: os.environ.pop(_PAD_ENV,None)
+    try: return t4._probe(a,binary,model,config,candidate,kv=kv)
+    finally:
+        if old is None: os.environ.pop(_PAD_ENV,None)
+        else: os.environ[_PAD_ENV]=old
+def _log(stage,p,bucket=None):
+    detail=f'{_tps(p):.2f} tok/s' if getattr(p,'ok',False) else str(getattr(p,'error','failed')); suffix=f' bucket={bucket}' if bucket else ''
+    print('llama server: T4 max-speed probe',f'stage={stage}',p.variant.name,f'kv={getattr(p,"kv","native-default")}{suffix}',f'-> {detail}',flush=True)
+def _best(base,probes):
+    vals=[base]+[p for p in probes if p is not base and _valid(p,base)]; win=max(vals,key=_tps)
+    return base if win is not base and _tps(win)<_tps(base)*_gain() else win
+def _measure_core(a,binary,model,config):
+    batch=a._env_int('MMM_LLAMA_BATCH',2048); ubs=_ubatches(batch); seed=512 if 512 in ubs else ubs[0]
+    base=_probe(a,binary,model,config,_variant(a,'qwen35-t4-max-baseline',seed)); _log('baseline',base)
+    if not getattr(base,'ok',False) or _tps(base)<=0: raise RuntimeError('T4 max-speed baseline failed')
+    probes=[base]; widths=[]
+    for w in _widths():
+        p=_probe(a,binary,model,config,_variant(a,f'qwen35-t4-max-mtp-{w}',seed,w)); _log('mtp-width',p); probes.append(p)
+        if _valid(p,base): widths.append(p)
+    seeds=sorted(widths,key=_tps,reverse=True)[:2]
+    widest=next((p for p in widths if int(p.variant.draft_n_max)==max(_widths())),None)
+    if widest is not None and widest not in seeds: seeds.append(widest)
+    for s in seeds:
+        w=int(s.variant.draft_n_max)
+        for pm in _p_mins():
+            if pm==0: continue
+            p=_probe(a,binary,model,config,_variant(a,f'qwen35-t4-max-mtp-{w}|pm{pm:g}',seed,w,pm)); _log('p-min',p); probes.append(p)
+    selected=_best(base,probes); ubprobes=[selected]
+    for ub in ubs:
+        if ub==int(getattr(selected.variant,'ubatch',seed) or seed): continue
+        v=selected.variant; p=_probe(a,binary,model,config,_variant(a,f'{v.name}|ub{ub}',ub,int(v.draft_n_max),float(v.draft_p_min))); _log('ubatch',p)
+        if _valid(p,base): ubprobes.append(p)
+    selected=max(ubprobes,key=_tps)
+    return selected.variant,_tps(base),_tps(selected)
+def _load_core(a,fp):
+    try: d=json.loads(_core_path().read_text())
+    except Exception: return None
+    if d.get('schema')!=_SCHEMA_VERSION or d.get('fingerprint')!=fp: return None
+    try: return a.ServerVariant(**d['selected']),float(d['baseline_tps']),float(d['selected_tps'])
+    except Exception: return None
+def _save_core(fp,s,b,st):
+    p=_core_path(); p.parent.mkdir(parents=True,exist_ok=True); tmp=p.with_suffix('.tmp'); tmp.write_text(json.dumps({'schema':_SCHEMA_VERSION,'fingerprint':fp,'selected':asdict(s),'baseline_tps':b,'selected_tps':st},indent=2,sort_keys=True)+'\n'); os.replace(tmp,p)
+def _kv_map(fp):
+    try: d=json.loads(_kv_path().read_text())
+    except Exception: return {}
+    return d.get('buckets',{}) if d.get('schema')==_SCHEMA_VERSION and d.get('fingerprint')==fp and isinstance(d.get('buckets'),dict) else {}
+def _save_kv(fp,d):
+    p=_kv_path(); p.parent.mkdir(parents=True,exist_ok=True); tmp=p.with_suffix('.tmp'); tmp.write_text(json.dumps({'schema':_SCHEMA_VERSION,'fingerprint':fp,'buckets':d},indent=2,sort_keys=True)+'\n'); os.replace(tmp,p)
+def _measure_kv(a,binary,model,config,selected,bucket):
+    pad=max(0,bucket*4-4096); base=_probe(a,binary,model,config,selected,'native-default',pad); _log('kv',base,bucket)
+    if not getattr(base,'ok',False) or _tps(base)<=0: raise RuntimeError('KV baseline failed')
+    vals=[base]
+    for kv in _kv_candidates():
+        if kv=='native-default': continue
+        p=_probe(a,binary,model,config,selected,kv,pad); _log('kv',p,bucket)
+        if _valid(p,base): vals.append(p)
+    win=max(vals,key=_tps)
+    return 'native-default' if win is not base and _tps(win)<_tps(base)*_gain() else str(getattr(win,'kv','native-default'))
+def _select_kv(a,binary,model,config,request,selected,fp):
+    bucket=_bucket_for_request(config,request); mode=_kv_mode(config)
+    if mode!='auto': return mode,bucket
+    d=_kv_map(fp); key=str(bucket)
+    if key not in d: d[key]=_measure_kv(a,binary,model,config,selected,bucket); _save_kv(fp,d)
+    return str(d[key]),bucket
+def _export(s,kv,bucket):
+    os.environ['MMM_LLAMA_ACTIVE_SPEC_TYPE']=str(s.spec_type); os.environ['MMM_LLAMA_ACTIVE_DRAFT_N_MAX']=str(s.draft_n_max); os.environ['MMM_LLAMA_ACTIVE_PARALLEL']='1'; os.environ['MMM_LLAMA_ACTIVE_UBATCH']=str(s.ubatch); os.environ['MMM_LLAMA_ACTIVE_CACHE_REUSE']='0'; os.environ['MMM_LLAMA_ACTIVE_MTP_P_MIN']=f'{s.draft_p_min:g}'; os.environ['MMM_LLAMA_ACTIVE_TUNING_OBJECTIVE']='single_stream'; os.environ['MMM_LLAMA_ACTIVE_KV_CACHE']=kv; os.environ[_BUCKET_ENV]=str(bucket)
+    if kv=='native-default': os.environ.pop(_KV_ENV,None)
+    else: os.environ[_KV_ENV]=kv
+def _shutdown(a):
+    fn=getattr(a,'_shutdown_managed_server',None)
+    if callable(fn): fn(); return
+    p=getattr(a,'_MANAGED_PROCESS',None); a._stop_server(p); a._MANAGED_PROCESS=None; a._MANAGED_URL=None; os.environ.pop('LLAMA_SERVER_URL',None)
+def install(a):
+    current=a.ensure_tuned_server
+    if getattr(current,_MARKER,False): return
+    @wraps(current)
+    def ensure(config,request):
+        if not (_enabled() and _is_qwen35_mtp(config) and t4._is_t4_runtime(a)): return current(config,request)
+        with _LOCK,a._AUTOTUNE_LOCK:
+            binary=a._server_binary()
+            if binary is None: return current(config,request)
+            model=a._resolve_model_path(config); fp=_fp(a,config,binary,model); core=_load_core(a,fp)
+            if core is None:
+                _reclaim_prior_mmm_server()
+                try: selected,bt,st=_measure_core(a,binary,model,config)
+                except Exception as exc:
+                    print('llama server: T4 max-speed calibration failed; conservative fallback',f'{type(exc).__name__}: {exc}',flush=True); return current(config,request)
+                _save_core(fp,selected,bt,st); source='measured'
+            else: selected,bt,st=core; source='cache'
+            try: kv,bucket=_select_kv(a,binary,model,config,request,selected,fp)
+            except Exception as exc:
+                print('llama server: context-KV calibration failed; native KV',f'{type(exc).__name__}: {exc}',flush=True); kv='native-default'; bucket=_bucket_for_request(config,request)
+            process=getattr(a,'_MANAGED_PROCESS',None); url=str(getattr(a,'_MANAGED_URL','') or ''); active=os.environ.get('MMM_LLAMA_ACTIVE_KV_CACHE','').strip().lower()
+            if process is not None and process.poll() is None and url:
+                if active==kv: os.environ[_BUCKET_ENV]=str(bucket); return url
+                _shutdown(a)
+            _export(selected,kv,bucket); url=a._launch_selected(binary,model,config,selected); speed=st/bt if bt>0 else 1.0
+            print('llama server: T4 max-speed production profile',f'source={source}',f'spec={selected.spec_type}',f'n_max={selected.draft_n_max}',f'p_min={selected.draft_p_min:g}',f'ubatch={selected.ubatch}',f'kv={kv}',f'bucket={bucket}',f'baseline={bt:.2f}',f'selected={st:.2f}',f'speedup={speed:.3f}x',flush=True); return url
+    setattr(ensure,_MARKER,True); ensure._mmm_qwen35_t4_max_speed=True; a.ensure_tuned_server=ensure
+
+__all__=['_bucket_for_request','_context_buckets','_kv_candidates','_kv_mode','_p_mins','_ubatches','_widths','install']
+'''
+          write('minecraft_mod_ai/qwen35_t4_max_speed_tuning.py',max_module)
+
+          p='minecraft_mod_ai/llama_tuning_pipeline.py'; t=read(p)
+          t=re.sub(r'_TUNING_PIPELINE_VERSION = \d+','_TUNING_PIPELINE_VERSION = 8',t,count=1)
+          if 'qwen35_t4_max_speed_tuning' not in t:
+              n='''        from .qwen35_t4_single_stream_tuning import (\n            install as install_qwen35_t4_single_stream,\n        )\n'''
+              t=one(t,n,n+'        from .qwen35_t4_max_speed_tuning import install as install_qwen35_t4_max_speed\n','pipeline import')
+              t=one(t,'            install_qwen35_t4_single_stream(self.autotune)\n','            install_qwen35_t4_single_stream(self.autotune)\n            install_qwen35_t4_max_speed(self.autotune)\n','pipeline install')
+          write(p,t)
+
+          p='tests/test_runtime_bootstrap_clean.py'; t=read(p)
+          if '"qwen35_t4_max_speed_tuning",' not in t:
+              t=one(t,'        "qwen35_t4_single_stream_tuning",\n','        "qwen35_t4_single_stream_tuning",\n        "qwen35_t4_max_speed_tuning",\n','composer set')
+          if 'source.index("install_qwen35_t4_max_speed(")' not in t:
+              old='        < source.index("install_qwen35_t4_single_stream(")\n        < source.index("install_single_stream_agentic_policy(")\n'
+              new='        < source.index("install_qwen35_t4_single_stream(")\n        < source.index("install_qwen35_t4_max_speed(")\n        < source.index("install_single_stream_agentic_policy(")\n'
+              t=one(t,old,new,'composer order')
+          write(p,t)
+
+          p='tests/test_native_llama_prebuilt_contract.py'; t=read(p)
+          t=t.replace('def test_emergency_source_build_enables_cuda_graphs() -> None:','def test_emergency_source_build_enables_max_cuda_path() -> None:')
+          if '"-DGGML_CUDA_CUB_3DOT2=ON"' not in t:
+              t=one(t,'    assert \'"-DGGML_CUDA_GRAPHS=ON"\' in fallback\n','    assert \'"-DGGML_CUDA_GRAPHS=ON"\' in fallback\n    assert \'"-DGGML_CUDA_CUB_3DOT2=ON"\' in fallback\n    assert \'"-DGGML_CUDA_FA=ON"\' in fallback\n    assert \'"-DGGML_LTO=ON"\' in fallback\n','source tests')
+          t=re.sub(r'assert "BUNDLE_SCHEMA: [^"]+" in worker',f'assert "BUNDLE_SCHEMA: {BUNDLE_SCHEMA}" in worker',t,count=1)
+          t=re.sub(r'assert "RELEASE_TAG: [^"]+" in worker',f'assert "RELEASE_TAG: {BUNDLE_TAG}" in worker',t,count=1)
+          if 'assert "-DGGML_CUDA_CUB_3DOT2=ON" in worker' not in t:
+              t=one(t,'    assert "-DGGML_CUDA_GRAPHS=ON" in worker\n','    assert "-DGGML_CUDA_GRAPHS=ON" in worker\n    assert "-DGGML_CUDA_CUB_3DOT2=ON" in worker\n    assert "-DGGML_CUDA_FA=ON" in worker\n    assert "-DGGML_LTO=ON" in worker\n','worker tests')
+          t=re.sub(r'assert helper\.BUNDLE_SCHEMA_VERSION == "[^"]+"',f'assert helper.BUNDLE_SCHEMA_VERSION == "{BUNDLE_SCHEMA}"',t,count=1)
+          t=re.sub(r'assert helper\.BUNDLE_RELEASE_TAG == "[^"]+"',f'assert helper.BUNDLE_RELEASE_TAG == "{BUNDLE_TAG}"',t,count=1)
+          fixture='                "cuda_graphs": False,\n                "files": {},\n'
+          if fixture in t: t=t.replace(fixture,'                "cuda_graphs": False,\n                "cuda_cub_3dot2": True,\n                "cuda_fa": True,\n                "lto": True,\n                "files": {},\n',1)
+          write(p,t)
+
+          write('tests/test_qwen35_t4_max_speed_tuning.py','''from __future__ import annotations\nfrom types import SimpleNamespace\nfrom minecraft_mod_ai.qwen35_t4_max_speed_tuning import _bucket_for_request,_context_buckets,_kv_candidates,_kv_mode,_p_mins,_ubatches,_widths\n\ndef test_widths(monkeypatch):\n    monkeypatch.delenv("MMM_QWEN35_T4_MAX_WIDTHS",raising=False); assert _widths()==(1,2,3,4,6,8,12,16)\ndef test_pmins(monkeypatch):\n    monkeypatch.delenv("MMM_QWEN35_T4_MAX_P_MIN",raising=False); assert _p_mins()==(0.0,0.5,0.6,0.7,0.8,0.9)\ndef test_ubatch(monkeypatch):\n    monkeypatch.delenv("MMM_QWEN35_T4_UBATCHES",raising=False); assert _ubatches(2048)==(512,1024,2048)\ndef test_kv_modes(monkeypatch):\n    monkeypatch.delenv("MMM_QWEN35_T4_MAX_KV",raising=False); assert _kv_candidates()==("native-default","q8_0","q4_0"); c=SimpleNamespace(extra={}); monkeypatch.setenv("MMM_QWEN35_T4_KV_MODE","q8"); assert _kv_mode(c)=="q8_0"\ndef test_buckets(monkeypatch):\n    monkeypatch.delenv("MMM_QWEN35_T4_KV_CONTEXT_BUCKETS",raising=False); c=SimpleNamespace(max_context=32768); assert _context_buckets(c)==(2048,8192,16384,28672); r=SimpleNamespace(messages=({"role":"user","content":"x"*30000},)); assert _bucket_for_request(c,r)==16384\n''')
+          pathlib.Path('.github/workflows/apply-llama-max-once.yml').unlink()
+          print('patched latest llama engine + six-axis T4 max-speed policy')
+          PY
+          python3 -m py_compile tools/colab_runtime_setup.py tools/native_llama_bundle.py minecraft_mod_ai/qwen35_t4_single_stream_tuning.py minecraft_mod_ai/qwen35_t4_max_speed_tuning.py minecraft_mod_ai/llama_tuning_pipeline.py tests/test_qwen35_t4_max_speed_tuning.py
+
+      - name: Commit atomically to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "juju-mmm-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Maximize latest llama.cpp throughput on T4"
+          git pull --rebase origin main
+          git push origin HEAD:main
