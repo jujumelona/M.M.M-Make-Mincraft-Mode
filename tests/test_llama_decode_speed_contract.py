@@ -89,21 +89,45 @@ def test_kv_autotune_can_be_explicitly_disabled(monkeypatch) -> None:
     assert _kv_autotune_enabled(autotune) is False
 
 
-def test_structured_local_payload_is_host_validated_without_server_json_grammar() -> None:
+def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
-    request = SimpleNamespace(
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    structured = SimpleNamespace(
         messages=({"role": "user", "content": "return json"},),
         response_format="json",
+        response_schema=schema,
+        tools=(),
     )
-    payload = hardware_policy._server_payload(adapter, request)
-    assert "response_format" not in payload
-    assert payload["reasoning_effort"] == "none"
-    assert getattr(
-        hardware_policy._server_payload,
-        "_mmm_host_validated_json_no_gbnf",
-        False,
-    )
+    payload = hardware_policy._server_payload(adapter, structured)
+    assert payload["response_format"] == {
+        "type": "json_object",
+        "schema": schema,
+    }
 
+    tool_request = SimpleNamespace(
+        messages=({"role": "user", "content": "inspect then return json"},),
+        response_format="json",
+        response_schema=schema,
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "lookup",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+        tool_choice="auto",
+    )
+    tool_payload = hardware_policy._server_payload(adapter, tool_request)
+    assert "response_format" not in tool_payload
+    assert tool_payload["tools"][0]["function"]["name"] == "lookup"
 
 def test_default_policy_searches_for_decode_speed_without_overfitting_exact_grid(
     monkeypatch,

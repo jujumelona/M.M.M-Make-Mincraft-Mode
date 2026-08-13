@@ -61,11 +61,11 @@ def _bootstrap_native_server() -> str | None:
 
 
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-    """Build the minimal OpenAI-compatible payload shared by every llama path.
+    """Build the one authoritative native llama-server chat payload.
 
-    JSON structure is requested in the authoritative prompt and validated/repaired by
-    the host. Optional OpenAI transport controls are deliberately omitted because
-    native llama.cpp builds/chat templates do not support them uniformly.
+    Tool-capable turns use the smallest widely compatible function-calling wire
+    contract. Structured non-tool turns may use llama.cpp JSON-schema constrained
+    decoding. Host parsing and validation remain authoritative in both cases.
     """
 
     payload: dict[str, Any] = {
@@ -82,6 +82,20 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             payload["tool_choice"] = (
                 dict(tool_choice) if isinstance(tool_choice, dict) else tool_choice
             )
+        # Do not combine optional structured/reasoning/parallel transport controls
+        # with native tool calls. Some llama-server/chat-template combinations reject
+        # that mixed payload even though each feature is valid independently.
+        return payload
+
+    if getattr(request, "response_format", None) == "json":
+        schema = getattr(request, "response_schema", None)
+        if schema is not None:
+            payload["response_format"] = {
+                "type": "json_object",
+                "schema": dict(schema),
+            }
+        else:
+            payload["response_format"] = {"type": "json_object"}
     return payload
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:

@@ -487,7 +487,9 @@ def test_game_design_requests_host_schema_from_router(tmp_path, monkeypatch) -> 
 
     GameDesignPlanner(router).plan("Create a moon crystal item.")
 
-    schema = router.calls[0][1]["response_schema"]
+    kwargs = router.calls[0][1]
+    assert kwargs["enable_tools"] is False
+    schema = kwargs["response_schema"]
     assert schema["required"] == ["game_design"]
     game_design = schema["properties"]["game_design"]
     assert "mod_context" in game_design["required"]

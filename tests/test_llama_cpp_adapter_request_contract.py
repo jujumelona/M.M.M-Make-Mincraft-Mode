@@ -106,3 +106,37 @@ def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatc
     assert "HTTP 400" in message
     assert "unsupported request field" in message
     assert "SECRET_PROMPT_SENTINEL" not in message
+
+
+def test_generate_turn_preserves_schema_for_non_tool_json(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
+
+    def post(url, *, json, timeout):
+        captured["payload"] = json
+        return _CompletionResponse(
+            status_code=200,
+            payload={"choices": [{"message": {"content": '{"value":"ok"}'}}]},
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "structured"},),
+            response_format="json",
+            response_schema=schema,
+        )
+    )
+
+    assert turn.content == '{"value":"ok"}'
+    assert captured["payload"]["response_format"] == {
+        "type": "json_object",
+        "schema": schema,
+    }

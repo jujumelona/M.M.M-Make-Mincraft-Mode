@@ -375,6 +375,7 @@ def _generate_valid_game_design(
             media_paths=media_paths,
             response_format="json",
             response_schema=_GAME_DESIGN_RESPONSE_SCHEMA,
+            enable_tools=False,
         )
         try:
             design = _extract_valid_game_design(text)

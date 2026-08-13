@@ -13,25 +13,39 @@ def _adapter(max_new_tokens: int = 8192):
     return SimpleNamespace(config=SimpleNamespace(max_new_tokens=max_new_tokens))
 
 
-def test_json_request_uses_host_validation_without_optional_transport_controls() -> None:
+def test_json_request_uses_schema_when_no_tools_are_present() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
     request = SimpleNamespace(
         messages=(
             {"role": "system", "content": "Return JSON."},
             {"role": "user", "content": "Plan it."},
         ),
         response_format="json",
+        response_schema=schema,
+        tools=(),
     )
     payload = _server_payload(_adapter(), request)
-    assert "response_format" not in payload
+    assert payload["response_format"] == {
+        "type": "json_object",
+        "schema": schema,
+    }
     assert "reasoning_effort" not in payload
     assert "parallel_tool_calls" not in payload
     assert payload["max_tokens"] == 8192
 
-
-def test_tool_request_uses_same_minimal_native_payload() -> None:
+def test_tool_request_uses_minimal_payload_even_when_schema_exists() -> None:
     request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then plan"},),
         response_format="json",
+        response_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
         tools=(
             {
                 "type": "function",
