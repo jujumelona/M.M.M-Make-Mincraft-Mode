@@ -25,14 +25,11 @@ def test_mcp_config_has_real_local_dev_and_research_servers() -> None:
         "-m",
         "minecraft_mod_ai.mod_generation_mcp_server",
     ]
-    assert "MMM_MCP_STAGE" not in generation["env"]
+    assert generation["env"]["MMM_MCP_STAGE"] == "generation"
 
     assert servers["minecraft-dev"]["args"] == [
         "-y",
         "@mcdxai/minecraft-dev-mcp@1.2.4",
     ]
     assert servers["playwright"]["args"][1] == "@playwright/mcp@0.0.78"
-    assert all(
-        "@latest" not in str(server)
-        for server in servers.values()
-    )
+    assert all("@latest" not in str(server) for server in servers.values())
