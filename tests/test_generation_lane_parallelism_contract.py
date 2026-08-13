@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph_module
@@ -45,21 +47,22 @@ def test_deterministic_generation_domains_use_cpu_lane() -> None:
     assert entity.resource_class == "cpu_io"
 
 
-def test_unknown_integration_cannot_escape_single_llm_safe_lane() -> None:
-    node = _module_node(
-        "content",
-        [
-            {
-                "module_id": "third_party_bridge",
-                "kind": "integration",
-                "config": {"integration_type": "unknown_custom_bridge"},
-            }
-        ],
+def test_unknown_integration_routes_to_custom_llm_stage() -> None:
+    module = ProductionModule(
+        module_id="third_party_bridge",
+        kind="integration",
+        config={"integration_type": "unknown_custom_bridge"},
     )
-    assert node.resource_class == "commit"
+    assert work_graph_module._module_stage(module) == "custom"
 
 
 def test_builtin_sidecar_integration_is_deterministic_cpu_work() -> None:
+    module = ProductionModule(
+        module_id="local_ai",
+        kind="integration",
+        config={"integration_type": "mmm_local_ai_sidecar"},
+    )
+    assert work_graph_module._module_stage(module) == "content"
     node = _module_node(
         "content",
         [
@@ -96,19 +99,20 @@ def test_stage_write_locks_are_domain_local_not_global() -> None:
     assert len({id(content_lock), id(system_lock), id(entity_lock)}) == 3
 
 
-def test_custom_modules_are_released_one_per_dag_node(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_CUSTOM_PIPELINE_SHARD_SIZE", raising=False)
+def test_custom_modules_keep_dependency_aware_bounded_shards(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
     modules = tuple(
         ProductionModule(
             module_id=f"custom_{index}",
             kind="custom_java",
             config={"summary": f"custom {index}"},
         )
-        for index in range(4)
+        for index in range(100)
     )
-    shards = list(work_graph_module._module_shards(modules, policy=ScalePolicy()))
-    assert [stage for stage, _ in shards] == ["custom"] * 4
-    assert [len(members) for _, members in shards] == [1, 1, 1, 1]
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+    shards = list(work_graph_module._module_shards(modules, policy=policy))
+    assert [stage for stage, _ in shards] == ["custom", "custom", "custom"]
+    assert [len(members) for _, members in shards] == [48, 48, 4]
 
 
 def test_entities_use_small_pipeline_shards(monkeypatch) -> None:
