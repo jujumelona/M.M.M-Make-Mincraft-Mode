@@ -1,0 +1,51 @@
+name: Apply safe hot-path optimization
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-safe-hot-path-optimization.yml
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply and validate focused hot-path changes
+        run: |
+          python -m pip install -q -e '.[dev]'
+          python -m py_compile .github/scripts/optimize_safe_hot_paths.py
+          python .github/scripts/optimize_safe_hot_paths.py
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check \
+            minecraft_mod_ai/production_tools.py \
+            minecraft_mod_ai/custom_module_generator.py \
+            tests/test_safe_hot_path_optimization.py \
+            --select F,E7,E9
+          python -m pytest -q \
+            tests/test_safe_hot_path_optimization.py \
+            tests/test_project_context_pagination.py \
+            tests/test_research_ledger.py \
+            tests/test_custom_generation_search_contract.py \
+            tests/test_production_tool_parallel_contract.py
+      - name: Commit focused optimization to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/apply-safe-hot-path-optimization.yml
+          rm .github/scripts/optimize_safe_hot_paths.py
+          git add -A
+          git diff --cached --check
+          git commit -m "Optimize RAG hot-path initialization and indexing"
+          git pull --rebase origin main
+          git push origin HEAD:main
