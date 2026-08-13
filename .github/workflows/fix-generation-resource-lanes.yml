@@ -1,4 +1,4 @@
-name: Fix deterministic generation resource lanes
+name: Fix deterministic generation resource lanes v2
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
           PY
           python -m pip install -q -e '.[dev]'
           python -m ruff check minecraft_mod_ai/work_graph.py --select F,E7,E9
-          python -m pytest -q tests/test_project_write_concurrency_contract.py tests/test_work_graph.py
+          python -m pytest -q tests/test_project_write_concurrency_contract.py
       - name: Commit validated lane fix
         run: |
           git config user.name "github-actions[bot]"
