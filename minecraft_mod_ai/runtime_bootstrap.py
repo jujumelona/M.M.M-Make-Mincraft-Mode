@@ -426,6 +426,7 @@ def _install_post_bootstrap_contracts() -> None:
     from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_research_contract import install as install_small_model_research
+    from .small_model_tool_guard_contract import install as install_small_model_tool_guard
 
     if not hasattr(central_research, "_bounded_text"):
         def _full_research_text(value: str, *, field: str = "research text") -> str:
@@ -448,5 +449,6 @@ def _install_post_bootstrap_contracts() -> None:
         repair_module=repair_engine,
         optimization_module=agentic_optimization_contract,
     )
+    install_small_model_tool_guard(install_small_model_max_agent)
     research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
