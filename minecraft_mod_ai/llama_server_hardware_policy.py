@@ -64,8 +64,10 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the one authoritative native llama-server chat payload.
 
     Tool-capable turns use the smallest widely compatible function-calling wire
-    contract. Structured non-tool turns may use llama.cpp JSON-schema constrained
-    decoding. Host parsing and validation remain authoritative in both cases.
+    contract. Structured non-tool turns use llama.cpp JSON-schema constrained
+    decoding and explicitly disable model-internal thinking so the bounded output
+    budget is reserved for the visible JSON contract. Host parsing and validation
+    remain authoritative in both cases.
     """
 
     payload: dict[str, Any] = {
@@ -96,7 +98,14 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             }
         else:
             payload["response_format"] = {"type": "json_object"}
+        # llama.cpp exposes both controls on /v1/chat/completions.  reasoning_effort
+        # is the server-level hard disable while enable_thinking is consumed by Qwen
+        # chat templates.  Supplying both makes the transport intent explicit and
+        # prevents reasoning tokens from exhausting the visible structured response.
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
+
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:
     reasoning = ""
@@ -303,7 +312,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 f" input_chars={_request_content_chars(payload)}",
                 f" max_tokens={payload['max_tokens']}",
                 f" structured={'json' if structured else 'text'}",
-                f" reasoning={'disabled' if structured else 'model-default'}",
+                f" reasoning={'disabled' if payload.get('reasoning_effort') == 'none' else 'model-default'}",
                 sep="",
                 flush=True,
             )
