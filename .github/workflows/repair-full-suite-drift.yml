@@ -8,6 +8,8 @@ on:
       - .github/scripts/repair_full_suite_drift.py
       - .github/scripts/repair_full_suite_drift_followup.py
       - tests/test_agent_tool_calling.py
+      - config/external_mcp_registry.yaml
+      - minecraft_mod_ai/config/external_mcp_registry.yaml
 
 permissions:
   contents: write
@@ -29,6 +31,8 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Sync packaged external MCP registry
+        run: cp config/external_mcp_registry.yaml minecraft_mod_ai/config/external_mcp_registry.yaml
       - name: Migrate stale tests to live contracts
         run: |
           python .github/scripts/repair_full_suite_drift.py
@@ -37,6 +41,7 @@ jobs:
         run: |
           python -m compileall -q minecraft_mod_ai tests tools
           python -m ruff check minecraft_mod_ai tests tools --select F,E7,E9
+          cmp --silent config/external_mcp_registry.yaml minecraft_mod_ai/config/external_mcp_registry.yaml
           python -m pytest -q \
             tests/test_mcp_complete_plan_refs.py \
             tests/test_notebook_registry_policy.py \
@@ -57,12 +62,12 @@ jobs:
             .github/workflows/repair-full-suite-drift.yml \
             .github/scripts/repair_full_suite_drift.py \
             .github/scripts/repair_full_suite_drift_followup.py
-          git add tests
+          git add tests minecraft_mod_ai/config/external_mcp_registry.yaml
           if git diff --cached --quiet; then
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Align stale tests with live runtime contracts'
+          git commit -m 'Align packaged contracts with live runtime'
           git pull --rebase origin main
           git push origin HEAD:main
