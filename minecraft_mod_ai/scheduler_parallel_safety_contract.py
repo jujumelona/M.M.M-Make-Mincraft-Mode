@@ -233,7 +233,7 @@ def _install_pipeline_shards(work_graph_module: Any) -> None:
 
 
 def _install_generation_lanes(work_graph_module: Any) -> None:
-    """Keep deterministic generation on CPU workers even across live-reload wrappers."""
+    """Override only the model-backed content exception to base lane ownership."""
 
     current = work_graph_module._node
     if getattr(current, "_mmm_stage_parallel_generation_lanes", False):
@@ -247,14 +247,13 @@ def _install_generation_lanes(work_graph_module: Any) -> None:
         payload: dict[str, Any],
     ):
         normalized = dict(payload)
-        if normalized.get("kind") == "module-shard":
-            generation_stage = str(normalized.get("generation_stage", ""))
-            if generation_stage in {"system", "entity"}:
-                normalized["resource_class"] = "cpu_io"
-            elif generation_stage == "content" and _content_node_is_cpu_safe(normalized):
-                normalized["resource_class"] = "cpu_io"
-            elif generation_stage == "audio-binding":
-                normalized.setdefault("resource_class", "commit")
+        if (
+            normalized.get("kind") == "module-shard"
+            and str(normalized.get("generation_stage", "")) == "content"
+            and not str(normalized.get("resource_class", "")).strip()
+            and not _content_node_is_cpu_safe(normalized)
+        ):
+            normalized["resource_class"] = "llm"
         return current(node_id, stage, dependencies, normalized)
 
     node._mmm_stage_parallel_generation_lanes = True  # type: ignore[attr-defined]
@@ -331,6 +330,7 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
         now = time.time()
         owner = _orchestrator_owner(self)
         capacities = _capacities()
+        renew_before = now + max(1.0, lease_seconds * 0.5)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -338,7 +338,8 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 UPDATE tasks
                 SET lease_until = ?, updated_at = ?
                 WHERE state = ? AND lease_owner = ?
-                  AND lease_until IS NOT NULL AND lease_until >= ?
+                  AND lease_until IS NOT NULL
+                  AND lease_until >= ? AND lease_until <= ?
                 """,
                 (
                     now + lease_seconds,
@@ -346,6 +347,7 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                     work_graph_module.WorkState.RUNNING.value,
                     owner,
                     now,
+                    renew_before,
                 ),
             )
             connection.execute(
@@ -388,7 +390,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                     lane for lane in free_lanes if lane not in _GPU_RESOURCE_CLASSES
                 )
             if not free_lanes:
-                connection.commit()
                 return None
 
             stage_sql = ""
@@ -425,7 +426,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 tuple(params),
             ).fetchone()
             if row is None:
-                connection.commit()
                 return None
 
             node_id = str(row[0])
@@ -445,7 +445,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                     work_graph_module.WorkState.PENDING.value,
                 ),
             )
-            connection.commit()
         return self.task(node_id)
 
     claim_ready._mmm_parallel_lane_claim = True
