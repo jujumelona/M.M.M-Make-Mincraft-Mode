@@ -87,9 +87,15 @@ class _ToolRuntime:
             {
                 "type": "function",
                 "function": {
-                    "name": "external_mcp_capabilities",
-                    "description": "list reviewed external capabilities",
-                    "parameters": {"type": "object", "properties": {}},
+                    "name": "inspect_existing_mod",
+                    "description": "Inspect an existing Minecraft mod archive.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "archive_path": {"type": "string"},
+                        },
+                        "required": ["archive_path"],
+                    },
                 },
             },
         )
@@ -207,13 +213,17 @@ def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> 
     assert runtime.stages == ["generation"]
     assert len(adapter.turn_requests) == 1
     request = adapter.turn_requests[0]
-    assert request.tools
+    assert [tool["function"]["name"] for tool in request.tools] == [
+        "inspect_existing_mod"
+    ]
     assert request.tool_choice == "auto"
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
     assert any(
         message.get("role") == "system"
         and "mmm/agent-capability-context-v4" in str(message.get("content", ""))
+        and "ground-production-with-live-evidence" in str(message.get("content", ""))
+        and "inspect_existing_mod" in str(message.get("content", ""))
         for message in request.messages
     )
 
