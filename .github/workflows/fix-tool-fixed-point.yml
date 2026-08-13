@@ -22,6 +22,7 @@ jobs:
           python-version: "3.11"
       - name: Apply fixed-point convergence repair
         run: |
+          python -m pip install -q pytest anyio PyYAML httpx packaging
           python .github/scripts/fix_tool_fixed_point.py
           python -m compileall -q minecraft_mod_ai
           pytest -q tests/test_agent_tool_calling.py
