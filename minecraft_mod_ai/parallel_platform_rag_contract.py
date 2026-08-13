@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from functools import wraps
 from typing import Any, Callable
 
+from .agentic_research_fusion import retrieve_target_agentic_evidence
 from .platform_catalog import adapter_for_target
 
 
@@ -31,173 +31,38 @@ def _target_parallel_retrieve_factory(
     ) -> dict[str, Any]:
         adapter = _adapter_from_brief(research_brief)
         if adapter is None:
-            # Pre-target classification may still use the legacy conceptual lane.
-            # Once a host target exists, this branch is never allowed to relabel it.
-            return legacy_retrieve(research_brief, retrieve=retrieve) if retrieve else legacy_retrieve(research_brief)
+            # Pre-target classification keeps the legacy conceptual 1.20.1 lane.
+            # Once a target is frozen, all evidence uses the target-aware agentic lane.
+            return (
+                legacy_retrieve(research_brief, retrieve=retrieve)
+                if retrieve
+                else legacy_retrieve(research_brief)
+            )
 
         selected_retrieve = retrieve or retrieval_module.retrieve_official_evidence
-        raw_domains = research_brief.get("domains")
-        if not isinstance(raw_domains, list) or not raw_domains:
-            raise central_module.SpecValidationError("Central research brief has no domains.")
-        domains = [central_module._research_domain(raw) for raw in raw_domains]
-        jobs: list[tuple[int, int, str]] = []
-        for domain_index, domain in enumerate(domains):
-            if "official_docs" not in domain.providers:
-                continue
-            for query_index, query in enumerate(domain.queries):
-                jobs.append((domain_index, query_index, query))
-
-        if not jobs:
-            payload = {
-                "schema_version": "mmm/central-evidence-graph-v1",
-                "brief_sha256": research_brief.get("brief_sha256", ""),
-                "target": {
-                    "minecraft_version": adapter.minecraft_version,
-                    "loader": adapter.loader,
-                    "mappings": adapter.yarn_mappings,
-                },
-                "domains": [
-                    {
-                        "domain_id": domain.domain_id,
-                        "strategy": "routed_to_other_providers",
-                        "queries": [],
-                    }
-                    for domain in domains
-                ],
-                "unresolved_official_domains": [],
-                "authorization": "none",
-                "retrieval_is_authority": False,
-            }
-            payload["evidence_sha256"] = central_module._sha256(
-                central_module.canonical_json(payload)
-            )
-            return payload
-
-        from .parallel_runtime_contract import _env_workers
-
-        workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
-        primary_results: dict[tuple[int, int], Any] = {}
-        correction_results: dict[tuple[int, int], list[Any]] = {}
-
-        def fetch_primary(job: tuple[int, int, str]) -> tuple[int, int, Any]:
-            domain_index, query_index, query = job
-            receipt = selected_retrieve(
-                query,
-                minecraft_version=adapter.minecraft_version,
-                loader=adapter.loader,
-                mappings=adapter.yarn_mappings,
-                limit=8,
-            )
-            return domain_index, query_index, receipt
-
-        with ThreadPoolExecutor(
-            max_workers=min(workers, len(jobs)),
-            thread_name_prefix="mmm_target_rag",
-        ) as pool:
-            primary_futures = [pool.submit(fetch_primary, job) for job in jobs]
-            for future in as_completed(primary_futures):
-                domain_index, query_index, primary = future.result()
-                primary_results[(domain_index, query_index)] = primary
-
-            correction_futures: dict[Future[Any], tuple[int, int, int]] = {}
-            for (domain_index, query_index), primary in primary_results.items():
-                correction_results[(domain_index, query_index)] = [
-                    None for _ in primary.correction_queries
-                ]
-                for correction_index, correction_query in enumerate(primary.correction_queries):
-                    future = pool.submit(
-                        selected_retrieve,
-                        correction_query,
-                        minecraft_version=adapter.minecraft_version,
-                        loader=adapter.loader,
-                        mappings=adapter.yarn_mappings,
-                        limit=4,
-                    )
-                    correction_futures[future] = (
-                        domain_index,
-                        query_index,
-                        correction_index,
-                    )
-            for future in as_completed(correction_futures):
-                domain_index, query_index, correction_index = correction_futures[future]
-                correction_results[(domain_index, query_index)][correction_index] = future.result()
-
-        results: list[dict[str, Any]] = []
-        unresolved: list[str] = []
-        for domain_index, domain in enumerate(domains):
-            if "official_docs" not in domain.providers:
-                results.append(
-                    {
-                        "domain_id": domain.domain_id,
-                        "strategy": "routed_to_other_providers",
-                        "queries": [],
-                    }
-                )
-                continue
-            query_results: list[dict[str, Any]] = []
-            has_hits = False
-            for query_index, query in enumerate(domain.queries):
-                primary = primary_results[(domain_index, query_index)]
-                corrections = [
-                    item.to_dict()
-                    for item in correction_results[(domain_index, query_index)]
-                    if item is not None
-                ]
-                has_hits = has_hits or bool(primary.hits) or any(
-                    bool(item.get("hits")) for item in corrections
-                )
-                query_results.append(
-                    {
-                        "query_sha256": central_module._sha256(query),
-                        "strategy": (
-                            "single"
-                            if not primary.correction_required
-                            else "corrective_multi_hop"
-                        ),
-                        "primary": primary.to_dict(),
-                        "corrections": corrections,
-                    }
-                )
-            if not has_hits:
-                unresolved.append(domain.domain_id)
-            results.append(
-                {
-                    "domain_id": domain.domain_id,
-                    "strategy": "adaptive_per_query",
-                    "queries": query_results,
-                }
-            )
-
-        payload = {
-            "schema_version": "mmm/central-evidence-graph-v1",
-            "brief_sha256": research_brief.get("brief_sha256", ""),
-            "target": {
-                "minecraft_version": adapter.minecraft_version,
-                "loader": adapter.loader,
-                "mappings": adapter.yarn_mappings,
-            },
-            "domains": results,
-            "unresolved_official_domains": unresolved,
-            "authorization": "none",
-            "retrieval_is_authority": False,
-        }
-        payload["evidence_sha256"] = central_module._sha256(
-            central_module.canonical_json(payload)
+        return retrieve_target_agentic_evidence(
+            research_brief,
+            central_module=central_module,
+            retrieve=selected_retrieve,
+            minecraft_version=adapter.minecraft_version,
+            loader=adapter.loader,
+            mappings=adapter.yarn_mappings,
+            include_target=True,
         )
-        return payload
 
     retrieve_domain_evidence_target_parallel._mmm_parallel_target_rag = True
+    retrieve_domain_evidence_target_parallel._mmm_agentic_rag_fusion = True
     return retrieve_domain_evidence_target_parallel
 
 
 def install(*, complete_planner_module: Any, central_module: Any, retrieval_module: Any) -> None:
-    """Repair the late parallel overlay without sacrificing research concurrency."""
+    """Bind target RAG to parallel adaptive retrieval and overlap independent research."""
 
-    from . import parallel_runtime_contract as parallel_module
     from . import ecosystem_discovery as ecosystem_module
+    from . import parallel_runtime_contract as parallel_module
 
     current_central = central_module.retrieve_domain_evidence
-    if getattr(current_central, "_mmm_parallel_target_rag", False):
+    if getattr(current_central, "_mmm_agentic_rag_fusion", False):
         target_retrieve = current_central
     else:
         target_retrieve = _target_parallel_retrieve_factory(
@@ -233,6 +98,7 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
         return base_radar(prompt, research_brief, *args, **kwargs)
 
     radar_with_target_prefetch._mmm_parallel_target_rag = True
+    radar_with_target_prefetch._mmm_agentic_rag_fusion = True
     complete_planner_module.collect_technology_radar = radar_with_target_prefetch
 
     current_ecosystem = complete_planner_module.collect_ecosystem_seed_bundle
@@ -274,7 +140,10 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
         return target_retrieve(brief)
 
     implementation_evidence_with_target_overlap._mmm_parallel_target_rag = True
-    complete_planner_module._retrieve_implementation_evidence = implementation_evidence_with_target_overlap
+    implementation_evidence_with_target_overlap._mmm_agentic_rag_fusion = True
+    complete_planner_module._retrieve_implementation_evidence = (
+        implementation_evidence_with_target_overlap
+    )
 
 
 __all__ = ["install"]
