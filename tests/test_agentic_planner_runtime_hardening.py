@@ -11,34 +11,29 @@ import minecraft_mod_ai.llama_tuning_pipeline as tuning_pipeline
 def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> None:
     barrier = threading.Barrier(2)
     observed: dict[str, str] = {}
+    agentic = SimpleNamespace()
+    agentic.normalize_research_brief = lambda prompt, _design: {
+        "domains": [{"domain_id": "request", "queries": [prompt]}]
+    }
+    agentic._domain_evidence_slice = lambda domain_id, deterministic: {
+        "base": domain_id,
+        **dict(deterministic),
+    }
+    agentic._research_receipt = lambda value: value
 
-    class _AgenticModule:
-        @staticmethod
-        def normalize_research_brief(prompt, _design):
-            return {"domains": [{"domain_id": "request", "queries": [prompt]}]}
+    def original_collect(router, prompt, *, trace_metadata=None):
+        barrier.wait(timeout=2)
+        evidence = agentic._domain_evidence_slice("request", {})
+        forced = evidence["forced_project_rag"]
+        observed[prompt] = forced["owner"]
+        return {
+            "research_brief": {"domains": []},
+            "deterministic": {},
+            "domain_notes": [],
+            "errors": [],
+        }
 
-        @staticmethod
-        def _domain_evidence_slice(domain_id, deterministic):
-            return {"base": domain_id, **dict(deterministic)}
-
-        @staticmethod
-        def _research_receipt(value):
-            return value
-
-        @staticmethod
-        def collect_pre_design_research(router, prompt, *, trace_metadata=None):
-            barrier.wait(timeout=2)
-            evidence = _AgenticModule._domain_evidence_slice("request", {})
-            forced = evidence["forced_project_rag"]
-            observed[prompt] = forced["owner"]
-            return {
-                "research_brief": {"domains": []},
-                "deterministic": {},
-                "domain_notes": [],
-                "errors": [],
-            }
-
-    agentic = _AgenticModule()
+    agentic.collect_pre_design_research = original_collect
     monkeypatch.setattr(
         forced_rag,
         "_forced_rag_bundle",
