@@ -16,9 +16,14 @@ _RESOURCE_CAPACITIES = {
     "image_gpu": 1,
     "commit": 1,
 }
-_SERIAL_GENERATION_STAGES = frozenset(
-    {"content", "system", "entity", "audio-binding"}
-)
+# These stages mutate some stage-global registries, so work within the same stage is
+# serialized.  They no longer share one global commit lane: content, systems and
+# entities can execute concurrently because their shared files are disjoint domains.
+_STAGE_WRITE_LOCKS = {
+    "content": threading.RLock(),
+    "system": threading.RLock(),
+    "entity": threading.RLock(),
+}
 _INDEX_COMMIT_LOCK = threading.RLock()
 
 
@@ -104,11 +109,36 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def _install_generation_commit_lanes(work_graph_module: Any) -> None:
-    """Do not occupy CPU workers with generators that must serialize shared writes."""
+def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
+    """Keep unknown integration modules out of the CPU lane.
+
+    Normal extended content and research shards are deterministic.  The built-in local
+    AI sidecar integration is deterministic too.  Other integration modules can fall
+    back to CustomModuleGenerator and therefore must not bypass the one-request LLM
+    lane merely because their topological stage is named ``content``.
+    """
+
+    members = payload.get("members")
+    if not isinstance(members, list):
+        return False
+    for member in members:
+        if not isinstance(member, dict):
+            return False
+        if str(member.get("kind", "")) != "integration":
+            continue
+        config = member.get("config")
+        if not isinstance(config, dict):
+            return False
+        if str(config.get("integration_type", "")) != "mmm_local_ai_sidecar":
+            return False
+    return True
+
+
+def _install_generation_lanes(work_graph_module: Any) -> None:
+    """Use CPU workers for independent deterministic stages, not one global commit queue."""
 
     current = work_graph_module._node
-    if getattr(current, "_mmm_shared_write_commit_lane", False):
+    if getattr(current, "_mmm_stage_parallel_generation_lanes", False):
         return
 
     @wraps(current)
@@ -119,15 +149,18 @@ def _install_generation_commit_lanes(work_graph_module: Any) -> None:
         payload: dict[str, Any],
     ):
         normalized = dict(payload)
-        if (
-            "resource_class" not in normalized
-            and normalized.get("kind") == "module-shard"
-            and str(normalized.get("generation_stage", ""))
-            in _SERIAL_GENERATION_STAGES
-        ):
-            normalized["resource_class"] = "commit"
+        if "resource_class" not in normalized and normalized.get("kind") == "module-shard":
+            generation_stage = str(normalized.get("generation_stage", ""))
+            if generation_stage in {"system", "entity"}:
+                normalized["resource_class"] = "cpu_io"
+            elif generation_stage == "content" and _content_node_is_cpu_safe(normalized):
+                normalized["resource_class"] = "cpu_io"
+            elif generation_stage == "audio-binding":
+                normalized["resource_class"] = "commit"
         return current(node_id, stage, dependencies, normalized)
 
+    node._mmm_stage_parallel_generation_lanes = True  # type: ignore[attr-defined]
+    # Keep the legacy marker because bootstrap/tests may inspect it across live reloads.
     node._mmm_shared_write_commit_lane = True  # type: ignore[attr-defined]
     work_graph_module._node = node
 
@@ -316,6 +349,15 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
     ledger_cls.claim_ready = claim_ready
 
 
+def _stage_write_lock(node: Any) -> threading.RLock | None:
+    if str(getattr(node, "resource_class", "")) != "cpu_io":
+        return None
+    stage = str(getattr(node, "stage", ""))
+    if not stage.startswith("generate:"):
+        return None
+    return _STAGE_WRITE_LOCKS.get(stage.split(":", 1)[1])
+
+
 def _install_index_commit_order(
     work_graph_module: Any,
     orchestrator_module: Any,
@@ -350,7 +392,13 @@ def _install_index_commit_order(
             ledger.begin(node.node_id, worker_id="complete-orchestrator")
 
         try:
-            if (
+            stage_lock = _stage_write_lock(node)
+            if stage_lock is not None:
+                # Same-stage generators can share manifests/initializers, so serialize
+                # only that domain. Different domains remain concurrent.
+                with stage_lock:
+                    receipt = action()
+            elif (
                 node.resource_class == "commit"
                 and shared_index is not None
                 and hasattr(shared_index, "root")
@@ -397,10 +445,10 @@ def install(
     work_graph_module: Any,
     orchestrator_module: Any,
 ) -> None:
-    _install_generation_commit_lanes(work_graph_module)
+    _install_generation_lanes(work_graph_module)
     _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
     _install_index_commit_order(work_graph_module, orchestrator_module)
 
 
-__all__ = ["_receipt_touched_paths", "install"]
+__all__ = ["_content_node_is_cpu_safe", "_receipt_touched_paths", "install"]
