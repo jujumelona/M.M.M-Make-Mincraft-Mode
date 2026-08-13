@@ -23,8 +23,6 @@ from .base import (
 class LlamaCppAdapter(ModelAdapter):
     """OpenAI-compatible client for the managed native llama-server."""
 
-    _reported_server_url: str | None = None
-
     def __init__(self, config: AdapterConfig) -> None:
         super().__init__(config)
 
@@ -77,24 +75,13 @@ class LlamaCppAdapter(ModelAdapter):
         cfg = self.config
         server_url = self._server_url(request)
         try:
-            import httpx
-
-            health = httpx.get(f"{server_url}/models", timeout=2.0)
-            health.raise_for_status()
-            if LlamaCppAdapter._reported_server_url != server_url:
-                print("llama server: connected", server_url, flush=True)
-                LlamaCppAdapter._reported_server_url = server_url
-
-            # Native llama-server request compatibility has exactly one owner.
-            # Tool-capable turns and ordinary text turns must use the same wire shape.
             from ..llama_server_hardware_policy import _server_payload
+            from ..llama_stream_efficiency_contract import _client, _report_server_connection
 
             payload = _server_payload(self, request)
-
-            response = httpx.post(
+            response = _client(server_url).post(
                 f"{server_url}/chat/completions",
                 json=payload,
-                timeout=None,
             )
             if response.status_code >= 400:
                 body = _bounded_response_body(response)
@@ -102,6 +89,7 @@ class LlamaCppAdapter(ModelAdapter):
                     f"llama server returned HTTP {response.status_code}"
                     + (f": {body}" if body else "")
                 )
+            _report_server_connection(server_url)
             data = response.json()
             choices = data.get("choices") if isinstance(data, dict) else None
             if not isinstance(choices, list) or not choices:
@@ -133,8 +121,6 @@ class LlamaCppAdapter(ModelAdapter):
             ) from exc
 
     def close(self) -> None:
-        # The managed native server owns model lifetime. GPU handoff is performed by
-        # llama_server_hardware_policy/llama_server_autotune, not by adapter teardown.
         return None
 
 
