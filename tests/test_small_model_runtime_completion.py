@@ -17,10 +17,13 @@ def test_relation_extractor_finds_java_and_resource_edges(tmp_path: Path) -> Non
     java.mkdir(parents=True)
     resources.mkdir(parents=True)
     target = java / "Target.java"
-    target.write_text("package demo; public final class Target {}", encoding="utf-8")
+    target.write_text(
+        "package demo;\npublic final class Target {}\n",
+        encoding="utf-8",
+    )
     caller = java / "Caller.java"
     caller.write_text(
-        'package demo; import demo.Target; class Caller { String id = "demo:item/widget"; Target value; }',
+        'package demo;\nimport demo.Target;\nclass Caller { String id = "demo:item/widget"; Target value; }\n',
         encoding="utf-8",
     )
     resource = resources / "widget.json"
@@ -38,11 +41,11 @@ def test_runtime_rag_index_contains_dependency_graph(tmp_path: Path) -> None:
     java = project / "src/main/java/demo"
     java.mkdir(parents=True)
     (java / "Target.java").write_text(
-        "package demo; public final class Target {}",
+        "package demo;\npublic final class Target {}\n",
         encoding="utf-8",
     )
     (java / "Caller.java").write_text(
-        "package demo; import demo.Target; public final class Caller { Target target; }",
+        "package demo;\nimport demo.Target;\npublic final class Caller { Target target; }\n",
         encoding="utf-8",
     )
     service = ProductionToolService(workspace_root=workspace, profile="t4_local")
