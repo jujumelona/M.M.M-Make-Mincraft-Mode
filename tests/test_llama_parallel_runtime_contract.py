@@ -77,30 +77,6 @@ class _ToolAwareAdapter:
         return "plain"
 
 
-class _ToolRuntime:
-    def __init__(self) -> None:
-        self.stages: list[str] = []
-
-    def tool_schemas(self, stage):
-        self.stages.append(stage)
-        return (
-            {
-                "type": "function",
-                "function": {
-                    "name": "inspect_existing_mod",
-                    "description": "Inspect an existing Minecraft mod archive.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "archive_path": {"type": "string"},
-                        },
-                        "required": ["archive_path"],
-                    },
-                },
-            },
-        )
-
-
 class _PlannerProbeRouter:
     profile = "test"
 
@@ -190,13 +166,14 @@ def test_planner_parallel_capacity_is_native_local_only(monkeypatch) -> None:
     assert _planner_parallel_capacity(remote, 2) == 1
 
 
-def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> None:
+def test_parallel_router_preserves_real_generation_mcp_tools_and_enable_tools(
+    monkeypatch,
+    tmp_path,
+) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    runtime = _ToolRuntime()
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_kwargs: runtime,
+    monkeypatch.setenv("MMM_AGENT_TOOLS", "1")
+    router = ModelRouter(profile="t4_local").bind_agent_workspace(
+        tmp_path / "workspace"
     )
     adapter = _ToolAwareAdapter()
     monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
@@ -210,12 +187,26 @@ def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> 
     )
 
     assert tool_result == "tool-aware"
-    assert runtime.stages == ["generation"]
     assert len(adapter.turn_requests) == 1
     request = adapter.turn_requests[0]
-    assert [tool["function"]["name"] for tool in request.tools] == [
-        "inspect_existing_mod"
-    ]
+    tool_names = {
+        str(tool["function"]["name"])
+        for tool in request.tools
+    }
+    # These schemas must come from the real generation-stage MCP server and the
+    # reviewed external-MCP bridge, then survive MinecraftCoder Skill filtering.
+    assert "inspect_existing_mod" in tool_names
+    assert "search_project_rag" in tool_names
+    assert "search_code_rag" in tool_names
+    assert {
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+        "external_mcp_call",
+    } <= tool_names
+    # Unrelated or host-owned stage surfaces must remain hidden from the coder.
+    assert "plan_complete_game" not in tool_names
+    assert "runtime_start_server" not in tool_names
+    assert "package_release" not in tool_names
     assert request.tool_choice == "auto"
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
@@ -243,7 +234,6 @@ def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> 
     assert plain_result == "plain"
     assert len(adapter.generate_requests) == 1
     assert adapter.generate_requests[0].response_schema == schema
-    assert runtime.stages == ["generation"]
 
 
 def test_verified_planner_candidates_use_native_slots(monkeypatch) -> None:
