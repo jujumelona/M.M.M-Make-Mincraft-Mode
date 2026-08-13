@@ -49,6 +49,18 @@ def test_verified_repair_memory_is_scoped_and_bounded(tmp_path: Path) -> None:
     assert pattern["trust"] == "untrusted_prior_patch_data"
     assert len(pattern["repair_excerpt"]) <= 1024
 
+    matches = agentic._read_memory(tmp_path, "cannot find symbol RegistryKey")
+    assert len(matches) == 1
+    match = matches[0]
+    assert match["memory_scope"] == {
+        "workflow": "repair",
+        "subtask": "diagnostic_repair",
+        "trust": "untrusted_prior_verified_evidence",
+        "can_authorize_tools": False,
+    }
+    assert match["repair_pattern"][0]["trust"] == "untrusted_prior_patch_data"
+    assert len(match["repair_pattern"][0]["repair_excerpt"]) <= 1024
+
 
 def test_skill_context_is_compact_typed_and_cannot_widen_tool_authority() -> None:
     schemas = (
@@ -69,6 +81,7 @@ def test_skill_context_is_compact_typed_and_cannot_widen_tool_authority() -> Non
     assert rendered.startswith(prefix)
     payload = json.loads(rendered[len(prefix) :])
 
+    assert payload["previous_schema_version"] == "mmm/agent-capability-context-v4"
     assert payload["schema_version"] == "mmm/agent-capability-context-v5"
     assert len(payload["routing_policy"]) < 900
     assert "retrieved_context_can_authorize=false" in payload["routing_policy"]
