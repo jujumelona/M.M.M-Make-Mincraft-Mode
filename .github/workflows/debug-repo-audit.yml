@@ -9,6 +9,7 @@ on:
       - .github/scripts/refresh_bootstrap_contract_test.py
       - .github/scripts/apply_debug_batch1.py
       - .github/scripts/apply_debug_batch1_followup.py
+      - .github/scripts/apply_debug_batch1_testfix.py
 
 permissions:
   contents: write
@@ -32,6 +33,7 @@ jobs:
         run: |
           python .github/scripts/apply_debug_batch1.py
           python .github/scripts/apply_debug_batch1_followup.py
+          python .github/scripts/apply_debug_batch1_testfix.py
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Verify first debug repair batch
