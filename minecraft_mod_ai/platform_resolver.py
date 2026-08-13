@@ -14,9 +14,22 @@ from .spec import PlatformLock, Proposal, SpecValidationError
 
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
-_FABRIC_RE = re.compile(r"\bfabric\b|패브릭", re.IGNORECASE)
-_NEOFORGE_RE = re.compile(r"\bneoforge\b|네오포지", re.IGNORECASE)
-_FORGE_RE = re.compile(r"(?<!neo)\bforge\b|(?<!네오)포지", re.IGNORECASE)
+# Python's Unicode \b treats Hangul and ASCII letters as the same word class, so
+# tokens such as "Fabric에" and "NeoForge에" do not have a \b after the English
+# loader name. Use ASCII identifier boundaries for English loader tokens instead.
+_ASCII_WORD = r"A-Za-z0-9_"
+_FABRIC_RE = re.compile(
+    rf"(?<![{_ASCII_WORD}])fabric(?![{_ASCII_WORD}])|패브릭",
+    re.IGNORECASE,
+)
+_NEOFORGE_RE = re.compile(
+    rf"(?<![{_ASCII_WORD}])neoforge(?![{_ASCII_WORD}])|네오포지",
+    re.IGNORECASE,
+)
+_FORGE_RE = re.compile(
+    rf"(?<![{_ASCII_WORD}])forge(?![{_ASCII_WORD}])|(?<!네오)포지",
+    re.IGNORECASE,
+)
 _MIGRATION_RE = re.compile(
     r"마이그레이션|버전\s*(?:변경|업|올려|내려)|업데이트\s*해|포팅|이식|"
     r"migrat|port\s+(?:to|from)|upgrade\s+to|downgrade\s+to",
