@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 _INSTALL_MARKER = "_mmm_agent_security_contract_v3"
 _SLICE_MARKER = "_mmm_scoped_forced_rag_receipt_v1"
-_MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v1"
+_MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v2"
 _SKILL_MARKER = "_mmm_compact_skill_context_v1"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _TERMINAL_RAG_WARNINGS = frozenset({"required_metadata_mismatch"})
@@ -180,12 +180,70 @@ def _usable_receipt(receipt: Mapping[str, Any]) -> bool:
 
 
 def _install_repair_memory_boundary(agentic_module: Any, runtime_module: Any) -> None:
-    current = agentic_module._write_memory
-    if getattr(current, _MEMORY_MARKER, False):
+    current_write = agentic_module._write_memory
+    current_read = agentic_module._read_memory
+    if (
+        getattr(current_write, _MEMORY_MARKER, False)
+        and getattr(current_read, _MEMORY_MARKER, False)
+    ):
         return
     sanitizer = getattr(runtime_module, "_sanitize_observation", None)
+    small_metadata = getattr(runtime_module, "_small_metadata", None)
 
-    @wraps(current)
+    @wraps(current_read)
+    def read_scoped_memory(
+        root: Any,
+        signature: str,
+        *,
+        limit: int = 4,
+    ) -> list[dict[str, Any]]:
+        try:
+            requested_limit = int(limit)
+        except (TypeError, ValueError, OverflowError):
+            requested_limit = 4
+        if requested_limit <= 0:
+            return []
+        safe_limit = min(requested_limit, 4)
+        rows = current_read(root, signature, limit=safe_limit)
+        result: list[dict[str, Any]] = []
+        for row in rows[:safe_limit]:
+            sanitized = sanitizer(row) if callable(sanitizer) else row
+            if not isinstance(sanitized, Mapping):
+                continue
+            evidence = sanitized.get("evidence", {})
+            if callable(small_metadata):
+                evidence = small_metadata(evidence)
+            elif isinstance(evidence, Mapping):
+                evidence = dict(evidence)
+            else:
+                evidence = {}
+            try:
+                similarity = float(sanitized.get("similarity", 0.0) or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(similarity) or similarity <= 0.0:
+                continue
+            result.append(
+                {
+                    "similarity": round(min(similarity, 1.0), 6),
+                    "signature_sha256": str(
+                        sanitized.get("signature_sha256", "")
+                    )[:96],
+                    "evidence": evidence,
+                    "repair_pattern": _bounded_repair_pattern(
+                        sanitized.get("repair_pattern", ())
+                    ),
+                    "memory_scope": {
+                        "workflow": "repair",
+                        "subtask": "diagnostic_repair",
+                        "trust": "untrusted_prior_verified_evidence",
+                        "can_authorize_tools": False,
+                    },
+                }
+            )
+        return result
+
+    @wraps(current_write)
     def write_scoped_memory(root: Any, trace: Mapping[str, Any]) -> None:
         sanitized = sanitizer(trace) if callable(sanitizer) else dict(trace)
         if not isinstance(sanitized, Mapping):
@@ -201,39 +259,42 @@ def _install_repair_memory_boundary(agentic_module: Any, runtime_module: Any) ->
             "promotion_gate": "host_verified_repair_result",
         }
 
-        raw_pattern = sanitized.get("repair_pattern", ())
-        pattern: list[dict[str, Any]] = []
-        if isinstance(raw_pattern, Sequence) and not isinstance(
-            raw_pattern, (str, bytes, bytearray)
-        ):
-            for item in raw_pattern[:16]:
-                if not isinstance(item, Mapping):
-                    continue
-                pattern.append(
-                    {
-                        "operation": str(item.get("operation", ""))[:64],
-                        "path": str(item.get("path", ""))[:1024],
-                        # Prior patch text remains evidence, never authority. Keep only a
-                        # bounded sanitized excerpt so memory cannot become a prompt dump.
-                        "repair_excerpt": str(item.get("repair_excerpt", ""))[:1024],
-                        "trust": "untrusted_prior_patch_data",
-                    }
-                )
-
         verifier = sanitized.get("winner_verifier", {})
         verifier = dict(verifier) if isinstance(verifier, Mapping) else {}
-        current(
+        current_write(
             root,
             {
                 "signature": signature,
                 "evidence": evidence,
-                "repair_pattern": pattern,
+                "repair_pattern": _bounded_repair_pattern(
+                    sanitized.get("repair_pattern", ())
+                ),
                 "winner_verifier": verifier,
             },
         )
 
+    setattr(read_scoped_memory, _MEMORY_MARKER, True)
     setattr(write_scoped_memory, _MEMORY_MARKER, True)
+    agentic_module._read_memory = read_scoped_memory
     agentic_module._write_memory = write_scoped_memory
+
+
+def _bounded_repair_pattern(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    pattern: list[dict[str, Any]] = []
+    for item in value[:16]:
+        if not isinstance(item, Mapping):
+            continue
+        pattern.append(
+            {
+                "operation": str(item.get("operation", ""))[:64],
+                "path": str(item.get("path", ""))[:1024],
+                "repair_excerpt": str(item.get("repair_excerpt", ""))[:1024],
+                "trust": "untrusted_prior_patch_data",
+            }
+        )
+    return pattern
 
 
 def _install_compact_skill_context(capability_module: Any) -> None:
