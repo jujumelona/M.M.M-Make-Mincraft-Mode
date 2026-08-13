@@ -37,7 +37,9 @@ jobs:
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Apply remaining progress semantics
-        run: python .github/scripts/apply_progress_semantics.py
+        run: |
+          python .github/scripts/apply_progress_semantics.py
+          python .github/scripts/fix_progress_test.py
       - name: Verify progress semantics
         run: |
           python -m pip install --prefer-binary -e '.[dev]'
@@ -57,6 +59,7 @@ jobs:
         run: |
           git rm .github/workflows/apply-progress-semantics.yml
           git rm .github/scripts/apply_progress_semantics.py
+          git rm .github/scripts/fix_progress_test.py
           git add -A
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
