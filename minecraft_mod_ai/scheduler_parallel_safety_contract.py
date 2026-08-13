@@ -327,11 +327,104 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
         if lease_seconds < 1:
             raise work_graph_module.WorkGraphError("lease_seconds must be positive.")
 
-        now = time.time()
         owner = _orchestrator_owner(self)
         capacities = _capacities()
+        resource_expr = _resource_sql("")
+        task_resource_expr = _resource_sql("task")
+        stage_sql = ""
+        stage_params: tuple[Any, ...] = ()
+        if stages:
+            placeholders = ",".join("?" for _ in stages)
+            stage_sql = f" AND task.stage IN ({placeholders})"
+            stage_params = tuple(stages)
+
+        def ready_node_id(connection: Any) -> str | None:
+            running = {
+                str(resource_class): int(count)
+                for resource_class, count in connection.execute(
+                    f"""
+                    SELECT {resource_expr}, COUNT(*)
+                    FROM tasks
+                    WHERE state = ? AND stage LIKE 'generate:%'
+                    GROUP BY {resource_expr}
+                    """,
+                    (work_graph_module.WorkState.RUNNING.value,),
+                )
+            }
+            free_lanes = tuple(
+                lane
+                for lane, capacity in capacities.items()
+                if running.get(lane, 0) < capacity
+            )
+            if _SHARED_LOCAL_GPU_LANE.get() and any(
+                running.get(lane, 0) > 0 for lane in _GPU_RESOURCE_CLASSES
+            ):
+                free_lanes = tuple(
+                    lane for lane in free_lanes if lane not in _GPU_RESOURCE_CLASSES
+                )
+            if not free_lanes:
+                return None
+
+            lane_placeholders = ",".join("?" for _ in free_lanes)
+            params = (
+                work_graph_module.WorkState.PENDING.value,
+                work_graph_module.WorkState.SUCCEEDED.value,
+                *stage_params,
+                *free_lanes,
+            )
+            row = connection.execute(
+                f"""
+                SELECT task.node_id
+                FROM tasks AS task
+                WHERE task.state = ?
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM edges
+                    JOIN tasks AS dependency
+                      ON dependency.node_id = edges.dependency_id
+                    WHERE edges.node_id = task.node_id
+                      AND dependency.state != ?
+                  )
+                  {stage_sql}
+                  AND {task_resource_expr} IN ({lane_placeholders})
+                ORDER BY task.node_id
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            return str(row[0]) if row is not None else None
+
+        now = time.time()
         renew_before = now + max(1.0, lease_seconds * 0.5)
-        with self._connect() as connection:
+        connection = self._connect()
+        maintenance_due = connection.execute(
+            """
+            SELECT 1
+            FROM tasks
+            WHERE state = ? AND lease_until IS NOT NULL
+              AND (
+                lease_until < ?
+                OR (
+                  lease_owner = ?
+                  AND lease_until >= ? AND lease_until <= ?
+                )
+              )
+            LIMIT 1
+            """,
+            (
+                work_graph_module.WorkState.RUNNING.value,
+                now,
+                owner,
+                now,
+                renew_before,
+            ),
+        ).fetchone()
+        if maintenance_due is None and ready_node_id(connection) is None:
+            return None
+
+        with connection:
+            now = time.time()
+            renew_before = now + max(1.0, lease_seconds * 0.5)
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
@@ -365,71 +458,11 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 ),
             )
 
-            resource_expr = _resource_sql("")
-            running = {
-                str(resource_class): int(count)
-                for resource_class, count in connection.execute(
-                    f"""
-                    SELECT {resource_expr}, COUNT(*)
-                    FROM tasks
-                    WHERE state = ? AND stage LIKE 'generate:%'
-                    GROUP BY {resource_expr}
-                    """,
-                    (work_graph_module.WorkState.RUNNING.value,),
-                )
-            }
-            free_lanes = tuple(
-                lane
-                for lane, capacity in capacities.items()
-                if running.get(lane, 0) < capacity
-            )
-            if _SHARED_LOCAL_GPU_LANE.get() and any(
-                running.get(lane, 0) > 0 for lane in _GPU_RESOURCE_CLASSES
-            ):
-                free_lanes = tuple(
-                    lane for lane in free_lanes if lane not in _GPU_RESOURCE_CLASSES
-                )
-            if not free_lanes:
+            node_id = ready_node_id(connection)
+            if node_id is None:
                 return None
 
-            stage_sql = ""
-            params: list[Any] = [
-                work_graph_module.WorkState.PENDING.value,
-                work_graph_module.WorkState.SUCCEEDED.value,
-            ]
-            if stages:
-                placeholders = ",".join("?" for _ in stages)
-                stage_sql = f" AND task.stage IN ({placeholders})"
-                params.extend(stages)
-
-            lane_placeholders = ",".join("?" for _ in free_lanes)
-            params.extend(free_lanes)
-            task_resource_expr = _resource_sql("task")
-            row = connection.execute(
-                f"""
-                SELECT task.node_id
-                FROM tasks AS task
-                WHERE task.state = ?
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM edges
-                    JOIN tasks AS dependency
-                      ON dependency.node_id = edges.dependency_id
-                    WHERE edges.node_id = task.node_id
-                      AND dependency.state != ?
-                  )
-                  {stage_sql}
-                  AND {task_resource_expr} IN ({lane_placeholders})
-                ORDER BY task.node_id
-                LIMIT 1
-                """,
-                tuple(params),
-            ).fetchone()
-            if row is None:
-                return None
-
-            node_id = str(row[0])
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE tasks
                 SET state = ?, attempt = attempt + 1, lease_owner = ?,
@@ -445,6 +478,8 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                     work_graph_module.WorkState.PENDING.value,
                 ),
             )
+            if cursor.rowcount != 1:
+                return None
         return self.task(node_id)
 
     claim_ready._mmm_parallel_lane_claim = True
