@@ -23,7 +23,10 @@ jobs:
       - name: Install pinned Ruff
         run: python -m pip install 'ruff==0.16.2'
       - name: Remove statically dead Python code
-        run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F --fix
+        run: |
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F --fix || true
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F841 --fix --unsafe-fixes
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F
       - name: Verify patch integrity
         run: git diff --check
       - name: Commit cleanup and remove maintenance workflow
