@@ -114,6 +114,7 @@ class ModelRouter:
             stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, "")).strip().lower()
             runtime = None
             tools: tuple[Mapping[str, Any], ...] = ()
+            request_messages: Sequence[Mapping[str, Any]] = messages
             if self._tools_enabled(
                 enable_tools=enable_tools,
                 stage=stage,
@@ -121,9 +122,16 @@ class ModelRouter:
             ):
                 runtime = self._tool_runtime()
                 tools = tuple(runtime.tool_schemas(stage))
+                if tools:
+                    from .agent_capability_context import build_agent_capability_context
+
+                    request_messages = _inject_system_context(
+                        messages,
+                        build_agent_capability_context(stage, tools),
+                    )
 
             request = GenerationRequest(
-                messages=messages,
+                messages=request_messages,
                 media_paths=tuple(Path(path) for path in media_paths),
                 response_format=response_format,
                 response_schema=response_schema,
@@ -156,6 +164,8 @@ class ModelRouter:
         convergence closes tool use and forces a final synthesis from accumulated
         observations instead of misclassifying convergence as model misconfiguration.
         """
+        from .agent_capability_context import skills_for_tool
+
         messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
         previous_exchange_state: str | None = None
         round_index = 0
@@ -203,17 +213,26 @@ class ModelRouter:
 
             observations: list[dict[str, Any]] = []
             for call in turn.tool_calls:
+                route_metadata: dict[str, Any] = {
+                    "skills": list(skills_for_tool(stage, call.name)),
+                }
+                if call.name == "external_mcp_call":
+                    capability = str(call.arguments.get("capability", "")).strip()
+                    if capability:
+                        route_metadata["external_mcp_capability"] = capability
                 try:
                     result = runtime.call(stage, call.name, call.arguments)
                     payload: Mapping[str, Any] = {
                         "ok": True,
                         "tool": call.name,
+                        **route_metadata,
                         "result": result,
                     }
                 except Exception as exc:
                     payload = {
                         "ok": False,
                         "tool": call.name,
+                        **route_metadata,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 messages.append(
@@ -415,6 +434,18 @@ class ModelRouter:
                 yield
         else:
             yield
+
+
+def _inject_system_context(
+    messages: Sequence[Mapping[str, Any]],
+    content: str,
+) -> tuple[dict[str, Any], ...]:
+    copied = [dict(message) for message in messages]
+    insert_at = 0
+    while insert_at < len(copied) and copied[insert_at].get("role") == "system":
+        insert_at += 1
+    copied.insert(insert_at, {"role": "system", "content": content})
+    return tuple(copied)
 
 
 def _positive_env_int(name: str, default: int) -> int:
