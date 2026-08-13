@@ -17,11 +17,6 @@ _PREFETCH_EXECUTOR = ThreadPoolExecutor(
     max_workers=2,
     thread_name_prefix="mmm_model_prefetch",
 )
-_PLANNER_AUX_EXECUTOR = ThreadPoolExecutor(
-    max_workers=2,
-    thread_name_prefix="mmm_planner_aux",
-)
-_PLANNER_STATE = threading.local()
 _MODEL_RESOLVER: Callable[[Any], str] | None = None
 
 
@@ -106,7 +101,7 @@ def _ensure_model_prefetch(config: Any) -> Future[str] | None:
 
 
 def _resolve_prefetched_model(config: Any) -> str:
-    """Reuse an already-running prefetch, otherwise resolve synchronously."""
+    """Reuse an already-running model download, otherwise resolve synchronously."""
 
     resolver = _MODEL_RESOLVER
     if resolver is None:
@@ -114,6 +109,7 @@ def _resolve_prefetched_model(config: Any) -> str:
     future = _ensure_model_prefetch(config)
     if future is None:
         return resolver(config)
+    # This join owns one required model artifact, not optional planner research.
     return future.result()
 
 
@@ -268,9 +264,7 @@ def _parallel_discover_seed_bundle_factory(
                     provider,
                     provider_query,
                     limit=10,
-                    target_profile=str(
-                        route.get("target_profile", "minecraft_mod")
-                    ),
+                    target_profile=str(route.get("target_profile", "minecraft_mod")),
                 )
                 return (
                     "page",
@@ -288,9 +282,7 @@ def _parallel_discover_seed_bundle_factory(
                     {
                         "domain_id": route["domain_id"],
                         "provider": provider,
-                        "query_sha256": ecosystem_module._sha256_text(
-                            route["query"]
-                        ),
+                        "query_sha256": ecosystem_module._sha256_text(route["query"]),
                         "error_type": type(exc).__name__,
                         "message": str(exc),
                     },
@@ -486,120 +478,13 @@ def _parallel_retrieve_domain_evidence_factory(
     return retrieve_domain_evidence_parallel
 
 
-def _planner_key(prompt: str, research_brief: Any) -> tuple[str, int]:
-    return prompt, id(research_brief)
-
-
-def _ecosystem_key(
-    prompt: str,
-    game_design: Any,
-    research_brief: Any,
-) -> tuple[str, int, int]:
-    return prompt, id(game_design), id(research_brief)
-
-
-def _install_planner_overlap(
-    *,
-    complete_planner_module: Any,
-    parallel_retrieve: Callable[..., dict[str, Any]],
-    parallel_discover: Callable[..., dict[str, Any]],
-) -> None:
-    complete_planner_module.retrieve_domain_evidence = parallel_retrieve
-    complete_planner_module.discover_seed_bundle = parallel_discover
-
-    current_radar = complete_planner_module.collect_technology_radar
-    current_impl = complete_planner_module._retrieve_implementation_evidence
-    current_ecosystem = complete_planner_module.collect_ecosystem_seed_bundle
-    if getattr(current_radar, "_mmm_parallel_planner_overlap", False):
-        return
-
-    @wraps(current_radar)
-    def radar_with_prefetch(
-        prompt: str,
-        research_brief: Any = None,
-        *args: Any,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        if isinstance(research_brief, dict):
-            key = _planner_key(prompt, research_brief)
-            existing = getattr(_PLANNER_STATE, "evidence", None)
-            if not existing or existing[0] != key:
-                _PLANNER_STATE.evidence = (
-                    key,
-                    _PLANNER_AUX_EXECUTOR.submit(parallel_retrieve, research_brief),
-                )
-        return current_radar(prompt, research_brief, *args, **kwargs)
-
-    radar_with_prefetch._mmm_parallel_planner_overlap = True  # type: ignore[attr-defined]
-
-    @wraps(current_impl)
-    def implementation_evidence_with_overlap(
-        prompt: str,
-        game_design: dict[str, Any],
-        research_brief: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        brief = research_brief or complete_planner_module.normalize_research_brief(
-            prompt,
-            game_design,
-        )
-        eco_key = _ecosystem_key(prompt, game_design, brief)
-        existing_ecosystem = getattr(_PLANNER_STATE, "ecosystem", None)
-        if not existing_ecosystem or existing_ecosystem[0] != eco_key:
-            original_collect = getattr(
-                current_ecosystem,
-                "__wrapped__",
-                current_ecosystem,
-            )
-            _PLANNER_STATE.ecosystem = (
-                eco_key,
-                _PLANNER_AUX_EXECUTOR.submit(
-                    original_collect,
-                    prompt,
-                    game_design,
-                    research_brief=brief,
-                    page_builder=parallel_discover,
-                    planning_seed_only=True,
-                ),
-            )
-
-        evidence_key = _planner_key(prompt, brief)
-        existing_evidence = getattr(_PLANNER_STATE, "evidence", None)
-        if existing_evidence and existing_evidence[0] == evidence_key:
-            return existing_evidence[1].result()
-        return parallel_retrieve(brief)
-
-    @wraps(current_ecosystem)
-    def ecosystem_with_prefetch(
-        prompt: str,
-        game_design: dict[str, Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        brief = kwargs.get("research_brief")
-        if isinstance(brief, dict):
-            key = _ecosystem_key(prompt, game_design, brief)
-            existing = getattr(_PLANNER_STATE, "ecosystem", None)
-            if existing and existing[0] == key:
-                try:
-                    return existing[1].result()
-                finally:
-                    _PLANNER_STATE.ecosystem = None
-        return current_ecosystem(prompt, game_design, *args, **kwargs)
-
-    complete_planner_module.collect_technology_radar = radar_with_prefetch
-    complete_planner_module._retrieve_implementation_evidence = (
-        implementation_evidence_with_overlap
-    )
-    complete_planner_module.collect_ecosystem_seed_bundle = ecosystem_with_prefetch
-
-
 def install(
     *,
     complete_planner_module: Any,
     model_registry_module: Any,
     llama_server_autotune_module: Any,
 ) -> None:
-    """Overlap only independent work while preserving deterministic result order."""
+    """Parallelize bounded provider/RAG work without planner-level future joins."""
 
     from . import central_research as central_module
     from . import ecosystem_discovery as ecosystem_module
@@ -629,11 +514,11 @@ def install(
         )
         central_module.retrieve_domain_evidence = parallel_retrieve
 
-    _install_planner_overlap(
-        complete_planner_module=complete_planner_module,
-        parallel_retrieve=parallel_retrieve,
-        parallel_discover=parallel_discover,
-    )
+    # Bind only the primitive parallel implementations. Do not prefetch planner
+    # dependencies into auxiliary futures and never join optional research at the
+    # planner lifecycle boundary.
+    complete_planner_module.retrieve_domain_evidence = parallel_retrieve
+    complete_planner_module.discover_seed_bundle = parallel_discover
 
 
 __all__ = ["install"]
