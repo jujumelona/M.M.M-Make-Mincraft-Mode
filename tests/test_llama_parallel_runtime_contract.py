@@ -145,6 +145,8 @@ class _PlannerProbeRouter:
 def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_llama_shared_slots", False)
     assert getattr(ModelRouter.generate_text, "_mmm_preserves_agent_tools", False)
+    assert getattr(ModelRouter.generate_text, "_mmm_preserves_response_schema", False)
+    assert getattr(ModelRouter.generate_text, "_mmm_parallel_router_contract_version", 0) >= 2
     assert getattr(ModelRouter.generation_session, "_mmm_llama_shared_slots", False)
     assert getattr(scheduler_module._capacities, "_mmm_dynamic_llama_slots", False)
     assert getattr(
@@ -205,14 +207,22 @@ def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> 
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
 
+    schema = {
+        "type": "object",
+        "properties": {"game_design": {"type": "object"}},
+        "required": ["game_design"],
+    }
     plain_result = router.generate_text(
         "coder",
         ({"role": "user", "content": "repair without tools"},),
+        response_format="json",
+        response_schema=schema,
         tool_stage="generation",
         enable_tools=False,
     )
     assert plain_result == "plain"
     assert len(adapter.generate_requests) == 1
+    assert adapter.generate_requests[0].response_schema == schema
     assert runtime.stages == ["generation"]
 
 
