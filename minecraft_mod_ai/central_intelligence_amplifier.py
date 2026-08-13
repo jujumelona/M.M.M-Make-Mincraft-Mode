@@ -262,22 +262,54 @@ def install_parallel_core(agentic_module: Any) -> None:
                             trace_metadata=trace_metadata,
                         )
                         futures[future] = index
+                    failed_domains: dict[int, Exception] = {}
                     for future in as_completed(futures):
                         index = futures[future]
                         try:
                             indexed_notes[index] = future.result()
                         except Exception as exc:
-                            domain_id = str(
-                                domains[index].get("domain_id", "unknown")
-                            ).strip() or "unknown"
-                            indexed_notes[index] = {
-                                "domain_id": domain_id,
-                                "claims": [],
-                                "gaps": [f"{type(exc).__name__}: {exc}"],
-                                "next_queries": list(domains[index].get("queries", [])),
-                                "sufficient": False,
-                                "worker_error": True,
-                            }
+                            # Parallel execution is an optimization, not research semantics.
+                            # Preserve the failed index and retry it in the caller context
+                            # after the fan-out. This recovers transient/shared-router failures
+                            # without marking an unexecuted route as covered.
+                            failed_domains[index] = exc
+
+                # A local/native model or stage-scoped tool runtime may reject a concurrent
+                # request even though the same canonical domain research succeeds serially.
+                # Retry only infrastructure-level exceptions that escaped the domain agent;
+                # schema/gap convergence remains owned by _research_domain_with_agent.
+                for index in sorted(failed_domains):
+                    domain = domains[index]
+                    parallel_exc = failed_domains[index]
+                    try:
+                        indexed_notes[index] = agentic_module._research_domain_with_agent(
+                            router,
+                            prompt=prompt,
+                            domain=domain,
+                            deterministic=deterministic,
+                            trace_metadata=trace_metadata,
+                        )
+                    except Exception as retry_exc:
+                        domain_id = str(
+                            domain.get("domain_id", "unknown")
+                        ).strip() or "unknown"
+                        indexed_notes[index] = {
+                            "domain_id": domain_id,
+                            "claims": [],
+                            "gaps": [
+                                "parallel research failed: "
+                                f"{type(parallel_exc).__name__}: {parallel_exc}",
+                                "serial recovery failed: "
+                                f"{type(retry_exc).__name__}: {retry_exc}",
+                            ],
+                            "next_queries": list(domain.get("queries", [])),
+                            "sufficient": False,
+                            "worker_error": True,
+                            "parallel_error": (
+                                f"{type(parallel_exc).__name__}: {parallel_exc}"
+                            ),
+                            "retry_error": f"{type(retry_exc).__name__}: {retry_exc}",
+                        }
             domain_notes = [indexed_notes[index] for index in range(len(domains))]
 
             payload = {
