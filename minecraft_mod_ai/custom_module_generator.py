@@ -85,7 +85,18 @@ class CustomModuleGenerator:
         self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
         from .production_tools import ProductionToolService
 
-        live_manifest = ProjectIndex(root, policy=self.policy).manifest_receipt()
+        # Reuse the already-built whole-project index for the RAG source receipt.
+        # Refresh only if a concurrent generation lane invalidated this snapshot.
+        try:
+            live_manifest = index.manifest_receipt()
+        except ValueError as exc:
+            if not _is_stale_project_index_error(exc):
+                raise
+            index = ProjectIndex(root, policy=self.policy)
+            self._cached_index = index
+            self._cached_root = root
+            live_manifest = index.manifest_receipt()
+
         ProductionToolService(
             workspace_root=root.parent,
             profile=self.router.profile,
