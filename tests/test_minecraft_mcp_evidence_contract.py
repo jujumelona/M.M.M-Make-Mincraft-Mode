@@ -66,6 +66,7 @@ def test_minecraft_technical_domains_gain_external_mcp_route() -> None:
 
 def test_official_research_does_not_eagerly_invoke_external_mcp(monkeypatch) -> None:
     """Optional MCP evidence must not own the pre-design provider critical path."""
+
     def fail_if_called(*args, **kwargs):
         del args, kwargs
         raise AssertionError("external MCP eager sweep entered official RAG")
@@ -87,7 +88,8 @@ def test_external_evidence_is_batched_scoped_and_compact() -> None:
     result = collect_external_minecraft_evidence(brief, router=router)
 
     assert result["execution"]["parallel"] is True
-    assert result["execution"]["single_flight_cache"] is True
+    assert result["execution"]["completed_read_cache"] is True
+    assert result["execution"]["single_flight_wait"] is False
     assert result["execution"]["planning_critical_path"] is False
     assert router.requests
     scopes = {tuple(sorted(row["allowed_server_ids"])) for row in router.requests}
