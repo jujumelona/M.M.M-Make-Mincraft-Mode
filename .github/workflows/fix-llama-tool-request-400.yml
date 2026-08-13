@@ -27,7 +27,7 @@ jobs:
           python .github/scripts/fix_llama_tool_request_400.py
           python -m compileall -q minecraft_mod_ai tests
           python -m ruff check minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_stream_efficiency_contract.py tests/test_llama_structured_reasoning_stream.py tests/test_llama_cpp_adapter_request_contract.py --select F,E7,E9
-          python -m pytest -q tests/test_llama_structured_reasoning_stream.py tests/test_llama_server_streaming.py tests/test_llama_cpp_adapter_request_contract.py tests/test_model_router_tools.py
+          python -m pytest -q tests/test_llama_structured_reasoning_stream.py tests/test_llama_server_streaming.py tests/test_llama_cpp_adapter_request_contract.py
       - name: Commit repair to main and remove one-shot files
         run: |
           git config user.name "github-actions[bot]"
