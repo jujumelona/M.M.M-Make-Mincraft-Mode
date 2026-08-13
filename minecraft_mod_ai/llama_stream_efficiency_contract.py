@@ -58,6 +58,41 @@ def _report_server_connection(server_url: str) -> None:
     print("llama server: connected", server_url, flush=True)
 
 
+def _native_timing_summary(timings: Any) -> dict[str, float | int] | None:
+    """Normalize llama.cpp aggregate decode/speculative telemetry defensively."""
+
+    if not isinstance(timings, dict):
+        return None
+    result: dict[str, float | int] = {}
+    try:
+        predicted_per_second = float(timings.get("predicted_per_second", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        predicted_per_second = 0.0
+    if predicted_per_second > 0.0:
+        result["predicted_per_second"] = predicted_per_second
+
+    try:
+        draft_n = max(0, int(timings.get("draft_n", 0) or 0))
+        accepted = max(0, int(timings.get("draft_n_accepted", 0) or 0))
+    except (TypeError, ValueError):
+        draft_n = 0
+        accepted = 0
+    if draft_n > 0:
+        accepted = min(accepted, draft_n)
+        result["draft_n"] = draft_n
+        result["draft_n_accepted"] = accepted
+        result["draft_acceptance_pct"] = 100.0 * accepted / draft_n
+
+    return result or None
+
+
+def _active_decode_profile() -> tuple[str, str, str]:
+    spec = os.environ.get("MMM_LLAMA_ACTIVE_SPEC_TYPE", "none").strip() or "none"
+    width = os.environ.get("MMM_LLAMA_ACTIVE_DRAFT_N_MAX", "0").strip() or "0"
+    p_min = os.environ.get("MMM_LLAMA_ACTIVE_MTP_P_MIN", "0").strip() or "0"
+    return spec, width, p_min
+
+
 def _commit_usage(
     hardware_module: Any,
     usage: dict[str, Any],
@@ -118,6 +153,7 @@ def install(hardware_module: Any) -> None:
             first_output_reported = False
             saw_done = False
             final_usage: dict[str, Any] | None = None
+            final_timings: dict[str, Any] | None = None
 
             with client.stream("POST", endpoint, json=payload) as response:
                 if response.status_code != 200:
@@ -133,12 +169,16 @@ def install(hardware_module: Any) -> None:
                 _report_server_connection(server_url)
                 structured = getattr(request, "response_format", None) == "json"
                 reasoning_disabled = payload.get("reasoning_effort") == "none"
+                spec_type, draft_n_max, draft_p_min = _active_decode_profile()
                 print(
                     "llama server: request accepted; streaming",
                     f" input_chars={hardware_module._request_content_chars(payload)}",
                     f" max_tokens={payload['max_tokens']}",
                     f" structured={'json-host-validated' if structured else 'text'}",
                     f" reasoning={'disabled' if reasoning_disabled else 'model-default'}",
+                    f" spec={spec_type}",
+                    f" n_max={draft_n_max}",
+                    f" p_min={draft_p_min}",
                     sep="",
                     flush=True,
                 )
@@ -162,6 +202,9 @@ def install(hardware_module: Any) -> None:
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         final_usage = usage
+                    timings = chunk.get("timings")
+                    if isinstance(timings, dict):
+                        final_timings = timings
                     choices = chunk.get("choices")
                     if not isinstance(choices, list) or not choices:
                         continue
@@ -220,6 +263,7 @@ def install(hardware_module: Any) -> None:
                 if final_usage is not None
                 else None
             )
+            native = _native_timing_summary(final_timings)
             if committed is not None:
                 request_total = int(committed["prompt_tokens"]) + int(
                     committed["output_tokens"]
@@ -227,7 +271,7 @@ def install(hardware_module: Any) -> None:
                 cumulative_total = int(committed["cumulative_prompt_tokens"]) + int(
                     committed["cumulative_output_tokens"]
                 )
-                request_tps = (
+                wall_tps = (
                     float(committed["output_tokens"]) / max(1e-9, generation_elapsed)
                     if int(committed["output_tokens"]) > 0
                     else 0.0
@@ -238,17 +282,43 @@ def install(hardware_module: Any) -> None:
                     if int(committed["cumulative_output_tokens"]) > 0
                     else 0.0
                 )
-                print(
+                native_tps = (
+                    float(native["predicted_per_second"])
+                    if native is not None and "predicted_per_second" in native
+                    else wall_tps
+                )
+                telemetry_fields = [
                     "llama server: generation complete",
                     f" prompt_tokens={int(committed['prompt_tokens'])}",
                     f" output_tokens={int(committed['output_tokens'])}",
                     f" request_tokens={request_total}",
-                    f" tok_s={request_tps:.2f}",
+                    f" tok_s={native_tps:.2f}",
+                    f" wall_tok_s={wall_tps:.2f}",
                     f" cumulative_tokens={cumulative_total}",
                     f" cumulative_tok_s={cumulative_tps:.2f}",
-                    f" elapsed={elapsed:.1f}s",
-                    flush=True,
-                )
+                ]
+                if native is not None and "draft_n" in native:
+                    telemetry_fields.extend(
+                        [
+                            f" mtp_accept={int(native['draft_n_accepted'])}/{int(native['draft_n'])}",
+                            f" mtp_accept_pct={float(native['draft_acceptance_pct']):.1f}%",
+                        ]
+                    )
+                elif native is None or "predicted_per_second" not in native:
+                    telemetry_fields.append(" native_timing=unavailable")
+                telemetry_fields.append(f" elapsed={elapsed:.1f}s")
+                print(*telemetry_fields, sep="", flush=True)
+
+                if (
+                    spec_type == "draft-mtp"
+                    and final_timings is not None
+                    and (native is None or "draft_n" not in native)
+                ):
+                    print(
+                        "llama server: warning MTP configured but native timings "
+                        "reported no draft counters",
+                        flush=True,
+                    )
             else:
                 print(
                     "llama server: generation complete",
@@ -271,4 +341,4 @@ def install(hardware_module: Any) -> None:
     hardware_module._strict_server_generate = fast_stream_generate
 
 
-__all__ = ["install"]
+__all__ = ["_active_decode_profile", "_native_timing_summary", "install"]
