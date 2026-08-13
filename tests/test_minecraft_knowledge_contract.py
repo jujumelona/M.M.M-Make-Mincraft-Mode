@@ -206,3 +206,29 @@ def test_route_coverage_requires_actual_forced_rag_and_sufficient_research() -> 
     unresolved = evaluate_route_coverage(plan, research)
     assert unresolved["status"] == "BLOCK"
     assert any(item["status"] == "RESEARCH_UNRESOLVED" for item in unresolved["domains"])
+
+
+
+def test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps() -> None:
+    plan = compile_minecraft_knowledge_plan("새 보스 몬스터를 추가해줘.")
+    research = _fake_research(plan)
+    domain = plan["research_domains"][0]
+    note = next(
+        item for item in research["domain_notes"]
+        if item["domain_id"] == domain["domain_id"]
+    )
+    note["sufficient"] = False
+    note["fixed_point"] = True
+
+    coverage = evaluate_route_coverage(plan, research)
+
+    assert coverage["status"] == "PASS"
+    assert not coverage["blocking_requirement_refs"]
+    assert set(domain["requirements"]) <= set(coverage["deferred_requirement_refs"])
+    receipt = next(
+        item for item in coverage["domains"]
+        if item["domain_id"] == domain["domain_id"]
+    )
+    assert receipt["status"] == "ROUTES_EXECUTED_WITH_GAPS"
+    assert receipt["research_agent_sufficient"] is False
+    assert receipt["research_agent_fixed_point"] is True
