@@ -47,21 +47,28 @@ def test_normal_seed_projection_is_lossless(monkeypatch) -> None:
     assert projected["domains"][1]["providers"] == original["domains"][1]["providers"]
     assert projected["domains"][0]["queries"] == ["q1", "q2", "q3"]
     assert projected["domains"][1]["queries"] == ["v1", "v2"]
-    assert projected["_mmm_planning_seed_projection"]["compacted"] is False
+    projection = projected["_mmm_planning_seed_projection"]
+    assert projection["schema_version"] == "mmm/planning-seed-projection-v3"
+    assert projection["compacted"] is False
+    assert projection["reason"] == "lossless_route_graph_external_io_deferred"
+    assert projection["specialist_discovery_continues_full_brief"] is True
 
 
-def test_explicit_seed_query_limit_never_mutates_full_brief(monkeypatch) -> None:
+def test_legacy_seed_query_limit_does_not_cut_deferred_route_graph(monkeypatch) -> None:
     monkeypatch.setenv("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", "1")
     original = _brief()
     projected = _planning_seed_brief(original)
 
-    assert projected["domains"][0]["queries"] == ["q1"]
-    assert projected["domains"][1]["queries"] == ["v1"]
+    assert projected["domains"][0]["queries"] == ["q1", "q2", "q3"]
+    assert projected["domains"][1]["queries"] == ["v1", "v2"]
     assert original["domains"][0]["queries"] == ["q1", "q2", "q3"]
-    assert projected["_mmm_planning_seed_projection"]["compacted"] is True
+    projection = projected["_mmm_planning_seed_projection"]
+    assert projection["compacted"] is False
+    assert projection["queries_per_domain"] is None
+    assert projection["full_research_brief_retained"] is True
 
 
-def test_large_route_fanout_compacts_automatically(monkeypatch) -> None:
+def test_large_route_fanout_is_lossless_when_network_io_is_deferred(monkeypatch) -> None:
     monkeypatch.delenv("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", raising=False)
     monkeypatch.setenv("MMM_ECOSYSTEM_SEED_ROUTE_BUDGET", "16")
     original = _brief()
@@ -69,10 +76,14 @@ def test_large_route_fanout_compacts_automatically(monkeypatch) -> None:
 
     projected = _planning_seed_brief(original)
 
-    assert projected["_mmm_planning_seed_projection"]["compacted"] is True
-    assert projected["_mmm_planning_seed_projection"]["reason"] == "route_budget"
-    assert len(projected["domains"][0]["queries"]) < 20
+    projection = projected["_mmm_planning_seed_projection"]
+    assert projection["route_budget"] == 16
+    assert projection["estimated_external_routes"] > 16
+    assert projection["compacted"] is False
+    assert projection["reason"] == "lossless_route_graph_external_io_deferred"
+    assert projected["domains"][0]["queries"] == original["domains"][0]["queries"]
     assert projected["domains"][0]["providers"] == original["domains"][0]["providers"]
+    assert projection["specialist_discovery_continues_full_brief"] is True
 
 
 def test_ecosystem_key_reuses_effective_platform_target() -> None:
