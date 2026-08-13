@@ -82,36 +82,11 @@ class CustomModuleGenerator:
             self._cached_root = root
             self._cached_index = index
 
+        # ProjectIndex below already supplies fresh, exact, SHA-bound source evidence.
+        # Keep the normal custom generation path to one model decode and materialize
+        # model-callable RAG only if host validation actually rejects that response.
         self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
-        from .production_tools import ProductionToolService
 
-        # Reuse the already-built whole-project index for the RAG source receipt.
-        # Refresh only if a concurrent generation lane invalidated this snapshot.
-        try:
-            live_manifest = index.manifest_receipt()
-        except ValueError as exc:
-            if not _is_stale_project_index_error(exc):
-                raise
-            index = ProjectIndex(root, policy=self.policy)
-            self._cached_index = index
-            self._cached_root = root
-            live_manifest = index.manifest_receipt()
-
-        ProductionToolService(
-            workspace_root=root.parent,
-            profile=self.router.profile,
-        ).index_project_rag(
-            [root.name],
-            metadata={
-                "minecraft_version": minecraft_version,
-                "loader": loader,
-                "mapping_namespace": _mapping_namespace(mappings),
-                "java_version": "17",
-                "license": "project-local",
-                "source_commit": str(live_manifest["sha256"]),
-            },
-            semantic=False,
-        )
         query = json.dumps(
             {
                 "module_id": module.module_id,
@@ -244,6 +219,7 @@ class CustomModuleGenerator:
         seen_cursors: set[tuple[int, str]] = set()
         cursor = ""
         observation_page_index = 0
+        repair_rag_ready = False
         while True:
             observation_context = observation_pages[observation_page_index]
             request = {
@@ -269,13 +245,12 @@ class CustomModuleGenerator:
                             "after using that page. The host rejects module completion "
                             "before the final page. Operations may be empty when "
                             "completing a non-final context page. prior_patch_receipt "
-                            "is a code-owned commitment to earlier operations. Use the "
-                            "live RAG/MCP tools throughout implementation: current code RAG "
-                            "for repository facts, exact-version project/API evidence for "
-                            "Minecraft/Fabric facts, reviewed ecosystem/repository tools for "
-                            "dependencies, and JDT symbols/diagnostics for uncertain Java "
-                            "APIs. Inspect RAG receipts and reformulate or switch source when "
-                            "evidence is weak. When code output for the current page is too "
+                            "is a code-owned commitment to earlier operations. The host has "
+                            "already supplied fresh exact source observations and reviewed "
+                            "research_context for this bounded first pass. Use them directly; "
+                            "do not repeat retrieval unless host validation rejects the result "
+                            "and explicitly enters evidence-backed repair. When code output for "
+                            "the current page is too "
                             "large, set "
                             "context_page_complete=false and return a new next_cursor."
                         ),
@@ -286,6 +261,7 @@ class CustomModuleGenerator:
                     },
                 ],
                 response_format="json",
+                enable_tools=False,
             )
 
             is_last_page = (
@@ -339,6 +315,36 @@ class CustomModuleGenerator:
                     )
                 repair_signatures.add(signature)
                 repair_attempts += 1
+                if not repair_rag_ready:
+                    # Escalation only: build one current lexical RAG snapshot after
+                    # host validation proves the direct evidence pass was insufficient.
+                    from .production_tools import ProductionToolService
+
+                    try:
+                        live_manifest = index.manifest_receipt()
+                    except ValueError as exc:
+                        if not _is_stale_project_index_error(exc):
+                            raise
+                        index = ProjectIndex(root, policy=self.policy)
+                        self._cached_index = index
+                        self._cached_root = root
+                        live_manifest = index.manifest_receipt()
+                    ProductionToolService(
+                        workspace_root=root.parent,
+                        profile=getattr(self.router, "profile", "t4_local"),
+                    ).index_project_rag(
+                        [root.name],
+                        metadata={
+                            "minecraft_version": minecraft_version,
+                            "loader": loader,
+                            "mapping_namespace": _mapping_namespace(mappings),
+                            "java_version": "17",
+                            "license": "project-local",
+                            "source_commit": str(live_manifest["sha256"]),
+                        },
+                        semantic=False,
+                    )
+                    repair_rag_ready = True
                 print(
                     "🔄 [CustomModule Auto-Repair] 검증 피드백 기반 재시도 "
                     f"({repair_attempts}) - 원인: {error_reason}",
