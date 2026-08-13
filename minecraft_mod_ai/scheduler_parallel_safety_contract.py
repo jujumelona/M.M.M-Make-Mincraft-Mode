@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -26,6 +27,11 @@ _STAGE_WRITE_LOCKS = {
     "entity": threading.RLock(),
 }
 _INDEX_COMMIT_LOCK = threading.RLock()
+_SHARED_LOCAL_GPU_LANE: ContextVar[bool] = ContextVar(
+    "mmm_shared_local_gpu_lane",
+    default=False,
+)
+_GPU_RESOURCE_CLASSES = frozenset({"llm", "image_gpu"})
 
 
 def _cpu_capacity() -> int:
@@ -136,6 +142,59 @@ def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
         if str(config.get("integration_type", "")) != "mmm_local_ai_sidecar":
             return False
     return True
+
+
+def _profile_uses_shared_local_gpu(profile: str, registry: Any | None = None) -> bool:
+    """Return whether generation text and image roles contend for one local GPU.
+
+    Remote/API profiles intentionally remain independent. Local llama/vLLM plus local
+    diffusion profiles share one physical device and must not be claimed concurrently;
+    the model-router read/write lock then governs safe in-lane text parallelism.
+    """
+
+    try:
+        if registry is None:
+            from .model_registry import ModelRegistry
+
+            registry = ModelRegistry()
+        text = registry.role(profile, "coder")
+        image = registry.role(profile, "image_generator")
+    except Exception:
+        return False
+    return (
+        str(getattr(text, "provider", "")) == "local"
+        and str(getattr(text, "adapter", "")) in {"llama_cpp", "vllm"}
+        and bool(getattr(text, "exclusive_gpu", False))
+        and str(getattr(image, "provider", "")) == "local"
+        and str(getattr(image, "adapter", "")) == "image_diffusion"
+        and bool(getattr(image, "exclusive_gpu", False))
+    )
+
+
+def _install_profile_gpu_lane(orchestrator_module: Any) -> None:
+    orchestrator_cls = orchestrator_module.CompleteProductionOrchestrator
+    current = orchestrator_cls._execute_generation_work
+    if getattr(current, "_mmm_profile_shared_gpu_lane", False):
+        return
+
+    @wraps(current)
+    def execute_generation_work(self: Any, *args: Any, **kwargs: Any):
+        router = kwargs.get("router")
+        registry = getattr(router, "registry", None) if router is not None else None
+        profile = (
+            str(getattr(router, "profile", ""))
+            if router is not None
+            else str(getattr(self, "profile", ""))
+        )
+        shared = _profile_uses_shared_local_gpu(profile, registry)
+        token = _SHARED_LOCAL_GPU_LANE.set(shared)
+        try:
+            return current(self, *args, **kwargs)
+        finally:
+            _SHARED_LOCAL_GPU_LANE.reset(token)
+
+    execute_generation_work._mmm_profile_shared_gpu_lane = True  # type: ignore[attr-defined]
+    orchestrator_cls._execute_generation_work = execute_generation_work
 
 
 def _install_pipeline_shards(work_graph_module: Any) -> None:
@@ -322,6 +381,12 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 for lane, capacity in capacities.items()
                 if running.get(lane, 0) < capacity
             )
+            if _SHARED_LOCAL_GPU_LANE.get() and any(
+                running.get(lane, 0) > 0 for lane in _GPU_RESOURCE_CLASSES
+            ):
+                free_lanes = tuple(
+                    lane for lane in free_lanes if lane not in _GPU_RESOURCE_CLASSES
+                )
             if not free_lanes:
                 connection.commit()
                 return None
@@ -481,6 +546,7 @@ def install(
     work_graph_module: Any,
     orchestrator_module: Any,
 ) -> None:
+    _install_profile_gpu_lane(orchestrator_module)
     _install_pipeline_shards(work_graph_module)
     _install_generation_lanes(work_graph_module)
     _install_thread_local_connections(work_graph_module)
@@ -490,6 +556,7 @@ def install(
 
 __all__ = [
     "_content_node_is_cpu_safe",
+    "_profile_uses_shared_local_gpu",
     "_receipt_touched_paths",
     "_stage_write_lock",
     "install",
