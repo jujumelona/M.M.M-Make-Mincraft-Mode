@@ -266,6 +266,7 @@ def _install_compact_skill_context(capability_module: Any) -> None:
                 # Keep the typed execution contract intact; trim only descriptive prose.
                 skill["description"] = str(skill.get("description", ""))[:240]
 
+        payload["previous_schema_version"] = str(payload.get("schema_version", ""))
         payload["schema_version"] = "mmm/agent-capability-context-v5"
         payload["routing_policy"] = (
             "Select only relevant reviewed Skill routes. model_tools are the only direct "
