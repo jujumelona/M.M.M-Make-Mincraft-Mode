@@ -1,0 +1,129 @@
+name: Repair live contract drift
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/repair-live-contract-drift.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-live-contract-drift-main
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Patch live progress contracts and sync packaged skills
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          import shutil
+          from pathlib import Path
+
+          def replace_exact(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected block in {path}: {old[:80]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          mcp = Path('minecraft_mod_ai/mcp_tools.py')
+          replace_exact(
+              mcp,
+              '        """Inspect exact Fabric 1.20.1 versions without downloading a JAR."""',
+              '        """Inspect project version metadata without downloading a JAR."""',
+          )
+          replace_exact(
+              mcp,
+              '''        root = self._existing_dir(project_root)\n        attempts = (\n            self.policy.repair_attempts\n            if max_attempts is None\n            else max_attempts\n        )\n        if type(attempts) is not int or attempts < 1:\n            raise SpecValidationError(\n                "max_attempts must be null or a positive integer."\n            )\n        return RepairEngine(\n            router=self.router_factory(),\n            gradle_cache=self.workspace_root / ".cache" / "gradle",\n            policy=self.policy,\n        ).repair(\n            root,\n            run_gametest=run_gametest,\n            max_attempts=attempts,\n        )''',
+              '''        root = self._existing_dir(project_root)\n        if max_attempts is not None and (\n            type(max_attempts) is not int or max_attempts < 1\n        ):\n            raise SpecValidationError(\n                "max_attempts must be null or a positive integer."\n            )\n        return RepairEngine(\n            router=self.router_factory(),\n            gradle_cache=self.workspace_root / ".cache" / "gradle",\n            policy=self.policy,\n        ).repair(\n            root,\n            run_gametest=run_gametest,\n            max_attempts=max_attempts,\n        )''',
+          )
+
+          catalog = Path('minecraft_mod_ai/skill_catalog.py')
+          replace_exact(catalog, '    max_attempts: int\n', '    max_attempts: int | None\n')
+          replace_exact(
+              catalog,
+              '        if attempts_started >= self.max_attempts:\n            return False\n',
+              '        if self.max_attempts is not None and attempts_started >= self.max_attempts:\n            return False\n',
+          )
+          replace_exact(
+              catalog,
+              '''    max_attempts = retry_raw.get("max_attempts")\n    if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):\n        raise SkillPolicyError(f"{skill} retry max_attempts must be an integer.")\n    if not 1 <= max_attempts <= 10:\n        raise SkillPolicyError(f"{skill} retry max_attempts must be between 1 and 10.")''',
+              '''    max_attempts = retry_raw.get("max_attempts")\n    if max_attempts is not None:\n        if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):\n            raise SkillPolicyError(\n                f"{skill} retry max_attempts must be null or an integer."\n            )\n        if not 1 <= max_attempts <= 10:\n            raise SkillPolicyError(\n                f"{skill} retry max_attempts must be between 1 and 10 when set."\n            )''',
+          )
+
+          canonical_root = Path('skills')
+          plugin_root = Path('plugins/mmm-minecraft-mod-ai/skills')
+          for skill_file in sorted(canonical_root.glob('*/SKILL.md')):
+              text = skill_file.read_text(encoding='utf-8')
+              text = re.sub(r'(?m)^  max_attempts: [1-9][0-9]*$', '  max_attempts: null', text)
+              text = text.replace(
+                  'strategy: finite minimal-diff repair from new machine evidence only',
+                  'strategy: progress-driven minimal-diff repair from fresh machine evidence only',
+              )
+              text = text.replace(
+                  'Retry limit is reached or a safety/version boundary is violated.',
+                  'Fresh machine evidence repeats without progress or a safety/version boundary is violated.',
+              )
+              skill_file.write_text(text, encoding='utf-8')
+              destination = plugin_root / skill_file.parent.name / 'SKILL.md'
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(skill_file, destination)
+
+          # Recompile the packaged runtime representation from the canonical source of truth.
+          from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS, compile_skill_catalog
+          compiled = compile_skill_catalog()
+          packaged_path = Path('minecraft_mod_ai/packaged_skills.json')
+          packaged = json.loads(packaged_path.read_text(encoding='utf-8'))
+          packaged['schema_version'] = 'mmm/packaged-skills-v3'
+          packaged['skills'] = {
+              name: (canonical_root / name / 'SKILL.md').read_text(encoding='utf-8')
+              for name in CANONICAL_SKILLS
+          }
+          packaged['contracts'] = {
+              name: compiled[name].to_dict() for name in CANONICAL_SKILLS
+          }
+          packaged_path.write_text(
+              json.dumps(packaged, ensure_ascii=False, sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Verify repaired contracts
+        run: |
+          python -m compileall -q minecraft_mod_ai tools tests
+          python -m ruff check minecraft_mod_ai tests tools --select F,E7,E9
+          python -m pytest -q tests/test_skill_policy.py tests/test_plugin_package.py tests/test_repair_engine.py tests/test_runtime_bootstrap_clean.py
+          python - <<'PY'
+          from pathlib import Path
+          from minecraft_mod_ai.skill_catalog import compile_skill_catalog
+          contracts = compile_skill_catalog()
+          assert all(contract.retry.max_attempts is None for contract in contracts.values())
+          source = Path('minecraft_mod_ai/mcp_tools.py').read_text(encoding='utf-8')
+          assert 'self.policy.repair_attempts\n            if max_attempts is None' not in source
+          PY
+          git diff --check
+      - name: Commit verified repair and remove one-shot workflow
+        run: |
+          git rm .github/workflows/repair-live-contract-drift.yml
+          git add minecraft_mod_ai skills plugins tests
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Make repair and skill retries progress-driven'
+          git pull --rebase origin main
+          git push origin HEAD:main
