@@ -93,6 +93,7 @@ def harden_pre_design_research(agentic_module: Any) -> None:
             forced = deterministic.get("forced_project_rag")
         if isinstance(forced, Mapping):
             domains = forced.get("domains")
+            selected = None
             if isinstance(domains, list):
                 selected = next(
                     (
@@ -103,8 +104,17 @@ def harden_pre_design_research(agentic_module: Any) -> None:
                     ),
                     None,
                 )
-                if selected is not None:
-                    value["forced_project_rag"] = selected
+            # Preserve root receipt metadata (hashes, owner/test provenance, index status)
+            # while narrowing only the heavy per-domain payload. This also keeps the
+            # ContextVar isolation contract observable to concurrent callers.
+            receipt = {
+                key: item
+                for key, item in forced.items()
+                if key != "domains"
+            }
+            if isinstance(selected, Mapping):
+                receipt.update(dict(selected))
+            value["forced_project_rag"] = receipt
         return value
 
     def compact_receipt(value: Any) -> Any:
