@@ -112,20 +112,26 @@ def patch_work_graph() -> None:
 
 def patch_scheduler() -> None:
     text = SCHED.read_text(encoding="utf-8")
+
+    # Per-stage locks permit unsafe cross-stage writes to the same initializer.
+    # All shared source mutations belong to the one project commit lane instead.
     start = text.find("_STAGE_WRITE_LOCKS = {")
     if start >= 0:
-        end = text.find("}\n_INDEX_COMMIT_LOCK", start)
-        if end < 0:
-            raise SystemExit("stage lock constant end missing")
-        text = text[:start] + "_INDEX_COMMIT_LOCK" + text[end + len("}\n_INDEX_COMMIT_LOCK") :]
+        boundary = text.find("_INDEX_COMMIT_LOCK", start)
+        if boundary < 0:
+            raise SystemExit("index commit lock boundary missing")
+        text = text[:start] + text[boundary:]
+
     text = remove_function(text, "_stage_write_lock")
-    old = '''            stage_lock = _stage_write_lock(node)
-            if stage_lock is not None:
-                # Same-stage generators can share manifests/initializers, so serialize
-                # only that domain. Different domains remain concurrent.
-                with stage_lock:
-                    receipt = action()
-            elif (
+
+    marker = "            stage_lock = _stage_write_lock(node)\n"
+    if marker in text:
+        block_start = text.index(marker)
+        block_end_marker = "            if not isinstance(receipt, dict):\n"
+        block_end = text.find(block_end_marker, block_start)
+        if block_end < 0:
+            raise SystemExit("run_work_node receipt boundary missing")
+        replacement_block = '''            if (
                 node.resource_class == "commit"
                 and shared_index is not None
                 and hasattr(shared_index, "root")
@@ -135,17 +141,10 @@ def patch_scheduler() -> None:
             else:
                 receipt = action()
 '''
-    new = '''            if (
-                node.resource_class == "commit"
-                and shared_index is not None
-                and hasattr(shared_index, "root")
-            ):
-                with project_write_lock(shared_index.root):
-                    receipt = action()
-            else:
-                receipt = action()
-'''
-    text = replace_once(text, old, new, "single commit owner")
+        text = text[:block_start] + replacement_block + text[block_end:]
+
+    if "stage_lock = _stage_write_lock(node)" in text:
+        raise SystemExit("stage-local write lock still owns generation")
     text = text.replace('    "_stage_write_lock",\n', "")
     compile(text, str(SCHED), "exec")
     SCHED.write_text(text, encoding="utf-8")
