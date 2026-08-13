@@ -1,5 +1,5 @@
-# M.M.M — Make Minecraft Mode
+# M.M.M Make Mincraft Mode
 
-A local/remote AI pipeline for designing and producing Minecraft Fabric mods with agentic planning, research, coding, validation, and production tooling.
+[한국어](README_KO.md)
 
-See `README_KO.md` for the Korean guide and `M.M.M_Make_Mincraft_Mode_Colab.ipynb` for the canonical Colab entry point.
+[![Open in Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft-Mode/blob/main/M.M.M_Make_Mincraft_Mode_Colab.ipynb)
