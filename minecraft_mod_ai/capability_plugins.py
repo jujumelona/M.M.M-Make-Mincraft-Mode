@@ -110,7 +110,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
             "schema migrations",
             "restart tests",
         ),
-        ("mmm-generation", "mmm-quality", "minecraft-runtime-1201"),
+        ("mmm-generation", "mmm-quality", "mmm-runtime"),
         (
             "packet validation",
             "permission tests",
@@ -203,7 +203,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.system_pack_generator",
         ("screen handler", "client screen", "validated action channel", "cooldown", "one-shot reward persistence"),
-        ("jdtls", "minecraft-dev", "minecraft-runtime-1201"),
+        ("jdtls", "minecraft-dev", "mmm-runtime"),
         ("Gradle", "server authority", "replay tests", "GUI screenshots"),
     ),
     PluginStatus(
@@ -211,7 +211,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.system_pack_generator",
         ("create", "invite", "accept", "kick", "leave", "disband", "persistence"),
-        ("jdtls", "minecraft-runtime-1201"),
+        ("jdtls", "mmm-runtime"),
         ("Gradle", "two-client test", "permissions", "restart"),
     ),
     PluginStatus(
@@ -284,7 +284,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "first-party disposable runtime manager",
         ("server/client logs", "screenshots", "process receipts", "cleanup"),
-        ("minecraft-runtime-1201",),
+        ("mmm-runtime",),
         ("external Fabric launcher", "explicit EULA acceptance", "server/client readiness"),
     ),
     PluginStatus(
@@ -292,7 +292,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "first-party Mineflayer 1.20.1 JSONL bridge",
         ("movement", "crafting", "container interaction", "chat", "inventory", "condition assertions"),
-        ("mineflayer-1201",),
+        ("mmm-runtime",),
         ("localhost runtime", "interaction plus wait_for assertion"),
     ),
     PluginStatus(
@@ -332,7 +332,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "single approved graph orchestrating mod generation, repair, runtime, visual review and distribution",
         ("complete proposal", "source", "JAR", "runtime receipts", "release bundle"),
-        ("mmm-generation", "mmm-quality", "mmm-runtime", "mmm-release", "minecraft-runtime-1201", "mineflayer-1201"),
+        ("mmm-generation", "mmm-quality", "mmm-runtime", "mmm-release"),
         ("every requested external gate",),
     ),
     PluginStatus(
@@ -345,7 +345,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
             "fresh evidence report",
             "plateau detection",
         ),
-        ("mmm-planning", "mmm-quality", "mmm-runtime", "mmm-release"),
+        ("mmm-frontdoor", "mmm-quality", "mmm-runtime", "mmm-release"),
         (
             "proposal and artifact binding",
             "independent verifier",
