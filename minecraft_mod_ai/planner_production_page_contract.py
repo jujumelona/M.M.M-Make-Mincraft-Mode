@@ -24,6 +24,29 @@ Never repeat an already-known module, asset, audio ID, or file path. Return JSON
 """.strip()
 
 
+class _StagedCatalog:
+    """Overlay catalog used while a production page is still uncommitted.
+
+    Child-item repair needs duplicate detection across both prior accepted output and
+    siblings from the current page. Mutating the real catalog during that validation
+    makes a later page-level failure irreversible because the catalog digest is
+    append-only. This overlay records current-page identities locally and publishes
+    nothing until the whole page has passed its progress checks.
+    """
+
+    def __init__(self, base: Any) -> None:
+        self._base = base
+        self._added: set[str] = set()
+
+    def __contains__(self, value: str) -> bool:
+        return value in self._added or value in self._base
+
+    def add(self, value: str) -> None:
+        if value in self:
+            raise ValueError(f"duplicate staged production id: {value}")
+        self._added.add(value)
+
+
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -135,25 +158,8 @@ def install(complete_planner_module: Any) -> None:
                     "Production batch page fields are invalid."
                 )
 
-            # Parse and repair each child independently. Valid siblings are committed
-            # unchanged; one malformed module/asset/audio item is patched in place and
-            # never causes the whole production page to be regenerated.
-            page_modules, page_assets, page_audio, tests = resolve_page_items(
-                complete_planner_module,
-                self.router,
-                page=page,
-                page_path=page_path,
-                module_catalog=module_catalog,
-                asset_catalog=asset_catalog,
-                audio_catalog=audio_catalog,
-                test_catalog=test_catalog,
-            )
-            parts.modules.extend(page_modules)
-            parts.assets.extend(page_assets)
-            parts.audio.extend(page_audio)
-            parts.acceptance_tests.extend(tests)
-            test_catalog.update(tests)
-
+            # A page with no host target progress is rejected before any child parser or
+            # repair path can mutate proposal/catalog state.
             completed = {
                 value
                 for value in _string_list(page.get("completed_deliverables", []))
@@ -163,6 +169,37 @@ def install(complete_planner_module: Any) -> None:
                 raise complete_planner_module.SpecValidationError(
                     f"Production batch {batch.batch_id!r} page made no verified progress."
                 )
+
+            # Resolve children against staged catalog overlays. A malformed later
+            # sibling or any subsequent page-level rejection therefore leaves all real
+            # catalogs and proposal lists byte-for-byte unchanged.
+            staged_modules = _StagedCatalog(module_catalog)
+            staged_assets = _StagedCatalog(asset_catalog)
+            staged_audio = _StagedCatalog(audio_catalog)
+            page_modules, page_assets, page_audio, tests = resolve_page_items(
+                complete_planner_module,
+                self.router,
+                page=page,
+                page_path=page_path,
+                module_catalog=staged_modules,
+                asset_catalog=staged_assets,
+                audio_catalog=staged_audio,
+                test_catalog=test_catalog,
+            )
+
+            # Publish catalog identities and proposal output only after the complete
+            # page has passed structural, progress, and child-item validation.
+            for value in page_modules:
+                module_catalog.add(value.module_id)
+            for value in page_assets:
+                asset_catalog.add(value.asset_id)
+            for value in page_audio:
+                audio_catalog.add(value.sound_id)
+            parts.modules.extend(page_modules)
+            parts.assets.extend(page_assets)
+            parts.audio.extend(page_audio)
+            parts.acceptance_tests.extend(tests)
+            test_catalog.update(tests)
 
             remaining = [value for value in remaining if value not in completed]
             if not remaining:
