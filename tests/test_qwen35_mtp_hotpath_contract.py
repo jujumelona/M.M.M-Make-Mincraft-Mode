@@ -57,9 +57,10 @@ def test_qwen35_mtp_detection_is_profile_specific() -> None:
     ) is False
 
 
-def test_measured_fast_args_use_bounded_native_kv_profile(monkeypatch) -> None:
+def test_measured_fast_args_preserve_model_profile_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+    monkeypatch.delenv("MMM_QWEN35_T4_KV_OVERRIDE", raising=False)
 
     autotune = SimpleNamespace(_base_args=_base_args)
     _install_measured_fast_base_args(autotune)
@@ -69,7 +70,7 @@ def test_measured_fast_args_use_bounded_native_kv_profile(monkeypatch) -> None:
     assert args[args.index("--flash-attn") + 1] == "on"
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
-    assert args[args.index("--ctx-size") + 1] == "8192"
+    assert args[args.index("--ctx-size") + 1] == "32768"
     assert "--cache-type-k" not in args
     assert "--cache-type-v" not in args
     assert "--load-mode" not in args
@@ -77,25 +78,39 @@ def test_measured_fast_args_use_bounded_native_kv_profile(monkeypatch) -> None:
     assert "--metrics" in args
 
 
-def test_qwen_context_is_bounded_and_explicitly_overridable(monkeypatch) -> None:
+def test_measured_fast_args_honor_t4_kv_override(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_QWEN35_T4_KV_OVERRIDE", "q8_0")
+    autotune = SimpleNamespace(_base_args=_base_args)
+    _install_measured_fast_base_args(autotune)
+    args = autotune._base_args("server", "model", _qwen_config(), 8910)
+
+    assert args[args.index("--cache-type-k") + 1] == "q8_0"
+    assert args[args.index("--cache-type-v") + 1] == "q8_0"
+
+
+def test_qwen_context_uses_profile_and_only_explicit_positive_override(monkeypatch) -> None:
     config = _qwen_config()
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-    assert _context_size(config) == 8192
+    assert _context_size(config) == 32768
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
     assert _context_size(config) == 16384
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "999999")
-    assert _context_size(config) == 32768
-    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "1024")
-    assert _context_size(config) == 4096
+    assert _context_size(config) == 999999
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "bad")
-    assert _context_size(config) == 8192
+    assert _context_size(config) == 32768
 
 
-def test_qwen35_hotpath_launches_exactly_one_fixed_mtp3_server(monkeypatch) -> None:
+def test_qwen35_hotpath_launches_exactly_one_mtp3_server(monkeypatch) -> None:
     monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
-    monkeypatch.setenv("MMM_QWEN35_MTP_WIDTH", "12")
+    monkeypatch.delenv("MMM_QWEN35_MTP_WIDTH", raising=False)
+    monkeypatch.delenv("MMM_QWEN35_T4_KV_OVERRIDE", raising=False)
     selected = []
+
+    def env_int(name, default, minimum=1, maximum=None):
+        del name
+        value = max(minimum, int(default))
+        return min(maximum, value) if maximum is not None else value
 
     def launch(binary, model_path, config, variant):
         del binary, model_path, config
@@ -116,6 +131,7 @@ def test_qwen35_hotpath_launches_exactly_one_fixed_mtp3_server(monkeypatch) -> N
         _MANAGED_PROCESS=None,
         _MANAGED_URL=None,
         _AUTOTUNE_LOCK=threading.RLock(),
+        _env_int=env_int,
         _server_binary=lambda: "llama-server",
         _resolve_model_path=lambda config: "/tmp/qwen35.gguf",
         _launch_selected=launch,
