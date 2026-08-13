@@ -339,6 +339,51 @@ def _record(
             )
 
 
+def planner_search_width_hint(
+    request: Mapping[str, Any] | str,
+    stage: str,
+    *,
+    maximum: int,
+) -> int | None:
+    """Estimate useful Best-of-N breadth from prior host-verified workflows.
+
+    Recovery-heavy matches raise breadth; several strong clean matches suppress
+    redundant decoding. Ambiguous history returns ``None`` so the deterministic risk
+    controller remains authoritative.
+    """
+
+    cap = max(1, min(3, int(maximum)))
+    if cap <= 1:
+        return 1
+    matches = _matches(_features(request, (), stage), limit=8)
+    strong = [
+        row for row in matches if float(row.get("similarity", 0.0) or 0.0) >= 0.62
+    ]
+    if not strong:
+        return None
+
+    clean_confidence = 0.0
+    recovery_pressure = 0.0
+    clean_count = 0
+    for row in strong:
+        similarity = float(row.get("similarity", 0.0) or 0.0)
+        recovered = row.get("recovered_from")
+        failures = [str(item) for item in recovered] if isinstance(recovered, list) else []
+        if failures:
+            recovery_pressure += similarity * (
+                1.0 + min(2.0, 0.35 * len(set(failures)))
+            )
+        else:
+            clean_confidence += similarity
+            clean_count += 1
+
+    if recovery_pressure >= max(0.9, clean_confidence * 0.45):
+        return cap
+    if clean_count >= 3 and clean_confidence >= 2.4 and recovery_pressure <= 0.25:
+        return 1
+    return None
+
+
 def enhance_planner(complete_planner_module: Any) -> None:
     current = complete_planner_module._generate_json_page_with_repair
     if getattr(current, "_mmm_small_model_agent_policy", False):
@@ -410,4 +455,4 @@ def enhance_planner(complete_planner_module: Any) -> None:
     complete_planner_module._generate_json_page_with_repair = generate_with_policy
 
 
-__all__ = ["enhance_planner"]
+__all__ = ["enhance_planner", "planner_search_width_hint"]
