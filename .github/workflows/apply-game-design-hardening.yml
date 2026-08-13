@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/apply-game-design-hardening.yml
       - .github/scripts/apply_game_design_hardening.py
+      - .github/scripts/fix_game_design_hardening_lint.py
       - minecraft_mod_ai/planner_stage_trace.py
 
 permissions:
@@ -30,7 +31,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply hardening patch
-        run: python .github/scripts/apply_game_design_hardening.py
+        run: |
+          python .github/scripts/apply_game_design_hardening.py
+          python .github/scripts/fix_game_design_hardening_lint.py
       - name: Static verification
         run: |
           python -m compileall -q minecraft_mod_ai tests tools
@@ -51,6 +54,7 @@ jobs:
         run: |
           git rm .github/workflows/apply-game-design-hardening.yml
           git rm .github/scripts/apply_game_design_hardening.py
+          git rm .github/scripts/fix_game_design_hardening_lint.py
           git add -A
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
