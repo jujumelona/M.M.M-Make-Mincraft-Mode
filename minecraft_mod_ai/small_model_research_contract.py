@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
@@ -261,12 +260,10 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
             ):
                 grounded += 1
 
-        score = (
-            base_score
-            + 10.0 * declared
-            + 18.0 * grounded
-            - 36.0 * unsupported
-        )
+        # Only directly verifiable evidence earns search preference. A declared but
+        # currently unresolvable identifier gets no bonus; the outer host sanitizer
+        # can still accept it when it resolves against prior catalogs/dependencies.
+        score = base_score + 24.0 * grounded - 36.0 * unsupported
         details = {
             **dict(verifier),
             "declared_completion_evidence": declared,
@@ -279,44 +276,18 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
     agentic_module._score_plan_page = score_with_evidence
 
 
-def _install_compute_optimal_width(agentic_module: Any) -> None:
-    current = agentic_module._planner_candidate_count
-    if getattr(current, "_mmm_compute_optimal_width", False):
-        return
-
-    @wraps(current)
-    def compute_optimal_width(request: Any, stage: str) -> int:
-        width = current(request, stage)
-        if width <= 1 or os.environ.get("MMM_AGENTIC_SEARCH", "auto").strip().lower() == "on":
-            return width
-
-        raw_slots = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip()
-        if not raw_slots:
-            return width
-        try:
-            slots = int(raw_slots)
-        except ValueError:
-            return width
-        return width if slots >= 2 else 1
-
-    compute_optimal_width._mmm_compute_optimal_width = True  # type: ignore[attr-defined]
-    agentic_module._planner_candidate_count = compute_optimal_width
-
-
 def install() -> None:
-    """Bind high-yield research patterns to the live small-model runtime.
+    """Bind verifier-grounded completion to the live small-model planner.
 
-    The base runtime already supplies adaptive Best-of-N planning, verifier-guided
-    repair, bounded reflection/retry, project memory, preference traces, RAG/tool
-    grounding and fail-closed deterministic gates. This layer adds verifier-grounded
-    completion claims without changing the durable production-page schema and makes
-    automatic test-time scaling resource-aware.
+    Adaptive Best-of-N, single-stream collapse, verifier-guided repair, bounded retry,
+    project memory, preference traces, RAG/tool grounding and deterministic gates are
+    already owned by their dedicated runtime contracts. This layer adds only the
+    missing completion-evidence bridge so policy ownership stays non-overlapping.
     """
 
     from . import agentic_optimization_contract, complete_planner
 
     _install_evidence_aware_scoring(agentic_optimization_contract)
-    _install_compute_optimal_width(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
 
 
