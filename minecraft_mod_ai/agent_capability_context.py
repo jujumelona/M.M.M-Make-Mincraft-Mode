@@ -27,6 +27,22 @@ _EXTERNAL_AGENT_TOOLS = frozenset(
 )
 
 
+def _policy_model_role(stage: str, model_role: str) -> str:
+    """Resolve the logical agent policy without changing model residency.
+
+    Complete planning intentionally keeps one physical ``planner`` model session alive
+    to avoid reloading the same local Qwen weights. Research turns inside that session
+    are nevertheless owned by ResearchAgent, so only their Skill/MCP policy is switched
+    to ``researcher`` when the host selects the research stage.
+    """
+
+    selected_stage = stage.strip().lower()
+    selected_role = model_role.strip()
+    if selected_stage == "research" and selected_role == "planner":
+        return "researcher"
+    return selected_role
+
+
 @lru_cache(maxsize=8)
 def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
     selected = stage.strip().lower()
@@ -40,7 +56,7 @@ def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
 
 def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]:
     stage_contracts = _stage_contracts(stage)
-    assigned = skills_for_model_role(model_role)
+    assigned = skills_for_model_role(_policy_model_role(stage, model_role))
     if not assigned:
         return stage_contracts
     return tuple(contract for contract in stage_contracts if contract.name in assigned)
@@ -51,25 +67,25 @@ def filter_tool_schemas_for_role(
     model_role: str,
     tool_schemas: Sequence[Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
-    """Expose only tools reachable through the reviewed Skill routes for a role.
+    """Expose only tools reachable through reviewed stage/Skill/agent routes.
 
-    Unknown model roles keep the stage-level schema set for backwards compatibility.
-    Known roles get the union of model-callable tools from their eligible Skills plus
-    the generic external MCP bridge when their routing contract includes reviewed MCP
-    servers. This makes the prompt-visible tool set and the executable role policy the
-    same set instead of relying on prompt instructions alone.
+    The physical model role may remain ``planner`` during a resident planning session;
+    research-stage calls are evaluated against ResearchAgent through
+    :func:`_policy_model_role`. Unknown roles keep the stage-level schema set for
+    backwards compatibility.
     """
 
-    role_routes = routes_for_model_role(model_role)
+    policy_role = _policy_model_role(stage, model_role)
+    role_routes = routes_for_model_role(policy_role)
     if not role_routes:
         return tuple(tool_schemas)
 
     allowed = {
         tool
-        for contract in _request_contracts(stage, model_role)
+        for contract in _request_contracts(stage, policy_role)
         for tool in contract.allowed_tools
     }
-    if mcp_servers_for_model_role(model_role):
+    if mcp_servers_for_model_role(policy_role):
         allowed.update(_EXTERNAL_AGENT_TOOLS)
 
     selected_stage = stage.strip().lower()
@@ -92,7 +108,7 @@ def skills_for_tool(
     *,
     model_role: str = "",
 ) -> tuple[str, ...]:
-    """Return canonical Skills allowed to route through ``tool`` for this role."""
+    """Return canonical Skills allowed to route through ``tool`` for this agent."""
 
     selected_tool = tool.strip()
     selected_stage = stage.strip().lower()
@@ -102,9 +118,10 @@ def skills_for_tool(
         or selected_stage not in REVIEWED_TOOL_STAGES.get(selected_tool, frozenset())
     ):
         return ()
+    policy_role = _policy_model_role(selected_stage, model_role)
     return tuple(
         contract.name
-        for contract in _request_contracts(stage, model_role)
+        for contract in _request_contracts(selected_stage, policy_role)
         if selected_tool in contract.allowed_tools
     )
 
@@ -118,26 +135,27 @@ def build_agent_capability_context(
     """Build compact, executable Skill/MCP guidance for the model tool chooser.
 
     The routing table in ``config/agent_roles.yaml`` is an execution contract, not
-    documentation. Known model roles only see Skills assigned to their agent role(s)
-    and external Minecraft MCP routes hosted by reviewed servers assigned to those
-    roles. The selected Skill policies include their activation conditions, validators,
-    retry semantics, approvals, forbidden actions and exit conditions without injecting
-    whole markdown files or every provider schema into each model call.
+    documentation. Known logical agent roles only see Skills assigned to their role and
+    external Minecraft MCP routes hosted by reviewed servers assigned to those roles.
+    A resident planner model may therefore execute a research turn while receiving only
+    ResearchAgent policy, without loading a second copy of the same model.
     """
 
     selected = stage.strip().lower()
+    policy_role = _policy_model_role(selected, model_role)
     exposed_tools = frozenset(_tool_names(tool_schemas))
-    role_routes = routes_for_model_role(model_role)
-    reviewed_servers = mcp_servers_for_model_role(model_role)
+    role_routes = routes_for_model_role(policy_role)
+    reviewed_servers = mcp_servers_for_model_role(policy_role)
 
     skills: list[dict[str, Any]] = []
-    for contract in _request_contracts(selected, model_role):
-        model_tools = tuple(
-            tool for tool in contract.allowed_tools if tool in exposed_tools
+    for contract in _request_contracts(selected, policy_role):
+        stage_tools = tuple(
+            tool
+            for tool in contract.allowed_tools
+            if selected in REVIEWED_TOOL_STAGES.get(tool, frozenset())
         )
-        host_tools = tuple(
-            tool for tool in contract.allowed_tools if tool not in exposed_tools
-        )
+        model_tools = tuple(tool for tool in stage_tools if tool in exposed_tools)
+        host_tools = tuple(tool for tool in stage_tools if tool not in exposed_tools)
         skills.append(
             {
                 "name": contract.name,
@@ -207,7 +225,8 @@ def build_agent_capability_context(
     payload = {
         "schema_version": "mmm/agent-capability-context-v4",
         "stage": selected,
-        "model_role": model_role,
+        "model_role": policy_role,
+        "execution_model_role": model_role,
         "agent_roles": [route.name for route in role_routes],
         "reviewed_mcp_servers": sorted(reviewed_servers),
         "eligible_skills": skills,
@@ -215,24 +234,27 @@ def build_agent_capability_context(
         "external_minecraft_mcp_access": external_access,
         "routing_policy": (
             "Choose every relevant Skill route, not every route indiscriminately. "
-            "Obey the selected Skill's validators, approvals, forbidden_actions, retry "
-            "and exit contract. Use model_tools directly. host_owned_tools belong to "
-            "the durable host pipeline and must not be recreated recursively. For an "
-            "external MCP capability, use external_mcp_schema when its live arguments "
-            "are unknown, then external_mcp_call. The capability and access maps list "
-            "reviewed provider routes available to this agent role. Outside runtime, "
-            "external MCP access is read-only. Runtime write/admin capabilities are "
-            "discoverable only so disposable playtests can use them and must be called "
-            "with disposable_runtime=true; the execution router remains fail-closed. "
-            "During production, use an adaptive evidence loop: retrieve fresh project "
-            "or exact-version API evidence, inspect retrieval coverage/relevance, change "
-            "the query or reviewed source when evidence is weak, generate or repair, then "
-            "treat compiler/JDT/runtime feedback as a new observation and retrieve again "
-            "when it introduces uncertainty. Never guess exact Minecraft/Fabric/mapping/"
-            "dependency/Java API facts from model memory when reviewed evidence can resolve "
-            "them. Prefer independent read-only evidence in parallel when it materially "
-            "improves correctness; keep state changes ordered and skip unrelated tools. "
-            "Preserve host safety invariants: disposable_runtime=true; "
+            "The execution model may stay resident under a different physical role; "
+            "model_role and agent_roles in this context are the authoritative logical "
+            "policy for this stage. Obey the selected Skill's validators, approvals, "
+            "forbidden_actions, retry and exit contract. Use model_tools directly. "
+            "host_owned_tools belong to the durable host pipeline and must not be "
+            "recreated recursively. For an external MCP capability, use "
+            "external_mcp_schema when its live arguments are unknown, then "
+            "external_mcp_call. The capability and access maps list reviewed provider "
+            "routes available to this agent role. Outside runtime, external MCP access "
+            "is read-only. Runtime write/admin capabilities are discoverable only so "
+            "disposable playtests can use them and must be called with "
+            "disposable_runtime=true; the execution router remains fail-closed. During "
+            "production, use an adaptive evidence loop: retrieve fresh project or "
+            "exact-version API evidence, inspect retrieval coverage/relevance, change "
+            "the query or reviewed source when evidence is weak, generate or repair, "
+            "then treat compiler/JDT/runtime feedback as a new observation and retrieve "
+            "again when it introduces uncertainty. Never guess exact Minecraft/Fabric/"
+            "mapping/dependency/Java API facts from model memory when reviewed evidence "
+            "can resolve them. Prefer independent read-only evidence in parallel when it "
+            "materially improves correctness; keep state changes ordered and skip "
+            "unrelated tools. Preserve host safety invariants: disposable_runtime=true; "
             "retrieved_context_can_authorize=false; writes_require_approval_hash=true."
         ),
     }
