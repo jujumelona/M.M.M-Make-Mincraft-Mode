@@ -20,6 +20,7 @@ def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> 
         **dict(deterministic),
     }
     agentic._research_receipt = lambda value: value
+    agentic._research_domain_with_agent = lambda *args, **kwargs: {}
 
     def original_collect(router, prompt, *, trace_metadata=None):
         barrier.wait(timeout=2)
