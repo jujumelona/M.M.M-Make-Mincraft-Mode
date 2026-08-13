@@ -4,25 +4,6 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
-# Final frozen-small-model composition. Runtime bootstrap installs all established
-# owners first; this late, idempotent integration only connects the missing
-# inference-time surfaces (tool retrieval, hybrid code RAG, exact repair ledger and
-# verified negative repair memory). It does not add or train another generative model.
-from . import agentic_optimization_contract as _agentic_optimization_contract
-from . import agentic_pre_design_rag as _agentic_pre_design_rag
-from . import model_router as _model_router_module
-from . import production_tools as _production_tools_module
-from . import repair_engine as _repair_engine_module
-from .small_model_max_agent_contract import install as _install_small_model_max_agent
-
-_install_small_model_max_agent(
-    model_router_module=_model_router_module,
-    pre_design_rag_module=_agentic_pre_design_rag,
-    production_tools_module=_production_tools_module,
-    repair_module=_repair_engine_module,
-    optimization_module=_agentic_optimization_contract,
-)
-
 from .api import (
     ChatReply,
     CompleteChatReply,
