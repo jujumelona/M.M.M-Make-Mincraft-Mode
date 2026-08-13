@@ -24,22 +24,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Repair execution-efficiency bootstrap call
+      - name: Repair runtime bootstrap owners
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('minecraft_mod_ai/runtime_bootstrap.py')
           text = path.read_text(encoding='utf-8')
+
           old = "    install_execution_efficiency(\n        complete_planner_module=complete_planner,\n        work_graph_module=work_graph,\n    )"
           block = "    install_execution_efficiency(\n        work_graph_module=work_graph,\n    )"
           compact = "    install_execution_efficiency(work_graph_module=work_graph)"
           if old in text:
               text = text.replace(old, block, 1)
-              path.write_text(text, encoding='utf-8')
-          elif block in text or compact in text:
-              print('execution-efficiency bootstrap already correct')
-          else:
+          elif block not in text and compact not in text:
               raise SystemExit('execution-efficiency bootstrap call not recognized')
+
+          stale_imports = "    from . import mcp_server, mcp_tools, model_router, platform_resolver, production_tools\n"
+          live_imports = "    from . import mcp_tools, platform_resolver\n"
+          if stale_imports in text:
+              text = text.replace(stale_imports, live_imports, 1)
+          elif live_imports not in text:
+              raise SystemExit('public-boundary import owner shape not recognized')
+
+          stale_contract = "    from .agent_tool_calling_contract import install as install_agent_tools\n"
+          stale_call = "    install_agent_tools(model_router, mcp_server, production_tools)\n"
+          text = text.replace(stale_contract, '', 1)
+          text = text.replace(stale_call, '', 1)
+          if 'agent_tool_calling_contract' in text or 'install_agent_tools(' in text:
+              raise SystemExit('stale agent tool owner still referenced')
+
+          path.write_text(text, encoding='utf-8')
           PY
       - name: Apply remaining progress semantics
         run: |
@@ -50,15 +64,19 @@ jobs:
           python -m pip install --prefer-binary -e '.[dev]'
           python -m ruff check \
             minecraft_mod_ai/runtime_bootstrap.py \
+            minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/agent_tool_runtime.py \
             minecraft_mod_ai/planner_incremental_resume_contract.py \
             minecraft_mod_ai/complete_planner.py \
             tests/test_planner_incremental_repair_contract.py \
             tests/test_complete_planner_scaling.py \
+            tests/test_agent_tool_calling.py \
             --select F,E7,E9
           python -m pytest -q \
             tests/test_planner_incremental_repair_contract.py \
             tests/test_complete_planner_scaling.py \
-            tests/test_agent_tool_calling.py
+            tests/test_agent_tool_calling.py \
+            tests/test_agent_tool_runtime_colab_stdio.py
           git diff --check
       - name: Commit and self-delete
         run: |
