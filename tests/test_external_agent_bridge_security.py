@@ -4,6 +4,7 @@ import pytest
 
 from minecraft_mod_ai.external_agent_bridge import (
     CALL_TOOL,
+    SCHEMA_TOOL,
     ExternalAgentBridge,
     ExternalAgentBridgeError,
 )
@@ -88,3 +89,34 @@ def test_external_mcp_strips_model_owned_platform_target_overrides() -> None:
     }
     assert router.last_invoke["arguments"] == {"query": "registry api"}
     assert router.last_invoke["allowed_server_ids"] == frozenset({"reviewed-docs"})
+
+
+def test_external_mcp_schema_cache_is_partitioned_by_access() -> None:
+    bridge, _ = _bridge()
+    calls: list[str] = []
+
+    def fake_run_async(_function: object, *args: object) -> dict[str, object]:
+        access = str(args[3])
+        calls.append(access)
+        return {"status": "PASS", "access": access}
+
+    bridge._run_async = fake_run_async  # type: ignore[method-assign]
+    common = {
+        "capability": "docs.lookup",
+        "minecraft_version": "1.20.1",
+        "loader": "fabric",
+    }
+    read_schema = bridge.call(
+        "runtime",
+        SCHEMA_TOOL,
+        {**common, "max_access": "read"},
+    )
+    write_schema = bridge.call(
+        "runtime",
+        SCHEMA_TOOL,
+        {**common, "max_access": "write"},
+    )
+
+    assert read_schema["access"] == "read"
+    assert write_schema["access"] == "write"
+    assert calls == ["read", "write"]
