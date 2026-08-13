@@ -168,6 +168,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         "llama_cache_reuse_efficiency_contract",
         "llama_decode_speed_contract",
         "qwen35_mtp_hotpath_contract",
+        "qwen35_t4_single_stream_tuning",
         "planner_single_stream_search_contract",
     }
 
@@ -186,9 +187,12 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     )
     positions = [source.index(marker) for marker in order]
     assert positions == sorted(positions)
-    assert source.index("install_decode_speed(") < source.index(
-        "install_qwen35_hotpath("
-    ) < source.index("install_single_stream_agentic_policy(")
+    assert (
+        source.index("install_decode_speed(")
+        < source.index("install_qwen35_hotpath(")
+        < source.index("install_qwen35_t4_single_stream(")
+        < source.index("install_single_stream_agentic_policy(")
+    )
 
 
 def test_contract_composition_is_limited_to_explicit_owners() -> None:
