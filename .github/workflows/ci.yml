@@ -34,6 +34,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
 
+      - name: Enforce unused-code hygiene
+        run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E4,E7,E9
+
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
 
