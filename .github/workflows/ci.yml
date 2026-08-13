@@ -37,6 +37,9 @@ jobs:
       - name: Enforce dead-code and control-flow hygiene
         run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
 
+      - name: Enforce high-confidence unreachable-code hygiene
+        run: vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
 
