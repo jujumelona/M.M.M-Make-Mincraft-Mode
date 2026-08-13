@@ -12,12 +12,18 @@ _MISSING = object()
 
 def _target_lock(path: Path) -> threading.RLock:
     """Return one stable lock per canonical RAG output target."""
+    canonical = path.expanduser().resolve()
     with _TARGET_LOCKS_GUARD:
-        lock = _TARGET_LOCKS.get(path)
+        lock = _TARGET_LOCKS.get(canonical)
         if lock is None:
             lock = threading.RLock()
-            _TARGET_LOCKS[path] = lock
+            _TARGET_LOCKS[canonical] = lock
         return lock
+
+
+def _index_lock(path: Path) -> threading.RLock:
+    """Compatibility name for callers/tests using the original striped RAG API."""
+    return _target_lock(path)
 
 
 def install(production_tools_module: Any) -> None:
@@ -109,3 +115,6 @@ def _install_custom_generator_router_compat() -> None:
 
     generate._mmm_lightweight_router_workspace_compat = True
     cls.generate = generate
+
+
+__all__ = ["_index_lock", "_target_lock", "install"]
