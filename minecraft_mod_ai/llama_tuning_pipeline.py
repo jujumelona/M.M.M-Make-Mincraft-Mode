@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 2
+_TUNING_PIPELINE_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -30,12 +30,17 @@ class NativeLlamaTuningPipeline:
         self.runtime_tuning = runtime_tuning
 
     def stages(self) -> tuple[TuningStage, ...]:
+        from . import agentic_optimization_contract
         from .llama_cache_reuse_efficiency_contract import install as install_cache_reuse
         from .llama_decode_speed_contract import install as install_decode_speed
         from .llama_server_efficiency_contract import install as install_efficiency
         from .llama_server_hardware_policy import install as install_hardware
         from .llama_server_runtime_tuning import install as install_runtime_tuning
         from .llama_structured_decode_policy import bind_structured_decode_policy
+        from .planner_single_stream_search_contract import (
+            install as install_single_stream_plan_search,
+        )
+        from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
 
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)
@@ -62,6 +67,16 @@ class NativeLlamaTuningPipeline:
                     self.autotune,
                     self.runtime_tuning,
                     self.hardware_policy,
+                ),
+            ),
+            TuningStage(
+                "qwen35-mtp-hotpath",
+                lambda: install_qwen35_hotpath(self.autotune),
+            ),
+            TuningStage(
+                "single-stream-plan-search",
+                lambda: install_single_stream_plan_search(
+                    agentic_optimization_contract
                 ),
             ),
         )
