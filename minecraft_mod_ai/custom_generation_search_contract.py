@@ -102,7 +102,9 @@ def _fork_router_for_candidate(router: Any) -> Any:
             registry=current.registry,
             agent_tool_runtime_factory=getattr(current, "_agent_tool_runtime_factory", None),
         )
-    return copy.copy(current)
+    # Unknown router types may intentionally expose state to their caller. Copying them
+    # blindly can detach callbacks/capture state, so only the owned ModelRouter is forked.
+    return current
 
 
 def _mode() -> str:
