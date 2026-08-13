@@ -329,7 +329,6 @@ def _install_architecture_contracts() -> None:
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
     from .required_gate_compatibility_contract import install as install_gate_compatibility
-    from .scheduler_fairness_contract import install as install_scheduler_fairness
     from .semantic_reviewer_role_contract import install as install_reviewer_role
     from .visual_acceptance_scope_contract import install as install_visual_scope
     from .work_graph_state_transition_contract import install as install_work_graph_state_transitions
@@ -366,7 +365,6 @@ def _install_architecture_contracts() -> None:
     )
     install_custom_generation_search(custom_module_generator)
     install_repair_memory_budget(agentic_optimization_contract)
-    install_scheduler_fairness(work_graph)
     install_visual_scope(complete_orchestrator)
     install_gate_compatibility(complete_orchestrator)
 
@@ -384,6 +382,7 @@ def _install_late_safety_contracts() -> None:
         work_graph,
     )
     from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
+    from .max_efficiency_runtime_contract import enhance_runtime as enhance_max_efficiency_runtime
     from .parallel_result_determinism_contract import install as install_parallel_result_determinism
     from .production_tool_parallel_contract import install as install_production_tool_parallel_safety
     from .runner_parallel_validation_contract import install as install_runner_parallel_validation
@@ -397,6 +396,10 @@ def _install_late_safety_contracts() -> None:
     )
     install_scheduler_poll_efficiency(work_graph)
     install_llama_parallel_runtime(model_router, scheduler_parallel_safety_contract)
+    enhance_max_efficiency_runtime(
+        work_graph_module=work_graph,
+        scheduler_module=scheduler_parallel_safety_contract,
+    )
     install_scheduler_claim_fencing(
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,
