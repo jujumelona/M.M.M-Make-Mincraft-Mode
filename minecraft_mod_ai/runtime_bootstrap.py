@@ -73,8 +73,8 @@ def _install_model_runtime_contracts() -> None:
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
-    from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
+    from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_runtime_performance import install as install_model_runtime_performance
     from .parallel_runtime_contract import install as install_parallel_runtime
 
@@ -284,7 +284,6 @@ def _install_planner_contracts() -> None:
     install_planner_strict_json(planner_json_runtime_contract)
     install_planner_outline_prompt(planner_json_runtime_contract)
     install_incremental_repair(planner_json_runtime_contract)
-
     install_checkpoint_journal(planner_incremental_repair_contract)
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(complete_orchestrator_services)
@@ -293,7 +292,6 @@ def _install_planner_contracts() -> None:
     install_production_stream_efficiency(complete_planner)
     install_execution_efficiency(work_graph_module=work_graph)
     install_incremental_resume(planner_incremental_repair_contract)
-
     install_planner_parser_safety(complete_planner)
     install_planner_module_identity(complete_planner)
     install_planner_pagination_safety(complete_planner)
@@ -340,23 +338,11 @@ def _install_architecture_contracts() -> None:
     install_atomic_requirements(complete_planner, complete_orchestrator)
     install_atomic_planner_policy(atomic_requirement_contract, complete_planner)
     install_atomic_execution(atomic_requirement_contract, complete_orchestrator)
-    install_atomic_quality(
-        atomic_requirement_contract,
-        quality_evidence,
-        complete_orchestrator,
-    )
-    install_atomic_playtest(
-        atomic_requirement_contract,
-        quality_evidence,
-        complete_orchestrator,
-    )
+    install_atomic_quality(atomic_requirement_contract, quality_evidence, complete_orchestrator)
+    install_atomic_playtest(atomic_requirement_contract, quality_evidence, complete_orchestrator)
     install_repair_diagnostics(repair_engine, validation_execution_contract)
     install_orchestrator_jdt_gate(complete_orchestrator)
-    install_clean_room(
-        complete_orchestrator,
-        quality_evidence,
-        validation_execution_contract,
-    )
+    install_clean_room(complete_orchestrator, quality_evidence, validation_execution_contract)
     install_work_graph_state_transitions(work_graph)
     agentic_optimization_contract.install(
         complete_planner_module=complete_planner,
@@ -405,10 +391,7 @@ def _install_late_safety_contracts() -> None:
         orchestrator_module=complete_orchestrator,
     )
     install_production_tool_parallel_safety(production_tools)
-    install_runner_parallel_validation(
-        runner_module=runner,
-        validation_module=validation_execution_contract,
-    )
+    install_runner_parallel_validation(runner_module=runner, validation_module=validation_execution_contract)
     install_parallel_result_determinism(
         orchestrator_module=complete_orchestrator,
         audio_generator_module=audio_generator,
@@ -428,21 +411,22 @@ def _install_public_boundary_contracts() -> None:
 def _install_post_bootstrap_contracts() -> None:
     """Install wrappers that must observe the fully composed runtime."""
     from . import (
+        agentic_optimization_contract,
         agentic_pre_design_rag,
         agentic_research_game_design,
         central_research,
         ecosystem_discovery,
         model_router,
+        production_tools,
+        repair_engine,
         research_coordinator,
     )
     from .agent_security_contract import install as install_agent_security
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
+    from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_research_contract import install as install_small_model_research
 
-    # central_research now owns lossless paging directly. Keep a compatibility shim
-    # only for an older small-model installer that probes this private name; it does
-    # not truncate or otherwise transform authoritative input.
     if not hasattr(central_research, "_bounded_text"):
         def _full_research_text(value: str, *, field: str = "research text") -> str:
             del field
@@ -457,7 +441,12 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_research_module=agentic_research_game_design,
         model_router_module=model_router,
     )
-    # research_coordinator imported the ecosystem builder by value. Rebind it after
-    # the lossless installer so specialist calls use the same paged implementation.
+    install_small_model_max_agent(
+        model_router_module=model_router,
+        pre_design_rag_module=agentic_pre_design_rag,
+        production_tools_module=production_tools,
+        repair_module=repair_engine,
+        optimization_module=agentic_optimization_contract,
+    )
     research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
