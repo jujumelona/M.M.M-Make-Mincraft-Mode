@@ -30,6 +30,7 @@ REQUIRED_ROLES = frozenset(
 )
 ALLOWED_ADAPTERS = frozenset(
     {
+        "mock",
         "transformers_text",
         "transformers_multimodal",
         "llama_cpp",
