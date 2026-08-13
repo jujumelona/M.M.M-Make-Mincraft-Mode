@@ -320,6 +320,8 @@ def _patch_frontdoor(monkeypatch: pytest.MonkeyPatch, prompt: str) -> None:
                     "requirements": [prompt],
                     "evidence_kinds": [],
                     "queries": [prompt],
+                    "providers": [],
+                    "depends_on": [],
                 }
             ],
         },
