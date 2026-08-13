@@ -86,7 +86,6 @@ class _LosslessWorkflowRouter:
             self.outline_pages.append(request)
             source = request["request_ingestion_page"]
             text = source["authoritative_request_text"]
-            int(source["page_index"])
             marker = next(
                 (
                     value

@@ -28,9 +28,7 @@ COLLECTION_FORMAT = "mmm/numbered-collection-manifests-v1"
 DEFAULT_PART_SIZE_BYTES = 1024 * 1024
 MIN_PART_SIZE_BYTES = 16 * 1024
 _COLLECTION_MANIFEST_SHARDS = 128
-_PAGE_CURSOR = re.compile(
-    r"^p_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)_([0-9a-f]{32})$"
-)
+_PAGE_CURSOR = re.compile(r"^p_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)_([0-9a-f]{32})$")
 MAX_PAGE_ITEMS = 1000
 DEFAULT_PAGE_SIZE_BYTES = 256 * 1024
 MIN_PAGE_SIZE_BYTES = 8 * 1024
@@ -57,13 +55,9 @@ def write_sharded_complete_proposal(
 
     if type(shard_size) is not int or shard_size < 1:
         raise ValueError("shard_size must be a positive integer.")
-    if (
-        type(part_size_bytes) is not int
-        or part_size_bytes < MIN_PART_SIZE_BYTES
-    ):
+    if type(part_size_bytes) is not int or part_size_bytes < MIN_PART_SIZE_BYTES:
         raise ValueError(
-            "part_size_bytes must be an integer of at least "
-            f"{MIN_PART_SIZE_BYTES}."
+            f"part_size_bytes must be an integer of at least {MIN_PART_SIZE_BYTES}."
         )
     if policy is not None:
         part_size_bytes = min(
@@ -82,15 +76,10 @@ def write_sharded_complete_proposal(
     parts_root = index.parent / parts_root_name
     if parts_root.exists():
         if parts_root.is_symlink() or not parts_root.is_dir():
-            raise SpecValidationError(
-                f"Proposal shard path is unsafe: {parts_root}"
-            )
+            raise SpecValidationError(f"Proposal shard path is unsafe: {parts_root}")
     else:
         parts_root.mkdir()
-    version_name = (
-        f"v-{proposal_hash.removeprefix('sha256:')[:24]}"
-        f"-{uuid.uuid4().hex}"
-    )
+    version_name = f"v-{proposal_hash.removeprefix('sha256:')[:24]}-{uuid.uuid4().hex}"
     version_parts = parts_root / version_name
     staging = parts_root / f".tmp-{uuid.uuid4().hex}"
     temporary_index: Path | None = None
@@ -159,12 +148,15 @@ def write_sharded_complete_proposal(
         _sync_directory(staging)
         os.replace(staging, version_parts)
         _sync_directory(parts_root)
-        rendered = json.dumps(
-            payload,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        ) + "\n"
+        rendered = (
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         if len(rendered.encode("utf-8")) > part_size_bytes:
             raise SpecValidationError(
                 "Proposal root index exceeded the configured part size."
@@ -208,9 +200,7 @@ def read_sharded_complete_proposal_section(
     """
 
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE_ITEMS:
-        raise SpecValidationError(
-            f"limit must be between 1 and {MAX_PAGE_ITEMS}."
-        )
+        raise SpecValidationError(f"limit must be between 1 and {MAX_PAGE_ITEMS}.")
     if (
         type(max_bytes) is not int
         or not MIN_PAGE_SIZE_BYTES <= max_bytes <= MAX_PAGE_SIZE_BYTES
@@ -219,18 +209,12 @@ def read_sharded_complete_proposal_section(
             "max_bytes must be between "
             f"{MIN_PAGE_SIZE_BYTES} and {MAX_PAGE_SIZE_BYTES}."
         )
-    if (
-        not isinstance(section, str)
-        or not section.strip()
-        or len(section) > 256
-    ):
+    if not isinstance(section, str) or not section.strip() or len(section) > 256:
         raise SpecValidationError("section must not be empty.")
     if cursor_key is not None and (
         not isinstance(cursor_key, bytes) or len(cursor_key) < 16
     ):
-        raise SpecValidationError(
-            "cursor_key must contain at least 16 bytes."
-        )
+        raise SpecValidationError("cursor_key must contain at least 16 bytes.")
     selected = section.strip()
     index = Path(index_path).expanduser().resolve()
     try:
@@ -257,7 +241,9 @@ def read_sharded_complete_proposal_section(
     ):
         raise SpecValidationError("Complete proposal shard index fields are invalid.")
     proposal_hash = str(raw["proposal_hash"])
-    read_part = lambda relative: _read_file_part(index.parent, relative)
+
+    def read_part(relative):
+        return _read_file_part(index.parent, relative)
 
     if selected == "overview":
         if cursor:
@@ -269,43 +255,40 @@ def read_sharded_complete_proposal_section(
             )
         requested_prompt = metadata.get("requested_prompt", "")
         metadata_summary = {
-            key: value
-            for key, value in metadata.items()
-            if key != "requested_prompt"
+            key: value for key, value in metadata.items() if key != "requested_prompt"
         }
         metadata_summary["requested_prompt_chars"] = (
-            len(requested_prompt)
-            if isinstance(requested_prompt, str)
-            else 0
+            len(requested_prompt) if isinstance(requested_prompt, str) else 0
         )
         metadata_summary["requested_prompt_sha256"] = (
             "sha256:"
             + hashlib.sha256(
-                (
-                    requested_prompt
-                    if isinstance(requested_prompt, str)
-                    else ""
-                ).encode("utf-8")
+                (requested_prompt if isinstance(requested_prompt, str) else "").encode(
+                    "utf-8"
+                )
             ).hexdigest()
         )
-        return _bounded_page_result({
-            "schema_version": "mmm/complete-plan-section-v1",
-            "proposal_hash": proposal_hash,
-            "section": selected,
-            "items": [
-                {
-                    "metadata": metadata_summary,
-                    "counts": _proposal_collection_counts(raw),
-                    "available_sections": _available_sections(raw),
-                }
-            ],
-            "returned": 1,
-            "item_fragment": None,
-            "total_count": 1,
-            "next_cursor": "",
-            "remaining": 0,
-            "max_bytes": max_bytes,
-        }, max_bytes=max_bytes)
+        return _bounded_page_result(
+            {
+                "schema_version": "mmm/complete-plan-section-v1",
+                "proposal_hash": proposal_hash,
+                "section": selected,
+                "items": [
+                    {
+                        "metadata": metadata_summary,
+                        "counts": _proposal_collection_counts(raw),
+                        "available_sections": _available_sections(raw),
+                    }
+                ],
+                "returned": 1,
+                "item_fragment": None,
+                "total_count": 1,
+                "next_cursor": "",
+                "remaining": 0,
+                "max_bytes": max_bytes,
+            },
+            max_bytes=max_bytes,
+        )
 
     if selected == "metadata":
         metadata = _read_json_part(raw["metadata"], read_part)
@@ -364,9 +347,7 @@ def read_sharded_complete_proposal_section(
             cursor_key=cursor_key,
         )
 
-    raise SpecValidationError(
-        f"Unknown complete proposal section: {selected!r}"
-    )
+    raise SpecValidationError(f"Unknown complete proposal section: {selected!r}")
 
 
 def load_sharded_complete_proposal_from_zip(
@@ -494,10 +475,7 @@ def _read_plain_value_page(
     if any((manifest_index, shard_index, item_index)):
         raise SpecValidationError("Plain-value page cursor is invalid.")
     if isinstance(value, dict):
-        sequence = [
-            {"key": key, "value": value[key]}
-            for key in sorted(value)
-        ]
+        sequence = [{"key": key, "value": value[key]} for key in sorted(value)]
     elif isinstance(value, list):
         sequence = value
     else:
@@ -513,12 +491,10 @@ def _read_plain_value_page(
         if fragment_offset or len(encoded) > payload_budget:
             if items:
                 break
-            fragment, next_fragment_offset, fragment_complete = (
-                _item_fragment(
-                    encoded,
-                    offset=fragment_offset,
-                    payload_budget=payload_budget,
-                )
+            fragment, next_fragment_offset, fragment_complete = _item_fragment(
+                encoded,
+                offset=fragment_offset,
+                payload_budget=payload_budget,
             )
             if fragment_complete:
                 offset += 1
@@ -549,16 +525,16 @@ def _read_plain_value_page(
     )
     return _bounded_page_result(
         {
-        "schema_version": "mmm/complete-plan-section-v1",
-        "proposal_hash": proposal_hash,
-        "section": section,
-        "items": items,
-        "returned": len(items),
-        "item_fragment": fragment,
-        "total_count": len(sequence),
-        "next_cursor": next_cursor,
-        "remaining": len(sequence) - offset,
-        "max_bytes": max_bytes,
+            "schema_version": "mmm/complete-plan-section-v1",
+            "proposal_hash": proposal_hash,
+            "section": section,
+            "items": items,
+            "returned": len(items),
+            "item_fragment": fragment,
+            "total_count": len(sequence),
+            "next_cursor": next_cursor,
+            "remaining": len(sequence) - offset,
+            "max_bytes": max_bytes,
         },
         max_bytes=max_bytes,
     )
@@ -613,10 +589,7 @@ def _read_collection_page(
         def load_manifest(index: int) -> tuple[list[Any], PurePosixPath]:
             if not 0 <= index < manifest_count:
                 return [], manifest_parent
-            path = (
-                manifest_parent
-                / f"{manifest_name}-{index:08d}.json"
-            ).as_posix()
+            path = (manifest_parent / f"{manifest_name}-{index:08d}.json").as_posix()
             payload = _read_collection_manifest(path, read_part)
             return payload["shards"], manifest_parent
 
@@ -652,9 +625,7 @@ def _read_collection_page(
             or not isinstance(wrapper["items"], list)
             or not wrapper["items"]
         ):
-            raise SpecValidationError(
-                "Collection shard must be a non-empty list."
-            )
+            raise SpecValidationError("Collection shard must be a non-empty list.")
         shard_items = wrapper["items"]
         if item_index > len(shard_items):
             raise SpecValidationError("Page cursor item position is invalid.")
@@ -670,12 +641,10 @@ def _read_collection_page(
                 if items:
                     stop_page = True
                     break
-                fragment, next_fragment_offset, fragment_complete = (
-                    _item_fragment(
-                        encoded,
-                        offset=fragment_offset,
-                        payload_budget=payload_budget,
-                    )
+                fragment, next_fragment_offset, fragment_complete = _item_fragment(
+                    encoded,
+                    offset=fragment_offset,
+                    payload_budget=payload_budget,
                 )
                 if fragment_complete:
                     item_index += 1
@@ -702,13 +671,9 @@ def _read_collection_page(
             break
 
     if offset > count:
-        raise SpecValidationError(
-            "Collection page contains more items than its index."
-        )
+        raise SpecValidationError("Collection page contains more items than its index.")
     if offset < count and manifest_index >= manifest_count:
-        raise SpecValidationError(
-            "Collection shard count does not match its index."
-        )
+        raise SpecValidationError("Collection shard count does not match its index.")
     next_cursor = (
         _encode_page_cursor(
             proposal_hash=proposal_hash,
@@ -725,16 +690,16 @@ def _read_collection_page(
     )
     return _bounded_page_result(
         {
-        "schema_version": "mmm/complete-plan-section-v1",
-        "proposal_hash": proposal_hash,
-        "section": section,
-        "items": items,
-        "returned": len(items),
-        "item_fragment": fragment,
-        "total_count": count,
-        "next_cursor": next_cursor,
-        "remaining": count - offset,
-        "max_bytes": max_bytes,
+            "schema_version": "mmm/complete-plan-section-v1",
+            "proposal_hash": proposal_hash,
+            "section": section,
+            "items": items,
+            "returned": len(items),
+            "item_fragment": fragment,
+            "total_count": count,
+            "next_cursor": next_cursor,
+            "remaining": count - offset,
+            "max_bytes": max_bytes,
         },
         max_bytes=max_bytes,
     )
@@ -776,18 +741,13 @@ def _validate_v2_collection(
     digest = hashlib.sha256()
     observed_shards = 0
     for index in range(manifest_count):
-        path = (
-            manifest_parent
-            / f"{manifest_name}-{index:08d}.json"
-        ).as_posix()
+        path = (manifest_parent / f"{manifest_name}-{index:08d}.json").as_posix()
         data = read_part(path)
         digest.update(data)
         payload = _decode_collection_manifest(path, data)
         observed_shards += len(payload["shards"])
     if "sha256:" + digest.hexdigest() != str(value["manifest_sha256"]):
-        raise SpecValidationError(
-            "Collection manifest hash does not match its index."
-        )
+        raise SpecValidationError("Collection manifest hash does not match its index.")
     if observed_shards != shard_count:
         raise SpecValidationError(
             "Collection manifest shard count does not match its index."
@@ -819,9 +779,7 @@ def _decode_collection_manifest(
         or not payload["shards"]
         or len(payload["shards"]) > _COLLECTION_MANIFEST_SHARDS
     ):
-        raise SpecValidationError(
-            f"Collection manifest fields are invalid: {path}"
-        )
+        raise SpecValidationError(f"Collection manifest fields are invalid: {path}")
     return payload
 
 
@@ -840,9 +798,12 @@ def _encode_page_cursor(
         f"{proposal_hash}\0{section}\0{offset}\0{manifest_index}"
         f"\0{shard_index}\0{item_index}\0{fragment_offset}"
     )
-    key = cursor_key or hashlib.sha256(
-        f"mmm-local-page-cursor\0{proposal_hash}".encode("utf-8")
-    ).digest()
+    key = (
+        cursor_key
+        or hashlib.sha256(
+            f"mmm-local-page-cursor\0{proposal_hash}".encode("utf-8")
+        ).digest()
+    )
     checksum = hmac.new(
         key,
         payload.encode("utf-8"),
@@ -885,9 +846,7 @@ def _decode_page_cursor(
         cursor_key=cursor_key,
     )
     if not hmac.compare_digest(expected, cursor):
-        raise SpecValidationError(
-            "Page cursor does not match this proposal section."
-        )
+        raise SpecValidationError("Page cursor does not match this proposal section.")
     return (
         offset,
         manifest_index,
@@ -911,9 +870,7 @@ def _item_fragment(
         "schema_version": "mmm/canonical-json-item-fragment-v1",
         "encoding": "base64",
         "content_type": "application/json",
-        "item_sha256": (
-            "sha256:" + hashlib.sha256(encoded).hexdigest()
-        ),
+        "item_sha256": ("sha256:" + hashlib.sha256(encoded).hexdigest()),
         "offset_bytes": offset,
         "total_bytes": len(encoded),
         "data": base64.b64encode(encoded[offset:end]).decode("ascii"),
@@ -987,9 +944,9 @@ def _write_collection_v2(
         ).encode("utf-8")
         if manifest_page and len(candidate_manifest) > part_size_bytes:
             flush_manifest()
-            candidate_manifest = canonical_json(
-                {"shards": [descriptor]}
-            ).encode("utf-8")
+            candidate_manifest = canonical_json({"shards": [descriptor]}).encode(
+                "utf-8"
+            )
         if len(candidate_manifest) > part_size_bytes:
             raise SpecValidationError(
                 "One proposal shard descriptor exceeds the configured part size."
@@ -1013,9 +970,7 @@ def _write_collection_v2(
         "shard_count": shard_count,
         "manifest_count": manifest_count,
         "manifest_prefix": f"{prefix}-manifest",
-        "manifest_sha256": (
-            "sha256:" + manifest_digest.hexdigest()
-        ),
+        "manifest_sha256": ("sha256:" + manifest_digest.hexdigest()),
     }
 
 
@@ -1065,10 +1020,7 @@ def _read_collection(
     manifest_parent = manifest_prefix.parent
     manifest_name = manifest_prefix.name
     for index in range(manifest_count):
-        path = (
-            manifest_parent
-            / f"{manifest_name}-{index:08d}.json"
-        ).as_posix()
+        path = (manifest_parent / f"{manifest_name}-{index:08d}.json").as_posix()
         data = read_part(path)
         manifest_digest.update(data)
         try:
@@ -1084,25 +1036,18 @@ def _read_collection(
             or not payload["shards"]
             or len(payload["shards"]) > _COLLECTION_MANIFEST_SHARDS
         ):
-            raise SpecValidationError(
-                f"Collection manifest fields are invalid: {path}"
-            )
+            raise SpecValidationError(f"Collection manifest fields are invalid: {path}")
         observed_shards += len(payload["shards"])
     actual_manifest_hash = "sha256:" + manifest_digest.hexdigest()
     if actual_manifest_hash != expected_manifest_hash:
-        raise SpecValidationError(
-            "Collection manifest hash does not match its index."
-        )
+        raise SpecValidationError("Collection manifest hash does not match its index.")
     if observed_shards != shard_count:
         raise SpecValidationError(
             "Collection manifest shard count does not match its index."
         )
     result: list[Any] = []
     for index in range(manifest_count):
-        path = (
-            manifest_parent
-            / f"{manifest_name}-{index:08d}.json"
-        ).as_posix()
+        path = (manifest_parent / f"{manifest_name}-{index:08d}.json").as_posix()
         payload = json.loads(read_part(path).decode("utf-8"))
         for descriptor in payload["shards"]:
             page_wrapper = _read_json_part(
@@ -1115,9 +1060,7 @@ def _read_collection(
                 or not isinstance(page_wrapper["items"], list)
                 or not page_wrapper["items"]
             ):
-                raise SpecValidationError(
-                    "Collection shard must be a non-empty list."
-                )
+                raise SpecValidationError("Collection shard must be a non-empty list.")
             result.extend(page_wrapper["items"])
     if len(result) != count:
         raise SpecValidationError("Collection shard count does not match its index.")
@@ -1249,10 +1192,7 @@ def _read_json_part(
         "size_bytes",
         "sha256",
     }
-    if (
-        set(descriptor) != required
-        or descriptor["encoding"] != CHUNKED_JSON_ENCODING
-    ):
+    if set(descriptor) != required or descriptor["encoding"] != CHUNKED_JSON_ENCODING:
         raise SpecValidationError("Proposal shard descriptor fields are invalid.")
     prefix = _safe_relative(str(descriptor["path_prefix"]))
     chunk_count = descriptor["chunk_count"]
@@ -1272,28 +1212,21 @@ def _read_json_part(
     observed_size = 0
     for index in range(chunk_count):
         relative = (
-            prefix_parent
-            / f"{prefix_name}.chunk-{index:08d}.jsonpart"
+            prefix_parent / f"{prefix_name}.chunk-{index:08d}.jsonpart"
         ).as_posix()
         data = read_part(relative)
         digest.update(data)
         observed_size += len(data)
     if observed_size != size_bytes:
-        raise SpecValidationError(
-            f"Proposal chunk size mismatch: {prefix.as_posix()}"
-        )
+        raise SpecValidationError(f"Proposal chunk size mismatch: {prefix.as_posix()}")
     actual = "sha256:" + digest.hexdigest()
     if actual != expected:
-        raise SpecValidationError(
-            f"Proposal chunk hash mismatch: {prefix.as_posix()}"
-        )
+        raise SpecValidationError(f"Proposal chunk hash mismatch: {prefix.as_posix()}")
+
     def chunks() -> Iterable[bytes]:
         for index in range(chunk_count):
             yield read_part(
-                (
-                    prefix_parent
-                    / f"{prefix_name}.chunk-{index:08d}.jsonpart"
-                ).as_posix()
+                (prefix_parent / f"{prefix_name}.chunk-{index:08d}.jsonpart").as_posix()
             )
 
     try:
@@ -1310,7 +1243,9 @@ def _read_file_part(root: Path, relative: str) -> bytes:
     try:
         target.relative_to(root.resolve())
     except ValueError as exc:
-        raise SpecValidationError("Proposal shard escaped its index directory.") from exc
+        raise SpecValidationError(
+            "Proposal shard escaped its index directory."
+        ) from exc
     if not target.is_file() or target.is_symlink():
         raise SpecValidationError(f"Proposal shard is missing or unsafe: {relative}")
     return target.read_bytes()
@@ -1354,9 +1289,7 @@ def _prefix_part_paths(value: Any, prefix: str) -> None:
             value["path_prefix"] = f"{prefix}/{value['path_prefix']}"
             return
         if value.get("format") == COLLECTION_FORMAT:
-            value["manifest_prefix"] = (
-                f"{prefix}/{value['manifest_prefix']}"
-            )
+            value["manifest_prefix"] = f"{prefix}/{value['manifest_prefix']}"
             return
         for nested in value.values():
             _prefix_part_paths(nested, prefix)
