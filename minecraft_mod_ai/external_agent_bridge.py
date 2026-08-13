@@ -29,7 +29,7 @@ class ExternalAgentBridge:
         self.timeout_seconds = float(timeout_seconds)
         self._router: Any | None = None
         self._schema_cache: dict[
-            tuple[str, str, str, str, str, tuple[str, ...] | None], dict[str, Any]
+            tuple[str, str, str, str, str, str, tuple[str, ...] | None], dict[str, Any]
         ] = {}
         self._lock = threading.RLock()
 
@@ -187,6 +187,7 @@ class ExternalAgentBridge:
                 target["minecraft_version"],
                 target["loader"],
                 target["mappings"],
+                max_access,
                 None if allowed_servers is None else tuple(sorted(allowed_servers)),
             )
             with self._lock:
@@ -257,9 +258,7 @@ class ExternalAgentBridge:
         )
         if allowed_server_ids is not None:
             allowed = frozenset(str(value) for value in allowed_server_ids)
-            routes = [
-                route for route in routes if str(route["server"]) in allowed
-            ]
+            routes = [route for route in routes if str(route["server"]) in allowed]
         return frozenset(
             provider_name
             for route in routes
