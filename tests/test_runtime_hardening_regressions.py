@@ -226,9 +226,16 @@ def test_t4_aliases_resolve_to_actual_qwen35_9b() -> None:
             assert planner.max_context == 32768
 
 
-def test_bounded_section_budget_does_not_cap_paginated_json(monkeypatch) -> None:
+def test_bounded_section_budget_does_not_cap_paginated_qwen_json(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_BOUNDED_SECTION_MAX_TOKENS", raising=False)
-    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
+    monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
+    adapter = SimpleNamespace(
+        config=SimpleNamespace(
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+            max_new_tokens=8192,
+        )
+    )
     section = SimpleNamespace(
         messages=({"role": "user", "content": "bounded"},),
         response_format="json",
@@ -249,4 +256,4 @@ def test_bounded_section_budget_does_not_cap_paginated_json(monkeypatch) -> None
         tool_choice=None,
     )
     assert llama_hardware._server_payload(adapter, section)["max_tokens"] == 2048
-    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == 8192
+    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == -1
