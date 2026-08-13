@@ -5,11 +5,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
-from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-_ROUTER_CONTRACT_VERSION = 2
+_ROUTER_CONTRACT_VERSION = 3
 
 
 class ReentrantReadWriteLock:
@@ -171,9 +170,7 @@ def _install_router(model_router_module: Any) -> None:
         return
 
     model_router_module._GPU_EXCLUSIVE_LOCK = ReentrantReadWriteLock()
-    model_router_module._LLAMA_INFERENCE_SLOTS = ReentrantCapacityGate(
-        _active_parallelism
-    )
+    model_router_module._LLAMA_INFERENCE_SLOTS = ReentrantCapacityGate(_active_parallelism)
 
     @contextmanager
     def generation_session(self: Any, role: str):
@@ -187,7 +184,6 @@ def _install_router(model_router_module: Any) -> None:
                 )
             self._active_generation_role = role
             self._active_generation_adapter = adapter
-
         session_factory = getattr(adapter, "generation_session", None)
         try:
             if callable(session_factory):
@@ -217,10 +213,6 @@ def _install_router(model_router_module: Any) -> None:
         tool_stage: str | None = None,
         enable_tools: bool = True,
     ) -> str:
-        # Keep router state selection protected, but release the router mutex before
-        # native decode. Native llama/vLLM concurrency is bounded independently by the
-        # server slot gate below. This preserves generation-session safety without
-        # serializing independent Best-of-N candidates.
         with self._generation_lock:
             config = self.registry.role(self.profile, role)
             if self._active_generation_adapter is not None:
@@ -234,28 +226,15 @@ def _install_router(model_router_module: Any) -> None:
             else:
                 adapter = self._new_text_adapter(config, role=role)
 
-        # Preserve the complete ModelRouter tool/structured-output contract. The
-        # parallel runtime layer is a lock/scheduling policy only; it must not silently
-        # remove Qwen's stage-scoped MCP tools or JSON-schema constraints.
-        stage = (tool_stage or model_router_module._ROLE_TOOL_STAGE.get(role, "")).strip().lower()
-        runtime = None
-        tools: tuple[Any, ...] = ()
-        if self._tools_enabled(
-            enable_tools=enable_tools,
-            stage=stage,
-            adapter_name=config.adapter,
-        ):
-            runtime = self._tool_runtime()
-            tools = tuple(runtime.tool_schemas(stage))
-
-        request = model_router_module.GenerationRequest(
-            messages=messages,
-            media_paths=tuple(Path(path) for path in media_paths),
+        stage, runtime, tools, request = self._prepare_generation_request(
+            role,
+            messages,
+            config=config,
+            media_paths=media_paths,
             response_format=response_format,
             response_schema=response_schema,
-            tools=tools,
-            tool_choice="auto" if tools else None,
-            parallel_tool_calls=True,
+            tool_stage=tool_stage,
+            enable_tools=enable_tools,
         )
 
         def run_generation() -> str:
@@ -276,9 +255,6 @@ def _install_router(model_router_module: Any) -> None:
             and _active_parallelism() > 1
         )
         if shared_llama:
-            # Take a native-server slot before the shared GPU lock. This keeps
-            # scheduler-external callers out of llama-server's internal queue while
-            # preserving writer preference for image/speech GPU handoff.
             with model_router_module._LLAMA_INFERENCE_SLOTS:
                 with model_router_module._GPU_EXCLUSIVE_LOCK.shared():
                     return run_generation()
@@ -288,8 +264,8 @@ def _install_router(model_router_module: Any) -> None:
     generate_text._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
     generate_text._mmm_preserves_agent_tools = True  # type: ignore[attr-defined]
     generate_text._mmm_preserves_response_schema = True  # type: ignore[attr-defined]
+    generate_text._mmm_uses_canonical_request_preparation = True  # type: ignore[attr-defined]
     generate_text._mmm_parallel_router_contract_version = _ROUTER_CONTRACT_VERSION  # type: ignore[attr-defined]
-
     cls.generation_session = generation_session
     cls.generate_text = generate_text
 
@@ -310,8 +286,6 @@ def _install_scheduler(scheduler_module: Any) -> None:
 
 
 def _install_planner_search_parallelism() -> None:
-    # Agentic search owns candidate policy/scoring. This layer only maps independent
-    # candidates onto the native server slots selected by autotuning.
     from . import agentic_optimization_contract as agentic_module
     from . import complete_planner as complete_planner_module
 
@@ -373,8 +347,6 @@ def _install_planner_search_parallelism() -> None:
             thread_name_prefix="mmm_plan_search",
         ) as pool:
             futures = [pool.submit(run_candidate, index) for index in range(width)]
-            # Consume in candidate order so failure selection and tie behavior remain
-            # deterministic even though native decode runs concurrently.
             for candidate_index, future in enumerate(futures):
                 try:
                     candidates.append(future.result())
