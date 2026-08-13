@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from minecraft_mod_ai.agent_roles import load_agent_role_routes
 from minecraft_mod_ai.capability_plugins import PLUGIN_STATUSES
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry
@@ -12,6 +14,13 @@ _STALE_MCP_ALIASES = frozenset(
         "mineflayer-1201",
         "mmm-planning",
     }
+)
+_MIRRORED_CONFIGS = (
+    "agent_roles.yaml",
+    "external_mcp_registry.yaml",
+    "model_registry.yaml",
+    "runtime_profiles.yaml",
+    "training_policy.yaml",
 )
 
 
@@ -47,3 +56,11 @@ def test_agent_role_skill_names_are_unique_within_each_role() -> None:
     for route in load_agent_role_routes():
         assert len(route.skills) == len(set(route.skills))
         assert len(route.mcp_servers) == len(set(route.mcp_servers))
+
+
+def test_packaged_runtime_configs_exactly_match_repository_sources() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for name in _MIRRORED_CONFIGS:
+        source = (root / "config" / name).read_bytes()
+        packaged = (root / "minecraft_mod_ai" / "config" / name).read_bytes()
+        assert packaged == source, f"Packaged config drift: {name}"
