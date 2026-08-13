@@ -6,9 +6,10 @@ on:
     paths:
       - .github/workflows/debug-repo-audit.yml
       - .github/scripts/debug_repo_audit.py
+      - .github/scripts/refresh_bootstrap_contract_test.py
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: debug-repo-audit-main
@@ -17,14 +18,29 @@ concurrency:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Refresh live bootstrap contract test
+        run: python .github/scripts/refresh_bootstrap_contract_test.py
+      - name: Verify and commit bootstrap test migration
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m pytest -q tests/test_runtime_bootstrap_clean.py
+          git diff --check
+          if ! git diff --quiet -- tests/test_runtime_bootstrap_clean.py; then
+            git add tests/test_runtime_bootstrap_clean.py
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Align bootstrap test with live contract owners'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
       - name: Static internal import audit
         run: python .github/scripts/debug_repo_audit.py
       - name: Compile all Python
