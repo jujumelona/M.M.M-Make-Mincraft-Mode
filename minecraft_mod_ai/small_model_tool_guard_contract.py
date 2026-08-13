@@ -31,7 +31,7 @@ def install(max_agent_owner: Any) -> None:
         require_fresh_evidence: bool = False,
     ) -> tuple[Mapping[str, Any], ...]:
         tools = tuple(tool_schemas)
-        selected = list(
+        ranked = list(
             current(
                 router,
                 role=role,
@@ -48,15 +48,21 @@ def install(max_agent_owner: Any) -> None:
             required.extend(
                 name for name in _EXTERNAL if name in available and name not in required
             )
-        selected_names = {_name(schema) for schema in selected}
-        for name in required:
-            if name not in selected_names:
-                selected.append(available[name])
-                selected_names.add(name)
-        order = {_name(schema): index for index, schema in enumerate(tools)}
-        selected.sort(key=lambda schema: order.get(_name(schema), len(order)))
         limit = max(5, min(8, len(required)))
-        return tuple(selected[:limit])
+        required_set = set(required)
+        chosen = [available[name] for name in required]
+        chosen_names = set(required)
+        for schema in ranked:
+            name = _name(schema)
+            if not name or name in chosen_names or name in required_set:
+                continue
+            chosen.append(schema)
+            chosen_names.add(name)
+            if len(chosen) >= limit:
+                break
+        order = {_name(schema): index for index, schema in enumerate(tools)}
+        chosen.sort(key=lambda schema: order.get(_name(schema), len(order)))
+        return tuple(chosen)
 
     guarded._mmm_required_tool_guard = True  # type: ignore[attr-defined]
     guarded.__wrapped__ = current  # type: ignore[attr-defined]
