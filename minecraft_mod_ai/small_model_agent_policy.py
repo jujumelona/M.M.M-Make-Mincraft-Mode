@@ -299,7 +299,14 @@ def enhance_planner(complete_planner_module: Any) -> None:
         features = _features(request, expected_contracts, stage)
         memory = _matches(features)
         strategies = _strategies(features, memory)
-        max_replans = _env_int("MMM_SMALL_AGENT_MAX_REPLANS", 2, minimum=0, maximum=3)
+        # Production pages already own their exact page-local retry, item repair,
+        # fixed-point and no-progress termination inside the lower planner stack.
+        # An outer policy retry would reopen a terminal page and can recreate the
+        # deterministic repeated-decode failure this policy is meant to prevent.
+        production_page = isinstance(request, Mapping) and "remaining_deliverables" in request
+        max_replans = 0 if production_page else _env_int(
+            "MMM_SMALL_AGENT_MAX_REPLANS", 2, minimum=0, maximum=3
+        )
         failures: list[str] = []
 
         for attempt in range(max_replans + 1):
@@ -316,9 +323,7 @@ def enhance_planner(complete_planner_module: Any) -> None:
                 )
             except complete_planner_module.SpecValidationError as exc:
                 failure = _failure(exc)
-                # The inner planner contracts already own exact fixed-point and
-                # no-progress termination. Never reopen those terminal states here.
-                if failure in {"fixed_point", "no_progress"}:
+                if production_page or failure in {"fixed_point", "no_progress"}:
                     raise
                 failures.append(failure)
                 strategies = tuple(
