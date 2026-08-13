@@ -31,15 +31,21 @@ def _tool_names(schemas) -> set[str]:
     return {str(item["function"]["name"]) for item in schemas}
 
 
+def _external_proxy_schemas():
+    return (
+        _schema("external_mcp_capabilities"),
+        _schema("external_mcp_schema"),
+        _schema("external_mcp_call"),
+    )
+
+
 def test_research_context_connects_role_skills_tools_and_external_mcp() -> None:
     context = _decode_context(
         build_agent_capability_context(
             "research",
             (
                 _schema("search_code_rag"),
-                _schema("external_mcp_capabilities"),
-                _schema("external_mcp_schema"),
-                _schema("external_mcp_call"),
+                *_external_proxy_schemas(),
             ),
             model_role="researcher",
         )
@@ -50,23 +56,59 @@ def test_research_context_connects_role_skills_tools_and_external_mcp() -> None:
     assert "minecraft-wiki" in context["reviewed_mcp_servers"]
 
     skills = {item["name"]: item for item in context["eligible_skills"]}
-    assert "gather-adaptive-minecraft-evidence" in skills
-    assert "search_code_rag" in skills["gather-adaptive-minecraft-evidence"]["model_tools"]
+    evidence = skills["gather-adaptive-minecraft-evidence"]
+    assert "search_code_rag" in evidence["model_tools"]
+    assert evidence["activate_when"]
+    assert evidence["validators"]
+    assert set(evidence["retry"]) >= {
+        "max_attempts",
+        "strategy",
+        "stop_on_repeated_error_signature",
+        "require_fresh_evidence",
+    }
+    assert "writes" in evidence["approvals"]
+    assert evidence["forbidden_actions"]
+    assert set(evidence["exit"]) == {"success", "blocked", "failed"}
 
     capabilities = context["external_minecraft_mcp_capabilities"]
+    access = context["external_minecraft_mcp_access"]
     assert capabilities["official_mod_docs"] == ["mcmodding-docs"]
     assert capabilities["source_search"] == ["minecraft-dev"]
     assert "minecraft-dev" in capabilities["mapping_resolution"]
     assert capabilities["vanilla_knowledge"] == ["minecraft-wiki"]
+    assert access["source_search"]["minecraft-dev"] == "read"
+    assert "runtime_command" not in capabilities
+    assert "server_rcon" not in capabilities
+    assert "player_e2e_interact" not in capabilities
+
+
+def test_runtime_context_discovers_gated_write_and_admin_minecraft_mcp_routes() -> None:
+    context = _decode_context(
+        build_agent_capability_context(
+            "runtime",
+            _external_proxy_schemas(),
+            model_role="coder_safe",
+        )
+    )
+
+    assert "RuntimeTester" in context["agent_roles"]
+    capabilities = context["external_minecraft_mcp_capabilities"]
+    access = context["external_minecraft_mcp_access"]
+
+    assert "minecraft-player-agent" in capabilities["player_e2e_interact"]
+    assert access["player_e2e_interact"]["minecraft-player-agent"] == "write"
+    assert "fabric-game-runtime" in capabilities["runtime_command"]
+    assert access["runtime_command"]["fabric-game-runtime"] == "admin"
+    assert "minecraft-rcon" in capabilities["server_rcon"]
+    assert access["server_rcon"]["minecraft-rcon"] == "admin"
+    assert "disposable_runtime=true" in context["routing_policy"]
 
 
 def test_role_filter_removes_unassigned_tools_but_keeps_external_bridge() -> None:
     schemas = (
         _schema("search_code_rag"),
         _schema("java_diagnostics"),
-        _schema("external_mcp_capabilities"),
-        _schema("external_mcp_schema"),
-        _schema("external_mcp_call"),
+        *_external_proxy_schemas(),
     )
     filtered = filter_tool_schemas_for_role("research", "researcher", schemas)
     names = _tool_names(filtered)
