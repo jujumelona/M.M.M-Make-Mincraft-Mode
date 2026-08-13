@@ -318,9 +318,9 @@ def _patch_frontdoor(monkeypatch: pytest.MonkeyPatch, prompt: str) -> None:
                     "domain_id": "requested_feature",
                     "objective": prompt,
                     "requirements": [prompt],
-                    "evidence_kinds": [],
+                    "evidence_kinds": ["minecraft_api"],
                     "queries": [prompt],
-                    "providers": [],
+                    "providers": ["official_docs"],
                     "depends_on": [],
                 }
             ],
