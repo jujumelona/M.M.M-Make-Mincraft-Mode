@@ -150,9 +150,6 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     assert _LLAMA_PIPELINE.is_file()
     installers, modules = _policy_imports(_LLAMA_PIPELINE)
     direct_calls, module_calls = _composition_calls(_LLAMA_PIPELINE)
-    # This generic detector intentionally indexes modules named *contract or *_tuning.
-    # llama_server_hardware_policy is checked explicitly below because its filename is
-    # outside that naming convention.
     actual = {
         module
         for local_name, module in installers.items()
@@ -168,6 +165,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         "llama_cache_reuse_efficiency_contract",
         "llama_decode_speed_contract",
         "qwen35_mtp_hotpath_contract",
+        "qwen35_t4_single_stream_tuning",
         "planner_single_stream_search_contract",
     }
 
@@ -177,8 +175,6 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         in source
     )
     assert "install_hardware(self.autotune)" in source
-    assert "qwen35_t4_single_stream_tuning" not in source
-    assert "install_qwen35_t4_single_stream" not in source
     order = (
         "TuningStage(\"hardware\"",
         "TuningStage(\n                \"efficiency\"",
@@ -191,6 +187,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     assert (
         source.index("install_decode_speed(")
         < source.index("install_qwen35_hotpath(")
+        < source.index("install_qwen35_t4_single_stream(")
         < source.index("install_single_stream_agentic_policy(")
     )
 
