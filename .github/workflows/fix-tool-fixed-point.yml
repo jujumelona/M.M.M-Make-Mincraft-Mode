@@ -25,7 +25,7 @@ jobs:
           python -m pip install -q pytest anyio PyYAML httpx packaging
           python .github/scripts/fix_tool_fixed_point.py
           python -m compileall -q minecraft_mod_ai
-          pytest -q tests/test_agent_tool_calling.py
+          PYTHONPATH=. pytest -q tests/test_agent_tool_calling.py
       - name: Commit repair to main and remove one-shot files
         run: |
           git config user.name "github-actions[bot]"
