@@ -24,6 +24,13 @@ def _compile_raw_skill_catalog():
         skill_catalog._parse_skill = current
 
 
+def _read_skill_source(name: str) -> str:
+    """Canonicalize EOF so packaging is stable across equivalent text writes."""
+
+    text = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
+    return text if text.endswith("\n") else text + "\n"
+
+
 def build_payload() -> dict[str, object]:
     missing = [
         name
@@ -33,10 +40,7 @@ def build_payload() -> dict[str, object]:
     if missing:
         raise RuntimeError(f"Missing canonical Skill sources: {missing}")
 
-    skills = {
-        name: (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
-        for name in CANONICAL_SKILLS
-    }
+    skills = {name: _read_skill_source(name) for name in CANONICAL_SKILLS}
     contracts = {
         name: contract.to_dict()
         for name, contract in _compile_raw_skill_catalog().items()
