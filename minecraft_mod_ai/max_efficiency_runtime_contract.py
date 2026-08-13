@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 import time
 from collections import Counter
 from contextvars import ContextVar
@@ -268,13 +269,13 @@ def _install_max_efficiency_claim(work_graph_module: Any, safety_module: Any) ->
                 (
                     running.get(str(resource), 0)
                     / max(1, int(capacities.get(str(resource), 1))),
-                    str(node_id),
                     priority.get(str(resource), 9),
+                    str(node_id),
                     str(resource),
                 )
                 for node_id, resource in rows
             )
-            _utilization, node_id, _priority, _resource = candidates[0]
+            _utilization, _priority, node_id, _resource = candidates[0]
             cursor = connection.execute(
                 """
                 UPDATE tasks
@@ -310,12 +311,18 @@ def _install_max_efficiency_claim(work_graph_module: Any, safety_module: Any) ->
     cls.claim_ready = claim_ready
 
 
+def _sha256_receipt(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
 def _candidate_patch_capture(
     *,
     base_root: Path,
     candidate_root: Path,
     result: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Rebuild one winning patch only after exact receipt/file verification."""
+
     receipt = result.get("patch_receipt")
     receipt_ops = receipt.get("operations") if isinstance(receipt, Mapping) else None
     if not isinstance(receipt_ops, list) or not receipt_ops:
@@ -323,12 +330,23 @@ def _candidate_patch_capture(
 
     operations: list[dict[str, Any]] = []
     before: dict[str, bytes | None] = {}
+    seen_paths: set[str] = set()
     for item in receipt_ops:
         if not isinstance(item, Mapping):
             raise RuntimeError("Custom candidate patch receipt is malformed.")
         relative = str(item.get("path", "")).strip()
+        operation = str(item.get("operation", "")).strip().lower()
         if not relative:
             raise RuntimeError("Custom candidate patch receipt has an empty path.")
+        if relative in seen_paths:
+            raise RuntimeError(f"Custom candidate patch receipt repeats path: {relative}")
+        seen_paths.add(relative)
+        if operation not in {"create", "replace", "edit", "delete"}:
+            raise RuntimeError(
+                f"Custom candidate patch receipt has invalid operation for {relative}: "
+                f"{operation!r}"
+            )
+
         base_path = (base_root / relative).resolve()
         candidate_path = (candidate_root / relative).resolve()
         try:
@@ -336,44 +354,98 @@ def _candidate_patch_capture(
             candidate_path.relative_to(candidate_root)
         except ValueError as exc:
             raise RuntimeError(f"Custom candidate path escaped staging root: {relative}") from exc
+        if base_path.is_symlink() or candidate_path.is_symlink():
+            raise RuntimeError(f"Custom candidate patch path may not be a symlink: {relative}")
 
         base_bytes = base_path.read_bytes() if base_path.is_file() else None
+        candidate_bytes = candidate_path.read_bytes() if candidate_path.is_file() else None
         before[relative] = base_bytes
         before_sha = item.get("before_sha256")
         after_sha = item.get("after_sha256")
-        if before_sha is None:
-            if not candidate_path.is_file():
+
+        if operation == "create":
+            if before_sha is not None or base_bytes is not None:
+                raise RuntimeError(f"Custom candidate create precondition is invalid: {relative}")
+            if candidate_bytes is None:
                 raise RuntimeError(f"Custom candidate create output is missing: {relative}")
+            actual_after = _sha256_receipt(candidate_bytes)
+            if str(after_sha) != actual_after:
+                raise RuntimeError(
+                    f"Custom candidate after hash drifted for {relative}: "
+                    f"{actual_after} != {after_sha}"
+                )
             operations.append(
                 {
                     "operation": "create",
                     "path": relative,
-                    "content": candidate_path.read_text(encoding="utf-8"),
+                    "content": candidate_bytes.decode("utf-8"),
                 }
             )
             continue
-        if base_bytes is None or hashlib.sha256(base_bytes).hexdigest() != str(before_sha):
-            raise RuntimeError(f"Custom candidate base hash drifted for {relative}")
-        if after_sha is None:
+
+        if base_bytes is None:
+            raise RuntimeError(f"Custom candidate base file is missing: {relative}")
+        actual_before = _sha256_receipt(base_bytes)
+        if str(before_sha) != actual_before:
+            raise RuntimeError(
+                f"Custom candidate base hash drifted for {relative}: "
+                f"{actual_before} != {before_sha}"
+            )
+
+        if operation == "delete":
+            if after_sha is not None:
+                raise RuntimeError(f"Custom candidate delete has an after hash: {relative}")
+            if candidate_path.exists() or candidate_bytes is not None:
+                raise RuntimeError(f"Custom candidate delete output still exists: {relative}")
             operations.append(
                 {
                     "operation": "delete",
                     "path": relative,
-                    "expected_sha256": str(before_sha),
+                    "expected_sha256": actual_before,
                 }
             )
             continue
-        if not candidate_path.is_file():
+
+        if candidate_bytes is None:
             raise RuntimeError(f"Custom candidate replacement output is missing: {relative}")
+        actual_after = _sha256_receipt(candidate_bytes)
+        if str(after_sha) != actual_after:
+            raise RuntimeError(
+                f"Custom candidate after hash drifted for {relative}: "
+                f"{actual_after} != {after_sha}"
+            )
         operations.append(
             {
                 "operation": "replace",
                 "path": relative,
-                "expected_sha256": str(before_sha),
-                "content": candidate_path.read_text(encoding="utf-8"),
+                "expected_sha256": actual_before,
+                "content": candidate_bytes.decode("utf-8"),
             }
         )
     return {"operations": operations, "before": before}
+
+
+def _clone_candidate_snapshot(
+    base_root: Path,
+    *,
+    candidate_index: int,
+    performance_module: Any,
+) -> Path:
+    """Clone one candidate under its own workspace/RAG parent directory."""
+
+    workspace = Path(
+        tempfile.mkdtemp(
+            prefix=f"candidate-{candidate_index:02d}-",
+            dir=base_root.parent,
+        )
+    ).resolve()
+    candidate_root = workspace / "project"
+    shutil.copytree(
+        base_root,
+        candidate_root,
+        copy_function=performance_module._reflink_or_copy,
+    )
+    return candidate_root
 
 
 def _install_parallel_custom_search(custom_module_generator_module: Any) -> None:
@@ -412,15 +484,22 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
             worker = copy.copy(self)
             worker._cached_index = None
             worker._cached_root = None
+            worker.router = search_module._host_evidence_router(
+                search_module._fork_router_for_candidate(self.router)
+            )
             return current(worker, project_root, *args, **kwargs)
 
         live_root = Path(project_root).expanduser().resolve()
         base_root = performance_module._clone_source_snapshot(live_root)
         candidates: list[tuple[int, Path, dict[str, Any]]] = []
-        errors: dict[int, BaseException] = {}
+        errors: dict[int, Exception] = {}
 
         def solve(candidate_index: int) -> tuple[int, Path, dict[str, Any]]:
-            candidate_root = performance_module._clone_source_snapshot(base_root)
+            candidate_root = _clone_candidate_snapshot(
+                base_root,
+                candidate_index=candidate_index,
+                performance_module=performance_module,
+            )
             worker = copy.copy(self)
             worker._cached_index = None
             worker._cached_root = None
@@ -428,7 +507,9 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                 candidate_index % len(search_module._STRATEGIES)
             ]
             worker.router = search_module._StrategyRouter(
-                search_module._host_evidence_router(self.router),
+                search_module._host_evidence_router(
+                    search_module._fork_router_for_candidate(self.router)
+                ),
                 strategy=strategy,
                 candidate_index=candidate_index,
                 count=count,
@@ -440,7 +521,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                     raise RuntimeError("Custom generation candidate returned a non-object receipt.")
                 return candidate_index, candidate_root, result
             except BaseException:
-                shutil.rmtree(candidate_root, ignore_errors=True)
+                shutil.rmtree(candidate_root.parent, ignore_errors=True)
                 raise
             finally:
                 _FORCE_SINGLE_CUSTOM_SEARCH.reset(token)
@@ -455,7 +536,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                 for candidate_index, future in enumerate(futures):
                     try:
                         candidates.append(future.result())
-                    except BaseException as exc:
+                    except Exception as exc:
                         errors[candidate_index] = exc
             candidates.sort(key=lambda item: item[0])
             if not candidates:
@@ -525,7 +606,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
             return rewritten
         finally:
             for _index, candidate_root, _result in candidates:
-                shutil.rmtree(candidate_root, ignore_errors=True)
+                shutil.rmtree(candidate_root.parent, ignore_errors=True)
             shutil.rmtree(base_root, ignore_errors=True)
 
     generate._mmm_max_parallel_custom_search = True  # type: ignore[attr-defined]
