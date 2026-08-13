@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 from functools import wraps
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any
 
 _INDEX_BUILD_LOCKS = tuple(threading.RLock() for _ in range(64))
 _BUILT_TARGETS_LOCK = threading.RLock()
-_BUILT_TARGETS: set[Path] = set()
+_BUILT_TARGET_FINGERPRINTS: dict[Path, str] = {}
 _MISSING = object()
 
 
@@ -16,6 +17,34 @@ def _index_lock(path: Path) -> threading.RLock:
     digest = hashlib.sha256(str(path).encode("utf-8")).digest()
     slot = int.from_bytes(digest[:2], "big") % len(_INDEX_BUILD_LOCKS)
     return _INDEX_BUILD_LOCKS[slot]
+
+
+def _build_fingerprint(
+    roots: Any,
+    *,
+    metadata: dict[str, Any],
+    semantic: bool,
+) -> str:
+    """Identify one logical index build without inspecting mutable output state."""
+    if isinstance(roots, (list, tuple)):
+        root_values = [str(value) for value in roots]
+    else:
+        # ProductionToolService accepts a Sequence. Keep compatibility with narrow
+        # test doubles without consuming an arbitrary one-shot iterable.
+        root_values = [str(roots)]
+    payload = {
+        "roots": root_values,
+        "metadata": metadata,
+        "semantic": bool(semantic),
+    }
+    rendered = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
 def install(production_tools_module: Any) -> None:
@@ -32,19 +61,23 @@ def install(production_tools_module: Any) -> None:
             metadata: dict[str, Any],
             semantic: bool = False,
         ) -> dict[str, Any]:
-            # Resolve before taking the stripe so unrelated canonical paths may build
-            # concurrently. A target that pre-existed before this process first
-            # touched it remains refreshable once. After this process successfully
-            # builds the target, later same-target callers must consume/recheck that
-            # fresh artifact rather than immediately rebuilding it. Tracking the
-            # successful build removes scheduler timing from this decision.
+            # Serialize only conflicting canonical targets. If another caller asks
+            # for the exact same logical build, the fresh artifact is rechecked
+            # instead of rebuilt. A changed source revision/metadata/roots is a real
+            # refresh and is therefore allowed to replace the index in place.
             target = self._resolve(index_path)
+            fingerprint = _build_fingerprint(
+                roots,
+                metadata=metadata,
+                semantic=semantic,
+            )
             with _index_lock(target):
                 with _BUILT_TARGETS_LOCK:
-                    built_here = target in _BUILT_TARGETS
-                if built_here and target.exists():
+                    previous = _BUILT_TARGET_FINGERPRINTS.get(target)
+                if previous == fingerprint and target.exists():
                     raise FileExistsError(
-                        f"RAG index was created by this process and must be rechecked: {target}"
+                        "Identical RAG index build already completed and must be "
+                        f"rechecked: {target}"
                     )
                 result = current(
                     self,
@@ -55,7 +88,9 @@ def install(production_tools_module: Any) -> None:
                 )
                 with _BUILT_TARGETS_LOCK:
                     if target.exists():
-                        _BUILT_TARGETS.add(target)
+                        _BUILT_TARGET_FINGERPRINTS[target] = fingerprint
+                    else:
+                        _BUILT_TARGET_FINGERPRINTS.pop(target, None)
                 return result
 
         index_project_rag._mmm_path_serialized_rag_build = True
