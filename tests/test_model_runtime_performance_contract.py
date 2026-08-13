@@ -26,12 +26,12 @@ class _DummyPipeline:
 def test_expensive_non_llm_runtime_reuse_contract_is_installed() -> None:
     assert getattr(
         ImageDiffusionAdapter.generate_image,
-        "_mmm_cached_image_pipeline",
+        "_mmm_adaptive_image_residency",
         False,
     )
-    assert getattr(
+    assert not getattr(
         ImageDiffusionAdapter.generate_image,
-        "_mmm_adaptive_image_residency",
+        "_mmm_cached_image_pipeline",
         False,
     )
     assert getattr(
