@@ -28,6 +28,7 @@ jobs:
           python .github/scripts/upgrade_adaptive_production_agent_preflight.py
           python -m py_compile .github/scripts/upgrade_adaptive_production_agent.py
           python .github/scripts/upgrade_adaptive_production_agent.py
+          sed -i '/^import json$/d' tests/test_adaptive_production_agent.py
           python -m compileall -q minecraft_mod_ai tests
           python -m ruff check \
             minecraft_mod_ai/model_router.py \
