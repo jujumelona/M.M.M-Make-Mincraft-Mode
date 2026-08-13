@@ -169,7 +169,13 @@ def _strategies(features: Sequence[str], memory: Sequence[Mapping[str, Any]]) ->
 
 def _failure(exc: BaseException) -> str:
     text = str(exc).casefold()
-    if "fixed point" in text or "identical invalid" in text:
+    if (
+        "fixed point" in text
+        or "identical invalid" in text
+        or "repeated identical model output" in text
+        or "repeated_validation_state" in text
+        or "repeated_model_output" in text
+    ):
         return "fixed_point"
     if "truncat" in text or "too large" in text or "overflow" in text:
         return "truncated"
@@ -310,6 +316,10 @@ def enhance_planner(complete_planner_module: Any) -> None:
                 )
             except complete_planner_module.SpecValidationError as exc:
                 failure = _failure(exc)
+                # The inner planner contracts already own exact fixed-point and
+                # no-progress termination. Never reopen those terminal states here.
+                if failure in {"fixed_point", "no_progress"}:
+                    raise
                 failures.append(failure)
                 strategies = tuple(
                     dict.fromkeys((*strategies, *_RECOVERY.get(failure, _RECOVERY["other"])))
