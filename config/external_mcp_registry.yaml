@@ -25,7 +25,6 @@ servers:
     federated: false
     transport: stdio
     command: [python, -m, minecraft_mod_ai.mod_generation_mcp_server]
-    env: {MMM_MCP_STAGE: generation}
     version_policy: dynamic
     loaders: [fabric]
     trust: first_party
