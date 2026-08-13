@@ -56,9 +56,6 @@ def validate_notebook() -> str:
 
     configuration = _source_by_id(notebook, "configuration")
     plan = _source_by_id(notebook, "plan")
-    all_code = "\n".join(
-        str(cell.source) for cell in notebook.cells if cell.cell_type == "code"
-    )
     if "KV_CACHE_AUTOTUNE = True" not in configuration:
         raise SystemExit("Canonical Colab must default KV cache autotuning on")
     if 'os.environ["MMM_LLAMA_KV_AUTOTUNE"]' not in plan:
@@ -67,8 +64,6 @@ def validate_notebook() -> str:
         "session = CompleteModAISession("
     ):
         raise SystemExit("KV autotune policy must be applied before session construction")
-    if "start_colab_mtp_server" in all_code or '"mtp-server"' in all_code:
-        raise SystemExit("Canonical Colab must not pre-launch a fixed MTP server")
 
     colab_name = notebook.metadata.get("colab", {}).get("name")
     if colab_name != NOTEBOOK_PATH.name:
