@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .project_write_lock import project_write_lock
 from .source_patch import TransactionalSourcePatcher, sha256_file
 
 
@@ -23,6 +25,18 @@ class FabricProjectInfo:
     main_java: Path
     fabric_mod_json: Path
     main_entrypoints: tuple[str, ...] = ()
+
+
+def _atomic_shared_edit(function):
+    """Lock only shared read/merge/commit edits, not expensive generation work."""
+
+    @wraps(function)
+    def wrapped(info: FabricProjectInfo, *args: Any, **kwargs: Any):
+        with project_write_lock(info.root):
+            return function(info, *args, **kwargs)
+
+    wrapped._mmm_atomic_shared_project_edit = True  # type: ignore[attr-defined]
+    return wrapped
 
 
 def inspect_fabric_project(project_root: str | Path) -> FabricProjectInfo:
@@ -98,6 +112,7 @@ def inspect_fabric_project(project_root: str | Path) -> FabricProjectInfo:
     )
 
 
+@_atomic_shared_edit
 def ensure_main_initializer_call(
     info: FabricProjectInfo,
     *,
@@ -296,6 +311,7 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
     return TransactionalSourcePatcher(info.root).apply(operations)
 
 
+@_atomic_shared_edit
 def ensure_client_entrypoint(
     info: FabricProjectInfo,
     *,
@@ -344,6 +360,7 @@ def ensure_client_entrypoint(
     )
 
 
+@_atomic_shared_edit
 def ensure_dependency(
     info: FabricProjectInfo,
     *,
