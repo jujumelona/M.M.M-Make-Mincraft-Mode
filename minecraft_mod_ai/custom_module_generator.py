@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .complete_spec import ProductionModule
+from .host_grounding import build_coder_grounding
 from .model_router import ModelRouter
 from .project_index import ProjectIndex
 from .research_ledger import select_module_research_context
@@ -82,9 +83,8 @@ class CustomModuleGenerator:
             self._cached_root = root
             self._cached_index = index
 
-        # ProjectIndex below already supplies fresh, exact, SHA-bound source evidence.
-        # Keep the normal custom generation path to one model decode and materialize
-        # model-callable RAG only if host validation actually rejects that response.
+        # ProjectIndex and the approved research ledger are mandatory host-owned
+        # grounding. Model-callable RAG remains a supplemental repair path only.
         self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
 
         query = json.dumps(
@@ -97,68 +97,67 @@ class CustomModuleGenerator:
             ensure_ascii=False,
             sort_keys=True,
         )
-        # Fast Path check: bypass heavy multi-pass source scanning in Fast Mode
-        is_fast_path = self.fast_mode
-
-        if is_fast_path:
+        # Fast mode may reduce the evidence byte budget, but it may not skip the
+        # baseline exact-source grounding contract.
+        project_context_budget = min(
+            self.policy.model_context_bytes,
+            (4 if self.fast_mode else 12) * 1024,
+        )
+        if self.fast_mode:
             print(
-                "🚀 [Fast-Path] 소스 정밀 RAG 탐색 스킵 (Fast Path Express 구동 중)...",
+                "🚀 [Fast-Path] host exact-source grounding limited to 4 KiB.",
                 flush=True,
             )
-            observation_ledger = {
-                "receipt": "fast_path_express",
-                "observations": [],
-            }
-            observation_pages = [
-                {"page_index": 0, "page_count": 1, "records": []}
-            ]
-        else:
-            project_context_budget = min(
-                self.policy.model_context_bytes,
-                12 * 1024,
-            )
-            observation_ledger: dict[str, Any] | None = None
-            last_snapshot_error: ValueError | None = None
-            # A deterministic generator may finish while the LLM lane is preparing
-            # its context. Keep the lanes overlapped, but never consume a stale
-            # ProjectIndex snapshot. Rebuild a bounded number of times instead of
-            # serializing all generation behind one global filesystem lock.
-            for snapshot_attempt in range(3):
-                try:
-                    observation_ledger = _collect_initial_observations(
-                        self.router,
-                        index,
-                        query=query,
-                        byte_budget=project_context_budget,
-                    )
-                    break
-                except ValueError as exc:
-                    if not _is_stale_project_index_error(exc):
-                        raise
-                    last_snapshot_error = exc
-                    index = ProjectIndex(root, policy=self.policy)
-                    self._cached_index = index
-                    self._cached_root = root
-                    print(
-                        "↻ [CustomModule] ProjectIndex snapshot changed during "
-                        f"parallel generation; refreshed context ({snapshot_attempt + 1}/3).",
-                        flush=True,
-                    )
-            if observation_ledger is None:
-                raise CustomModuleGenerationError(
-                    "Project source kept changing while custom-module context was "
-                    "being captured; refusing to generate from a stale snapshot. "
-                    f"Last error: {last_snapshot_error}"
+        observation_ledger: dict[str, Any] | None = None
+        last_snapshot_error: ValueError | None = None
+        # A deterministic generator may finish while the LLM lane is preparing
+        # its context. Keep the lanes overlapped, but never consume a stale
+        # ProjectIndex snapshot. Rebuild a bounded number of times instead of
+        # serializing all generation behind one global filesystem lock.
+        for snapshot_attempt in range(3):
+            try:
+                observation_ledger = _collect_initial_observations(
+                    self.router,
+                    index,
+                    query=query,
+                    byte_budget=project_context_budget,
                 )
-            observation_pages = _observation_context_pages(
-                observation_ledger,
-                query=query,
-                byte_budget=project_context_budget,
+                break
+            except ValueError as exc:
+                if not _is_stale_project_index_error(exc):
+                    raise
+                last_snapshot_error = exc
+                index = ProjectIndex(root, policy=self.policy)
+                self._cached_index = index
+                self._cached_root = root
+                print(
+                    "↻ [CustomModule] ProjectIndex snapshot changed during "
+                    f"parallel generation; refreshed context ({snapshot_attempt + 1}/3).",
+                    flush=True,
+                )
+        if observation_ledger is None:
+            raise CustomModuleGenerationError(
+                "Project source kept changing while custom-module context was "
+                "being captured; refusing to generate from a stale snapshot. "
+                f"Last error: {last_snapshot_error}"
             )
+        observation_pages = _observation_context_pages(
+            observation_ledger,
+            query=query,
+            byte_budget=project_context_budget,
+        )
         research_context = select_module_research_context(
             research_modules,
             query=query,
             byte_budget=8 * 1024,
+        )
+        host_grounding = build_coder_grounding(
+            module_kind=module.kind,
+            source_observation_receipt=observation_ledger["receipt"],
+            research_context=research_context,
+            minecraft_version=minecraft_version,
+            loader=loader,
+            mappings=mappings,
         )
         base_request = {
             "phase": "generate_patch",
@@ -185,6 +184,7 @@ class CustomModuleGenerator:
             "project_manifest": index.manifest_receipt(),
             "source_observation_receipt": observation_ledger["receipt"],
             "research_context": research_context,
+            "host_grounding": host_grounding,
             "output_contract": {
                 "operations": [
                     {
@@ -247,9 +247,13 @@ class CustomModuleGenerator:
                             "completing a non-final context page. prior_patch_receipt "
                             "is a code-owned commitment to earlier operations. The host has "
                             "already supplied fresh exact source observations and reviewed "
-                            "research_context for this bounded first pass. Use them directly; "
-                            "do not repeat retrieval unless host validation rejects the result "
-                            "and explicitly enters evidence-backed repair. When code output for "
+                            "research_context for this bounded first pass. host_grounding is a "
+                            "code-owned contract proving that baseline ProjectIndex RAG, approved "
+                            "research RAG, Skill selection, and role-scoped MCP routing were "
+                            "resolved before this coder decode. Baseline grounding is not an "
+                            "optional model decision. Use the supplied evidence directly; do not "
+                            "repeat retrieval unless host validation rejects the result and "
+                            "explicitly enters evidence-backed repair. When code output for "
                             "the current page is too "
                             "large, set "
                             "context_page_complete=false and return a new next_cursor."
