@@ -25,9 +25,11 @@ jobs:
         run: |
           python -m pip install -q -e '.[dev]'
           python -m py_compile \
+            .github/scripts/repair_optimizer_driver.py \
             .github/scripts/optimize_production_rag_structure.py \
             .github/scripts/optimize_work_graph_core.py \
             .github/scripts/finalize_safe_execution_ownership.py
+          python .github/scripts/repair_optimizer_driver.py
           python .github/scripts/optimize_production_rag_structure.py
           python .github/scripts/optimize_work_graph_core.py
           python .github/scripts/finalize_safe_execution_ownership.py
@@ -40,6 +42,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm .github/workflows/optimize-production-rag-structure.yml
+          rm .github/scripts/repair_optimizer_driver.py
           rm .github/scripts/optimize_production_rag_structure.py
           rm .github/scripts/optimize_work_graph_core.py
           rm .github/scripts/finalize_safe_execution_ownership.py
