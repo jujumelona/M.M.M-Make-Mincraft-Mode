@@ -1,5 +1,6 @@
 name: Fix game design module normalization
 
+# Re-run after preserving the existing strict prompt line contract.
 on:
   push:
     branches:
