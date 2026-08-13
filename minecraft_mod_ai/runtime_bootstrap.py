@@ -72,9 +72,7 @@ def _install_model_runtime_contracts() -> None:
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
-    from .llama_tuning_pipeline import (
-        install_native_llama_tuning_pipeline,
-    )
+    from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .model_runtime_performance import install as install_model_runtime_performance
     from .parallel_runtime_contract import install as install_parallel_runtime
@@ -125,15 +123,9 @@ def _install_generation_contracts() -> None:
     from .extended_registration_contract import install as install_extended_registration
     from .performance_final_contract import install as install_performance_contract
     from .performance_final_tuning import install as install_performance_tuning
-    from .project_index_execution_reuse_contract import (
-        install as install_project_index_execution_reuse,
-    )
-    from .project_index_manifest_efficiency_contract import (
-        install as install_project_index_manifest_efficiency,
-    )
-    from .project_manifest_hash_efficiency_contract import (
-        install as install_manifest_hash_efficiency,
-    )
+    from .project_index_execution_reuse_contract import install as install_project_index_execution_reuse
+    from .project_index_manifest_efficiency_contract import install as install_project_index_manifest_efficiency
+    from .project_manifest_hash_efficiency_contract import install as install_manifest_hash_efficiency
 
     install_extended_registration(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
@@ -186,12 +178,8 @@ def _install_platform_contracts() -> None:
     from .platform_prompt_contract import install as install_platform_prompts
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
-    from .platform_selection_efficiency_contract import (
-        install as install_platform_selection_efficiency,
-    )
-    from .platform_specialized_generator_contract import (
-        install as install_specialized_generator_guards,
-    )
+    from .platform_selection_efficiency_contract import install as install_platform_selection_efficiency
+    from .platform_specialized_generator_contract import install as install_specialized_generator_guards
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
     from .proposal_deserialization_contract import install as install_proposal_deserialization
@@ -293,17 +281,12 @@ def _install_planner_contracts() -> None:
     install_audio_resume_efficiency(audio_generator)
     complete_orchestrator.synthesize_audio_files = audio_generator.synthesize_audio_files
     install_production_stream_efficiency(complete_planner)
-    install_execution_efficiency(
-        complete_planner_module=complete_planner,
-        work_graph_module=work_graph,
-    )
+    install_execution_efficiency(work_graph_module=work_graph)
     install_incremental_resume(planner_incremental_repair_contract)
 
     install_planner_parser_safety(complete_planner)
     install_planner_module_identity(complete_planner)
     install_planner_pagination_safety(complete_planner)
-    # Pagination safety replaces _expand_one_production_batch. Adaptive page width is
-    # the final authority for that method and therefore installs immediately after it.
     install_planner_production_page(complete_planner)
     install_planner_outline_identity(planner_pagination_safety_contract)
 
@@ -339,9 +322,7 @@ def _install_architecture_contracts() -> None:
     from .scheduler_fairness_contract import install as install_scheduler_fairness
     from .semantic_reviewer_role_contract import install as install_reviewer_role
     from .visual_acceptance_scope_contract import install as install_visual_scope
-    from .work_graph_state_transition_contract import (
-        install as install_work_graph_state_transitions,
-    )
+    from .work_graph_state_transition_contract import install as install_work_graph_state_transitions
 
     install_build_input_scope(validation_execution_contract)
     install_atomic_efficiency(atomic_requirement_contract)
@@ -393,22 +374,12 @@ def _install_late_safety_contracts() -> None:
         work_graph,
     )
     from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
-    from .parallel_result_determinism_contract import (
-        install as install_parallel_result_determinism,
-    )
-    from .production_tool_parallel_contract import (
-        install as install_production_tool_parallel_safety,
-    )
-    from .runner_parallel_validation_contract import (
-        install as install_runner_parallel_validation,
-    )
+    from .parallel_result_determinism_contract import install as install_parallel_result_determinism
+    from .production_tool_parallel_contract import install as install_production_tool_parallel_safety
+    from .runner_parallel_validation_contract import install as install_runner_parallel_validation
     from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
-    from .scheduler_parallel_safety_contract import (
-        install as install_scheduler_parallel_safety,
-    )
-    from .scheduler_poll_efficiency_contract import (
-        install as install_scheduler_poll_efficiency,
-    )
+    from .scheduler_parallel_safety_contract import install as install_scheduler_parallel_safety
+    from .scheduler_poll_efficiency_contract import install as install_scheduler_poll_efficiency
 
     install_scheduler_parallel_safety(
         work_graph_module=work_graph,
@@ -426,66 +397,22 @@ def _install_late_safety_contracts() -> None:
         validation_module=validation_execution_contract,
     )
     install_parallel_result_determinism(
-        audio_generator_module=audio_generator,
         orchestrator_module=complete_orchestrator,
+        audio_module=audio_generator,
     )
 
 
 def _install_public_boundary_contracts() -> None:
-    """Bind MCP and Python API surfaces after the runtime implementation is final."""
-    from . import (
-        api,
-        complete_orchestrator,
-        complete_planner,
-        custom_module_generator,
-        external_mcp_router,
-        mcp_tools,
-        minecraft_mcp_repair_batch_contract,
-        minecraft_mcp_runtime_helper_contract,
-        plan_render,
-        production_tools,
-        repair_engine,
-        runtime_manager,
-        skill_catalog,
-    )
-    from .external_mcp_bridge_safety_contract import (
-        install as install_external_mcp_bridge_safety,
-    )
-    from .external_mcp_target_validation_contract import (
-        install as install_mcp_target_validation,
-    )
-    from .mcp_repair_diagnostic_shape_contract import (
-        install as install_mcp_repair_diagnostic_shape,
-    )
-    from .minecraft_mcp_federation_contract import install as install_mcp_federation
-    from .minecraft_mcp_repair_batch_contract import install as install_mcp_repair_batch
-    from .minecraft_mcp_runtime_contract import install as install_mcp_runtime
-    from .minecraft_mcp_runtime_helper_contract import install as install_runtime_helpers
-    from .platform_api_contract import install as install_platform_api
+    """Install MCP/release/platform boundary adapters last."""
+    from . import mcp_server, mcp_tools, model_router, platform_resolver, production_tools
+    from .agent_tool_calling_contract import install as install_agent_tools
+    from .platform_mcp_compatibility_contract import install as install_platform_mcp_compatibility
     from .platform_mcp_contract import install as install_platform_mcp
+    from .platform_policy_runtime_contract import install as install_platform_policy_runtime
     from .platform_release_contract import install as install_platform_release
-    from .platform_skill_policy_contract import install as install_skill_policy
-    from .runtime_helper_json_deadline_contract import (
-        install as install_runtime_helper_json_deadline,
-    )
 
-    install_runtime_helpers(runtime_manager)
-    install_runtime_helper_json_deadline(minecraft_mcp_runtime_helper_contract)
-    install_mcp_target_validation(external_mcp_router)
-    install_external_mcp_bridge_safety(external_mcp_router)
-    install_mcp_runtime(complete_orchestrator)
-    install_mcp_federation(
-        complete_planner_module=complete_planner,
-        custom_module_generator_module=custom_module_generator,
-        repair_engine_module=repair_engine,
-        mcp_tools_module=mcp_tools,
-    )
-    install_mcp_repair_batch(repair_engine)
-    install_mcp_repair_diagnostic_shape(minecraft_mcp_repair_batch_contract)
-    install_skill_policy(skill_catalog)
-    install_platform_mcp(mcp_tools, production_tools)
+    install_platform_policy_runtime(platform_resolver)
+    install_platform_mcp(mcp_tools)
+    install_platform_mcp_compatibility(mcp_tools)
     install_platform_release(mcp_tools)
-    install_platform_api(api, plan_render)
-
-
-__all__ = ["initialize_runtime", "runtime_initialized"]
+    install_agent_tools(model_router, mcp_server, production_tools)
