@@ -84,6 +84,7 @@ def install(complete_planner_module: Any) -> None:
         planning_receipt: dict[str, Any],
         media_paths: Sequence[Any],
     ) -> None:
+        from .planner_structured_router import structured_planner_router
         from .production_page_durable_contract import (
             load_or_generate_page,
             resolve_page_items,
@@ -93,6 +94,7 @@ def install(complete_planner_module: Any) -> None:
         cursor = ""
         first_page = True
         seen_states: set[tuple[tuple[str, ...], str]] = set()
+        structured_router = structured_planner_router(self.router)
 
         while remaining:
             state = (tuple(remaining), cursor)
@@ -132,8 +134,11 @@ def install(complete_planner_module: Any) -> None:
             stage = f"production batch {batch.batch_id!r} page"
 
             def generate_page() -> dict[str, Any]:
+                # The host already supplied the exact evidence/context and a strict
+                # response schema. Tool use here only adds serial model-tool-model
+                # round-trips, so structured production decode is deliberately direct.
                 return complete_planner_module._generate_json_page_with_repair(
-                    self.router,
+                    structured_router,
                     system_prompt=_ADAPTIVE_PRODUCTION_PROMPT,
                     request=request,
                     media_paths=media_paths if first_page else (),
@@ -170,15 +175,15 @@ def install(complete_planner_module: Any) -> None:
                     f"Production batch {batch.batch_id!r} page made no verified progress."
                 )
 
-            # Resolve children against staged catalog overlays. A malformed later
-            # sibling or any subsequent page-level rejection therefore leaves all real
-            # catalogs and proposal lists byte-for-byte unchanged.
+            # Resolve children against staged catalog overlays. Semantic child repair
+            # also uses the direct structured router: it operates only on the persisted
+            # invalid child plus validator error and does not need another RAG cycle.
             staged_modules = _StagedCatalog(module_catalog)
             staged_assets = _StagedCatalog(asset_catalog)
             staged_audio = _StagedCatalog(audio_catalog)
             page_modules, page_assets, page_audio, tests = resolve_page_items(
                 complete_planner_module,
-                self.router,
+                structured_router,
                 page=page,
                 page_path=page_path,
                 module_catalog=staged_modules,
@@ -215,6 +220,7 @@ def install(complete_planner_module: Any) -> None:
     expand_one_production_batch._mmm_adaptive_production_page_width = True  # type: ignore[attr-defined]
     expand_one_production_batch._mmm_adaptive_page_width = True  # type: ignore[attr-defined]
     expand_one_production_batch._mmm_durable_production_items = True  # type: ignore[attr-defined]
+    expand_one_production_batch._mmm_structured_no_tool_loop = True  # type: ignore[attr-defined]
     cls._expand_one_production_batch = expand_one_production_batch
 
 
