@@ -40,7 +40,7 @@ jobs:
               raise SystemExit('execution-efficiency bootstrap call not recognized')
 
           stale_imports = "    from . import mcp_server, mcp_tools, model_router, platform_resolver, production_tools\n"
-          live_imports = "    from . import mcp_tools, platform_resolver\n"
+          live_imports = "    from . import mcp_tools, platform_resolver, production_tools\n"
           if stale_imports in text:
               text = text.replace(stale_imports, live_imports, 1)
           elif live_imports not in text:
@@ -62,6 +62,13 @@ jobs:
           )
           if any(value in text for value in forbidden):
               raise SystemExit('stale public-boundary owner still referenced')
+
+          old_call = '    install_platform_mcp(mcp_tools)\n'
+          new_call = '    install_platform_mcp(mcp_tools, production_tools)\n'
+          if old_call in text:
+              text = text.replace(old_call, new_call, 1)
+          elif new_call not in text:
+              raise SystemExit('platform MCP installer call not recognized')
 
           path.write_text(text, encoding='utf-8')
           PY
