@@ -55,6 +55,7 @@ dev = [
   "nbformat>=5.10,<6",
   "Pillow>=10.4,<13",
   "pytest>=8,<10",
+  "ruff>=0.16,<1",
   "tomli>=2; python_version < '3.11'",
 ]
 
