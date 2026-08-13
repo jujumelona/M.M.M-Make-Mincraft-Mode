@@ -11,7 +11,6 @@ _REPLACE_PATCH_FIELDS = frozenset({"target_fingerprint", "replacement_batch"})
 _BATCH_FIELDS = frozenset(
     {"batch_id", "scope", "depends_on_batches", "deliverables", "exports"}
 )
-_DEFAULT_OUTLINE_GENERATION_ATTEMPTS = 2
 _DEFAULT_BATCH_REPAIR_ATTEMPTS = 2
 
 
@@ -447,13 +446,7 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
     class _GuardedRouter:
         def __init__(self, router: Any) -> None:
             self._router = router
-            self._seen_requests: set[str] = set()
             self._outline_calls = 0
-            self._outline_limit = _bounded_env(
-                "MMM_PLANNER_OUTLINE_GENERATION_ATTEMPTS",
-                _DEFAULT_OUTLINE_GENERATION_ATTEMPTS,
-                maximum=4,
-            )
 
         def __getattr__(self, name: str) -> Any:
             return getattr(self._router, name)
@@ -467,14 +460,10 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
             response_format="text",
         ) -> str:
             system_content = ""
-            user_content = ""
             if isinstance(messages, (list, tuple)) and messages:
                 first = messages[0]
-                last = messages[-1]
                 if isinstance(first, dict):
                     system_content = str(first.get("content", ""))
-                if isinstance(last, dict):
-                    user_content = str(last.get("content", ""))
 
             is_batch_repair = (
                 "field-level JSON patcher" in system_content
@@ -482,26 +471,10 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
             )
             if not is_batch_repair:
                 self._outline_calls += 1
-                if self._outline_calls > self._outline_limit:
+                if self._outline_calls > 2:
                     raise complete_planner.SpecValidationError(
-                        "Production outline generation made no valid progress after the "
-                        "diagnostic regeneration path."
+                        "Planner repair cycle detected before a third semantic outline request."
                     )
-
-            request_sha256 = incremental_module._fingerprint(
-                {
-                    "role": role,
-                    "system": system_content,
-                    "user": user_content,
-                    "response_format": response_format,
-                    "media_paths": [str(path) for path in media_paths],
-                }
-            )
-            if request_sha256 in self._seen_requests:
-                raise complete_planner.SpecValidationError(
-                    "Planner repair cycle detected before repeating an identical model request."
-                )
-            self._seen_requests.add(request_sha256)
 
             return self._router.generate_text(
                 role,
