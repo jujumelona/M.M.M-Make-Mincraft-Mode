@@ -126,11 +126,11 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
 
 
 def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
-    """Keep model-backed integrations out of deterministic CPU lanes."""
+    """Keep only explicit model-backed integrations out of deterministic CPU lanes."""
 
     members = payload.get("members")
     if not isinstance(members, list):
-        return False
+        return True
     for member in members:
         if not isinstance(member, dict):
             return False
