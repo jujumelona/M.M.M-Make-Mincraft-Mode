@@ -1,0 +1,57 @@
+name: Full verification
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/full-verification.yml
+
+permissions:
+  contents: read
+
+# Deliberately no shared concurrency group. This workflow exists to pin one commit
+# and finish the complete hosted contract suite even while direct-main development
+# continues and the normal CI correctly cancels superseded runs.
+jobs:
+  full-contracts:
+    name: Full hosted contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+
+      - name: Audit repository ownership and workflow graph
+        run: python .github/scripts/debug_repo_audit.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+
+      - name: Enforce dead-code and control-flow hygiene
+        run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+
+      - name: Enforce high-confidence unreachable-code hygiene
+        run: vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+
+      - name: Import package bootstrap
+        run: python -c "import minecraft_mod_ai"
+
+      - name: Validate Mineflayer bridge syntax
+        run: node --check integrations/mineflayer-1201/bridge.mjs
+
+      - name: Validate canonical Colab notebook
+        run: python tools/validate_colab_notebook.py
+
+      - name: Verify packaged Skill catalog
+        run: |
+          python tools/package_skills.py
+          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
+
+      - name: Run complete unit and contract suite
+        run: python -m pytest -vv --tb=short --durations=30 --maxfail=25
