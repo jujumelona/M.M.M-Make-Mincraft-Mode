@@ -87,8 +87,8 @@ class _ToolRuntime:
             {
                 "type": "function",
                 "function": {
-                    "name": "inspect_project",
-                    "description": "inspect",
+                    "name": "external_mcp_capabilities",
+                    "description": "list reviewed external capabilities",
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
@@ -146,7 +146,12 @@ def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_llama_shared_slots", False)
     assert getattr(ModelRouter.generate_text, "_mmm_preserves_agent_tools", False)
     assert getattr(ModelRouter.generate_text, "_mmm_preserves_response_schema", False)
-    assert getattr(ModelRouter.generate_text, "_mmm_parallel_router_contract_version", 0) >= 2
+    assert getattr(
+        ModelRouter.generate_text,
+        "_mmm_uses_canonical_request_preparation",
+        False,
+    )
+    assert getattr(ModelRouter.generate_text, "_mmm_parallel_router_contract_version", 0) >= 3
     assert getattr(ModelRouter.generation_session, "_mmm_llama_shared_slots", False)
     assert getattr(scheduler_module._capacities, "_mmm_dynamic_llama_slots", False)
     assert getattr(
@@ -206,6 +211,11 @@ def test_parallel_router_preserves_stage_tools_and_enable_tools(monkeypatch) -> 
     assert request.tool_choice == "auto"
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
+    assert any(
+        message.get("role") == "system"
+        and "mmm/agent-capability-context-v4" in str(message.get("content", ""))
+        for message in request.messages
+    )
 
     schema = {
         "type": "object",
