@@ -78,16 +78,37 @@ jobs:
           if text.count(anchor) != 1:
               raise SystemExit('bootstrap absence assertion anchor changed')
           test.write_text(text.replace(anchor, replacement), encoding='utf-8')
+
+          planner_test = Path('tests/test_planner_json_runtime_contract.py')
+          text = planner_test.read_text(encoding='utf-8')
+          if 'import pytest\n' not in text:
+              text = text.replace('import json\n', 'import json\n\nimport pytest\n', 1)
+          old = '''def test_production_repair_keeps_requested_targets_after_truncated_first_page() -> None:\n    router = _Router(\n        '{"modules":[{"module_id":"cut_off"',\n        json.dumps(\n            {\n                "modules": [\n                    _module("entity_runtime_impl", implements=("entity_runtime",))\n                ]\n            }\n        ),\n    )\n\n    page = complete_planner._generate_json_page_with_repair(\n        router,\n        system_prompt="Implement ALL requested deliverables in this page.",\n        request=_request("entity_runtime", "ui_runtime"),\n        media_paths=("reference.png",),\n        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),\n        stage="unit production page",\n    )\n\n    assert page["completed_deliverables"] == ["entity_runtime"]\n    assert page["complete"] is False\n    assert page["next_cursor"]\n    assert len(router.calls) == 2\n    second_user = router.calls[1]["messages"][1]["content"]\n    assert '\"current_target_deliverables\": [\"entity_runtime\", \"ui_runtime\"]' in second_user\n    second_system = router.calls[1]["messages"][0]["content"]\n    assert "RECOVERY MODE is host-narrowed" not in second_system\n    assert router.calls[1]["media_paths"] == ()\n\n\ndef test_production_page_can_repair_more_than_once() -> None:\n    router = _Router(\n        "not json",\n        "still not json",\n        json.dumps({"modules": [_module()]}),\n    )\n\n    page = complete_planner._generate_json_page_with_repair(\n        router,\n        system_prompt="Return the production page.",\n        request=_request(),\n        media_paths=(),\n        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),\n        stage="unit production page",\n    )\n\n    assert page["completed_deliverables"] == ["entity_runtime"]\n    assert len(router.calls) == 3\n    assert "REPAIR THIS PAGE" in router.calls[1]["messages"][0]["content"]\n    assert "REPAIR THIS PAGE" in router.calls[2]["messages"][0]["content"]\n\n\n'''
+          new = '''def test_production_retry_keeps_requested_targets_after_invalid_first_page() -> None:\n    router = _Router(\n        "not json",\n        json.dumps(\n            {\n                "modules": [\n                    _module("entity_runtime_impl", implements=("entity_runtime",))\n                ]\n            }\n        ),\n    )\n\n    page = complete_planner._generate_json_page_with_repair(\n        router,\n        system_prompt="Implement ALL requested deliverables in this page.",\n        request=_request("entity_runtime", "ui_runtime"),\n        media_paths=("reference.png",),\n        expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),\n        stage="unit production page",\n    )\n\n    assert page["completed_deliverables"] == ["entity_runtime"]\n    assert page["complete"] is False\n    assert page["next_cursor"]\n    assert len(router.calls) == 2\n    second_user = router.calls[1]["messages"][1]["content"]\n    assert '\"current_target_deliverables\": [\"entity_runtime\", \"ui_runtime\"]' in second_user\n    second_system = router.calls[1]["messages"][0]["content"]\n    assert "CORRECTION:" in second_system\n    assert router.calls[1]["media_paths"] == ()\n\n\ndef test_production_page_stops_after_one_full_page_retry() -> None:\n    router = _Router(\n        "not json",\n        "still not json",\n        json.dumps({"modules": [_module()]}),\n    )\n\n    with pytest.raises(\n        complete_planner.SpecValidationError,\n        match="failed after one page-local repair",\n    ):\n        complete_planner._generate_json_page_with_repair(\n            router,\n            system_prompt="Return the production page.",\n            request=_request(),\n            media_paths=(),\n            expected_contracts=(frozenset(complete_planner._PRODUCTION_PAGE_CONTRACT),),\n            stage="unit production page",\n        )\n\n    assert len(router.calls) == 2\n    assert "CORRECTION:" in router.calls[1]["messages"][0]["content"]\n\n\n'''
+          if text.count(old) != 1:
+              raise SystemExit('planner stream policy tests changed')
+          planner_test.write_text(text.replace(old, new), encoding='utf-8')
+
+          recovery = Path('tests/test_production_stream_resume_contract.py')
+          text = recovery.read_text(encoding='utf-8')
+          text = text.replace(\
+              'from minecraft_mod_ai.production_stream_resume_contract import install as install_resume\n',\
+              '',\
+          )
+          text = text.replace('    stream.install(complete_planner)\n    install_resume(complete_planner)\n', '')
+          recovery.write_text(text, encoding='utf-8')
           PY
           git rm minecraft_mod_ai/production_stream_resume_contract.py
+          git mv tests/test_production_stream_resume_contract.py tests/test_production_stream_recovery_contract.py
       - name: Verify single stream owner
         run: |
           python -m pip install --prefer-binary -e '.[dev]'
-          ! grep -R "production_stream_resume_contract\|install_production_stream_resume" -n minecraft_mod_ai tests tools --exclude-dir='__pycache__'
+          if grep -R "production_stream_resume_contract\|install_production_stream_resume" -n minecraft_mod_ai tools --exclude-dir='__pycache__'; then exit 1; fi
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
           python -m pytest -q \
             tests/test_runtime_bootstrap_clean.py \
             tests/test_planner_json_runtime_contract.py \
+            tests/test_production_stream_recovery_contract.py \
             tests/test_production_page_durable_contract.py \
             tests/test_planner_incremental_repair_contract.py
           git diff --check
