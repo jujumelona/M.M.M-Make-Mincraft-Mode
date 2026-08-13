@@ -182,12 +182,13 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         "TuningStage(\n                \"efficiency\"",
         "TuningStage(\"runtime\"",
         "TuningStage(\n                \"cache-reuse\"",
-        "TuningStage(\n                \"decode-speed\"",
-        "TuningStage(\n                \"qwen35-mtp-hotpath\"",
-        "TuningStage(\n                \"single-stream-plan-search\"",
+        "TuningStage(\"decode-speed\"",
     )
     positions = [source.index(marker) for marker in order]
     assert positions == sorted(positions)
+    assert source.index("install_decode_speed(") < source.index(
+        "install_qwen35_hotpath("
+    ) < source.index("install_single_stream_plan_search(")
 
 
 def test_contract_composition_is_limited_to_explicit_owners() -> None:
