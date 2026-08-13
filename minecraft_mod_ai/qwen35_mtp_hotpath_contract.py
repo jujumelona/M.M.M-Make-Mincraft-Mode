@@ -11,10 +11,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _MAX_CTX = 2147483647
-_MARKER = "_mmm_qwen35_measured_decode_hotpath_v9"
-_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v6"
+_MARKER = "_mmm_qwen35_measured_decode_hotpath_v10"
+_BASE_MARKER = "_mmm_qwen35_measured_fast_args_v7"
 _VARIANT_MARKER = "_mmm_qwen35_full_draft_gpu_v1"
 _FINGERPRINT_MARKER = "_mmm_qwen35_draft_gpu_fingerprint_v1"
+_SLOT_POLL_MARKER = "_mmm_qwen35_no_decode_slot_poll_v1"
 _ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _DEFAULT_MTP_WIDTHS = "1,2,3,4,5,6,8"
 _ACTIVE_RUNTIME_KEYS = (
@@ -116,6 +117,23 @@ def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
     args.extend([names[0], value])
 
 
+def _disable_decode_slot_polling() -> None:
+    """Keep progress reporting local while Qwen is actively decoding on the T4."""
+
+    from . import llama_server_hardware_policy as hardware_policy
+
+    current = getattr(hardware_policy, "_slot_snapshot", None)
+    if not callable(current) or getattr(current, _SLOT_POLL_MARKER, False):
+        return
+
+    @wraps(current)
+    def no_decode_slot_poll(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    setattr(no_decode_slot_poll, _SLOT_POLL_MARKER, True)
+    hardware_policy._slot_snapshot = no_decode_slot_poll
+
+
 def _install_measured_fast_base_args(autotune: Any) -> None:
     """Install the Qwen3.5 T4 launch constraints without masking decode tuners."""
 
@@ -147,6 +165,11 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         # same native-default cache while reporting a fictitious selected format.
         _drop_option(args, ("--load-mode", "-lm"))
         _drop_option(args, ("--cache-prompt",), takes_value=False)
+        # /slots is diagnostic-only and the old 15 s progress sampler issued a
+        # second HTTP request to the same llama-server during active decoding.
+        # Qwen single-stream progress uses local SSE counters instead, so do not
+        # expose or poll the endpoint on this latency-sensitive path.
+        _drop_option(args, ("--slots",), takes_value=False)
         if "--metrics" not in args:
             args.append("--metrics")
         return args
@@ -302,6 +325,7 @@ def _restore_env(name: str, previous: str | None) -> None:
 def install(autotune: Any) -> None:
     """Keep Qwen3.5 on the T4 hot path while delegating winner selection."""
 
+    _disable_decode_slot_polling()
     _install_measured_fast_base_args(autotune)
     _install_measured_fast_variant_args(autotune)
     _install_qwen35_fingerprint(autotune)
@@ -350,6 +374,7 @@ def install(autotune: Any) -> None:
 
 __all__ = [
     "_context_size",
+    "_disable_decode_slot_polling",
     "_draft_gpu_layers",
     "_install_measured_fast_base_args",
     "_install_measured_fast_variant_args",
