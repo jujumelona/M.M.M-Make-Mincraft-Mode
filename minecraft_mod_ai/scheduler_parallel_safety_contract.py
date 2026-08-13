@@ -13,12 +13,13 @@ from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
 _RESOURCE_CAPACITIES = {
-    # CompleteProductionOrchestrator currently owns one LLM executor worker. Keep the
-    # durable claimant matched to the real executor instead of building a hidden queue.
+    # llama_parallel_runtime_contract replaces the LLM value with the selected native
+    # slot capacity after this safety layer is installed.
     "llm": 1,
     "image_gpu": 1,
     "commit": 1,
 }
+_RESOURCE_PRIORITY = {"llm": 0, "image_gpu": 1, "cpu_io": 2, "commit": 3}
 # These stages mutate stage-global registries, so work within the same domain is
 # serialized. Different domains are independent and can execute concurrently.
 _STAGE_WRITE_LOCKS = {
@@ -31,7 +32,6 @@ _SHARED_LOCAL_GPU_LANE: ContextVar[bool] = ContextVar(
     "mmm_shared_local_gpu_lane",
     default=False,
 )
-_GPU_RESOURCE_CLASSES = frozenset({"llm", "image_gpu"})
 
 
 def _cpu_capacity() -> int:
@@ -148,8 +148,9 @@ def _profile_uses_shared_local_gpu(profile: str, registry: Any | None = None) ->
     """Return whether generation text and image roles contend for one local GPU.
 
     Remote/API profiles intentionally remain independent. Local llama/vLLM plus local
-    diffusion profiles share one physical device and must not be claimed concurrently;
-    the model-router read/write lock then governs safe in-lane text parallelism.
+    diffusion profiles share one physical device. Text requests may share the resident
+    model up to native slot capacity, while diffusion remains mutually exclusive with
+    every text slot.
     """
 
     try:
@@ -202,7 +203,7 @@ def _install_pipeline_shards(work_graph_module: Any) -> None:
 
     Dependency-aware custom sharding already bounds row count and models the selected
     native decode slots. Re-splitting those shards into one row per module creates
-    scheduler overhead without increasing the single Qwen decode capacity, so custom
+    scheduler overhead without increasing the selected Qwen decode capacity, so custom
     shards are deliberately preserved.
 
     Entity generation is deterministic, while post-generation Blockbench review runs
@@ -328,7 +329,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
             raise work_graph_module.WorkGraphError("lease_seconds must be positive.")
 
         owner = _orchestrator_owner(self)
-        capacities = _capacities()
         resource_expr = _resource_sql("")
         task_resource_expr = _resource_sql("task")
         stage_sql = ""
@@ -339,6 +339,10 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
             stage_params = tuple(stages)
 
         def ready_node_id(connection: Any) -> str | None:
+            capacities = {
+                lane: max(1, int(capacity))
+                for lane, capacity in _capacities().items()
+            }
             running = {
                 str(resource_class): int(count)
                 for resource_class, count in connection.execute(
@@ -351,48 +355,75 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                     (work_graph_module.WorkState.RUNNING.value,),
                 )
             }
-            free_lanes = tuple(
+            free_lanes = {
                 lane
                 for lane, capacity in capacities.items()
                 if running.get(lane, 0) < capacity
-            )
-            if _SHARED_LOCAL_GPU_LANE.get() and any(
-                running.get(lane, 0) > 0 for lane in _GPU_RESOURCE_CLASSES
-            ):
-                free_lanes = tuple(
-                    lane for lane in free_lanes if lane not in _GPU_RESOURCE_CLASSES
-                )
+            }
+            if _SHARED_LOCAL_GPU_LANE.get():
+                # Text slots are concurrent readers of one resident local model.
+                # Diffusion is the exclusive writer on that physical GPU.
+                if running.get("image_gpu", 0) > 0:
+                    free_lanes.discard("llm")
+                if running.get("llm", 0) > 0:
+                    free_lanes.discard("image_gpu")
             if not free_lanes:
                 return None
 
-            lane_placeholders = ",".join("?" for _ in free_lanes)
+            ordered_lanes = tuple(
+                sorted(
+                    free_lanes,
+                    key=lambda lane: (_RESOURCE_PRIORITY.get(lane, 9), lane),
+                )
+            )
+            lane_placeholders = ",".join("?" for _ in ordered_lanes)
             params = (
                 work_graph_module.WorkState.PENDING.value,
                 work_graph_module.WorkState.SUCCEEDED.value,
                 *stage_params,
-                *free_lanes,
+                *ordered_lanes,
             )
-            row = connection.execute(
+            rows = connection.execute(
                 f"""
-                SELECT task.node_id
-                FROM tasks AS task
-                WHERE task.state = ?
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM edges
-                    JOIN tasks AS dependency
-                      ON dependency.node_id = edges.dependency_id
-                    WHERE edges.node_id = task.node_id
-                      AND dependency.state != ?
-                  )
-                  {stage_sql}
-                  AND {task_resource_expr} IN ({lane_placeholders})
-                ORDER BY task.node_id
-                LIMIT 1
+                WITH ready AS (
+                    SELECT task.node_id, {task_resource_expr} AS resource_class
+                    FROM tasks AS task
+                    WHERE task.state = ?
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM edges
+                        JOIN tasks AS dependency
+                          ON dependency.node_id = edges.dependency_id
+                        WHERE edges.node_id = task.node_id
+                          AND dependency.state != ?
+                      )
+                      {stage_sql}
+                      AND {task_resource_expr} IN ({lane_placeholders})
+                ), ranked AS (
+                    SELECT node_id, resource_class,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY resource_class ORDER BY node_id
+                           ) AS resource_rank
+                    FROM ready
+                )
+                SELECT node_id, resource_class
+                FROM ranked
+                WHERE resource_rank = 1
                 """,
                 params,
-            ).fetchone()
-            return str(row[0]) if row is not None else None
+            ).fetchall()
+            if not rows:
+                return None
+
+            node_id, _resource = min(
+                ((str(node), str(resource)) for node, resource in rows),
+                key=lambda item: (
+                    running.get(item[1], 0) / capacities.get(item[1], 1),
+                    _RESOURCE_PRIORITY.get(item[1], 9),
+                    item[0],
+                ),
+            )
+            return node_id
 
         now = time.time()
         renew_before = now + max(1.0, lease_seconds * 0.5)
@@ -482,7 +513,11 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 return None
         return self.task(node_id)
 
-    claim_ready._mmm_parallel_lane_claim = True
+    claim_ready._mmm_parallel_lane_claim = True  # type: ignore[attr-defined]
+    claim_ready._mmm_exact_executor_fairness = True  # type: ignore[attr-defined]
+    # The consolidated safety claimant already owns the max-efficiency semantics.
+    # Any late compatibility installer must not wrap it with another transaction.
+    claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
     ledger_cls.claim_ready = claim_ready
 
 
