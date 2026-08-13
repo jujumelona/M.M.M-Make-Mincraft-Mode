@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Patch live progress contracts and sync packaged skills
         run: |
           python - <<'PY'
@@ -81,7 +83,6 @@ jobs:
               destination.parent.mkdir(parents=True, exist_ok=True)
               shutil.copyfile(skill_file, destination)
 
-          # Recompile the packaged runtime representation from the canonical source of truth.
           from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS, compile_skill_catalog
           compiled = compile_skill_catalog()
           packaged_path = Path('minecraft_mod_ai/packaged_skills.json')
@@ -99,8 +100,6 @@ jobs:
               encoding='utf-8',
           )
           PY
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Verify repaired contracts
         run: |
           python -m compileall -q minecraft_mod_ai tools tests
