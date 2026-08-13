@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
 
 import minecraft_mod_ai.work_graph as work_graph_module
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
+from minecraft_mod_ai.project_edit import FabricProjectInfo, ensure_main_initializer_call
 from minecraft_mod_ai.project_write_lock import project_write_lock
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 from minecraft_mod_ai.work_graph import WorkNode
@@ -174,15 +176,95 @@ def test_transactional_patchers_do_not_block_independent_projects(monkeypatch, t
     assert max_active == 2
 
 
-def test_shared_mutating_module_stages_use_commit_lane_but_custom_stays_llm() -> None:
-    for stage in ("content", "system", "entity", "audio-binding"):
+def test_shared_initializer_edits_merge_atomically_under_parallel_generation(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    main_java = root / "src/main/java/example/FrostWorksMod.java"
+    metadata = root / "src/main/resources/fabric.mod.json"
+    main_java.parent.mkdir(parents=True)
+    metadata.parent.mkdir(parents=True)
+    main_java.write_text(
+        "package example;\n\n"
+        "public final class FrostWorksMod {\n"
+        "    public void onInitialize() {\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    metadata.write_text(
+        json.dumps(
+            {
+                "id": "frostworks",
+                "entrypoints": {"main": ["example.FrostWorksMod"]},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    info = FabricProjectInfo(
+        root=root,
+        mod_id="frostworks",
+        main_entrypoint="example.FrostWorksMod",
+        package_name="example",
+        main_class="FrostWorksMod",
+        main_java=main_java,
+        fabric_mod_json=metadata,
+        main_entrypoints=("example.FrostWorksMod",),
+    )
+    errors: list[BaseException] = []
+
+    def bind(import_line: str, call_line: str, marker: str) -> None:
+        try:
+            ensure_main_initializer_call(
+                info,
+                import_line=import_line,
+                call_line=call_line,
+                marker=marker,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=bind,
+            args=("import example.ext.GeneratedExtendedContent", "GeneratedExtendedContent.register()", "extended:content"),
+        ),
+        threading.Thread(
+            target=bind,
+            args=("import example.geckolib.GeneratedGeckoEntities", "GeneratedGeckoEntities.register()", "geckolib:entities"),
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
+    text = main_java.read_text(encoding="utf-8")
+    assert "import example.ext.GeneratedExtendedContent;" in text
+    assert "import example.geckolib.GeneratedGeckoEntities;" in text
+    assert "// MMM:extended:content" in text
+    assert "// MMM:geckolib:entities" in text
+
+
+def test_deterministic_module_stages_use_cpu_lanes_but_custom_stays_llm() -> None:
+    for stage in ("content", "system", "entity"):
         node = work_graph_module._node(
             f"node-{stage}",
             f"generate:{stage}",
             (),
-            {"kind": "module-shard", "generation_stage": stage},
+            {"kind": "module-shard", "generation_stage": stage, "members": []},
         )
-        assert node.resource_class == "commit", stage
+        assert node.resource_class == "cpu_io", stage
+
+    audio_binding = work_graph_module._node(
+        "node-audio-binding",
+        "generate:audio-binding",
+        (),
+        {"kind": "module-shard", "generation_stage": "audio-binding"},
+    )
+    assert audio_binding.resource_class == "commit"
 
     custom = work_graph_module._node(
         "node-custom",
@@ -210,7 +292,7 @@ def test_commit_lane_action_holds_same_project_lock(tmp_path: Path) -> None:
 
     node = WorkNode(
         node_id="commit-node",
-        stage="generate:content",
+        stage="generate:audio-binding",
         input_hash="sha256:commit-node",
         dependencies=(),
         payload={"kind": "module-shard", "resource_class": "commit"},
