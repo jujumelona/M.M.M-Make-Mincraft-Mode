@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import httpx
 
+from minecraft_mod_ai import llama_stream_efficiency_contract as stream_runtime
 from minecraft_mod_ai.llama_server_hardware_policy import _strict_server_generate
 
 
@@ -37,35 +38,35 @@ class _StreamingResponse:
         yield 'data: [DONE]'
 
 
-class _UnavailableTelemetryResponse:
-    status_code = 404
-    text = ""
+class _Client:
+    def __init__(self, response, captured: dict[str, object]) -> None:
+        self.response = response
+        self.captured = captured
 
-    @staticmethod
-    def json():
-        return {}
-
-
-def _disable_mock_telemetry(monkeypatch) -> None:
-    monkeypatch.setattr(
-        httpx,
-        "get",
-        lambda *args, **kwargs: _UnavailableTelemetryResponse(),
-    )
+    def stream(self, method, url, *, json):
+        self.captured["method"] = method
+        self.captured["url"] = url
+        self.captured["json"] = json
+        return self.response
 
 
-def test_local_native_generation_uses_sse_without_fixed_read_timeout(monkeypatch) -> None:
+def test_persistent_client_has_no_fixed_read_timeout() -> None:
+    client = stream_runtime._client("http://127.0.0.1:18910/v1")
+    timeout = client.timeout
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 30.0
+    assert timeout.read is None
+    assert timeout.write == 30.0
+    assert timeout.pool == 30.0
+
+
+def test_local_native_generation_uses_persistent_sse_client(monkeypatch) -> None:
     captured: dict[str, object] = {}
-
-    def fake_stream(method, url, *, json, timeout):
-        captured["method"] = method
-        captured["url"] = url
-        captured["json"] = json
-        captured["timeout"] = timeout
-        return _StreamingResponse()
-
-    monkeypatch.setattr(httpx, "stream", fake_stream)
-    _disable_mock_telemetry(monkeypatch)
+    monkeypatch.setattr(
+        stream_runtime,
+        "_client",
+        lambda _server_url: _Client(_StreamingResponse(), captured),
+    )
 
     adapter = _Adapter()
     request = SimpleNamespace(
@@ -83,12 +84,7 @@ def test_local_native_generation_uses_sse_without_fixed_read_timeout(monkeypatch
     assert captured["method"] == "POST"
     assert captured["url"] == "http://127.0.0.1:8910/v1/chat/completions"
     assert captured["json"]["stream"] is True
-    timeout = captured["timeout"]
-    assert isinstance(timeout, httpx.Timeout)
-    assert timeout.connect == 30.0
-    assert timeout.read is None
-    assert timeout.write == 30.0
-    assert timeout.pool == 30.0
+    assert captured["json"]["stream_options"] == {"include_usage": True}
 
 
 def test_local_native_stream_requires_done_marker(monkeypatch) -> None:
@@ -96,8 +92,11 @@ def test_local_native_stream_requires_done_marker(monkeypatch) -> None:
         def iter_lines(self):
             yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
 
-    monkeypatch.setattr(httpx, "stream", lambda *args, **kwargs: _BrokenResponse())
-    _disable_mock_telemetry(monkeypatch)
+    monkeypatch.setattr(
+        stream_runtime,
+        "_client",
+        lambda _server_url: _Client(_BrokenResponse(), {}),
+    )
 
     adapter = _Adapter()
     request = SimpleNamespace(
