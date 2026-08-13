@@ -5,7 +5,7 @@ from functools import wraps
 from typing import Any, Mapping
 
 
-_MARKER = "_mmm_host_validated_json_fastpath_v4"
+_MARKER = "_mmm_host_validated_json_fastpath_v5"
 
 
 def _bounded_section_output_tokens(adapter: Any) -> int:
@@ -20,14 +20,30 @@ def _bounded_section_output_tokens(adapter: Any) -> int:
     return min(configured, requested)
 
 
-def bind_structured_decode_policy(hardware_module: Any) -> None:
-    """Keep structured planner serialization fast without spending tokens on thinking.
+def _is_qwen35(adapter: Any) -> bool:
+    config = getattr(adapter, "config", None)
+    model_id = str(getattr(config, "model_id", "")).casefold()
+    extra = getattr(config, "extra", {})
+    filename = (
+        str(extra.get("gguf_filename", "")).casefold()
+        if isinstance(extra, Mapping)
+        else ""
+    )
+    return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
 
-    A JSON request with an explicit response schema remains llama.cpp constrained.
-    Schema-less JSON is already parsed and contract-validated by MMM on the host, so
-    forcing a server-side JSON grammar there only adds sampler/speculative constraints.
-    Those calls keep Qwen thinking disabled but use ordinary decoding; malformed output
-    is rejected by the existing host validator/repair loop.
+
+def _force_server_schema() -> bool:
+    raw = os.environ.get("MMM_QWEN35_FORCE_SERVER_JSON_SCHEMA", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def bind_structured_decode_policy(hardware_module: Any) -> None:
+    """Keep validated planner serialization off the constrained decode hot path.
+
+    Schema-less JSON is parsed and contract-validated by MMM on the host. The Qwen
+    game-design stage has the same explicit host validator/repair loop, so its large
+    schema also defaults to ordinary decoding instead of a llama.cpp grammar. Other
+    explicit schemas remain constrained until their host validation paths are proven.
     """
 
     current = hardware_module._server_payload
@@ -45,8 +61,6 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
         schema = getattr(request, "response_schema", None)
         if schema is None:
             # Host-validated planner pages do not need llama.cpp's JSON grammar.
-            # Preserve the explicit no-thinking controls installed by the hardware
-            # policy so the visible JSON gets the full output budget.
             result.pop("response_format", None)
             result["reasoning_effort"] = "none"
             result["chat_template_kwargs"] = {"enable_thinking": False}
@@ -54,6 +68,22 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
             return result
 
         properties = schema.get("properties") if isinstance(schema, Mapping) else None
+        if (
+            isinstance(properties, Mapping)
+            and "game_design" in properties
+            and _is_qwen35(adapter)
+            and not _force_server_schema()
+        ):
+            # GameDesignPlanner validates every candidate after generation and
+            # repairs invalid output until success or a proven no-progress cycle.
+            # Avoid converting this large schema to a sampler grammar on the T4
+            # speculative-decode path; the host validator remains authoritative.
+            result.pop("response_format", None)
+            result["reasoning_effort"] = "none"
+            result["chat_template_kwargs"] = {"enable_thinking": False}
+            result.pop("thinking_budget_tokens", None)
+            return result
+
         if isinstance(properties, Mapping) and "section" in properties:
             # This is a transport budget for one explicitly bounded serialization
             # call, not a project/plan-size or input-context limit. Large/schema-less
@@ -70,6 +100,7 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
     setattr(payload, _MARKER, True)
     payload._mmm_bounded_section_thinking_budget_v2 = True  # type: ignore[attr-defined]
     payload._mmm_bounded_section_thinking_budget_v1 = True  # type: ignore[attr-defined]
+    payload._mmm_qwen35_game_design_host_validation = True  # type: ignore[attr-defined]
     hardware_module._server_payload = payload
 
 
