@@ -31,10 +31,15 @@ jobs:
           path = Path('minecraft_mod_ai/runtime_bootstrap.py')
           text = path.read_text(encoding='utf-8')
           old = "    install_execution_efficiency(\n        complete_planner_module=complete_planner,\n        work_graph_module=work_graph,\n    )"
-          new = "    install_execution_efficiency(\n        work_graph_module=work_graph,\n    )"
-          if text.count(old) != 1:
-              raise SystemExit(f'execution efficiency bootstrap block count: {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          block = "    install_execution_efficiency(\n        work_graph_module=work_graph,\n    )"
+          compact = "    install_execution_efficiency(work_graph_module=work_graph)"
+          if old in text:
+              text = text.replace(old, block, 1)
+              path.write_text(text, encoding='utf-8')
+          elif block in text or compact in text:
+              print('execution-efficiency bootstrap already correct')
+          else:
+              raise SystemExit('execution-efficiency bootstrap call not recognized')
           PY
       - name: Apply remaining progress semantics
         run: |
