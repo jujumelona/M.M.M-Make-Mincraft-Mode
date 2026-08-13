@@ -301,7 +301,6 @@ def _research_page_messages(
     page: Mapping[str, Any],
 ) -> list[dict[str, str]]:
     """Create one bounded page-reading request; raw cross-page evidence is never inlined."""
-    domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
     system = (
         "You are reading exactly one bounded page from a host-owned Minecraft research "
         "evidence document. Extract only design-relevant claims supported by this page. "
