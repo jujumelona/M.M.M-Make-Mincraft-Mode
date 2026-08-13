@@ -33,17 +33,43 @@ def _brief() -> dict:
     }
 
 
-def test_seed_projection_keeps_coverage_without_query_explosion(monkeypatch) -> None:
+def test_normal_seed_projection_is_lossless(monkeypatch) -> None:
     monkeypatch.delenv("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", raising=False)
+    monkeypatch.delenv("MMM_ECOSYSTEM_SEED_ROUTE_BUDGET", raising=False)
     original = _brief()
     projected = _planning_seed_brief(original)
 
     assert [item["domain_id"] for item in projected["domains"]] == ["gameplay", "visuals"]
     assert projected["domains"][0]["providers"] == original["domains"][0]["providers"]
     assert projected["domains"][1]["providers"] == original["domains"][1]["providers"]
+    assert projected["domains"][0]["queries"] == ["q1", "q2", "q3"]
+    assert projected["domains"][1]["queries"] == ["v1", "v2"]
+    assert projected["_mmm_planning_seed_projection"]["compacted"] is False
+
+
+def test_explicit_seed_query_limit_never_mutates_full_brief(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", "1")
+    original = _brief()
+    projected = _planning_seed_brief(original)
+
     assert projected["domains"][0]["queries"] == ["q1"]
     assert projected["domains"][1]["queries"] == ["v1"]
     assert original["domains"][0]["queries"] == ["q1", "q2", "q3"]
+    assert projected["_mmm_planning_seed_projection"]["compacted"] is True
+
+
+def test_large_route_fanout_compacts_automatically(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", raising=False)
+    monkeypatch.setenv("MMM_ECOSYSTEM_SEED_ROUTE_BUDGET", "16")
+    original = _brief()
+    original["domains"][0]["queries"] = [f"q{i}" for i in range(20)]
+
+    projected = _planning_seed_brief(original)
+
+    assert projected["_mmm_planning_seed_projection"]["compacted"] is True
+    assert projected["_mmm_planning_seed_projection"]["reason"] == "route_budget"
+    assert len(projected["domains"][0]["queries"]) < 20
+    assert projected["domains"][0]["providers"] == original["domains"][0]["providers"]
 
 
 def test_stall_guard_is_live_on_complete_planner() -> None:
