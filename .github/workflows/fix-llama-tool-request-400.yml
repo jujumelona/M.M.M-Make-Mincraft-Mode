@@ -1,0 +1,41 @@
+name: Fix llama tool request 400
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-llama-tool-request-400.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply and validate native llama request repair
+        run: |
+          python -m pip install -q -e '.[dev]'
+          python .github/scripts/fix_llama_tool_request_400.py
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_stream_efficiency_contract.py tests/test_llama_structured_reasoning_stream.py tests/test_llama_cpp_adapter_request_contract.py --select F,E7,E9
+          python -m pytest -q tests/test_llama_structured_reasoning_stream.py tests/test_llama_server_streaming.py tests/test_llama_cpp_adapter_request_contract.py tests/test_model_router_tools.py
+      - name: Commit repair to main and remove one-shot files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/fix-llama-tool-request-400.yml
+          rm .github/scripts/fix_llama_tool_request_400.py
+          git add minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_stream_efficiency_contract.py tests/test_llama_structured_reasoning_stream.py tests/test_llama_cpp_adapter_request_contract.py .github/workflows/fix-llama-tool-request-400.yml .github/scripts/fix_llama_tool_request_400.py
+          git diff --cached --check
+          git commit -m "Unify native llama tool request payload"
+          git pull --rebase origin main
+          git push origin HEAD:main
