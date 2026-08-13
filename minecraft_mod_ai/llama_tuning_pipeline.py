@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 4
+_TUNING_PIPELINE_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,9 @@ class NativeLlamaTuningPipeline:
             install as install_single_stream_agentic_policy,
         )
         from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
+        from .qwen35_t4_single_stream_tuning import (
+            install as install_qwen35_t4_single_stream,
+        )
 
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)
@@ -52,9 +55,10 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
                 self.hardware_policy,
             )
-            # Decode-topology-aware policies belong inside this existing ownership
-            # stage rather than another top-level bootstrap phase.
+            # Keep the low-startup generic Qwen hotpath as the fail-safe, then let
+            # Tesla T4 replace its fixed MTP width with a measured single-stream choice.
             install_qwen35_hotpath(self.autotune)
+            install_qwen35_t4_single_stream(self.autotune)
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
                 repair_engine,
@@ -95,7 +99,12 @@ class NativeLlamaTuningPipeline:
         self.autotune._mmm_tuning_pipeline_version = _TUNING_PIPELINE_VERSION
 
 
-def install_native_llama_tuning_pipeline(*, autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
+def install_native_llama_tuning_pipeline(
+    *,
+    autotune: Any,
+    hardware_policy: Any,
+    runtime_tuning: Any,
+) -> None:
     NativeLlamaTuningPipeline(
         autotune=autotune,
         hardware_policy=hardware_policy,
