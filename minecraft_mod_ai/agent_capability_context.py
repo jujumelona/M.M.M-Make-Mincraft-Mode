@@ -54,6 +54,13 @@ def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
     )
 
 
+@lru_cache(maxsize=1)
+def _manifest_router() -> ExternalMCPRouter:
+    """Reuse the immutable reviewed provider registry on model-request hot paths."""
+
+    return ExternalMCPRouter()
+
+
 def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]:
     stage_contracts = _stage_contracts(stage)
     assigned = skills_for_model_role(_policy_model_role(stage, model_role))
@@ -176,7 +183,7 @@ def build_agent_capability_context(
     if exposed_tools & _EXTERNAL_AGENT_TOOLS:
         try:
             manifest_max_access = "admin" if selected == "runtime" else "read"
-            manifest = ExternalMCPRouter().capability_manifest(
+            manifest = _manifest_router().capability_manifest(
                 stage=selected,
                 target=_environment_target(),
                 max_access=manifest_max_access,
