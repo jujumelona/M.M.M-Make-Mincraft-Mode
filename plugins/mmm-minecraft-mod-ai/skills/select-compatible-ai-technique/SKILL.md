@@ -78,7 +78,7 @@ validators:
   - measured_runtime_quality
   - deterministic_fallback
 retry_policy:
-  max_attempts: 3
+  max_attempts: null
   strategy: Correct the capability query or execution boundary and retrieve fresh evidence; never relax a failed license, consent, hash, or target-version gate.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true

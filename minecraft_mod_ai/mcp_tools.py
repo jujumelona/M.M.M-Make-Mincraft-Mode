@@ -101,7 +101,7 @@ class MMMToolService:
         )
 
     def inspect_modrinth_project(self, project_id: str) -> dict[str, Any]:
-        """Inspect exact Fabric 1.20.1 versions without downloading a JAR."""
+        """Inspect project version metadata without downloading a JAR."""
 
         return self.discovery_client_factory().inspect_modrinth_project(
             project_id
@@ -412,12 +412,9 @@ class MMMToolService:
         max_attempts: int | None = None,
     ) -> dict[str, Any]:
         root = self._existing_dir(project_root)
-        attempts = (
-            self.policy.repair_attempts
-            if max_attempts is None
-            else max_attempts
-        )
-        if type(attempts) is not int or attempts < 1:
+        if max_attempts is not None and (
+            type(max_attempts) is not int or max_attempts < 1
+        ):
             raise SpecValidationError(
                 "max_attempts must be null or a positive integer."
             )
@@ -428,7 +425,7 @@ class MMMToolService:
         ).repair(
             root,
             run_gametest=run_gametest,
-            max_attempts=attempts,
+            max_attempts=max_attempts,
         )
 
     def revise_plan(

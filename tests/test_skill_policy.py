@@ -145,8 +145,9 @@ def test_retry_and_exit_contracts_are_executable() -> None:
         error_signature="compile:new",
         fresh_evidence=False,
     )
-    assert not retry.allows_retry(
-        attempts_started=retry.max_attempts,
+    assert retry.max_attempts is None
+    assert retry.allows_retry(
+        attempts_started=10_000,
         error_signature="compile:new",
         fresh_evidence=True,
     )

@@ -43,8 +43,8 @@ validators:
   - no advertised capability without its required build/runtime gate
 
 retry_policy:
-  max_attempts: 3
-  strategy: finite minimal-diff repair from new machine evidence only
+  max_attempts: null
+  strategy: progress-driven minimal-diff repair from fresh machine evidence only
   stop_on_repeated_error_signature: true
 
 approval_required:
@@ -67,4 +67,4 @@ exit_conditions:
   blocked:
     - Required MCP, model, dependency, approval or runtime is unavailable.
   failed:
-    - Retry limit is reached or a safety/version boundary is violated.
+    - Fresh machine evidence repeats without progress or a safety/version boundary is violated.

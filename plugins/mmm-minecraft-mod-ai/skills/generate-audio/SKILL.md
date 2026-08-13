@@ -36,7 +36,7 @@ validators:
   - client playback and loop review
 
 retry_policy:
-  max_attempts: 2
+  max_attempts: null
   strategy: regenerate only the failed audio asset or binding
   stop_on_repeated_error_signature: true
 

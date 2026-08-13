@@ -287,7 +287,7 @@ class PolicyDecision:
 
 @dataclass(frozen=True)
 class RetryContract:
-    max_attempts: int
+    max_attempts: int | None
     strategy: str
     stop_on_repeated_error_signature: bool
     require_fresh_evidence: bool
@@ -302,7 +302,7 @@ class RetryContract:
     ) -> bool:
         if attempts_started < 0:
             raise ValueError("attempts_started cannot be negative.")
-        if attempts_started >= self.max_attempts:
+        if self.max_attempts is not None and attempts_started >= self.max_attempts:
             return False
         if self.require_fresh_evidence and not fresh_evidence:
             return False
@@ -490,10 +490,15 @@ def compile_skill_contract(
 
     retry_raw = _mapping(policy.get("retry_policy"), "retry_policy", skill)
     max_attempts = retry_raw.get("max_attempts")
-    if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):
-        raise SkillPolicyError(f"{skill} retry max_attempts must be an integer.")
-    if not 1 <= max_attempts <= 10:
-        raise SkillPolicyError(f"{skill} retry max_attempts must be between 1 and 10.")
+    if max_attempts is not None:
+        if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):
+            raise SkillPolicyError(
+                f"{skill} retry max_attempts must be null or an integer."
+            )
+        if not 1 <= max_attempts <= 10:
+            raise SkillPolicyError(
+                f"{skill} retry max_attempts must be between 1 and 10 when set."
+            )
     strategy = retry_raw.get("strategy")
     if not isinstance(strategy, str) or not strategy.strip():
         raise SkillPolicyError(f"{skill} retry strategy must be non-empty.")

@@ -79,7 +79,7 @@ validators:
   - requirement_traceability
   - quality_convergence
 retry_policy:
-  max_attempts: 3
+  max_attempts: null
   strategy: Reclassify the uncovered domain and continue from a fresh provider cursor or more precise evidence query.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true

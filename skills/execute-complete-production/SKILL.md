@@ -59,7 +59,7 @@ validators:
   - evidence_freshness
   - no_self_certification
 retry_policy:
-  max_attempts: 8
+  max_attempts: null
   strategy: Resume unaffected shards, retrieve fresh diagnostics for one failed requirement slice, repair it, and invalidate all dependent evidence.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true

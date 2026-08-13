@@ -75,7 +75,7 @@ validators:
   - exact_version_evidence
   - source_provenance
 retry_policy:
-  max_attempts: 8
+  max_attempts: null
   strategy: Retrieve fresh evidence, repair one coherent unresolved slice, rerun its strongest validator, and stop on a repeated failure signature.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true

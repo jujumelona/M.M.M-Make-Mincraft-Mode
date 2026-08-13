@@ -56,7 +56,7 @@ validators:
   - path_containment
   - final_receipts
 retry_policy:
-  max_attempts: 3
+  max_attempts: null
   strategy: Retry only ready failed shards after fresh diagnostics and recursive descendant invalidation.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true

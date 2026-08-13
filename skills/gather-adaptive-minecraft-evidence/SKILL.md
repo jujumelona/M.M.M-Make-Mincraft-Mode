@@ -47,7 +47,7 @@ validators:
   - retrieval_coverage
   - retrieval_not_authority
 retry_policy:
-  max_attempts: 2
+  max_attempts: null
   strategy: Perform one corrective retrieval from a rewritten query and a better evidence route.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true

@@ -35,7 +35,7 @@ validators:
   - upload endpoint is HTTPS and reviewed
 
 retry_policy:
-  max_attempts: 1
+  max_attempts: null
   strategy: no automatic duplicate publishing
   stop_on_repeated_error_signature: true
 

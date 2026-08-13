@@ -38,7 +38,7 @@ validators:
   - existing functionality remains present
 
 retry_policy:
-  max_attempts: 3
+  max_attempts: null
   strategy: minimal exact patch from new machine diagnostics
   stop_on_repeated_error_signature: true
 

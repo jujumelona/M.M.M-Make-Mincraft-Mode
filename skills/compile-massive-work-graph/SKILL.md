@@ -57,7 +57,7 @@ validators:
   - durable_ledger
   - feature_preservation
 retry_policy:
-  max_attempts: 3
+  max_attempts: null
   strategy: Retry only the failed shard from fresh diagnostics while invalidating its dependent descendants.
   stop_on_repeated_error_signature: true
   require_fresh_evidence: true
