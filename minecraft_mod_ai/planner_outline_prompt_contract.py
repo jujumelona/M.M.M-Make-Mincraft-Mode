@@ -34,7 +34,7 @@ If several JSON objects are emitted in one response, they are consecutive pages 
 If the host sends accepted_outline_prefix, those batches are immutable accepted state. NEVER regenerate, rename, summarize, or replace them.
 If the host sends a batch_patch_request, return ONLY the requested replacement batch object under the exact patch contract described in that request; do not regenerate any surrounding page or other batch.
 Never leave a JSON object truncated. Prefer another page over an oversized or incomplete object.
-"""
+""".strip()
 
 
 def _outline_is_allowed(expected_contracts: Sequence[frozenset[str]]) -> bool:
@@ -44,7 +44,9 @@ def _outline_is_allowed(expected_contracts: Sequence[frozenset[str]]) -> bool:
 def install(runtime_module: Any) -> None:
     """Give production-outline pages model-chosen, unbounded pagination."""
 
+    del runtime_module
     from . import complete_planner as complete_planner_module
+    from .planner_structured_router import structured_planner_router
 
     page_current = complete_planner_module._generate_json_page_with_repair
     if getattr(page_current, "_mmm_scalable_outline_prompt", False):
@@ -70,8 +72,11 @@ def install(runtime_module: Any) -> None:
                 stage=stage,
             )
 
+        # Research/evidence discovery has already completed before this structured
+        # outline phase. Do not enter ModelRouter's agent tool loop again merely to
+        # serialize the host JSON contract.
         return page_current(
-            router,
+            structured_planner_router(router),
             system_prompt=_SCALABLE_OUTLINE_PROMPT,
             request=request,
             media_paths=media_paths,
@@ -80,6 +85,7 @@ def install(runtime_module: Any) -> None:
         )
 
     generate_outline_with_scalable_prompt._mmm_scalable_outline_prompt = True  # type: ignore[attr-defined]
+    generate_outline_with_scalable_prompt._mmm_structured_no_tool_loop = True  # type: ignore[attr-defined]
     complete_planner_module._generate_json_page_with_repair = generate_outline_with_scalable_prompt
 
 
