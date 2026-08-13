@@ -12,13 +12,14 @@ from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
 _RESOURCE_CAPACITIES = {
+    # CompleteProductionOrchestrator currently owns one LLM executor worker. Keep the
+    # durable claimant matched to the real executor instead of building a hidden queue.
     "llm": 1,
     "image_gpu": 1,
     "commit": 1,
 }
-# These stages mutate some stage-global registries, so work within the same stage is
-# serialized. They no longer share one global commit lane: content, systems and
-# entities can execute concurrently because their shared files are disjoint domains.
+# These stages mutate stage-global registries, so work within the same domain is
+# serialized. Different domains are independent and can execute concurrently.
 _STAGE_WRITE_LOCKS = {
     "content": threading.RLock(),
     "system": threading.RLock(),
@@ -119,13 +120,7 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
 
 
 def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
-    """Keep unknown integration modules out of the CPU lane.
-
-    Normal extended content and research shards are deterministic. The built-in local
-    AI sidecar integration is deterministic too. Other integration modules can fall
-    back to CustomModuleGenerator and therefore must not bypass the one-request LLM
-    lane merely because their topological stage is named ``content``.
-    """
+    """Keep model-backed integrations out of deterministic CPU lanes."""
 
     members = payload.get("members")
     if not isinstance(members, list):
@@ -144,49 +139,42 @@ def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
 
 
 def _install_pipeline_shards(work_graph_module: Any) -> None:
-    """Expose dependency progress instead of hiding dozens of modules in one node.
+    """Pipeline deterministic entity generation without exploding LLM task rows.
 
-    Custom modules are already generated one-by-one inside a shard, so a 48-member
-    custom shard does not reduce LLM calls; it only prevents downstream nodes from
-    starting until all 48 serial calls finish. One custom module per DAG node releases
-    dependencies immediately while the single LLM lane continues with the next one.
+    Dependency-aware custom sharding already bounds row count and models the selected
+    native decode slots. Re-splitting those shards into one row per module creates
+    scheduler overhead without increasing the single Qwen decode capacity, so custom
+    shards are deliberately preserved.
 
-    Entity generation is deterministic but each node also performs post-generation
-    review. Small entity shards let the next entity generation overlap the prior
-    node's review without concurrently mutating the same entity registry.
+    Entity generation is deterministic, while post-generation Blockbench review runs
+    after the stage write lock is released. Small entity shards therefore let later
+    entity generation overlap earlier review safely.
     """
 
     current = work_graph_module._module_shards
-    if getattr(current, "_mmm_pipeline_granularity", False):
+    if getattr(current, "_mmm_entity_pipeline_granularity", False):
         return
 
     @wraps(current)
     def module_shards(modules: Any, *, policy: Any):
         for stage, members in current(modules, policy=policy):
-            if stage == "custom":
-                size = _pipeline_shard_size(
-                    "MMM_CUSTOM_PIPELINE_SHARD_SIZE",
-                    1,
-                    len(members),
-                )
-            elif stage == "entity":
-                size = _pipeline_shard_size(
-                    "MMM_ENTITY_PIPELINE_SHARD_SIZE",
-                    2,
-                    len(members),
-                )
-            else:
+            if stage != "entity":
                 yield stage, members
                 continue
+            size = _pipeline_shard_size(
+                "MMM_ENTITY_PIPELINE_SHARD_SIZE",
+                2,
+                len(members),
+            )
             for offset in range(0, len(members), size):
                 yield stage, tuple(members[offset : offset + size])
 
-    module_shards._mmm_pipeline_granularity = True  # type: ignore[attr-defined]
+    module_shards._mmm_entity_pipeline_granularity = True  # type: ignore[attr-defined]
     work_graph_module._module_shards = module_shards
 
 
 def _install_generation_lanes(work_graph_module: Any) -> None:
-    """Use CPU workers for independent deterministic stages, not one global commit queue."""
+    """Keep deterministic generation on CPU workers even across live-reload wrappers."""
 
     current = work_graph_module._node
     if getattr(current, "_mmm_stage_parallel_generation_lanes", False):
@@ -200,18 +188,17 @@ def _install_generation_lanes(work_graph_module: Any) -> None:
         payload: dict[str, Any],
     ):
         normalized = dict(payload)
-        if "resource_class" not in normalized and normalized.get("kind") == "module-shard":
+        if normalized.get("kind") == "module-shard":
             generation_stage = str(normalized.get("generation_stage", ""))
             if generation_stage in {"system", "entity"}:
                 normalized["resource_class"] = "cpu_io"
             elif generation_stage == "content" and _content_node_is_cpu_safe(normalized):
                 normalized["resource_class"] = "cpu_io"
             elif generation_stage == "audio-binding":
-                normalized["resource_class"] = "commit"
+                normalized.setdefault("resource_class", "commit")
         return current(node_id, stage, dependencies, normalized)
 
     node._mmm_stage_parallel_generation_lanes = True  # type: ignore[attr-defined]
-    # Keep the legacy marker because bootstrap/tests may inspect it across live reloads.
     node._mmm_shared_write_commit_lane = True  # type: ignore[attr-defined]
     work_graph_module._node = node
 
@@ -445,8 +432,6 @@ def _install_index_commit_order(
         try:
             stage_lock = _stage_write_lock(node)
             if stage_lock is not None:
-                # Same-stage generators can share manifests/initializers, so serialize
-                # only that domain. Different domains remain concurrent.
                 with stage_lock:
                     receipt = action()
             elif (
