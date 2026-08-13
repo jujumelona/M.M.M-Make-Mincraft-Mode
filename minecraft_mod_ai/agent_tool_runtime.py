@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import threading
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -253,10 +255,8 @@ class _MCPStdioSession:
         self.stage = stage
         self.env = dict(env)
         self.timeout_seconds = timeout_seconds
-        self._stdio_cm: Any = None
-        self._session_cm: Any = None
         self.session: Any = None
-        self._timeout_cm: Any = None
+        self._stack: AsyncExitStack | None = None
 
     async def __aenter__(self) -> Any:
         try:
@@ -265,35 +265,53 @@ class _MCPStdioSession:
         except Exception as exc:  # pragma: no cover - dependency failure
             raise AgentToolRuntimeError("The pinned MCP Python client is unavailable") from exc
 
-        self._timeout_cm = anyio.fail_after(self.timeout_seconds)
-        self._timeout_cm.__enter__()
+        stack = AsyncExitStack()
+        self._stack = stack
         try:
+            stack.enter_context(anyio.fail_after(self.timeout_seconds))
+            # MCP's stdio client forwards errlog to the subprocess stderr handle.
+            # Notebook stderr objects (Colab/IPython) may not expose a real fileno(),
+            # so always give the child an actual fd-backed file instead of sys.stderr.
+            errlog = stack.enter_context(
+                tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+            )
             params = StdioServerParameters(
                 command=sys.executable,
                 args=["-m", "minecraft_mod_ai.mcp_server"],
                 env=self.env,
             )
-            self._stdio_cm = stdio_client(params)
-            read_stream, write_stream = await self._stdio_cm.__aenter__()
-            self._session_cm = ClientSession(read_stream, write_stream)
-            self.session = await self._session_cm.__aenter__()
+            read_stream, write_stream = await stack.enter_async_context(
+                stdio_client(params, errlog=errlog)
+            )
+            self.session = await stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
             await self.session.initialize()
             return self.session
-        except BaseException:
-            await self.__aexit__(*sys.exc_info())
+        except BaseException as original:
+            # Only contexts that successfully entered are registered in AsyncExitStack.
+            # This avoids calling __aexit__ on a stdio async generator whose __aenter__
+            # failed, which otherwise masks the real error with an athrow RuntimeError.
+            try:
+                await stack.aclose()
+            except BaseException as cleanup_error:
+                add_note = getattr(original, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "MCP cleanup after startup failure also raised: "
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    )
+            self._stack = None
+            self.session = None
             raise
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        try:
-            if self._session_cm is not None:
-                await self._session_cm.__aexit__(exc_type, exc, tb)
-        finally:
-            try:
-                if self._stdio_cm is not None:
-                    await self._stdio_cm.__aexit__(exc_type, exc, tb)
-            finally:
-                if self._timeout_cm is not None:
-                    self._timeout_cm.__exit__(exc_type, exc, tb)
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
+        stack = self._stack
+        self._stack = None
+        self.session = None
+        if stack is None:
+            return None
+        return await stack.__aexit__(exc_type, exc, tb)
 
 
 def _jsonable(value: Any) -> Any:
