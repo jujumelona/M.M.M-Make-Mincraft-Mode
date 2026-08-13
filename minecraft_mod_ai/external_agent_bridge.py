@@ -213,16 +213,58 @@ class ExternalAgentBridge:
         corroborate = payload.get("corroborate", 1)
         if type(corroborate) is not int or not 1 <= corroborate <= 4:
             raise ExternalAgentBridgeError("corroborate must be an integer from 1 to 4")
+        disposable_runtime = payload.get("disposable_runtime", False)
+        if type(disposable_runtime) is not bool:
+            raise ExternalAgentBridgeError("disposable_runtime must be a boolean")
+        arguments = dict(raw_arguments)
+        for reserved in self._reserved_target_arguments(
+            router,
+            capability=capability,
+            stage=stage,
+            target=target,
+            max_access=max_access,
+            allowed_server_ids=allowed_servers,
+        ):
+            arguments.pop(reserved, None)
         return router.invoke(
             capability,
             stage=stage,
-            arguments=dict(raw_arguments),
+            arguments=arguments,
             target=target,
             corroborate=corroborate,
             required=False,
             max_access=max_access,
-            disposable_runtime=bool(payload.get("disposable_runtime", False)),
+            disposable_runtime=disposable_runtime,
             allowed_server_ids=allowed_servers,
+        )
+
+    @staticmethod
+    def _reserved_target_arguments(
+        router: Any,
+        *,
+        capability: str,
+        stage: str,
+        target: Mapping[str, str],
+        max_access: str,
+        allowed_server_ids: Collection[str] | None,
+    ) -> frozenset[str]:
+        routes = router.registry.routes(
+            capability,
+            stage=stage,
+            minecraft_version=target["minecraft_version"],
+            loader=target["loader"],
+            max_access=max_access,
+        )
+        if allowed_server_ids is not None:
+            allowed = frozenset(str(value) for value in allowed_server_ids)
+            routes = [
+                route for route in routes if str(route["server"]) in allowed
+            ]
+        return frozenset(
+            provider_name
+            for route in routes
+            for raw_name in route["route"].get("target_args", {}).values()
+            if (provider_name := str(raw_name).strip())
         )
 
     def _external_router(self) -> Any:
