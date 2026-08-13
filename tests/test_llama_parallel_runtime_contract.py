@@ -172,9 +172,7 @@ def test_parallel_router_preserves_real_generation_mcp_tools_and_enable_tools(
 ) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     monkeypatch.setenv("MMM_AGENT_TOOLS", "1")
-    router = ModelRouter(profile="t4_local").bind_agent_workspace(
-        tmp_path / "workspace"
-    )
+    router = ModelRouter(profile="t4_local").bind_agent_workspace(tmp_path)
     adapter = _ToolAwareAdapter()
     monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
 

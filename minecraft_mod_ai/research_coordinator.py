@@ -27,8 +27,7 @@ def collect_technology_radar(
     """Collect every technology page into one backwards-compatible aggregate.
 
     ``page_size`` remains the bound for each call.  Completion is controlled by
-    the page contract and its declared total, never by an coordinator-wide item
-    coordinator-wide item or page limit.
+    the page contract and its declared total, never by a coordinator-wide item or page limit.
     """
 
     if type(page_size) is not int or not 1 <= page_size <= 100:
@@ -179,17 +178,15 @@ def collect_ecosystem_seed_bundle(
     client: EcosystemDiscoveryClient | None = None,
     route_limit: int = 12,
     page_builder: EcosystemPageBuilder = discover_seed_bundle,
-    allow_legacy_terminal: bool = False,
+    planning_seed_only: bool = False,
 ) -> dict[str, Any]:
     """Collect ecosystem route pages, or exactly one planning seed page.
 
     The normal coordinator is exhaustive because specialist callers may require the
-    complete request-derived route catalog.  ``allow_legacy_terminal`` is the planner
-    compatibility path used by ``CompleteGameDesignPlanner``: planning consumes only
-    the first bounded seed page and preserves ``next_route_cursor`` plus
-    ``remaining_route_count`` for later specialist work.  This prevents the planning
-    critical path from accidentally turning seed discovery into a full internet
-    research crawl.
+    complete request-derived route catalog. ``planning_seed_only`` keeps the planning
+    critical path bounded to the first canonical route page while preserving
+    ``next_route_cursor`` and ``remaining_route_count`` for later specialist work.
+    It never relaxes the route-page schema or cursor contract.
     """
 
     if type(route_limit) is not int or not 1 <= route_limit <= 100:
@@ -221,11 +218,6 @@ def collect_ecosystem_seed_bundle(
         )
         if not isinstance(page, dict):
             raise SpecValidationError("Ecosystem route page must be an object.")
-        legacy_without_cursor_contract = (
-            "next_route_cursor" not in page and "routes_complete" not in page
-        )
-        if allow_legacy_terminal and legacy_without_cursor_contract:
-            return deepcopy(page)
         if page.get("schema_version") != "mmm/ecosystem-seed-bundle-v1":
             raise SpecValidationError("Unsupported ecosystem seed page schema.")
 
@@ -328,7 +320,7 @@ def collect_ecosystem_seed_bundle(
             }
         )
 
-        if allow_legacy_terminal:
+        if planning_seed_only:
             planning_seed = deepcopy(first_page)
             planning_seed["aggregate_schema_version"] = (
                 "mmm/ecosystem-planning-seed-v1"

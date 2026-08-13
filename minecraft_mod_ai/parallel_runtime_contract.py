@@ -558,7 +558,7 @@ def _install_planner_overlap(
                     game_design,
                     research_brief=brief,
                     page_builder=parallel_discover,
-                    allow_legacy_terminal=True,
+                    planning_seed_only=True,
                 ),
             )
 

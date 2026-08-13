@@ -165,7 +165,7 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
                     game_design,
                     research_brief=ecosystem_brief,
                     page_builder=ecosystem_module.discover_seed_bundle,
-                    allow_legacy_terminal=True,
+                    planning_seed_only=True,
                 ),
             )
 

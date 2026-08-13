@@ -137,6 +137,13 @@ _SECTION_SPECS: tuple[tuple[str, tuple[str, ...], dict[str, Any]], ...] = (
 )
 
 
+def supports_agentic_research_router(router: Any) -> bool:
+    """Return whether the router owns the production agent-tool runtime."""
+    from .model_router import ModelRouter
+
+    return isinstance(router, ModelRouter)
+
+
 def bind_game_design_planner(game_design_module: Any) -> None:
     """Install research-first, sectioned game-design generation exactly once.
 
@@ -162,6 +169,14 @@ def bind_game_design_planner(game_design_module: Any) -> None:
         page_index: int,
         page_count: int,
     ) -> dict[str, Any]:
+        if not supports_agentic_research_router(router):
+            return original_sharded(
+                router,
+                request_text=request_text,
+                media_paths=media_paths,
+                page_index=page_index,
+                page_count=page_count,
+            )
         research = collect_pre_design_research(
             router,
             request_text,
@@ -181,6 +196,8 @@ def bind_game_design_planner(game_design_module: Any) -> None:
     game_design_module._generate_sharded_design_page = sharded_page
 
     def plan(self: Any, prompt: str, *, media_paths=()):
+        if not supports_agentic_research_router(self.router):
+            return original(self, prompt, media_paths=media_paths)
         if not prompt.strip():
             raise SpecValidationError("프롬프트를 입력해 주세요.")
 
@@ -264,7 +281,7 @@ def collect_pre_design_research(
             research_brief=research_brief,
             route_limit=12,
             page_builder=discover_seed_bundle,
-            allow_legacy_terminal=True,
+            planning_seed_only=True,
         )
     except Exception as exc:
         errors.append(_error("ecosystem_discovery", exc))

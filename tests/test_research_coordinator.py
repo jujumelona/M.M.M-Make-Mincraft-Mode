@@ -331,7 +331,9 @@ def test_planner_sidecar_uses_capability_from_later_technology_page(
     monkeypatch.setattr(
         planner_module,
         "discover_seed_bundle",
-        lambda *args, **kwargs: {"schema_version": "test/discovery-v1"},
+        lambda *args, **kwargs: _ecosystem_page(
+            offset=0, advanced_to=0, total=0, next_cursor=""
+        ),
     )
     calls: list[str] = []
 

@@ -187,7 +187,7 @@ class CompleteGameDesignPlanner:
                 game_design,
                 research_brief=research_brief,
                 page_builder=discover_seed_bundle,
-                allow_legacy_terminal=True,
+                planning_seed_only=True,
             ),
         }
         if isinstance(internal_design.get("_request_ingestion"), dict):

@@ -205,7 +205,7 @@ def install_parallel_core(agentic_module: Any) -> None:
                     research_brief=research_brief,
                     route_limit=12,
                     page_builder=agentic_module.discover_seed_bundle,
-                    allow_legacy_terminal=True,
+                    planning_seed_only=True,
                 )
 
             provider_jobs = (
@@ -409,7 +409,7 @@ def install(agentic_module: Any) -> None:
 
         @wraps(current_collect)
         def collect(router: Any, prompt: str, *, trace_metadata=None):
-            if not _amplification_enabled(router):
+            if not _amplification_enabled(agentic_module, router):
                 return current_collect(router, prompt, trace_metadata=trace_metadata)
 
             council = build_central_committee(router, prompt)
@@ -522,7 +522,7 @@ def install(agentic_module: Any) -> None:
         research: Mapping[str, Any],
         trace_metadata=None,
     ) -> dict[str, Any]:
-        if not _amplification_enabled(router):
+        if not _amplification_enabled(agentic_module, router):
             return current_generate(
                 game_design_module,
                 router,
@@ -1048,14 +1048,10 @@ def _compact_review(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _amplification_enabled(router: Any) -> bool:
+def _amplification_enabled(agentic_module: Any, router: Any) -> bool:
     if bool(getattr(router, "_mmm_enable_central_intelligence", False)):
         return True
-    try:
-        from .model_router import ModelRouter
-    except Exception:
-        return False
-    return isinstance(router, ModelRouter)
+    return bool(agentic_module.supports_agentic_research_router(router))
 
 
 def _stable_unique(values: Any) -> list[str]:
