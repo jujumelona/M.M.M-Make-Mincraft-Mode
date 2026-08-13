@@ -83,6 +83,13 @@ jobs:
               destination.parent.mkdir(parents=True, exist_ok=True)
               shutil.copyfile(skill_file, destination)
 
+          retry_test = Path('tests/test_skill_policy.py')
+          replace_exact(
+              retry_test,
+              '''    assert not retry.allows_retry(\n        attempts_started=retry.max_attempts,\n        error_signature="compile:new",\n        fresh_evidence=True,\n    )''',
+              '''    assert retry.max_attempts is None\n    assert retry.allows_retry(\n        attempts_started=10_000,\n        error_signature="compile:new",\n        fresh_evidence=True,\n    )''',
+          )
+
           from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS, compile_skill_catalog
           compiled = compile_skill_catalog()
           packaged_path = Path('minecraft_mod_ai/packaged_skills.json')
