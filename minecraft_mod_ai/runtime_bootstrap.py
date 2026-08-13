@@ -424,10 +424,24 @@ def _install_public_boundary_contracts() -> None:
 
 def _install_post_bootstrap_contracts() -> None:
     """Install wrappers that must observe the fully composed runtime."""
+    from . import central_research, ecosystem_discovery, research_coordinator
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .small_model_research_contract import install as install_small_model_research
 
+    # central_research now owns lossless paging directly. Keep a compatibility shim
+    # only for an older small-model installer that probes this private name; it does
+    # not truncate or otherwise transform authoritative input.
+    if not hasattr(central_research, "_bounded_text"):
+        def _full_research_text(value: str, *, field: str = "research text") -> str:
+            del field
+            return value
+
+        central_research._bounded_text = _full_research_text
+
     install_planning_stall_guard()
     install_small_model_research()
+    # research_coordinator imported the ecosystem builder by value. Rebind it after
+    # the lossless installer so specialist calls use the same paged implementation.
+    research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
