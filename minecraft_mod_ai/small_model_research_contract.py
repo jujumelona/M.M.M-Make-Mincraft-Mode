@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
@@ -20,6 +22,19 @@ _PRODUCTION_KEYS = frozenset(
         "complete",
         "next_cursor",
     }
+)
+_AGENTIC_RISK_MARKERS = (
+    "networking",
+    "multiplayer",
+    "custom_java",
+    "integration",
+    "dimension",
+    "world_event",
+    "ai_inference",
+    "agent_tool_use",
+    "speech",
+    "migration",
+    "persistence",
 )
 
 
@@ -247,11 +262,101 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
     agentic_module._score_plan_page = score_with_evidence
 
 
+def _semantic_digest(value: Any) -> str:
+    try:
+        rendered = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        rendered = repr(value)
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _semantic_planner_key(prompt: str, research_brief: Any) -> tuple[str, str]:
+    return _semantic_digest(prompt), _semantic_digest(research_brief)
+
+
+def _semantic_ecosystem_key(
+    prompt: str,
+    game_design: Any,
+    research_brief: Any,
+) -> tuple[str, str, str]:
+    return (
+        _semantic_digest(prompt),
+        _semantic_digest(game_design),
+        _semantic_digest(research_brief),
+    )
+
+
+def _install_semantic_single_flight(parallel_module: Any) -> None:
+    """Join equivalent planner prefetches by content rather than object identity."""
+
+    parallel_module._planner_key = _semantic_planner_key
+    parallel_module._ecosystem_key = _semantic_ecosystem_key
+
+
+def _maximal_planner_risk(request: Any, stage: str) -> bool:
+    rendered = (
+        request
+        if isinstance(request, str)
+        else json.dumps(request, ensure_ascii=False, sort_keys=True, default=str)
+    )
+    size_risk = len(rendered.encode("utf-8")) >= 12 * 1024
+    lowered = (stage + "\n" + rendered[:24_000]).casefold()
+    domain_risk = any(marker in lowered for marker in _AGENTIC_RISK_MARKERS)
+    target_risk = False
+    if isinstance(request, Mapping):
+        targets = request.get("current_target_deliverables", ())
+        target_risk = (
+            isinstance(targets, Sequence)
+            and not isinstance(targets, (str, bytes))
+            and len(targets) >= 3
+        )
+    return bool(size_risk and domain_risk and target_risk)
+
+
+def _install_trace_adaptive_search(agentic_module: Any) -> None:
+    """Use verified workflow history as a bounded utility signal for Best-of-N."""
+
+    current = agentic_module._planner_candidate_count
+    if getattr(current, "_mmm_trace_adaptive_width", False):
+        return
+
+    @wraps(current)
+    def candidate_count(request: Any, stage: str) -> int:
+        base = int(current(request, stage))
+        if agentic_module._mode() != "auto":
+            return base
+        width = agentic_module._env_int("MMM_PLAN_SEARCH_WIDTH", 2, maximum=3)
+        try:
+            from .small_model_agent_policy import planner_search_width_hint
+
+            hint = planner_search_width_hint(request, stage, maximum=width)
+        except Exception:
+            hint = None
+        if hint is None:
+            return base
+        if hint > base:
+            return int(hint)
+        if hint < base and not _maximal_planner_risk(request, stage):
+            return int(hint)
+        return base
+
+    candidate_count._mmm_trace_adaptive_width = True  # type: ignore[attr-defined]
+    candidate_count.__wrapped__ = current  # type: ignore[attr-defined]
+    agentic_module._planner_candidate_count = candidate_count
+
+
 def install() -> None:
     """Bind research-derived small-model amplification to the fully composed runtime."""
     from . import (
         agentic_optimization_contract,
         complete_planner,
+        parallel_runtime_contract,
         scheduler_parallel_safety_contract,
         work_graph,
     )
@@ -260,6 +365,8 @@ def install() -> None:
 
     _install_evidence_aware_scoring(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
+    _install_semantic_single_flight(parallel_runtime_contract)
+    _install_trace_adaptive_search(agentic_optimization_contract)
     enhance_planner(complete_planner)
 
     # Post-bootstrap is the first point where planner, scheduler, router and generator
