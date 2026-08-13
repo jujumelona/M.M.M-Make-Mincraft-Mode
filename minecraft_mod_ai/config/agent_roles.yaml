@@ -32,6 +32,7 @@ agents:
       - generate-audio
       - patch-existing-project
       - compile-and-repair
+      - ground-production-with-live-evidence
     purpose: Minecraft mod source/resources, datagen, worldgen, GeckoLib, gameplay systems, audio, exact patching, diagnostics and minimal repair
     mcp_servers: [mmm-generation, mmm-quality, minecraft-dev, minecraft-modding, mcmodding-docs, minecraft-wiki, jdtls, blockbench, github]
   VisualCritic:
