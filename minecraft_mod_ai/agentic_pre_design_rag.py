@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import asdict
@@ -13,41 +14,39 @@ from .knowledge import AuthoritativeEvidenceRetriever, evidence_catalog_for_vers
 from .rag_index import ProjectRAGIndex
 
 
-_MARKER = "_mmm_forced_pre_design_rag_v2"
+_MARKER = "_mmm_forced_pre_design_rag_v3"
 _FORCED_RAG_CONTEXT: ContextVar[Mapping[str, Any] | None] = ContextVar(
     "mmm_forced_pre_design_rag_context",
     default=None,
 )
+_EVIDENCE_PAGE_CHARS = 12_000
+_EVIDENCE_DOCUMENT_SCHEMA = "mmm/research-evidence-document-v1"
+_EVIDENCE_PAGE_SCHEMA = "mmm/research-evidence-page-v1"
 
 
 def harden_pre_design_research(agentic_module: Any) -> None:
-    """Force deterministic RAG over every research query before design generation.
+    """Force deterministic RAG and feed model workers through bounded evidence documents.
 
-    The research agent can still issue further MCP retrieval/actions adaptively, but it
-    never starts from an empty evidence slate. Every research-brief query is searched
-    against the code-owned authoritative project catalog. If a durable source-code RAG
-    index exists, the same queries are searched there too. Full receipts stay in the
-    pre-design research bundle; final section workers receive only compact receipts and
-    the research agent's claims/gaps so prompt size cannot grow with raw retrieval data.
-
-    The forced evidence context is ContextVar-scoped so independent concurrent planning
-    calls cannot observe one another's receipts.
+    Full retrieval receipts remain authoritative and are retained in the returned research
+    bundle. Prompt-facing workers never receive those raw receipts directly: the host writes
+    them to a durable per-run document, reads every bounded page, asks the planner to digest
+    each page separately, then synthesizes only the compact page notes. This keeps fixed
+    context limits independent of retrieval volume without reducing any research route.
     """
 
     current_collect = agentic_module.collect_pre_design_research
     if getattr(current_collect, _MARKER, False):
         return
 
-    # Hot Colab v1 wrappers should be unwrapped, but the central intelligence parallel
-    # collector is an execution owner rather than an obsolete forced-RAG layer. Preserve
-    # it so forced evidence wraps the parallel provider/domain fan-out instead of silently
-    # restoring the older sequential collector.
+    # Preserve the central intelligence parallel collector when it already owns provider/
+    # domain fan-out. Only obsolete forced-RAG wrappers are unwrapped.
     if getattr(current_collect, "_mmm_parallel_research_design_core_v1", False):
         original_collect = current_collect
     else:
         original_collect = getattr(current_collect, "__wrapped__", current_collect)
     current_slice = agentic_module._domain_evidence_slice
     original_domain_slice = getattr(current_slice, "__wrapped__", current_slice)
+    original_domain_worker = agentic_module._research_domain_with_agent
 
     def collect(
         router: Any,
@@ -55,9 +54,6 @@ def harden_pre_design_research(agentic_module: Any) -> None:
         *,
         trace_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        # Run the established official/technology/ecosystem + ReAct research flow.
-        # Its domain agents call _domain_evidence_slice dynamically, so expose the
-        # forced receipts in this execution context only.
         brief = agentic_module.normalize_research_brief(
             prompt,
             {"title": "pre-design research"},
@@ -87,7 +83,9 @@ def harden_pre_design_research(agentic_module: Any) -> None:
         return result
 
     def domain_slice(domain_id: str, deterministic: Mapping[str, Any]) -> dict[str, Any]:
-        value = dict(original_domain_slice(domain_id, deterministic))
+        # Build the complete raw evidence slice first. It is persisted verbatim below, but
+        # never returned inline to the model-facing prompt path.
+        raw_value = dict(original_domain_slice(domain_id, deterministic))
         forced = _FORCED_RAG_CONTEXT.get()
         if not isinstance(forced, Mapping):
             forced = deterministic.get("forced_project_rag")
@@ -104,18 +102,160 @@ def harden_pre_design_research(agentic_module: Any) -> None:
                     ),
                     None,
                 )
-            # Preserve root receipt metadata (hashes, owner/test provenance, index status)
-            # while narrowing only the heavy per-domain payload. This also keeps the
-            # ContextVar isolation contract observable to concurrent callers.
-            receipt = {
-                key: item
-                for key, item in forced.items()
-                if key != "domains"
-            }
+            receipt = {key: item for key, item in forced.items() if key != "domains"}
             if isinstance(selected, Mapping):
                 receipt.update(dict(selected))
-            value["forced_project_rag"] = receipt
-        return value
+            raw_value["forced_project_rag"] = receipt
+
+        document = _materialize_domain_evidence_document(domain_id, raw_value)
+        return {"evidence_document": document}
+
+    def research_domain_from_document(
+        router: Any,
+        *,
+        prompt: str,
+        domain: Mapping[str, Any],
+        deterministic: Mapping[str, Any],
+        trace_metadata: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
+        evidence = agentic_module._domain_evidence_slice(domain_id, deterministic)
+        document = evidence.get("evidence_document")
+        if not isinstance(document, Mapping):
+            return original_domain_worker(
+                router,
+                prompt=prompt,
+                domain=domain,
+                deterministic=deterministic,
+                trace_metadata=trace_metadata,
+            )
+
+        pages = _read_evidence_pages(document)
+        page_notes: list[dict[str, Any]] = []
+        for page in pages:
+            raw = router.generate_text(
+                "planner",
+                _research_page_messages(
+                    prompt=prompt,
+                    domain=domain,
+                    document=document,
+                    page=page,
+                ),
+                response_format="json",
+                response_schema=agentic_module._RESEARCH_NOTE_SCHEMA,
+                tool_stage="research",
+                enable_tools=False,
+            )
+            note = agentic_module._parse_research_note(raw, domain_id)
+            page_ref = str(page.get("page_ref", "")).strip()
+            claims: list[dict[str, Any]] = []
+            for claim in note.get("claims", []):
+                if not isinstance(claim, Mapping):
+                    continue
+                refs = [
+                    str(item).strip()
+                    for item in claim.get("evidence_refs", [])
+                    if str(item).strip()
+                ]
+                if page_ref and page_ref not in refs:
+                    refs.insert(0, page_ref)
+                claims.append(
+                    {
+                        "claim": str(claim.get("claim", "")).strip(),
+                        "evidence_refs": refs,
+                    }
+                )
+            page_notes.append(
+                {
+                    "page_ref": page_ref,
+                    "unit_id": str(page.get("unit_id", "")),
+                    "claims": claims,
+                    "gaps": list(note.get("gaps", [])),
+                    "next_queries": list(note.get("next_queries", [])),
+                }
+            )
+
+        synthesis_evidence = {
+            "evidence_document": _prompt_document_receipt(document),
+            "page_notes": page_notes,
+        }
+        trace = agentic_module.PlannerStageTrace(
+            stage="pre_design_research",
+            prompt=prompt,
+            metadata={"domain_id": domain_id, **dict(trace_metadata or {})},
+        )
+        seen: set[str] = set()
+        prior: dict[str, Any] | None = None
+
+        while True:
+            messages = agentic_module._research_messages(
+                prompt=prompt,
+                domain=domain,
+                deterministic_evidence=synthesis_evidence,
+                prior=prior,
+            )
+            raw = router.generate_text(
+                "planner",
+                messages,
+                response_format="json",
+                response_schema=agentic_module._RESEARCH_NOTE_SCHEMA,
+                tool_stage="research",
+                enable_tools=True,
+            )
+            try:
+                note = agentic_module._parse_research_note(raw, domain_id)
+            except agentic_module.SpecValidationError as exc:
+                state = agentic_module._json_sha256(
+                    {"error": str(exc), "raw": raw.strip()}
+                )
+                trace.record_attempt(
+                    raw_output=raw,
+                    validation_error=str(exc),
+                    candidate=None,
+                    context={"domain_id": domain_id},
+                )
+                if state in seen:
+                    return {
+                        "domain_id": domain_id,
+                        "claims": [],
+                        "gaps": [str(exc)],
+                        "next_queries": [],
+                        "sufficient": False,
+                        "fixed_point": True,
+                        "evidence_document": _prompt_document_receipt(document),
+                    }
+                seen.add(state)
+                prior = {
+                    "domain_id": domain_id,
+                    "claims": [],
+                    "gaps": [str(exc)],
+                    "next_queries": list(domain.get("queries", [])),
+                    "sufficient": False,
+                }
+                continue
+
+            trace.record_attempt(
+                raw_output=raw,
+                validation_error=None,
+                candidate=note,
+                accepted=note if note["sufficient"] else None,
+                context={"domain_id": domain_id},
+            )
+            state = agentic_module._json_sha256(note)
+            if note["sufficient"]:
+                trace.record_success(note)
+                return {
+                    **note,
+                    "evidence_document": _prompt_document_receipt(document),
+                }
+            if state in seen:
+                return {
+                    **note,
+                    "fixed_point": True,
+                    "evidence_document": _prompt_document_receipt(document),
+                }
+            seen.add(state)
+            prior = note
 
     def compact_receipt(value: Any) -> Any:
         if not isinstance(value, Mapping):
@@ -135,18 +275,245 @@ def harden_pre_design_research(agentic_module: Any) -> None:
             "project_source_count",
             "code_index_status",
             "code_index_path",
+            "document_sha256",
+            "page_count",
         )
         return {key: value[key] for key in keep if key in value}
 
     setattr(collect, _MARKER, True)
-    # Keep v1 marker for existing runtime guards while v2 is the authoritative version.
     collect._mmm_forced_pre_design_rag_v1 = True  # type: ignore[attr-defined]
+    collect._mmm_forced_pre_design_rag_v2 = True  # type: ignore[attr-defined]
     collect.__wrapped__ = original_collect  # type: ignore[attr-defined]
     domain_slice.__wrapped__ = original_domain_slice  # type: ignore[attr-defined]
+    research_domain_from_document.__wrapped__ = original_domain_worker  # type: ignore[attr-defined]
+    research_domain_from_document._mmm_document_paged_evidence_v1 = True  # type: ignore[attr-defined]
     agentic_module.collect_pre_design_research = collect
     agentic_module._domain_evidence_slice = domain_slice
-    # Section workers must consume claims/gaps + receipts, not raw retrieval pages.
+    agentic_module._research_domain_with_agent = research_domain_from_document
     agentic_module._research_receipt = compact_receipt
+
+
+def _research_page_messages(
+    *,
+    prompt: str,
+    domain: Mapping[str, Any],
+    document: Mapping[str, Any],
+    page: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Create one bounded page-reading request; raw cross-page evidence is never inlined."""
+    domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
+    system = (
+        "You are reading exactly one bounded page from a host-owned Minecraft research "
+        "evidence document. Extract only design-relevant claims supported by this page. "
+        "Do not assume unseen pages are absent; the host will read every page and synthesize "
+        "the page notes later. Return one compact JSON object matching research_note. "
+        "research_note.domain_id must equal the assigned domain. Evidence refs should use "
+        "the supplied page_ref. Set sufficient=true when this page has been fully processed; "
+        "it does not mean the whole domain is complete."
+    )
+    payload = {
+        "authoritative_request": prompt,
+        "domain": dict(domain),
+        "evidence_document": _prompt_document_receipt(document),
+        "evidence_page": {
+            "schema_version": page.get("schema_version"),
+            "page_ref": page.get("page_ref"),
+            "unit_id": page.get("unit_id"),
+            "part_index": page.get("part_index"),
+            "part_count": page.get("part_count"),
+            "content": page.get("content", ""),
+        },
+        "instruction": (
+            "Read the complete supplied page. Preserve source identifiers and concrete "
+            "version/API facts. Put unresolved page-local uncertainty in gaps."
+        ),
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
+def _materialize_domain_evidence_document(
+    domain_id: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw_text = json.dumps(
+        dict(evidence),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    document_sha256 = _sha256_text(raw_text)
+    digest = document_sha256.removeprefix("sha256:")
+    safe_domain = _safe_name(domain_id)
+    directory = _evidence_root() / digest
+    raw_path = directory / f"{safe_domain}.json"
+    pages_path = directory / f"{safe_domain}.pages.jsonl"
+
+    units = list(_evidence_units(evidence))
+    pages: list[dict[str, Any]] = []
+    for unit_id, value in units:
+        rendered = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        parts = [
+            rendered[offset : offset + _EVIDENCE_PAGE_CHARS]
+            for offset in range(0, len(rendered), _EVIDENCE_PAGE_CHARS)
+        ] or [""]
+        for part_index, content in enumerate(parts):
+            pages.append(
+                {
+                    "schema_version": _EVIDENCE_PAGE_SCHEMA,
+                    "domain_id": domain_id,
+                    "unit_id": unit_id,
+                    "part_index": part_index,
+                    "part_count": len(parts),
+                    "content": content,
+                }
+            )
+
+    if not pages:
+        pages.append(
+            {
+                "schema_version": _EVIDENCE_PAGE_SCHEMA,
+                "domain_id": domain_id,
+                "unit_id": "empty",
+                "part_index": 0,
+                "part_count": 1,
+                "content": "{}",
+            }
+        )
+
+    page_count = len(pages)
+    for page_index, page in enumerate(pages):
+        page["page_index"] = page_index
+        page["page_count"] = page_count
+        page["page_ref"] = f"{document_sha256}#page={page_index + 1}/{page_count}"
+
+    pages_text = "\n".join(
+        json.dumps(page, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for page in pages
+    ) + "\n"
+    _atomic_write_text(raw_path, raw_text)
+    _atomic_write_text(pages_path, pages_text)
+
+    return {
+        "schema_version": _EVIDENCE_DOCUMENT_SCHEMA,
+        "domain_id": domain_id,
+        "document_sha256": document_sha256,
+        "raw_path": str(raw_path),
+        "pages_path": str(pages_path),
+        "page_count": page_count,
+        "page_chars": _EVIDENCE_PAGE_CHARS,
+        "source_keys": sorted(str(key) for key in evidence),
+    }
+
+
+def _evidence_units(evidence: Mapping[str, Any]):
+    for source_key, value in evidence.items():
+        if isinstance(value, Mapping):
+            queries = value.get("queries")
+            if isinstance(queries, list):
+                metadata = {key: item for key, item in value.items() if key != "queries"}
+                yield f"{source_key}:metadata", metadata
+                for index, query in enumerate(queries):
+                    yield f"{source_key}:query:{index}", query
+                continue
+        yield str(source_key), value
+
+
+def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    path = Path(str(document.get("pages_path", ""))).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"Research evidence pages are missing: {path}")
+    pages: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise ValueError(f"Invalid research evidence page in {path}")
+            content = str(value.get("content", ""))
+            if len(content) > _EVIDENCE_PAGE_CHARS:
+                raise ValueError(
+                    f"Research evidence page exceeds {_EVIDENCE_PAGE_CHARS} chars: {path}"
+                )
+            pages.append(value)
+    expected = int(document.get("page_count", -1))
+    if expected != len(pages):
+        raise ValueError(
+            f"Research evidence page count mismatch: expected {expected}, got {len(pages)}"
+        )
+    return pages
+
+
+def _prompt_document_receipt(document: Mapping[str, Any]) -> dict[str, Any]:
+    keep = (
+        "schema_version",
+        "domain_id",
+        "document_sha256",
+        "page_count",
+        "page_chars",
+        "source_keys",
+    )
+    return {key: document[key] for key in keep if key in document}
+
+
+def _evidence_root() -> Path:
+    configured = os.environ.get("MMM_RESEARCH_DOCUMENT_DIR", "").strip()
+    if configured:
+        root = Path(configured).expanduser()
+    else:
+        workspace = os.environ.get("MMM_WORKSPACE", "").strip()
+        base = Path(workspace).expanduser() if workspace else Path.cwd()
+        root = base / "mmm-output" / "research-evidence"
+    root.mkdir(parents=True, exist_ok=True)
+    return root.resolve()
+
+
+def _safe_name(value: str) -> str:
+    cleaned = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "_"
+        for char in value.strip()
+    )
+    return cleaned[:96] or "unknown"
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        try:
+            if path.read_text(encoding="utf-8") == content:
+                return
+        except OSError:
+            pass
+    temp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_name = handle.name
+        os.replace(temp_name, path)
+    finally:
+        if temp_name:
+            temp_path = Path(temp_name)
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
 
 def _forced_rag_bundle(router: Any, research_brief: Mapping[str, Any]) -> dict[str, Any]:
@@ -186,7 +553,6 @@ def _forced_rag_bundle(router: Any, research_brief: Mapping[str, Any]) -> dict[s
             max_workers=worker_count,
             thread_name_prefix="mmm_pre_design_rag",
         ) as pool:
-            # map preserves the authoritative query order while searches overlap.
             for domain_id, result in pool.map(run, jobs):
                 by_domain.setdefault(domain_id, []).append(result)
 
@@ -225,9 +591,6 @@ def _research_versions(router: Any) -> tuple[str, ...]:
         return (requested,)
     if existing:
         return (existing,)
-    # Before live target resolution, search both offline seed scopes. Generic official
-    # records apply to both; exact Javadocs remain version-scoped. No network lookup is
-    # introduced just to choose a pre-design RAG scope.
     return ("1.20.1", "1.21.1")
 
 
