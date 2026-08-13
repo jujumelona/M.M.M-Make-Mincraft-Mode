@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/repair-full-suite-drift.yml
       - .github/scripts/repair_full_suite_drift.py
+      - .github/scripts/repair_full_suite_drift_followup.py
 
 permissions:
   contents: write
@@ -28,7 +29,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Migrate stale tests to live contracts
-        run: python .github/scripts/repair_full_suite_drift.py
+        run: |
+          python .github/scripts/repair_full_suite_drift.py
+          python .github/scripts/repair_full_suite_drift_followup.py
       - name: Verify targeted migrations
         run: |
           python -m compileall -q minecraft_mod_ai tests tools
@@ -49,7 +52,10 @@ jobs:
         run: python -m pytest -q
       - name: Commit verified migrations and remove repair files
         run: |
-          git rm .github/workflows/repair-full-suite-drift.yml .github/scripts/repair_full_suite_drift.py
+          git rm \
+            .github/workflows/repair-full-suite-drift.yml \
+            .github/scripts/repair_full_suite_drift.py \
+            .github/scripts/repair_full_suite_drift_followup.py
           git add tests
           if git diff --cached --quiet; then
             exit 0
