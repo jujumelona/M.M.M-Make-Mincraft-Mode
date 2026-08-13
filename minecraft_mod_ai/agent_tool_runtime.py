@@ -81,6 +81,7 @@ class AgentToolRuntime:
         self.workspace_root = str(Path(configured_workspace).expanduser().resolve())
         self.timeout_seconds = float(timeout_seconds)
         self._schema_cache: dict[str, tuple[dict[str, Any], ...]] = {}
+        self._allowed_tool_cache: dict[str, frozenset[str]] = {}
         self._external_bridge = ExternalAgentBridge(timeout_seconds=timeout_seconds)
         self._lock = threading.RLock()
 
@@ -112,6 +113,10 @@ class AgentToolRuntime:
             schemas.extend(self._external_bridge.tool_schemas(selected))
             result = tuple(schemas)
             self._schema_cache[selected] = result
+            self._allowed_tool_cache[selected] = frozenset(
+                str(item["function"]["name"])
+                for item in result
+            )
             return result
 
     def call(
@@ -128,10 +133,11 @@ class AgentToolRuntime:
             raise AgentToolRuntimeError(
                 f"Tool {tool_name!r} is intentionally not model-callable."
             )
-        allowed = {
-            str(item["function"]["name"])
-            for item in self.tool_schemas(selected)
-        }
+        # Materialize the authoritative stage schema once. Keep the immutable name
+        # set beside it so hot-path calls do not rebuild the same set repeatedly.
+        self.tool_schemas(selected)
+        with self._lock:
+            allowed = self._allowed_tool_cache[selected]
         if tool_name not in allowed:
             raise AgentToolRuntimeError(
                 f"Tool {tool_name!r} is not exposed in stage {selected!r}."
@@ -222,16 +228,11 @@ class AgentToolRuntime:
         name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
+        # ``call`` already checked this name against the stage schema fetched from
+        # the same first-party server. Re-listing every schema after opening this
+        # process adds a full MCP round trip without creating a new safety boundary.
+        # ``call_tool`` itself remains fail-closed if code/server state diverges.
         async with self._session(stage) as session:
-            listed = await session.list_tools()
-            available = {
-                str(getattr(item, "name", ""))
-                for item in getattr(listed, "tools", ()) or ()
-            }
-            if name not in available:
-                raise AgentToolRuntimeError(
-                    f"MCP stage {stage!r} does not expose tool {name!r}."
-                )
             raw = await session.call_tool(name, arguments=dict(arguments))
             if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):
                 raise AgentToolRuntimeError(f"MCP tool {name!r} returned an error")
