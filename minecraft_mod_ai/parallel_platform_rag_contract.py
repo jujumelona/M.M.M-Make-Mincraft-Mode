@@ -65,7 +65,7 @@ def _target_parallel_retrieve_factory(
 
 
 def install(*, complete_planner_module: Any, central_module: Any, retrieval_module: Any) -> None:
-    """Bind target RAG to parallel adaptive retrieval and overlap independent research."""
+    """Bind target RAG to one parallel research owner without duplicate prefetches."""
 
     from . import ecosystem_discovery as ecosystem_module
     from . import parallel_runtime_contract as parallel_module
@@ -103,7 +103,11 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
         *args: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if isinstance(research_brief, dict):
+        # A target-less prefetch is not reusable once platform selection adds an exact
+        # target. Starting it here used to create a generic 1.20.1 RAG job which was
+        # then discarded and repeated for the real target. Prefetch only work that can
+        # be consumed under the same target identity.
+        if isinstance(research_brief, dict) and _adapter_from_brief(research_brief) is not None:
             key = parallel_module._planner_key(prompt, research_brief)
             existing = getattr(parallel_module._PLANNER_STATE, "evidence", None)
             if not existing or existing[0] != key:
@@ -128,16 +132,29 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
         game_design: dict[str, Any],
         research_brief: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        brief = research_brief or complete_planner_module.normalize_research_brief(
+        # Keep two identities deliberately separate. Official RAG is target-specific;
+        # ecosystem route generation is target-independent and must use the exact same
+        # base brief later passed by CompleteGameDesignPlanner. Previously the target-
+        # enriched copy produced a different object-id key, so the prefetched ecosystem
+        # crawl could not be joined and was executed a second time.
+        ecosystem_brief = research_brief or complete_planner_module.normalize_research_brief(
             prompt,
             game_design,
         )
-        if _adapter_from_brief(brief) is None:
+        evidence_brief = ecosystem_brief
+        if _adapter_from_brief(evidence_brief) is None:
             selection = game_design.get("_platform_selection")
             if isinstance(selection, dict) and isinstance(selection.get("target"), dict):
-                brief = {**brief, "_mmm_platform_target": dict(selection["target"])}
+                evidence_brief = {
+                    **evidence_brief,
+                    "_mmm_platform_target": dict(selection["target"]),
+                }
 
-        ecosystem_key = parallel_module._ecosystem_key(prompt, game_design, brief)
+        ecosystem_key = parallel_module._ecosystem_key(
+            prompt,
+            game_design,
+            ecosystem_brief,
+        )
         existing_ecosystem = getattr(parallel_module._PLANNER_STATE, "ecosystem", None)
         if not existing_ecosystem or existing_ecosystem[0] != ecosystem_key:
             parallel_module._PLANNER_STATE.ecosystem = (
@@ -146,17 +163,17 @@ def install(*, complete_planner_module: Any, central_module: Any, retrieval_modu
                     base_ecosystem,
                     prompt,
                     game_design,
-                    research_brief=brief,
+                    research_brief=ecosystem_brief,
                     page_builder=ecosystem_module.discover_seed_bundle,
                     allow_legacy_terminal=True,
                 ),
             )
 
-        evidence_key = parallel_module._planner_key(prompt, brief)
+        evidence_key = parallel_module._planner_key(prompt, evidence_brief)
         existing_evidence = getattr(parallel_module._PLANNER_STATE, "evidence", None)
         if existing_evidence and existing_evidence[0] == evidence_key:
             return existing_evidence[1].result()
-        return target_retrieve(brief)
+        return target_retrieve(evidence_brief)
 
     implementation_evidence_with_target_overlap._mmm_parallel_target_rag = True
     implementation_evidence_with_target_overlap._mmm_agentic_rag_fusion = True
