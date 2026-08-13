@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-"""Parallel reviewed-MCP evidence fusion for Minecraft technical research.
+"""Reviewed Minecraft MCP routing without eager planner-wide provider sweeps.
 
-This contract is intentionally late-bound after the base runtime bootstrap. It keeps
-Minecraft/Fabric documentation, mappings, source and examples as read-only evidence,
-shares identical calls through a single-flight cache, and overlaps external MCP work
-with the existing official RAG lane without weakening any knowledge or validation gate.
+External Minecraft MCP is optional evidence. The pre-design critical path is owned by
+local/official RAG plus the research agents; reviewed MCP tools remain exposed to the
+ResearchAgent and later production agents so they can retrieve exact evidence when an
+actual uncertainty requires it. This avoids turning every research-domain query into a
+fresh external MCP process cold start before planning can continue.
+
+Explicit callers may still request a batched external evidence graph. Those calls are
+read-only, role-scoped, single-flight cached, and duplicate requests are collapsed before
+provider execution.
 """
 
-import asyncio
 import hashlib
 import json
 import os
@@ -18,10 +22,8 @@ from copy import deepcopy
 from functools import wraps
 from typing import Any, Collection, Mapping
 
-import anyio
 
-
-_MARKER = "_mmm_minecraft_mcp_evidence_v1"
+_MARKER = "_mmm_minecraft_mcp_evidence_v2"
 _MAX_RESULT_CHARS = 6000
 _TECHNICAL_KINDS = frozenset(
     {
@@ -78,7 +80,8 @@ def _workers() -> int:
     return max(1, min(16, value))
 
 
-def _enabled() -> bool:
+def _explicit_batch_enabled() -> bool:
+    """Allow explicit external evidence batches; planning never calls them eagerly."""
     raw = os.environ.get("MMM_EXTERNAL_MCP_PREFETCH", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
@@ -187,9 +190,16 @@ def _shared_router() -> Any:
         with _SHARED_ROUTER_LOCK:
             if _SHARED_ROUTER is None:
                 from .external_mcp_router import ExternalMCPRouter
-
                 _SHARED_ROUTER = ExternalMCPRouter()
     return _SHARED_ROUTER
+
+
+def _request_identity(request: Mapping[str, Any]) -> str:
+    normalized = dict(request)
+    scope = normalized.get("allowed_server_ids")
+    if isinstance(scope, (set, frozenset, list, tuple)):
+        normalized["allowed_server_ids"] = sorted(str(value) for value in scope)
+    return _sha256(normalized)
 
 
 def collect_external_minecraft_evidence(
@@ -197,17 +207,20 @@ def collect_external_minecraft_evidence(
     *,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Collect reviewed Minecraft MCP evidence in one bounded parallel batch."""
+    """Explicitly collect reviewed external evidence, deduplicating cold starts.
 
+    This function is intentionally not called by the normal pre-design official-RAG
+    provider. Research agents already have reviewed role-scoped external MCP tools and
+    invoke them adaptively when local/official evidence leaves a real gap.
+    """
     raw_domains = research_brief.get("domains")
     if not isinstance(raw_domains, list) or not raw_domains:
         from .spec import SpecValidationError
-
         raise SpecValidationError("Central research brief has no domains.")
 
     target = _target(research_brief)
-    requests: list[dict[str, Any]] = []
-    owners: list[tuple[str, str, str]] = []
+    logical_owners: list[tuple[str, str, str, str]] = []
+    unique_requests: dict[str, dict[str, Any]] = {}
     domain_rows: list[dict[str, Any]] = []
     by_query: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -224,7 +237,7 @@ def collect_external_minecraft_evidence(
         domain_rows.append(row)
         if "external_mcp" not in providers:
             continue
-        row["strategy"] = "parallel_reviewed_minecraft_mcp"
+        row["strategy"] = "adaptive_reviewed_minecraft_mcp"
         capabilities = _capabilities(raw_domain)
         for raw_query in raw_domain.get("queries", []):
             query = str(raw_query).strip()
@@ -241,60 +254,69 @@ def collect_external_minecraft_evidence(
                 scope = _CAPABILITY_SCOPES.get(capability)
                 if not scope:
                     continue
-                requests.append(
-                    {
-                        "capability": capability,
-                        "stage": "research",
-                        "arguments": {"query": query},
-                        "target": target,
-                        "corroborate": 1,
-                        "required": False,
-                        "max_access": "read",
-                        "allowed_server_ids": scope,
-                    }
-                )
-                owners.append((domain_id, query_sha256, capability))
+                request = {
+                    "capability": capability,
+                    "stage": "research",
+                    "arguments": {"query": query},
+                    "target": target,
+                    "corroborate": 1,
+                    "required": False,
+                    "max_access": "read",
+                    "allowed_server_ids": scope,
+                }
+                identity = _request_identity(request)
+                unique_requests.setdefault(identity, request)
+                logical_owners.append((domain_id, query_sha256, capability, identity))
 
-    enabled = _enabled()
-    bundles: tuple[dict[str, Any], ...] = ()
-    if requests and enabled:
+    enabled = _explicit_batch_enabled()
+    bundles_by_identity: dict[str, dict[str, Any]] = {}
+    if unique_requests and enabled:
         selected_router = router or _shared_router()
+        identities = tuple(unique_requests)
+        requests = tuple(unique_requests[key] for key in identities)
         bundles = selected_router.invoke_many(requests)
-    if bundles and len(bundles) != len(owners):
-        from .spec import SpecValidationError
-
-        raise SpecValidationError(
-            "External MCP batch changed deterministic result cardinality."
-        )
+        if len(bundles) != len(identities):
+            from .spec import SpecValidationError
+            raise SpecValidationError(
+                "External MCP batch changed deterministic result cardinality."
+            )
+        bundles_by_identity = dict(zip(identities, bundles))
 
     pass_count = 0
-    if bundles:
-        for owner, bundle in zip(owners, bundles):
-            domain_id, query_sha256, capability = owner
-            compact = _compact_bundle(bundle)
-            compact["capability"] = capability
-            if compact["status"] == "PASS":
-                pass_count += 1
-            by_query[(domain_id, query_sha256)]["capabilities"].append(compact)
+    for domain_id, query_sha256, capability, identity in logical_owners:
+        bundle = bundles_by_identity.get(identity)
+        if bundle is None:
+            continue
+        compact = _compact_bundle(bundle)
+        compact["capability"] = capability
+        if compact["status"] == "PASS":
+            pass_count += 1
+        by_query[(domain_id, query_sha256)]["capabilities"].append(compact)
 
+    logical_request_count = len(logical_owners)
+    unique_request_count = len(unique_requests)
     status = "SKIPPED"
-    if requests and not enabled:
+    if unique_requests and not enabled:
         status = "DISABLED"
-    elif requests:
+    elif unique_requests:
         status = "PASS" if pass_count else "UNAVAILABLE"
     payload: dict[str, Any] = {
-        "schema_version": "mmm/external-minecraft-evidence-graph-v1",
+        "schema_version": "mmm/external-minecraft-evidence-graph-v2",
         "brief_sha256": str(research_brief.get("brief_sha256", "")),
         "target": target,
         "domains": domain_rows,
         "status": status,
         "execution": {
-            "parallel": len(requests) > 1,
-            "request_count": len(requests),
+            "parallel": unique_request_count > 1,
+            "request_count": logical_request_count,
+            "unique_request_count": unique_request_count,
+            "deduplicated_request_count": max(0, logical_request_count - unique_request_count),
             "pass_count": pass_count,
             "single_flight_cache": True,
             "deterministic_merge_order": True,
             "read_only": True,
+            "planning_critical_path": False,
+            "retrieval_policy": "adaptive_or_explicit_only",
         },
         "authorization": "none",
         "retrieval_is_authority": False,
@@ -304,11 +326,11 @@ def collect_external_minecraft_evidence(
 
 
 def _install_router_parallel_cache() -> None:
-    from .external_mcp_router import ExternalMCPError, ExternalMCPRouter, MCPRouteTarget
+    """Add shared read caching and an explicit batch API without changing MCP lifecycle."""
+    from .external_mcp_router import ExternalMCPRouter, MCPRouteTarget
 
     if getattr(ExternalMCPRouter.invoke, _MARKER, False):
         return
-
     original_invoke = ExternalMCPRouter.invoke
 
     @wraps(original_invoke)
@@ -376,7 +398,7 @@ def _install_router_parallel_cache() -> None:
                 self._mmm_external_inflight[key] = inflight
         assert inflight is not None
         if not owner:
-            return deepcopy(inflight.result(timeout=self.timeout_seconds + 5.0))
+            return deepcopy(inflight.result())
 
         try:
             result = original_invoke(
@@ -447,64 +469,12 @@ def _install_router_parallel_cache() -> None:
                 ordered[index] = bundle
         return tuple(item for item in ordered if item is not None)
 
-    invoke_many._mmm_minecraft_mcp_evidence_v1 = True
+    invoke_many._mmm_minecraft_mcp_evidence_v2 = True  # type: ignore[attr-defined]
     ExternalMCPRouter.invoke_many = invoke_many
-
-    async def call_async(self: Any, server_name: str, entry: Mapping[str, Any], *, tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._call_provider_async(
-            server_name,
-            entry,
-            tool=tool,
-            arguments=arguments,
-        )
-
-    def call_provider_parallel(
-        self: Any,
-        server_name: str,
-        entry: Mapping[str, Any],
-        *,
-        tool: str,
-        arguments: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        async def run() -> dict[str, Any]:
-            return await call_async(
-                self,
-                server_name,
-                entry,
-                tool=tool,
-                arguments=arguments,
-            )
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return anyio.run(run)
-
-        value: dict[str, Any] = {}
-        errors: list[BaseException] = []
-
-        def worker() -> None:
-            try:
-                value["result"] = anyio.run(run)
-            except BaseException as exc:  # pragma: no cover - thread bridge
-                errors.append(exc)
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        thread.join(self.timeout_seconds + 5.0)
-        if thread.is_alive():
-            raise ExternalMCPError(
-                f"External MCP {server_name} exceeded the synchronous bridge timeout."
-            )
-        if errors:
-            raise ExternalMCPError(str(errors[0])) from errors[0]
-        return value["result"]
-
-    call_provider_parallel._mmm_minecraft_mcp_evidence_v1 = True
-    ExternalMCPRouter._call_provider = call_provider_parallel
 
 
 def _install_research_routes() -> None:
+    """Advertise reviewed MCP to technical research without executing it eagerly."""
     from . import central_research
 
     central_research._ALLOWED_PROVIDERS = frozenset(
@@ -534,77 +504,15 @@ def _install_research_routes() -> None:
     central_research._augment_domain_routes = augment
 
 
-def _merge_external(official: Any, external: Mapping[str, Any]) -> Any:
-    if not isinstance(official, dict):
-        return official
-    merged = deepcopy(official)
-    external_by_id = {
-        str(row.get("domain_id", "")): row
-        for row in external.get("domains", [])
-        if isinstance(row, Mapping)
-    }
-    domains = merged.get("domains")
-    if isinstance(domains, list):
-        for row in domains:
-            if not isinstance(row, dict):
-                continue
-            external_row = external_by_id.get(str(row.get("domain_id", "")))
-            if external_row is not None:
-                row["external_mcp"] = deepcopy(external_row)
-    merged["external_mcp_status"] = str(external.get("status", ""))
-    merged["external_mcp_evidence_sha256"] = str(
-        external.get("evidence_sha256", "")
-    )
-    merged["external_mcp_execution"] = deepcopy(external.get("execution", {}))
-    merged.pop("evidence_sha256", None)
-    merged["evidence_sha256"] = _sha256(merged)
-    return merged
-
-
-def _install_research_fusion() -> None:
-    from . import agentic_research_game_design as research_design
-
-    current = research_design.retrieve_domain_evidence
-    if getattr(current, _MARKER, False):
-        return
-
-    @wraps(current)
-    def retrieve_fused(research_brief: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="mmm_minecraft_evidence") as pool:
-            official_future = pool.submit(current, research_brief, *args, **kwargs)
-            external_future = pool.submit(collect_external_minecraft_evidence, research_brief)
-            official = official_future.result()
-            try:
-                external = external_future.result()
-            except Exception as exc:
-                external = {
-                    "schema_version": "mmm/external-minecraft-evidence-graph-v1",
-                    "status": "UNAVAILABLE",
-                    "domains": [],
-                    "execution": {
-                        "parallel": False,
-                        "request_count": 0,
-                        "pass_count": 0,
-                        "single_flight_cache": True,
-                        "deterministic_merge_order": True,
-                        "read_only": True,
-                    },
-                    "evidence_sha256": _sha256(
-                        {"error": f"{type(exc).__name__}: {exc}"}
-                    ),
-                }
-        return _merge_external(official, external)
-
-    setattr(retrieve_fused, _MARKER, True)
-    research_design.retrieve_domain_evidence = retrieve_fused
-
-
 def install() -> None:
-    """Install the reviewed Minecraft MCP evidence layer exactly once."""
+    """Install adaptive reviewed Minecraft MCP routing exactly once.
 
+    Deliberately do not wrap retrieve_domain_evidence. Official/project RAG owns
+    deterministic pre-design evidence; external MCP remains an optional adaptive tool
+    route and therefore cannot hold the planner critical path hostage.
+    """
     _install_router_parallel_cache()
     _install_research_routes()
-    _install_research_fusion()
 
 
 __all__ = ["collect_external_minecraft_evidence", "install"]
