@@ -193,7 +193,17 @@ def test_provider_domain_and_design_fanout_are_parallel_with_deterministic_merge
     )
 
     install_parallel_core(module)
-    result = module.collect_pre_design_research(object(), "test")
+    native_router = SimpleNamespace(
+        profile="test",
+        registry=SimpleNamespace(
+            role=lambda _profile, _role: SimpleNamespace(
+                exclusive_gpu=True,
+                provider="local",
+                adapter="llama_cpp",
+            )
+        ),
+    )
+    result = module.collect_pre_design_research(native_router, "test")
 
     assert maxima["provider"] >= 3
     assert maxima["domain"] >= 3
