@@ -1,9 +1,10 @@
-"""Runtime safety invariants for bounded research and native llama.cpp grammar.
+"""Runtime safety invariants for bounded research and native llama.cpp tool grammar.
 
 This contract owns two host-side safety boundaries that must hold independently of
 model quality: hierarchical synthesis must strictly converge, and tool schemas sent
 to llama.cpp must stay inside its grammar compiler's conservative JSON-schema subset.
-The authoritative evidence ledger and original tool definitions remain untouched.
+Structured response schemas are validated and repaired by ``structured_output`` on
+the host; transport failures are never retried here.
 """
 from __future__ import annotations
 
@@ -18,7 +19,6 @@ from typing import Any
 
 _SYNTHESIS_PROTOCOL_V3 = "mmm/research-hierarchical-synthesis-v3"
 _SYNTHESIS_NODE_BYTES = 1_400
-_GRAMMAR_ERROR = "failed to initialize samplers: failed to parse grammar"
 _INSTALLED = False
 
 
@@ -50,7 +50,7 @@ def _compact_synthesis_note(
 ) -> dict[str, Any]:
     """Project one synthesis node to a byte-bounded, schema-shaped summary.
 
-    The durable page/claim ledgers remain lossless.  Intermediate tree nodes are only
+    The durable page/claim ledgers remain lossless. Intermediate tree nodes are only
     routing summaries, so bounding them is preferable to atomizing one node into many
     children (which can make a reduction tree grow instead of converge).
     """
@@ -99,8 +99,6 @@ def _compact_synthesis_note(
         if query and not append_if_fits("next_queries", query):
             break
 
-    # Host fallback evidence is already retained verbatim in evidence-ledger.jsonl.
-    # Make that provenance explicit without copying the raw fragment back into the tree.
     fragment = note.get("evidence_fragment")
     if (
         not result["claims"]
@@ -138,10 +136,7 @@ def _merge_synthesis_notes(
 
 
 def _frontier_sha(notes: Sequence[Mapping[str, Any]]) -> str:
-    canonical = [
-        _compact_synthesis_note(note)
-        for note in notes
-    ]
+    canonical = [_compact_synthesis_note(note) for note in notes]
     payload = json.dumps(
         canonical,
         ensure_ascii=False,
@@ -165,7 +160,6 @@ def _install_synthesis_convergence(module: Any) -> None:
 
         compact = [_compact_synthesis_note(note) for note in notes]
         groups = [compact[index : index + 2] for index in range(0, len(compact), 2)]
-        # Two bounded nodes plus JSON separators are comfortably below 3600 bytes.
         for group in groups:
             if _json_bytes(group) > int(module._SYNTHESIS_INPUT_BYTES):
                 raise RuntimeError("bounded synthesis pair exceeded its transport budget")
@@ -240,8 +234,6 @@ def _install_synthesis_convergence(module: Any) -> None:
                 )
 
             if len(next_level) >= len(current):
-                # Recovery may split a malformed group.  Never feed that expanded frontier
-                # back to the model: deterministically collapse pairs on the host instead.
                 next_level = [
                     _merge_synthesis_notes(
                         next_level[index : index + 2],
@@ -321,7 +313,7 @@ def _grammar_safe_schema(
     *,
     root: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Project JSON Schema to the conservative subset accepted by llama.cpp grammar."""
+    """Project tool JSON Schema to the conservative subset accepted by llama.cpp."""
 
     root = schema if root is None else root
     resolved = _resolve_local_ref(schema, root)
@@ -332,10 +324,7 @@ def _grammar_safe_schema(
         branches = resolved.get(union_key)
         if isinstance(branches, list):
             candidates = [item for item in branches if isinstance(item, Mapping)]
-            non_null = [
-                item for item in candidates
-                if item.get("type") != "null"
-            ]
+            non_null = [item for item in candidates if item.get("type") != "null"]
             if non_null:
                 return _grammar_safe_schema(non_null[0], root=root)
 
@@ -358,10 +347,11 @@ def _grammar_safe_schema(
         properties: dict[str, Any] = {}
         if isinstance(properties_raw, Mapping):
             for key, value in properties_raw.items():
-                if isinstance(value, Mapping):
-                    properties[str(key)] = _grammar_safe_schema(value, root=root)
-                else:
-                    properties[str(key)] = {"type": "string"}
+                properties[str(key)] = (
+                    _grammar_safe_schema(value, root=root)
+                    if isinstance(value, Mapping)
+                    else {"type": "string"}
+                )
         result: dict[str, Any] = {"type": "object", "properties": properties}
         required_raw = resolved.get("required")
         if isinstance(required_raw, list):
@@ -394,9 +384,7 @@ def _grammar_safe_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
     function = tool.get("function")
     if not isinstance(function, Mapping):
         return copy.deepcopy(dict(tool))
-    safe_function: dict[str, Any] = {
-        "name": str(function.get("name", "")),
-    }
+    safe_function: dict[str, Any] = {"name": str(function.get("name", ""))}
     description = function.get("description")
     if isinstance(description, str) and description:
         safe_function["description"] = description
@@ -411,85 +399,41 @@ def _grammar_safe_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
     return {"type": "function", "function": safe_function}
 
 
-def _grammar_fallback_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    retry = copy.deepcopy(dict(payload))
-    tools = retry.get("tools")
-    if isinstance(tools, list):
-        minimal: list[dict[str, Any]] = []
-        for tool in tools:
-            if not isinstance(tool, Mapping):
-                continue
-            safe = _grammar_safe_tool(tool)
-            function = safe.get("function")
-            if isinstance(function, dict):
-                function["parameters"] = {"type": "object", "properties": {}}
-            minimal.append(safe)
-        retry["tools"] = minimal
-    response_format = retry.get("response_format")
-    if isinstance(response_format, dict) and "schema" in response_format:
-        retry["response_format"] = {"type": "json_object"}
-    return retry
+def _install_llama_tool_schema_projection(policy_module: Any) -> None:
+    """Make the first tool request grammar-safe without any response retry."""
 
-
-def _is_grammar_error(response: Any) -> bool:
-    if int(getattr(response, "status_code", 0) or 0) != 400:
-        return False
-    try:
-        body = str(response.text).lower()
-    except Exception:
-        return False
-    return _GRAMMAR_ERROR in body
-
-
-def _install_llama_grammar_safety(policy_module: Any, adapter_module: Any) -> None:
     current_payload = policy_module._server_payload
-    if not getattr(current_payload, "_mmm_grammar_safe_tools_v1", False):
-        @wraps(current_payload)
-        def server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-            payload = current_payload(adapter, request)
-            tools = payload.get("tools")
-            if isinstance(tools, list):
-                payload = dict(payload)
-                payload["tools"] = [
-                    _grammar_safe_tool(tool)
-                    for tool in tools
-                    if isinstance(tool, Mapping)
-                ]
-            return payload
+    if getattr(current_payload, "_mmm_grammar_safe_tools_v1", False):
+        return
 
-        server_payload._mmm_grammar_safe_tools_v1 = True
-        policy_module._server_payload = server_payload
+    @wraps(current_payload)
+    def server_payload(adapter: Any, request: Any) -> dict[str, Any]:
+        payload = current_payload(adapter, request)
+        tools = payload.get("tools")
+        if isinstance(tools, list):
+            payload = dict(payload)
+            payload["tools"] = [
+                _grammar_safe_tool(tool)
+                for tool in tools
+                if isinstance(tool, Mapping)
+            ]
+        return payload
 
-    current_post = adapter_module._post_completion
-    if not getattr(current_post, "_mmm_grammar_retry_v1", False):
-        @wraps(current_post)
-        def post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
-            response = current_post(server_url, payload)
-            if not _is_grammar_error(response):
-                return response
-            retry_payload = _grammar_fallback_payload(payload)
-            if retry_payload == payload:
-                return response
-            print(
-                "llama server: grammar compile rejected schema; retrying once with "
-                "host-validated minimal grammar",
-                flush=True,
-            )
-            return current_post(server_url, retry_payload)
-
-        post_completion._mmm_grammar_retry_v1 = True
-        adapter_module._post_completion = post_completion
+    server_payload._mmm_grammar_safe_tools_v1 = True
+    policy_module._server_payload = server_payload
 
 
 def install() -> None:
-    """Install both invariants after the normal runtime bootstrap has composed owners."""
+    """Install convergence and first-request tool projection; never install retries."""
 
     global _INSTALLED
     if _INSTALLED:
         return
     from . import agentic_pre_design_rag, llama_server_hardware_policy
-    from .model_adapters import llama_cpp_adapter
 
     _install_synthesis_convergence(agentic_pre_design_rag)
-    _install_llama_grammar_safety(llama_server_hardware_policy, llama_cpp_adapter)
+    _install_llama_tool_schema_projection(llama_server_hardware_policy)
     _INSTALLED = True
+
+
+__all__ = ["install"]

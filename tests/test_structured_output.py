@@ -151,3 +151,9 @@ def test_invalid_schema_fails_before_model_generation() -> None:
         generate_with_host_schema_repair(request, generate)
 
     assert calls == 0
+
+
+def test_runtime_does_not_install_blind_grammar_retry() -> None:
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter
+
+    assert not getattr(llama_cpp_adapter._post_completion, "_mmm_grammar_retry_v1", False)
