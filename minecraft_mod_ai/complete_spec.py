@@ -716,6 +716,6 @@ def complete_proposal_from_parts(
         external_runtime_required=True,
         existing_input_sha256=existing_input_sha256,
         approval_hash="",
-    ).with_hash()
+    )
     proposal.validate()
-    return proposal
+    return proposal.with_hash()
