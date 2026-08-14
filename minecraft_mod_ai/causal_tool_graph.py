@@ -30,6 +30,11 @@ _GOAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     "plan": frozenset({"plan_ready"}),
     "release": frozenset({"packaged"}),
 }
+_EXTERNAL_NAMES = frozenset({
+    "external_mcp_capabilities",
+    "external_mcp_schema",
+    "external_mcp_call",
+})
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -38,8 +43,6 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
 
 
 def transition_for_schema(schema: Mapping[str, Any]) -> ToolTransition:
-    """Return reviewed causal semantics; never infer them from descriptions."""
-
     name = _tool_name(schema)
     spec = reviewed_transition(name)
     reviewed = spec is not None
@@ -73,12 +76,6 @@ def verified_state_from_messages(
     *,
     require_fresh_evidence: bool = False,
 ) -> frozenset[str]:
-    """Replay successful tool observations into an externally verified state.
-
-    State advances only from host tool observations with ``ok=true``.  Model text,
-    intent words and assistant self-reports never satisfy a precondition.
-    """
-
     transitions = {
         transition.name: transition
         for schema in schemas
@@ -92,16 +89,10 @@ def verified_state_from_messages(
         transition = transitions.get(name)
         if transition is None or not transition.reviewed:
             continue
-        # A successful tool call can only certify its effects if the host-known
-        # preconditions were already certified at that point in the trace.
         if transition.preconditions.issubset(state):
             state.update(transition.effects)
-
-    # Fresh-evidence requests deliberately never inherit evidence merely because an
-    # earlier user/system sentence said it existed.  Only successful tool receipts
-    # above can add evidence_ready/code_evidence/project_evidence.
     if require_fresh_evidence and not any(
-        fact in state for fact in ("code_evidence", "project_evidence", "ecosystem_evidence")
+        fact in state for fact in ("code_evidence", "project_evidence", "ecosystem_evidence", "external_observation")
     ):
         state.discard("evidence_ready")
     return frozenset(state)
@@ -113,13 +104,6 @@ def infer_verified_state(
     tool_schemas: Sequence[Mapping[str, Any]],
     require_fresh_evidence: bool,
 ) -> frozenset[str]:
-    """Compatibility helper for pre-loop selection.
-
-    Query text never certifies state.  The live tool loop uses
-    :func:`verified_state_from_messages` and therefore advances after each host
-    observation.
-    """
-
     del query, tool_schemas, require_fresh_evidence
     return frozenset({"workspace_bound"})
 
@@ -138,8 +122,6 @@ def shortest_causal_path(
     goals: Iterable[str],
     max_depth: int = 6,
 ) -> tuple[str, ...]:
-    """Find the minimum-cost reviewed transition path from state to goal facts."""
-
     transitions = {
         transition.name: transition
         for schema in schemas
@@ -148,7 +130,6 @@ def shortest_causal_path(
     target = _goal_facts(goals)
     if target.issubset(state):
         return ()
-
     queue: deque[tuple[frozenset[str], tuple[str, ...], int]] = deque([(state, (), 0)])
     best_cost: dict[frozenset[str], int] = {state: 0}
     solutions: list[tuple[int, int, tuple[str, ...]]] = []
@@ -160,8 +141,7 @@ def shortest_causal_path(
             transition = transitions[name]
             if name in path or not transition.preconditions.issubset(current_state):
                 continue
-            new_effects = set(transition.effects) - set(current_state)
-            if not new_effects:
+            if not (set(transition.effects) - set(current_state)):
                 continue
             next_state = frozenset(set(current_state) | set(transition.effects))
             next_path = path + (name,)
@@ -186,25 +166,22 @@ def executable_frontier(
     limit: int = 3,
     max_depth: int = 6,
 ) -> tuple[str, ...]:
-    """Expose only the first 1-3 executable edges that can advance a goal.
-
-    Multiple first edges are returned only when they are equally minimal alternatives
-    or jointly useful evidence reads.  Downstream edges remain hidden until their
-    preconditions become verified by actual tool observations.
-    """
-
     limit = max(1, min(int(limit), 3))
+    transitions = {
+        transition_for_schema(schema).name: transition_for_schema(schema)
+        for schema in schemas
+        if transition_for_schema(schema).name
+    }
     path = shortest_causal_path(schemas, state=state, goals=goals, max_depth=max_depth)
+    # If the authorized surface is external-MCP-only, a generic "inspect" request
+    # means inspect through that external surface rather than exposing nothing.
+    if not path and transitions and set(transitions) <= _EXTERNAL_NAMES:
+        path = shortest_causal_path(schemas, state=state, goals=("external",), max_depth=max_depth)
     if not path:
         return ()
-    transitions = {transition_for_schema(schema).name: transition_for_schema(schema) for schema in schemas}
     first = transitions[path[0]]
     frontier: list[str] = [first.name]
 
-    # Evidence acquisition is a safe parallel-read opportunity. If the goal requires
-    # a later mutation/verification, expose up to two other executable reviewed
-    # evidence transitions at the same frontier so the model can gather independent
-    # evidence in one wave without exposing downstream write tools.
     if first.effects & {"evidence_ready", "project_evidence", "code_evidence", "ecosystem_evidence"}:
         alternatives: list[tuple[int, str]] = []
         for name, transition in transitions.items():
@@ -217,10 +194,23 @@ def executable_frontier(
                 alternatives.append((transition.cost, name))
         alternatives.sort()
         frontier.extend(name for _cost, name in alternatives[: limit - 1])
+
+    # External capabilities/schema/call are three read-only alternatives, not a fake
+    # mandatory chain. The bridge itself says schema is needed only when arguments are
+    # not already known. Keep all executable choices available, still bounded to 3.
+    if first.name in _EXTERNAL_NAMES:
+        external_alternatives = sorted(
+            name
+            for name, transition in transitions.items()
+            if name in _EXTERNAL_NAMES
+            and name not in frontier
+            and transition.reviewed
+            and transition.preconditions.issubset(state)
+        )
+        frontier.extend(external_alternatives[: limit - len(frontier)])
     return tuple(frontier[:limit])
 
 
-# Backward-compatible name used by older focused tests/contracts.
 def shortest_causal_frontier(
     schemas: Sequence[Mapping[str, Any]],
     *,
