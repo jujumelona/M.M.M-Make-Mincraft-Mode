@@ -12,6 +12,9 @@ def _modules(*, generic_workers=6, model_workers=2, fail_capacity=False):
     def model_capacity(router, width):
         assert router == "router"
         assert width == generic_workers
+        # Match the real helper: it consults _worker_count() internally.
+        # The hardener must avoid recursively re-entering model-capacity routing here.
+        assert central._worker_count() == generic_workers
         if fail_capacity:
             raise RuntimeError("capacity unavailable")
         return model_workers
@@ -47,7 +50,7 @@ def test_provider_worker_budget_stays_generic_outside_model_scope():
     assert central._worker_count() == 6
 
 
-def test_committee_reviewer_and_design_share_model_capacity():
+def test_committee_reviewer_and_design_share_model_capacity_without_recursion():
     agentic, central = _modules(generic_workers=6, model_workers=2)
     concurrency.harden(agentic, central)
 

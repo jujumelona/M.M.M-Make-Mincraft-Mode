@@ -7,7 +7,7 @@ from functools import wraps
 from typing import Any
 
 
-_MARKER = "_mmm_central_model_capacity_v1"
+_MARKER = "_mmm_central_model_capacity_v2"
 _ACTIVE_MODEL_ROUTER: ContextVar[Any | None] = ContextVar(
     "mmm_central_model_capacity_router",
     default=None,
@@ -23,6 +23,12 @@ def harden(agentic_module: Any, central_module: Any) -> None:
     """
 
     current_worker_count = central_module._worker_count
+    # Upgrade an in-place v1 install without stacking the recursive worker wrapper.
+    if getattr(current_worker_count, "_mmm_central_model_capacity_v1", False):
+        previous = getattr(current_worker_count, "__wrapped__", None)
+        if callable(previous):
+            current_worker_count = previous
+
     if not getattr(current_worker_count, _MARKER, False):
 
         @wraps(current_worker_count)
@@ -31,24 +37,35 @@ def harden(agentic_module: Any, central_module: Any) -> None:
             router = _ACTIVE_MODEL_ROUTER.get()
             if router is None:
                 return generic
+
+            # _research_domain_worker_count is the existing authority, but it calls
+            # central_module._worker_count() internally. Temporarily clear model scope
+            # so that nested call sees only the original generic CPU worker budget.
+            token = _ACTIVE_MODEL_ROUTER.set(None)
             try:
-                return max(
-                    1,
-                    min(
-                        int(generic),
-                        int(central_module._research_domain_worker_count(router, generic)),
-                    ),
-                )
+                capacity = central_module._research_domain_worker_count(router, generic)
             except Exception:
-                # Unknown model capacity is not permission to oversubscribe one local model.
+                return 1
+            finally:
+                _ACTIVE_MODEL_ROUTER.reset(token)
+            try:
+                return max(1, min(int(generic), int(capacity)))
+            except (TypeError, ValueError):
                 return 1
 
         setattr(model_aware_worker_count, _MARKER, True)
         model_aware_worker_count.__wrapped__ = current_worker_count  # type: ignore[attr-defined]
         central_module._worker_count = model_aware_worker_count
 
+    def unwrap_v1(current: Any) -> Any:
+        if getattr(current, "_mmm_central_model_capacity_v1", False):
+            previous = getattr(current, "__wrapped__", None)
+            if callable(previous):
+                return previous
+        return current
+
     def wrap_router_scope(owner: Any, name: str) -> None:
-        current = getattr(owner, name)
+        current = unwrap_v1(getattr(owner, name))
         if getattr(current, _MARKER, False):
             return
 
@@ -67,7 +84,7 @@ def harden(agentic_module: Any, central_module: Any) -> None:
     wrap_router_scope(central_module, "build_central_committee")
     wrap_router_scope(central_module, "_parallel_reviews")
 
-    current_generate = agentic_module.generate_sectioned_game_design
+    current_generate = unwrap_v1(agentic_module.generate_sectioned_game_design)
     if not getattr(current_generate, _MARKER, False):
 
         @wraps(current_generate)
