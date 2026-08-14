@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import minecraft_mod_ai.complete_planner as complete_planner_module
 import minecraft_mod_ai.model_router as router_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as scheduler_module
+from minecraft_mod_ai.causal_frontier_adapter import authorized_tools
 from minecraft_mod_ai.llama_parallel_runtime_contract import (
     ReentrantReadWriteLock,
     _planner_parallel_capacity,
@@ -166,7 +167,7 @@ def test_planner_parallel_capacity_is_native_local_only(monkeypatch) -> None:
     assert _planner_parallel_capacity(remote, 2) == 1
 
 
-def test_parallel_router_preserves_real_generation_mcp_tools_and_enable_tools(
+def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -187,34 +188,48 @@ def test_parallel_router_preserves_real_generation_mcp_tools_and_enable_tools(
     assert tool_result == "tool-aware"
     assert len(adapter.turn_requests) == 1
     request = adapter.turn_requests[0]
-    tool_names = {
+    exposed_names = {
         str(tool["function"]["name"])
         for tool in request.tools
     }
-    # These schemas must come from the real generation-stage MCP server and the
-    # reviewed external-MCP bridge, then survive MinecraftCoder Skill filtering.
-    assert "inspect_existing_mod" in tool_names
-    assert "search_project_rag" in tool_names
-    assert "search_code_rag" in tool_names
+    authorized_names = {
+        str(tool["function"]["name"])
+        for tool in authorized_tools(())
+    }
+
+    # Security/role filtering retains the real generation-stage surface. Causal
+    # planning is allowed only to reduce what the model sees on this particular
+    # turn; it may never widen the authorization boundary.
     assert {
+        "inspect_existing_mod",
+        "search_project_rag",
+        "search_code_rag",
         "external_mcp_capabilities",
         "external_mcp_schema",
         "external_mcp_call",
-    } <= tool_names
-    # Unrelated or host-owned stage surfaces must remain hidden from the coder.
-    assert "plan_complete_game" not in tool_names
-    assert "runtime_start_server" not in tool_names
-    assert "package_release" not in tool_names
+    } <= authorized_names
+    assert 1 <= len(exposed_names) <= 3
+    assert exposed_names <= authorized_names
+
+    # Unrelated/host-owned stages remain absent from the complete authorized surface,
+    # not merely hidden by the causal selector.
+    assert "plan_complete_game" not in authorized_names
+    assert "runtime_start_server" not in authorized_names
+    assert "package_release" not in authorized_names
     assert request.tool_choice == "auto"
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
-    assert any(
-        message.get("role") == "system"
-        and "mmm/agent-capability-context-v5" in str(message.get("content", ""))
-        and "ground-production-with-live-evidence" in str(message.get("content", ""))
-        and "inspect_existing_mod" in str(message.get("content", ""))
+
+    capability_messages = [
+        str(message.get("content", ""))
         for message in request.messages
-    )
+        if message.get("role") == "system"
+        and "mmm/agent-capability-context-v5" in str(message.get("content", ""))
+    ]
+    assert capability_messages
+    capability = capability_messages[-1]
+    assert "ground-production-with-live-evidence" in capability
+    assert all(name in capability for name in exposed_names)
 
     schema = {
         "type": "object",
