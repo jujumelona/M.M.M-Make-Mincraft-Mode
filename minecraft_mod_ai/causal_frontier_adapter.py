@@ -13,6 +13,9 @@ _AUTHORIZED_TOOLS: ContextVar[tuple[Mapping[str, Any], ...]] = ContextVar(
 _AUTHORIZED_PREFERENCE: ContextVar[tuple[tuple[str, int], ...]] = ContextVar(
     "mmm_causal_authorized_preference", default=()
 )
+_CURRENT_FRONTIER_NAMES: ContextVar[tuple[str, ...] | None] = ContextVar(
+    "mmm_causal_current_frontier_names", default=None
+)
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 
 
@@ -25,7 +28,12 @@ def remember_authorized_tools(
     _AUTHORIZED_TOOLS.set(tuple(tools))
     if preference is not None:
         _AUTHORIZED_PREFERENCE.set(
-            tuple(sorted(((str(name), int(rank)) for name, rank in preference.items()), key=lambda item: item[1]))
+            tuple(
+                sorted(
+                    ((str(name), int(rank)) for name, rank in preference.items()),
+                    key=lambda item: item[1],
+                )
+            )
         )
 
 
@@ -36,6 +44,16 @@ def authorized_tools(fallback: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str
 
 def authorized_tool_preference() -> dict[str, int]:
     return dict(_AUTHORIZED_PREFERENCE.get())
+
+
+def current_frontier_names() -> tuple[str, ...] | None:
+    """Return the exact schemas shown on the most recent model turn in this context."""
+
+    return _CURRENT_FRONTIER_NAMES.get()
+
+
+def clear_current_frontier() -> None:
+    _CURRENT_FRONTIER_NAMES.set(None)
 
 
 def _name(schema: Mapping[str, Any]) -> str:
@@ -115,6 +133,7 @@ class CausalFrontierAdapter:
 
         candidates = authorized_tools(request.tools)
         if not candidates:
+            _CURRENT_FRONTIER_NAMES.set(())
             return self.inner.generate_turn(request)
         state = verified_state_from_messages(
             request.messages,
@@ -133,6 +152,10 @@ class CausalFrontierAdapter:
         )
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         selected = tuple(by_name[name] for name in names if name in by_name)
+        # Set this before the model call and intentionally retain it until the next
+        # turn. The runtime proxy executes returned tool calls immediately afterward
+        # and checks against this exact set, not the broader authorization surface.
+        _CURRENT_FRONTIER_NAMES.set(tuple(_name(schema) for schema in selected))
 
         rebuilt = GenerationRequest(
             messages=_with_capability_context(
@@ -166,5 +189,7 @@ __all__ = [
     "CausalFrontierAdapter",
     "authorized_tool_preference",
     "authorized_tools",
+    "clear_current_frontier",
+    "current_frontier_names",
     "remember_authorized_tools",
 ]
