@@ -7,9 +7,11 @@ def install() -> None:
     from . import (
         agentic_pre_design_rag,
         centroid_vector_rag,
+        complete_spec,
         rag_index,
         runner,
         trajectory_memory,
+        work_graph,
     )
     from . import research_rag_performance as rag_performance
     from . import validation_execution_contract
@@ -22,6 +24,7 @@ def install() -> None:
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
+    from .work_graph_hash_performance import harden as harden_work_graph_hashes
 
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
@@ -40,6 +43,7 @@ def install() -> None:
     harden_cpu_retrieval()
     harden_gradle(runner)
     harden_validation_fingerprints(validation_execution_contract)
+    harden_work_graph_hashes(work_graph, complete_spec)
 
 
 __all__ = ["install"]
