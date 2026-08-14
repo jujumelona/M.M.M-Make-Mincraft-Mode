@@ -17,6 +17,10 @@ _WORK_GRAPH_FAST_SERIALIZE: ContextVar[bool] = ContextVar(
     "mmm_work_graph_fast_serialize",
     default=False,
 )
+_PROPOSAL_HASH_CACHE: ContextVar[dict[int, tuple[Any, str]] | None] = ContextVar(
+    "mmm_proposal_store_hash_cache",
+    default=None,
+)
 
 
 def _start_platform_future() -> Future[Any]:
@@ -195,12 +199,55 @@ def _install_work_graph_fastpath() -> None:
             continue
 
 
+def _install_proposal_store_hash_fastpath() -> None:
+    """Reuse the hash already verified by CompleteProposal.from_dict during one load."""
+
+    from . import complete_spec, proposal_store
+
+    current_hash = complete_spec.CompleteProposal.calculate_hash
+    if not getattr(current_hash, "_mmm_store_invocation_hash_cache", False):
+
+        @wraps(current_hash)
+        def calculate_hash(self: Any) -> str:
+            cache = _PROPOSAL_HASH_CACHE.get()
+            if cache is None:
+                return current_hash(self)
+            key = id(self)
+            cached = cache.get(key)
+            if cached is not None and cached[0] is self:
+                return cached[1]
+            digest = current_hash(self)
+            cache[key] = (self, digest)
+            return digest
+
+        calculate_hash._mmm_store_invocation_hash_cache = True
+        calculate_hash.__wrapped__ = current_hash
+        complete_spec.CompleteProposal.calculate_hash = calculate_hash
+
+    current_load = proposal_store.complete_proposal_from_index
+    if getattr(current_load, "_mmm_store_hash_scope", False):
+        return
+
+    @wraps(current_load)
+    def complete_proposal_from_index(*args: Any, **kwargs: Any):
+        token = _PROPOSAL_HASH_CACHE.set({})
+        try:
+            return current_load(*args, **kwargs)
+        finally:
+            _PROPOSAL_HASH_CACHE.reset(token)
+
+    complete_proposal_from_index._mmm_store_hash_scope = True
+    complete_proposal_from_index.__wrapped__ = current_load
+    proposal_store.complete_proposal_from_index = complete_proposal_from_index
+
+
 def start(model_registry_module: Any) -> None:
     """Start non-blocking metadata prefetch and install bootstrap hot paths."""
 
     del model_registry_module
     _install_request_byte_fastpath()
     _install_work_graph_fastpath()
+    _install_proposal_store_hash_fastpath()
     _install_platform_prefetch()
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
