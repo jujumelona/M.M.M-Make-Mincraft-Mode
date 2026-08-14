@@ -12,7 +12,6 @@ from .causal_frontier_adapter import (
     FrontierExecutionGate,
     authorized_tools,
     clear_current_frontier,
-    current_frontier_names,
     remember_authorized_tools,
 )
 from .causal_tool_graph import executable_frontier, infer_verified_state
