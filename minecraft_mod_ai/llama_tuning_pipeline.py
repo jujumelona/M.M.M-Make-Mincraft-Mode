@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 18
+_TUNING_PIPELINE_VERSION = 19
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -102,6 +102,7 @@ class NativeLlamaTuningPipeline:
         from .llama_decode_speed_contract import install as install_decode_speed
         from .llama_server_efficiency_contract import install as install_efficiency
         from .llama_server_hardware_policy import install as install_hardware
+        from .llama_server_kernel_autotune import install as install_kernel_autotune
         from .llama_server_runtime_tuning import install as install_runtime_tuning
         from .llama_structured_decode_policy import bind_structured_decode_policy
         from .planner_single_stream_search_contract import (
@@ -156,6 +157,13 @@ class NativeLlamaTuningPipeline:
                 ),
             ),
             TuningStage("decode-speed", install_decode_speed_stage),
+            # Outermost cold-start search: select Flash Attention, logical batch and
+            # independent K/V cache types first, then let the already-installed
+            # MTP/ubatch/cache-reuse stages refine that measured winner.
+            TuningStage(
+                "kernel-autotune",
+                lambda: install_kernel_autotune(self.autotune, self.runtime_tuning),
+            ),
         )
 
     def install(self) -> None:
