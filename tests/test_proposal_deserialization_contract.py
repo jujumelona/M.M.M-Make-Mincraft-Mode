@@ -29,7 +29,7 @@ def test_complete_proposal_does_not_stringify_non_string_acceptance_test() -> No
     payload = _complete_payload()
     payload["acceptance_tests"] = [123]
 
-    with pytest.raises(spec.SpecValidationError, match="acceptance_tests\[0\]"):
+    with pytest.raises(spec.SpecValidationError, match=r"acceptance_tests\[0\]"):
         complete_spec.CompleteProposal.from_dict(payload)
 
 
@@ -52,6 +52,7 @@ def test_complete_proposal_does_not_normalize_saved_module_identity() -> None:
 
 def test_base_proposal_list_fields_do_not_accept_string_iterables() -> None:
     install(spec, complete_spec)
+    payload = _complete_payload()
     payload = {
         "schema_version": "minecraft-mod-ai/proposal-v1",
         "proposal_version": 1,
