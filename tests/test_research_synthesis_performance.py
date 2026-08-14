@@ -103,6 +103,19 @@ def test_context_budget_is_scoped_to_hierarchy_call() -> None:
     assert fallback == _fixed_group(notes)
 
 
+def test_live_runtime_context_caps_registry_budget(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setenv(
+        "MMM_LLAMA_RUNTIME_RECEIPT",
+        json.dumps({"context_per_slot": 16_384, "slots": 2}),
+    )
+
+    max_bytes, max_items = synthesis._planner_limits(_qwen_router(), module)
+
+    assert max_bytes == 4_096
+    assert max_items == 4
+
+
 def test_unknown_router_preserves_conservative_fallback() -> None:
     module = _module()
     synthesis.harden(module)

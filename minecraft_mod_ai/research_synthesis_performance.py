@@ -3,6 +3,7 @@ from __future__ import annotations
 """Context-aware packing for lossless pre-design research synthesis."""
 
 import json
+import os
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any
@@ -30,6 +31,19 @@ def _planner_limits(router: Any, agentic_module: Any) -> tuple[int, int]:
         return fallback_bytes, fallback_items
     if max_context <= 0:
         return fallback_bytes, fallback_items
+
+    # Native runtime tuning may lower per-slot context to fit VRAM when it enables
+    # multiple llama slots. The live receipt is authoritative for the current managed
+    # server, so never pack against a larger registry-only context window.
+    raw_receipt = os.environ.get("MMM_LLAMA_RUNTIME_RECEIPT", "").strip()
+    if raw_receipt:
+        try:
+            receipt = json.loads(raw_receipt)
+            runtime_context = int(receipt.get("context_per_slot", 0) or 0)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            runtime_context = 0
+        if runtime_context > 0:
+            max_context = min(max_context, runtime_context)
 
     prompt_tokens = max(1, max_context - max(0, max_new_tokens))
     if max_input_tokens > 0:
