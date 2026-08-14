@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 from contextvars import ContextVar
 from functools import wraps
@@ -25,6 +26,14 @@ from typing import Any, Mapping
 _FORCE_SINGLE_CUSTOM_SEARCH: ContextVar[bool] = ContextVar(
     "mmm_force_single_custom_search",
     default=False,
+)
+_WORK_GRAPH_HASH_CACHE: ContextVar[dict[int, str] | None] = ContextVar(
+    "mmm_work_graph_hash_cache",
+    default=None,
+)
+_WORK_GRAPH_VALIDATION_CACHE: ContextVar[set[tuple[int, int]] | None] = ContextVar(
+    "mmm_work_graph_validation_cache",
+    default=None,
 )
 _ORIGINAL_THREAD_POOL = concurrent.futures.ThreadPoolExecutor
 
@@ -65,6 +74,84 @@ def _install_exact_llm_executor() -> None:
     ExactCapacityThreadPoolExecutor._mmm_exact_llm_executor = True  # type: ignore[attr-defined]
     ExactCapacityThreadPoolExecutor._mmm_base_executor = base  # type: ignore[attr-defined]
     concurrent.futures.ThreadPoolExecutor = ExactCapacityThreadPoolExecutor
+
+
+def _install_work_graph_compile_cache(work_graph_module: Any) -> None:
+    """Deduplicate validation and full proposal hashing inside one graph compile.
+
+    CompleteProposal.validate already validates every proposal-owned module before
+    build_production_work_plan historically validates that exact same object set a
+    second time.  The builder also asks for the same canonical proposal hash three
+    times.  Keep those checks authoritative on every invocation, but reuse their
+    successful result only for the lifetime of that one synchronous compile.  The
+    ContextVars make concurrent compiles independent and prevent stale cross-call
+    validation or hash reuse after callers mutate nested proposal data.
+    """
+
+    proposal_cls = work_graph_module.CompleteProposal
+    module_cls = work_graph_module.ProductionModule
+
+    current_hash = proposal_cls.calculate_hash
+    if not getattr(current_hash, "_mmm_compile_local_hash_cache", False):
+
+        @wraps(current_hash)
+        def calculate_hash(self: Any) -> str:
+            cache = _WORK_GRAPH_HASH_CACHE.get()
+            if cache is None:
+                return current_hash(self)
+            key = id(self)
+            if key not in cache:
+                cache[key] = current_hash(self)
+            return cache[key]
+
+        calculate_hash._mmm_compile_local_hash_cache = True  # type: ignore[attr-defined]
+        proposal_cls.calculate_hash = calculate_hash
+
+    current_validate = module_cls.validate
+    if not getattr(current_validate, "_mmm_compile_local_validation_cache", False):
+
+        @wraps(current_validate)
+        def validate(self: Any, *, policy: Any = None) -> None:
+            cache = _WORK_GRAPH_VALIDATION_CACHE.get()
+            if cache is None:
+                current_validate(self, policy=policy)
+                return
+            key = (id(self), id(policy))
+            if key in cache:
+                return
+            current_validate(self, policy=policy)
+            cache.add(key)
+
+        validate._mmm_compile_local_validation_cache = True  # type: ignore[attr-defined]
+        module_cls.validate = validate
+
+    current_build = work_graph_module.build_production_work_plan
+    if getattr(current_build, "_mmm_compile_local_cache", False):
+        return
+
+    @wraps(current_build)
+    def build_production_work_plan(*args: Any, **kwargs: Any):
+        hash_token = _WORK_GRAPH_HASH_CACHE.set({})
+        validation_token = _WORK_GRAPH_VALIDATION_CACHE.set(set())
+        try:
+            return current_build(*args, **kwargs)
+        finally:
+            _WORK_GRAPH_VALIDATION_CACHE.reset(validation_token)
+            _WORK_GRAPH_HASH_CACHE.reset(hash_token)
+
+    build_production_work_plan._mmm_compile_local_cache = True  # type: ignore[attr-defined]
+    work_graph_module.build_production_work_plan = build_production_work_plan
+
+    # Runtime composition installs this layer late. Replace only aliases that still
+    # point at the exact pre-install function; unrelated names are never touched.
+    for loaded in tuple(sys.modules.values()):
+        if loaded is None:
+            continue
+        try:
+            if getattr(loaded, "build_production_work_plan", None) is current_build:
+                setattr(loaded, "build_production_work_plan", build_production_work_plan)
+        except (AttributeError, TypeError):
+            continue
 
 
 def _install_module_routing(work_graph_module: Any) -> None:
@@ -401,6 +488,7 @@ def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
 
     del scheduler_module
     _install_exact_llm_executor()
+    _install_work_graph_compile_cache(work_graph_module)
     _install_module_routing(work_graph_module)
     _install_parallel_custom_search(custom_module_generator)
 
@@ -408,6 +496,7 @@ def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
 __all__ = [
     "_active_parallelism",
     "_install_exact_llm_executor",
+    "_install_work_graph_compile_cache",
     "_install_module_routing",
     "_install_parallel_custom_search",
     "enhance_runtime",
