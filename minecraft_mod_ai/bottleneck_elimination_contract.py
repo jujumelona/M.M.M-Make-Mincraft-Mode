@@ -856,6 +856,7 @@ def _install_external_mcp_efficiency() -> None:
             raise external.ExternalMCPError(str(exc)) from exc
 
     pooled_call._mmm_persistent_provider = True
+    pooled_call._mmm_parallel_sessions = True
     pooled_call.__wrapped__ = call_provider
     external.ExternalMCPRouter._call_provider = pooled_call
 
