@@ -32,7 +32,6 @@ os.environ["MMM_RESEARCH_DOCUMENT_DIR"] = str(probe_root / "documents")
 # not a hand-built facsimile of the wrappers.
 import minecraft_mod_ai.agentic_pre_design_rag as pre_design
 import minecraft_mod_ai.agentic_research_game_design as agentic
-from minecraft_mod_ai.model_adapters import ModelBackendError
 
 
 def wrapper_chain(function):
@@ -215,12 +214,8 @@ class ProbeRouter:
         with lock:
             call = model_calls.get(domain_id, 0) + 1
             model_calls[domain_id] = call
-        if domain_id == "mk_item_block":
-            raise ModelBackendError(
-                role="planner",
-                model_id="probe-model",
-                cause=ValueError("Unterminated string starting at: line 1 column 76305"),
-            )
+        if domain_id == "mk_item_block" and call == 1:
+            raise RuntimeError("shared local router rejected concurrent request")
         return json.dumps(
             {
                 "research_note": {
@@ -262,26 +257,12 @@ assert all(name.startswith("mmm_research_domain") for name in worker_threads.val
 assert coverage["status"] == "PASS"
 assert len(coverage_by_domain) == 7
 assert all(status != "MISSING_FORCED_RAG_RECEIPT" for status in coverage_by_domain.values())
-assert coverage_by_domain["mk_item_block"] == "ROUTES_EXECUTED_WITH_GAPS"
-assert all(
-    status == "ROUTES_EXECUTED"
-    for domain_id, status in coverage_by_domain.items()
-    if domain_id != "mk_item_block"
-)
+assert all(status == "ROUTES_EXECUTED" for status in coverage_by_domain.values())
 assert model_calls["mk_item_block"] == 2
-failed_note = notes["mk_item_block"]
-assert failed_note["sufficient"] is False
-assert failed_note["fixed_point"] is True
-assert failed_note["checkpoint"]["status"] == "terminal_gap"
-assert any(
-    "Unterminated string" in failure["error"]
-    for failure in failed_note["research_failures"]
-)
-assert all(
-    notes[domain_id]["sufficient"] is True
-    for domain_id in coverage_by_domain
-    if domain_id != "mk_item_block"
-)
+recovered_note = notes["mk_item_block"]
+assert recovered_note["sufficient"] is True
+assert recovered_note.get("worker_error") is not True
+assert all(notes[domain_id]["sufficient"] is True for domain_id in coverage_by_domain)
 
 print(
     "__MMM_RESULT__="
@@ -292,8 +273,8 @@ print(
             "parallel_owner_index": parallel_index,
             "worker_domains": sorted(worker_contexts),
             "coverage": coverage_by_domain,
-            "malformed_calls": model_calls["mk_item_block"],
-            "failed_fixed_point": failed_note["fixed_point"],
+            "recovery_calls": model_calls["mk_item_block"],
+            "recovered_sufficient": recovered_note["sufficient"],
         },
         sort_keys=True,
     )
@@ -338,5 +319,5 @@ def test_fresh_runtime_bootstrap_preserves_forced_rag_across_parallel_recovery(
     assert result["forced_calls"] == 1
     assert result["forced_owner_index"] < result["parallel_owner_index"]
     assert len(result["coverage"]) == 7
-    assert result["malformed_calls"] == 2
-    assert result["failed_fixed_point"] is True
+    assert result["recovery_calls"] == 2
+    assert result["recovered_sufficient"] is True
