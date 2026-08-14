@@ -91,6 +91,25 @@ def _replace_registration_method(source: str, root_name: str | None) -> str:
     return source[:start] + _render_static_registration(root_name) + source[end:]
 
 
+def _generated_unit_names(root: Path, package_name: str) -> list[str]:
+    """Read registrar identity from generated Java names, not every JSON record."""
+
+    directory = (
+        root
+        / "src/main/java"
+        / Path(*package_name.split("."))
+        / "extended"
+    )
+    if not directory.is_dir() or directory.is_symlink():
+        return []
+    names: list[str] = []
+    for path in directory.glob("GeneratedContentUnit*.java"):
+        if path.is_file() and not path.is_symlink():
+            names.append(path.stem)
+    names.sort()
+    return names
+
+
 def _install_static_registration(extended_module: Any) -> None:
     original_lock = extended_module._EXTENDED_CONTENT_LOCK
     if not getattr(original_lock, "_mmm_project_scoped_extended_lock", False):
@@ -125,15 +144,12 @@ def _install_static_registration(extended_module: Any) -> None:
                 if not isinstance(receipt, dict) or receipt.get("status") != "GENERATED":
                     return receipt
 
-                records = [
-                    item
-                    for item in extended_module.iter_extended_module_records(root)
-                    if str(item.get("kind", "")) in extended_module._JAVA_KINDS
-                ]
-                leaf_names = [
-                    extended_module._unit_class_name(str(item["module_id"]))
-                    for item in records
-                ]
+                # The base generator has already materialized one deterministic
+                # GeneratedContentUnit*.java file for every Java-backed module.
+                # Reopening and JSON-decoding the complete bounded record directory
+                # here was a second O(N) I/O pass. Filenames are the exact registrar
+                # class identities and are sufficient for the compile-time tree.
+                leaf_names = _generated_unit_names(root, str(package_name))
                 dispatch_root, dispatch_files = extended_module._registrar_tree_files(
                     str(package_name),
                     leaf_names,
