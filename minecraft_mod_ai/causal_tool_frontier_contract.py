@@ -21,13 +21,7 @@ def _contains(value: str, markers: Sequence[str]) -> bool:
 
 
 def goals_for_query(query: str) -> tuple[str, ...]:
-    """Resolve the request to one terminal causal target, not a keyword AND-bag.
-
-    Intermediate requirements such as evidence/project observation are encoded in
-    transition preconditions and are therefore reached by the shortest-path solver.
-    Choosing one terminal state prevents generic words such as ``inspect`` from
-    accidentally requiring an unrelated second terminal state.
-    """
+    """Resolve one terminal target; preconditions supply intermediate states."""
 
     value = query.casefold()
     external = ("external mcp", "mcp server", "capability", "외부 mcp")
@@ -39,21 +33,35 @@ def goals_for_query(query: str) -> tuple[str, ...]:
         "플레이테스트 검증",
     )
     release = ("package", "release", "jar", "배포", "패키지")
-    act = (
+    repair = (
+        "repair",
+        "fix",
+        "patch",
+        "bugfix",
+        "고쳐",
+        "고치",
+        "수리",
+        "복구",
+    )
+    generate = (
         "generate",
         "create",
-        "patch",
-        "modify",
-        "fix",
-        "write",
-        "implement",
-        "repair",
+        "new project",
+        "new mod",
         "만들",
         "생성",
+        "새 모드",
+        "새 프로젝트",
+    )
+    act = (
+        "modify",
+        "write",
+        "implement",
+        "edit",
+        "change",
         "수정",
-        "고쳐",
         "구현",
-        "수리",
+        "변경",
     )
     verify = (
         "error",
@@ -93,17 +101,16 @@ def goals_for_query(query: str) -> tuple[str, ...]:
     )
     plan = ("plan", "planning", "계획", "플랜")
 
-    # Terminal intents are ordered by the state the user ultimately wants.  A
-    # mutation request that also mentions errors/API still targets project_changed;
-    # its causal path acquires the required evidence first.  Verification requests
-    # without mutation words target verified.  This keeps verification from becoming
-    # stale merely because both words appeared in the same prompt.
     if _contains(value, external):
         return ("external",)
     if _contains(value, runtime_verify):
         return ("runtime_verify",)
     if _contains(value, release):
         return ("release",)
+    if _contains(value, repair):
+        return ("repair",)
+    if _contains(value, generate):
+        return ("generate",)
     if _contains(value, act):
         return ("act",)
     if _contains(value, verify):
@@ -181,12 +188,13 @@ def install(max_agent_owner: Any) -> None:
             require_fresh_evidence: bool = False,
         ) -> tuple[Mapping[str, Any], ...]:
             available = tuple(tool_schemas)
-            remember_authorized_tools(available)
+            remember_authorized_tools(available, {})
             if not available:
                 return ()
 
-            # Semantic/tool relevance remains a tie-breaker only after the causal
-            # policy has established which next transitions are executable.
+            # This prior selector is relevance-only. Its order is retained as a
+            # preference map, but causal legality/minimum total cost is computed over
+            # the COMPLETE authorized surface below.
             ranked = tuple(
                 current(
                     router,
@@ -197,6 +205,7 @@ def install(max_agent_owner: Any) -> None:
                 )
             )
             rank = {_name(schema): index for index, schema in enumerate(ranked)}
+            remember_authorized_tools(available, rank)
             state = infer_verified_state(
                 query=query,
                 tool_schemas=available,
@@ -209,11 +218,10 @@ def install(max_agent_owner: Any) -> None:
                 goals=goals,
                 limit=_env_int("MMM_CAUSAL_TOOL_FRONTIER_MAX", 3, minimum=1, maximum=3),
                 max_depth=_env_int("MMM_CAUSAL_TOOL_MAX_DEPTH", 8, minimum=1, maximum=10),
+                preference=rank,
             )
             by_name = {_name(schema): schema for schema in available if _name(schema)}
-            selected = [by_name[name] for name in names if name in by_name]
-            selected.sort(key=lambda schema: (rank.get(_name(schema), len(rank)), _name(schema)))
-            result = tuple(selected[:3])
+            result = tuple(by_name[name] for name in names if name in by_name)[:3]
             print(
                 "causal tool frontier:",
                 f"role={role}",
