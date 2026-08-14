@@ -16,24 +16,105 @@ def _name(schema: Mapping[str, Any]) -> str:
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
 
 
+def _contains(value: str, markers: Sequence[str]) -> bool:
+    return any(marker in value for marker in markers)
+
+
 def goals_for_query(query: str) -> tuple[str, ...]:
+    """Resolve the request to one terminal causal target, not a keyword AND-bag.
+
+    Intermediate requirements such as evidence/project observation are encoded in
+    transition preconditions and are therefore reached by the shortest-path solver.
+    Choosing one terminal state prevents generic words such as ``inspect`` from
+    accidentally requiring an unrelated second terminal state.
+    """
+
     value = query.casefold()
-    goals: list[str] = []
-    marker_groups = (
-        ("external", ("external mcp", "mcp server", "capability", "외부 mcp")),
-        ("runtime_verify", ("runtime assertion", "playtest verify", "런타임 검증", "플레이테스트 검증")),
-        ("release", ("package", "release", "jar", "배포", "패키지")),
-        ("verify", ("repair", "error", "fail", "compile", "diagnostic", "verify", "test", "검증", "오류", "실패", "수리")),
-        ("runtime", ("runtime", "playtest", "server", "client", "screenshot", "런타임", "플레이테스트", "서버", "클라이언트")),
-        ("evidence", ("api", "version", "mapping", "yarn", "research", "evidence", "검색", "근거", "버전")),
-        ("plan", ("plan", "planning", "계획", "플랜")),
-        ("observe", ("existing", "project", "inspect", "current", "기존", "프로젝트", "확인")),
-        ("act", ("generate", "create", "patch", "modify", "fix", "write", "만들", "수정", "고쳐", "구현")),
+    external = ("external mcp", "mcp server", "capability", "외부 mcp")
+    runtime_verify = (
+        "runtime assertion",
+        "playtest verify",
+        "runtime verify",
+        "런타임 검증",
+        "플레이테스트 검증",
     )
-    for goal, markers in marker_groups:
-        if any(marker in value for marker in markers):
-            goals.append(goal)
-    return tuple(dict.fromkeys(goals or ("observe",)))
+    release = ("package", "release", "jar", "배포", "패키지")
+    act = (
+        "generate",
+        "create",
+        "patch",
+        "modify",
+        "fix",
+        "write",
+        "implement",
+        "repair",
+        "만들",
+        "생성",
+        "수정",
+        "고쳐",
+        "구현",
+        "수리",
+    )
+    verify = (
+        "error",
+        "fail",
+        "compile",
+        "diagnostic",
+        "verify",
+        "test",
+        "validation",
+        "검증",
+        "오류",
+        "실패",
+        "테스트",
+    )
+    runtime = (
+        "runtime",
+        "playtest",
+        "server",
+        "client",
+        "screenshot",
+        "런타임",
+        "플레이테스트",
+        "서버",
+        "클라이언트",
+    )
+    evidence = (
+        "api",
+        "version",
+        "mapping",
+        "yarn",
+        "research",
+        "evidence",
+        "source search",
+        "검색",
+        "근거",
+        "버전",
+    )
+    plan = ("plan", "planning", "계획", "플랜")
+
+    # Terminal intents are ordered by the state the user ultimately wants.  A
+    # mutation request that also mentions errors/API still targets project_changed;
+    # its causal path acquires the required evidence first.  Verification requests
+    # without mutation words target verified.  This keeps verification from becoming
+    # stale merely because both words appeared in the same prompt.
+    if _contains(value, external):
+        return ("external",)
+    if _contains(value, runtime_verify):
+        return ("runtime_verify",)
+    if _contains(value, release):
+        return ("release",)
+    if _contains(value, act):
+        return ("act",)
+    if _contains(value, verify):
+        return ("verify",)
+    if _contains(value, runtime):
+        return ("runtime",)
+    if _contains(value, evidence):
+        return ("evidence",)
+    if _contains(value, plan):
+        return ("plan",)
+    return ("observe",)
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -100,14 +181,12 @@ def install(max_agent_owner: Any) -> None:
             require_fresh_evidence: bool = False,
         ) -> tuple[Mapping[str, Any], ...]:
             available = tuple(tool_schemas)
-            # The supplied set is already stage/role/security filtered. Preserve the
-            # complete authorized set in a ContextVar so later tool-loop rounds can
-            # reveal different members only after their preconditions are verified.
             remember_authorized_tools(available)
             if not available:
                 return ()
 
-            # Semantic retrieval remains a tie-breaker among causally legal choices.
+            # Semantic/tool relevance remains a tie-breaker only after the causal
+            # policy has established which next transitions are executable.
             ranked = tuple(
                 current(
                     router,
