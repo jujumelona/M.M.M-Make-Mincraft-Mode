@@ -14,6 +14,8 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .procedural_memory_hierarchy import build_hierarchy, compact_hierarchy
+
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
 _LOCK = threading.RLock()
 _ALLOWED_FACT_KEYS = frozenset(
@@ -256,18 +258,20 @@ def synthesize_temporary_skill(
                 if token in {"pass", "success", "fail", "jdt_status", "jdt_error_count", "overall_status"}:
                     verifier_facts[token] += 1
         examples.append(str(row.get("trajectory_id", "")))
+    hierarchy = compact_hierarchy(build_hierarchy(records[:8]), max_items=18)
     return {
-        "schema_version": "mmm/temporary-skill-v1",
+        "schema_version": "mmm/temporary-skill-v2",
         "ephemeral": True,
         "task_class": task_class,
         "current_query_terms": sorted(_tokens(query))[:48],
+        "procedural_hierarchy": hierarchy,
         "proven_patterns": [item for item, _count in success_actions.most_common(6)],
         "avoid_patterns": [item for item, _count in failure_signatures.most_common(6)],
         "verifier_hints": [item for item, _count in verifier_facts.most_common(8)],
         "source_trajectory_ids": examples[:8],
         "rule": (
-            "Use these host-verified patterns only as procedural hints. Current exact evidence, "
-            "tool results, compiler diagnostics and acceptance tests remain authoritative."
+            "Use subtask-level verified procedures first, then function/workflow hints. "
+            "Current exact evidence, tool results, compiler diagnostics and acceptance tests remain authoritative."
         ),
     }
 
