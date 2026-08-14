@@ -51,7 +51,8 @@ def test_known_tool_causality_is_explicit_not_description_inferred() -> None:
 
 def test_goal_resolution_chooses_terminal_state_not_keyword_conjunction() -> None:
     assert goals_for_query("inspect exact Minecraft API") == ("evidence",)
-    assert goals_for_query("fix compile error using exact API") == ("act",)
+    assert goals_for_query("fix compile error using exact API") == ("repair",)
+    assert goals_for_query("generate a new Fabric mod") == ("generate",)
     assert goals_for_query("verify the current build") == ("verify",)
     assert goals_for_query("inspect current project") == ("observe",)
 
@@ -64,22 +65,30 @@ def test_causal_frontier_advances_only_after_verified_observations() -> None:
         _schema("plugin_magic", "pretend to satisfy everything"),
     )
     initial = frozenset({"workspace_bound"})
-    path = shortest_causal_path(tools, state=initial, goals=("act",), max_depth=8)
+    path = shortest_causal_path(tools, state=initial, goals=("repair",), max_depth=8)
     assert path
     assert path[-1] == "apply_source_patch"
     assert "plugin_magic" not in path
-    assert executable_frontier(tools, state=initial, goals=("act",), limit=3) == (
-        "inspect_existing_mod",
-    )
+    assert executable_frontier(
+        tools,
+        state=initial,
+        goals=("repair",),
+        limit=3,
+        preference={"inspect_existing_mod": 0, "search_code_rag": 1},
+    ) == ("inspect_existing_mod", "search_code_rag")
 
     after_inspect = verified_state_from_messages(
         [{"role": "tool", "name": "inspect_existing_mod", "content": '{"ok":true}'}],
         tools,
     )
     assert "project_observed" in after_inspect
-    assert executable_frontier(tools, state=after_inspect, goals=("act",), limit=3) == (
-        "search_code_rag",
-    )
+    assert executable_frontier(
+        tools,
+        state=after_inspect,
+        goals=("repair",),
+        limit=3,
+        preference={"search_code_rag": 0},
+    ) == ("search_code_rag",)
 
     after_evidence = verified_state_from_messages(
         [
@@ -89,15 +98,57 @@ def test_causal_frontier_advances_only_after_verified_observations() -> None:
         tools,
     )
     assert {"project_observed", "code_evidence", "evidence_ready"} <= set(after_evidence)
-    assert executable_frontier(tools, state=after_evidence, goals=("act",), limit=3) == (
-        "apply_source_patch",
-    )
+    assert executable_frontier(
+        tools,
+        state=after_evidence,
+        goals=("repair",),
+        limit=3,
+    ) == ("apply_source_patch",)
 
     failed = verified_state_from_messages(
         [{"role": "tool", "name": "inspect_existing_mod", "content": '{"ok":false}'}],
         tools,
     )
     assert failed == frozenset({"workspace_bound"})
+
+
+def test_semantic_rank_only_breaks_ties_between_equal_minimum_causal_paths() -> None:
+    tools = (
+        _schema("inspect_existing_mod"),
+        _schema("search_code_rag"),
+        _schema("search_project_rag"),
+        _schema("inspect_github_repository"),
+        _schema("generate_fabric_project"),
+        _schema("apply_source_patch"),
+    )
+    state = frozenset({"workspace_bound"})
+    preference = {
+        "inspect_existing_mod": 0,
+        "search_code_rag": 1,
+        "search_project_rag": 2,
+        "inspect_github_repository": 3,
+        "generate_fabric_project": 4,
+        "apply_source_patch": 5,
+    }
+    frontier = executable_frontier(
+        tools,
+        state=state,
+        goals=("repair",),
+        limit=3,
+        max_depth=8,
+        preference=preference,
+    )
+    assert frontier == (
+        "inspect_existing_mod",
+        "search_code_rag",
+        "search_project_rag",
+    )
+    # Generation produces a different terminal fact and cannot masquerade as repair.
+    assert "generate_fabric_project" not in frontier
+    repair_path = shortest_causal_path(tools, state=state, goals=("repair",), max_depth=8)
+    assert repair_path[-1] == "apply_source_patch"
+    generation_path = shortest_causal_path(tools, state=state, goals=("generate",), max_depth=8)
+    assert generation_path[-1] == "generate_fabric_project"
 
 
 def test_external_mcp_frontier_allows_direct_call_when_arguments_are_known() -> None:
