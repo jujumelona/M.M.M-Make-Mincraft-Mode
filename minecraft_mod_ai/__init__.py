@@ -4,6 +4,10 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
+from .bottleneck_elimination_contract import install as _install_bottleneck_elimination
+
+_install_bottleneck_elimination()
+
 from .api import (
     ChatReply,
     CompleteChatReply,
