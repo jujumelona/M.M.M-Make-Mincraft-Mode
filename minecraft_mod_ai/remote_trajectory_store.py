@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Optional cross-run trajectory persistence outside the MMM source repository.
+"""Optional versioned cross-run trajectory persistence outside the MMM source repo.
 
-Writes are fail-closed behind explicit Colab consent. Production never depends on
-remote persistence: records are first queued locally and a failed sync leaves the
-outbox intact.
+Writes are fail-closed behind explicit Colab consent and verifier qualification.
+Production never depends on remote persistence: eligible records are queued locally
+first and a failed sync leaves the outbox intact.
 """
 
 import base64
@@ -24,6 +24,7 @@ from .remote_skill_store_consent import (
     sanitize_remote_payload,
 )
 from .trajectory_memory import remote_cache_path
+from .trajectory_verification import REMOTE_FORMAT_VERSION, record_remote_eligible
 
 _BACKEND_ENV = "MMM_TRAJECTORY_STORE_BACKEND"
 _REPO_ENV = "MMM_TRAJECTORY_STORE_REPO"
@@ -44,14 +45,22 @@ def _repo() -> str:
     return os.environ.get(_REPO_ENV, "").strip()
 
 
+def _remote_path(task_class: str) -> str:
+    return f"memory/{REMOTE_FORMAT_VERSION}/{task_class}.jsonl"
+
+
+def _legacy_remote_path(task_class: str) -> str:
+    return f"memory/{task_class}.jsonl"
+
+
 def remote_configured() -> bool:
     return remote_write_allowed() and _backend() != "none" and bool(_repo())
 
 
 def queue_remote_record(base: str | Path, row: Mapping[str, Any]) -> bool:
-    """Queue one sanitized record only when the user explicitly opted in."""
+    """Queue one sanitized, verifier-qualified record only after explicit opt-in."""
 
-    if not remote_write_allowed():
+    if not remote_write_allowed() or not record_remote_eligible(row):
         return False
     sanitized = sanitize_remote_payload(dict(row))
     path = _outbox(base)
@@ -89,7 +98,7 @@ def _read_jsonl(path: Path, *, max_rows: int = _MAX_REMOTE_ROWS) -> list[dict[st
                 value = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            if isinstance(value, dict):
+            if isinstance(value, dict) and record_remote_eligible(value):
                 rows.append(value)
     return list(rows)
 
@@ -98,6 +107,8 @@ def _merge_rows(existing: Sequence[Mapping[str, Any]], pending: Sequence[Mapping
     by_id: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for row in [*existing, *pending]:
+        if not record_remote_eligible(row):
+            continue
         identity = str(row.get("trajectory_id", ""))
         if not identity:
             continue
@@ -141,11 +152,9 @@ def _github_request(method: str, path: str, *, body: Mapping[str, Any] | None = 
     return json.loads(raw.decode("utf-8")) if raw else {}
 
 
-def _github_read(task_class: str) -> tuple[list[dict[str, Any]], str]:
-    repo = _repo()
-    path = f"memory/{task_class}.jsonl"
+def _github_read_path(path: str) -> tuple[list[dict[str, Any]], str]:
     encoded_path = urllib.parse.quote(path, safe="/")
-    value = _github_request("GET", f"/repos/{repo}/contents/{encoded_path}")
+    value = _github_request("GET", f"/repos/{_repo()}/contents/{encoded_path}")
     if value is None:
         return [], ""
     content = base64.b64decode(str(value.get("content", "")).encode("ascii"))
@@ -155,33 +164,42 @@ def _github_read(task_class: str) -> tuple[list[dict[str, Any]], str]:
             item = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if isinstance(item, dict):
+        if isinstance(item, dict) and record_remote_eligible(item):
             rows.append(item)
     return rows[-_MAX_REMOTE_ROWS:], str(value.get("sha", ""))
+
+
+def _github_read(task_class: str) -> tuple[list[dict[str, Any]], str]:
+    rows, sha = _github_read_path(_remote_path(task_class))
+    if rows or sha:
+        return rows, sha
+    # Read-only compatibility for a pre-v3 store. Legacy rows without verifier
+    # qualification are deliberately discarded by record_remote_eligible().
+    legacy, _legacy_sha = _github_read_path(_legacy_remote_path(task_class))
+    return legacy, ""
 
 
 def _github_write(task_class: str, pending: Sequence[Mapping[str, Any]]) -> None:
     require_remote_write_consent()
     existing, sha = _github_read(task_class)
     content = _merge_rows(existing, pending)
-    repo = _repo()
-    path = f"memory/{task_class}.jsonl"
+    path = _remote_path(task_class)
     encoded_path = urllib.parse.quote(path, safe="/")
     body: dict[str, Any] = {
-        "message": f"Update verified {task_class} trajectories",
+        "message": f"Update {REMOTE_FORMAT_VERSION} verified {task_class} trajectories",
         "content": base64.b64encode(content).decode("ascii"),
         "branch": os.environ.get(_BRANCH_ENV, "main").strip() or "main",
     }
     if sha:
         body["sha"] = sha
-    _github_request("PUT", f"/repos/{repo}/contents/{encoded_path}", body=body)
+    _github_request("PUT", f"/repos/{_repo()}/contents/{encoded_path}", body=body)
 
 
 def _hf_token() -> str:
     return os.environ.get("MMM_TRAJECTORY_HF_TOKEN", "").strip() or os.environ.get("HF_TOKEN", "").strip()
 
 
-def _hf_read(task_class: str) -> list[dict[str, Any]]:
+def _hf_read_path(path_in_repo: str) -> list[dict[str, Any]]:
     token = _hf_token()
     if not token:
         raise RuntimeError("Hugging Face trajectory store requires HF_TOKEN or MMM_TRAJECTORY_HF_TOKEN.")
@@ -189,7 +207,7 @@ def _hf_read(task_class: str) -> list[dict[str, Any]]:
         from huggingface_hub import hf_hub_download
         path = hf_hub_download(
             _repo(),
-            filename=f"memory/{task_class}.jsonl",
+            filename=path_in_repo,
             repo_type=os.environ.get("MMM_TRAJECTORY_HF_REPO_TYPE", "dataset"),
             token=token,
         )
@@ -199,6 +217,11 @@ def _hf_read(task_class: str) -> list[dict[str, Any]]:
             return []
         raise
     return _read_jsonl(Path(path))
+
+
+def _hf_read(task_class: str) -> list[dict[str, Any]]:
+    rows = _hf_read_path(_remote_path(task_class))
+    return rows if rows else _hf_read_path(_legacy_remote_path(task_class))
 
 
 def _hf_write(task_class: str, pending: Sequence[Mapping[str, Any]]) -> None:
@@ -215,17 +238,17 @@ def _hf_write(task_class: str, pending: Sequence[Mapping[str, Any]]) -> None:
     try:
         HfApi(token=token).upload_file(
             path_or_fileobj=str(temporary),
-            path_in_repo=f"memory/{task_class}.jsonl",
+            path_in_repo=_remote_path(task_class),
             repo_id=_repo(),
             repo_type=os.environ.get("MMM_TRAJECTORY_HF_REPO_TYPE", "dataset"),
-            commit_message=f"Update verified {task_class} trajectories",
+            commit_message=f"Update {REMOTE_FORMAT_VERSION} verified {task_class} trajectories",
         )
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def hydrate_remote_cache(base: str | Path, task_class: str) -> bool:
-    """Refresh one task-class shard; failures never break production."""
+    """Refresh one verified task-class shard; failures never break production."""
 
     if not remote_configured():
         return False
@@ -241,7 +264,7 @@ def hydrate_remote_cache(base: str | Path, task_class: str) -> bool:
 
 
 def flush_remote_outbox(base: str | Path) -> dict[str, Any]:
-    """Flush queued records at a safe work-unit boundary, keeping failures local."""
+    """Flush qualified records at a safe work-unit boundary, keeping failures local."""
 
     require_remote_write_consent()
     backend = _backend()
@@ -251,6 +274,7 @@ def flush_remote_outbox(base: str | Path) -> dict[str, Any]:
     path = _outbox(base)
     rows = _read_jsonl(path, max_rows=10000)
     if not rows:
+        path.unlink(missing_ok=True)
         return {"status": "EMPTY", "flushed": 0}
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -264,7 +288,13 @@ def flush_remote_outbox(base: str | Path) -> dict[str, Any]:
     except Exception as exc:
         return {"status": "DEFERRED", "flushed": 0, "error": f"{type(exc).__name__}: {str(exc)[:500]}"}
     path.unlink(missing_ok=True)
-    return {"status": "SYNCED", "flushed": len(rows), "backend": backend, "repo": repo}
+    return {
+        "status": "SYNCED",
+        "flushed": len(rows),
+        "backend": backend,
+        "repo": repo,
+        "format_version": REMOTE_FORMAT_VERSION,
+    }
 
 
 __all__ = [
