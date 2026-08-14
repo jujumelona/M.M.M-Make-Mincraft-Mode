@@ -8,6 +8,7 @@ def install() -> None:
         agentic_pre_design_rag,
         agentic_research_game_design,
         centroid_vector_rag,
+        central_intelligence_amplifier,
         complete_spec,
         rag_index,
         research_adaptive_rag_routing,
@@ -30,6 +31,7 @@ def install() -> None:
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
+    from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .work_graph_hash_performance import harden as harden_work_graph_hashes
 
     harden_rag(rag_index, centroid_vector_rag)
@@ -42,6 +44,10 @@ def install() -> None:
     harden_adaptive_providers(
         agentic_research_game_design,
         research_adaptive_rag_routing,
+    )
+    harden_adaptive_compute(
+        agentic_research_game_design,
+        central_intelligence_amplifier,
     )
     indexed_append, indexed_relevant = harden_memory(trajectory_memory)
 
