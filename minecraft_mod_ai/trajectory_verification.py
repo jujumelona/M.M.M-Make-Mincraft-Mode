@@ -29,7 +29,6 @@ _FAILURE_LEVEL = {
     "synthetic_counterexample": 2,
     "test": 3,
     "gametest": 3,
-    "synthetic_scenarios": 3,
     "reproduction": 3,
     "runtime": 4,
     "acceptance": 5,
@@ -88,18 +87,40 @@ def _kind_for_command(name: str) -> str:
     return "command"
 
 
+def _scenario_kind(scenario_id: str) -> str | None:
+    value = scenario_id.casefold()
+    if "gametest" in value or "game_test" in value:
+        return "gametest"
+    if "runtime" in value or "playtest" in value or "interaction" in value:
+        return "runtime"
+    if "test" in value or "assert" in value:
+        return "test"
+    if "build" in value or "gradle" in value:
+        return "build"
+    if "json" in value or "parse" in value or "static" in value:
+        return "static"
+    return None
+
+
 def _append(chain: list[dict[str, Any]], *, kind: str, status: str, source: str, details: Mapping[str, Any] | None = None) -> None:
-    record = {
-        "kind": kind,
-        "status": status,
-        "source": source[:240],
-    }
+    record = {"kind": kind, "status": status, "source": source[:240]}
     if details:
         record["details"] = dict(details)
     identity = (record["kind"], record["status"], record["source"], repr(record.get("details", {})))
     if any((item["kind"], item["status"], item["source"], repr(item.get("details", {}))) == identity for item in chain):
         return
     chain.append(record)
+
+
+def _quality_receipt(node: Mapping[str, Any]) -> bool:
+    refs = node.get("evidence_refs")
+    return (
+        node.get("verified_by") == "mmm.quality-evidence-adapter/v1"
+        and str(node.get("receipt_id", "")).startswith("quality:")
+        and isinstance(refs, Sequence)
+        and not isinstance(refs, (str, bytes, bytearray))
+        and len(refs) > 0
+    )
 
 
 def _collect_chain(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -123,9 +144,6 @@ def _collect_chain(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
             elif value in _FAIL:
                 _append(chain, kind="build", status="FAIL", source=f"{path}.{source_key}".strip("."))
 
-        if ("build" in lower_path or "gradle" in lower_path) and status in _PASS | _FAIL:
-            _append(chain, kind="build", status="PASS" if status in _PASS else "FAIL", source=path or "receipt")
-
         for command in _commands(node):
             name = str(command.get("name", "")).strip()
             if not name:
@@ -145,38 +163,49 @@ def _collect_chain(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
             elif status in _FAIL:
                 _append(chain, kind=kind, status="FAIL", source=path or "receipt", details={"assertions": assertion_count})
 
-        if node.get("server_running") is True and ("runtime" in lower_path or "server" in lower_path):
-            _append(chain, kind="runtime", status="PASS", source=path or "receipt", details={"server_running": True})
-
-        if any(marker in lower_path for marker in ("acceptance", "quality_contract", "quality_gate", "quality_evidence")) and status in _PASS | _FAIL:
-            evidence = node.get("evidence", ())
-            evidence_count = len(evidence) if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else 0
-            _append(chain, kind="acceptance", status="PASS" if status in _PASS else "FAIL", source=path or "receipt", details={"evidence_count": evidence_count})
+        if _quality_receipt(node) and status in _PASS | _FAIL:
+            refs = node.get("evidence_refs")
+            _append(
+                chain,
+                kind="acceptance",
+                status="PASS" if status in _PASS else "FAIL",
+                source=path or "receipt",
+                details={
+                    "dimension_id": str(node.get("dimension_id", "")),
+                    "evidence_count": len(refs) if isinstance(refs, Sequence) else 0,
+                    "receipt_id": str(node.get("receipt_id", ""))[:160],
+                },
+            )
 
         reproduction = node.get("reproduction") or node.get("replay") or node.get("reproducibility")
         if isinstance(reproduction, Mapping):
             repro_status = _status(reproduction.get("status"))
-            if repro_status in _PASS | _FAIL:
-                _append(chain, kind="reproduction", status="PASS" if repro_status in _PASS else "FAIL", source=f"{path}.reproduction".strip("."))
+            verifier = str(reproduction.get("verified_by", "")).strip()
+            isolated = reproduction.get("isolated_snapshot") is True
+            if repro_status in _PASS | _FAIL and (verifier or isolated):
+                _append(chain, kind="reproduction", status="PASS" if repro_status in _PASS else "FAIL", source=f"{path}.reproduction".strip("."), details={"isolated_snapshot": isolated, "verified_by": verifier[:160]})
 
         counterexample = node.get("counterexample_result")
         if isinstance(counterexample, Mapping):
             counter_status = _status(counterexample.get("status"))
-            details = {
-                "gametest_requested": bool(counterexample.get("gametest_requested")),
-                "json_ok": counterexample.get("json_ok"),
-                "isolated_snapshot": True,
-            }
-            if counter_status in _PASS | _FAIL:
-                _append(chain, kind="synthetic_counterexample", status="PASS" if counter_status in _PASS else "FAIL", source=f"{path}.counterexample_result".strip("."), details=details)
+            synthetic = counterexample.get("synthetic_verification")
+            isolated = isinstance(synthetic, Mapping) and synthetic.get("isolated_snapshot") is True
+            if counter_status in _PASS | _FAIL and isolated:
+                _append(chain, kind="synthetic_counterexample", status="PASS" if counter_status in _PASS else "FAIL", source=f"{path}.counterexample_result".strip("."), details={"gametest_requested": bool(counterexample.get("gametest_requested")), "json_ok": counterexample.get("json_ok"), "isolated_snapshot": True})
 
         synthetic = node.get("synthetic_verification")
-        if isinstance(synthetic, Mapping):
-            synthetic_status = _status(synthetic.get("status"))
-            cases = synthetic.get("scenarios") or synthetic.get("cases") or ()
-            case_count = len(cases) if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)) else 0
-            if synthetic_status in _PASS | _FAIL and case_count > 0:
-                _append(chain, kind="synthetic_scenarios", status="PASS" if synthetic_status in _PASS else "FAIL", source=f"{path}.synthetic_verification".strip("."), details={"case_count": case_count, "isolated_snapshot": bool(synthetic.get("isolated_snapshot"))})
+        if isinstance(synthetic, Mapping) and synthetic.get("isolated_snapshot") is True:
+            scenarios = synthetic.get("scenarios") or synthetic.get("cases") or ()
+            if isinstance(scenarios, Sequence) and not isinstance(scenarios, (str, bytes, bytearray)):
+                for index, scenario in enumerate(scenarios[:64]):
+                    if not isinstance(scenario, Mapping):
+                        continue
+                    scenario_status = _status(scenario.get("status"))
+                    scenario_id = str(scenario.get("scenario_id", f"case-{index}"))
+                    kind = _scenario_kind(scenario_id)
+                    if kind is None or scenario_status not in _PASS | _FAIL:
+                        continue
+                    _append(chain, kind=kind, status="PASS" if scenario_status in _PASS else "FAIL", source=f"{path}.synthetic_verification:{scenario_id}".strip("."), details={"synthetic": True, "isolated_snapshot": True})
 
     return chain
 
@@ -189,18 +218,14 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
     chain = _collect_chain(receipt or {})
     static_pass = _has(chain, {"static"})
     build_pass = _has(chain, {"build"})
-    test_pass = _has(chain, {"test", "gametest", "synthetic_scenarios"})
+    test_pass = _has(chain, {"test", "gametest"})
     runtime_pass = _has(chain, {"runtime"})
     acceptance_pass = _has(chain, {"acceptance"})
     explicit_reproduction = _has(chain, {"reproduction"})
     independent_replay = static_pass and _has(chain, {"synthetic_counterexample"})
     reproduced = explicit_reproduction or independent_replay
 
-    failed_kinds = [
-        str(item.get("kind"))
-        for item in chain
-        if str(item.get("status")) == "FAIL" and str(item.get("kind")) in _FAILURE_LEVEL
-    ]
+    failed_kinds = [str(item.get("kind")) for item in chain if str(item.get("status")) == "FAIL" and str(item.get("kind")) in _FAILURE_LEVEL]
     failure_level = max((_FAILURE_LEVEL[kind] for kind in failed_kinds), default=0)
     verified_failure = failure_level > 0
 
@@ -240,13 +265,7 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
         "verified_failure": verified_failure,
         "reproduced": reproduced,
         "reproduction_basis": "explicit" if explicit_reproduction else ("independent-clean-snapshot" if independent_replay else "none"),
-        "checks": {
-            "static": static_pass,
-            "build": build_pass,
-            "tests": test_pass,
-            "runtime": runtime_pass,
-            "acceptance": acceptance_pass,
-        },
+        "checks": {"static": static_pass, "build": build_pass, "tests": test_pass, "runtime": runtime_pass, "acceptance": acceptance_pass},
         "verifier_chain": chain[:48],
         "error_present": bool(str(error).strip()),
         "policy": "model completion claims never count as verification evidence",
