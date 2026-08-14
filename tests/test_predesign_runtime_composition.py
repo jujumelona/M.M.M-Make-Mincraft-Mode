@@ -177,7 +177,7 @@ def observed_worker(
     context_receipt = pre_design._FORCED_RAG_CONTEXT.get()
     with lock:
         worker_contexts[domain_id] = context_receipt
-        worker_threads[domain_id] = threading.current_thread().name
+        worker_threads.setdefault(domain_id, []).append(threading.current_thread().name)
     return installed_worker(
         router,
         prompt=prompt,
@@ -253,7 +253,18 @@ assert forced_calls == 1, f"forced RAG executed {forced_calls} times"
 assert set(worker_contexts) == brief_domain_ids
 assert set(materialized_receipts) == brief_domain_ids
 assert all(isinstance(value, dict) for value in worker_contexts.values())
-assert all(name.startswith("mmm_research_domain") for name in worker_threads.values())
+assert all(
+    names and names[0].startswith("mmm_research_domain")
+    for names in worker_threads.values()
+)
+assert worker_threads["mk_item_block"] == [
+    worker_threads["mk_item_block"][0],
+    "MainThread",
+]
+assert all(
+    len(names) == (2 if domain_id == "mk_item_block" else 1)
+    for domain_id, names in worker_threads.items()
+)
 assert coverage["status"] == "PASS"
 assert len(coverage_by_domain) == 7
 assert all(status != "MISSING_FORCED_RAG_RECEIPT" for status in coverage_by_domain.values())
@@ -272,6 +283,7 @@ print(
             "forced_owner_index": outer_forced_index,
             "parallel_owner_index": parallel_index,
             "worker_domains": sorted(worker_contexts),
+            "worker_threads": worker_threads,
             "coverage": coverage_by_domain,
             "recovery_calls": model_calls["mk_item_block"],
             "recovered_sufficient": recovered_note["sufficient"],
@@ -320,4 +332,5 @@ def test_fresh_runtime_bootstrap_preserves_forced_rag_across_parallel_recovery(
     assert result["forced_owner_index"] < result["parallel_owner_index"]
     assert len(result["coverage"]) == 7
     assert result["recovery_calls"] == 2
+    assert result["worker_threads"]["mk_item_block"][-1] == "MainThread"
     assert result["recovered_sufficient"] is True
