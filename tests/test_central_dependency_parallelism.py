@@ -10,6 +10,7 @@ from minecraft_mod_ai.central_intelligence_amplifier import (
     _research_domain_worker_count,
     install_parallel_core,
 )
+from minecraft_mod_ai.model_router import ModelRouter
 
 
 class _Registry:
@@ -24,10 +25,13 @@ class _Registry:
         )
 
 
-class _Router:
+class _Router(ModelRouter):
     profile = "test"
 
     def __init__(self, *, provider: str = "local") -> None:
+        # This is an intentionally minimal managed-router probe. The capacity policy only
+        # needs the production ModelRouter identity plus the planner role contract; no model
+        # backend is constructed by these tests.
         self.registry = _Registry(provider=provider)
 
 

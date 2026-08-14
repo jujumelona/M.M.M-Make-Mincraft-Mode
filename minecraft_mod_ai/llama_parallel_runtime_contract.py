@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping
 
 _ROUTER_CONTRACT_VERSION = 3
 _PLANNER_SEARCH_CONTRACT_VERSION = 2
+_RESEARCH_DESIGN_CAPACITY_VERSION = 1
 
 
 class ReentrantReadWriteLock:
@@ -328,6 +329,52 @@ def _install_scheduler(scheduler_module: Any) -> None:
     scheduler_module._capacities = capacities
 
 
+def _install_research_design_capacity_policy(model_router_module: Any) -> None:
+    """Apply managed-runtime receipt limits only to the router that owns that receipt.
+
+    Central research also accepts injected lightweight routers in tests and recovery probes.
+    Those routers do not own the managed llama process or its receipt, so interpreting a
+    missing/stale managed-runtime environment as their capacity would silently change their
+    established parallel-failure and serial-recovery semantics.
+    """
+
+    from . import central_intelligence_amplifier as central_module
+
+    current = central_module._research_domain_worker_count
+    installed_version = int(
+        getattr(current, "_mmm_managed_research_capacity_version", 0) or 0
+    )
+    if installed_version >= _RESEARCH_DESIGN_CAPACITY_VERSION:
+        return
+
+    @wraps(current)
+    def research_design_capacity(router: Any, width: int) -> int:
+        requested = min(max(1, int(width)), central_module._worker_count())
+        if isinstance(router, model_router_module.ModelRouter):
+            return current(router, width)
+
+        # Non-managed/injected local routers retain the central core's explicit fan-out.
+        # External/non-exclusive adapters still stay serial because their concurrency
+        # contract is unknown to this runtime.
+        try:
+            config = router.registry.role(router.profile, "planner")
+        except Exception:
+            return requested
+        if not bool(getattr(config, "exclusive_gpu", False)):
+            return 1
+        if str(getattr(config, "provider", "")) != "local":
+            return 1
+        if str(getattr(config, "adapter", "")) not in {"llama_cpp", "vllm"}:
+            return 1
+        return requested
+
+    research_design_capacity._mmm_managed_research_capacity_version = (  # type: ignore[attr-defined]
+        _RESEARCH_DESIGN_CAPACITY_VERSION
+    )
+    research_design_capacity.__wrapped__ = current  # type: ignore[attr-defined]
+    central_module._research_domain_worker_count = research_design_capacity
+
+
 def _install_planner_search_parallelism() -> None:
     from . import agentic_optimization_contract as agentic_module
     from . import complete_planner as complete_planner_module
@@ -432,6 +479,7 @@ def _install_planner_search_parallelism() -> None:
 def install(model_router_module: Any, scheduler_module: Any) -> None:
     _install_router(model_router_module)
     _install_scheduler(scheduler_module)
+    _install_research_design_capacity_policy(model_router_module)
     _install_planner_search_parallelism()
 
 
