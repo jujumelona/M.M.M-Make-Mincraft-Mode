@@ -10,11 +10,13 @@ def install() -> None:
         complete_spec,
         rag_index,
         runner,
+        small_model_max_agent_contract,
         trajectory_memory,
         work_graph,
     )
     from . import research_rag_performance as rag_performance
     from . import validation_execution_contract
+    from .research_adaptive_rag_routing import harden as harden_adaptive_rag
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
@@ -29,6 +31,7 @@ def install() -> None:
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
     harden_synthesis(agentic_pre_design_rag)
+    harden_adaptive_rag(agentic_pre_design_rag, small_model_max_agent_contract)
     indexed_append, indexed_relevant = harden_memory(trajectory_memory)
 
     # temporary_skill_contract imported these functions by value before this late
