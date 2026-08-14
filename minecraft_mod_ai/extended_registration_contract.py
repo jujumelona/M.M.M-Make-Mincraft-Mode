@@ -1,53 +1,10 @@
 from __future__ import annotations
 
-import threading
-from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from .project_write_lock import project_write_lock
-
-
-_EXTENDED_PROJECT_ROOT: ContextVar[Path | None] = ContextVar(
-    "mmm_extended_project_root",
-    default=None,
-)
-
-
-class _ProjectScopedExtendedLock:
-    """Preserve one-writer semantics without serializing unrelated projects."""
-
-    _mmm_project_scoped_extended_lock = True
-
-    def __init__(self, fallback: Any) -> None:
-        self._fallback = fallback
-        self._local = threading.local()
-
-    def __enter__(self):
-        root = _EXTENDED_PROJECT_ROOT.get()
-        stack = getattr(self._local, "stack", None)
-        if stack is None:
-            stack = []
-            self._local.stack = stack
-        if root is None:
-            self._fallback.acquire()
-            stack.append(("fallback", self._fallback))
-        else:
-            manager = project_write_lock(root)
-            manager.__enter__()
-            stack.append(("project", manager))
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        stack = getattr(self._local, "stack", None)
-        if not stack:
-            raise RuntimeError("Extended-content lock exit without matching enter.")
-        kind, value = stack.pop()
-        if kind == "fallback":
-            value.release()
-            return False
-        return value.__exit__(exc_type, exc, tb)
 
 
 def _render_static_registration(root_name: str | None) -> str:
@@ -111,10 +68,6 @@ def _generated_unit_names(root: Path, package_name: str) -> list[str]:
 
 
 def _install_static_registration(extended_module: Any) -> None:
-    original_lock = extended_module._EXTENDED_CONTENT_LOCK
-    if not getattr(original_lock, "_mmm_project_scoped_extended_lock", False):
-        extended_module._EXTENDED_CONTENT_LOCK = _ProjectScopedExtendedLock(original_lock)
-
     original = extended_module.generate_extended_content
     if getattr(original, "_mmm_static_registrar_tree", False):
         return
@@ -134,78 +87,73 @@ def _install_static_registration(extended_module: Any) -> None:
             raise RuntimeError("Static registrar binding requires project_root/mod_id/package_name.")
 
         root = Path(project_root).expanduser().resolve()
-        token = _EXTENDED_PROJECT_ROOT.set(root)
-        try:
-            # Hold the same per-project re-entrant lock across catalog generation and
-            # static-tree binding. The wrapped base generator re-enters this lock, so
-            # same-project callers remain atomic while unrelated roots can proceed.
-            with extended_module._EXTENDED_CONTENT_LOCK:
-                receipt = original(*args, **kwargs)
-                if not isinstance(receipt, dict) or receipt.get("status") != "GENERATED":
-                    return receipt
+        # Keep catalog generation and static-tree binding atomic per project. The base
+        # generator re-enters the same project lock, while unrelated projects proceed.
+        with project_write_lock(root):
+            receipt = original(*args, **kwargs)
+            if not isinstance(receipt, dict) or receipt.get("status") != "GENERATED":
+                return receipt
 
-                # The base generator has already materialized one deterministic
-                # GeneratedContentUnit*.java file for every Java-backed module.
-                # Reopening and JSON-decoding the complete bounded record directory
-                # here was a second O(N) I/O pass. Filenames are the exact registrar
-                # class identities and are sufficient for the compile-time tree.
-                leaf_names = _generated_unit_names(root, str(package_name))
-                dispatch_root, dispatch_files = extended_module._registrar_tree_files(
-                    str(package_name),
-                    leaf_names,
-                    fanout=32,
+            # The base generator has already materialized one deterministic
+            # GeneratedContentUnit*.java file for every Java-backed module.
+            # Reopening and JSON-decoding the complete bounded record directory
+            # here was a second O(N) I/O pass. Filenames are the exact registrar
+            # class identities and are sufficient for the compile-time tree.
+            leaf_names = _generated_unit_names(root, str(package_name))
+            dispatch_root, dispatch_files = extended_module._registrar_tree_files(
+                str(package_name),
+                leaf_names,
+                fanout=32,
+            )
+
+            info = extended_module.inspect_fabric_project(root)
+            dispatch_receipt = None
+            if dispatch_files:
+                dispatch_receipt = extended_module.write_text_files(
+                    info,
+                    dispatch_files,
+                    replace_existing=True,
                 )
 
-                info = extended_module.inspect_fabric_project(root)
-                dispatch_receipt = None
-                if dispatch_files:
-                    dispatch_receipt = extended_module.write_text_files(
-                        info,
-                        dispatch_files,
-                        replace_existing=True,
-                    )
+            root_path = (
+                root
+                / "src/main/java"
+                / Path(*str(package_name).split("."))
+                / "extended/GeneratedExtendedContent.java"
+            )
+            before = root_path.read_text(encoding="utf-8")
+            after = _replace_registration_method(before, dispatch_root)
+            if after != before:
+                from .source_patch import TransactionalSourcePatcher, sha256_file
 
-                root_path = (
-                    root
-                    / "src/main/java"
-                    / Path(*str(package_name).split("."))
-                    / "extended/GeneratedExtendedContent.java"
+                registration_receipt = TransactionalSourcePatcher(root).apply(
+                    [
+                        {
+                            "operation": "replace",
+                            "path": root_path.relative_to(root).as_posix(),
+                            "expected_sha256": sha256_file(root_path),
+                            "content": after,
+                        }
+                    ]
                 )
-                before = root_path.read_text(encoding="utf-8")
-                after = _replace_registration_method(before, dispatch_root)
-                if after != before:
-                    from .source_patch import TransactionalSourcePatcher, sha256_file
+            else:
+                registration_receipt = {"status": "UNCHANGED"}
 
-                    registration_receipt = TransactionalSourcePatcher(root).apply(
-                        [
-                            {
-                                "operation": "replace",
-                                "path": root_path.relative_to(root).as_posix(),
-                                "expected_sha256": sha256_file(root_path),
-                                "content": after,
-                            }
-                        ]
-                    )
-                else:
-                    registration_receipt = {"status": "UNCHANGED"}
-
-                dispatch_paths = [str(root / relative) for relative in sorted(dispatch_files)]
-                result = dict(receipt)
-                result["registrar_dispatch_count"] = len(dispatch_files)
-                result["static_registration_unit_count"] = len(leaf_names)
-                result["static_registration_root"] = dispatch_root
-                result["static_registration_receipt"] = registration_receipt
-                result["files"] = list(
-                    dict.fromkeys([*receipt.get("files", []), *dispatch_paths])
-                )
-                result["touched_paths"] = list(
-                    dict.fromkeys([*receipt.get("touched_paths", []), *dispatch_paths])
-                )
-                if dispatch_receipt is not None:
-                    result["registrar_dispatch_receipt"] = dispatch_receipt
-                return result
-        finally:
-            _EXTENDED_PROJECT_ROOT.reset(token)
+            dispatch_paths = [str(root / relative) for relative in sorted(dispatch_files)]
+            result = dict(receipt)
+            result["registrar_dispatch_count"] = len(dispatch_files)
+            result["static_registration_unit_count"] = len(leaf_names)
+            result["static_registration_root"] = dispatch_root
+            result["static_registration_receipt"] = registration_receipt
+            result["files"] = list(
+                dict.fromkeys([*receipt.get("files", []), *dispatch_paths])
+            )
+            result["touched_paths"] = list(
+                dict.fromkeys([*receipt.get("touched_paths", []), *dispatch_paths])
+            )
+            if dispatch_receipt is not None:
+                result["registrar_dispatch_receipt"] = dispatch_receipt
+            return result
 
     generated_with_static_registrar._mmm_static_registrar_tree = True
     generated_with_static_registrar._mmm_project_scoped_serialization = True
