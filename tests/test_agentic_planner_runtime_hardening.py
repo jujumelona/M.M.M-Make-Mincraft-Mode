@@ -133,7 +133,7 @@ def test_bounded_section_disables_thinking_without_touching_research_tools() -> 
 
 
 def test_native_tuning_pipeline_keeps_single_stage_order_and_is_versioned() -> None:
-    assert tuning_pipeline._TUNING_PIPELINE_VERSION >= 2
+    assert tuning_pipeline._TUNING_PIPELINE_VERSION >= 19
     pipeline = tuning_pipeline.NativeLlamaTuningPipeline(
         autotune=SimpleNamespace(),
         hardware_policy=SimpleNamespace(),
@@ -145,4 +145,5 @@ def test_native_tuning_pipeline_keeps_single_stage_order_and_is_versioned() -> N
         "runtime",
         "cache-reuse",
         "decode-speed",
+        "kernel-autotune",
     )
