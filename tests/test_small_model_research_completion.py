@@ -99,6 +99,42 @@ def test_model_claim_only_is_l0_and_never_persisted(tmp_path: Path) -> None:
     assert append_trajectory(tmp_path, row) is False
 
 
+def test_server_running_without_behavior_assertions_stays_l0(tmp_path: Path) -> None:
+    row = build_work_trajectory(
+        _repair_task(),
+        outcome="SUCCESS",
+        receipt={"runtime": {"status": "PASS", "server_running": True}},
+    )
+    assert row["verification"]["level"] == "L0"
+    assert append_trajectory(tmp_path, row) is False
+
+
+def test_generic_quality_pass_without_signed_evidence_does_not_become_l5() -> None:
+    receipt = {
+        **_build_receipt(gametest=True),
+        "quality_evidence": {"status": "PASS", "evidence": ["model-claim"]},
+    }
+    row = build_work_trajectory(_repair_task(), outcome="SUCCESS", receipt=receipt)
+    assert row["verification"]["level"] == "L3"
+    assert row["verification"]["checks"]["acceptance"] is False
+
+
+def test_signed_quality_receipt_with_evidence_can_raise_l5() -> None:
+    receipt = {
+        **_build_receipt(gametest=True),
+        "quality": {
+            "dimension_id": "correctness",
+            "status": "PASS",
+            "receipt_id": "quality:correctness:abc123",
+            "verified_by": "mmm.quality-evidence-adapter/v1",
+            "evidence_refs": ["evidence:gametest:abc", "evidence:build:def"],
+        },
+    }
+    row = build_work_trajectory(_repair_task(), outcome="SUCCESS", receipt=receipt)
+    assert row["verification"]["level"] == "L5"
+    assert row["verification"]["checks"]["acceptance"] is True
+
+
 def test_l2_build_pass_is_local_weak_memory_not_proven_skill(tmp_path: Path) -> None:
     row = build_work_trajectory(_repair_task(), outcome="SUCCESS", receipt=_build_receipt())
     assert row["verification"]["level"] == "L2"
@@ -116,6 +152,28 @@ def test_l3_gametest_pass_is_strong_and_remote_eligible(tmp_path: Path) -> None:
     assert record_remote_eligible(row) is True
     assert append_trajectory(tmp_path, row) is True
     assert _remote_path("repair") == "memory/v3/repair.jsonl"
+
+
+def test_build_only_synthetic_probe_does_not_fake_l3() -> None:
+    synthetic = _synthetic_verification(
+        plan={"probes": ["gradle_build", "json_resource_parse"]},
+        build_status="PASS",
+        json_ok=True,
+        commands=[{"name": "clean_build", "exit_code": 0, "timed_out": False}],
+    )
+    row = build_work_trajectory(
+        _repair_task(),
+        outcome="SUCCESS",
+        receipt={
+            "counterexample_result": {
+                "status": "PASS",
+                "synthetic_verification": synthetic,
+                "commands": [{"name": "clean_build", "exit_code": 0, "timed_out": False}],
+            }
+        },
+    )
+    assert row["verification"]["level"] == "L2"
+    assert row["verification"]["checks"]["tests"] is False
 
 
 def test_verified_jdt_failure_becomes_negative_memory(tmp_path: Path) -> None:
