@@ -23,6 +23,17 @@ REMOTE_FORMAT_VERSION = "v3"
 _PASS = {"PASS", "PASSED", "SUCCESS", "SUCCEEDED", "OK"}
 _FAIL = {"FAIL", "FAILED", "ERROR"}
 _CODE_TASKS = {"repair", "generation", "build", "runtime", "quality", "release"}
+_FAILURE_LEVEL = {
+    "static": 1,
+    "build": 2,
+    "synthetic_counterexample": 2,
+    "test": 3,
+    "gametest": 3,
+    "synthetic_scenarios": 3,
+    "reproduction": 3,
+    "runtime": 4,
+    "acceptance": 5,
+}
 
 
 def _status(value: Any) -> str:
@@ -138,7 +149,8 @@ def _collect_chain(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
             _append(chain, kind="runtime", status="PASS", source=path or "receipt", details={"server_running": True})
 
         if any(marker in lower_path for marker in ("acceptance", "quality_contract", "quality_gate", "quality_evidence")) and status in _PASS | _FAIL:
-            evidence_count = len(node.get("evidence", ())) if isinstance(node.get("evidence"), Sequence) and not isinstance(node.get("evidence"), (str, bytes)) else 0
+            evidence = node.get("evidence", ())
+            evidence_count = len(evidence) if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else 0
             _append(chain, kind="acceptance", status="PASS" if status in _PASS else "FAIL", source=path or "receipt", details={"evidence_count": evidence_count})
 
         reproduction = node.get("reproduction") or node.get("replay") or node.get("reproducibility")
@@ -153,6 +165,7 @@ def _collect_chain(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
             details = {
                 "gametest_requested": bool(counterexample.get("gametest_requested")),
                 "json_ok": counterexample.get("json_ok"),
+                "isolated_snapshot": True,
             }
             if counter_status in _PASS | _FAIL:
                 _append(chain, kind="synthetic_counterexample", status="PASS" if counter_status in _PASS else "FAIL", source=f"{path}.counterexample_result".strip("."), details=details)
@@ -163,7 +176,7 @@ def _collect_chain(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
             cases = synthetic.get("scenarios") or synthetic.get("cases") or ()
             case_count = len(cases) if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)) else 0
             if synthetic_status in _PASS | _FAIL and case_count > 0:
-                _append(chain, kind="synthetic_scenarios", status="PASS" if synthetic_status in _PASS else "FAIL", source=f"{path}.synthetic_verification".strip("."), details={"case_count": case_count})
+                _append(chain, kind="synthetic_scenarios", status="PASS" if synthetic_status in _PASS else "FAIL", source=f"{path}.synthetic_verification".strip("."), details={"case_count": case_count, "isolated_snapshot": bool(synthetic.get("isolated_snapshot"))})
 
     return chain
 
@@ -179,8 +192,17 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
     test_pass = _has(chain, {"test", "gametest", "synthetic_scenarios"})
     runtime_pass = _has(chain, {"runtime"})
     acceptance_pass = _has(chain, {"acceptance"})
-    reproduced = _has(chain, {"reproduction"})
-    verified_failure = any(str(item.get("status")) == "FAIL" and str(item.get("kind")) in {"static", "build", "test", "gametest", "runtime", "acceptance", "synthetic_scenarios", "synthetic_counterexample", "reproduction"} for item in chain)
+    explicit_reproduction = _has(chain, {"reproduction"})
+    independent_replay = static_pass and _has(chain, {"synthetic_counterexample"})
+    reproduced = explicit_reproduction or independent_replay
+
+    failed_kinds = [
+        str(item.get("kind"))
+        for item in chain
+        if str(item.get("status")) == "FAIL" and str(item.get("kind")) in _FAILURE_LEVEL
+    ]
+    failure_level = max((_FAILURE_LEVEL[kind] for kind in failed_kinds), default=0)
+    verified_failure = failure_level > 0
 
     level = 0
     if static_pass:
@@ -197,23 +219,27 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
     successful = str(outcome).upper() == "SUCCESS"
     memory_eligible = (successful and level >= 2) or ((not successful) and verified_failure)
     strong_skill_eligible = successful and level >= 3
-    remote_eligible = (successful and level >= 3) or ((not successful) and verified_failure and level >= 1)
+    remote_eligible = (successful and level >= 3) or ((not successful) and failure_level >= 1)
 
-    diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "PASS"})
-    confidence = min(1.0, 0.12 * level + 0.05 * min(diversity, 5) + (0.12 if reproduced else 0.0))
+    pass_diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "PASS"})
+    fail_diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "FAIL"})
+    confidence = min(1.0, 0.12 * level + 0.05 * min(pass_diversity, 5) + (0.12 if reproduced else 0.0))
     if verified_failure and not successful:
-        confidence = max(confidence, min(0.95, 0.35 + 0.08 * diversity))
+        confidence = max(confidence, min(0.98, 0.20 + 0.12 * failure_level + 0.05 * min(fail_diversity, 4)))
 
     return {
         "schema_version": VERIFICATION_SCHEMA_VERSION,
         "level": f"L{level}",
         "level_index": level,
+        "failure_level": f"L{failure_level}",
+        "failure_level_index": failure_level,
         "confidence": round(confidence, 4),
         "memory_eligible": memory_eligible,
         "strong_skill_eligible": strong_skill_eligible,
         "remote_eligible": remote_eligible,
         "verified_failure": verified_failure,
         "reproduced": reproduced,
+        "reproduction_basis": "explicit" if explicit_reproduction else ("independent-clean-snapshot" if independent_replay else "none"),
         "checks": {
             "static": static_pass,
             "build": build_pass,
