@@ -10,18 +10,32 @@ from .causal_tool_graph import executable_frontier, verified_state_from_messages
 _AUTHORIZED_TOOLS: ContextVar[tuple[Mapping[str, Any], ...]] = ContextVar(
     "mmm_causal_authorized_tools", default=()
 )
+_AUTHORIZED_PREFERENCE: ContextVar[tuple[tuple[str, int], ...]] = ContextVar(
+    "mmm_causal_authorized_preference", default=()
+)
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 
 
-def remember_authorized_tools(tools: Sequence[Mapping[str, Any]]) -> None:
-    """Remember the already security/role-filtered surface for this request context."""
+def remember_authorized_tools(
+    tools: Sequence[Mapping[str, Any]],
+    preference: Mapping[str, int] | None = None,
+) -> None:
+    """Remember the security-filtered surface and query-specific tie-break order."""
 
     _AUTHORIZED_TOOLS.set(tuple(tools))
+    if preference is not None:
+        _AUTHORIZED_PREFERENCE.set(
+            tuple(sorted(((str(name), int(rank)) for name, rank in preference.items()), key=lambda item: item[1]))
+        )
 
 
 def authorized_tools(fallback: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
     value = _AUTHORIZED_TOOLS.get()
     return value or tuple(fallback)
+
+
+def authorized_tool_preference() -> dict[str, int]:
+    return dict(_AUTHORIZED_PREFERENCE.get())
 
 
 def _name(schema: Mapping[str, Any]) -> str:
@@ -30,12 +44,7 @@ def _name(schema: Mapping[str, Any]) -> str:
 
 
 def _query(messages: Sequence[Mapping[str, Any]]) -> str:
-    """Recover terminal intent from user turns only.
-
-    System capability text and tool observations describe the execution surface/state;
-    they must never mutate the user's terminal goal merely because they contain words
-    such as ``external MCP``, ``runtime`` or ``verify``.
-    """
+    """Recover terminal intent from user turns only."""
 
     parts: list[str] = []
     for message in reversed(messages):
@@ -120,6 +129,7 @@ class CausalFrontierAdapter:
             goals=goals,
             limit=self.frontier_limit,
             max_depth=8,
+            preference=authorized_tool_preference(),
         )
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         selected = tuple(by_name[name] for name in names if name in by_name)
@@ -152,4 +162,9 @@ class CausalFrontierAdapter:
         return getattr(self.inner, name)
 
 
-__all__ = ["CausalFrontierAdapter", "authorized_tools", "remember_authorized_tools"]
+__all__ = [
+    "CausalFrontierAdapter",
+    "authorized_tool_preference",
+    "authorized_tools",
+    "remember_authorized_tools",
+]
