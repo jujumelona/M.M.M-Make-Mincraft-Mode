@@ -8,6 +8,7 @@ def install() -> None:
         centroid_vector_rag,
         llama_server_autotune,
         long_run_resilience_contract,
+        model_adapters,
         model_router,
         rag_index,
         runner,
@@ -15,7 +16,6 @@ def install() -> None:
         validation_execution_contract,
     )
     from . import research_rag_performance as rag_performance
-    from .model_adapters import llama_cpp_adapter
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
@@ -44,7 +44,7 @@ def install() -> None:
     long_run_resilience_contract._install_research_generation_resilience(model_router)
     long_run_resilience_contract._install_autotune_rearm(llama_server_autotune)
     long_run_resilience_contract._install_managed_backend_recovery(
-        llama_cpp_adapter,
+        model_adapters,
         llama_server_autotune,
     )
     long_run_resilience_contract._mmm_long_run_resilience_installed = (
