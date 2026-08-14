@@ -170,8 +170,14 @@ class _FrontierRuntimeProxy:
         **kwargs: Any,
     ) -> Any:
         self._require_visible(name)
-        method = getattr(self._inner, "call_scoped")
-        return method(stage, name, arguments, **kwargs)
+        # Production AgentToolRuntime owns call_scoped and therefore retains the
+        # stage/role/model scope checks. Minimal compatibility/test runtimes may only
+        # implement call(); falling back there preserves their original host contract
+        # without weakening production scope enforcement.
+        method = getattr(self._inner, "call_scoped", None)
+        if callable(method):
+            return method(stage, name, arguments, **kwargs)
+        return self._inner.call(stage, name, arguments)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
