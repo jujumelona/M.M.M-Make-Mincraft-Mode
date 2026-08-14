@@ -202,6 +202,74 @@ def test_evidence_document_preserves_full_raw_and_bounds_every_page(
     assert all(page["page_count"] == len(pages) for page in pages)
 
 
+def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path / "evidence"))
+    monkeypatch.setenv("MMM_RESEARCH_CHECKPOINT_ROOT", str(tmp_path / "checkpoints"))
+    evidence = {
+        "official_rag": {
+            "domain_id": "mk_combat",
+            "queries": [
+                {"query": "damage", "raw": "공식근거-" + ("A" * 8_000)},
+                {"query": "registry", "raw": "레지스트리-" + ("B" * 7_000)},
+            ],
+        },
+        "forced_project_rag": {
+            "domain_id": "mk_combat",
+            "queries": [{"query": "bossbar", "raw": "강제근거-" + ("C" * 9_000)}],
+        },
+    }
+    document = paged_rag._materialize_domain_evidence_document("mk_combat", evidence)
+    pages = paged_rag._read_evidence_pages(document)
+    calls: list[list[dict[str, str]]] = []
+
+    class Router:
+        profile = "test-lossless-synthesis"
+        registry = None
+
+        def generate_text(self, role, messages, **kwargs):
+            del role, kwargs
+            calls.append(messages)
+            return json.dumps(
+                {
+                    "research_note": {
+                        "domain_id": "mk_combat",
+                        "claims": [],
+                        "gaps": [],
+                        "next_queries": [],
+                        "sufficient": True,
+                    }
+                },
+                ensure_ascii=False,
+            )
+
+    result = paged_rag._research_document_domain(
+        agentic,
+        Router(),
+        prompt="전투 기능을 정확한 근거로 설계해줘",
+        domain={"domain_id": "mk_combat", "queries": ["damage", "registry", "bossbar"]},
+        document=document,
+        trace_metadata=None,
+    )
+
+    delivered_fragments: list[str] = []
+    for messages in calls:
+        payload = json.loads(messages[-1]["content"])
+        children = payload.get("bounded_child_notes", [])
+        assert len(json.dumps(children, ensure_ascii=False).encode("utf-8")) <= (
+            paged_rag._SYNTHESIS_INPUT_BYTES + 256
+        )
+        for child in children:
+            fragment = child.get("evidence_fragment")
+            if isinstance(fragment, dict):
+                delivered_fragments.append(str(fragment.get("content", "")))
+
+    assert delivered_fragments == [str(page["content"]) for page in pages]
+    assert result["evidence_ledger"]["record_count"] == len(pages)
+    assert result["checkpoint"]["status"] == "complete"
+
+
 def test_domain_slice_persists_raw_forced_receipt_instead_of_inlining_it(
     monkeypatch, tmp_path: Path
 ) -> None:

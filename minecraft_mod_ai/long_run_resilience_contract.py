@@ -460,12 +460,21 @@ def _transport_failure(exc: BaseException) -> bool:
 
 def _install_managed_backend_recovery(llama_adapter_module: Any, autotune: Any) -> None:
     adapter_cls = llama_adapter_module.LlamaCppAdapter
-    current = adapter_cls.generate
+    # Tool-capable ModelRouter paths call generate_turn() directly, while the text-only
+    # generate() method delegates to generate_turn(). Patch the shared turn primitive
+    # whenever it exists so one recovery policy covers both paths. Focused legacy test
+    # adapters that expose only generate() still use the fallback target below.
+    target_name = (
+        "generate_turn"
+        if callable(getattr(adapter_cls, "generate_turn", None))
+        else "generate"
+    )
+    current = getattr(adapter_cls, target_name)
     if getattr(current, _MARKER, False):
         return
 
     @wraps(current)
-    def generate(self: Any, request: Any) -> Any:
+    def generate_with_recovery(self: Any, request: Any) -> Any:
         failed_owner = _managed_server_snapshot(autotune)
         failed_owner_was_owned = _managed_server_owned(autotune, failed_owner)
         try:
@@ -482,7 +491,9 @@ def _install_managed_backend_recovery(llama_adapter_module: Any, autotune: Any) 
                 raise
             # Only an MMM-owned local server is eligible. External/user-provided
             # servers are never terminated or silently replaced. Replay the exact
-            # same request object once after rearming the managed process.
+            # same request object once after rearming the managed process. Holding the
+            # re-entrant lifecycle lock through the retry serializes concurrent recovery
+            # attempts until one healthy replacement has been installed.
             recovery_lock = getattr(autotune, "_AUTOTUNE_LOCK", None)
             if recovery_lock is None:
                 raise
@@ -496,9 +507,9 @@ def _install_managed_backend_recovery(llama_adapter_module: Any, autotune: Any) 
                 except Exception as retry_error:
                     raise retry_error from first_error
 
-    setattr(generate, _MARKER, True)
-    generate.__wrapped__ = current  # type: ignore[attr-defined]
-    adapter_cls.generate = generate
+    setattr(generate_with_recovery, _MARKER, True)
+    generate_with_recovery.__wrapped__ = current  # type: ignore[attr-defined]
+    setattr(adapter_cls, target_name, generate_with_recovery)
 
 
 def install() -> None:

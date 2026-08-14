@@ -361,3 +361,31 @@ def test_cold_start_launch_then_transport_failure_is_rearmed_once(monkeypatch):
     assert "cold-failed-key" not in autotune._ATTEMPTED_KEYS
     assert replacement.terminated is False
     assert autotune._MANAGED_PROCESS is replacement
+
+
+def test_tool_capable_turn_transport_failure_replays_exact_request_once(monkeypatch):
+    process = _LiveProcess()
+    autotune = _autotune(process)
+    monkeypatch.setenv("LLAMA_SERVER_URL", autotune._MANAGED_URL)
+    seen = []
+
+    class Adapter:
+        def generate(self, request):
+            raise AssertionError("production tool paths must recover at generate_turn")
+
+        def generate_turn(self, request):
+            seen.append(request)
+            if len(seen) == 1:
+                raise RuntimeError(
+                    "ModelBackendError: [Errno 111] Connection refused"
+                )
+            return "turn-recovered"
+
+    module = SimpleNamespace(LlamaCppAdapter=Adapter)
+    resilience._install_managed_backend_recovery(module, autotune)
+    request = object()
+
+    assert Adapter().generate_turn(request) == "turn-recovered"
+    assert seen == [request, request]
+    assert process.terminated is True
+    assert "model-key" not in autotune._ATTEMPTED_KEYS
