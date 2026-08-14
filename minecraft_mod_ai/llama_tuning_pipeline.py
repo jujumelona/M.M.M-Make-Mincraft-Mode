@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 22
+_TUNING_PIPELINE_VERSION = 23
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 

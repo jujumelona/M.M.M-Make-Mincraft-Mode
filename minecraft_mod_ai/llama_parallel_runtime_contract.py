@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 
 
 _ROUTER_CONTRACT_VERSION = 3
+_PLANNER_SEARCH_CONTRACT_VERSION = 2
 
 
 class ReentrantReadWriteLock:
@@ -161,6 +162,48 @@ def _planner_parallel_capacity(router: Any, width: int) -> int:
     return capacity
 
 
+def _env_enabled(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _latency_objective() -> bool:
+    raw = os.environ.get("MMM_PERFORMANCE_MODE", "").strip().lower()
+    if not raw:
+        raw = os.environ.get("MMM_LLAMA_TUNING_OBJECTIVE", "auto").strip().lower()
+    return raw in {"latency", "single_stream", "single-stream"}
+
+
+def _planner_search_width(router: Any, base_width: int, agentic_module: Any) -> int:
+    """Fill only real, validated managed llama slots with independent candidates."""
+    width = max(1, int(base_width))
+    if not _env_enabled("MMM_PLAN_FILL_ACTIVE_LLAMA_SLOTS", True):
+        return width
+    if os.environ.get("MMM_PLAN_SEARCH_WIDTH", "").strip():
+        return width
+    try:
+        if agentic_module._mode() == "off":
+            return width
+    except Exception:
+        pass
+    if _latency_objective():
+        return width
+
+    from .llama_vram_parallel_policy import validated_active_parallelism
+
+    live_slots = validated_active_parallelism()
+    if live_slots <= width:
+        return width
+    # Promotion happens only after the router itself proves this is the local,
+    # exclusive llama path. Fake/test routers and external providers remain on
+    # the original planner width even if stale slot environment exists.
+    if _planner_parallel_capacity(router, live_slots) <= 1:
+        return width
+    return live_slots
+
+
 def _install_router(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
     installed_version = int(
@@ -290,8 +333,15 @@ def _install_planner_search_parallelism() -> None:
     from . import complete_planner as complete_planner_module
 
     current = complete_planner_module._generate_json_page_with_repair
-    if getattr(current, "_mmm_parallel_plan_search", False):
+    installed_version = int(
+        getattr(current, "_mmm_parallel_plan_search_version", 0) or 0
+    )
+    if installed_version >= _PLANNER_SEARCH_CONTRACT_VERSION:
         return
+    if getattr(current, "_mmm_parallel_plan_search", False):
+        previous = getattr(current, "__wrapped__", None)
+        if callable(previous):
+            current = previous
     if not getattr(current, "_mmm_verifier_plan_search", False):
         return
     base = getattr(current, "__wrapped__", None)
@@ -308,7 +358,8 @@ def _install_planner_search_parallelism() -> None:
         expected_contracts: Any,
         stage: str,
     ) -> dict[str, Any]:
-        width = agentic_module._planner_candidate_count(request, stage)
+        base_width = agentic_module._planner_candidate_count(request, stage)
+        width = _planner_search_width(router, base_width, agentic_module)
         parallel = _planner_parallel_capacity(router, width)
         if width <= 1 or parallel <= 1:
             return current(
@@ -374,6 +425,7 @@ def _install_planner_search_parallelism() -> None:
 
     generate_with_parallel_search._mmm_parallel_plan_search = True  # type: ignore[attr-defined]
     generate_with_parallel_search._mmm_verifier_plan_search = True  # type: ignore[attr-defined]
+    generate_with_parallel_search._mmm_parallel_plan_search_version = _PLANNER_SEARCH_CONTRACT_VERSION  # type: ignore[attr-defined]
     complete_planner_module._generate_json_page_with_repair = generate_with_parallel_search
 
 
@@ -388,5 +440,6 @@ __all__ = [
     "ReentrantReadWriteLock",
     "_active_parallelism",
     "_planner_parallel_capacity",
+    "_planner_search_width",
     "install",
 ]
