@@ -105,7 +105,9 @@
     },
     "verified_facts": {"type": "object"},
     "error_signature": {"type": "string", "maxLength": 1200},
-    "trajectory_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    "trajectory_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "remote_format_version": {"const": "v3"},
+    "remote_record_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   },
   "additionalProperties": false
 }
