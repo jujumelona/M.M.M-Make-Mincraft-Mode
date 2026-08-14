@@ -156,6 +156,26 @@ def remote_configured() -> bool:
     return remote_write_allowed() and _backend() != "none" and bool(_repo())
 
 
+def _iter_outbox_lines_reverse(path: Path, *, block_size: int = 64 * 1024):
+    """Yield outbox lines newest-first without scanning the whole file."""
+
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        carry = b""
+        while position > 0:
+            size = min(block_size, position)
+            position -= size
+            handle.seek(position)
+            parts = (handle.read(size) + carry).split(b"\n")
+            carry = parts[0]
+            for raw in reversed(parts[1:]):
+                if raw:
+                    yield raw.decode("utf-8")
+        if carry:
+            yield carry.decode("utf-8")
+
+
 def queue_remote_record(base: str | Path, row: Mapping[str, Any]) -> bool:
     """Queue one sanitized, verifier-qualified record only after explicit opt-in."""
 
@@ -167,17 +187,20 @@ def queue_remote_record(base: str | Path, row: Mapping[str, Any]) -> bool:
     path = _outbox(base)
     path.parent.mkdir(parents=True, exist_ok=True)
     identity = str(stamped.get(_REMOTE_ID_KEY, ""))
-    recent: deque[str] = deque(maxlen=512)
+    recent: set[str] = set()
     if path.is_file() and not path.is_symlink():
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                for raw in handle:
-                    try:
-                        value = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(value, Mapping):
-                        recent.append(str(value.get(_REMOTE_ID_KEY, "")))
+            recent_rows = 0
+            for raw in _iter_outbox_lines_reverse(path):
+                try:
+                    value = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, Mapping):
+                    recent.add(str(value.get(_REMOTE_ID_KEY, "")))
+                    recent_rows += 1
+                    if recent_rows >= 512:
+                        break
         except OSError:
             return False
     if identity in recent:
