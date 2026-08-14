@@ -1,10 +1,11 @@
 """Runtime safety invariants for bounded research and native llama.cpp tool grammar.
 
-This contract owns two host-side safety boundaries that must hold independently of
-model quality: hierarchical synthesis must strictly converge, and tool schemas sent
-to llama.cpp must stay inside its grammar compiler's conservative JSON-schema subset.
-Structured response schemas are validated and repaired by ``structured_output`` on
-the host; transport failures are never retried here.
+This contract owns three host-side safety boundaries that must hold independently of
+model quality: bounded research has exactly one structured-output repair owner,
+hierarchical synthesis strictly converges, and tool schemas sent to llama.cpp stay
+inside its grammar compiler's conservative JSON-schema subset. Detailed response
+schemas are validated and repaired by ``structured_output`` on the host; transport
+failures are never retried here.
 """
 from __future__ import annotations
 
@@ -19,8 +20,9 @@ from functools import wraps
 from typing import Any
 
 
-_SYNTHESIS_PROTOCOL_V3 = "mmm/research-hierarchical-synthesis-v3"
+_SYNTHESIS_PROTOCOL_V4 = "mmm/research-hierarchical-synthesis-v4"
 _SYNTHESIS_NODE_BYTES = 1_400
+_MIN_SYNTHESIS_INPUT_BYTES = 10_240
 _INSTALLED = False
 
 
@@ -52,7 +54,7 @@ def _compact_synthesis_note(
 ) -> dict[str, Any]:
     """Project one synthesis node to a byte-bounded, schema-shaped summary.
 
-    The durable page/claim ledgers remain lossless. Intermediate tree nodes are only
+    The durable page/evidence ledgers remain lossless. Intermediate tree nodes are only
     routing summaries, so bounding them is preferable to atomizing one node into many
     children (which can make a reduction tree grow instead of converge).
     """
@@ -162,11 +164,211 @@ def _synthesis_worker_count(router: Any, width: int) -> int:
         return 1
 
 
-def _install_synthesis_convergence(module: Any) -> None:
-    if getattr(module, "_mmm_synthesis_convergence_v3", False):
+def _latest_json_payload(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    for message in reversed(messages):
+        if str(message.get("role", "")) != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _bound_research_schema(
+    module: Any,
+    response_schema: Mapping[str, Any],
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], str]:
+    """Bind host-owned semantic invariants into the host-only detailed schema."""
+
+    schema = copy.deepcopy(dict(response_schema))
+    payload = _latest_json_payload(messages)
+    domain = payload.get("domain")
+    domain_id = ""
+    if isinstance(domain, Mapping):
+        domain_id = str(domain.get("domain_id", "")).strip()
+
+    properties = schema.get("properties")
+    research_note = properties.get("research_note") if isinstance(properties, Mapping) else None
+    if isinstance(research_note, dict):
+        note_properties = research_note.get("properties")
+        if isinstance(note_properties, dict) and domain_id:
+            domain_schema = note_properties.get("domain_id")
+            if isinstance(domain_schema, dict):
+                domain_schema["const"] = domain_id
+        # A zero-claim note may be a valid unresolved result, but it must never claim
+        # sufficiency and then get persisted as a successful research conclusion.
+        all_of = research_note.setdefault("allOf", [])
+        all_of.append(
+            {
+                "if": {
+                    "properties": {"sufficient": {"const": True}},
+                    "required": ["sufficient"],
+                },
+                "then": {"properties": {"claims": {"minItems": 1}}},
+            }
+        )
+
+    continuation_contract = payload.get("continuation_contract")
+    evidence_page = payload.get("evidence_page")
+    continuation = properties.get("continuation") if isinstance(properties, Mapping) else None
+    if (
+        isinstance(continuation, dict)
+        and isinstance(continuation_contract, Mapping)
+        and isinstance(evidence_page, Mapping)
+    ):
+        current_offset = int(continuation_contract.get("current_offset", 0))
+        content_chars = int(evidence_page.get("content_total_chars", 0))
+        tail_sha256 = str(evidence_page.get("tail_sha256", ""))
+        remaining = max(0, content_chars - current_offset)
+        minimum_progress = min(
+            int(getattr(module, "_MIN_CONTINUATION_PROGRESS_CHARS", 1)),
+            remaining,
+        )
+        continuation_properties = continuation.get("properties")
+        if isinstance(continuation_properties, dict):
+            next_offset = continuation_properties.get("next_offset")
+            if isinstance(next_offset, dict):
+                next_offset["minimum"] = current_offset + minimum_progress
+                next_offset["maximum"] = content_chars
+        conditions = continuation.setdefault("allOf", [])
+        conditions.append(
+            {
+                "if": {
+                    "properties": {"complete": {"const": True}},
+                    "required": ["complete"],
+                },
+                "then": {
+                    "properties": {
+                        "next_offset": {"const": content_chars},
+                        "tail_sha256": {"const": tail_sha256},
+                    }
+                },
+            }
+        )
+        if content_chars > current_offset:
+            conditions.append(
+                {
+                    "if": {
+                        "properties": {"complete": {"const": False}},
+                        "required": ["complete"],
+                    },
+                    "then": {
+                        "properties": {
+                            "next_offset": {"maximum": content_chars - 1},
+                        }
+                    },
+                }
+            )
+
+    return schema, domain_id
+
+
+def _aligned_research_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    response_schema: Mapping[str, Any],
+    domain_id: str,
+) -> list[dict[str, Any]]:
+    """Make the first generation prompt describe the same envelope the host validates."""
+
+    result = [dict(message) for message in messages]
+    required = response_schema.get("required")
+    required_keys = [str(item) for item in required] if isinstance(required, list) else []
+    if required_keys == ["research_note"]:
+        shape = 'exactly one top-level JSON object with exactly the key "research_note"'
+    elif "research_note" in required_keys and "continuation" in required_keys:
+        shape = (
+            'exactly one top-level JSON object with exactly the keys "research_note" '
+            'and "continuation"'
+        )
+    else:
+        shape = "exactly one top-level JSON object matching the requested response contract"
+    directive = (
+        f" Return {shape}; do not return a bare research_note body."
+        + (f' research_note.domain_id must be exactly "{domain_id}".' if domain_id else "")
+        + " If no evidence-backed design claim can be extracted, set sufficient=false and "
+        "record the reason in gaps; never set sufficient=true with an empty claims array."
+    )
+    for message in result:
+        if str(message.get("role", "")) == "system" and isinstance(message.get("content"), str):
+            message["content"] = str(message["content"]).rstrip() + directive
+            break
+    else:
+        result.insert(0, {"role": "system", "content": directive.strip()})
+    return result
+
+
+def _install_bounded_research_efficiency(module: Any) -> None:
+    """Give host schema repair sole ownership of bounded research correction."""
+
+    if getattr(module, "_mmm_single_structured_repair_owner_v1", False):
         return
 
-    module._SYNTHESIS_PROTOCOL_SCHEMA = _SYNTHESIS_PROTOCOL_V3
+    module._SYNTHESIS_INPUT_BYTES = max(
+        int(getattr(module, "_SYNTHESIS_INPUT_BYTES", 0)),
+        _MIN_SYNTHESIS_INPUT_BYTES,
+    )
+
+    def generate_bounded(
+        agentic_module: Any,
+        router: Any,
+        *,
+        messages: list[dict[str, str]],
+        response_schema: Mapping[str, Any],
+        parser: Any,
+        progress_label: str,
+    ) -> Any:
+        bound_schema, domain_id = _bound_research_schema(
+            module,
+            response_schema,
+            messages,
+        )
+        aligned_messages = _aligned_research_messages(
+            messages,
+            response_schema=bound_schema,
+            domain_id=domain_id,
+        )
+        module._emit_research_progress("model_attempt", label=progress_label, attempt=1)
+        try:
+            raw = router.generate_text(
+                "planner",
+                aligned_messages,
+                response_format="json",
+                response_schema=bound_schema,
+                tool_stage="research",
+                enable_tools=False,
+            )
+            return parser(raw)
+        except Exception as exc:
+            from .structured_output import StructuredOutputValidationError
+
+            if isinstance(exc, (agentic_module.SpecValidationError, StructuredOutputValidationError)):
+                raise module._BoundedResearchOutputError(
+                    f"bounded structured output failed after host repair: {exc}"
+                ) from exc
+            raise
+
+    generate_bounded._mmm_single_structured_repair_owner_v1 = True
+    module._generate_bounded = generate_bounded
+    module._mmm_single_structured_repair_owner_v1 = True
+
+
+def _install_synthesis_convergence(module: Any) -> None:
+    if getattr(module, "_mmm_synthesis_convergence_v4", False):
+        return
+
+    module._SYNTHESIS_PROTOCOL_SCHEMA = _SYNTHESIS_PROTOCOL_V4
+    module._SYNTHESIS_INPUT_BYTES = max(
+        int(getattr(module, "_SYNTHESIS_INPUT_BYTES", 0)),
+        _MIN_SYNTHESIS_INPUT_BYTES,
+    )
     synthesize_group = module._synthesize_group_with_recovery
     emit = module._emit_research_progress
     original_group = getattr(module, "_group_synthesis_notes", None)
@@ -178,9 +380,9 @@ def _install_synthesis_convergence(module: Any) -> None:
             isinstance(note.get("evidence_fragment"), Mapping) for note in notes
         )
         if has_raw_evidence and callable(original_group):
-            # Raw page fragments are the lossless model input. The base packer already
-            # respects the synthesis byte budget, so never compact those leaves before
-            # the model has seen them. Only model-produced intermediate notes are bounded.
+            # Raw page fragments are the lossless first model input. Raising the bounded
+            # synthesis transport budget lets the existing four-item packer actually pack
+            # several 1.8-KB pages instead of degenerating into one model call per page.
             groups = original_group(notes)
         else:
             compact = [_compact_synthesis_note(note) for note in notes]
@@ -198,6 +400,27 @@ def _install_synthesis_convergence(module: Any) -> None:
             "next_queries": [],
             "sufficient": False,
         }
+
+    def final_result(
+        note: Mapping[str, Any],
+        *,
+        domain_id: str,
+        failures: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        result = _compact_synthesis_note(note, domain_id=domain_id)
+        if result["claims"]:
+            return result
+        reason = (
+            "No evidence-backed design-relevant claim survived bounded synthesis; full "
+            "evidence remains in the durable ledger."
+        )
+        result["sufficient"] = False
+        if not result["gaps"]:
+            result["gaps"] = [reason]
+        marker = {"unit": "synthesis:final", "error": reason}
+        if marker not in failures:
+            failures.append(marker)
+        return result
 
     def hierarchical_synthesis(
         agentic_module: Any,
@@ -222,10 +445,14 @@ def _install_synthesis_convergence(module: Any) -> None:
         for level in range(max_levels):
             fingerprint = _frontier_sha(current)
             if fingerprint in seen:
-                return terminal_gap(
-                    domain_id,
-                    "Bounded research synthesis detected a repeated semantic frontier; "
-                    "full evidence remains in the durable ledger.",
+                return final_result(
+                    terminal_gap(
+                        domain_id,
+                        "Bounded research synthesis detected a repeated semantic frontier; "
+                        "full evidence remains in the durable ledger.",
+                    ),
+                    domain_id=domain_id,
+                    failures=failures,
                 )
             seen.add(fingerprint)
 
@@ -288,13 +515,21 @@ def _install_synthesis_convergence(module: Any) -> None:
                 for note in next_level
             ]
             if len(next_level) == 1:
-                return next_level[0]
+                return final_result(
+                    next_level[0],
+                    domain_id=domain_id,
+                    failures=failures,
+                )
 
             if not next_level:
-                return terminal_gap(
-                    domain_id,
-                    "Bounded research synthesis produced an empty frontier; full evidence "
-                    "remains in the durable ledger.",
+                return final_result(
+                    terminal_gap(
+                        domain_id,
+                        "Bounded research synthesis produced an empty frontier; full evidence "
+                        "remains in the durable ledger.",
+                    ),
+                    domain_id=domain_id,
+                    failures=failures,
                 )
 
             if len(next_level) >= len(current):
@@ -317,13 +552,21 @@ def _install_synthesis_convergence(module: Any) -> None:
                     frontier_out=len(next_level),
                 )
                 if len(next_level) == 1:
-                    return next_level[0]
+                    return final_result(
+                        next_level[0],
+                        domain_id=domain_id,
+                        failures=failures,
+                    )
 
             if len(next_level) >= len(current):
-                return terminal_gap(
-                    domain_id,
-                    "Bounded research synthesis could not contract the frontier; full "
-                    "evidence remains in the durable ledger.",
+                return final_result(
+                    terminal_gap(
+                        domain_id,
+                        "Bounded research synthesis could not contract the frontier; full "
+                        "evidence remains in the durable ledger.",
+                    ),
+                    domain_id=domain_id,
+                    failures=failures,
                 )
 
             emit(
@@ -337,17 +580,21 @@ def _install_synthesis_convergence(module: Any) -> None:
             )
             current = next_level
 
-        return terminal_gap(
-            domain_id,
-            "Bounded research synthesis reached its logarithmic safety fuse; full evidence "
-            "remains in the durable ledger.",
+        return final_result(
+            terminal_gap(
+                domain_id,
+                "Bounded research synthesis reached its logarithmic safety fuse; full "
+                "evidence remains in the durable ledger.",
+            ),
+            domain_id=domain_id,
+            failures=failures,
         )
 
-    group_synthesis_notes._mmm_strict_contraction_v3 = True
-    hierarchical_synthesis._mmm_strict_contraction_v3 = True
+    group_synthesis_notes._mmm_strict_contraction_v4 = True
+    hierarchical_synthesis._mmm_strict_contraction_v4 = True
     module._group_synthesis_notes = group_synthesis_notes
     module._hierarchical_synthesis = hierarchical_synthesis
-    module._mmm_synthesis_convergence_v3 = True
+    module._mmm_synthesis_convergence_v4 = True
 
 
 def _resolve_local_ref(schema: Mapping[str, Any], root: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -493,13 +740,14 @@ def _install_llama_tool_schema_projection(policy_module: Any) -> None:
 
 
 def install() -> None:
-    """Install convergence and first-request tool projection; never install retries."""
+    """Install one repair owner, convergence, and first-request tool projection."""
 
     global _INSTALLED
     if _INSTALLED:
         return
     from . import agentic_pre_design_rag, llama_server_hardware_policy
 
+    _install_bounded_research_efficiency(agentic_pre_design_rag)
     _install_synthesis_convergence(agentic_pre_design_rag)
     _install_llama_tool_schema_projection(llama_server_hardware_policy)
     _INSTALLED = True

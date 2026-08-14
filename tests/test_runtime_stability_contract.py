@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+
+import pytest
 
 from minecraft_mod_ai import runtime_stability_contract as contract
 
@@ -21,6 +24,193 @@ def _rich_note(domain_id: str = "mk_platform") -> dict[str, object]:
     }
 
 
+def _research_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "research_note": {
+                "type": "object",
+                "properties": {
+                    "domain_id": {"type": "string"},
+                    "claims": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "claim": {"type": "string"},
+                                "evidence_refs": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["claim", "evidence_refs"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "gaps": {"type": "array", "items": {"type": "string"}},
+                    "next_queries": {"type": "array", "items": {"type": "string"}},
+                    "sufficient": {"type": "boolean"},
+                },
+                "required": ["domain_id", "claims", "gaps", "next_queries", "sufficient"],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["research_note"],
+        "additionalProperties": False,
+    }
+
+
+def _bounded_module():
+    class BoundedError(RuntimeError):
+        pass
+
+    return SimpleNamespace(
+        _SYNTHESIS_INPUT_BYTES=3600,
+        _MIN_CONTINUATION_PROGRESS_CHARS=512,
+        _BoundedResearchOutputError=BoundedError,
+        _emit_research_progress=lambda *args, **kwargs: None,
+    )
+
+
+def test_bounded_research_has_one_outer_generation_and_host_bound_schema():
+    class SpecValidationError(RuntimeError):
+        pass
+
+    calls: list[dict[str, object]] = []
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            calls.append({"role": role, "messages": messages, **kwargs})
+            return json.dumps(
+                {
+                    "research_note": {
+                        "domain_id": "request",
+                        "claims": [
+                            {"claim": "supported", "evidence_refs": ["page:1"]}
+                        ],
+                        "gaps": [],
+                        "next_queries": [],
+                        "sufficient": True,
+                    }
+                }
+            )
+
+    module = _bounded_module()
+    contract._install_bounded_research_efficiency(module)
+    agentic = SimpleNamespace(SpecValidationError=SpecValidationError)
+    messages = [
+        {"role": "system", "content": "Return compact research JSON."},
+        {
+            "role": "user",
+            "content": json.dumps({"domain": {"domain_id": "request"}}),
+        },
+    ]
+    result = module._generate_bounded(
+        agentic,
+        Router(),
+        messages=messages,
+        response_schema=_research_schema(),
+        parser=lambda raw: json.loads(raw)["research_note"],
+        progress_label="domain request synthesis 0:0",
+    )
+
+    assert result["domain_id"] == "request"
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["response_format"] == "json"
+    assert call["enable_tools"] is False
+    bound = call["response_schema"]
+    note_schema = bound["properties"]["research_note"]
+    assert note_schema["properties"]["domain_id"]["const"] == "request"
+    assert note_schema["allOf"]
+    assert "do not return a bare research_note body" in call["messages"][0]["content"]
+    assert module._SYNTHESIS_INPUT_BYTES >= contract._MIN_SYNTHESIS_INPUT_BYTES
+
+
+def test_parser_validation_failure_is_not_replayed_by_bounded_layer():
+    class SpecValidationError(RuntimeError):
+        pass
+
+    calls = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
+            del role, messages, kwargs
+            calls += 1
+            return '{"research_note":{}}'
+
+    module = _bounded_module()
+    contract._install_bounded_research_efficiency(module)
+    agentic = SimpleNamespace(SpecValidationError=SpecValidationError)
+
+    def invalid_parser(raw):
+        del raw
+        raise SpecValidationError("semantic mismatch")
+
+    with pytest.raises(module._BoundedResearchOutputError, match="after host repair"):
+        module._generate_bounded(
+            agentic,
+            Router(),
+            messages=[
+                {"role": "system", "content": "research"},
+                {
+                    "role": "user",
+                    "content": json.dumps({"domain": {"domain_id": "request"}}),
+                },
+            ],
+            response_schema=_research_schema(),
+            parser=invalid_parser,
+            progress_label="domain request synthesis 0:0",
+        )
+
+    assert calls == 1
+
+
+def test_page_schema_binds_exact_continuation_receipt_before_generation():
+    module = _bounded_module()
+    schema = _research_schema()
+    schema["properties"]["continuation"] = {
+        "type": "object",
+        "properties": {
+            "complete": {"type": "boolean"},
+            "next_offset": {"type": "integer"},
+            "tail_sha256": {"type": "string"},
+        },
+        "required": ["complete", "next_offset", "tail_sha256"],
+        "additionalProperties": False,
+    }
+    schema["required"] = ["research_note", "continuation"]
+    messages = [
+        {"role": "system", "content": "read page"},
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "domain": {"domain_id": "mk_platform"},
+                    "continuation_contract": {"current_offset": 100},
+                    "evidence_page": {
+                        "content_total_chars": 1800,
+                        "tail_sha256": "sha256:tail",
+                    },
+                }
+            ),
+        },
+    ]
+
+    bound, domain_id = contract._bound_research_schema(module, schema, messages)
+    continuation = bound["properties"]["continuation"]
+    next_offset = continuation["properties"]["next_offset"]
+
+    assert domain_id == "mk_platform"
+    assert next_offset["minimum"] == 612
+    assert next_offset["maximum"] == 1800
+    rendered = json.dumps(continuation["allOf"], sort_keys=True)
+    assert '"const": 1800' in rendered
+    assert '"const": "sha256:tail"' in rendered
+    assert '"maximum": 1799' in rendered
+
+
 def test_synthesis_nodes_are_utf8_bounded_and_pairwise_contracting():
     compact = contract._compact_synthesis_note(_rich_note())
     assert contract._json_bytes(compact) <= contract._SYNTHESIS_NODE_BYTES
@@ -35,8 +225,9 @@ def test_synthesis_nodes_are_utf8_bounded_and_pairwise_contracting():
     groups = module._group_synthesis_notes([_rich_note() for _ in range(5)])
     assert len(groups) == 3
     assert all(len(group) <= 2 for group in groups)
-    assert all(contract._json_bytes(group) <= 3600 for group in groups)
-    assert module._SYNTHESIS_PROTOCOL_SCHEMA.endswith("-v3")
+    assert all(contract._json_bytes(group) <= module._SYNTHESIS_INPUT_BYTES for group in groups)
+    assert module._SYNTHESIS_INPUT_BYTES >= contract._MIN_SYNTHESIS_INPUT_BYTES
+    assert module._SYNTHESIS_PROTOCOL_SCHEMA.endswith("-v4")
 
 
 def test_valid_large_synthesis_outputs_terminate_without_failure_signal():
@@ -55,6 +246,7 @@ def test_valid_large_synthesis_outputs_terminate_without_failure_signal():
         _emit_research_progress=lambda *args, **kwargs: None,
     )
     contract._install_synthesis_convergence(module)
+    failures: list[dict[str, str]] = []
 
     result = module._hierarchical_synthesis(
         None,
@@ -63,12 +255,13 @@ def test_valid_large_synthesis_outputs_terminate_without_failure_signal():
         domain={"domain_id": "mk_platform"},
         page_notes=[_rich_note() for _ in range(4)],
         domain_key="unit-test",
-        failures=[],
+        failures=failures,
     )
 
     assert result["domain_id"] == "mk_platform"
     assert calls == [(0, 2), (0, 2), (1, 2)]
     assert contract._json_bytes(result) <= contract._SYNTHESIS_NODE_BYTES
+    assert failures == []
 
 
 def test_recovery_expansion_is_collapsed_on_host_before_next_model_level():
@@ -143,6 +336,7 @@ def test_raw_evidence_leaves_reach_first_synthesis_before_host_compaction():
         }
         for index, content in enumerate(("RAW-A", "RAW-B"))
     ]
+    failures: list[dict[str, str]] = []
 
     result = module._hierarchical_synthesis(
         None,
@@ -151,11 +345,13 @@ def test_raw_evidence_leaves_reach_first_synthesis_before_host_compaction():
         domain={"domain_id": "mk_platform"},
         page_notes=page_notes,
         domain_key="unit-test",
-        failures=[],
+        failures=failures,
     )
 
     assert result["domain_id"] == "mk_platform"
+    assert result["sufficient"] is False
     assert delivered == ["RAW-A", "RAW-B"]
+    assert failures and failures[-1]["unit"] == "synthesis:final"
 
 
 def test_tool_schema_projection_resolves_refs_and_drops_grammar_hazards():
