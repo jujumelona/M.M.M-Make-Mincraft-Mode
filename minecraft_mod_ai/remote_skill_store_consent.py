@@ -21,6 +21,20 @@ _SENSITIVE_KEY_PARTS = (
     "secret",
     "token",
 )
+_REMOTE_PRIVATE_KEYS = frozenset(
+    {
+        "node_id",
+        "member_ids",
+        "error_signature",
+        "source_body",
+        "source_code",
+        "source_path",
+        "uri",
+        "path",
+        "content",
+        "prompt",
+    }
+)
 
 
 def remote_write_allowed() -> bool:
@@ -46,13 +60,15 @@ def require_remote_write_consent() -> None:
 
 
 def sanitize_remote_payload(value: Any) -> Any:
-    """Remove common credential-bearing fields before an opted-in remote write."""
+    """Project opted-in records onto reusable, non-source structural facts only."""
 
     if isinstance(value, Mapping):
         sanitized: dict[str, Any] = {}
         for raw_key, raw_value in value.items():
             key = str(raw_key)
             lowered = key.casefold()
+            if lowered in _REMOTE_PRIVATE_KEYS:
+                continue
             if any(part in lowered for part in _SENSITIVE_KEY_PARTS):
                 continue
             sanitized[key] = sanitize_remote_payload(raw_value)
