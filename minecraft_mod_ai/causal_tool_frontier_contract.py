@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-"""Reduce relevance-ranked tools to the smallest useful next-action frontier."""
+"""Expose only host-authorized tools on a verified causal next-action frontier."""
 
 import os
 import sys
 from functools import wraps
 from typing import Any, Mapping, Sequence
+
+from .causal_tool_graph import infer_verified_state, shortest_causal_frontier
 
 _CODER_CORE = ("inspect_existing_mod", "search_project_rag", "search_code_rag")
 _EXTERNAL = ("external_mcp_capabilities", "external_mcp_schema", "external_mcp_call")
@@ -14,31 +16,6 @@ _EXTERNAL = ("external_mcp_capabilities", "external_mcp_schema", "external_mcp_c
 def _name(schema: Mapping[str, Any]) -> str:
     fn = schema.get("function")
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
-
-
-def _document(schema: Mapping[str, Any]) -> str:
-    fn = schema.get("function")
-    if not isinstance(fn, Mapping):
-        return ""
-    return (str(fn.get("name", "")) + " " + str(fn.get("description", ""))).casefold()
-
-
-def _effect(schema: Mapping[str, Any]) -> str:
-    text = _document(schema)
-    name = _name(schema).casefold()
-    if name in _EXTERNAL or "external mcp" in text:
-        return "external"
-    if any(token in name for token in ("search", "discover")):
-        return "evidence"
-    if any(token in name for token in ("inspect", "read", "status", "logs", "symbols")):
-        return "observe"
-    if any(token in name for token in ("diagnostic", "validate", "quality", "test", "smoke")):
-        return "verify"
-    if any(token in name for token in ("patch", "generate", "write", "apply", "execute", "command")):
-        return "act"
-    if any(token in name for token in ("runtime", "mineflayer", "blockbench")):
-        return "runtime"
-    return "other"
 
 
 def _goals(query: str) -> tuple[str, ...]:
@@ -96,76 +73,56 @@ def install(max_agent_owner: Any) -> None:
         if len(ranked) <= 2:
             return ranked
 
-        goals = _goals(query)
-        ambiguous = len(set(goals)) >= 3
-        width = _env_int("MMM_CAUSAL_TOOL_FRONTIER_MAX", 3, minimum=2, maximum=5)
-        if ambiguous:
-            width = min(5, max(width, 4))
-        by_name = {_name(schema): schema for schema in available if _name(schema)}
-        selected: list[Mapping[str, Any]] = []
-        selected_names: set[str] = set()
-
-        def add(name: str) -> None:
-            schema = by_name.get(name)
-            if schema is not None and name not in selected_names:
-                selected.append(schema)
-                selected_names.add(name)
-
-        # Host role/Skill requirements are hard preconditions, not retrieval hints.
-        # A causal frontier may shrink only optional tools; it must never hide the
-        # production coder core or the reviewed external-MCP capability/schema/call
-        # chain when those schemas are present in the host-authorized surface.
+        names = {_name(schema) for schema in available}
+        protected: list[str] = []
         if role in {"coder", "coder_safe"}:
-            for name in _CODER_CORE:
-                add(name)
-        if any(name in by_name for name in _EXTERNAL):
-            for name in _EXTERNAL:
-                add(name)
+            protected.extend(name for name in _CODER_CORE if name in names)
+        if any(name in names for name in _EXTERNAL):
+            protected.extend(name for name in _EXTERNAL if name in names)
 
-        preference = {
-            "verify": ("verify", "observe", "evidence", "act", "runtime"),
-            "runtime": ("runtime", "verify", "observe", "evidence", "act"),
-            "evidence": ("evidence", "observe", "verify", "act", "runtime"),
-            "observe": ("observe", "evidence", "verify", "act", "runtime"),
-            "act": ("evidence", "observe", "act", "verify", "runtime"),
-            "external": ("external", "evidence", "observe", "verify", "act"),
-        }
-        ordered_effects: list[str] = []
-        for goal in goals:
-            for effect in preference.get(goal, (goal,)):
-                if effect not in ordered_effects:
-                    ordered_effects.append(effect)
-
-        ranked_index = {_name(schema): index for index, schema in enumerate(ranked)}
-        candidates = sorted(
-            ranked,
-            key=lambda schema: (
-                ordered_effects.index(_effect(schema))
-                if _effect(schema) in ordered_effects
-                else len(ordered_effects),
-                ranked_index.get(_name(schema), len(ranked)),
-            ),
+        state = infer_verified_state(
+            query=query,
+            tool_schemas=available,
+            require_fresh_evidence=require_fresh_evidence,
         )
-        target_width = max(width, len(selected))
-        for schema in candidates:
-            if len(selected) >= target_width:
-                break
-            name = _name(schema)
-            if not name or name in selected_names:
-                continue
-            selected.append(schema)
-            selected_names.add(name)
+        goals = _goals(query)
+        path = shortest_causal_frontier(
+            available,
+            state=state,
+            goals=goals,
+            protected=protected,
+            max_depth=_env_int("MMM_CAUSAL_TOOL_MAX_DEPTH", 4, minimum=1, maximum=8),
+        )
 
-        # Preserve original stage order for stable schema prefixes/KV reuse. The
-        # cardinality was already bounded before sorting, so never slice again here.
+        # If no causal path can prove progress, keep the protected host surface plus
+        # the single highest-ranked optional tool rather than widening to all tools.
+        selected_names = list(path)
+        if len(selected_names) <= len(protected):
+            for schema in ranked:
+                name = _name(schema)
+                if name and name not in selected_names:
+                    selected_names.append(name)
+                    break
+
+        max_optional = _env_int("MMM_CAUSAL_TOOL_FRONTIER_MAX", 3, minimum=1, maximum=5)
+        hard = set(protected)
+        optional = [name for name in selected_names if name not in hard]
+        selected_names = [*protected, *optional[:max_optional]]
+
+        by_name = {_name(schema): schema for schema in available if _name(schema)}
         order = {_name(schema): index for index, schema in enumerate(available)}
-        selected.sort(key=lambda schema: order.get(_name(schema), len(order)))
-        result = tuple(selected)
+        result = tuple(
+            sorted(
+                (by_name[name] for name in selected_names if name in by_name),
+                key=lambda schema: order.get(_name(schema), len(order)),
+            )
+        )
         print(
             "causal tool frontier:",
             f"role={role}",
+            f"state={','.join(sorted(state))}",
             f"goals={','.join(goals)}",
-            f"ranked={len(ranked)}",
+            f"path={','.join(path)}",
             f"exposed={len(result)}",
             flush=True,
         )
