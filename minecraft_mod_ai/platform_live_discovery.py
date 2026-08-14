@@ -154,9 +154,6 @@ def _api_for(version: str) -> str:
 
 @lru_cache(maxsize=1)
 def _loom_version() -> str:
-    # Do not scrape the rendered Develop page: the version panel is hydrated by
-    # client-side JavaScript and therefore is not a stable machine interface. The
-    # official Fabric template source is what the official CLI itself renders.
     text = _fetch(_FABRIC_TEMPLATE_PROPERTIES).decode("utf-8", errors="replace")
     match = re.search(r"(?m)^loom_version=([^\s]+)\s*$", text)
     if not match:
@@ -196,6 +193,17 @@ def _mojang_version_index() -> tuple[tuple[str, str], ...]:
     )
 
 
+def _java_from_detail(version: str, target_url: str) -> str:
+    detail = _json(target_url)
+    java = detail.get("javaVersion", {}) if isinstance(detail, dict) else {}
+    major = java.get("majorVersion") if isinstance(java, dict) else None
+    if not isinstance(major, int) or major <= 0:
+        raise PlatformDiscoveryError(
+            f"Mojang metadata exposed no Java major version for Minecraft {version}"
+        )
+    return str(major)
+
+
 @lru_cache(maxsize=64)
 def _mojang_java_version(version: str) -> str:
     target_url = next(
@@ -206,14 +214,30 @@ def _mojang_java_version(version: str) -> str:
         raise PlatformDiscoveryError(
             f"Mojang version manifest does not contain Minecraft {version}"
         )
-    detail = _json(target_url)
-    java = detail.get("javaVersion", {}) if isinstance(detail, dict) else {}
-    major = java.get("majorVersion") if isinstance(java, dict) else None
-    if not isinstance(major, int) or major <= 0:
-        raise PlatformDiscoveryError(
-            f"Mojang metadata exposed no Java major version for Minecraft {version}"
-        )
-    return str(major)
+    return _java_from_detail(version, target_url)
+
+
+@lru_cache(maxsize=1)
+def _stable_java_versions() -> tuple[tuple[str, str], ...]:
+    """Resolve the candidate Java requirements concurrently, preserving version order."""
+
+    versions = latest_stable_versions(limit=8)
+    if not versions:
+        return ()
+    urls = dict(_mojang_version_index())
+
+    def resolve(version: str) -> tuple[str, str]:
+        target_url = urls.get(version, "")
+        if not target_url:
+            return version, ""
+        try:
+            return version, _java_from_detail(version, target_url)
+        except PlatformDiscoveryError:
+            return version, ""
+
+    workers = min(8, len(versions))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-mojang-java") as pool:
+        return tuple(pool.map(resolve, versions))
 
 
 def _gradle_bundle() -> tuple[str, str]:
@@ -268,12 +292,9 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
         _mojang_index,
     ) = _common_platform_metadata()
     api = _api_from_versions(version, api_versions)
-    java = _mojang_java_version(version)
+    prefetched_java = dict(_stable_java_versions()).get(version, "")
+    java = prefetched_java or _mojang_java_version(version)
 
-    # MMM's live path deliberately standardizes on Mojang names. For 26.1+ the game
-    # is unobfuscated and this is the native source surface; on earlier dynamically
-    # discovered versions Fabric's official project generator supports the Mojang
-    # mappings option. Old pinned Yarn projects remain covered by compatibility seeds.
     mappings_kind = "mojang"
     mappings_version = "mojang"
     payload = {
