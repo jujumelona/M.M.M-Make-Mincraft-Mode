@@ -154,6 +154,134 @@ def _install_work_graph_compile_cache(work_graph_module: Any) -> None:
             continue
 
 
+def _install_work_ledger_read_batching(work_graph_module: Any) -> None:
+    """Remove N+1 SQLite reads from status pages without changing ledger authority."""
+
+    ledger_cls = work_graph_module.DurableWorkLedger
+    current_tasks = ledger_cls.tasks
+    if not getattr(current_tasks, "_mmm_batched_status_reads", False):
+
+        @wraps(current_tasks)
+        def tasks(
+            self: Any,
+            *,
+            cursor: str = "",
+            limit: int = 100,
+            state: Any = None,
+        ) -> dict[str, Any]:
+            if not 1 <= limit <= 1000:
+                raise work_graph_module.WorkGraphError(
+                    "Task page size must be between 1 and 1000."
+                )
+            clauses = ["node_id > ?"]
+            params: list[Any] = [cursor]
+            if state is not None:
+                clauses.append("state = ?")
+                params.append(state.value)
+            params.append(limit + 1)
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"""
+                    SELECT node_id, stage, input_hash, payload_json, state,
+                           attempt, lease_owner, lease_until, output_hash,
+                           receipt_json, error, updated_at
+                    FROM tasks
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY node_id LIMIT ?
+                    """,
+                    tuple(params),
+                ).fetchall()
+                page_rows = rows[:limit]
+                node_ids = [str(row[0]) for row in page_rows]
+                dependencies: dict[str, list[str]] = {
+                    node_id: [] for node_id in node_ids
+                }
+                # Keep under SQLite builds with the historical 999-variable limit.
+                # One connection still owns the whole status snapshot.
+                for start in range(0, len(node_ids), 900):
+                    batch = node_ids[start : start + 900]
+                    if not batch:
+                        continue
+                    placeholders = ",".join("?" for _ in batch)
+                    for node_id, dependency_id in connection.execute(
+                        f"""
+                        SELECT node_id, dependency_id FROM edges
+                        WHERE node_id IN ({placeholders})
+                        ORDER BY node_id, dependency_id
+                        """,
+                        tuple(batch),
+                    ):
+                        dependencies[str(node_id)].append(str(dependency_id))
+
+            page = [
+                {
+                    "node_id": row[0],
+                    "stage": row[1],
+                    "input_hash": row[2],
+                    "payload": json.loads(row[3]),
+                    "state": row[4],
+                    "attempt": row[5],
+                    "lease_owner": row[6],
+                    "lease_until": row[7],
+                    "output_hash": row[8],
+                    "receipt": json.loads(row[9]) if row[9] else None,
+                    "error": row[10],
+                    "updated_at": row[11],
+                    "dependencies": dependencies[str(row[0])],
+                }
+                for row in page_rows
+            ]
+            return {
+                "schema_version": "mmm/work-task-page-v1",
+                "tasks": page,
+                "next_cursor": page[-1]["node_id"] if len(rows) > limit else "",
+            }
+
+        tasks._mmm_batched_status_reads = True  # type: ignore[attr-defined]
+        tasks.__wrapped__ = current_tasks  # type: ignore[attr-defined]
+        ledger_cls.tasks = tasks
+
+    current_summary = ledger_cls.summary
+    if getattr(current_summary, "_mmm_single_connection_summary", False):
+        return
+
+    @wraps(current_summary)
+    def summary(self: Any) -> dict[str, Any]:
+        with self._connect() as connection:
+            counts = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT state, COUNT(*) FROM tasks GROUP BY state"
+                )
+            }
+            total = sum(counts.values())
+            checkpoint_counts = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT state, COUNT(*) FROM checkpoints GROUP BY state"
+                )
+            }
+            cancel_requested = self._meta(connection, "cancel_requested")
+            graph_hash = self._meta(connection, "graph_hash")
+            module_count = self._meta(connection, "module_count")
+        completed = counts.get(work_graph_module.WorkState.SUCCEEDED.value, 0)
+        return {
+            "schema_version": "mmm/work-ledger-summary-v1",
+            "proposal_hash": self.proposal_hash,
+            "graph_hash": graph_hash,
+            "module_count": int(module_count or "0"),
+            "task_count": total,
+            "counts": counts,
+            "checkpoint_counts": checkpoint_counts,
+            "cancel_requested": cancel_requested or None,
+            "progress": 1.0 if total == 0 else round(completed / total, 6),
+        }
+
+    summary._mmm_single_connection_summary = True  # type: ignore[attr-defined]
+    summary.__wrapped__ = current_summary  # type: ignore[attr-defined]
+    ledger_cls.summary = summary
+
+
 def _install_module_routing(work_graph_module: Any) -> None:
     """Route only genuinely model-backed integrations into the custom LLM lane."""
 
@@ -489,6 +617,7 @@ def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
     del scheduler_module
     _install_exact_llm_executor()
     _install_work_graph_compile_cache(work_graph_module)
+    _install_work_ledger_read_batching(work_graph_module)
     _install_module_routing(work_graph_module)
     _install_parallel_custom_search(custom_module_generator)
 
@@ -497,6 +626,7 @@ __all__ = [
     "_active_parallelism",
     "_install_exact_llm_executor",
     "_install_work_graph_compile_cache",
+    "_install_work_ledger_read_batching",
     "_install_module_routing",
     "_install_parallel_custom_search",
     "enhance_runtime",
