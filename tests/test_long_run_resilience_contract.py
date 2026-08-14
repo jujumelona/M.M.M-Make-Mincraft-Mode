@@ -12,11 +12,13 @@ from minecraft_mod_ai import long_run_resilience_contract as resilience
 def _valid_note(*, sufficient: bool = False) -> str:
     return json.dumps(
         {
-            "domain_id": "mk_project",
-            "claims": [{"claim": "kept", "evidence_refs": ["page:1"]}],
-            "gaps": [] if sufficient else ["needs nothing new"],
-            "next_queries": [],
-            "sufficient": sufficient,
+            "research_note": {
+                "domain_id": "mk_project",
+                "claims": [{"claim": "kept", "evidence_refs": ["page:1"]}],
+                "gaps": [] if sufficient else ["needs nothing new"],
+                "next_queries": [],
+                "sufficient": sufficient,
+            }
         }
     )
 
@@ -26,7 +28,10 @@ def _document_messages(*, prior=None, sentinel: str = "TAIL-SENTINEL"):
         "authoritative_request": f"build the mod {sentinel}",
         "domain": {"domain_id": "mk_project"},
         "deterministic_evidence": {
-            "evidence_document": {"document_sha256": "sha256:doc-one", "page_count": 8},
+            "evidence_document": {
+                "document_sha256": "sha256:doc-one",
+                "page_count": 8,
+            },
             "page_notes": [
                 {"page_ref": "page:1", "claims": [{"claim": sentinel}]},
                 {"page_ref": "page:8", "claims": [{"claim": "last-page"}]},
@@ -34,7 +39,7 @@ def _document_messages(*, prior=None, sentinel: str = "TAIL-SENTINEL"):
         },
     }
     if prior is not None:
-        payload["prior"] = prior
+        payload["previous_reflection"] = prior
     return [
         {"role": "system", "content": "synthesize all supplied page notes"},
         {"role": "user", "content": json.dumps(payload, sort_keys=True)},
@@ -48,8 +53,13 @@ def _page_messages(sentinel: str = "PAGE-TAIL-SENTINEL"):
             "role": "user",
             "content": json.dumps(
                 {
-                    "evidence_document": {"document_sha256": "sha256:page-doc"},
-                    "evidence_page": {"page_ref": "page:7", "content": f"full evidence {sentinel}"},
+                    "evidence_document": {
+                        "document_sha256": "sha256:page-doc",
+                    },
+                    "evidence_page": {
+                        "page_ref": "page:7",
+                        "content": f"full evidence {sentinel}",
+                    },
                 },
                 sort_keys=True,
             ),
@@ -57,7 +67,10 @@ def _page_messages(sentinel: str = "PAGE-TAIL-SENTINEL"):
     ]
 
 
-def test_document_synthesis_disables_duplicate_tools_and_reaches_host_fixed_point(tmp_path, monkeypatch):
+def test_document_synthesis_disables_duplicate_tools_and_reaches_host_fixed_point(
+    tmp_path,
+    monkeypatch,
+):
     monkeypatch.setenv("MMM_RESEARCH_CHECKPOINT_ROOT", str(tmp_path))
     resilience._SYNTHESIS_RESULTS.clear()
     calls = []
@@ -83,7 +96,7 @@ def test_document_synthesis_disables_duplicate_tools_and_reaches_host_fixed_poin
     )
     second = router.generate_text(
         "planner",
-        _document_messages(prior=json.loads(first)),
+        _document_messages(prior=json.loads(first)["research_note"]),
         tool_stage="research",
         enable_tools=True,
         response_format="json",
@@ -95,7 +108,10 @@ def test_document_synthesis_disables_duplicate_tools_and_reaches_host_fixed_poin
     assert "TAIL-SENTINEL" in calls[0][1][1]["content"]
 
 
-def test_successful_research_page_generation_is_durably_reused(tmp_path, monkeypatch):
+def test_successful_research_page_generation_is_durably_reused(
+    tmp_path,
+    monkeypatch,
+):
     monkeypatch.setenv("MMM_RESEARCH_CHECKPOINT_ROOT", str(tmp_path))
     calls = []
 
@@ -149,14 +165,18 @@ def test_corrupt_research_checkpoint_is_ignored(tmp_path, monkeypatch):
     resilience._install_research_generation_resilience(module)
     router = Router()
     messages = _page_messages("CORRUPT-TAIL")
-    kwargs = {"tool_stage": "research", "enable_tools": False, "response_format": "json"}
+    kwargs = {
+        "tool_stage": "research",
+        "enable_tools": False,
+        "response_format": "json",
+    }
     key = resilience._research_request_key(router, "planner", messages, (), kwargs)
     path = resilience._checkpoint_path(key)
     path.write_text('{"schema_version":"broken"}', encoding="utf-8")
 
     raw = router.generate_text("planner", messages, **kwargs)
 
-    assert json.loads(raw)["sufficient"] is True
+    assert json.loads(raw)["research_note"]["sufficient"] is True
     assert len(calls) == 1
     repaired = json.loads(path.read_text(encoding="utf-8"))
     assert repaired["schema_version"] == resilience._CACHE_SCHEMA
@@ -216,7 +236,9 @@ def test_managed_transport_failure_replays_exact_request_once(monkeypatch):
         def generate(self, request):
             seen.append(request)
             if len(seen) == 1:
-                raise RuntimeError("ModelBackendError: [Errno 111] Connection refused")
+                raise RuntimeError(
+                    "ModelBackendError: [Errno 111] Connection refused"
+                )
             return "recovered"
 
     module = SimpleNamespace(LlamaCppAdapter=Adapter)
@@ -239,7 +261,9 @@ def test_explicit_external_server_is_never_restarted(monkeypatch):
         def generate(self, request):
             nonlocal calls
             calls += 1
-            raise RuntimeError("ModelBackendError: [Errno 111] Connection refused")
+            raise RuntimeError(
+                "ModelBackendError: [Errno 111] Connection refused"
+            )
 
     module = SimpleNamespace(LlamaCppAdapter=Adapter)
     resilience._install_managed_backend_recovery(module, autotune)
