@@ -106,8 +106,17 @@ class TransactionalSourcePatcher:
         staged: dict[Path, bytes | None] = {}
         originals: dict[Path, bytes | None] = {}
         receipts: list[PatchReceipt] = []
+        # The project lock freezes every in-process transaction for this root. Parent
+        # safety therefore only needs to be checked once per unique directory during
+        # this transaction instead of once per file. Large generated catalogs commonly
+        # contain thousands of sibling files under the same three or four directories.
+        validated_parents: set[Path] = {self.project_root}
         for item in normalized:
-            path = self._path(item["path"], allow_missing=item["operation"] == "create")
+            path = self._path(
+                item["path"],
+                allow_missing=item["operation"] == "create",
+                validated_parents=validated_parents,
+            )
             exists = path.exists()
             if exists and (not path.is_file() or path.is_symlink()):
                 raise SourcePatchError(f"Patch target is not a regular file: {item['path']}")
@@ -204,8 +213,13 @@ class TransactionalSourcePatcher:
 
     def snapshot(self, relative_paths: Iterable[str]) -> dict[str, Any]:
         files: list[dict[str, Any]] = []
+        validated_parents: set[Path] = {self.project_root}
         for relative in relative_paths:
-            path = self._path(relative, allow_missing=False)
+            path = self._path(
+                relative,
+                allow_missing=False,
+                validated_parents=validated_parents,
+            )
             if not path.is_file() or path.is_symlink():
                 raise SourcePatchError(f"Snapshot target is not a regular file: {relative}")
             text = path.read_text(encoding="utf-8")
@@ -287,24 +301,34 @@ class TransactionalSourcePatcher:
             text = text.replace(replacement["old"], replacement["new"], replacement["count"])
         return text
 
-    def _path(self, relative: str, *, allow_missing: bool) -> Path:
+    def _path(
+        self,
+        relative: str,
+        *,
+        allow_missing: bool,
+        validated_parents: set[Path] | None = None,
+    ) -> Path:
         candidate = Path(relative)
         if candidate.is_absolute() or ".." in candidate.parts:
             raise SourcePatchError(f"Unsafe patch path: {relative}")
-        target = (self.project_root / candidate).resolve(strict=False)
-        try:
-            target.relative_to(self.project_root)
-        except ValueError as exc:
-            raise SourcePatchError(f"Patch path escaped the project root: {relative}") from exc
+        # ``project_root`` is already resolved and candidate is a lexical relative path
+        # with parent traversal forbidden. Resolving every target here would stat the
+        # same parent chain again for every sibling; explicit parent checks below own
+        # symlink and non-directory validation instead.
+        target = self.project_root / candidate
         if target == self.project_root:
             raise SourcePatchError("The project root itself cannot be patched.")
         current = self.project_root
         for part in candidate.parts[:-1]:
             current = current / part
+            if validated_parents is not None and current in validated_parents:
+                continue
             if current.is_symlink():
                 raise SourcePatchError(f"Patch parent contains a symlink: {relative}")
             if current.exists() and not current.is_dir():
                 raise SourcePatchError(f"Patch parent is not a directory: {relative}")
+            if validated_parents is not None:
+                validated_parents.add(current)
         if not allow_missing and not target.exists():
             raise SourcePatchError(f"Patch target does not exist: {relative}")
         return target
