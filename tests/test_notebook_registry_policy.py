@@ -1,6 +1,7 @@
 import json
 import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
 import nbformat
 import pytest
@@ -91,14 +92,16 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
     assert '"pull",' not in cells["setup"]
     assert "refs/remotes/origin/main" in cells["setup"]
     assert '"--untracked-files=no"' in cells["setup"]
-    assert "sys.modules.pop" in cells["setup"]
-    assert "importlib.invalidate_caches()" in cells["setup"]
+    assert "sys.modules.pop" not in cells["setup"]
+    assert "importlib.invalidate_caches()" not in cells["setup"]
     assert "LATEST_MAIN_COMMIT" in cells["existing-input"]
     assert "CURRENT_ENGINE_COMMIT" in cells["existing-input"]
     assert '"reset",' in cells["existing-input"]
     assert '"--hard",' in cells["existing-input"]
-    assert "sys.modules.pop" in cells["existing-input"]
-    assert "importlib.invalidate_caches()" in cells["existing-input"]
+    assert "sys.modules.pop" not in cells["existing-input"]
+    assert "importlib.invalidate_caches()" not in cells["existing-input"]
+    assert "engine_was_loaded=engine_was_loaded" in cells["existing-input"]
+    assert "engine_module_file=engine_module_file" in cells["existing-input"]
     assert "setup_colab_runtime(" in cells["setup"]
     assert "engine_module_file=engine_module_file" in cells["setup"]
     assert 'SETUP_STATE["receipt"]' in cells["setup"]
@@ -115,12 +118,62 @@ def test_local_colab_profiles_require_verified_qwen_fast_kernels() -> None:
         ".[ui,local-model,rag,image,speech,production-audio,training]"
     )
     assert "_install_project(local_profile=profile in LOCAL_PROFILES)" in setup_source
+    assert "_shutdown_loaded_managed_llama_server()" in setup_source
+    assert "sys.modules.pop(name, None)" in setup_source
     assert '"--no-build-isolation"' in setup_source
+
+
+def test_setup_stops_managed_server_before_same_commit_engine_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    setup = runpy.run_path("tools/colab_runtime_setup.py")
+    validate_checkout = setup["_validate_checkout"]
+    calls: list[str] = []
+    package = SimpleNamespace(__file__=str(tmp_path / "minecraft_mod_ai" / "__init__.py"))
+    autotune = SimpleNamespace(
+        _MANAGED_URL="http://127.0.0.1:8910",
+        _shutdown_managed_server=lambda: calls.append("shutdown"),
+    )
+    fake_modules = {
+        "minecraft_mod_ai": package,
+        "minecraft_mod_ai.llama_server_autotune": autotune,
+    }
+    fake_sys = SimpleNamespace(modules=fake_modules)
+    fake_importlib = SimpleNamespace(invalidate_caches=lambda: calls.append("invalidate"))
+    monkeypatch.setitem(
+        validate_checkout.__globals__,
+        "sys",
+        fake_sys,
+    )
+    monkeypatch.setitem(validate_checkout.__globals__, "importlib", fake_importlib)
+    monkeypatch.setenv("LLAMA_SERVER_URL", autotune._MANAGED_URL)
+    monkeypatch.setitem(validate_checkout.__globals__, "_git_head", lambda _path: "a" * 40)
+    monkeypatch.setitem(validate_checkout.__globals__, "_tracked_changes", lambda _path: "")
+    (tmp_path / ".git").mkdir()
+
+    validate_checkout(
+        repo_dir=tmp_path,
+        used_commit="a" * 40,
+        previous_commit="a" * 40,
+        engine_was_loaded=True,
+        engine_module_file=package.__file__,
+    )
+
+    assert calls == ["shutdown", "invalidate"]
+    assert "minecraft_mod_ai" not in fake_modules
+    assert "minecraft_mod_ai.llama_server_autotune" not in fake_modules
+    assert "LLAMA_SERVER_URL" not in __import__("os").environ
 
 
 def test_notebook_checks_setup_fingerprint_and_prints_resolved_planner() -> None:
     cells = _cells()
 
+    assert 'PERFORMANCE_MODE = "Auto"' in cells["configuration"]
+    assert 'os.environ["MMM_PERFORMANCE_MODE"] = performance_mode' in cells[
+        "configuration"
+    ]
+    assert 'os.environ["MMM_PERFORMANCE_MODE"]' not in cells["plan"]
     assert "def assert_current_colab_setup" in cells["registry"]
     assert "COLAB_SETUP_MODULE.assert_setup_state(" in cells["registry"]
     assert "planner_config = registry_manager.role" in cells["registry"]
@@ -167,6 +220,7 @@ def test_colab_setup_fingerprint_is_stable_and_receipt_excludes_secrets() -> Non
     assert "api_key" not in serialized.lower()
     assert receipt["remote"]["base_url"] == "https://example.test/v1"
     assert receipt["setup_fingerprint"] == first
+    assert receipt["runtime"]["cpu_count"] >= 1
     assert validate_remote_url("https://example.test/v1") == "https://example.test/v1"
     with pytest.raises(ValueError, match="without embedded"):
         validate_remote_url("https://user:TOPSECRET@example.test/v1")

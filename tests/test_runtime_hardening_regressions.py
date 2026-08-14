@@ -256,4 +256,4 @@ def test_bounded_section_budget_does_not_cap_paginated_qwen_json(monkeypatch) ->
         tool_choice=None,
     )
     assert llama_hardware._server_payload(adapter, section)["max_tokens"] == 2048
-    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == -1
+    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == 8192

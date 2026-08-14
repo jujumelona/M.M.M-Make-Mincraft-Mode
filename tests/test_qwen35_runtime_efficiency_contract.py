@@ -12,10 +12,11 @@ def _config():
     return SimpleNamespace(
         model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
         extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        max_new_tokens=8192,
     )
 
 
-def test_qwen_output_is_unbounded_by_default_and_operator_can_recap(monkeypatch) -> None:
+def test_qwen_output_preserves_profile_default_and_operator_can_override(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     hardware = SimpleNamespace(
         _server_payload=lambda adapter, request: {"max_tokens": 8192}
@@ -23,10 +24,58 @@ def test_qwen_output_is_unbounded_by_default_and_operator_can_recap(monkeypatch)
     contract._install_output_policy(hardware)
     adapter = SimpleNamespace(config=_config())
 
-    assert hardware._server_payload(adapter, object())["max_tokens"] == -1
+    assert hardware._server_payload(adapter, object())["max_tokens"] == 8192
 
     monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "24576")
     assert hardware._server_payload(adapter, object())["max_tokens"] == 24576
+
+    monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
+    assert hardware._server_payload(adapter, object())["max_tokens"] == -1
+
+
+@pytest.mark.parametrize(
+    ("operator_limit", "expected"),
+    ((None, 2048), ("1536", 1536), ("24576", 2048), ("-1", 2048)),
+)
+def test_research_note_has_schema_local_output_cap(
+    monkeypatch, operator_limit, expected
+) -> None:
+    if operator_limit is None:
+        monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
+    else:
+        monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", operator_limit)
+    hardware = SimpleNamespace(
+        _server_payload=lambda adapter, request: {"max_tokens": 8192}
+    )
+    contract._install_output_policy(hardware)
+    request = SimpleNamespace(
+        response_schema={
+            "type": "object",
+            "properties": {"research_note": {"type": "object"}},
+        }
+    )
+
+    assert hardware._server_payload(
+        SimpleNamespace(config=_config()), request
+    )["max_tokens"] == expected
+
+
+def test_non_research_schema_keeps_full_profile_output_budget(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
+    hardware = SimpleNamespace(
+        _server_payload=lambda adapter, request: {"max_tokens": 8192}
+    )
+    contract._install_output_policy(hardware)
+    request = SimpleNamespace(
+        response_schema={
+            "type": "object",
+            "properties": {"game_design": {"type": "object"}},
+        }
+    )
+
+    assert hardware._server_payload(
+        SimpleNamespace(config=_config()), request
+    )["max_tokens"] == 8192
 
 
 def test_output_limit_rejects_zero_and_invalid_values(monkeypatch) -> None:

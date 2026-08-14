@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-_SCHEMA_VERSION = "mmm/llama-decode-speed-v2"
+_SCHEMA_VERSION = "mmm/llama-decode-speed-v3-unified-e2e-pmin"
 _KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v2"
 _INSTALL_LOCK = threading.RLock()
 _BENCHMARK_LOCK = threading.RLock()
@@ -61,8 +61,14 @@ def _mtp_p_min_candidates() -> tuple[float, ...]:
 
 
 def _tuning_objective() -> str:
-    raw = os.environ.get("MMM_LLAMA_TUNING_OBJECTIVE", "single_stream").strip().lower()
-    return "throughput" if raw in {"throughput", "aggregate", "concurrent"} else "single_stream"
+    raw = os.environ.get("MMM_PERFORMANCE_MODE", "").strip().lower()
+    if not raw:
+        raw = os.environ.get("MMM_LLAMA_TUNING_OBJECTIVE", "auto").strip().lower()
+    if raw in {"latency", "single_stream", "single-stream"}:
+        return "latency"
+    if raw in {"throughput", "aggregate", "concurrent"}:
+        return "throughput"
+    return "auto"
 
 
 def _explicit_parallel_requested() -> bool:
@@ -81,6 +87,34 @@ def _explicit_parallel_requested() -> bool:
 def _decode_ratio(probe: Any, baseline: Any) -> float:
     base = max(1e-9, float(getattr(baseline, "predicted_tps", 0.0)))
     return max(0.0, float(getattr(probe, "predicted_tps", 0.0))) / base
+
+
+def _same_execution_shape(left: Any, right: Any) -> bool:
+    fields = (
+        ("spec_type", "none"),
+        ("draft_n_max", 0),
+        ("ubatch", 0),
+        ("parallel", 1),
+        ("cache_reuse", 0),
+    )
+    if any(getattr(left, name, default) != getattr(right, name, default) for name, default in fields):
+        return False
+    return float(getattr(left, "draft_p_min", 0.0) or 0.0) == float(
+        getattr(right, "draft_p_min", 0.0) or 0.0
+    )
+
+
+def _latest_probe_for_shape(probes: Any, selected: Any) -> Any | None:
+    target = _as_speed_variant(selected, draft_p_min=0.0)
+    return next(
+        (
+            probe
+            for probe in reversed(tuple(probes))
+            if bool(getattr(probe, "ok", False))
+            and _same_execution_shape(getattr(probe, "variant", None), target)
+        ),
+        None,
+    )
 
 
 def _representative_benchmark_request(request: Any) -> Any:
@@ -124,7 +158,7 @@ def _kv_autotune_enabled(autotune: Any) -> bool:
     return bool(
         autotune._env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True)
         and autotune._env_bool("MMM_LLAMA_KV_AUTOTUNE", True)
-        and _tuning_objective() == "single_stream"
+        and _tuning_objective() != "throughput"
     )
 
 
@@ -310,6 +344,7 @@ def _probe_kv_types(
 
 def _probe_p_min(
     autotune: Any,
+    runtime_tuning: Any,
     binary: str,
     model_path: str,
     config: Any,
@@ -325,13 +360,11 @@ def _probe_p_min(
         return _as_speed_variant(selected), ()
 
     probes: list[Any] = []
-    baseline = baseline_probe if bool(getattr(baseline_probe, "ok", False)) else None
+    # Raw decode-only probes and aggregate short+medium probes are not comparable.
+    # Always remeasure p_min=0 and every candidate with the same E2E workload.
+    del baseline_probe
+    baseline = None
     pending = candidates
-    if baseline is not None:
-        # p_min=0 is the MTP probe already selected by the prior stage. Reuse it;
-        # do not reload the same GGUF/server merely to recreate that baseline.
-        probes.append(baseline)
-        pending = tuple(value for value in candidates if value != 0.0)
 
     bench_request = autotune._compact_benchmark_request(request)
     probe_tokens = min(
@@ -355,8 +388,13 @@ def _probe_p_min(
             process = autotune._start_server(binary, model_path, config, variant, port)
             url = autotune._wait_ready(process, port)
             autotune._probe_server(url, bench_request, max_tokens=1, variant=variant)
-            probe = autotune._probe_server(
-                url, bench_request, max_tokens=probe_tokens, variant=variant
+            probe = runtime_tuning._parallel_probe(
+                autotune,
+                url,
+                bench_request,
+                max_tokens=probe_tokens,
+                variant=variant,
+                concurrency=max(1, int(getattr(variant, "parallel", 1) or 1)),
             )
         except Exception as exc:
             probe = autotune.ProbeResult(
@@ -468,11 +506,11 @@ def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = No
                 old_score = runtime_tuning._balanced_score
                 try:
                     if (
-                        _tuning_objective() == "single_stream"
+                        _tuning_objective() == "latency"
                         and not _explicit_parallel_requested()
                     ):
-                        runtime_tuning._parallel_target = lambda: 1
-                        runtime_tuning._parallel_candidates = lambda: ()
+                        runtime_tuning._parallel_target = lambda *_args, **_kwargs: 1
+                        runtime_tuning._parallel_candidates = lambda *_args, **_kwargs: ()
                     runtime_tuning._balanced_score = _decode_ratio
                     decision = current_benchmark(
                         binary, model_path, config, request, fingerprint_value
@@ -484,22 +522,12 @@ def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = No
 
             if decision is None:
                 return None
-            selected_baseline_probe = next(
-                (
-                    probe
-                    for probe in reversed(decision.probes)
-                    if bool(getattr(probe, "ok", False))
-                    and str(getattr(getattr(probe, "variant", None), "spec_type", "none"))
-                    == str(getattr(decision.selected, "spec_type", "none"))
-                    and int(getattr(getattr(probe, "variant", None), "draft_n_max", 0) or 0)
-                    == int(getattr(decision.selected, "draft_n_max", 0) or 0)
-                    and float(getattr(getattr(probe, "variant", None), "draft_p_min", 0.0) or 0.0)
-                    == 0.0
-                ),
-                None,
+            selected_baseline_probe = _latest_probe_for_shape(
+                decision.probes, decision.selected
             )
             selected, extra_probes = _probe_p_min(
                 autotune,
+                runtime_tuning,
                 binary,
                 model_path,
                 config,

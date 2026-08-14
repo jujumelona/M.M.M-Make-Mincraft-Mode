@@ -23,13 +23,23 @@ _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
                 "domain_id": {"type": "string", "minLength": 1},
                 "claims": {
                     "type": "array",
+                    "maxItems": 6,
                     "items": {
                         "type": "object",
                         "properties": {
-                            "claim": {"type": "string", "minLength": 1},
+                            "claim": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 512,
+                            },
                             "evidence_refs": {
                                 "type": "array",
-                                "items": {"type": "string", "minLength": 1},
+                                "maxItems": 4,
+                                "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 192,
+                                },
                             },
                         },
                         "required": ["claim", "evidence_refs"],
@@ -38,11 +48,21 @@ _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
                 },
                 "gaps": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1},
+                    "maxItems": 4,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512,
+                    },
                 },
                 "next_queries": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1},
+                    "maxItems": 4,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512,
+                    },
                 },
                 "sufficient": {"type": "boolean"},
             },
@@ -53,6 +73,13 @@ _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
     "required": ["research_note"],
     "additionalProperties": False,
 }
+
+_RESEARCH_MAX_RAW_CHARS = 24_000
+_RESEARCH_MAX_CLAIMS = 6
+_RESEARCH_MAX_LIST_ITEMS = 4
+_RESEARCH_MAX_CLAIM_CHARS = 512
+_RESEARCH_MAX_REF_CHARS = 192
+_RESEARCH_MAX_TEXT_CHARS = 512
 
 _SECTION_SPECS: tuple[tuple[str, tuple[str, ...], dict[str, Any]], ...] = (
     (
@@ -644,6 +671,10 @@ def _domain_evidence_slice(
 
 
 def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
+    if len(raw) > _RESEARCH_MAX_RAW_CHARS:
+        raise SpecValidationError(
+            "research_note exceeded the bounded page response size."
+        )
     payload = _extract_json_object(raw)
     note = payload.get("research_note")
     if not isinstance(note, dict):
@@ -660,19 +691,37 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
             not isinstance(item, str) or not item.strip() for item in value
         ):
             raise SpecValidationError(f"research_note.{field} must be list[str].")
+        if len(value) > _RESEARCH_MAX_LIST_ITEMS or any(
+            len(item) > _RESEARCH_MAX_TEXT_CHARS for item in value
+        ):
+            raise SpecValidationError(
+                f"research_note.{field} exceeded the bounded page contract."
+            )
     claims = note.get("claims")
     if not isinstance(claims, list):
         raise SpecValidationError("research_note.claims must be a list.")
+    if len(claims) > _RESEARCH_MAX_CLAIMS:
+        raise SpecValidationError(
+            "research_note.claims exceeded the bounded page contract."
+        )
     for claim in claims:
         if not isinstance(claim, dict) or set(claim) != {"claim", "evidence_refs"}:
             raise SpecValidationError("research_note claim shape is invalid.")
         if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
             raise SpecValidationError("research_note claim text is empty.")
+        if len(claim["claim"]) > _RESEARCH_MAX_CLAIM_CHARS:
+            raise SpecValidationError("research_note claim text is too long.")
         refs = claim.get("evidence_refs")
         if not isinstance(refs, list) or any(
             not isinstance(item, str) or not item.strip() for item in refs
         ):
             raise SpecValidationError("research_note evidence_refs must be list[str].")
+        if len(refs) > _RESEARCH_MAX_LIST_ITEMS or any(
+            len(item) > _RESEARCH_MAX_REF_CHARS for item in refs
+        ):
+            raise SpecValidationError(
+                "research_note evidence_refs exceeded the bounded page contract."
+            )
     return note
 
 

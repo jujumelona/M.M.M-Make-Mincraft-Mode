@@ -11,7 +11,9 @@ from minecraft_mod_ai.llama_decode_speed_contract import (
     _kv_autotune_enabled,
     _kv_candidates,
     _kv_fingerprint,
+    _latest_probe_for_shape,
     _mtp_p_min_candidates,
+    _probe_p_min,
     _representative_benchmark_request,
     _tuning_objective,
 )
@@ -27,19 +29,27 @@ def test_decode_speed_contract_is_installed() -> None:
     assert autotune._BENCHMARK_OUTPUT_TOKENS >= 256
 
 
-def test_default_objective_is_single_stream(monkeypatch) -> None:
+def test_default_objective_is_auto(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_PERFORMANCE_MODE", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TUNING_OBJECTIVE", raising=False)
     monkeypatch.delenv("MMM_LLAMA_PARALLEL", raising=False)
     monkeypatch.delenv("MMM_LLAMA_CONCURRENT_REQUESTS", raising=False)
-    assert _tuning_objective() == "single_stream"
+    assert _tuning_objective() == "auto"
     assert _explicit_parallel_requested() is False
 
 
 def test_explicit_throughput_mode_is_preserved(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_PERFORMANCE_MODE", raising=False)
     monkeypatch.setenv("MMM_LLAMA_TUNING_OBJECTIVE", "throughput")
     monkeypatch.setenv("MMM_LLAMA_CONCURRENT_REQUESTS", "4")
     assert _tuning_objective() == "throughput"
     assert _explicit_parallel_requested() is True
+
+
+def test_notebook_performance_mode_has_priority_over_legacy_objective(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_PERFORMANCE_MODE", "latency")
+    monkeypatch.setenv("MMM_LLAMA_TUNING_OBJECTIVE", "throughput")
+    assert _tuning_objective() == "latency"
 
 
 def test_mtp_p_min_candidates_are_bounded_and_include_baseline(monkeypatch) -> None:
@@ -74,6 +84,94 @@ def test_decode_ratio_ignores_prompt_prefill_speed() -> None:
     baseline = SimpleNamespace(predicted_tps=20.0, prompt_tps=1000.0)
     faster_decode_slower_prefill = SimpleNamespace(predicted_tps=24.0, prompt_tps=1.0)
     assert _decode_ratio(faster_decode_slower_prefill, baseline) == 1.2
+
+
+def test_parallel_probe_lookup_requires_exact_execution_shape() -> None:
+    selected = SpeedServerVariant(
+        "mtp-2|p1", "draft-mtp", 2, ubatch=512, parallel=1, cache_reuse=64
+    )
+    p1 = SimpleNamespace(
+        ok=True,
+        variant=selected,
+    )
+    p4 = SimpleNamespace(
+        ok=True,
+        variant=SpeedServerVariant(
+            "mtp-2|p4", "draft-mtp", 2, ubatch=512, parallel=4, cache_reuse=64
+        ),
+    )
+    assert _latest_probe_for_shape((p1, p4), selected) is p1
+
+
+def test_p_min_latency_stage_remeasures_same_combined_workload(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.8")
+    calls: list[tuple[float, int]] = []
+
+    def aggregate_probe(
+        _autotune,
+        _url,
+        _request,
+        *,
+        max_tokens,
+        variant,
+        concurrency,
+    ):
+        p_min = float(variant.draft_p_min)
+        calls.append((p_min, concurrency))
+        return autotune.ProbeResult(
+            variant=variant,
+            ok=True,
+            output_sha256="combined-short-medium",
+            predicted_tokens=max_tokens,
+            predicted_tps=15.0 if p_min == 0.8 else 10.0,
+            prompt_tps=20.0,
+            elapsed_seconds=1.0,
+        )
+
+    fake_autotune = SimpleNamespace(
+        _compact_benchmark_request=lambda request: request,
+        _env_int=lambda _name, default: default,
+        _env_float=lambda _name, default: default,
+        _free_port=lambda preferred: preferred,
+        _start_server=lambda *_args: object(),
+        _wait_ready=lambda _process, _port: "http://127.0.0.1:8910/v1",
+        _probe_server=lambda _url, _request, *, max_tokens, variant: SimpleNamespace(
+            ok=True
+        ),
+        _stop_server=lambda _process: None,
+        _BENCHMARK_OUTPUT_TOKENS=64,
+        ProbeResult=autotune.ProbeResult,
+    )
+    fake_runtime = SimpleNamespace(_parallel_probe=aggregate_probe)
+    selected = SpeedServerVariant(
+        "mtp-2|pm0.8|p1", "draft-mtp", 2, ubatch=512, parallel=1, draft_p_min=0.8
+    )
+    raw_decode_probe = autotune.ProbeResult(
+        variant=SpeedServerVariant(
+            "mtp-2|p1", "draft-mtp", 2, ubatch=512, parallel=1
+        ),
+        ok=True,
+        output_sha256="raw-short-only",
+        predicted_tokens=64,
+        predicted_tps=50.0,
+        prompt_tps=20.0,
+        elapsed_seconds=1.0,
+    )
+    winner, probes = _probe_p_min(
+        fake_autotune,
+        fake_runtime,
+        "server",
+        "model.gguf",
+        SimpleNamespace(max_new_tokens=64),
+        SimpleNamespace(messages=(), response_format="text"),
+        selected,
+        baseline_probe=raw_decode_probe,
+    )
+    assert calls == [(0.0, 1), (0.8, 1)]
+    assert len(probes) == 2
+    assert winner.parallel == 1
+    assert winner.ubatch == 512
+    assert winner.draft_p_min == 0.8
 
 
 def test_kv_autotune_tries_all_supported_types_with_selected_type_first(monkeypatch) -> None:

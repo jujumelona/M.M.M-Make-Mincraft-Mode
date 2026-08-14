@@ -291,23 +291,48 @@ def _save(autotune: Any, fingerprint: str, selected: KernelConfig, probes: Itera
     os.replace(temporary, path)
 
 
-def _run_probe(autotune: Any, binary: str, model_path: str, model_config: Any, request: Any, kernel: KernelConfig) -> KernelProbe:
+def _run_probe(
+    autotune: Any,
+    binary: str,
+    model_path: str,
+    model_config: Any,
+    request: Any,
+    kernel: KernelConfig,
+    *,
+    propagate_resource_failure: bool = False,
+) -> KernelProbe:
     started = time.perf_counter()
     try:
         variant = autotune.ServerVariant(
             name=f"kernel|fa-{kernel.flash_attn}|b-{kernel.batch}|k-{kernel.cache_type_k}|v-{kernel.cache_type_v}"
         )
         with _temporary_server_env(kernel):
+            probe_kwargs: dict[str, Any] = {
+                "probe_tokens": min(
+                    int(getattr(model_config, "max_new_tokens", 256) or 256),
+                    autotune._env_int(
+                        "MMM_LLAMA_AUTOTUNE_TOKENS",
+                        autotune._BENCHMARK_OUTPUT_TOKENS,
+                    ),
+                )
+            }
+            if bool(
+                getattr(
+                    autotune._mmm_run_tuning_variant,
+                    "_mmm_resource_failure_propagation",
+                    False,
+                )
+            ):
+                probe_kwargs["propagate_resource_failure"] = (
+                    propagate_resource_failure
+                )
             probe = autotune._mmm_run_tuning_variant(
                 binary,
                 model_path,
                 model_config,
                 autotune._compact_benchmark_request(request),
                 variant,
-                probe_tokens=min(
-                    int(getattr(model_config, "max_new_tokens", 256) or 256),
-                    autotune._env_int("MMM_LLAMA_AUTOTUNE_TOKENS", autotune._BENCHMARK_OUTPUT_TOKENS),
-                ),
+                **probe_kwargs,
             )
         return KernelProbe(
             config=kernel,
@@ -319,6 +344,8 @@ def _run_probe(autotune: Any, binary: str, model_path: str, model_config: Any, r
             error=str(getattr(probe, "error", "")),
         )
     except Exception as exc:
+        if bool(getattr(exc, "_mmm_recoverable_resource_failure", False)):
+            raise
         return KernelProbe(
             config=kernel,
             ok=False,
@@ -334,7 +361,15 @@ def _benchmark(autotune: Any, binary: str, model_path: str, model_config: Any, r
     minimum_gain = autotune._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
     current_config = _baseline_config()
     probes: list[KernelProbe] = []
-    current = _run_probe(autotune, binary, model_path, model_config, request, current_config)
+    current = _run_probe(
+        autotune,
+        binary,
+        model_path,
+        model_config,
+        request,
+        current_config,
+        propagate_resource_failure=True,
+    )
     probes.append(current)
     if not current.ok or current.predicted_tps <= 0:
         raise RuntimeError("baseline llama kernel configuration failed")

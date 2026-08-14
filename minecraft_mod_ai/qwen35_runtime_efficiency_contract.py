@@ -6,13 +6,14 @@ from typing import Any, Mapping
 
 
 _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
-_PAYLOAD_MARKER = "_mmm_qwen35_unbounded_output_v2"
+_PAYLOAD_MARKER = "_mmm_qwen35_profile_output_default_v4"
 _CACHE_MARKER = "_mmm_qwen35_skip_cold_cache_reuse_probe_v1"
 _KV_MARKER = "_mmm_qwen35_skip_main_kv_probe_v1"
 _FAST_TUNING_ENV = "MMM_QWEN35_FAST_TUNING_ACTIVE"
 _QWEN_ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _FAST_MTP_WIDTHS = "2,4,8"
 _EXHAUSTIVE_MTP_WIDTHS = "1,2,3,4,5,6,8"
+_RESEARCH_NOTE_MAX_TOKENS = 2048
 
 
 def _is_qwen35_mtp(config: Any) -> bool:
@@ -25,10 +26,10 @@ def _tuning_mode() -> str:
     return "exhaustive" if raw in {"full", "exhaustive", "deep"} else "fast"
 
 
-def _output_token_limit() -> int:
+def _output_token_limit() -> int | None:
     raw = os.environ.get("MMM_QWEN35_MAX_OUTPUT_TOKENS", "").strip()
     if not raw:
-        return -1
+        return None
     try:
         value = int(raw)
     except ValueError as exc:
@@ -66,6 +67,32 @@ def _bounded_section_request(request: Any) -> bool:
     return isinstance(properties, Mapping) and "section" in properties
 
 
+def _research_note_request(request: Any) -> bool:
+    schema = getattr(request, "response_schema", None)
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    return isinstance(properties, Mapping) and "research_note" in properties
+
+
+def _research_note_output_limit(
+    adapter: Any,
+    payload: Mapping[str, Any],
+    operator_limit: int | None,
+) -> int:
+    candidates = [_RESEARCH_NOTE_MAX_TOKENS]
+    for value in (
+        getattr(getattr(adapter, "config", None), "max_new_tokens", None),
+        payload.get("max_tokens"),
+        operator_limit if operator_limit is not None and operator_limit > 0 else None,
+    ):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            candidates.append(parsed)
+    return max(1, min(candidates))
+
+
 def _install_output_policy(hardware_policy: Any) -> None:
     current = hardware_policy._server_payload
     if getattr(current, _PAYLOAD_MARKER, False):
@@ -76,12 +103,31 @@ def _install_output_policy(hardware_policy: Any) -> None:
         result = current(adapter, request)
         if _is_qwen35_mtp(getattr(adapter, "config", None)):
             limit = _output_token_limit()
-            if _bounded_section_request(request):
-                if limit > 0:
+            if _research_note_request(request):
+                # Research is paginated by domain/page outside this transport call.
+                # A schema-local cap prevents a malformed note from decoding for tens
+                # of thousands of tokens. An operator may lower this bound, but -1
+                # cannot disable the schema safety boundary.
+                result["max_tokens"] = _research_note_output_limit(
+                    adapter, result, limit
+                )
+            elif _bounded_section_request(request):
+                if limit is not None and limit > 0:
                     current_max = max(1, int(result.get("max_tokens", limit) or limit))
                     result["max_tokens"] = min(current_max, limit)
             else:
-                result["max_tokens"] = limit
+                if limit is None:
+                    configured = getattr(getattr(adapter, "config", None), "max_new_tokens", None)
+                    try:
+                        configured = int(configured)
+                    except (TypeError, ValueError):
+                        configured = 0
+                    if configured > 0:
+                        # Reassert the profile value even if a live notebook still has
+                        # the prior unbounded-output wrapper installed underneath us.
+                        result["max_tokens"] = configured
+                else:
+                    result["max_tokens"] = limit
         return result
 
     setattr(payload, _PAYLOAD_MARKER, True)
@@ -163,4 +209,10 @@ def install(autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
     _install_cold_tuning_policy(autotune)
 
 
-__all__ = ["_fast_tuning_defaults", "_output_token_limit", "install"]
+__all__ = [
+    "_fast_tuning_defaults",
+    "_output_token_limit",
+    "_research_note_output_limit",
+    "_research_note_request",
+    "install",
+]

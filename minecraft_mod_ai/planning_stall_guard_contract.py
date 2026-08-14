@@ -14,12 +14,21 @@ import threading
 import time
 import weakref
 from copy import deepcopy
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 
 _INSTALL_LOCK = threading.RLock()
 _INSTALLED = False
+_PROGRESS_WORKER_MARKER = "_mmm_planner_progress_worker_v1"
+_PROGRESS_NORMALIZE_MARKER = "_mmm_planner_progress_normalize_v1"
+_PROGRESS_MATERIALIZE_MARKER = "_mmm_planner_progress_materialize_v1"
+_PROGRESS_PAGE_MARKER = "_mmm_planner_progress_page_v1"
+_PROGRESS_WRITE_MARKER = "_mmm_planner_progress_write_v1"
+_UNSET = object()
 _EXTERNAL_PROVIDERS = frozenset(
     {
         "modrinth",
@@ -44,6 +53,305 @@ _ALLOWED_API_HOSTS = frozenset(
         "api.crossref.org",
     }
 )
+
+
+def _safe_progress_value(value: Any, *, fallback: str = "-") -> str:
+    """Keep progress output compact and prevent evidence/prompt text from leaking."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    cleaned = "".join(
+        char if char.isalnum() or char in {"-", "_", ".", ":", "/"} else "_"
+        for char in raw
+    )
+    return cleaned[:80] or fallback
+
+
+@dataclass
+class _PlanningProgress:
+    """Thread-safe, request-local progress shared with copied worker contexts."""
+
+    stage: str = "initializing"
+    domain: str = "-"
+    page: int = 0
+    page_total: int = 0
+    attempt: int = 0
+    checkpoint: str = "none"
+    total: int = 0
+    updated_at: float = field(default_factory=time.monotonic)
+    _completed_domains: set[str] = field(default_factory=set, repr=False)
+    _domain_attempts: dict[str, int] = field(default_factory=dict, repr=False)
+    _page_attempts: dict[tuple[str, int, int], int] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+
+    def record(
+        self,
+        *,
+        stage: Any = _UNSET,
+        domain: Any = _UNSET,
+        page: Any = _UNSET,
+        page_total: Any = _UNSET,
+        attempt: Any = _UNSET,
+        checkpoint: Any = _UNSET,
+        total: Any = _UNSET,
+        complete_domain: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if stage is not _UNSET:
+                self.stage = _safe_progress_value(stage, fallback="unknown")
+            if domain is not _UNSET:
+                self.domain = _safe_progress_value(domain)
+            if page is not _UNSET:
+                self.page = max(0, int(page))
+            if page_total is not _UNSET:
+                self.page_total = max(0, int(page_total))
+            if attempt is not _UNSET:
+                self.attempt = max(0, int(attempt))
+            if checkpoint is not _UNSET:
+                self.checkpoint = _safe_progress_value(
+                    checkpoint,
+                    fallback="none",
+                )
+            if total is not _UNSET:
+                self.total = max(0, int(total))
+            if complete_domain:
+                self._completed_domains.add(_safe_progress_value(complete_domain))
+            self.updated_at = time.monotonic()
+            return self._snapshot_locked()
+
+    def begin_domain(self, domain: str) -> dict[str, Any]:
+        safe_domain = _safe_progress_value(domain)
+        with self._lock:
+            invocation = self._domain_attempts.get(safe_domain, 0) + 1
+            self._domain_attempts[safe_domain] = invocation
+        return self.record(
+            stage="domain-research" if invocation == 1 else "domain-retry",
+            domain=safe_domain,
+            page=0,
+            page_total=0,
+            attempt=invocation,
+            checkpoint="looking-up-checkpoint",
+        )
+
+    def begin_page(
+        self,
+        domain: str,
+        *,
+        page: int,
+        page_total: int,
+        continuation_offset: int = 0,
+    ) -> dict[str, Any]:
+        safe_domain = _safe_progress_value(domain)
+        safe_page = max(1, int(page))
+        safe_offset = max(0, int(continuation_offset))
+        with self._lock:
+            key = (safe_domain, safe_page, safe_offset)
+            page_attempt = self._page_attempts.get(key, 0) + 1
+            self._page_attempts[key] = page_attempt
+        if page_attempt > 1:
+            stage = "page-retry"
+        elif safe_offset > 0:
+            stage = "page-continuation"
+        else:
+            stage = "page-research"
+        return self.record(
+            stage=stage,
+            domain=safe_domain,
+            page=safe_page,
+            page_total=max(safe_page, int(page_total)),
+            attempt=page_attempt,
+            checkpoint=f"page-offset-{safe_offset}",
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "domain": self.domain,
+            "page": self.page,
+            "page_total": self.page_total,
+            "attempt": self.attempt,
+            "checkpoint": self.checkpoint,
+            "completed": len(self._completed_domains),
+            "total": self.total,
+            "updated_at": self.updated_at,
+        }
+
+
+_ACTIVE_PROGRESS: ContextVar[_PlanningProgress | None] = ContextVar(
+    "mmm_active_planner_progress",
+    default=None,
+)
+_ACTIVE_PROGRESS_CURSOR: ContextVar[dict[str, Any] | None] = ContextVar(
+    "mmm_active_planner_progress_cursor",
+    default=None,
+)
+
+
+def _progress_fields(progress: _PlanningProgress, *, now: float | None = None) -> str:
+    snapshot = progress.snapshot()
+    page_total = snapshot["page_total"] or "?"
+    total = snapshot["total"] or "?"
+    fields = (
+        f"stage={snapshot['stage']}"
+        f" domain={snapshot['domain']}"
+        f" page={snapshot['page']}/{page_total}"
+        f" attempt={snapshot['attempt']}"
+        f" checkpoint={snapshot['checkpoint']}"
+        f" completed={snapshot['completed']}"
+        f" total={total}"
+    )
+    if now is not None:
+        fields += f" idle={max(0.0, now - snapshot['updated_at']):.1f}s"
+    return fields
+
+
+def _emit_progress(progress: _PlanningProgress) -> None:
+    print(
+        "planner research: pre-design progress",
+        _progress_fields(progress),
+        flush=True,
+    )
+
+
+def report_planner_research_progress(
+    *,
+    stage: str | None = None,
+    domain: str | None = None,
+    page: int | None = None,
+    page_total: int | None = None,
+    attempt: int | None = None,
+    checkpoint: str | None = None,
+    completed_domain: str | None = None,
+    total: int | None = None,
+    emit: bool = True,
+) -> bool:
+    """Update the active plan's observable state without exposing research content.
+
+    The function intentionally becomes a no-op outside an observed pre-design request,
+    so low-level research/checkpoint code can report progress without owning lifecycle.
+    """
+
+    progress = _ACTIVE_PROGRESS.get()
+    if progress is None:
+        return False
+    kwargs: dict[str, Any] = {}
+    if stage is not None:
+        kwargs["stage"] = stage
+    if domain is not None:
+        kwargs["domain"] = domain
+    if page is not None:
+        kwargs["page"] = page
+    if page_total is not None:
+        kwargs["page_total"] = page_total
+    if attempt is not None:
+        kwargs["attempt"] = attempt
+    if checkpoint is not None:
+        kwargs["checkpoint"] = checkpoint
+    if total is not None:
+        kwargs["total"] = total
+    progress.record(complete_domain=completed_domain, **kwargs)
+    if emit:
+        _emit_progress(progress)
+    return True
+
+
+def _progress_int(value: Any, *, minimum: int = 0) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(minimum, min(1_000_000_000, parsed))
+
+
+def _research_progress_hook(payload: Any) -> None:
+    """Map paged-research events into the active request without owning execution."""
+
+    if not isinstance(payload, dict) or _ACTIVE_PROGRESS.get() is None:
+        return
+    event = _safe_progress_value(payload.get("event"), fallback="research-event")
+    cursor = dict(_ACTIVE_PROGRESS_CURSOR.get() or {})
+
+    raw_domain = payload.get("domain_id")
+    if raw_domain is not None:
+        cursor["domain"] = _safe_progress_value(raw_domain, fallback="unknown")
+    page = _progress_int(payload.get("page_index"), minimum=1)
+    page_total = _progress_int(payload.get("page_count"), minimum=1)
+    attempt = _progress_int(payload.get("attempt"), minimum=1)
+    if page is not None:
+        cursor["page"] = page
+    if page_total is not None:
+        cursor["page_total"] = page_total
+    _ACTIVE_PROGRESS_CURSOR.set(cursor)
+
+    stages = {
+        "model_attempt": "model-attempt",
+        "bounded_json_repair": "bounded-json-repair",
+        "page_checkpoint_hit": "page-checkpoint-hit",
+        "page_adaptive_split": "page-adaptive-split",
+        "synthesis_checkpoint_hit": "synthesis-checkpoint-hit",
+        "domain_checkpoint_complete": "domain-checkpoint-hit",
+        "domain_start": "domain-research",
+        "page_start": "page-research",
+        "page_ledgered": "page-ledgered",
+        "domain_complete": "domain-complete",
+        "domain_gap_receipt": "domain-gap-receipt",
+    }
+    checkpoint = event
+    if event == "model_attempt":
+        checkpoint = "model-requested"
+    elif event == "bounded_json_repair":
+        checkpoint = "repairing-bounded-json"
+    elif event == "page_checkpoint_hit":
+        offset = _progress_int(payload.get("offset"))
+        checkpoint = f"page-offset-{offset or 0}-loaded"
+    elif event == "page_adaptive_split":
+        start = _progress_int(payload.get("start_offset"))
+        midpoint = _progress_int(payload.get("midpoint"))
+        end = _progress_int(payload.get("end_offset"))
+        checkpoint = f"split-{start or 0}-{midpoint or 0}-{end or 0}"
+    elif event == "synthesis_checkpoint_hit":
+        level = _progress_int(payload.get("level"))
+        group = _progress_int(payload.get("group_index"))
+        checkpoint = f"synthesis-{level or 0}-{group or 0}-loaded"
+    elif event == "domain_checkpoint_complete":
+        checkpoint = "domain-checkpoint-loaded"
+    elif event == "domain_start":
+        checkpoint = "domain-started"
+    elif event == "page_start":
+        checkpoint = "page-started"
+    elif event == "page_ledgered":
+        checkpoint = "page-ledger-saved"
+    elif event == "domain_complete":
+        checkpoint = "domain-saved"
+    elif event == "domain_gap_receipt":
+        checkpoint = "domain-gap-saved"
+
+    terminal = event in {
+        "domain_checkpoint_complete",
+        "domain_complete",
+        "domain_gap_receipt",
+    }
+    report_planner_research_progress(
+        stage=stages.get(event, event),
+        domain=cursor.get("domain"),
+        page=cursor.get("page"),
+        page_total=cursor.get("page_total"),
+        attempt=attempt,
+        checkpoint=checkpoint,
+        completed_domain=cursor.get("domain") if terminal else None,
+        total=_progress_int(payload.get("total"), minimum=1),
+        # The source already prints one structured event. Avoid doubling every line;
+        # the heartbeat renders this mapped state in its compact human-readable form.
+        emit=False,
+    )
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -158,7 +466,12 @@ def _ecosystem_key(
     )
 
 
-def _heartbeat(label: str, stop: threading.Event, started: float) -> None:
+def _heartbeat(
+    label: str,
+    stop: threading.Event,
+    started: float,
+    progress: _PlanningProgress | None = None,
+) -> None:
     interval = _env_float(
         "MMM_PLANNER_HEARTBEAT_SECONDS",
         15.0,
@@ -166,10 +479,222 @@ def _heartbeat(label: str, stop: threading.Event, started: float) -> None:
         maximum=60.0,
     )
     while not stop.wait(interval):
+        now = time.monotonic()
+        progress_text = f" {_progress_fields(progress, now=now)}" if progress else ""
         print(
-            f"planner research: {label} still running elapsed={time.monotonic() - started:.1f}s",
+            f"planner research: {label} still running{progress_text}"
+            f" elapsed={now - started:.1f}s",
             flush=True,
         )
+
+
+def _patch_pre_design_progress_sources(
+    agentic_module: Any,
+    pre_design_module: Any,
+) -> None:
+    """Attach request-local progress probes to dynamically resolved research helpers."""
+
+    progress_setter = getattr(pre_design_module, "set_research_progress_hook", None)
+    if callable(progress_setter):
+        # This global registration is stateless. Request identity and all mutable state
+        # stay in ContextVars, so concurrent sessions cannot observe one another's data.
+        progress_setter(_research_progress_hook)
+
+    current_normalize = agentic_module.normalize_research_brief
+    if current_normalize.__dict__.get(_PROGRESS_NORMALIZE_MARKER) is not current_normalize:
+
+        @wraps(current_normalize)
+        def normalize_observed(*args: Any, **kwargs: Any) -> Any:
+            result = current_normalize(*args, **kwargs)
+            progress = _ACTIVE_PROGRESS.get()
+            if progress is not None and isinstance(result, dict):
+                domains = result.get("domains")
+                total = (
+                    sum(isinstance(item, dict) for item in domains)
+                    if isinstance(domains, list)
+                    else 0
+                )
+                progress.record(
+                    stage="research-brief",
+                    total=total,
+                    checkpoint="brief-ready",
+                )
+                _emit_progress(progress)
+            return result
+
+        setattr(normalize_observed, _PROGRESS_NORMALIZE_MARKER, normalize_observed)
+        agentic_module.normalize_research_brief = normalize_observed
+
+    current_worker = agentic_module._research_domain_with_agent
+    if current_worker.__dict__.get(_PROGRESS_WORKER_MARKER) is not current_worker:
+
+        @wraps(current_worker)
+        def worker_observed(
+            router: Any,
+            *,
+            prompt: str,
+            domain: Any,
+            deterministic: Any,
+            trace_metadata: Any,
+        ) -> Any:
+            domain_id = (
+                str(domain.get("domain_id", "")).strip()
+                if isinstance(domain, dict)
+                else ""
+            ) or "unknown"
+            progress = _ACTIVE_PROGRESS.get()
+            cursor_token = None
+            if progress is not None:
+                cursor_token = _ACTIVE_PROGRESS_CURSOR.set(
+                    {"domain": _safe_progress_value(domain_id)}
+                )
+                progress.begin_domain(domain_id)
+                _emit_progress(progress)
+            try:
+                try:
+                    result = current_worker(
+                        router,
+                        prompt=prompt,
+                        domain=domain,
+                        deterministic=deterministic,
+                        trace_metadata=trace_metadata,
+                    )
+                except BaseException:
+                    if progress is not None:
+                        progress.record(
+                            stage="domain-recovery",
+                            domain=domain_id,
+                            checkpoint="last-safe-checkpoint",
+                        )
+                        _emit_progress(progress)
+                    raise
+                if progress is not None:
+                    progress.record(
+                        stage="domain-complete",
+                        domain=domain_id,
+                        checkpoint="domain-saved",
+                        complete_domain=domain_id,
+                    )
+                    _emit_progress(progress)
+                return result
+            finally:
+                if cursor_token is not None:
+                    _ACTIVE_PROGRESS_CURSOR.reset(cursor_token)
+
+        setattr(worker_observed, _PROGRESS_WORKER_MARKER, worker_observed)
+        worker_observed.__wrapped__ = current_worker  # type: ignore[attr-defined]
+        agentic_module._research_domain_with_agent = worker_observed
+
+    current_materialize = getattr(
+        pre_design_module,
+        "_materialize_domain_evidence_document",
+        None,
+    )
+    if callable(current_materialize) and (
+        current_materialize.__dict__.get(_PROGRESS_MATERIALIZE_MARKER)
+        is not current_materialize
+    ):
+
+        @wraps(current_materialize)
+        def materialize_observed(domain_id: str, evidence: Any) -> Any:
+            progress = _ACTIVE_PROGRESS.get()
+            if progress is not None:
+                progress.record(
+                    stage="evidence-snapshot",
+                    domain=domain_id,
+                    checkpoint="saving-evidence",
+                )
+                _emit_progress(progress)
+            result = current_materialize(domain_id, evidence)
+            if progress is not None and isinstance(result, dict):
+                progress.record(
+                    stage="evidence-snapshot",
+                    domain=domain_id,
+                    page=0,
+                    page_total=max(0, int(result.get("page_count", 0) or 0)),
+                    checkpoint="evidence-saved",
+                )
+                _emit_progress(progress)
+            return result
+
+        setattr(
+            materialize_observed,
+            _PROGRESS_MATERIALIZE_MARKER,
+            materialize_observed,
+        )
+        pre_design_module._materialize_domain_evidence_document = materialize_observed
+
+    current_page_messages = getattr(pre_design_module, "_research_page_messages", None)
+    if callable(current_page_messages) and (
+        current_page_messages.__dict__.get(_PROGRESS_PAGE_MARKER)
+        is not current_page_messages
+    ):
+
+        @wraps(current_page_messages)
+        def page_messages_observed(*args: Any, **kwargs: Any) -> Any:
+            domain = kwargs.get("domain")
+            page_value = kwargs.get("page")
+            document = kwargs.get("document")
+            domain_id = (
+                str(domain.get("domain_id", "")).strip()
+                if isinstance(domain, dict)
+                else ""
+            ) or "unknown"
+            if isinstance(page_value, dict):
+                page_index = int(page_value.get("page_index", 0) or 0) + 1
+                page_total = int(page_value.get("page_count", 0) or 0)
+            else:
+                page_index = 1
+                page_total = 0
+            if page_total <= 0 and isinstance(document, dict):
+                page_total = int(document.get("page_count", 0) or 0)
+            progress = _ACTIVE_PROGRESS.get()
+            if progress is not None:
+                cursor = dict(_ACTIVE_PROGRESS_CURSOR.get() or {})
+                cursor.update(
+                    {
+                        "domain": _safe_progress_value(domain_id),
+                        "page": page_index,
+                        "page_total": max(page_index, page_total),
+                    }
+                )
+                _ACTIVE_PROGRESS_CURSOR.set(cursor)
+                progress.begin_page(
+                    domain_id,
+                    page=page_index,
+                    page_total=max(page_index, page_total),
+                    continuation_offset=max(
+                        0,
+                        int(kwargs.get("continuation_offset", 0) or 0),
+                    ),
+                )
+                _emit_progress(progress)
+            return current_page_messages(*args, **kwargs)
+
+        setattr(page_messages_observed, _PROGRESS_PAGE_MARKER, page_messages_observed)
+        pre_design_module._research_page_messages = page_messages_observed
+
+    current_write = getattr(pre_design_module, "_atomic_write_text", None)
+    if callable(current_write) and (
+        current_write.__dict__.get(_PROGRESS_WRITE_MARKER) is not current_write
+    ):
+
+        @wraps(current_write)
+        def write_observed(path: Any, content: str) -> Any:
+            progress = _ACTIVE_PROGRESS.get()
+            filename = Path(str(path)).name.lower()
+            is_checkpoint = "checkpoint" in filename
+            if progress is not None and is_checkpoint:
+                progress.record(checkpoint="saving-checkpoint")
+                _emit_progress(progress)
+            result = current_write(path, content)
+            if progress is not None and is_checkpoint:
+                progress.record(checkpoint="checkpoint-saved")
+                _emit_progress(progress)
+            return result
+
+        setattr(write_observed, _PROGRESS_WRITE_MARKER, write_observed)
+        pre_design_module._atomic_write_text = write_observed
 
 
 def _patch_pre_design_external_seed(agentic_module: Any, central_module: Any) -> None:
@@ -237,7 +762,9 @@ def _patch_pre_design_external_seed(agentic_module: Any, central_module: Any) ->
 
 def _patch_pre_design_observability(agentic_module: Any) -> None:
     current = agentic_module.collect_pre_design_research
-    if getattr(current, "_mmm_pre_design_heartbeat", False):
+    # functools.wraps copies attributes. Only the function that points the marker at
+    # itself owns this lifecycle wrapper; inherited truthy metadata must not suppress it.
+    if current.__dict__.get("_mmm_pre_design_heartbeat") is current:
         return
 
     @wraps(current)
@@ -249,27 +776,41 @@ def _patch_pre_design_observability(agentic_module: Any) -> None:
     ) -> dict[str, Any]:
         started = time.monotonic()
         stop = threading.Event()
+        progress = _PlanningProgress()
+        progress_token = _ACTIVE_PROGRESS.set(progress)
+        cursor_token = _ACTIVE_PROGRESS_CURSOR.set({})
         heartbeat = threading.Thread(
             target=_heartbeat,
-            args=("pre-design", stop, started),
+            args=("pre-design", stop, started, progress),
             daemon=True,
             name="mmm_pre_design_heartbeat",
         )
-        print("planner research: pre-design start", flush=True)
+        print(
+            "planner research: pre-design start",
+            _progress_fields(progress),
+            flush=True,
+        )
         heartbeat.start()
         try:
             result = current(router, prompt, trace_metadata=trace_metadata)
+        except BaseException:
+            progress.record(stage="failed", checkpoint="last-safe-checkpoint")
+            _emit_progress(progress)
+            raise
         finally:
             stop.set()
+            _ACTIVE_PROGRESS_CURSOR.reset(cursor_token)
+            _ACTIVE_PROGRESS.reset(progress_token)
+        progress.record(stage="complete", checkpoint="research-saved")
         print(
             "planner research: pre-design complete",
-            f" elapsed={time.monotonic() - started:.1f}s",
-            sep="",
+            _progress_fields(progress),
+            f"elapsed={time.monotonic() - started:.1f}s",
             flush=True,
         )
         return result
 
-    observed._mmm_pre_design_heartbeat = True  # type: ignore[attr-defined]
+    observed._mmm_pre_design_heartbeat = observed  # type: ignore[attr-defined]
     observed.__wrapped__ = current  # type: ignore[attr-defined]
     agentic_module.collect_pre_design_research = observed
 
@@ -573,6 +1114,7 @@ def install() -> None:
             return
 
         from . import (
+            agentic_pre_design_rag,
             agentic_research_fusion,
             agentic_research_game_design,
             central_research,
@@ -583,6 +1125,10 @@ def install() -> None:
         )
 
         _patch_pre_design_external_seed(agentic_research_game_design, central_research)
+        _patch_pre_design_progress_sources(
+            agentic_research_game_design,
+            agentic_pre_design_rag,
+        )
         _patch_pre_design_observability(agentic_research_game_design)
         _patch_external_mcp_parallel(external_mcp_router)
         _patch_discovery_http_pool(ecosystem_discovery)
@@ -591,4 +1137,9 @@ def install() -> None:
         _INSTALLED = True
 
 
-__all__ = ["_ecosystem_key", "_planning_seed_brief", "install"]
+__all__ = [
+    "_ecosystem_key",
+    "_planning_seed_brief",
+    "install",
+    "report_planner_research_progress",
+]

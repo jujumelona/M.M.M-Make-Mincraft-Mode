@@ -6,6 +6,8 @@ import json
 import math
 import re
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -90,6 +92,10 @@ class _ProductionParts:
     acceptance_tests: list[str]
 
 
+class _ProductionWaveConflict(SpecValidationError):
+    """A deterministic identity/path collision found during atomic wave merge."""
+
+
 class _ModuleCatalog:
     """Keep exact local membership while exposing only a bounded model receipt."""
 
@@ -120,6 +126,15 @@ class _ModuleCatalog:
             "recent_ids": list(self._recent),
             "recent_limit": _RECENT_MODULE_ID_LIMIT,
         }
+
+    def clone(self) -> _ModuleCatalog:
+        """Return an independent catalog with the exact same receipt state."""
+
+        cloned = _ModuleCatalog()
+        cloned._ids = set(self._ids)
+        cloned._recent = deque(self._recent, maxlen=_RECENT_MODULE_ID_LIMIT)
+        cloned._digest = self._digest.copy()
+        return cloned
 
 
 class CompleteGameDesignPlanner:
@@ -693,6 +708,142 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path],
         enforce_batch_dependencies: bool = False,
     ) -> _ProductionParts:
+        parallelism = _production_batch_parallel_capacity(
+            self.router,
+            len(batches),
+        )
+        if parallelism <= 1:
+            return self._expand_production_batches_serial(
+                batches=batches,
+                prompt=prompt,
+                game_design=game_design,
+                media_paths=media_paths,
+                enforce_batch_dependencies=enforce_batch_dependencies,
+            )
+
+        ordered_batches = _topological_production_batches(tuple(batches))
+        waves = _production_batch_waves(ordered_batches)
+        if not any(len(wave) > 1 for wave in waves):
+            # Preserve the established serial request/catalog sequence when the graph
+            # itself exposes no independent work, even with spare native slots.
+            return self._expand_production_batches_serial(
+                batches=batches,
+                prompt=prompt,
+                game_design=game_design,
+                media_paths=media_paths,
+                enforce_batch_dependencies=enforce_batch_dependencies,
+            )
+
+        parts = _ProductionParts([], [], [], [])
+        module_catalog = _ModuleCatalog()
+        asset_catalog = _ModuleCatalog()
+        audio_catalog = _ModuleCatalog()
+        test_catalog: set[str] = set()
+        planning_context, planning_receipt = _pagination_planning_context(
+            prompt,
+            game_design,
+        )
+        total_batches = len(ordered_batches)
+        batch_positions = {
+            batch.batch_id: index for index, batch in enumerate(ordered_batches)
+        }
+
+        # Every task shares this planner's router/server. No task constructs a router,
+        # adapter, or model copy; the native llama slot contract bounds active calls.
+        with ThreadPoolExecutor(
+            max_workers=parallelism,
+            thread_name_prefix="mmm_production_batch",
+        ) as pool:
+            for wave in waves:
+                futures: list[tuple[_ProductionBatch, Future[_ProductionParts]]] = []
+                for batch in wave:
+                    idx = batch_positions[batch.batch_id]
+                    print(
+                        "[Planner] Expanding batch "
+                        f"{idx + 1}/{total_batches}: '{batch.batch_id}' "
+                        f"({batch.scope})...",
+                        flush=True,
+                    )
+                    context = copy_context()
+                    future = pool.submit(
+                        context.run,
+                        self._expand_one_production_batch_isolated,
+                        batch=batch,
+                        batches=ordered_batches,
+                        module_catalog=module_catalog,
+                        asset_catalog=asset_catalog,
+                        audio_catalog=audio_catalog,
+                        test_catalog=test_catalog,
+                        planning_context=planning_context,
+                        planning_receipt=planning_receipt,
+                        media_paths=media_paths,
+                        enforce_batch_dependencies=enforce_batch_dependencies,
+                    )
+                    futures.append((batch, future))
+
+                wave_results: list[tuple[_ProductionBatch, _ProductionParts]] = []
+                try:
+                    # Harvest in canonical topological order, not completion order.
+                    for batch, future in futures:
+                        wave_results.append((batch, future.result()))
+                except BaseException:
+                    for _, future in futures:
+                        future.cancel()
+                    # Workers own private proposal/catalog state. With no merge, a
+                    # failed wave publishes no partial planner output.
+                    raise
+
+                try:
+                    (
+                        parts,
+                        module_catalog,
+                        asset_catalog,
+                        audio_catalog,
+                        test_catalog,
+                    ) = _merge_production_batch_wave(
+                        parts=parts,
+                        module_catalog=module_catalog,
+                        asset_catalog=asset_catalog,
+                        audio_catalog=audio_catalog,
+                        test_catalog=test_catalog,
+                        wave_results=tuple(wave_results),
+                    )
+                except _ProductionWaveConflict as conflict:
+                    # Parallel peers intentionally see the same committed snapshot.
+                    # If that produces a collision, retry this wave once in canonical
+                    # order against staged catalogs. Nothing is published until every
+                    # retry succeeds, and a changed receipt prevents cache aliasing.
+                    (
+                        parts,
+                        module_catalog,
+                        asset_catalog,
+                        audio_catalog,
+                        test_catalog,
+                    ) = self._retry_production_batch_wave_serially(
+                        wave=wave,
+                        batches=ordered_batches,
+                        parts=parts,
+                        module_catalog=module_catalog,
+                        asset_catalog=asset_catalog,
+                        audio_catalog=audio_catalog,
+                        test_catalog=test_catalog,
+                        planning_context=planning_context,
+                        planning_receipt=planning_receipt,
+                        media_paths=media_paths,
+                        enforce_batch_dependencies=enforce_batch_dependencies,
+                        conflict=conflict,
+                    )
+        return parts
+
+    def _expand_production_batches_serial(
+        self,
+        *,
+        batches: tuple[_ProductionBatch, ...],
+        prompt: str,
+        game_design: dict[str, Any],
+        media_paths: Sequence[str | Path],
+        enforce_batch_dependencies: bool = False,
+    ) -> _ProductionParts:
         parts = _ProductionParts([], [], [], [])
         module_catalog = _ModuleCatalog()
         asset_catalog = _ModuleCatalog()
@@ -736,15 +887,20 @@ class CompleteGameDesignPlanner:
             missing_exports = set(batch.exports) - set(generated_ids)
             if missing_exports:
                 for missing_id in sorted(missing_exports):
-                    parts.modules.append(
-                        ProductionModule(
-                            module_id=missing_id,
-                            kind="custom_java",
-                            config={"summary": f"Auto-generated implementation for declared export {missing_id}"},
-                            depends_on=(),
-                            required_gates=(),
-                        )
+                    fallback = ProductionModule(
+                        module_id=missing_id,
+                        kind="custom_java",
+                        config={
+                            "summary": (
+                                "Auto-generated implementation for declared export "
+                                f"{missing_id}"
+                            )
+                        },
+                        depends_on=(),
+                        required_gates=(),
                     )
+                    module_catalog.add(fallback.module_id)
+                    parts.modules.append(fallback)
             if enforce_batch_dependencies and batch.depends_on_batches:
                 dependency_module_ids = tuple(
                     exported
@@ -760,6 +916,166 @@ class CompleteGameDesignPlanner:
                     dependency_module_ids,
                 )
         return parts
+
+    def _expand_one_production_batch_isolated(
+        self,
+        *,
+        batch: _ProductionBatch,
+        batches: tuple[_ProductionBatch, ...],
+        module_catalog: _ModuleCatalog,
+        asset_catalog: _ModuleCatalog,
+        audio_catalog: _ModuleCatalog,
+        test_catalog: set[str],
+        planning_context: dict[str, Any],
+        planning_receipt: dict[str, Any],
+        media_paths: Sequence[str | Path],
+        enforce_batch_dependencies: bool,
+    ) -> _ProductionParts:
+        """Expand one batch against immutable-at-dispatch private state."""
+
+        private_parts = _ProductionParts([], [], [], [])
+        private_modules = module_catalog.clone()
+        private_assets = asset_catalog.clone()
+        private_audio = audio_catalog.clone()
+        private_tests = set(test_catalog)
+        self._expand_one_production_batch(
+            batch=batch,
+            parts=private_parts,
+            module_catalog=private_modules,
+            asset_catalog=private_assets,
+            audio_catalog=private_audio,
+            test_catalog=private_tests,
+            dependency_exports={
+                dependency: list(
+                    next(
+                        item.exports
+                        for item in batches
+                        if item.batch_id == dependency
+                    )
+                )
+                for dependency in batch.depends_on_batches
+            },
+            planning_context=planning_context,
+            planning_receipt=planning_receipt,
+            media_paths=media_paths,
+        )
+
+        generated_ids = {item.module_id for item in private_parts.modules}
+        for missing_id in sorted(set(batch.exports) - generated_ids):
+            fallback = ProductionModule(
+                module_id=missing_id,
+                kind="custom_java",
+                config={
+                    "summary": (
+                        "Auto-generated implementation for declared export "
+                        f"{missing_id}"
+                    )
+                },
+                depends_on=(),
+                required_gates=(),
+            )
+            # A declared-export fallback is real output. Recording it in the private
+            # catalog catches collisions with already committed modules before merge.
+            private_modules.add(fallback.module_id)
+            private_parts.modules.append(fallback)
+
+        if enforce_batch_dependencies and batch.depends_on_batches:
+            dependency_module_ids = tuple(
+                exported
+                for dependency in batch.depends_on_batches
+                for exported in next(
+                    item.exports
+                    for item in batches
+                    if item.batch_id == dependency
+                )
+            )
+            private_parts.modules[:] = _bind_batch_dependency_exports(
+                private_parts.modules,
+                dependency_module_ids,
+            )
+        return private_parts
+
+    def _retry_production_batch_wave_serially(
+        self,
+        *,
+        wave: tuple[_ProductionBatch, ...],
+        batches: tuple[_ProductionBatch, ...],
+        parts: _ProductionParts,
+        module_catalog: _ModuleCatalog,
+        asset_catalog: _ModuleCatalog,
+        audio_catalog: _ModuleCatalog,
+        test_catalog: set[str],
+        planning_context: dict[str, Any],
+        planning_receipt: dict[str, Any],
+        media_paths: Sequence[str | Path],
+        enforce_batch_dependencies: bool,
+        conflict: _ProductionWaveConflict,
+    ) -> tuple[
+        _ProductionParts,
+        _ModuleCatalog,
+        _ModuleCatalog,
+        _ModuleCatalog,
+        set[str],
+    ]:
+        """Retry one colliding wave once without exposing a partial transition."""
+
+        retry_receipt = {
+            **planning_receipt,
+            "parallel_wave_retry": {
+                "schema_version": "mmm/parallel-wave-retry-v1",
+                "attempt": 1,
+                "batch_ids": [batch.batch_id for batch in wave],
+                "conflict": str(conflict),
+                "conflict_sha256": hashlib.sha256(
+                    str(conflict).encode("utf-8")
+                ).hexdigest(),
+            },
+        }
+        print(
+            "[Planner] Parallel batch collision; retrying wave once in "
+            "deterministic serial order.",
+            flush=True,
+        )
+
+        staged_parts = parts
+        staged_modules = module_catalog
+        staged_assets = asset_catalog
+        staged_audio = audio_catalog
+        staged_tests = test_catalog
+        for batch in wave:
+            batch_parts = self._expand_one_production_batch_isolated(
+                batch=batch,
+                batches=batches,
+                module_catalog=staged_modules,
+                asset_catalog=staged_assets,
+                audio_catalog=staged_audio,
+                test_catalog=staged_tests,
+                planning_context=planning_context,
+                planning_receipt=retry_receipt,
+                media_paths=media_paths,
+                enforce_batch_dependencies=enforce_batch_dependencies,
+            )
+            (
+                staged_parts,
+                staged_modules,
+                staged_assets,
+                staged_audio,
+                staged_tests,
+            ) = _merge_production_batch_wave(
+                parts=staged_parts,
+                module_catalog=staged_modules,
+                asset_catalog=staged_assets,
+                audio_catalog=staged_audio,
+                test_catalog=staged_tests,
+                wave_results=((batch, batch_parts),),
+            )
+        return (
+            staged_parts,
+            staged_modules,
+            staged_assets,
+            staged_audio,
+            staged_tests,
+        )
 
     def _expand_one_production_batch(
         self,
@@ -2564,6 +2880,157 @@ def _topological_production_batches(
     if len(ordered) != len(batches):
         raise SpecValidationError("Production batch dependency cycle detected.")
     return tuple(ordered)
+
+
+def _production_batch_parallel_capacity(router: Any, width: int) -> int:
+    """Use only native shared-server slots; every other topology stays serial."""
+
+    if width <= 1:
+        return 1
+    try:
+        from .llama_parallel_runtime_contract import _planner_parallel_capacity
+
+        return _planner_parallel_capacity(router, width)
+    except Exception:
+        # Registry/configuration uncertainty must never create implicit model copies.
+        return 1
+
+
+def _production_batch_waves(
+    batches: tuple[_ProductionBatch, ...],
+) -> tuple[tuple[_ProductionBatch, ...], ...]:
+    """Partition a validated topological sequence into dependency barriers."""
+
+    ids = [batch.batch_id for batch in batches]
+    if len(ids) != len(set(ids)):
+        raise SpecValidationError("Production outline contains duplicate batch ids.")
+    known = set(ids)
+    for batch in batches:
+        missing = set(batch.depends_on_batches) - known
+        if missing:
+            raise SpecValidationError(
+                f"Production batch {batch.batch_id} references unknown dependencies: "
+                + ", ".join(sorted(missing)[:4])
+            )
+
+    remaining = set(ids)
+    committed: set[str] = set()
+    waves: list[tuple[_ProductionBatch, ...]] = []
+    while remaining:
+        ready = tuple(
+            batch
+            for batch in batches
+            if batch.batch_id in remaining
+            and set(batch.depends_on_batches) <= committed
+        )
+        if not ready:
+            raise SpecValidationError("Production batch dependency cycle detected.")
+        waves.append(ready)
+        completed = {batch.batch_id for batch in ready}
+        committed.update(completed)
+        remaining.difference_update(completed)
+    return tuple(waves)
+
+
+def _asset_target_path(asset: AssetRequest) -> str:
+    return asset.target_path.replace("\\", "/")
+
+
+def _audio_target_path(audio: AudioRequest) -> str:
+    # AudioRequest owns no explicit path; the generator contract maps IDs exactly to
+    # assets/<mod-id>/sounds/<sound-id>.ogg, so this is its planner-visible path key.
+    return f"sounds/{audio.sound_id}.ogg"
+
+
+def _merge_production_batch_wave(
+    *,
+    parts: _ProductionParts,
+    module_catalog: _ModuleCatalog,
+    asset_catalog: _ModuleCatalog,
+    audio_catalog: _ModuleCatalog,
+    test_catalog: set[str],
+    wave_results: tuple[tuple[_ProductionBatch, _ProductionParts], ...],
+) -> tuple[
+    _ProductionParts,
+    _ModuleCatalog,
+    _ModuleCatalog,
+    _ModuleCatalog,
+    set[str],
+]:
+    """Validate an entire wave, then publish one deterministic state transition."""
+
+    staged_parts = _ProductionParts(
+        list(parts.modules),
+        list(parts.assets),
+        list(parts.audio),
+        list(parts.acceptance_tests),
+    )
+    staged_modules = module_catalog.clone()
+    staged_assets = asset_catalog.clone()
+    staged_audio = audio_catalog.clone()
+    staged_tests = set(test_catalog)
+    asset_paths = {_asset_target_path(item) for item in staged_parts.assets}
+    audio_paths = {_audio_target_path(item) for item in staged_parts.audio}
+
+    # Members of one wave have no dependency relation. Batch identity is therefore a
+    # canonical merge key independent of thread completion order.
+    for batch, batch_parts in sorted(
+        wave_results,
+        key=lambda item: item[0].batch_id,
+    ):
+        for module in batch_parts.modules:
+            if module.module_id in staged_modules:
+                raise _ProductionWaveConflict(
+                    "Parallel production wave returned duplicate module ID "
+                    f"{module.module_id!r} in batch {batch.batch_id!r}."
+                )
+            staged_modules.add(module.module_id)
+            staged_parts.modules.append(module)
+
+        for asset in batch_parts.assets:
+            target_path = _asset_target_path(asset)
+            conflicts: list[str] = []
+            if asset.asset_id in staged_assets:
+                conflicts.append(f"asset ID {asset.asset_id!r}")
+            if target_path in asset_paths:
+                conflicts.append(f"asset target path {target_path!r}")
+            if conflicts:
+                raise _ProductionWaveConflict(
+                    "Parallel production wave conflict in batch "
+                    f"{batch.batch_id!r}: " + " and ".join(conflicts) + "."
+                )
+            staged_assets.add(asset.asset_id)
+            asset_paths.add(target_path)
+            staged_parts.assets.append(asset)
+
+        for audio in batch_parts.audio:
+            target_path = _audio_target_path(audio)
+            conflicts = []
+            if audio.sound_id in staged_audio:
+                conflicts.append(f"audio ID {audio.sound_id!r}")
+            if target_path in audio_paths:
+                conflicts.append(f"audio target path {target_path!r}")
+            if conflicts:
+                raise _ProductionWaveConflict(
+                    "Parallel production wave conflict in batch "
+                    f"{batch.batch_id!r}: " + " and ".join(conflicts) + "."
+                )
+            staged_audio.add(audio.sound_id)
+            audio_paths.add(target_path)
+            staged_parts.audio.append(audio)
+
+        for test in batch_parts.acceptance_tests:
+            if test not in staged_tests:
+                staged_tests.add(test)
+                staged_parts.acceptance_tests.append(test)
+
+    return (
+        staged_parts,
+        staged_modules,
+        staged_assets,
+        staged_audio,
+        staged_tests,
+    )
 
 
 def _module(value: Any) -> ProductionModule:

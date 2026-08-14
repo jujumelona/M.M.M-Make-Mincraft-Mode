@@ -20,6 +20,7 @@ import json
 import os
 import tempfile
 import threading
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -31,6 +32,14 @@ _CACHE_LOCK = threading.RLock()
 _KEY_LOCKS: dict[str, threading.Lock] = {}
 _SYNTHESIS_LOCK = threading.RLock()
 _SYNTHESIS_RESULTS: dict[str, str] = {}
+
+
+@dataclass(frozen=True)
+class _ManagedServerIdentity:
+    process: Any
+    key: Any
+    url: str
+    configured_url: str
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -327,25 +336,67 @@ def _install_research_generation_resilience(model_router_module: Any) -> None:
     model_router_module.ModelRouter.generate_text = generate_text
 
 
-def _managed_server_owned(autotune: Any) -> bool:
-    managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "").rstrip("/")
-    configured = (os.environ.get("LLAMA_SERVER_URL") or "").strip().rstrip("/")
+def _managed_server_snapshot(autotune: Any) -> _ManagedServerIdentity:
+    lock = getattr(autotune, "_AUTOTUNE_LOCK", None)
+    if lock is None:
+        return _ManagedServerIdentity(None, None, "", "")
+    with lock:
+        return _ManagedServerIdentity(
+            getattr(autotune, "_MANAGED_PROCESS", None),
+            getattr(autotune, "_MANAGED_KEY", None),
+            str(getattr(autotune, "_MANAGED_URL", "") or "").rstrip("/"),
+            (os.environ.get("LLAMA_SERVER_URL") or "").strip().rstrip("/"),
+        )
+
+
+def _managed_server_owned(
+    autotune: Any, identity: _ManagedServerIdentity | None = None
+) -> bool:
+    managed_url = (
+        identity.url
+        if identity is not None
+        else str(getattr(autotune, "_MANAGED_URL", "") or "").rstrip("/")
+    )
+    configured = (
+        identity.configured_url
+        if identity is not None
+        else (os.environ.get("LLAMA_SERVER_URL") or "").strip().rstrip("/")
+    )
     return bool(managed_url and configured == managed_url)
 
 
-def _rearm_managed_server(autotune: Any, *, force: bool) -> bool:
+def _rearm_managed_server(
+    autotune: Any,
+    *,
+    force: bool,
+    expected: _ManagedServerIdentity | None = None,
+) -> bool:
     lock = getattr(autotune, "_AUTOTUNE_LOCK", None)
     if lock is None:
         return False
     with lock:
         process = getattr(autotune, "_MANAGED_PROCESS", None)
+        old_key = getattr(autotune, "_MANAGED_KEY", None)
+        old_url = str(getattr(autotune, "_MANAGED_URL", "") or "").rstrip("/")
+        if expected is not None and not (
+            process is expected.process
+            and old_key == expected.key
+            and old_url == expected.url
+        ):
+            # Another recovery already replaced the failed owner. Reuse only a
+            # healthy replacement that is still the configured MMM-owned endpoint.
+            return bool(
+                process is not None
+                and process.poll() is None
+                and _managed_server_owned(autotune)
+            )
+        if expected is not None and not _managed_server_owned(autotune):
+            return False
         if process is None:
             return False
         alive = process.poll() is None
         if alive and not force:
             return False
-        old_key = getattr(autotune, "_MANAGED_KEY", None)
-        old_url = getattr(autotune, "_MANAGED_URL", None)
         if alive and force:
             try:
                 process.terminate()
@@ -361,7 +412,7 @@ def _rearm_managed_server(autotune: Any, *, force: bool) -> bool:
             if isinstance(attempted, set):
                 attempted.discard(old_key)
         configured = (os.environ.get("LLAMA_SERVER_URL") or "").rstrip("/")
-        if old_url and configured == str(old_url).rstrip("/"):
+        if old_url and configured == old_url:
             os.environ.pop("LLAMA_SERVER_URL", None)
         autotune._MANAGED_PROCESS = None
         autotune._MANAGED_KEY = None
@@ -415,22 +466,35 @@ def _install_managed_backend_recovery(llama_adapter_module: Any, autotune: Any) 
 
     @wraps(current)
     def generate(self: Any, request: Any) -> Any:
+        failed_owner = _managed_server_snapshot(autotune)
+        failed_owner_was_owned = _managed_server_owned(autotune, failed_owner)
         try:
             return current(self, request)
         except Exception as first_error:
             if not _transport_failure(first_error):
                 raise
-            if not _managed_server_owned(autotune):
+            if failed_owner.process is None and not failed_owner.url:
+                post_call_owner = _managed_server_snapshot(autotune)
+                if _managed_server_owned(autotune, post_call_owner):
+                    failed_owner = post_call_owner
+                    failed_owner_was_owned = True
+            if not failed_owner_was_owned:
                 raise
             # Only an MMM-owned local server is eligible. External/user-provided
             # servers are never terminated or silently replaced. Replay the exact
             # same request object once after rearming the managed process.
-            if not _rearm_managed_server(autotune, force=True):
+            recovery_lock = getattr(autotune, "_AUTOTUNE_LOCK", None)
+            if recovery_lock is None:
                 raise
-            try:
-                return current(self, request)
-            except Exception as retry_error:
-                raise retry_error from first_error
+            with recovery_lock:
+                if not _rearm_managed_server(
+                    autotune, force=True, expected=failed_owner
+                ):
+                    raise
+                try:
+                    return current(self, request)
+                except Exception as retry_error:
+                    raise retry_error from first_error
 
     setattr(generate, _MARKER, True)
     generate.__wrapped__ = current  # type: ignore[attr-defined]

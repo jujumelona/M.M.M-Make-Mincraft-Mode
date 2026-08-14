@@ -8,6 +8,7 @@ import weakref
 from concurrent.futures import Future
 from contextvars import ContextVar
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 
@@ -248,15 +249,28 @@ def _install_proposal_validation_fastpath() -> None:
     complete_spec.complete_proposal_from_parts = complete_proposal_from_parts
 
     # Several planner/orchestrator modules import this constructor directly during
-    # bootstrap. Retarget only aliases that still own the exact old function.
-    for loaded in tuple(sys.modules.values()):
+    # bootstrap. Retarget only M.M.M aliases that still own the exact old function.
+    # Inspecting every loaded module with getattr() invokes third-party lazy-module
+    # loaders (Transformers in particular), causing unrelated vision dependencies to
+    # import during a CPU-only Colab bootstrap.
+    _retarget_loaded_proposal_aliases(current_parts, complete_proposal_from_parts)
+
+
+def _retarget_loaded_proposal_aliases(current: Any, replacement: Any) -> None:
+    for module_name, loaded in tuple(sys.modules.items()):
+        if not (
+            module_name == "minecraft_mod_ai"
+            or module_name.startswith("minecraft_mod_ai.")
+        ):
+            continue
         if loaded is None:
             continue
         try:
-            if getattr(loaded, "complete_proposal_from_parts", None) is current_parts:
-                setattr(loaded, "complete_proposal_from_parts", complete_proposal_from_parts)
-        except (AttributeError, TypeError):
+            namespace = vars(loaded)
+        except TypeError:
             continue
+        if namespace.get("complete_proposal_from_parts") is current:
+            namespace["complete_proposal_from_parts"] = replacement
 
 
 def _install_work_graph_fastpath() -> None:
@@ -407,8 +421,35 @@ def start(model_registry_module: Any) -> None:
     _install_platform_prefetch()
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
-    os.environ.setdefault("MMM_DISCOVERY_WORKERS", "12")
-    os.environ.setdefault("MMM_RESEARCH_WORKERS", "8")
+    discovery_workers, research_workers = _colab_worker_defaults()
+    os.environ.setdefault("MMM_DISCOVERY_WORKERS", str(discovery_workers))
+    os.environ.setdefault("MMM_RESEARCH_WORKERS", str(research_workers))
 
 
-__all__ = ["start"]
+def _colab_worker_defaults() -> tuple[int, int]:
+    """Size network and CPU retrieval pools from the live Colab allocation.
+
+    Discovery is mostly concurrent network I/O, while official-evidence retrieval
+    also performs CPU tokenization/ranking.  Keeping separate budgets avoids the
+    old fixed 12/8 pools oversubscribing a typical two-vCPU, 12.7-GiB T4 runtime.
+    Explicit environment overrides remain authoritative in ``start``.
+    """
+
+    cpu_count = max(1, int(os.cpu_count() or 1))
+    available_gib = 4
+    try:
+        for raw_line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if not raw_line.startswith("MemAvailable:"):
+                continue
+            available_kib = int(raw_line.split()[1])
+            available_gib = max(1, available_kib // (1024 * 1024))
+            break
+    except (OSError, ValueError, IndexError):
+        pass
+
+    discovery = min(12, max(4, cpu_count * 4), max(4, available_gib * 2))
+    research = min(8, max(2, cpu_count * 2), max(2, available_gib))
+    return max(1, discovery), max(1, research)
+
+
+__all__ = ["_colab_worker_defaults", "start"]

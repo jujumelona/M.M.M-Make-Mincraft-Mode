@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai import llama_server_autotune as autotune
+from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai.llama_server_autotune import (
     ProbeResult,
     ServerVariant,
@@ -97,11 +98,13 @@ def test_default_runtime_candidates_are_bounded(monkeypatch) -> None:
         "MMM_LLAMA_CACHE_REUSE_CANDIDATES",
         "MMM_LLAMA_CONCURRENT_REQUESTS",
         "MMM_LLAMA_PARALLEL",
+        "MMM_PERFORMANCE_MODE",
+        "MMM_LLAMA_TUNING_OBJECTIVE",
     ):
         monkeypatch.delenv(name, raising=False)
     assert _ubatch_candidates(autotune) == (512, 1024, 2048)
     assert _cache_reuse_candidates() == (0, 64, 256)
-    assert _parallel_candidates() == (1, 2)
+    assert _parallel_candidates() == (1,)
 
 
 def test_compact_benchmark_never_reuses_real_workflow_prompt() -> None:
@@ -163,14 +166,25 @@ def test_managed_server_fast_path_skips_external_health_http(monkeypatch) -> Non
     previous_process = autotune._MANAGED_PROCESS
     previous_url = autotune._MANAGED_URL
     try:
+        config = object()
         monkeypatch.setattr(autotune, "_MANAGED_PROCESS", _AliveProcess())
         monkeypatch.setattr(autotune, "_MANAGED_URL", "http://127.0.0.1:8910/v1")
+        monkeypatch.setattr(
+            autotune,
+            "_MMM_LLAMA_RUNTIME_RECEIPT",
+            {
+                "selection_inputs_sha256": runtime_tuning._json_fingerprint(
+                    runtime_tuning._selection_inputs(config)
+                )
+            },
+            raising=False,
+        )
         monkeypatch.setattr(
             autotune,
             "_external_server_is_ready",
             lambda: (_ for _ in ()).throw(AssertionError("health HTTP must not run")),
         )
-        assert autotune.ensure_tuned_server(object(), object()) == "http://127.0.0.1:8910/v1"
+        assert autotune.ensure_tuned_server(config, object()) == "http://127.0.0.1:8910/v1"
     finally:
         autotune._MANAGED_PROCESS = previous_process
         autotune._MANAGED_URL = previous_url
@@ -216,6 +230,7 @@ def test_server_args_use_quality_neutral_performance_defaults(monkeypatch) -> No
     assert args[args.index("--cache-type-v") + 1] == "q4_0"
     assert args[args.index("--load-mode") + 1] == "auto"
     assert "--cache-prompt" in args
+    assert args[args.index("--cache-ram") + 1] == "1024"
 
 
 def test_speculative_server_flags_are_native() -> None:

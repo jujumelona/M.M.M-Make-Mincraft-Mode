@@ -105,7 +105,7 @@ def test_sectioned_game_design_uses_four_small_schema_calls() -> None:
     assert "art_direction" not in result
 
 
-def test_research_domain_reads_bounded_document_pages_before_tool_synthesis(
+def test_research_domain_ledgers_pages_then_runs_one_bounded_synthesis(
     monkeypatch, tmp_path: Path
 ) -> None:
     router = _ResearchRouter()
@@ -140,15 +140,14 @@ def test_research_domain_reads_bounded_document_pages_before_tool_synthesis(
     )
 
     assert result["sufficient"] is True
-    assert len(router.calls) >= 2
-    page_calls = router.calls[:-1]
-    synthesis_call = router.calls[-1]
+    assert len(router.calls) == 1
+    synthesis_call = router.calls[0]
     assert all(call["tool_stage"] == "research" for call in router.calls)
     assert all(call["response_format"] == "json" for call in router.calls)
     assert all(call["response_schema"] == agentic._RESEARCH_NOTE_SCHEMA for call in router.calls)
-    assert all(call["enable_tools"] is False for call in page_calls)
-    assert synthesis_call["enable_tools"] is True
+    assert synthesis_call["enable_tools"] is False
     assert "evidence_document" in result
+    assert result["evidence_ledger"]["record_count"] == 1
 
 
 def test_evidence_document_preserves_full_raw_and_bounds_every_page(
@@ -175,11 +174,16 @@ def test_evidence_document_preserves_full_raw_and_bounds_every_page(
 
     assert raw == evidence
     assert document["page_count"] == len(pages)
-    assert len(pages) > 2
+    assert pages
+    assert document["model_projection"].startswith("bounded_hash_addressed")
     assert all(
         len(str(page.get("content", ""))) <= paged_rag._EVIDENCE_PAGE_CHARS
         for page in pages
     )
+    rendered_pages = json.dumps(pages, ensure_ascii=False, sort_keys=True)
+    assert huge_official not in rendered_pages
+    assert huge_forced not in rendered_pages
+    assert "externalized_to_raw_document" in rendered_pages
     assert [page["page_index"] for page in pages] == list(range(len(pages)))
     assert all(page["page_count"] == len(pages) for page in pages)
 

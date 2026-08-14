@@ -173,7 +173,7 @@ def install_parallel_core(agentic_module: Any) -> None:
     """Parallelize independent research providers, domain agents, and design sections."""
 
     current_collect = agentic_module.collect_pre_design_research
-    if not getattr(current_collect, _PARALLEL_CORE_MARKER, False):
+    if current_collect.__dict__.get(_PARALLEL_CORE_MARKER) is not current_collect:
 
         @wraps(current_collect)
         def collect_parallel(
@@ -242,8 +242,9 @@ def install_parallel_core(agentic_module: Any) -> None:
             ]
             indexed_notes: dict[int, dict[str, Any]] = {}
             if domains:
+                domain_workers = _research_domain_worker_count(router, len(domains))
                 with ThreadPoolExecutor(
-                    max_workers=min(_worker_count(), len(domains)),
+                    max_workers=domain_workers,
                     thread_name_prefix="mmm_research_domain",
                 ) as pool:
                     futures = {}
@@ -334,6 +335,7 @@ def install_parallel_core(agentic_module: Any) -> None:
                         "independent research domains execute concurrently and merge "
                         "in deterministic domain order"
                     ),
+                    "parallel_specialist_workers": domain_workers if domains else 0,
                     "planning_search": (
                         "existing MMM verifier/candidate search remains downstream"
                     ),
@@ -342,7 +344,7 @@ def install_parallel_core(agentic_module: Any) -> None:
             payload["research_sha256"] = agentic_module._json_sha256(payload)
             return payload
 
-        setattr(collect_parallel, _PARALLEL_CORE_MARKER, True)
+        setattr(collect_parallel, _PARALLEL_CORE_MARKER, collect_parallel)
         collect_parallel.__wrapped__ = current_collect  # type: ignore[attr-defined]
         agentic_module.collect_pre_design_research = collect_parallel
 
@@ -1076,6 +1078,51 @@ def _worker_count() -> int:
     except ValueError:
         requested = 4
     return max(1, min(8, requested))
+
+
+def _research_domain_worker_count(router: Any, width: int) -> int:
+    """Use only native slots owned by the one shared local planner server.
+
+    CPU provider work keeps the independent central worker setting, but model-backed
+    domain specialists must never create more simultaneous requests than llama.cpp or
+    vLLM actually admitted. Remote/non-native routers remain serial because their
+    concurrency and billing semantics are not host-owned here.
+    """
+
+    requested = min(max(1, int(width)), _worker_count())
+    active = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip()
+    try:
+        from .llama_parallel_runtime_contract import _planner_parallel_capacity
+
+        if active:
+            return _planner_parallel_capacity(router, requested)
+    except Exception:
+        if active:
+            return 1
+
+    # Pre-design is commonly the first model stage, before managed llama autotuning has
+    # published MMM_LLAMA_ACTIVE_PARALLEL. Do not freeze the whole run to one worker from
+    # that temporary absence. Admit a small cold-start candidate pool only for a verified
+    # one-server native local planner; ModelRouter's dynamic capacity gate still limits
+    # simultaneous adapter calls to the pN selected by the managed runtime.
+    try:
+        config = router.registry.role(router.profile, "planner")
+    except Exception:
+        return 1
+    if not bool(getattr(config, "exclusive_gpu", False)):
+        return 1
+    if str(getattr(config, "provider", "")) != "local":
+        return 1
+    if str(getattr(config, "adapter", "")) not in {"llama_cpp", "vllm"}:
+        return 1
+    candidate = 4
+    forced = os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
+    if forced:
+        try:
+            candidate = max(1, min(4, int(forced)))
+        except ValueError:
+            candidate = 1
+    return max(1, min(requested, candidate))
 
 
 def _disagreement_threshold() -> float:

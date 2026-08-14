@@ -201,7 +201,6 @@ def _validate_checkout(
     engine_was_loaded: bool,
     engine_module_file: str,
 ) -> None:
-    del engine_module_file
     if not (repo_dir / ".git").is_dir():
         raise RuntimeError(f"Not a Git checkout: {repo_dir}")
     actual_commit = _git_head(repo_dir)
@@ -215,14 +214,32 @@ def _validate_checkout(
             "The pulled checkout contains tracked local changes. Remove the "
             "Colab checkout and rerun setup cell 2."
         )
-    if engine_was_loaded and (
-        not previous_commit or previous_commit.strip() != used_commit
-    ):
-        print(
-            f"engine reload: {previous_commit[:7] if previous_commit else 'old'} -> "
-            f"{used_commit[:7]}",
-            flush=True,
-        )
+    if engine_was_loaded:
+        package_root = (repo_dir / "minecraft_mod_ai").resolve()
+        try:
+            loaded_path = Path(engine_module_file).resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "The loaded minecraft_mod_ai origin cannot be verified. Restart "
+                "the Colab runtime and rerun from cell 1."
+            ) from exc
+        if not engine_module_file or not loaded_path.is_relative_to(package_root):
+            raise RuntimeError(
+                "minecraft_mod_ai is loaded from a different checkout. Restart "
+                "the Colab runtime and rerun from cell 1."
+            )
+        if not previous_commit or previous_commit.strip() != used_commit:
+            print(
+                f"engine reload: {previous_commit[:7] if previous_commit else 'old'} -> "
+                f"{used_commit[:7]}",
+                flush=True,
+            )
+        else:
+            print(
+                "engine reload: stopping the previous managed runtime before "
+                "reapplying notebook settings",
+                flush=True,
+            )
         _shutdown_loaded_managed_llama_server()
         for name in list(sys.modules):
             if name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai."):
@@ -711,7 +728,28 @@ def _runtime_details(torch: Any | None) -> dict[str, Any]:
     details: dict[str, Any] = {
         "python": sys.version.split()[0],
         "cuda_available": bool(torch is not None and torch.cuda.is_available()),
+        "cpu_count": int(os.cpu_count() or 1),
     }
+    try:
+        memory: dict[str, int] = {}
+        for raw_line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, separator, raw_value = raw_line.partition(":")
+            if not separator:
+                continue
+            fields = raw_value.strip().split()
+            if not fields:
+                continue
+            memory[key] = int(fields[0]) * 1024
+        if memory.get("MemTotal", 0) > 0:
+            details["system_ram_total_bytes"] = memory["MemTotal"]
+            details["system_ram_available_bytes"] = memory.get(
+                "MemAvailable",
+                memory.get("MemFree", 0),
+            )
+    except (OSError, ValueError):
+        # Non-Linux callers still get a valid setup receipt; Colab always exposes
+        # /proc/meminfo and therefore records the live RAM budget used by auto tuning.
+        pass
     if details["cuda_available"]:
         free_bytes, total_bytes = torch.cuda.mem_get_info()
         details.update(
@@ -876,6 +914,13 @@ def setup_colab_runtime(
     runtime = receipt["runtime"]
     print("Setup source:", f"{SETUP_API_VERSION}@{commit[:12]}")
     print("Python:", runtime["python"])
+    print("CPU workers available:", runtime["cpu_count"])
+    if runtime.get("system_ram_total_bytes"):
+        print(
+            "System RAM available/total:",
+            f"{runtime.get('system_ram_available_bytes', 0) / 2**30:.2f}/"
+            f"{runtime['system_ram_total_bytes'] / 2**30:.2f} GiB",
+        )
     print("CUDA:", runtime["cuda_available"])
     if runtime["cuda_available"]:
         print("GPU:", runtime["gpu"])

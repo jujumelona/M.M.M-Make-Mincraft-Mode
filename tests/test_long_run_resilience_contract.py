@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -274,3 +276,88 @@ def test_explicit_external_server_is_never_restarted(monkeypatch):
     assert calls == 1
     assert process.terminated is False
     assert autotune._MANAGED_KEY == "model-key"
+
+
+def test_concurrent_transport_failures_never_terminate_healthy_replacement(
+    monkeypatch,
+):
+    class Process(_LiveProcess):
+        def poll(self):
+            return 0 if self.terminated else None
+
+    failed = Process()
+    replacement = Process()
+    autotune = _autotune(failed)
+    monkeypatch.setenv("LLAMA_SERVER_URL", autotune._MANAGED_URL)
+    first_calls = threading.Barrier(2)
+    local = threading.local()
+
+    class Adapter:
+        def generate(self, request):
+            if not getattr(local, "failed_once", False):
+                local.failed_once = True
+                first_calls.wait(timeout=5)
+                raise RuntimeError("ModelBackendError: [Errno 111] Connection refused")
+            if autotune._MANAGED_PROCESS is None:
+                autotune._MANAGED_PROCESS = replacement
+                autotune._MANAGED_KEY = "replacement-key"
+                autotune._MANAGED_URL = "http://127.0.0.1:8910/v1"
+                autotune._ATTEMPTED_KEYS.add("replacement-key")
+                os.environ["LLAMA_SERVER_URL"] = autotune._MANAGED_URL
+            return request
+
+    module = SimpleNamespace(LlamaCppAdapter=Adapter)
+    resilience._install_managed_backend_recovery(module, autotune)
+    requests = (object(), object())
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(Adapter().generate, requests))
+
+    assert results == list(requests)
+    assert failed.terminated is True
+    assert replacement.terminated is False
+    assert autotune._MANAGED_PROCESS is replacement
+    assert autotune._MANAGED_KEY == "replacement-key"
+
+
+def test_cold_start_launch_then_transport_failure_is_rearmed_once(monkeypatch):
+    class Process(_LiveProcess):
+        def poll(self):
+            return 0 if self.terminated else None
+
+    failed = Process()
+    replacement = Process()
+    autotune = _autotune(None)
+    autotune._MANAGED_KEY = None
+    autotune._MANAGED_URL = None
+    autotune._ATTEMPTED_KEYS.clear()
+    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
+    calls = 0
+
+    class Adapter:
+        def generate(self, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                autotune._MANAGED_PROCESS = failed
+                autotune._MANAGED_KEY = "cold-failed-key"
+                autotune._MANAGED_URL = "http://127.0.0.1:8910/v1"
+                autotune._ATTEMPTED_KEYS.add("cold-failed-key")
+                os.environ["LLAMA_SERVER_URL"] = autotune._MANAGED_URL
+                raise RuntimeError("ModelBackendError: [Errno 111] Connection refused")
+            autotune._MANAGED_PROCESS = replacement
+            autotune._MANAGED_KEY = "cold-replacement-key"
+            autotune._MANAGED_URL = "http://127.0.0.1:8910/v1"
+            autotune._ATTEMPTED_KEYS.add("cold-replacement-key")
+            os.environ["LLAMA_SERVER_URL"] = autotune._MANAGED_URL
+            return request
+
+    module = SimpleNamespace(LlamaCppAdapter=Adapter)
+    resilience._install_managed_backend_recovery(module, autotune)
+    request = object()
+
+    assert Adapter().generate(request) is request
+    assert calls == 2
+    assert failed.terminated is True
+    assert "cold-failed-key" not in autotune._ATTEMPTED_KEYS
+    assert replacement.terminated is False
+    assert autotune._MANAGED_PROCESS is replacement

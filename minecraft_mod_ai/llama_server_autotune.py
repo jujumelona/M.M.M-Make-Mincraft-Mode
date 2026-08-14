@@ -18,6 +18,7 @@ from typing import Any, Iterable
 _AUTOTUNE_LOCK = threading.RLock()
 _MANAGED_PROCESS: subprocess.Popen[bytes] | None = None
 _MANAGED_URL: str | None = None
+_MANAGED_KEY: str | None = None
 _ATTEMPTED_KEYS: set[str] = set()
 _BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v2-compact"
 _BENCHMARK_OUTPUT_TOKENS = 96
@@ -644,8 +645,15 @@ def _baseline_decision(fingerprint: str) -> AutotuneDecision:
     )
 
 
+def _release_recoverable_attempt(fingerprint: str, exc: BaseException) -> None:
+    """Allow a later retry only for explicitly classified transient resource failures."""
+    if bool(getattr(exc, "_mmm_recoverable_resource_failure", False)):
+        _ATTEMPTED_KEYS.discard(fingerprint)
+
+
 def ensure_tuned_server(config: Any, request: Any) -> str:
     """Start one managed native server and never fall back to a second GGUF engine."""
+    global _MANAGED_KEY
 
     if _external_server_is_ready():
         explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
@@ -671,27 +679,39 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
             )
         _ATTEMPTED_KEYS.add(fingerprint)
 
-        decision = _load_cached_decision(fingerprint)
-        if decision is None:
-            if _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True):
-                decision = _benchmark(binary, model_path, config, request, fingerprint)
-                if decision is None:
-                    raise RuntimeError(
-                        "llama-server autotune could not validate a baseline decode"
+        try:
+            decision = _load_cached_decision(fingerprint)
+            if decision is None:
+                if _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True):
+                    decision = _benchmark(
+                        binary, model_path, config, request, fingerprint
                     )
-                _save_decision(decision)
-            else:
-                decision = _baseline_decision(fingerprint)
+                    if decision is None:
+                        raise RuntimeError(
+                            "llama-server autotune could not validate a baseline decode"
+                        )
+                    _save_decision(decision)
+                else:
+                    decision = _baseline_decision(fingerprint)
 
-        return _launch_selected(binary, model_path, config, decision.selected)
+            url = _launch_selected(binary, model_path, config, decision.selected)
+            _MANAGED_KEY = fingerprint
+            return url
+        except Exception as exc:
+            _release_recoverable_attempt(fingerprint, exc)
+            raise
 
 
 def _shutdown_managed_server() -> None:
-    global _MANAGED_PROCESS, _MANAGED_URL
+    global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
     with _AUTOTUNE_LOCK:
+        managed_key = _MANAGED_KEY
         _stop_server(_MANAGED_PROCESS)
         _MANAGED_PROCESS = None
         _MANAGED_URL = None
+        _MANAGED_KEY = None
+        if managed_key:
+            _ATTEMPTED_KEYS.discard(managed_key)
 
 
 atexit.register(_shutdown_managed_server)
@@ -711,6 +731,7 @@ __all__ = [
     "_choose_variant",
     "_compact_benchmark_request",
     "_probe_server",
+    "_release_recoverable_attempt",
     "_server_binary",
     "_shutdown_managed_server",
     "_variant_args",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
+import minecraft_mod_ai.colab_prefetch_bootstrap as bootstrap
 from minecraft_mod_ai.colab_prefetch_bootstrap import start
 
 
@@ -19,10 +21,44 @@ def test_colab_bootstrap_sets_worker_defaults_without_registry_lookup(monkeypatc
     monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", "receipt")
     monkeypatch.delenv("MMM_DISCOVERY_WORKERS", raising=False)
     monkeypatch.delenv("MMM_RESEARCH_WORKERS", raising=False)
+    monkeypatch.setattr(bootstrap, "_colab_worker_defaults", lambda: (8, 4))
     start(SimpleNamespace(ModelRegistry=Registry))
     assert calls == []
-    assert __import__("os").environ["MMM_DISCOVERY_WORKERS"] == "12"
-    assert __import__("os").environ["MMM_RESEARCH_WORKERS"] == "8"
+    assert __import__("os").environ["MMM_DISCOVERY_WORKERS"] == "8"
+    assert __import__("os").environ["MMM_RESEARCH_WORKERS"] == "4"
+
+
+def test_colab_worker_defaults_separate_io_and_cpu_budgets(monkeypatch) -> None:
+    monkeypatch.setattr(bootstrap.os, "cpu_count", lambda: 2)
+    monkeypatch.setattr(
+        bootstrap.Path,
+        "read_text",
+        lambda self, **kwargs: "MemTotal: 13000000 kB\nMemAvailable: 8388608 kB\n",
+    )
+
+    assert bootstrap._colab_worker_defaults() == (8, 4)
+
+
+def test_proposal_alias_retarget_never_introspects_foreign_lazy_modules(
+    monkeypatch,
+) -> None:
+    accesses: list[str] = []
+
+    class ForeignLazyModule:
+        def __getattr__(self, name: str):
+            accesses.append(name)
+            raise AssertionError("foreign lazy module must not be imported")
+
+    current = object()
+    replacement = object()
+    internal = SimpleNamespace(complete_proposal_from_parts=current)
+    monkeypatch.setitem(sys.modules, "transformers.lazy_test", ForeignLazyModule())
+    monkeypatch.setitem(sys.modules, "minecraft_mod_ai._proposal_alias_test", internal)
+
+    bootstrap._retarget_loaded_proposal_aliases(current, replacement)
+
+    assert internal.complete_proposal_from_parts is replacement
+    assert accesses == []
 
 
 def test_colab_bootstrap_preserves_explicit_worker_overrides(monkeypatch) -> None:

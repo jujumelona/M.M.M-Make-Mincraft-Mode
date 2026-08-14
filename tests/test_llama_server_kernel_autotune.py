@@ -91,7 +91,15 @@ def test_benchmark_is_staged_not_cartesian(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(kernel, "_batch_candidates", lambda _current, _hardware: (2048, 1024))
     monkeypatch.setattr(kernel, "_cache_candidates", lambda _current, _hardware: (("q4_0", "q4_0"), ("q8_0", "f16")))
 
-    def fake_run_probe(_autotune, _binary, _model_path, _config, _request, config):
+    def fake_run_probe(
+        _autotune,
+        _binary,
+        _model_path,
+        _config,
+        _request,
+        config,
+        **_kwargs,
+    ):
         calls.append(config)
         bonus = (10.0 if config.flash_attn == "auto" else 0.0)
         bonus += 10.0 if config.batch == 1024 else 0.0

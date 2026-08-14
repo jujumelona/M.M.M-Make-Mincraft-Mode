@@ -48,6 +48,8 @@ The checked-in notebook currently exposes these model profiles:
 
 The optional local CUDA llama-server cell uses the same resolved planner configuration. Google Drive storage is enabled by default, and resumable runs reuse completed work instead of rebuilding it unnecessarily.
 
+`PERFORMANCE_MODE` defaults to `Auto`. On a cold or cache-invalid run, the engine measures the live CPU, system RAM, and GPU budget, probes one, two, and—when feasible—four shared llama-server slots, and keeps the best deterministic candidate that clears the minimum-gain gate; an exactly matching cached decision is reused. `Latency` favors one request at a time; `Throughput` favors concurrent independent planning and implementation pages. All slots share one resident model, and each batch is merged and validated deterministically. Large projects remain paginated instead of using an unbounded single model response.
+
 ## Local Python
 
 ```python
