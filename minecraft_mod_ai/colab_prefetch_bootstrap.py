@@ -13,6 +13,7 @@ from typing import Any
 _PLATFORM_LOCK = threading.RLock()
 _PLATFORM_FUTURE: Future[Any] | None = None
 _PLATFORM_ORIGINAL: Any = None
+_PLATFORM_CATALOG_PREFETCH_STARTED = False
 _WORK_GRAPH_FAST_SERIALIZE: ContextVar[bool] = ContextVar(
     "mmm_work_graph_fast_serialize",
     default=False,
@@ -46,8 +47,37 @@ def _start_platform_future() -> Future[Any]:
         return future
 
 
+def _start_platform_catalog_prefetch(live: Any) -> None:
+    """Warm shared official metadata without blocking package initialization."""
+
+    global _PLATFORM_CATALOG_PREFETCH_STARTED
+    with _PLATFORM_LOCK:
+        if _PLATFORM_CATALOG_PREFETCH_STARTED:
+            return
+        _PLATFORM_CATALOG_PREFETCH_STARTED = True
+
+    def worker() -> None:
+        try:
+            # Shared loader/API/Loom/Gradle/Mojang metadata first, then the small
+            # version-specific Java requirement set. Both functions are process
+            # cached, so the planner later consumes the exact same official data.
+            live._common_platform_metadata()
+            live._stable_java_versions()
+        except BaseException:
+            # Network failures are intentionally not sticky; lru_cache does not
+            # retain exceptions, so the normal planner path can retry and then use
+            # its existing compatibility fallback if the network is still down.
+            return
+
+    threading.Thread(
+        target=worker,
+        daemon=True,
+        name="mmm_platform_catalog_prefetch",
+    ).start()
+
+
 def _install_platform_prefetch() -> None:
-    """Overlap the first official Fabric Meta lookup and single-flight its miss."""
+    """Overlap official Fabric/Mojang metadata lookup with earlier runtime work."""
 
     global _PLATFORM_ORIGINAL, _PLATFORM_FUTURE
 
@@ -56,6 +86,7 @@ def _install_platform_prefetch() -> None:
     current = live.discover_game_versions
     if getattr(current, "_mmm_platform_singleflight_prefetch", False):
         _start_platform_future()
+        _start_platform_catalog_prefetch(live)
         return
 
     _PLATFORM_ORIGINAL = current
@@ -79,6 +110,7 @@ def _install_platform_prefetch() -> None:
     discover_game_versions.__wrapped__ = current
     live.discover_game_versions = discover_game_versions
     _start_platform_future()
+    _start_platform_catalog_prefetch(live)
 
 
 def _install_request_byte_fastpath() -> None:
