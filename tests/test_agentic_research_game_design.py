@@ -175,15 +175,29 @@ def test_evidence_document_preserves_full_raw_and_bounds_every_page(
     assert raw == evidence
     assert document["page_count"] == len(pages)
     assert pages
-    assert document["model_projection"].startswith("bounded_hash_addressed")
+    assert document["model_projection"] == "lossless_ordered_utf8_fragments"
     assert all(
-        len(str(page.get("content", ""))) <= paged_rag._EVIDENCE_PAGE_CHARS
+        len(str(page.get("content", "")).encode("utf-8"))
+        <= paged_rag._EVIDENCE_PAGE_CHARS
         for page in pages
     )
-    rendered_pages = json.dumps(pages, ensure_ascii=False, sort_keys=True)
-    assert huge_official not in rendered_pages
-    assert huge_forced not in rendered_pages
-    assert "externalized_to_raw_document" in rendered_pages
+    oversized_records: dict[str, list[dict[str, object]]] = {}
+    for page in pages:
+        record_sha256 = page.get("record_sha256")
+        if record_sha256:
+            oversized_records.setdefault(str(record_sha256), []).append(page)
+    reconstructed = []
+    for fragments in oversized_records.values():
+        fragments.sort(key=lambda item: int(item["part_index"]))
+        assert [int(item["part_index"]) for item in fragments] == list(
+            range(int(fragments[0]["part_count"]))
+        )
+        rendered = "".join(str(item["content"]) for item in fragments)
+        reconstructed.append(rendered)
+        assert paged_rag._sha256_text(rendered) == fragments[0]["record_sha256"]
+    joined = "\n".join(reconstructed)
+    assert huge_official in joined
+    assert huge_forced in joined
     assert [page["page_index"] for page in pages] == list(range(len(pages)))
     assert all(page["page_count"] == len(pages) for page in pages)
 
