@@ -87,13 +87,14 @@ def _install_static_registration(extended_module: Any) -> None:
             raise RuntimeError("Static registrar binding requires project_root/mod_id/package_name.")
 
         root = Path(project_root).expanduser().resolve()
-        # Keep catalog generation and static-tree binding atomic per project. The base
-        # generator re-enters the same project lock, while unrelated projects proceed.
-        with project_write_lock(root):
-            receipt = original(*args, **kwargs)
-            if not isinstance(receipt, dict) or receipt.get("status") != "GENERATED":
-                return receipt
+        # The base generator owns its own project transaction boundary. Do not hold a
+        # second outer project lock across its validation/materialization work. Only
+        # the shared registrar read/merge/commit below needs this wrapper's lock.
+        receipt = original(*args, **kwargs)
+        if not isinstance(receipt, dict) or receipt.get("status") != "GENERATED":
+            return receipt
 
+        with project_write_lock(root):
             # The base generator has already materialized one deterministic
             # GeneratedContentUnit*.java file for every Java-backed module.
             # Reopening and JSON-decoding the complete bounded record directory
@@ -121,17 +122,21 @@ def _install_static_registration(extended_module: Any) -> None:
                 / Path(*str(package_name).split("."))
                 / "extended/GeneratedExtendedContent.java"
             )
-            before = root_path.read_text(encoding="utf-8")
-            after = _replace_registration_method(before, dispatch_root)
-            if after != before:
-                from .source_patch import TransactionalSourcePatcher, sha256_file
+            before = root_path.read_bytes()
+            try:
+                before_text = before.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise RuntimeError("GeneratedExtendedContent.java is not UTF-8.") from exc
+            after = _replace_registration_method(before_text, dispatch_root)
+            if after != before_text:
+                from .source_patch import TransactionalSourcePatcher, sha256_bytes
 
                 registration_receipt = TransactionalSourcePatcher(root).apply(
                     [
                         {
                             "operation": "replace",
                             "path": root_path.relative_to(root).as_posix(),
-                            "expected_sha256": sha256_file(root_path),
+                            "expected_sha256": sha256_bytes(before),
                             "content": after,
                         }
                     ]
