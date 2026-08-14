@@ -227,7 +227,8 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
 
     failed_kinds = [str(item.get("kind")) for item in chain if str(item.get("status")) == "FAIL" and str(item.get("kind")) in _FAILURE_LEVEL]
     failure_level = max((_FAILURE_LEVEL[kind] for kind in failed_kinds), default=0)
-    verified_failure = failure_level > 0
+    successful = str(outcome).upper() == "SUCCESS"
+    verified_failure = (not successful) and failure_level > 0
 
     level = 0
     if static_pass:
@@ -241,15 +242,14 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
     if acceptance_pass and (test_pass or runtime_pass or task_class not in _CODE_TASKS):
         level = 5
 
-    successful = str(outcome).upper() == "SUCCESS"
-    memory_eligible = (successful and level >= 2) or ((not successful) and verified_failure)
+    memory_eligible = (successful and level >= 2) or verified_failure
     strong_skill_eligible = successful and level >= 3
-    remote_eligible = (successful and level >= 3) or ((not successful) and failure_level >= 1)
+    remote_eligible = (successful and level >= 3) or verified_failure
 
     pass_diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "PASS"})
     fail_diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "FAIL"})
     confidence = min(1.0, 0.12 * level + 0.05 * min(pass_diversity, 5) + (0.12 if reproduced else 0.0))
-    if verified_failure and not successful:
+    if verified_failure:
         confidence = max(confidence, min(0.98, 0.20 + 0.12 * failure_level + 0.05 * min(fail_diversity, 4)))
 
     return {
@@ -273,18 +273,21 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
 
 
 def record_memory_eligible(row: Mapping[str, Any]) -> bool:
-    verification = row.get("verification")
-    return isinstance(verification, Mapping) and verification.get("memory_eligible") is True
+    from .trajectory_record_integrity import record_memory_eligible as validate
+
+    return validate(row)
 
 
 def record_strong_skill_eligible(row: Mapping[str, Any]) -> bool:
-    verification = row.get("verification")
-    return isinstance(verification, Mapping) and verification.get("strong_skill_eligible") is True
+    from .trajectory_record_integrity import record_strong_skill_eligible as validate
+
+    return validate(row)
 
 
 def record_remote_eligible(row: Mapping[str, Any]) -> bool:
-    verification = row.get("verification")
-    return isinstance(verification, Mapping) and verification.get("remote_eligible") is True
+    from .trajectory_record_integrity import record_remote_eligible as validate
+
+    return validate(row)
 
 
 __all__ = [
