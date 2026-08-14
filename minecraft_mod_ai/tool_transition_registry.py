@@ -46,14 +46,14 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "approve_complete_plan": _spec(pre=("plan_ready",), effects=("plan_approved",)),
     "read_complete_plan_section": _spec(pre=("plan_ready",), effects=("plan_observed",)),
     "read_quality_contract": _spec(effects=("quality_contract",)),
-    "execute_complete_project": _spec(pre=("plan_approved",), effects=("project_changed", "source_generated"), cost=2),
-    "generate_fabric_project": _spec(pre=("evidence_ready",), effects=("project_changed", "source_generated"), cost=2),
-    "generate_assets": _spec(pre=("project_observed",), effects=("project_changed", "assets_generated"), cost=2),
-    "generate_geckolib_entity": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "source_generated"), cost=2),
-    "generate_system_plugin": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "source_generated"), cost=2),
-    "apply_source_patch": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed",), cost=2),
-    "apply_java_operations": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed",), cost=2),
-    "repair_project": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed",), cost=2),
+    "execute_complete_project": _spec(pre=("plan_approved",), effects=("project_changed", "source_generated", "generated"), cost=2),
+    "generate_fabric_project": _spec(pre=("evidence_ready",), effects=("project_changed", "source_generated", "generated"), cost=2),
+    "generate_assets": _spec(pre=("project_observed",), effects=("project_changed", "assets_generated", "generated"), cost=2),
+    "generate_geckolib_entity": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "source_generated", "generated"), cost=2),
+    "generate_system_plugin": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "source_generated", "generated"), cost=2),
+    "apply_source_patch": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=2),
+    "apply_java_operations": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=2),
+    "repair_project": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=2),
     "work_cancel_run": _spec(pre=("work_observed",), effects=("work_changed",), cost=2),
     "work_resume_run": _spec(pre=("work_observed",), effects=("work_changed",), cost=2),
     "java_diagnostics": _spec(pre=("project_observed",), effects=("static_verified", "verified"), cost=1),
@@ -92,9 +92,6 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "inspect_jar": _spec(pre=("build_verified",), effects=("artifact_observed",)),
     "package_release": _spec(pre=("build_verified",), effects=("packaged",), cost=2),
     "package_mod": _spec(pre=("build_verified",), effects=("packaged",), cost=2),
-    # External MCP meta-tools are optional introspection. The bridge permits a direct
-    # reviewed call when capability/arguments are already known; schema is only needed
-    # when argument names are unknown. All three remain read-only outside runtime.
     "external_mcp_capabilities": _spec(effects=("external_capabilities",)),
     "external_mcp_schema": _spec(effects=("external_schema",)),
     "external_mcp_call": _spec(effects=("external_observation", "evidence_ready"), cost=2),
@@ -109,6 +106,8 @@ TRANSITIONS: dict[str, TransitionSpec] = {
 
 CRITICAL_EFFECTS = frozenset({
     "project_changed",
+    "repaired",
+    "generated",
     "verified",
     "runtime_verified",
     "quality_verified",
