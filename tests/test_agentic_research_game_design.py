@@ -144,7 +144,13 @@ def test_research_domain_ledgers_pages_then_runs_one_bounded_synthesis(
     synthesis_call = router.calls[0]
     assert all(call["tool_stage"] == "research" for call in router.calls)
     assert all(call["response_format"] == "json" for call in router.calls)
-    assert all(call["response_schema"] == agentic._RESEARCH_NOTE_SCHEMA for call in router.calls)
+    bound_schema = synthesis_call["response_schema"]
+    assert bound_schema is not agentic._RESEARCH_NOTE_SCHEMA
+    note_schema = bound_schema["properties"]["research_note"]
+    assert note_schema["properties"]["domain_id"]["const"] == "request"
+    assert note_schema["allOf"]
+    base_domain = agentic._RESEARCH_NOTE_SCHEMA["properties"]["research_note"]["properties"]["domain_id"]
+    assert "const" not in base_domain
     assert synthesis_call["enable_tools"] is False
     assert "evidence_document" in result
     assert result["evidence_ledger"]["record_count"] == 1
@@ -235,7 +241,12 @@ def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
                 {
                     "research_note": {
                         "domain_id": "mk_combat",
-                        "claims": [],
+                        "claims": [
+                            {
+                                "claim": "bounded evidence reached synthesis",
+                                "evidence_refs": ["probe:lossless-synthesis"],
+                            }
+                        ],
                         "gaps": [],
                         "next_queries": [],
                         "sufficient": True,
