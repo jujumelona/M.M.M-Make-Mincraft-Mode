@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Per-turn causal tool exposure for the live retrieve/act/observe loop."""
 
-import json
 from contextvars import ContextVar
 from typing import Any, Mapping, Sequence
 
@@ -31,16 +30,20 @@ def _name(schema: Mapping[str, Any]) -> str:
 
 
 def _query(messages: Sequence[Mapping[str, Any]]) -> str:
+    """Recover terminal intent from user turns only.
+
+    System capability text and tool observations describe the execution surface/state;
+    they must never mutate the user's terminal goal merely because they contain words
+    such as ``external MCP``, ``runtime`` or ``verify``.
+    """
+
     parts: list[str] = []
     for message in reversed(messages):
-        role = str(message.get("role", "")).casefold()
-        if role not in {"user", "system", "tool"}:
+        if str(message.get("role", "")).casefold() != "user":
             continue
         content = message.get("content")
         if isinstance(content, str) and content.strip():
             parts.append(content.strip())
-        elif isinstance(content, Mapping):
-            parts.append(json.dumps(content, ensure_ascii=False, sort_keys=True))
         if sum(len(item) for item in parts) >= 12_000:
             break
     return "\n".join(reversed(parts))[-12_000:]
@@ -121,10 +124,6 @@ class CausalFrontierAdapter:
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         selected = tuple(by_name[name] for name in names if name in by_name)
 
-        # Once the causal target is already certified there is no reason to expose
-        # more actions. The model receives the accumulated observations and can
-        # finalize; if a new target emerges from a later system/user message the next
-        # invocation recomputes from the full authorized set.
         rebuilt = GenerationRequest(
             messages=_with_capability_context(
                 request.messages,
