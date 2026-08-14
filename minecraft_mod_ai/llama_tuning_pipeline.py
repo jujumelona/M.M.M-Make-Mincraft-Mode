@@ -208,11 +208,14 @@ def install_native_llama_tuning_pipeline(
     hardware_policy: Any,
     runtime_tuning: Any,
 ) -> None:
+    from .runtime_stability_contract import install as install_runtime_stability
+
     NativeLlamaTuningPipeline(
         autotune=autotune,
         hardware_policy=hardware_policy,
         runtime_tuning=runtime_tuning,
     ).install()
+    install_runtime_stability()
 
 
 __all__ = [

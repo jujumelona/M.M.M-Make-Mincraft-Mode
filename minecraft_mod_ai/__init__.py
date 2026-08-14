@@ -4,10 +4,6 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
-from .runtime_stability_contract import install as _install_runtime_stability
-
-_install_runtime_stability()
-
 from .api import (
     ChatReply,
     CompleteChatReply,
