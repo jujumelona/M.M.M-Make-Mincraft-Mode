@@ -903,6 +903,7 @@ def create_demo(
             "label": "모드 제작 대화",
             "height": 520,
             "layout": "bubble",
+            "allow_tags": False,
         }
         if "type" in __import__("inspect").signature(gr.Chatbot).parameters:
             chatbot_kwargs["type"] = "messages"
