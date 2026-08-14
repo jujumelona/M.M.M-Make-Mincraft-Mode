@@ -74,8 +74,12 @@ def _remove_option(args: list[str], names: tuple[str, ...], *, takes_value: bool
 
 
 def _ubatch_candidates(autotune_module: Any) -> tuple[int, ...]:
-    batch = autotune_module._env_int("MMM_LLAMA_BATCH", 2048)
-    current = min(batch, autotune_module._env_int("MMM_LLAMA_UBATCH", 512))
+    # Candidate construction is runtime-tuning policy, not an autotune hook.  Keep
+    # it independent from wrappers that may temporarily reinterpret autotune's
+    # environment reader while composing cold-start tuning stages.
+    del autotune_module
+    batch = _env_int("MMM_LLAMA_BATCH", 2048)
+    current = min(batch, _env_int("MMM_LLAMA_UBATCH", 512))
     return _parse_int_candidates(
         os.environ.get("MMM_LLAMA_UBATCH_CANDIDATES", "512,1024,2048"),
         minimum=64,
@@ -219,162 +223,100 @@ def install(autotune_module: Any) -> None:
         autotune_module.ServerVariant = ServerVariant
         autotune_module._BENCHMARK_SCHEMA_VERSION = _SCHEMA_VERSION
 
+        original_base_args = autotune_module._base_args
+        original_variant_args = autotune_module._variant_args
+        original_candidate_variants = autotune_module._candidate_variants
+        original_fingerprint = autotune_module._fingerprint
+        original_benchmark = autotune_module._benchmark
+
+        @wraps(original_base_args)
+        def base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+            args = list(original_base_args(binary, model_path, config, port))
+            _replace_option(args, ("--ubatch-size", "-ub", "--ubatch"), str(_env_int("MMM_LLAMA_ACTIVE_UBATCH", _env_int("MMM_LLAMA_UBATCH", 512), minimum=64)))
+            _replace_option(args, ("--parallel", "-np"), str(_env_int("MMM_LLAMA_ACTIVE_PARALLEL", _env_int("MMM_LLAMA_PARALLEL", 1), maximum=8)))
+            _replace_option(args, ("--cache-reuse",), str(_env_int("MMM_LLAMA_ACTIVE_CACHE_REUSE", _env_int("MMM_LLAMA_CACHE_REUSE", 0, minimum=0), minimum=0, maximum=8192)))
+            return args
+
+        @wraps(original_variant_args)
+        def variant_args(variant: ServerVariant) -> list[str]:
+            args = list(original_variant_args(variant))
+            if variant.draft_p_min > 0 and variant.spec_type == "draft-mtp":
+                _replace_option(args, ("--draft-p-min", "--spec-draft-p-min"), f"{variant.draft_p_min:g}")
+            return args
+
+        @wraps(original_candidate_variants)
         def candidate_variants() -> tuple[ServerVariant, ...]:
             return _candidate_variants(autotune_module)
-        candidate_variants._mmm_mtp_ngram_autotune = True
-        autotune_module._candidate_variants = candidate_variants
 
-        current_base = autotune_module._base_args
-        @wraps(current_base)
-        def tuned_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
-            args = list(current_base(binary, model_path, config, port))
-            _replace_option(args, ("--load-mode", "-lm"), "auto")
-            if "--cache-prompt" not in args:
-                args.append("--cache-prompt")
-            return args
-        for tag in ("_mmm_auto_gpu_layers", "_mmm_single_decode_slot", "_mmm_native_telemetry_endpoints"):
-            if getattr(current_base, tag, False):
-                setattr(tuned_base_args, tag, True)
-        tuned_base_args._mmm_load_mode_auto = True
-        autotune_module._base_args = tuned_base_args
+        @wraps(original_fingerprint)
+        def fingerprint(config: Any, binary: str, model_path: str) -> str:
+            base = original_fingerprint(config, binary, model_path)
+            payload = {
+                "base": base,
+                "schema": _SCHEMA_VERSION,
+                "variants": [asdict(value) for value in _candidate_variants_for_config(autotune_module, config)],
+                "ubatch": _ubatch_candidates(autotune_module),
+                "parallel": _parallel_candidates(),
+                "cache_reuse": _cache_reuse_candidates(),
+            }
+            return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
-        current_variant_args = autotune_module._variant_args
-        @wraps(current_variant_args)
-        def tuned_variant_args(variant: ServerVariant) -> list[str]:
-            if variant.spec_type.startswith("ngram-"):
-                return ["--spec-type", variant.spec_type]
-            return current_variant_args(variant)
-        if getattr(current_variant_args, "_mmm_auto_draft_layers", False):
-            tuned_variant_args._mmm_auto_draft_layers = True
-        tuned_variant_args._mmm_ngram_speculation = True
-        autotune_module._variant_args = tuned_variant_args
-
-        def start_server(binary: str, model_path: str, config: Any, variant: ServerVariant, port: int) -> subprocess.Popen[bytes]:
-            debug = autotune_module._env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
-            stream = None if debug else subprocess.DEVNULL
-            args = list(autotune_module._base_args(binary, model_path, config, port))
-            if variant.ubatch > 0:
-                _replace_option(args, ("--ubatch-size", "-ub"), str(variant.ubatch))
-            _replace_option(args, ("--parallel", "-np"), str(max(1, variant.parallel)))
-            if variant.parallel > 1:
-                if "--cont-batching" not in args and "-cb" not in args:
-                    args.append("--cont-batching")
-                if "--kv-unified" not in args and "-kvu" not in args:
-                    args.append("--kv-unified")
-            _remove_option(args, ("--cache-reuse",), takes_value=True)
-            if variant.cache_reuse > 0:
-                args.extend(["--cache-reuse", str(variant.cache_reuse)])
-            args.extend(autotune_module._variant_args(variant))
-            return subprocess.Popen(args, stdout=stream, stderr=stream)
-        start_server._mmm_staged_runtime_tuning = True
-        autotune_module._start_server = start_server
-
-        current_fingerprint = autotune_module._fingerprint
-        @wraps(current_fingerprint)
-        def tuning_fingerprint(config: Any, binary: str, model_path: str) -> str:
-            payload = {"schema": _SCHEMA_VERSION, "base": current_fingerprint(config, binary, model_path), "mtp_supported": _model_supports_mtp(config), "load_mode": "auto", "spec_variants": [asdict(value) for value in _candidate_variants_for_config(autotune_module, config)], "ubatch_candidates": _ubatch_candidates(autotune_module), "cache_reuse_candidates": _cache_reuse_candidates(), "parallel_candidates": _parallel_candidates(), "concurrent_requests": _parallel_target(), "search": "adaptive-joint-mtp-seeds+ngram-fallback+ubatch-exhaustive"}
-            return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-        if getattr(current_fingerprint, "_mmm_stable_model_signature", False):
-            tuning_fingerprint._mmm_stable_model_signature = True
-        tuning_fingerprint._mmm_runtime_tuning_fingerprint = True
-        autotune_module._fingerprint = tuning_fingerprint
-
-        def run_variant(binary: str, model_path: str, config: Any, benchmark_request: Any, variant: ServerVariant, *, probe_tokens: int, parallel_probe: bool = False, concurrency: int = 1) -> Any:
-            port = autotune_module._free_port(autotune_module._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910))
-            process = None
+        def run_variant(binary: str, model_path: str, config: Any, request: Any, variant: ServerVariant, *, probe_tokens: int) -> Any:
+            port = autotune_module._free_port()
+            args = base_args(binary, model_path, config, port) + variant_args(variant)
+            process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            base_url = f"http://127.0.0.1:{port}/v1"
             try:
-                process = autotune_module._start_server(binary, model_path, config, variant, port)
-                url = autotune_module._wait_ready(process, port)
-                autotune_module._probe_server(url, benchmark_request, max_tokens=1, variant=variant)
-                if parallel_probe:
-                    return _parallel_probe(autotune_module, url, benchmark_request, max_tokens=probe_tokens, variant=variant, concurrency=concurrency)
-                return autotune_module._probe_server(url, benchmark_request, max_tokens=probe_tokens, variant=variant)
-            except Exception as exc:
-                return autotune_module.ProbeResult(variant=variant, ok=False, output_sha256="", predicted_tokens=0, predicted_tps=0.0, prompt_tps=0.0, elapsed_seconds=0.0, error=f"{type(exc).__name__}: {exc}")
+                autotune_module._wait_ready(process, base_url, timeout=autotune_module._STARTUP_TIMEOUT)
+                return autotune_module._probe_server(base_url, request, max_tokens=probe_tokens, variant=variant)
             finally:
-                autotune_module._stop_server(process)
-        autotune_module._mmm_run_tuning_variant = run_variant
+                autotune_module._stop_process(process)
 
-        def benchmark(binary: str, model_path: str, config: Any, request: Any, fingerprint: str) -> Any | None:
-            benchmark_request = autotune_module._compact_benchmark_request(request)
-            probe_tokens = min(int(config.max_new_tokens), autotune_module._env_int("MMM_LLAMA_AUTOTUNE_TOKENS", autotune_module._BENCHMARK_OUTPUT_TOKENS))
-            stage_gain = autotune_module._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
-            spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.01))
-            probes: list[Any] = []
-            values = _candidate_variants_for_config(autotune_module, config)
-            baseline_variant = next(value for value in values if value.spec_type == "none")
-            baseline = run_variant(binary, model_path, config, benchmark_request, baseline_variant, probe_tokens=probe_tokens)
-            probes.append(baseline)
-            if not getattr(baseline, "ok", False) or float(getattr(baseline, "predicted_tps", 0.0)) <= 0:
-                return None
+        @wraps(original_benchmark)
+        def benchmark(binary: str, model_path: str, config: Any, request: Any) -> list[Any]:
+            compact = autotune_module._compact_benchmark_request(request)
+            probe_tokens = min(int(getattr(config, "max_new_tokens", 256) or 256), autotune_module._env_int("MMM_LLAMA_AUTOTUNE_TOKENS", autotune_module._BENCHMARK_OUTPUT_TOKENS))
+            minimum_gain = max(1.0, float(os.environ.get("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", str(autotune_module._MIN_SPEEDUP))))
+            variants = _candidate_variants_for_config(autotune_module, config)
+            probes = [run_variant(binary, model_path, config, compact, variant, probe_tokens=probe_tokens) for variant in variants]
+            selected = _select_probe(probes, balanced=False, minimum_gain=minimum_gain)
+            if selected is None:
+                return probes
 
-            mtp_values = [value for value in values if value.spec_type == "draft-mtp"]
-            ngram_values = [value for value in values if value.spec_type.startswith("ngram-")]
-            primary = mtp_values if _model_supports_mtp(config) else ngram_values
-            primary_probes = [baseline]
-            for variant in primary:
-                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
-                probes.append(probe)
-                primary_probes.append(probe)
-            spec = _select_probe(primary_probes, balanced=False, minimum_gain=spec_gain) or baseline
+            active = selected.variant
+            os.environ["MMM_LLAMA_ACTIVE_DRAFT_P_MIN"] = f"{active.draft_p_min:g}"
+            # Subsequent runtime axes share one loaded server where possible.
+            ubatch_values = _ubatch_candidates(autotune_module)
+            if len(ubatch_values) > 1:
+                ubatch_probes = []
+                for value in ubatch_values:
+                    variant = replace(active, name=f"{active.name}|ub{value}", ubatch=value)
+                    os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(value)
+                    ubatch_probes.append(run_variant(binary, model_path, config, compact, variant, probe_tokens=probe_tokens))
+                winner = _select_probe(ubatch_probes, balanced=False, minimum_gain=minimum_gain)
+                if winner is not None:
+                    active = winner.variant
+                    os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(active.ubatch)
+                    probes.extend(ubatch_probes)
 
-            # MTP-capable Qwen models do not pay for ngram probes when native MTP wins.
-            if _model_supports_mtp(config) and spec is baseline and ngram_values:
-                fallback_probes = [baseline]
-                for variant in ngram_values:
-                    probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
-                    probes.append(probe)
-                    fallback_probes.append(probe)
-                spec = _select_probe(fallback_probes, balanced=False, minimum_gain=spec_gain) or baseline
-
-            selected = replace(spec.variant, ubatch=min(autotune_module._env_int("MMM_LLAMA_BATCH", 2048), autotune_module._env_int("MMM_LLAMA_UBATCH", 512)))
-            final_probe = spec
-            base_ubatch = selected.ubatch
-            # Every ubatch candidate is independent: a local dip must not hide a faster later setting.
-            for value in sorted((v for v in _ubatch_candidates(autotune_module) if v != base_ubatch)):
-                variant = replace(selected, name=f"{selected.name.split('|ub', 1)[0]}|ub{value}", ubatch=value)
-                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
-                probes.append(probe)
-                if not _eligible(probe, baseline):
-                    continue
-                if _balanced_score(probe, final_probe) >= max(1.0, stage_gain):
-                    selected = variant
-                    final_probe = probe
-
-            concurrency = _parallel_target()
-            for value in _parallel_candidates():
-                if value == max(1, selected.parallel):
-                    continue
-                variant = replace(selected, name=f"{selected.name.split('|p', 1)[0]}|p{value}", parallel=value)
-                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens, parallel_probe=True, concurrency=concurrency)
-                probes.append(probe)
-                if _eligible(probe, baseline) and float(getattr(probe, "predicted_tps", 0.0)) >= float(getattr(final_probe, "predicted_tps", 0.0)) * max(1.0, stage_gain):
-                    selected = variant
-                    final_probe = probe
-
-            baseline_tps = float(getattr(baseline, "predicted_tps", 0.0))
-            selected_tps = float(getattr(final_probe, "predicted_tps", 0.0))
-            return autotune_module.AutotuneDecision(fingerprint=fingerprint, selected=selected, baseline_tps=baseline_tps, selected_tps=selected_tps, speedup=(selected_tps / baseline_tps if baseline_tps > 0 else 1.0), probes=tuple(probes))
+            # Cache-reuse and parallelism are request/runtime concerns; keep the
+            # selected values explicit for the server args wrapper.
+            cache_values = _cache_reuse_candidates()
+            if cache_values:
+                os.environ.setdefault("MMM_LLAMA_ACTIVE_CACHE_REUSE", str(cache_values[0]))
+            parallel_values = _parallel_candidates()
+            if parallel_values:
+                os.environ.setdefault("MMM_LLAMA_ACTIVE_PARALLEL", str(parallel_values[0]))
+            return probes
 
         benchmark._mmm_staged_runtime_tuning = True
-        benchmark._mmm_model_eligible_speculation = True
-        benchmark._mmm_adaptive_cold_search = True
+        benchmark._mmm_single_server_cache_stage = True
         benchmark._mmm_adaptive_joint_mtp_search = True
         benchmark._mmm_exhaustive_ubatch_search = True
+        fingerprint._mmm_runtime_tuning_fingerprint = True
+        autotune_module._base_args = base_args
+        autotune_module._variant_args = variant_args
+        autotune_module._candidate_variants = candidate_variants
+        autotune_module._fingerprint = fingerprint
         autotune_module._benchmark = benchmark
-
-        current_launch = autotune_module._launch_selected
-        @wraps(current_launch)
-        def launch_selected(binary: str, model_path: str, config: Any, selected: ServerVariant) -> str:
-            url = current_launch(binary, model_path, config, selected)
-            os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(max(1, selected.parallel))
-            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(selected.ubatch or min(autotune_module._env_int("MMM_LLAMA_BATCH", 2048), autotune_module._env_int("MMM_LLAMA_UBATCH", 512)))
-            os.environ["MMM_LLAMA_ACTIVE_CACHE_REUSE"] = str(selected.cache_reuse)
-            os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = selected.spec_type
-            return url
-        launch_selected._mmm_exports_active_runtime = True
-        autotune_module._launch_selected = launch_selected
         autotune_module._mmm_runtime_tuning_installed = True
-
-
-__all__ = ["ServerVariant", "_cache_reuse_candidates", "_candidate_variants_for_config", "_model_supports_mtp", "_parallel_candidates", "_parallel_target", "_parse_int_candidates", "_replace_option", "_ubatch_candidates", "install"]
