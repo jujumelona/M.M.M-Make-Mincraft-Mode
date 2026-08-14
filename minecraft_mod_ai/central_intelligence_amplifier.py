@@ -14,6 +14,23 @@ _MARKER = "_mmm_central_intelligence_amplifier_v1"
 _PARALLEL_CORE_MARKER = "_mmm_parallel_research_design_core_v1"
 _WORD = re.compile(r"[A-Za-z0-9_./:+-]{2,}|[가-힣]{2,}")
 _SEVERITY = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+_TRANSIENT_PARALLEL_RESEARCH_MARKERS = (
+    "shared local router rejected concurrent request",
+    "concurrent request",
+    "server busy",
+    "temporarily unavailable",
+    "resource temporarily unavailable",
+    "connection refused",
+    "connection reset",
+    "broken pipe",
+    "server disconnected",
+    "failed to establish a new connection",
+    "http 429",
+    "http 502",
+    "http 503",
+    "http 504",
+)
+_TRANSIENT_OS_ERRNOS = frozenset({32, 104, 110, 111, 113})
 
 _COUNCIL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -206,6 +223,43 @@ def _dependency_waves(domains: Sequence[Mapping[str, Any]]) -> tuple[tuple[int, 
     return tuple(waves)
 
 
+def _retryable_parallel_research_failure(exc: BaseException) -> bool:
+    """Replay only transient/concurrency failures, never deterministic research errors."""
+
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) in _TRANSIENT_OS_ERRNOS:
+        return True
+    text = f"{type(exc).__name__}: {exc}".casefold()
+    return any(marker in text for marker in _TRANSIENT_PARALLEL_RESEARCH_MARKERS)
+
+
+def _failed_domain_note(
+    domain: Mapping[str, Any],
+    exc: BaseException,
+    *,
+    parallel: bool,
+    retry_exc: BaseException | None = None,
+) -> dict[str, Any]:
+    domain_id = str(domain.get("domain_id", "unknown")).strip() or "unknown"
+    first_error = f"{type(exc).__name__}: {exc}"
+    prefix = "parallel" if parallel else "serial"
+    note: dict[str, Any] = {
+        "domain_id": domain_id,
+        "claims": [],
+        "gaps": [f"{prefix} research failed: {first_error}"],
+        "next_queries": list(domain.get("queries", [])),
+        "sufficient": False,
+        "worker_error": True,
+        f"{prefix}_error": first_error,
+    }
+    if retry_exc is not None:
+        retry_error = f"{type(retry_exc).__name__}: {retry_exc}"
+        note["gaps"].append(f"serial recovery failed: {retry_error}")
+        note["retry_error"] = retry_error
+    return note
+
+
 def install_parallel_core(agentic_module: Any) -> None:
     """Parallelize independent research providers, domain agents, and design sections."""
 
@@ -283,7 +337,7 @@ def install_parallel_core(agentic_module: Any) -> None:
             for wave in domain_waves:
                 wave_workers = _research_domain_worker_count(router, len(wave))
                 domain_workers = max(domain_workers, wave_workers)
-                failed_domains: dict[int, Exception] = {}
+                retry_domains: dict[int, Exception] = {}
 
                 if wave_workers <= 1:
                     for index in wave:
@@ -296,7 +350,14 @@ def install_parallel_core(agentic_module: Any) -> None:
                                 trace_metadata=trace_metadata,
                             )
                         except Exception as exc:
-                            failed_domains[index] = exc
+                            # This path already ran on the caller thread. Replaying the same
+                            # expensive domain cannot recover a parallelism failure, and lower
+                            # transport layers own exact backend restart/retry semantics.
+                            indexed_notes[index] = _failed_domain_note(
+                                domains[index],
+                                exc,
+                                parallel=False,
+                            )
                 else:
                     with ThreadPoolExecutor(
                         max_workers=wave_workers,
@@ -323,16 +384,25 @@ def install_parallel_core(agentic_module: Any) -> None:
                             try:
                                 indexed_notes[index] = future.result()
                             except Exception as exc:
-                                # Parallel execution is an optimization, not research semantics.
-                                # Preserve the failed index and retry it in the caller context
-                                # before any dependent wave is allowed to start.
-                                failed_domains[index] = exc
+                                # Only transient transport/concurrency failures benefit from
+                                # replaying once on the caller thread. Validation/programming/
+                                # semantic failures are deterministic and must not duplicate a
+                                # full research+synthesis domain call.
+                                if _retryable_parallel_research_failure(exc):
+                                    retry_domains[index] = exc
+                                else:
+                                    indexed_notes[index] = _failed_domain_note(
+                                        domains[index],
+                                        exc,
+                                        parallel=True,
+                                    )
 
                 # A dependent wave cannot start until every predecessor either completed or
-                # produced the same terminal worker-error receipt as the previous serial path.
-                for index in sorted(failed_domains):
+                # produced a strict terminal failure note. Only transient parallel failures
+                # receive one serial recovery attempt.
+                for index in sorted(retry_domains):
                     domain = domains[index]
-                    parallel_exc = failed_domains[index]
+                    parallel_exc = retry_domains[index]
                     try:
                         indexed_notes[index] = agentic_module._research_domain_with_agent(
                             router,
@@ -342,26 +412,12 @@ def install_parallel_core(agentic_module: Any) -> None:
                             trace_metadata=trace_metadata,
                         )
                     except Exception as retry_exc:
-                        domain_id = str(
-                            domain.get("domain_id", "unknown")
-                        ).strip() or "unknown"
-                        indexed_notes[index] = {
-                            "domain_id": domain_id,
-                            "claims": [],
-                            "gaps": [
-                                "parallel research failed: "
-                                f"{type(parallel_exc).__name__}: {parallel_exc}",
-                                "serial recovery failed: "
-                                f"{type(retry_exc).__name__}: {retry_exc}",
-                            ],
-                            "next_queries": list(domain.get("queries", [])),
-                            "sufficient": False,
-                            "worker_error": True,
-                            "parallel_error": (
-                                f"{type(parallel_exc).__name__}: {parallel_exc}"
-                            ),
-                            "retry_error": f"{type(retry_exc).__name__}: {retry_exc}",
-                        }
+                        indexed_notes[index] = _failed_domain_note(
+                            domain,
+                            parallel_exc,
+                            parallel=True,
+                            retry_exc=retry_exc,
+                        )
             domain_notes = [indexed_notes[index] for index in range(len(domains))]
 
             payload = {

@@ -18,6 +18,19 @@ def _sha(value: object) -> str:
     ).hexdigest()
 
 
+def _native_router():
+    return SimpleNamespace(
+        profile="test",
+        registry=SimpleNamespace(
+            role=lambda _profile, _role: SimpleNamespace(
+                exclusive_gpu=True,
+                provider="local",
+                adapter="llama_cpp",
+            )
+        ),
+    )
+
+
 def _fake_agentic(research_domain):
     domains = [
         {
@@ -78,7 +91,7 @@ def test_parallel_domain_failure_recovers_serially_without_weakening_terminal_se
 
     fake = _fake_agentic(research_domain)
     amplifier.install_parallel_core(fake)
-    result = fake.collect_pre_design_research(object(), "boss")
+    result = fake.collect_pre_design_research(_native_router(), "boss")
 
     assert attempts == {"mk_entity": 2, "mk_quality": 2}
     assert [note["domain_id"] for note in result["domain_notes"]] == [
@@ -89,18 +102,43 @@ def test_parallel_domain_failure_recovers_serially_without_weakening_terminal_se
     assert all("worker_error" not in note for note in result["domain_notes"])
 
 
-def test_parallel_and_serial_failure_remains_strictly_unresolved() -> None:
+def test_persistent_parallel_failure_is_not_replayed() -> None:
+    attempts: dict[str, int] = {}
+
     def research_domain(router, *, prompt, domain, deterministic, trace_metadata):
+        domain_id = domain["domain_id"]
+        attempts[domain_id] = attempts.get(domain_id, 0) + 1
         raise RuntimeError("persistent research failure")
+
+    fake = _fake_agentic(research_domain)
+    amplifier.install_parallel_core(fake)
+    result = fake.collect_pre_design_research(_native_router(), "boss")
+
+    assert attempts == {"mk_entity": 1, "mk_quality": 1}
+    assert all(note["sufficient"] is False for note in result["domain_notes"])
+    assert all(note["worker_error"] is True for note in result["domain_notes"])
+    assert all(not note.get("fixed_point", False) for note in result["domain_notes"])
+    assert all("parallel_error" in note for note in result["domain_notes"])
+    assert all("retry_error" not in note for note in result["domain_notes"])
+
+
+def test_single_slot_failure_is_not_replayed() -> None:
+    attempts: dict[str, int] = {}
+
+    def research_domain(router, *, prompt, domain, deterministic, trace_metadata):
+        domain_id = domain["domain_id"]
+        attempts[domain_id] = attempts.get(domain_id, 0) + 1
+        raise RuntimeError("deterministic validation failure")
 
     fake = _fake_agentic(research_domain)
     amplifier.install_parallel_core(fake)
     result = fake.collect_pre_design_research(object(), "boss")
 
+    assert attempts == {"mk_entity": 1, "mk_quality": 1}
     assert all(note["sufficient"] is False for note in result["domain_notes"])
     assert all(note["worker_error"] is True for note in result["domain_notes"])
-    assert all(not note.get("fixed_point", False) for note in result["domain_notes"])
-    assert all("parallel_error" in note and "retry_error" in note for note in result["domain_notes"])
+    assert all("serial_error" in note for note in result["domain_notes"])
+    assert all("retry_error" not in note for note in result["domain_notes"])
 
 
 def test_fixed_point_recovery_is_accepted_only_with_real_route_receipts() -> None:

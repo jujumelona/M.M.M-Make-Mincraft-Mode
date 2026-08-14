@@ -221,7 +221,7 @@ def test_provider_domain_and_design_fanout_are_parallel_with_deterministic_merge
     game_design_module = SimpleNamespace(_validate_design=lambda _value: None)
     design = module.generate_sectioned_game_design(
         game_design_module,
-        object(),
+        native_router,
         "test",
         research=result,
     )
