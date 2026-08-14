@@ -89,6 +89,8 @@ def _install_cpu_retrieval_coalescing() -> None:
                 lengths.append(len(texts))
                 combined.extend(texts)
             values = current_embed(group[0].adapter, combined)
+            if len(values) != len(combined):
+                raise RuntimeError("Embedding batch returned the wrong row count.")
             offset = 0
             for item, length in zip(group, lengths, strict=True):
                 item.future.set_result(values[offset : offset + length])
@@ -131,6 +133,8 @@ def _install_cpu_retrieval_coalescing() -> None:
                 documents,
                 instruction=instruction,
             )
+            if len(values) != len(documents):
+                raise RuntimeError("Reranker batch returned the wrong score count.")
             offset = 0
             for item, length in zip(group, lengths, strict=True):
                 item.future.set_result(values[offset : offset + length])

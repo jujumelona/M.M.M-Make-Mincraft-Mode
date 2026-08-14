@@ -54,6 +54,7 @@ def test_research_runtime_is_installed_by_package_bootstrap() -> None:
 
 def test_project_rag_reuses_unchanged_content_and_reindexes_only_changed_file(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "project"
     root.mkdir()
@@ -66,18 +67,29 @@ def test_project_rag_reuses_unchanged_content_and_reindexes_only_changed_file(
     initial = index.build([root], metadata=_metadata("sha256:one"), semantic=False)
     assert initial["files_indexed"] == 2
 
+    hash_calls: list[Path] = []
+    original_hash = rag_perf._file_sha256
+
+    def tracked_hash(path: Path) -> str:
+        hash_calls.append(path)
+        return original_hash(path)
+
+    monkeypatch.setattr(rag_perf, "_file_sha256", tracked_hash)
     reused = index.build([root], metadata=_metadata("sha256:two"), semantic=False)
     assert reused["incremental"] is True
     assert reused["changed_files"] == 0
     assert reused["removed_files"] == 0
     assert reused["reused_files"] == 2
+    assert hash_calls == []
 
+    # A content mutation invalidates only A.java; B.java remains indexed in place.
     first_file.write_text("public final class A { int value = 1; }\n", encoding="utf-8")
     changed = index.build([root], metadata=_metadata("sha256:three"), semantic=False)
     assert changed["incremental"] is True
     assert changed["changed_files"] == 1
     assert changed["removed_files"] == 0
     assert changed["reused_files"] == 1
+    assert hash_calls == [first_file]
 
 
 def test_multi_probe_lsh_bounds_dense_candidates_and_keeps_exact_neighbor(
@@ -86,6 +98,10 @@ def test_multi_probe_lsh_bounds_dense_candidates_and_keeps_exact_neighbor(
     target = tmp_path / "semantic.sqlite"
     connection = sqlite3.connect(str(target))
     connection.row_factory = sqlite3.Row
+    connection.execute("CREATE TABLE index_meta(key TEXT PRIMARY KEY, value TEXT)")
+    connection.execute(
+        "INSERT INTO index_meta(key, value) VALUES ('chunks_indexed', '1000')"
+    )
     connection.execute(
         """
         CREATE TABLE chunks(
@@ -125,6 +141,14 @@ def test_multi_probe_lsh_bounds_dense_candidates_and_keeps_exact_neighbor(
     assert 0 < len(rows) <= 128
     assert len(rows) < 1000
     assert any(str(row["chunk_id"]) == "0" for row in rows)
+
+    connection = sqlite3.connect(str(target))
+    trace: list[str] = []
+    connection.set_trace_callback(trace.append)
+    rag_perf._ensure_semantic_lsh(connection)
+    connection.set_trace_callback(None)
+    connection.close()
+    assert not any(statement.startswith("DELETE FROM mmm_semantic_lsh") for statement in trace)
 
 
 def test_trajectory_memory_uses_indexed_append_and_query_candidates(
@@ -173,6 +197,12 @@ def test_trajectory_memory_uses_indexed_append_and_query_candidates(
         / "trajectory-index.sqlite3"
     )
     assert db.is_file()
+    connection = sqlite3.connect(str(db))
+    last_order = connection.execute(
+        "SELECT value FROM trajectory_meta WHERE key = 'last_source_order'"
+    ).fetchone()
+    connection.close()
+    assert last_order == (80,)
     assert len(rows) == 6
     assert all(row["task_class"] in {"repair", "general"} for row in rows)
 

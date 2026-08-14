@@ -51,6 +51,10 @@ def _open_trajectory_db(tm: Any, base: str | Path) -> sqlite3.Connection:
             byte_offset INTEGER NOT NULL,
             source_kind TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS trajectory_meta (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL
+        );
         """
     )
     try:
@@ -66,6 +70,34 @@ def _open_trajectory_db(tm: Any, base: str | Path) -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass
     return connection
+
+
+def _last_source_order(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "SELECT value FROM trajectory_meta WHERE key = 'last_source_order'"
+    ).fetchone()
+    if row is not None:
+        return int(row[0])
+    value = int(
+        connection.execute(
+            "SELECT COALESCE(MAX(source_order), 0) FROM trajectories"
+        ).fetchone()[0]
+    )
+    connection.execute(
+        "INSERT INTO trajectory_meta(key, value) VALUES ('last_source_order', ?)",
+        (value,),
+    )
+    return value
+
+
+def _set_last_source_order(connection: sqlite3.Connection, value: int) -> None:
+    connection.execute(
+        """
+        INSERT INTO trajectory_meta(key, value) VALUES ('last_source_order', ?)
+        ON CONFLICT(key) DO UPDATE SET value = MAX(value, excluded.value)
+        """,
+        (int(value),),
+    )
 
 
 def _trajectory_insert(tm: Any, connection: sqlite3.Connection, row: Mapping[str, Any], *, source: Path, order: int) -> bool:
@@ -151,9 +183,7 @@ def _sync_trajectory_source(tm: Any, connection: sqlite3.Connection, source: Pat
     else:
         _delete_trajectory_source(connection, source)
 
-    order = int(
-        connection.execute("SELECT COALESCE(MAX(source_order), 0) FROM trajectories").fetchone()[0]
-    )
+    order = _last_source_order(connection)
     with source.open("rb") as handle:
         if append_from:
             handle.seek(append_from)
@@ -164,9 +194,13 @@ def _sync_trajectory_source(tm: Any, connection: sqlite3.Connection, source: Pat
             except json.JSONDecodeError:
                 continue
             if isinstance(value, Mapping) and tm.record_memory_eligible(value):
-                order += 1
-                _trajectory_insert(tm, connection, value, source=source, order=order)
+                candidate_order = order + 1
+                if _trajectory_insert(
+                    tm, connection, value, source=source, order=candidate_order
+                ):
+                    order = candidate_order
         offset = handle.tell()
+    _set_last_source_order(connection, order)
     connection.execute(
         """
         INSERT INTO trajectory_sources(source_path, size_bytes, modified_ns, byte_offset, source_kind)
@@ -204,12 +238,10 @@ def _indexed_append_factory(tm: Any, original: Callable[..., bool]):
                 rendered = json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n"
                 with path.open("a", encoding="utf-8", newline="\n") as handle:
                     handle.write(rendered)
-                order = int(
-                    connection.execute(
-                        "SELECT COALESCE(MAX(source_order), 0) + 1 FROM trajectories"
-                    ).fetchone()[0]
-                )
+                order = _last_source_order(connection) + 1
                 inserted = _trajectory_insert(tm, connection, row, source=path, order=order)
+                if inserted:
+                    _set_last_source_order(connection, order)
                 stat = path.stat()
                 connection.execute(
                     """
@@ -376,6 +408,7 @@ def _indexed_relevant_factory(tm: Any, original: Callable[..., list[dict[str, An
 
     setattr(relevant, _MARKER, True)
     return relevant
+
 
 
 def harden(trajectory_memory_module: Any) -> tuple[Callable[..., Any], Callable[..., Any]]:

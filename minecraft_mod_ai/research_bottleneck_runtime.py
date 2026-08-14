@@ -5,12 +5,15 @@ from __future__ import annotations
 
 def install() -> None:
     from . import centroid_vector_rag, rag_index, runner, trajectory_memory
+    from . import research_rag_performance as rag_performance
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
+    from .research_rag_amortized_runtime import harden as harden_rag_amortized
     from .research_rag_performance import harden as harden_rag
 
     harden_rag(rag_index, centroid_vector_rag)
+    harden_rag_amortized(rag_index, rag_performance)
     indexed_append, indexed_relevant = harden_memory(trajectory_memory)
 
     # temporary_skill_contract imported these functions by value before this late
