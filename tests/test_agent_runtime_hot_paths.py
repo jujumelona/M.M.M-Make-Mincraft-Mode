@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import anyio
+import pytest
 
 import minecraft_mod_ai.agent_capability_context as capability_context
 from minecraft_mod_ai import agent_tool_runtime
+from minecraft_mod_ai.causal_frontier_adapter import FrontierExecutionGate
+from minecraft_mod_ai.causal_tool_frontier_contract import _FrontierRuntimeProxy
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -84,3 +88,35 @@ def test_manifest_router_is_reused_but_request_target_stays_dynamic(monkeypatch)
     assert len(instances) == 1
     assert [target["minecraft_version"] for target in targets] == ["1.21.1", "1.21.4"]
     capability_context._manifest_router.cache_clear()
+
+
+def test_causal_execution_gate_blocks_hidden_read_tool_inside_worker_thread() -> None:
+    calls: list[str] = []
+
+    class Runtime:
+        def call(self, stage, name, arguments):
+            calls.append(name)
+            return {"ok": True, "stage": stage, "arguments": dict(arguments)}
+
+    gate = FrontierExecutionGate()
+    gate.set_visible(("search_code_rag",))
+    proxy = _FrontierRuntimeProxy(Runtime(), gate)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        visible = executor.submit(
+            proxy.call,
+            "generation",
+            "search_code_rag",
+            {"query": "visible"},
+        )
+        hidden = executor.submit(
+            proxy.call,
+            "generation",
+            "search_project_rag",
+            {"query": "hidden"},
+        )
+        assert visible.result()["ok"] is True
+        with pytest.raises(RuntimeError, match="not exposed on the current causal frontier"):
+            hidden.result()
+
+    assert calls == ["search_code_rag"]
