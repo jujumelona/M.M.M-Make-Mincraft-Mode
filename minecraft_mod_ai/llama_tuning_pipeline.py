@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 20
+_TUNING_PIPELINE_VERSION = 21
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -105,6 +105,7 @@ class NativeLlamaTuningPipeline:
         from .llama_server_kernel_autotune import install as install_kernel_autotune
         from .llama_server_runtime_tuning import install as install_runtime_tuning
         from .llama_structured_decode_policy import bind_structured_decode_policy
+        from .llama_vram_parallel_policy import install as install_vram_parallel
         from .planner_single_stream_search_contract import (
             install as install_single_stream_agentic_policy,
         )
@@ -175,6 +176,17 @@ class NativeLlamaTuningPipeline:
             # independent K/V cache types first, then let the already-installed
             # MTP/ubatch/cache-reuse stages refine that measured winner.
             TuningStage("kernel-autotune", install_kernel_stage),
+            # Last policy layer: reuse the validated native p1/p2/p4 probes, but do
+            # not double-charge the shared model against host RAM when admitting
+            # extra slots. Then feed every successfully launched slot from planner
+            # candidate search so the selected VRAM capacity is actually exercised.
+            TuningStage(
+                "vram-parallel",
+                lambda: install_vram_parallel(
+                    self.runtime_tuning,
+                    agentic_optimization_contract,
+                ),
+            ),
         )
 
     def install(self) -> None:
