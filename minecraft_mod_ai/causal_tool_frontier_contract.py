@@ -152,18 +152,20 @@ def install(max_agent_owner: Any) -> None:
         )
         target_width = max(width, len(selected))
         for schema in candidates:
+            if len(selected) >= target_width:
+                break
             name = _name(schema)
             if not name or name in selected_names:
                 continue
             selected.append(schema)
             selected_names.add(name)
-            if len(selected) >= target_width:
-                break
 
-        # Preserve original stage order for stable schema prefixes/KV reuse.
+        # Preserve original stage order for stable schema prefixes/KV reuse. The
+        # cardinality was already bounded before sorting, so never slice again here:
+        # slicing after reordering can evict a host-required core tool.
         order = {_name(schema): index for index, schema in enumerate(available)}
         selected.sort(key=lambda schema: order.get(_name(schema), len(order)))
-        result = tuple(selected[:target_width])
+        result = tuple(selected)
         print(
             "causal tool frontier:",
             f"role={role}",
