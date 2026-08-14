@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,39 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
+
+
+def _commit_worker_count(count: int) -> int:
+    if count <= 1:
+        return 1
+    raw = os.environ.get("MMM_SOURCE_PATCH_WORKERS", "").strip()
+    if raw:
+        try:
+            requested = int(raw)
+        except ValueError:
+            requested = 1
+    else:
+        requested = min(16, max(2, (os.cpu_count() or 1) * 2))
+    return max(1, min(int(count), 32, requested))
+
+
+def _commit_staged_path(path: Path, after: bytes | None) -> None:
+    """Commit one already-validated path without acquiring another project lock."""
+
+    if after is None:
+        path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(after)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 @dataclass(frozen=True)
@@ -112,26 +146,41 @@ class TransactionalSourcePatcher:
                 )
             )
 
-        committed: list[Path] = []
-        try:
-            for path, after in staged.items():
-                if after is None:
-                    path.unlink()
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        ordered_staged = list(staged.items())
+        committed: set[Path] = set()
+        errors: dict[Path, BaseException] = {}
+        workers = _commit_worker_count(len(ordered_staged))
+        if workers <= 1:
+            for path, after in ordered_staged:
+                try:
+                    _commit_staged_path(path, after)
+                except BaseException as exc:
+                    errors[path] = exc
+                    break
+                committed.add(path)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="mmm_source_patch_commit",
+            ) as pool:
+                futures = {
+                    pool.submit(_commit_staged_path, path, after): path
+                    for path, after in ordered_staged
+                }
+                for future in as_completed(futures):
+                    path = futures[future]
                     try:
-                        with os.fdopen(fd, "wb") as stream:
-                            stream.write(after)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        os.replace(tmp_name, path)
-                    finally:
-                        if os.path.exists(tmp_name):
-                            os.unlink(tmp_name)
-                committed.append(path)
-        except Exception as exc:
-            for path in reversed(committed):
+                        future.result()
+                    except BaseException as exc:
+                        errors[path] = exc
+                    else:
+                        committed.add(path)
+
+        if errors:
+            committed_order = [
+                path for path, _after in ordered_staged if path in committed
+            ]
+            for path in reversed(committed_order):
                 original = originals[path]
                 if original is None:
                     if path.exists():
@@ -139,7 +188,12 @@ class TransactionalSourcePatcher:
                 else:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(original)
-            raise SourcePatchError(f"Patch transaction rolled back: {exc}") from exc
+            first_error = next(
+                errors[path]
+                for path, _after in ordered_staged
+                if path in errors
+            )
+            raise SourcePatchError(f"Patch transaction rolled back: {first_error}") from first_error
 
         return {
             "schema_version": "mmm/source-patch-receipt-v1",

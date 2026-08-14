@@ -5,11 +5,14 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
+import minecraft_mod_ai.source_patch as source_patch_module
 import minecraft_mod_ai.work_graph as work_graph_module
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.project_edit import FabricProjectInfo, ensure_main_initializer_call
 from minecraft_mod_ai.project_write_lock import project_write_lock
-from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
+from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourcePatcher
 from minecraft_mod_ai.work_graph import WorkNode
 
 
@@ -174,6 +177,58 @@ def test_transactional_patchers_do_not_block_independent_projects(monkeypatch, t
 
     assert all(not thread.is_alive() for thread in threads)
     assert max_active == 2
+
+
+def test_transactional_patch_commit_parallelizes_independent_paths(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "parallel-commit"
+    root.mkdir()
+    barrier = threading.Barrier(2)
+    original_fsync = source_patch_module.os.fsync
+
+    def fsync_probe(fd: int) -> None:
+        barrier.wait(timeout=2)
+        original_fsync(fd)
+
+    monkeypatch.setenv("MMM_SOURCE_PATCH_WORKERS", "2")
+    monkeypatch.setattr(source_patch_module.os, "fsync", fsync_probe)
+
+    receipt = TransactionalSourcePatcher(root).apply(
+        [
+            {"operation": "create", "path": "a.txt", "content": "a"},
+            {"operation": "create", "path": "b.txt", "content": "b"},
+        ]
+    )
+
+    assert receipt["status"] == "APPLIED"
+    assert (root / "a.txt").read_text(encoding="utf-8") == "a"
+    assert (root / "b.txt").read_text(encoding="utf-8") == "b"
+
+
+def test_parallel_patch_failure_rolls_back_every_successful_path(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "parallel-rollback"
+    root.mkdir()
+    barrier = threading.Barrier(2)
+    original_commit = source_patch_module._commit_staged_path
+
+    def commit_probe(path: Path, after: bytes | None) -> None:
+        barrier.wait(timeout=2)
+        if path.name == "bad.txt":
+            raise OSError("synthetic parallel commit failure")
+        original_commit(path, after)
+
+    monkeypatch.setenv("MMM_SOURCE_PATCH_WORKERS", "2")
+    monkeypatch.setattr(source_patch_module, "_commit_staged_path", commit_probe)
+
+    with pytest.raises(SourcePatchError, match="rolled back"):
+        TransactionalSourcePatcher(root).apply(
+            [
+                {"operation": "create", "path": "good.txt", "content": "good"},
+                {"operation": "create", "path": "bad.txt", "content": "bad"},
+            ]
+        )
+
+    assert not (root / "good.txt").exists()
+    assert not (root / "bad.txt").exists()
 
 
 def test_shared_initializer_edits_merge_atomically_under_parallel_generation(tmp_path: Path) -> None:
