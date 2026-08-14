@@ -15,12 +15,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .procedural_memory_hierarchy import build_hierarchy, compact_hierarchy
-from .trajectory_verification import (
-    TRAJECTORY_SCHEMA_VERSION,
-    classify_verification,
+from .trajectory_record_integrity import (
+    derive_levels,
     record_memory_eligible,
     record_strong_skill_eligible,
+    validate_trajectory_record,
 )
+from .trajectory_verification import TRAJECTORY_SCHEMA_VERSION, classify_verification
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
 _LOCK = threading.RLock()
@@ -213,6 +214,8 @@ def _load_rows(path: Path, *, max_rows: int = 1024) -> list[dict[str, Any]]:
 
 
 def _verification_weight(row: Mapping[str, Any]) -> float:
+    if not validate_trajectory_record(row):
+        return 0.0
     verification = row.get("verification")
     if not isinstance(verification, Mapping):
         return 0.0
@@ -266,11 +269,11 @@ def relevant_trajectories(
 
 
 def _verified_failure(row: Mapping[str, Any]) -> bool:
-    verification = row.get("verification")
-    return (
-        row.get("outcome") != "SUCCESS"
-        and isinstance(verification, Mapping)
-        and verification.get("verified_failure") is True
+    derived = derive_levels(row)
+    return bool(
+        derived
+        and validate_trajectory_record(row)
+        and derived.get("verified_failure") is True
     )
 
 
