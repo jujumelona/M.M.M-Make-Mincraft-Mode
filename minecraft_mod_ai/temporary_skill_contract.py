@@ -85,7 +85,12 @@ def _install_model_skill(model_router_module: Any) -> None:
             limit=6,
         )
         skill = synthesize_temporary_skill(query, records, task_class=task_class)
-        if skill is None or len(records) < 2:
+        qualified_count = (
+            len(skill.get("source_trajectory_ids", ()))
+            if isinstance(skill, Mapping)
+            else 0
+        )
+        if skill is None or qualified_count < 2:
             return stage, runtime, tools, request
 
         from .model_adapters import GenerationRequest
@@ -102,7 +107,7 @@ def _install_model_skill(model_router_module: Any) -> None:
         print(
             "temporary skill:",
             f"class={task_class}",
-            f"trajectories={len(records)}",
+            f"qualified_trajectories={qualified_count}",
             f"patterns={len(skill.get('proven_patterns', ()))}/{len(skill.get('avoid_patterns', ())) }",
             flush=True,
         )
