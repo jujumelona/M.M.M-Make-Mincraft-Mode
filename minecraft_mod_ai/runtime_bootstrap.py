@@ -424,6 +424,7 @@ def _install_post_bootstrap_contracts() -> None:
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .agent_security_contract import install as install_agent_security
+    from .bottleneck_elimination_contract import install as install_bottleneck_elimination
     from .causal_tool_frontier_contract import install as install_causal_tool_frontier
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
@@ -493,3 +494,4 @@ def _install_post_bootstrap_contracts() -> None:
 
     research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
+    install_bottleneck_elimination()
