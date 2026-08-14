@@ -906,7 +906,7 @@ Output contract:
     "progression": ["milestones"],
     "combat": {{"player_verbs": ["..."], "enemy_roles": ["..."]}},
     "mod_context": {{"vanilla_integration": ["..."], "compatibility_targets": ["..."]}},
-    "art_direction": {{"visual_tone": "...", "texture_guidance": ["..."], "model_animation_guidance": ["..."],}},
+    "art_direction": {{"visual_tone": "...", "texture_guidance": ["..."], "model_animation_guidance": ["..."]}},
     "modules": [{{"plugin_id":"from manifest or custom","status":"implemented|custom","reason":"..."}}],
     "assets": [{{"id":"snake_case","kind":"item|block|entity|gui|environment","brief":"..."}}],
     "acceptance_tests": ["observable test"]
