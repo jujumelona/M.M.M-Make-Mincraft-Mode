@@ -53,7 +53,7 @@ def test_routes_retrievers_by_provider_and_evidence_kind():
         "domains": [
             {
                 "domain_id": "api",
-                "providers": ["official_docs", "project_rag"],
+                "providers": ["project_rag"],
                 "evidence_kinds": ["minecraft_api"],
                 "queries": ["Fabric registry API"],
             },
