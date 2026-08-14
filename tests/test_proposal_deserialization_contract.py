@@ -52,7 +52,6 @@ def test_complete_proposal_does_not_normalize_saved_module_identity() -> None:
 
 def test_base_proposal_list_fields_do_not_accept_string_iterables() -> None:
     install(spec, complete_spec)
-    payload = _complete_payload()
     payload = {
         "schema_version": "minecraft-mod-ai/proposal-v1",
         "proposal_version": 1,
