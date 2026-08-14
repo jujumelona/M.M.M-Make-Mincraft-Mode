@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from .causal_frontier_adapter import (
     CausalFrontierAdapter,
+    FrontierExecutionGate,
     authorized_tools,
     clear_current_frontier,
     current_frontier_names,
@@ -144,16 +145,21 @@ class _FrontierRuntimeProxy:
     The underlying router keeps the complete security/role/stage authorization set so
     future rounds may reveal new causal transitions. This proxy is the narrower host
     execution gate: a model may execute only a tool that was actually present in its
-    most recent request.
+    most recent request. The gate is an ordinary thread-safe shared object because
+    independent read calls execute inside ``ThreadPoolExecutor`` workers.
     """
 
-    def __init__(self, inner: Any) -> None:
+    def __init__(self, inner: Any, execution_gate: FrontierExecutionGate) -> None:
         self._inner = inner
+        self._execution_gate = execution_gate
 
-    @staticmethod
-    def _require_visible(name: str) -> None:
-        visible = current_frontier_names()
-        if visible is not None and name not in visible:
+    def _require_visible(self, name: str) -> None:
+        visible = self._execution_gate.visible_names()
+        if visible is None:
+            # Before the first model turn no tool is executable. Do not fall back to
+            # ContextVar state here because worker threads do not inherit it.
+            raise RuntimeError("No causal frontier has been published for execution.")
+        if name not in visible:
             raise RuntimeError(
                 f"Tool {name!r} was not exposed on the current causal frontier."
             )
@@ -218,6 +224,7 @@ def _install_live_loop() -> None:
             tool_choice="auto" if complete_surface else None,
             parallel_tool_calls=True if complete_surface else False,
         )
+        execution_gate = FrontierExecutionGate()
         wrapped = CausalFrontierAdapter(
             adapter,
             stage=stage,
@@ -228,6 +235,7 @@ def _install_live_loop() -> None:
             frontier_limit=_env_int(
                 "MMM_CAUSAL_TOOL_FRONTIER_MAX", 3, minimum=1, maximum=3
             ),
+            execution_gate=execution_gate,
         )
         clear_current_frontier()
         try:
@@ -235,11 +243,12 @@ def _install_live_loop() -> None:
                 self,
                 adapter=wrapped,
                 request=host_request,
-                runtime=_FrontierRuntimeProxy(runtime),
+                runtime=_FrontierRuntimeProxy(runtime, execution_gate),
                 stage=stage,
                 role=role,
             )
         finally:
+            execution_gate.clear()
             clear_current_frontier()
 
     causal_tool_loop._mmm_dynamic_causal_frontier = True  # type: ignore[attr-defined]
