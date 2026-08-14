@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Per-turn causal tool exposure for the live retrieve/act/observe loop."""
 
+import threading
 from contextvars import ContextVar
 from typing import Any, Mapping, Sequence
 
@@ -17,6 +18,32 @@ _CURRENT_FRONTIER_NAMES: ContextVar[tuple[str, ...] | None] = ContextVar(
     "mmm_causal_current_frontier_names", default=None
 )
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
+
+
+class FrontierExecutionGate:
+    """Thread-safe execution boundary shared by the adapter and runtime proxy.
+
+    ContextVars are useful for request-local planning metadata but are not inherited by
+    ``ThreadPoolExecutor`` worker threads. The model router intentionally executes
+    independent read tools in those workers, so the actual host execution boundary
+    must live in a shared object rather than relying on thread-local context state.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._visible: tuple[str, ...] | None = None
+
+    def set_visible(self, names: Sequence[str]) -> None:
+        with self._lock:
+            self._visible = tuple(str(name) for name in names)
+
+    def visible_names(self) -> tuple[str, ...] | None:
+        with self._lock:
+            return self._visible
+
+    def clear(self) -> None:
+        with self._lock:
+            self._visible = None
 
 
 def remember_authorized_tools(
@@ -120,12 +147,20 @@ class CausalFrontierAdapter:
         role: str,
         require_fresh_evidence: bool,
         frontier_limit: int = 3,
+        execution_gate: FrontierExecutionGate | None = None,
     ) -> None:
         self.inner = inner
         self.stage = stage
         self.role = role
         self.require_fresh_evidence = require_fresh_evidence
         self.frontier_limit = max(1, min(int(frontier_limit), 3))
+        self.execution_gate = execution_gate
+
+    def _publish_frontier(self, names: Sequence[str]) -> None:
+        normalized = tuple(str(name) for name in names)
+        _CURRENT_FRONTIER_NAMES.set(normalized)
+        if self.execution_gate is not None:
+            self.execution_gate.set_visible(normalized)
 
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
@@ -135,12 +170,12 @@ class CausalFrontierAdapter:
         # fixed-point/final synthesis. That is a control signal, not a new planning
         # round; never resurrect the broader authorization ContextVar on that turn.
         if not request.tools and request.tool_choice is None:
-            _CURRENT_FRONTIER_NAMES.set(())
+            self._publish_frontier(())
             return self.inner.generate_turn(request)
 
         candidates = authorized_tools(request.tools)
         if not candidates:
-            _CURRENT_FRONTIER_NAMES.set(())
+            self._publish_frontier(())
             return self.inner.generate_turn(request)
         state = verified_state_from_messages(
             request.messages,
@@ -159,7 +194,7 @@ class CausalFrontierAdapter:
         )
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         selected = tuple(by_name[name] for name in names if name in by_name)
-        _CURRENT_FRONTIER_NAMES.set(tuple(_name(schema) for schema in selected))
+        self._publish_frontier(tuple(_name(schema) for schema in selected))
 
         rebuilt = GenerationRequest(
             messages=_with_capability_context(
@@ -191,6 +226,7 @@ class CausalFrontierAdapter:
 
 __all__ = [
     "CausalFrontierAdapter",
+    "FrontierExecutionGate",
     "authorized_tool_preference",
     "authorized_tools",
     "clear_current_frontier",
