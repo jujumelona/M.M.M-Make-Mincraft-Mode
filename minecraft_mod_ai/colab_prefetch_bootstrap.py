@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from concurrent.futures import Future
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
@@ -11,6 +13,10 @@ from typing import Any
 _PLATFORM_LOCK = threading.RLock()
 _PLATFORM_FUTURE: Future[Any] | None = None
 _PLATFORM_ORIGINAL: Any = None
+_WORK_GRAPH_FAST_SERIALIZE: ContextVar[bool] = ContextVar(
+    "mmm_work_graph_fast_serialize",
+    default=False,
+)
 
 
 def _start_platform_future() -> Future[Any]:
@@ -94,11 +100,107 @@ def _install_request_byte_fastpath() -> None:
     game_design._json_text_bytes = json_text_bytes
 
 
+def _install_work_graph_fastpath() -> None:
+    """Avoid deep-copying graph payloads solely to hash a synchronous compile."""
+
+    from . import work_graph
+
+    node_cls = work_graph.WorkNode
+    current_to_dict = node_cls.to_dict
+    if not getattr(current_to_dict, "_mmm_compile_shallow_dict", False):
+
+        @wraps(current_to_dict)
+        def to_dict(self: Any) -> dict[str, Any]:
+            if not _WORK_GRAPH_FAST_SERIALIZE.get():
+                return current_to_dict(self)
+            return {
+                "node_id": self.node_id,
+                "stage": self.stage,
+                "input_hash": self.input_hash,
+                "dependencies": self.dependencies,
+                "payload": self.payload,
+                "resource_class": self.resource_class,
+            }
+
+        to_dict._mmm_compile_shallow_dict = True
+        to_dict.__wrapped__ = current_to_dict
+        node_cls.to_dict = to_dict
+
+    current_topological = work_graph._topological_modules
+    if not getattr(current_topological, "_mmm_heap_deterministic_no_child_sort", False):
+
+        @wraps(current_topological)
+        def topological_modules(modules: Any):
+            import heapq
+
+            lookup = {module.module_id: module for module in modules}
+            indegree = {
+                module.module_id: len(module.depends_on)
+                for module in modules
+            }
+            outgoing: dict[str, list[str]] = {
+                module.module_id: [] for module in modules
+            }
+            for module in modules:
+                for dependency in module.depends_on:
+                    outgoing[dependency].append(module.module_id)
+            ready = [
+                node_id for node_id, degree in indegree.items() if degree == 0
+            ]
+            heapq.heapify(ready)
+            ordered: list[Any] = []
+            while ready:
+                node_id = heapq.heappop(ready)
+                ordered.append(lookup[node_id])
+                # The heap already defines the globally deterministic next node.
+                # Sorting each adjacency list cannot change that order.
+                for dependent in outgoing[node_id]:
+                    indegree[dependent] -= 1
+                    if indegree[dependent] == 0:
+                        heapq.heappush(ready, dependent)
+            if len(ordered) != len(modules):
+                raise work_graph.WorkGraphError(
+                    "Production module graph contains a cycle."
+                )
+            return tuple(ordered)
+
+        topological_modules._mmm_heap_deterministic_no_child_sort = True
+        topological_modules.__wrapped__ = current_topological
+        work_graph._topological_modules = topological_modules
+
+    current_build = work_graph.build_production_work_plan
+    if getattr(current_build, "_mmm_compile_shallow_serialization", False):
+        return
+
+    @wraps(current_build)
+    def build_production_work_plan(*args: Any, **kwargs: Any):
+        token = _WORK_GRAPH_FAST_SERIALIZE.set(True)
+        try:
+            return current_build(*args, **kwargs)
+        finally:
+            _WORK_GRAPH_FAST_SERIALIZE.reset(token)
+
+    build_production_work_plan._mmm_compile_shallow_serialization = True
+    build_production_work_plan.__wrapped__ = current_build
+    work_graph.build_production_work_plan = build_production_work_plan
+
+    # Keep modules that imported the function before bootstrap on the same owner.
+    for loaded in tuple(sys.modules.values()):
+        if loaded is None:
+            continue
+        try:
+            if getattr(loaded, "build_production_work_plan", None) is current_build:
+                setattr(loaded, "build_production_work_plan", build_production_work_plan)
+        except (AttributeError, TypeError):
+            continue
+
+
 def start(model_registry_module: Any) -> None:
     """Start non-blocking metadata prefetch and install bootstrap hot paths."""
 
     del model_registry_module
     _install_request_byte_fastpath()
+    _install_work_graph_fastpath()
     _install_platform_prefetch()
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
