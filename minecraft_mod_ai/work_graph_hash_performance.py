@@ -12,19 +12,27 @@ _WORK_GRAPH_PROPOSAL_HASH_CACHE: ContextVar[
     "mmm_work_graph_proposal_hash_cache",
     default=None,
 )
+_WORK_GRAPH_VALIDATED_MODULES: ContextVar[
+    dict[int, tuple[Any, Any]] | None
+] = ContextVar(
+    "mmm_work_graph_validated_modules",
+    default=None,
+)
 
 
 def harden(work_graph_module: Any, complete_spec_module: Any) -> None:
-    """Hash each proposal once per synchronous work-graph compile.
+    """Reuse proven proposal work only inside one synchronous graph compile.
 
-    CompleteProposal is frozen, but its JSON payload can still be large. The graph
-    builder asks for the same canonical proposal digest several times while compiling
-    one immutable snapshot. Keep that digest only inside the current compile context;
-    a later compile starts with an empty cache and therefore still detects nested
-    payload mutation before reusing any validation proof.
+    CompleteProposal is frozen, but nested JSON payloads can still be mutated. Every
+    graph compile therefore starts with empty invocation-local caches. The proposal
+    digest is computed once per compile, and modules are reused only after the exact
+    proposal has successfully validated under the exact same ScalePolicy object.
+    Separate execution modules continue through their normal validator.
     """
 
     proposal_cls = complete_spec_module.CompleteProposal
+    module_cls = complete_spec_module.ProductionModule
+
     current_hash = proposal_cls.calculate_hash
     if not getattr(current_hash, "_mmm_work_graph_hash_cache", False):
 
@@ -45,17 +53,68 @@ def harden(work_graph_module: Any, complete_spec_module: Any) -> None:
         calculate_hash.__wrapped__ = current_hash
         proposal_cls.calculate_hash = calculate_hash
 
+    current_module_validate = module_cls.validate
+    if not getattr(
+        current_module_validate,
+        "_mmm_work_graph_validated_module_cache",
+        False,
+    ):
+
+        @wraps(current_module_validate)
+        def validate_module(self: Any, *, policy: Any = None) -> None:
+            cache = _WORK_GRAPH_VALIDATED_MODULES.get()
+            if cache is not None and policy is not None:
+                cached = cache.get(id(self))
+                if (
+                    cached is not None
+                    and cached[0] is self
+                    and cached[1] is policy
+                ):
+                    return
+            current_module_validate(self, policy=policy)
+            if cache is not None and policy is not None:
+                cache[id(self)] = (self, policy)
+
+        validate_module._mmm_work_graph_validated_module_cache = True
+        validate_module.__wrapped__ = current_module_validate
+        module_cls.validate = validate_module
+
+    current_proposal_validate = proposal_cls.validate
+    if not getattr(
+        current_proposal_validate,
+        "_mmm_work_graph_validated_module_transfer",
+        False,
+    ):
+
+        @wraps(current_proposal_validate)
+        def validate_proposal(self: Any, *, policy: Any = None) -> None:
+            current_proposal_validate(self, policy=policy)
+            cache = _WORK_GRAPH_VALIDATED_MODULES.get()
+            if cache is None or policy is None:
+                return
+            # The authoritative proposal validator has either validated this payload
+            # now or accepted its current full-payload hash proof. No user code runs
+            # between this return and the graph builder's redundant module loop.
+            for module in self.modules:
+                cache[id(module)] = (module, policy)
+
+        validate_proposal._mmm_work_graph_validated_module_transfer = True
+        validate_proposal.__wrapped__ = current_proposal_validate
+        proposal_cls.validate = validate_proposal
+
     current_build = work_graph_module.build_production_work_plan
     if getattr(current_build, "_mmm_proposal_hash_scope", False):
         return
 
     @wraps(current_build)
     def build_production_work_plan(*args: Any, **kwargs: Any):
-        token = _WORK_GRAPH_PROPOSAL_HASH_CACHE.set({})
+        hash_token = _WORK_GRAPH_PROPOSAL_HASH_CACHE.set({})
+        validation_token = _WORK_GRAPH_VALIDATED_MODULES.set({})
         try:
             return current_build(*args, **kwargs)
         finally:
-            _WORK_GRAPH_PROPOSAL_HASH_CACHE.reset(token)
+            _WORK_GRAPH_VALIDATED_MODULES.reset(validation_token)
+            _WORK_GRAPH_PROPOSAL_HASH_CACHE.reset(hash_token)
 
     build_production_work_plan._mmm_proposal_hash_scope = True
     build_production_work_plan.__wrapped__ = current_build
