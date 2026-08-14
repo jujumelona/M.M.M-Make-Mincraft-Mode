@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmm.local/schemas/trajectory_store_manifest_v1.schema.json",
+  "title": "MMM Trajectory Store Manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "format_version",
+    "trajectory_schema",
+    "storage",
+    "shard_pattern",
+    "privacy_policy",
+    "success_policy",
+    "failure_policy"
+  ],
+  "properties": {
+    "schema_version": {"const": "mmm/trajectory-store-manifest-v1"},
+    "format_version": {"const": "v3"},
+    "trajectory_schema": {"const": "mmm/verified-trajectory-v3"},
+    "storage": {"const": "jsonl-sharded-by-task-class"},
+    "shard_pattern": {"const": "memory/v3/{task_class}.jsonl"},
+    "privacy_policy": {"const": "sanitized-structural-verifier-evidence-only"},
+    "success_policy": {"const": "remote-success-requires-L3-or-higher"},
+    "failure_policy": {"const": "remote-failure-requires-objective-verifier-failure"},
+    "task_classes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["repair", "generation", "build", "runtime", "quality", "research", "planning", "release", "general"]
+      }
+    }
+  },
+  "additionalProperties": false
+}
