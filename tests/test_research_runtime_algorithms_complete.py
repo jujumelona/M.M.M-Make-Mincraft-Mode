@@ -90,10 +90,50 @@ def test_causal_frontier_advances_only_after_verified_observations() -> None:
         preference={"search_code_rag": 0},
     ) == ("search_code_rag",)
 
+    weak_search = verified_state_from_messages(
+        [
+            {"role": "tool", "name": "inspect_existing_mod", "content": '{"ok":true}'},
+            {
+                "role": "tool",
+                "name": "search_code_rag",
+                "content": json.dumps(
+                    {
+                        "ok": True,
+                        "result": {
+                            "receipt": {
+                                "result_count": 1,
+                                "coverage_score": 0.2,
+                                "relevance_score": 0.7,
+                            }
+                        },
+                    }
+                ),
+            },
+        ],
+        tools,
+    )
+    assert "code_evidence" in weak_search
+    assert "evidence_ready" not in weak_search
+
     after_evidence = verified_state_from_messages(
         [
             {"role": "tool", "name": "inspect_existing_mod", "content": '{"ok":true}'},
-            {"role": "tool", "name": "search_code_rag", "content": '{"ok":true}'},
+            {
+                "role": "tool",
+                "name": "search_code_rag",
+                "content": json.dumps(
+                    {
+                        "ok": True,
+                        "result": {
+                            "receipt": {
+                                "result_count": 3,
+                                "coverage_score": 0.9,
+                                "relevance_score": 0.8,
+                            }
+                        },
+                    }
+                ),
+            },
         ],
         tools,
     )
@@ -143,7 +183,6 @@ def test_semantic_rank_only_breaks_ties_between_equal_minimum_causal_paths() -> 
         "search_code_rag",
         "search_project_rag",
     )
-    # Generation produces a different terminal fact and cannot masquerade as repair.
     assert "generate_fabric_project" not in frontier
     repair_path = shortest_causal_path(tools, state=state, goals=("repair",), max_depth=8)
     assert repair_path[-1] == "apply_source_patch"
