@@ -549,6 +549,17 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
                         score, verifier = future.result()
                         evaluations.append((score, candidate_index, operations, verifier))
 
+            discriminator = globals().get("_mmm_active_candidate_discriminator")
+            if callable(discriminator) and len(evaluations) >= 2:
+                try:
+                    evaluations = list(discriminator(root, evaluations))
+                except Exception as exc:
+                    print(
+                        "active candidate discriminator skipped:",
+                        f"{type(exc).__name__}: {str(exc)[:500]}",
+                        flush=True,
+                    )
+
             evaluations.sort(key=lambda item: (-item[0], _json_size(item[2]), item[1]))
             winner_score, winner_index, winner_ops, winner_verifier = evaluations[0]
             self._mmm_last_java_paths = tuple(
