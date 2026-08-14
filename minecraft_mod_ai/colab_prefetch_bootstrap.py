@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import threading
+import weakref
 from concurrent.futures import Future
 from contextvars import ContextVar
 from functools import wraps
@@ -22,6 +23,15 @@ _PROPOSAL_HASH_CACHE: ContextVar[dict[int, tuple[Any, str]] | None] = ContextVar
     "mmm_proposal_store_hash_cache",
     default=None,
 )
+_PROPOSAL_CONSTRUCTION_POLICIES: ContextVar[set[tuple[int, int, int]] | None] = ContextVar(
+    "mmm_proposal_construction_policies",
+    default=None,
+)
+_PROPOSAL_PROOF_LOCK = threading.RLock()
+_PROPOSAL_VALIDATION_PROOFS: dict[
+    int,
+    tuple[weakref.ReferenceType[Any], dict[tuple[int, int, int], str]],
+] = {}
 
 
 def _start_platform_future() -> Future[Any]:
@@ -134,6 +144,119 @@ def _install_request_byte_fastpath() -> None:
     json_text_bytes._mmm_c_json_byte_count = True
     json_text_bytes.__wrapped__ = current
     game_design._json_text_bytes = json_text_bytes
+
+
+def _proposal_policy_key(policy: Any) -> tuple[int, int, int]:
+    """Fields that can change CompleteProposal semantic acceptance."""
+
+    return (
+        int(policy.max_single_file_bytes),
+        int(policy.max_texture_dimension),
+        int(policy.max_audio_seconds),
+    )
+
+
+def _remember_proposal_proof(
+    proposal: Any,
+    policy_key: tuple[int, int, int],
+    digest: str,
+) -> None:
+    object_id = id(proposal)
+    with _PROPOSAL_PROOF_LOCK:
+        current = _PROPOSAL_VALIDATION_PROOFS.get(object_id)
+        if current is not None and current[0]() is proposal:
+            current[1][policy_key] = digest
+            return
+
+        def cleanup(reference: weakref.ReferenceType[Any], key: int = object_id) -> None:
+            with _PROPOSAL_PROOF_LOCK:
+                owned = _PROPOSAL_VALIDATION_PROOFS.get(key)
+                if owned is not None and owned[0] is reference:
+                    _PROPOSAL_VALIDATION_PROOFS.pop(key, None)
+
+        reference = weakref.ref(proposal, cleanup)
+        _PROPOSAL_VALIDATION_PROOFS[object_id] = (
+            reference,
+            {policy_key: digest},
+        )
+
+
+def _proposal_proof(
+    proposal: Any,
+    policy_key: tuple[int, int, int],
+) -> str:
+    with _PROPOSAL_PROOF_LOCK:
+        current = _PROPOSAL_VALIDATION_PROOFS.get(id(proposal))
+        if current is None or current[0]() is not proposal:
+            return ""
+        return current[1].get(policy_key, "")
+
+
+def _install_proposal_validation_fastpath() -> None:
+    """Reuse semantic validation only when the full current payload hash proves it."""
+
+    from . import complete_spec
+    from .scale_policy import ScalePolicy
+
+    proposal_cls = complete_spec.CompleteProposal
+    current_validate = proposal_cls.validate
+    if not getattr(current_validate, "_mmm_hash_proven_semantic_validation", False):
+
+        @wraps(current_validate)
+        def validate(self: Any, *, policy: Any = None) -> None:
+            effective = policy or ScalePolicy.from_environment()
+            effective.validate()
+            policy_key = _proposal_policy_key(effective)
+            if _WORK_GRAPH_FAST_SERIALIZE.get():
+                proof = _proposal_proof(self, policy_key)
+                if proof and self.calculate_hash() == proof:
+                    return
+
+            current_validate(self, policy=effective)
+            construction = _PROPOSAL_CONSTRUCTION_POLICIES.get()
+            if construction is not None:
+                construction.add(policy_key)
+            # A non-empty approval hash has just been recomputed and checked by the
+            # authoritative validator, so it is already the exact payload proof.
+            if self.approval_hash:
+                _remember_proposal_proof(self, policy_key, self.approval_hash)
+
+        validate._mmm_hash_proven_semantic_validation = True
+        validate.__wrapped__ = current_validate
+        proposal_cls.validate = validate
+
+    current_parts = complete_spec.complete_proposal_from_parts
+    if getattr(current_parts, "_mmm_transfer_validation_proof", False):
+        return
+
+    @wraps(current_parts)
+    def complete_proposal_from_parts(*args: Any, **kwargs: Any):
+        token = _PROPOSAL_CONSTRUCTION_POLICIES.set(set())
+        try:
+            result = current_parts(*args, **kwargs)
+            validated_policies = _PROPOSAL_CONSTRUCTION_POLICIES.get() or set()
+            digest = str(result.approval_hash)
+            if digest:
+                for policy_key in validated_policies:
+                    _remember_proposal_proof(result, policy_key, digest)
+            return result
+        finally:
+            _PROPOSAL_CONSTRUCTION_POLICIES.reset(token)
+
+    complete_proposal_from_parts._mmm_transfer_validation_proof = True
+    complete_proposal_from_parts.__wrapped__ = current_parts
+    complete_spec.complete_proposal_from_parts = complete_proposal_from_parts
+
+    # Several planner/orchestrator modules import this constructor directly during
+    # bootstrap. Retarget only aliases that still own the exact old function.
+    for loaded in tuple(sys.modules.values()):
+        if loaded is None:
+            continue
+        try:
+            if getattr(loaded, "complete_proposal_from_parts", None) is current_parts:
+                setattr(loaded, "complete_proposal_from_parts", complete_proposal_from_parts)
+        except (AttributeError, TypeError):
+            continue
 
 
 def _install_work_graph_fastpath() -> None:
@@ -278,6 +401,7 @@ def start(model_registry_module: Any) -> None:
 
     del model_registry_module
     _install_request_byte_fastpath()
+    _install_proposal_validation_fastpath()
     _install_work_graph_fastpath()
     _install_proposal_store_hash_fastpath()
     _install_platform_prefetch()
