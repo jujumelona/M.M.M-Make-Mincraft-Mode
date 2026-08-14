@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Compact verified trajectory memory for inference-time temporary skills.
+"""Verifier-qualified trajectory memory for inference-time temporary skills.
 
-The store deliberately excludes source bodies and arbitrary tool payloads. It keeps
-only structural task/action/verifier facts that can be reused across projects.
+Only structural task/action/verifier facts are stored. Model completion claims,
+source bodies and arbitrary tool payloads are not reusable memory evidence.
 """
 
 import hashlib
@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .procedural_memory_hierarchy import build_hierarchy, compact_hierarchy
+from .trajectory_verification import (
+    TRAJECTORY_SCHEMA_VERSION,
+    classify_verification,
+    record_memory_eligible,
+    record_strong_skill_eligible,
+)
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
 _LOCK = threading.RLock()
@@ -38,6 +44,9 @@ _ALLOWED_FACT_KEYS = frozenset(
         "candidate_count",
         "winner_score",
         "overall_status",
+        "assertion_count",
+        "interaction_count",
+        "active_build_status",
     }
 )
 
@@ -82,7 +91,7 @@ def task_class_for_stage(stage: str) -> str:
 
 
 def _structural_facts(value: Any, *, depth: int = 0) -> dict[str, Any]:
-    if depth > 4 or not isinstance(value, Mapping):
+    if depth > 5 or not isinstance(value, Mapping):
         return {}
     result: dict[str, Any] = {}
     for raw_key, raw_value in value.items():
@@ -131,12 +140,23 @@ def build_work_trajectory(
 ) -> dict[str, Any]:
     shape = _task_shape(task)
     stage = shape["stage"]
+    task_class = task_class_for_stage(stage)
+    normalized_outcome = "SUCCESS" if outcome.upper() == "SUCCESS" else "FAIL"
+    verification = classify_verification(
+        task_class=task_class,
+        outcome=normalized_outcome,
+        receipt=receipt,
+        error=error,
+    )
     body: dict[str, Any] = {
-        "schema_version": "mmm/verified-trajectory-v1",
-        "task_class": task_class_for_stage(stage),
+        "schema_version": TRAJECTORY_SCHEMA_VERSION,
+        "record_type": "verified_trajectory",
+        "storage_format": "jsonl",
+        "task_class": task_class,
         "stage": stage,
         "task_shape": shape,
-        "outcome": "SUCCESS" if outcome.upper() == "SUCCESS" else "FAIL",
+        "outcome": normalized_outcome,
+        "verification": verification,
         "verified_facts": _structural_facts(receipt or {}),
         "error_signature": " ".join(str(error).split())[:1200],
     }
@@ -146,6 +166,8 @@ def build_work_trajectory(
 
 
 def append_trajectory(base: str | Path, row: Mapping[str, Any]) -> bool:
+    if not record_memory_eligible(row):
+        return False
     path = memory_path(base)
     identity = str(row.get("trajectory_id", ""))
     if not identity:
@@ -183,11 +205,27 @@ def _load_rows(path: Path, *, max_rows: int = 1024) -> list[dict[str, Any]]:
                     value = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(value, dict):
+                if isinstance(value, dict) and record_memory_eligible(value):
                     rows.append(value)
     except OSError:
         return []
     return list(rows)
+
+
+def _verification_weight(row: Mapping[str, Any]) -> float:
+    verification = row.get("verification")
+    if not isinstance(verification, Mapping):
+        return 0.0
+    try:
+        level = int(verification.get("level_index", 0) or 0)
+    except (TypeError, ValueError):
+        level = 0
+    try:
+        confidence = float(verification.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    reproduced = verification.get("reproduced") is True
+    return 0.08 * min(level, 5) + 0.25 * max(0.0, min(1.0, confidence)) + (0.08 if reproduced else 0.0)
 
 
 def relevant_trajectories(
@@ -208,8 +246,8 @@ def relevant_trajectories(
         values = _tokens(rendered)
         lexical = len(target & values) / max(1, len(target | values)) if target and values else 0.0
         class_bonus = 0.35 if row.get("task_class") == task_class else 0.0
-        outcome_bonus = 0.08 if row.get("outcome") == "SUCCESS" else 0.0
-        scored.append((lexical + class_bonus + outcome_bonus, str(row.get("trajectory_id", "")), row))
+        success_bonus = 0.08 if record_strong_skill_eligible(row) else 0.0
+        scored.append((lexical + class_bonus + success_bonus + _verification_weight(row), str(row.get("trajectory_id", "")), row))
     scored.sort(key=lambda item: (-item[0], item[1]))
     shortlist = scored[: min(24, max(limit * 4, limit))]
     if router is not None and query.strip() and shortlist:
@@ -227,40 +265,57 @@ def relevant_trajectories(
     return [row for score, _identity, row in shortlist[:limit] if score > 0.0]
 
 
+def _verified_failure(row: Mapping[str, Any]) -> bool:
+    verification = row.get("verification")
+    return (
+        row.get("outcome") != "SUCCESS"
+        and isinstance(verification, Mapping)
+        and verification.get("verified_failure") is True
+    )
+
+
 def synthesize_temporary_skill(
     query: str,
     records: Sequence[Mapping[str, Any]],
     *,
     task_class: str,
 ) -> dict[str, Any] | None:
-    if not records:
+    qualified = [row for row in records[:8] if record_strong_skill_eligible(row) or _verified_failure(row)]
+    if not qualified:
         return None
     success_actions: Counter[str] = Counter()
     failure_signatures: Counter[str] = Counter()
     verifier_facts: Counter[str] = Counter()
     examples: list[str] = []
-    for row in records[:8]:
+    source_levels: dict[str, str] = {}
+    for row in qualified:
         shape = row.get("task_shape") if isinstance(row.get("task_shape"), Mapping) else {}
         stage = str(shape.get("stage", ""))
         kind = str(shape.get("kind", ""))
         label = ":".join(part for part in (stage, kind) if part)
         if label:
-            if row.get("outcome") == "SUCCESS":
+            if record_strong_skill_eligible(row):
                 success_actions[label] += 1
-            else:
+            elif _verified_failure(row):
                 failure_signatures[label] += 1
         error = str(row.get("error_signature", "")).strip()
-        if error and row.get("outcome") != "SUCCESS":
+        if error and _verified_failure(row):
             failure_signatures[error[:240]] += 1
         facts = row.get("verified_facts")
         if isinstance(facts, Mapping):
             for token in _tokens(json.dumps(facts, ensure_ascii=False, sort_keys=True)):
                 if token in {"pass", "success", "fail", "jdt_status", "jdt_error_count", "overall_status"}:
                     verifier_facts[token] += 1
-        examples.append(str(row.get("trajectory_id", "")))
-    hierarchy = compact_hierarchy(build_hierarchy(records[:8]), max_items=18)
+        identity = str(row.get("trajectory_id", ""))
+        examples.append(identity)
+        verification = row.get("verification")
+        if identity and isinstance(verification, Mapping):
+            source_levels[identity] = str(verification.get("level", "L0"))
+    hierarchy = compact_hierarchy(build_hierarchy(qualified), max_items=18)
+    if not success_actions and not failure_signatures:
+        return None
     return {
-        "schema_version": "mmm/temporary-skill-v2",
+        "schema_version": "mmm/temporary-skill-v3",
         "ephemeral": True,
         "task_class": task_class,
         "current_query_terms": sorted(_tokens(query))[:48],
@@ -269,9 +324,10 @@ def synthesize_temporary_skill(
         "avoid_patterns": [item for item, _count in failure_signatures.most_common(6)],
         "verifier_hints": [item for item, _count in verifier_facts.most_common(8)],
         "source_trajectory_ids": examples[:8],
+        "source_verification_levels": source_levels,
         "rule": (
-            "Use subtask-level verified procedures first, then function/workflow hints. "
-            "Current exact evidence, tool results, compiler diagnostics and acceptance tests remain authoritative."
+            "Treat only L3+ successful trajectories as proven procedure. Verified failures are negative evidence. "
+            "Current exact evidence, compiler diagnostics, executable tests and acceptance contracts remain authoritative."
         ),
     }
 
