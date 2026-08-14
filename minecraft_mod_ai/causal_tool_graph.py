@@ -50,9 +50,7 @@ _EXTERNAL_NAMES = frozenset({
     "external_mcp_schema",
     "external_mcp_call",
 })
-# When a test/plugin/runtime exposes only a partial reviewed surface, continue with
-# useful read/verification progress instead of dropping out of the tool-capable loop.
-# Mutation/release effects are deliberately absent from this fallback allow-list.
+_RAG_NAMES = frozenset({"search_code_rag", "search_project_rag"})
 _SAFE_PROGRESS_EFFECTS = frozenset({
     "project_observed",
     "work_observed",
@@ -105,17 +103,34 @@ def transition_for_schema(schema: Mapping[str, Any]) -> ToolTransition:
     )
 
 
-def _payload_ok(message: Mapping[str, Any]) -> bool:
+def _payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
     content = message.get("content")
     if isinstance(content, Mapping):
-        return content.get("ok") is True
+        return content
     if not isinstance(content, str) or not content.strip():
-        return False
+        return None
     try:
         value = json.loads(content)
     except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, Mapping) else None
+
+
+def _rag_receipt_ready(payload: Mapping[str, Any]) -> bool:
+    """Certify terminal RAG evidence only from objective retrieval-quality fields."""
+
+    result = payload.get("result")
+    result = result if isinstance(result, Mapping) else payload
+    receipt = result.get("receipt") if isinstance(result, Mapping) else None
+    if not isinstance(receipt, Mapping):
         return False
-    return isinstance(value, Mapping) and value.get("ok") is True
+    try:
+        count = int(receipt.get("result_count", 0) or 0)
+        coverage = float(receipt.get("coverage_score", 0.0) or 0.0)
+        relevance = float(receipt.get("relevance_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return count > 0 and coverage >= 0.50 and relevance > 0.0
 
 
 def verified_state_from_messages(
@@ -131,14 +146,26 @@ def verified_state_from_messages(
     }
     state: set[str] = {"workspace_bound"}
     for message in messages:
-        if str(message.get("role", "")).casefold() != "tool" or not _payload_ok(message):
+        if str(message.get("role", "")).casefold() != "tool":
+            continue
+        payload = _payload(message)
+        if payload is None or payload.get("ok") is not True:
             continue
         name = str(message.get("name", "")).strip()
         transition = transitions.get(name)
         if transition is None or not transition.reviewed:
             continue
-        if transition.preconditions.issubset(state):
-            state.update(transition.effects)
+        if not transition.preconditions.issubset(state):
+            continue
+        effects = set(transition.effects)
+        # A successful transport/tool invocation is merely an observation. For RAG,
+        # `evidence_ready` is a stronger state and requires retrieval coverage +
+        # relevance evidence. Weak/no-receipt searches remain repeatable and can be
+        # reformulated instead of prematurely terminating retrieval.
+        if name in _RAG_NAMES and "evidence_ready" in effects:
+            if not _rag_receipt_ready(payload):
+                effects.discard("evidence_ready")
+        state.update(effects)
     if require_fresh_evidence and not any(
         fact in state
         for fact in (
@@ -236,13 +263,6 @@ def _progress_frontier(
     preference: Mapping[str, int] | None,
     limit: int,
 ) -> tuple[str, ...]:
-    """Best safe progress when the authorized surface cannot complete the goal.
-
-    This is necessary for partial MCP/test/plugin surfaces: evidence can still be
-    gathered and fed back to the model even if the mutation/terminal tool is host-
-    owned elsewhere. Only reviewed non-mutating effects are eligible.
-    """
-
     support = _support_facts(goals) - set(state)
     rank = preference or {}
     fallback_rank = len(rank) + len(transitions) + 1
@@ -255,8 +275,6 @@ def _progress_frontier(
         if not safe_effects:
             continue
         direct_support = len(safe_effects & set(support))
-        # Support-producing reads outrank merely safe observations. Semantic rank is
-        # still only the final tie-breaker within equal causal progress.
         scored.append(
             (
                 -direct_support,
@@ -287,15 +305,6 @@ def executable_frontier(
     max_depth: int = 6,
     preference: Mapping[str, int] | None = None,
 ) -> tuple[str, ...]:
-    """Return up to three first edges on globally minimum-cost causal paths.
-
-    Causal legality and total path cost are authoritative. ``preference`` is used
-    only after more expensive paths have been discarded. If this authorized surface
-    cannot itself reach the terminal state, the bounded safe-progress fallback keeps
-    read/evidence verification in the tool loop rather than silently switching to a
-    text-only model path.
-    """
-
     limit = max(1, min(int(limit), 3))
     transitions = _transitions(schemas)
     if not transitions:
