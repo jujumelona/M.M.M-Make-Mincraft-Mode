@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from minecraft_mod_ai import model_router
+from minecraft_mod_ai.causal_tool_frontier_contract import goals_for_query
 from minecraft_mod_ai.causal_tool_graph import (
     executable_frontier,
     shortest_causal_path,
@@ -48,6 +49,13 @@ def test_known_tool_causality_is_explicit_not_description_inferred() -> None:
     assert "project_changed" not in opaque.effects
 
 
+def test_goal_resolution_chooses_terminal_state_not_keyword_conjunction() -> None:
+    assert goals_for_query("inspect exact Minecraft API") == ("evidence",)
+    assert goals_for_query("fix compile error using exact API") == ("act",)
+    assert goals_for_query("verify the current build") == ("verify",)
+    assert goals_for_query("inspect current project") == ("observe",)
+
+
 def test_causal_frontier_advances_only_after_verified_observations() -> None:
     tools = (
         _schema("inspect_existing_mod"),
@@ -85,7 +93,6 @@ def test_causal_frontier_advances_only_after_verified_observations() -> None:
         "apply_source_patch",
     )
 
-    # A failed host observation never advances the transition state.
     failed = verified_state_from_messages(
         [{"role": "tool", "name": "inspect_existing_mod", "content": '{"ok":false}'}],
         tools,
@@ -93,32 +100,36 @@ def test_causal_frontier_advances_only_after_verified_observations() -> None:
     assert failed == frozenset({"workspace_bound"})
 
 
-def test_external_mcp_meta_tools_are_exposed_sequentially() -> None:
+def test_external_mcp_frontier_allows_direct_call_when_arguments_are_known() -> None:
     tools = (
         _schema("external_mcp_capabilities"),
         _schema("external_mcp_schema"),
         _schema("external_mcp_call"),
     )
     state = frozenset({"workspace_bound"})
-    assert executable_frontier(tools, state=state, goals=("external",), limit=3) == (
-        "external_mcp_capabilities",
+    frontier = executable_frontier(tools, state=state, goals=("external",), limit=3)
+    assert 1 <= len(frontier) <= 3
+    assert "external_mcp_call" in frontier
+
+    after_call = verified_state_from_messages(
+        [{"role": "tool", "name": "external_mcp_call", "content": '{"ok":true}'}],
+        tools,
+        require_fresh_evidence=True,
     )
-    state = frozenset({"workspace_bound", "external_capabilities"})
-    assert executable_frontier(tools, state=state, goals=("external",), limit=3) == (
-        "external_mcp_schema",
-    )
-    state = frozenset({"workspace_bound", "external_capabilities", "external_schema"})
-    assert executable_frontier(tools, state=state, goals=("external",), limit=3) == (
-        "external_mcp_call",
-    )
+    assert {"external_observation", "evidence_ready"} <= set(after_call)
 
 
 def test_live_model_tool_loop_has_dynamic_causal_recalculation() -> None:
-    assert getattr(model_router.ModelRouter._generate_with_tools, "_mmm_dynamic_causal_frontier", False) or getattr(
-        getattr(model_router.ModelRouter._generate_with_tools, "__wrapped__", None),
-        "_mmm_dynamic_causal_frontier",
-        False,
-    )
+    current = model_router.ModelRouter._generate_with_tools
+    found = False
+    for _ in range(12):
+        if getattr(current, "_mmm_dynamic_causal_frontier", False):
+            found = True
+            break
+        current = getattr(current, "__wrapped__", None)
+        if current is None:
+            break
+    assert found
 
 
 def _verified_receipt() -> dict[str, object]:
@@ -262,8 +273,6 @@ def test_generated_junit_uses_existing_harness_and_same_static_oracle(tmp_path: 
         left_operations=[operation],
         right_operations=[{**operation, "content": json.dumps({"parent": "minecraft:block/cube"})}],
     )
-    # Add an unchanged consumer whose target is the focused model. This makes a
-    # candidate-neutral file-existence oracle suitable for generated JUnit.
     assert any(item["kind"] == "unchanged_resource_reference" for item in spec["assertions"])
     installed = install_generated_junit(root, spec)
     assert installed["status"] == "INSTALLED"
