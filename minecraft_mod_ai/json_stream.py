@@ -25,9 +25,20 @@ def iter_canonical_json(value: Any) -> Iterable[str]:
 
 
 def canonical_json_sha256(value: Any) -> str:
+    """Hash canonical JSON with bounded fragment coalescing."""
+
     digest = hashlib.sha256()
+    buffer: list[str] = []
+    buffered_characters = 0
     for text in iter_canonical_json(value):
-        digest.update(text.encode("utf-8"))
+        buffer.append(text)
+        buffered_characters += len(text)
+        if buffered_characters >= 16 * 1024:
+            digest.update("".join(buffer).encode("utf-8"))
+            buffer.clear()
+            buffered_characters = 0
+    if buffer:
+        digest.update("".join(buffer).encode("utf-8"))
     return "sha256:" + digest.hexdigest()
 
 

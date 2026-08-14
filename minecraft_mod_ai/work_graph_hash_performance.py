@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import sys
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any
-
-from .json_stream import iter_canonical_json
 
 
 _WORK_GRAPH_PROPOSAL_HASH_CACHE: ContextVar[
@@ -23,34 +20,6 @@ _WORK_GRAPH_VALIDATED_MODULES: ContextVar[
 )
 
 
-def _buffered_canonical_json_sha256(value: Any) -> str:
-    """Hash canonical JSON with bounded string coalescing.
-
-    ``iter_canonical_json`` intentionally emits punctuation and scalar fragments
-    separately so callers never need one project-sized JSON string. Feeding every
-    tiny fragment directly to hashlib adds substantial Python call/UTF-8 overhead on
-    large proposals. Coalesce at most 16K Unicode characters before encoding; the
-    canonical byte stream and digest stay identical while memory remains bounded.
-    """
-
-    digest = hashlib.sha256()
-    buffer: list[str] = []
-    buffered_characters = 0
-    for text in iter_canonical_json(value):
-        buffer.append(text)
-        buffered_characters += len(text)
-        if buffered_characters >= 16 * 1024:
-            digest.update("".join(buffer).encode("utf-8"))
-            buffer.clear()
-            buffered_characters = 0
-    if buffer:
-        digest.update("".join(buffer).encode("utf-8"))
-    return "sha256:" + digest.hexdigest()
-
-
-_buffered_canonical_json_sha256._mmm_buffered_canonical_hash = True
-
-
 def harden(work_graph_module: Any, complete_spec_module: Any) -> None:
     """Reuse proven proposal work only inside one synchronous graph compile.
 
@@ -63,15 +32,6 @@ def harden(work_graph_module: Any, complete_spec_module: Any) -> None:
 
     proposal_cls = complete_spec_module.CompleteProposal
     module_cls = complete_spec_module.ProductionModule
-
-    current_canonical_hash = complete_spec_module.canonical_json_sha256
-    if not getattr(
-        current_canonical_hash,
-        "_mmm_buffered_canonical_hash",
-        False,
-    ):
-        _buffered_canonical_json_sha256.__wrapped__ = current_canonical_hash
-        complete_spec_module.canonical_json_sha256 = _buffered_canonical_json_sha256
 
     current_hash = proposal_cls.calculate_hash
     if not getattr(current_hash, "_mmm_work_graph_hash_cache", False):
