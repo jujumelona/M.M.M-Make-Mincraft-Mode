@@ -169,6 +169,43 @@ _LENSES: tuple[tuple[str, str], ...] = (
 )
 
 
+def _dependency_waves(domains: Sequence[Mapping[str, Any]]) -> tuple[tuple[int, ...], ...]:
+    """Return stable topological waves; malformed graphs degrade to serial order."""
+
+    if not domains:
+        return ()
+    domain_ids = [str(domain.get("domain_id", "")).strip() for domain in domains]
+    serial = tuple((index,) for index in range(len(domains)))
+    if any(not domain_id for domain_id in domain_ids) or len(set(domain_ids)) != len(domain_ids):
+        return serial
+
+    known = set(domain_ids)
+    dependencies: list[set[str]] = []
+    for domain in domains:
+        raw = domain.get("depends_on", [])
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list):
+            return serial
+        values = {str(value).strip() for value in raw if str(value).strip()}
+        if not values <= known:
+            return serial
+        dependencies.append(values)
+
+    pending = list(range(len(domains)))
+    completed: set[str] = set()
+    waves: list[tuple[int, ...]] = []
+    while pending:
+        ready = tuple(index for index in pending if dependencies[index] <= completed)
+        if not ready:
+            return serial
+        waves.append(ready)
+        ready_set = set(ready)
+        pending = [index for index in pending if index not in ready_set]
+        completed.update(domain_ids[index] for index in ready)
+    return tuple(waves)
+
+
 def install_parallel_core(agentic_module: Any) -> None:
     """Parallelize independent research providers, domain agents, and design sections."""
 
@@ -240,45 +277,59 @@ def install_parallel_core(agentic_module: Any) -> None:
                 for domain in research_brief.get("domains", [])
                 if isinstance(domain, dict)
             ]
+            domain_waves = _dependency_waves(domains)
             indexed_notes: dict[int, dict[str, Any]] = {}
-            if domains:
-                domain_workers = _research_domain_worker_count(router, len(domains))
-                with ThreadPoolExecutor(
-                    max_workers=domain_workers,
-                    thread_name_prefix="mmm_research_domain",
-                ) as pool:
-                    futures = {}
-                    for index, domain in enumerate(domains):
-                        # ContextVar state is per request. Copy it into each worker so the
-                        # forced-RAG receipt remains isolated even when domain specialists
-                        # execute concurrently on the same shared production router.
-                        context = copy_context()
-                        future = pool.submit(
-                            context.run,
-                            agentic_module._research_domain_with_agent,
-                            router,
-                            prompt=prompt,
-                            domain=domain,
-                            deterministic=deterministic,
-                            trace_metadata=trace_metadata,
-                        )
-                        futures[future] = index
-                    failed_domains: dict[int, Exception] = {}
-                    for future in as_completed(futures):
-                        index = futures[future]
-                        try:
-                            indexed_notes[index] = future.result()
-                        except Exception as exc:
-                            # Parallel execution is an optimization, not research semantics.
-                            # Preserve the failed index and retry it in the caller context
-                            # after the fan-out. This recovers transient/shared-router failures
-                            # without marking an unexecuted route as covered.
-                            failed_domains[index] = exc
+            domain_workers = 0
+            for wave in domain_waves:
+                wave_workers = _research_domain_worker_count(router, len(wave))
+                domain_workers = max(domain_workers, wave_workers)
+                failed_domains: dict[int, Exception] = {}
 
-                # A local/native model or stage-scoped tool runtime may reject a concurrent
-                # request even though the same canonical domain research succeeds serially.
-                # Retry only infrastructure-level exceptions that escaped the domain agent;
-                # schema/gap convergence remains owned by _research_domain_with_agent.
+                if wave_workers <= 1:
+                    for index in wave:
+                        try:
+                            indexed_notes[index] = agentic_module._research_domain_with_agent(
+                                router,
+                                prompt=prompt,
+                                domain=domains[index],
+                                deterministic=deterministic,
+                                trace_metadata=trace_metadata,
+                            )
+                        except Exception as exc:
+                            failed_domains[index] = exc
+                else:
+                    with ThreadPoolExecutor(
+                        max_workers=wave_workers,
+                        thread_name_prefix="mmm_research_domain",
+                    ) as pool:
+                        futures = {}
+                        for index in wave:
+                            # ContextVar state is per request. Copy it into each worker so the
+                            # forced-RAG receipt remains isolated even when domain specialists
+                            # execute concurrently on the same shared production router.
+                            context = copy_context()
+                            future = pool.submit(
+                                context.run,
+                                agentic_module._research_domain_with_agent,
+                                router,
+                                prompt=prompt,
+                                domain=domains[index],
+                                deterministic=deterministic,
+                                trace_metadata=trace_metadata,
+                            )
+                            futures[future] = index
+                        for future in as_completed(futures):
+                            index = futures[future]
+                            try:
+                                indexed_notes[index] = future.result()
+                            except Exception as exc:
+                                # Parallel execution is an optimization, not research semantics.
+                                # Preserve the failed index and retry it in the caller context
+                                # before any dependent wave is allowed to start.
+                                failed_domains[index] = exc
+
+                # A dependent wave cannot start until every predecessor either completed or
+                # produced the same terminal worker-error receipt as the previous serial path.
                 for index in sorted(failed_domains):
                     domain = domains[index]
                     parallel_exc = failed_domains[index]
@@ -332,10 +383,14 @@ def install_parallel_core(agentic_module: Any) -> None:
                         "official RAG, technology radar, and ecosystem discovery"
                     ),
                     "parallel_specialists": (
-                        "independent research domains execute concurrently and merge "
+                        "dependency-ready research domains execute concurrently and merge "
                         "in deterministic domain order"
                     ),
-                    "parallel_specialist_workers": domain_workers if domains else 0,
+                    "parallel_specialist_workers": domain_workers,
+                    "dependency_wave_count": len(domain_waves),
+                    "dependency_wave_scheduling": (
+                        "depends_on predecessors finish before each research wave starts"
+                    ),
                     "planning_search": (
                         "existing MMM verifier/candidate search remains downstream"
                     ),
@@ -364,12 +419,16 @@ def install_parallel_core(agentic_module: Any) -> None:
     ) -> dict[str, Any]:
         sections: dict[int, dict[str, Any]] = {}
         specs = tuple(agentic_module._SECTION_SPECS)
+        design_workers = _research_domain_worker_count(router, len(specs))
         with ThreadPoolExecutor(
-            max_workers=min(_worker_count(), len(specs)),
+            max_workers=design_workers,
             thread_name_prefix="mmm_design_section",
         ) as pool:
-            futures = {
-                pool.submit(
+            futures = {}
+            for index, (section_id, fields, properties) in enumerate(specs):
+                context = copy_context()
+                future = pool.submit(
+                    context.run,
                     agentic_module._generate_section,
                     router,
                     prompt=prompt,
@@ -379,9 +438,8 @@ def install_parallel_core(agentic_module: Any) -> None:
                     research=research,
                     media_paths=media_paths if index == 0 else (),
                     trace_metadata=trace_metadata,
-                ): index
-                for index, (section_id, fields, properties) in enumerate(specs)
-            }
+                )
+                futures[future] = index
             for future in as_completed(futures):
                 sections[futures[future]] = future.result()
 
@@ -1081,30 +1139,26 @@ def _worker_count() -> int:
 
 
 def _research_domain_worker_count(router: Any, width: int) -> int:
-    """Use only native slots owned by the one shared local planner server.
-
-    CPU provider work keeps the independent central worker setting, but model-backed
-    domain specialists must never create more simultaneous requests than llama.cpp or
-    vLLM actually admitted. Remote/non-native routers remain serial because their
-    concurrency and billing semantics are not host-owned here.
-    """
+    """Bound model fan-out to receipt-validated native slots, with safe cold start."""
 
     requested = min(max(1, int(width)), _worker_count())
     active = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip()
-    try:
-        from .llama_parallel_runtime_contract import _planner_parallel_capacity
+    if active:
+        try:
+            from .llama_parallel_runtime_contract import _planner_parallel_capacity
+            from .llama_vram_parallel_policy import validated_active_parallelism
 
-        if active:
-            return _planner_parallel_capacity(router, requested)
-    except Exception:
-        if active:
+            validated = validated_active_parallelism()
+            if validated <= 1:
+                return 1
+            return _planner_parallel_capacity(router, min(requested, validated))
+        except Exception:
             return 1
 
     # Pre-design is commonly the first model stage, before managed llama autotuning has
-    # published MMM_LLAMA_ACTIVE_PARALLEL. Do not freeze the whole run to one worker from
-    # that temporary absence. Admit a small cold-start candidate pool only for a verified
-    # one-server native local planner; ModelRouter's dynamic capacity gate still limits
-    # simultaneous adapter calls to the pN selected by the managed runtime.
+    # published a receipt. Queue only a small native-local candidate pool. ModelRouter's
+    # dynamic gate starts at p1, then releases more queued calls only after the first request
+    # publishes the managed p2/p4 runtime state.
     try:
         config = router.registry.role(router.profile, "planner")
     except Exception:
