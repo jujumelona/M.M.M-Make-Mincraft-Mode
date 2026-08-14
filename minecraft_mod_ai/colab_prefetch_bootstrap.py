@@ -20,12 +20,6 @@ _WORK_GRAPH_FAST_SERIALIZE: ContextVar[bool] = ContextVar(
     "mmm_work_graph_fast_serialize",
     default=False,
 )
-_WORK_GRAPH_MODULE_VALIDATION_CACHE: ContextVar[
-    dict[tuple[int, tuple[int, int, int]], Any] | None
-] = ContextVar(
-    "mmm_work_graph_module_validation_cache",
-    default=None,
-)
 _PROPOSAL_HASH_CACHE: ContextVar[dict[int, tuple[Any, str]] | None] = ContextVar(
     "mmm_proposal_store_hash_cache",
     default=None,
@@ -280,10 +274,9 @@ def _retarget_loaded_proposal_aliases(current: Any, replacement: Any) -> None:
 
 
 def _install_work_graph_fastpath() -> None:
-    """Avoid repeated validation, hashing and deep copies during graph compilation."""
+    """Avoid deep-copying graph payloads solely to hash a synchronous compile."""
 
     from . import work_graph
-    from .scale_policy import ScalePolicy
 
     node_cls = work_graph.WorkNode
     current_to_dict = node_cls.to_dict
@@ -305,27 +298,6 @@ def _install_work_graph_fastpath() -> None:
         to_dict._mmm_compile_shallow_dict = True
         to_dict.__wrapped__ = current_to_dict
         node_cls.to_dict = to_dict
-
-    module_cls = work_graph.ProductionModule
-    current_module_validate = module_cls.validate
-    if not getattr(current_module_validate, "_mmm_work_graph_validation_cache", False):
-
-        @wraps(current_module_validate)
-        def validate_module(self: Any, *, policy: Any = None) -> None:
-            cache = _WORK_GRAPH_MODULE_VALIDATION_CACHE.get()
-            if cache is None:
-                return current_module_validate(self, policy=policy)
-            effective = policy or ScalePolicy.from_environment()
-            key = (id(self), _proposal_policy_key(effective))
-            cached = cache.get(key)
-            if cached is self:
-                return
-            current_module_validate(self, policy=effective)
-            cache[key] = self
-
-        validate_module._mmm_work_graph_validation_cache = True
-        validate_module.__wrapped__ = current_module_validate
-        module_cls.validate = validate_module
 
     current_topological = work_graph._topological_modules
     if not getattr(current_topological, "_mmm_heap_deterministic_no_child_sort", False):
@@ -375,15 +347,11 @@ def _install_work_graph_fastpath() -> None:
 
     @wraps(current_build)
     def build_production_work_plan(*args: Any, **kwargs: Any):
-        serialize_token = _WORK_GRAPH_FAST_SERIALIZE.set(True)
-        validation_token = _WORK_GRAPH_MODULE_VALIDATION_CACHE.set({})
-        hash_token = _PROPOSAL_HASH_CACHE.set({})
+        token = _WORK_GRAPH_FAST_SERIALIZE.set(True)
         try:
             return current_build(*args, **kwargs)
         finally:
-            _PROPOSAL_HASH_CACHE.reset(hash_token)
-            _WORK_GRAPH_MODULE_VALIDATION_CACHE.reset(validation_token)
-            _WORK_GRAPH_FAST_SERIALIZE.reset(serialize_token)
+            _WORK_GRAPH_FAST_SERIALIZE.reset(token)
 
     build_production_work_plan._mmm_compile_shallow_serialization = True
     build_production_work_plan.__wrapped__ = current_build
