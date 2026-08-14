@@ -78,6 +78,66 @@ def _json_probe(root: Path, focus_paths: Sequence[str]) -> tuple[bool, list[str]
     return not errors, errors
 
 
+def _synthetic_verification(
+    *,
+    plan: Mapping[str, Any],
+    build_status: str,
+    json_ok: bool,
+    commands: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    command_by_name = {str(item.get("name", "")): item for item in commands}
+    scenarios: list[dict[str, Any]] = []
+    if "json_resource_parse" in set(plan.get("probes", ())):
+        scenarios.append({
+            "scenario_id": "json_resource_parse",
+            "oracle": "all focused JSON resources parse",
+            "status": "PASS" if json_ok else "FAIL",
+        })
+    build_command = command_by_name.get("clean_build")
+    if build_command is not None:
+        build_pass = build_command.get("exit_code") == 0 and build_command.get("timed_out") is not True
+        scenarios.append({
+            "scenario_id": "gradle_clean_build",
+            "oracle": "clean Gradle build exits zero without timeout",
+            "status": "PASS" if build_pass else "FAIL",
+        })
+    else:
+        scenarios.append({
+            "scenario_id": "gradle_clean_build",
+            "oracle": "clean Gradle build exits zero without timeout",
+            "status": "PASS" if build_status == "PASS" else "NOT_RUN",
+        })
+    if "gametest_if_available" in set(plan.get("probes", ())):
+        gametest = command_by_name.get("gametest")
+        if gametest is None:
+            scenario_status = "NOT_RUN"
+        else:
+            scenario_status = (
+                "PASS"
+                if gametest.get("exit_code") == 0 and gametest.get("timed_out") is not True
+                else "FAIL"
+            )
+        scenarios.append({
+            "scenario_id": "fabric_gametest",
+            "oracle": "focused behavior GameTest exits zero",
+            "status": scenario_status,
+        })
+    terminal = [str(item.get("status", "")) for item in scenarios]
+    if scenarios and all(value == "PASS" for value in terminal):
+        overall = "PASS"
+    elif any(value == "FAIL" for value in terminal):
+        overall = "FAIL"
+    else:
+        overall = "INCOMPLETE"
+    return {
+        "schema_version": "mmm/synthetic-verification-v1",
+        "status": overall,
+        "generator": "host-diff-derived-counterexample",
+        "isolated_snapshot": True,
+        "scenarios": scenarios,
+    }
+
+
 def verify_candidate(
     root: Path,
     operations: Sequence[Mapping[str, Any]],
@@ -93,10 +153,17 @@ def verify_candidate(
         TransactionalSourcePatcher(stage).apply([dict(item) for item in operations])
         json_ok, json_errors = _json_probe(stage, list(plan.get("focus_paths", ())))
         if not (stage / "build.gradle").is_file():
+            synthetic = _synthetic_verification(
+                plan=plan,
+                build_status="NO_GRADLE",
+                json_ok=json_ok,
+                commands=(),
+            )
             return {
                 "status": "NO_GRADLE",
                 "json_ok": json_ok,
                 "json_errors": json_errors,
+                "synthetic_verification": synthetic,
                 "score_delta": 40.0 if json_ok else -400.0,
             }
         cache = Path(
@@ -111,6 +178,20 @@ def verify_candidate(
             download_timeout_seconds=120,
             command_timeout_seconds=600,
         ).build(stage, run_gametest=run_gametest)
+        commands = [
+            {
+                "name": command.name,
+                "exit_code": command.exit_code,
+                "timed_out": command.timed_out,
+            }
+            for command in report.commands
+        ]
+        synthetic = _synthetic_verification(
+            plan=plan,
+            build_status=report.status,
+            json_ok=json_ok,
+            commands=commands,
+        )
         delta = 0.0
         if report.status == "PASS":
             delta += 700.0
@@ -120,20 +201,16 @@ def verify_candidate(
             delta += 40.0
         else:
             delta -= 400.0
+        if synthetic["status"] == "FAIL":
+            delta -= 350.0
         return {
             "status": report.status,
             "error": report.error,
             "json_ok": json_ok,
             "json_errors": json_errors,
             "gametest_requested": run_gametest,
-            "commands": [
-                {
-                    "name": command.name,
-                    "exit_code": command.exit_code,
-                    "timed_out": command.timed_out,
-                }
-                for command in report.commands
-            ],
+            "commands": commands,
+            "synthetic_verification": synthetic,
             "score_delta": delta,
         }
     except Exception as exc:
