@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Verifier-qualified trajectory memory for inference-time temporary skills.
 
-Only structural task/action/verifier facts are stored. Model completion claims,
-source bodies and arbitrary tool payloads are not reusable memory evidence.
+Only structural task/action/verifier facts and ordered source-free procedure steps
+are stored. Model completion claims, source bodies and arbitrary tool payloads are
+not reusable memory evidence.
 """
 
 import hashlib
@@ -14,6 +15,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .procedure_trace import extract_procedure
 from .procedural_memory_hierarchy import build_hierarchy, compact_hierarchy
 from .trajectory_record_integrity import (
     derive_levels,
@@ -158,6 +160,7 @@ def build_work_trajectory(
         "task_shape": shape,
         "outcome": normalized_outcome,
         "verification": verification,
+        "procedure": extract_procedure(receipt),
         "verified_facts": _structural_facts(receipt or {}),
         "error_signature": " ".join(str(error).split())[:1200],
     }
@@ -315,7 +318,7 @@ def synthesize_temporary_skill(
         if identity and isinstance(verification, Mapping):
             source_levels[identity] = str(verification.get("level", "L0"))
     hierarchy = compact_hierarchy(build_hierarchy(qualified), max_items=18)
-    if not success_actions and not failure_signatures:
+    if not success_actions and not failure_signatures and not hierarchy:
         return None
     return {
         "schema_version": "mmm/temporary-skill-v3",
@@ -330,6 +333,7 @@ def synthesize_temporary_skill(
         "source_verification_levels": source_levels,
         "rule": (
             "Treat only L3+ successful trajectories as proven procedure. Verified failures are negative evidence. "
+            "Follow ordered workflow/subtask/function procedure motifs only when their current preconditions still hold. "
             "Current exact evidence, compiler diagnostics, executable tests and acceptance contracts remain authoritative."
         ),
     }
