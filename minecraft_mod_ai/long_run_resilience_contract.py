@@ -438,10 +438,9 @@ def _install_managed_backend_recovery(llama_adapter_module: Any, autotune: Any) 
 
 
 def install() -> None:
-    from . import llama_server_autotune, model_router
-    from .model_adapters import llama_cpp_adapter
+    from . import llama_server_autotune, model_adapters, model_router
 
     _install_research_generation_resilience(model_router)
     _install_autotune_rearm(llama_server_autotune)
-    _install_managed_backend_recovery(llama_cpp_adapter, llama_server_autotune)
+    _install_managed_backend_recovery(model_adapters, llama_server_autotune)
     globals()["_mmm_long_run_resilience_installed"] = _MARKER
