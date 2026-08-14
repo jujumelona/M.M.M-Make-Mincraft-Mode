@@ -10,6 +10,8 @@ call ``require_remote_write_consent`` immediately before a network write.
 import os
 from typing import Any, Mapping
 
+from .remote_store_defaults import apply_remote_store_defaults
+
 CONSENT_ENV = "MMM_REMOTE_TRAJECTORY_STORE_CONSENT"
 _SENSITIVE_KEY_PARTS = (
     "api_key",
@@ -35,6 +37,11 @@ _REMOTE_PRIVATE_KEYS = frozenset(
         "prompt",
     }
 )
+
+# Configure only the destination. This does not enable remote persistence: the
+# consent environment variable below remains fail-closed and every write path
+# re-checks it immediately before network I/O.
+apply_remote_store_defaults()
 
 
 def remote_write_allowed() -> bool:
