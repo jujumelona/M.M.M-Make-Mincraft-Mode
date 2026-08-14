@@ -167,6 +167,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         "qwen35_mtp_hotpath_contract",
         "qwen35_runtime_efficiency_contract",
         "planner_single_stream_search_contract",
+        "runtime_stability_contract",
     }
 
     source = _LLAMA_PIPELINE.read_text(encoding="utf-8")
