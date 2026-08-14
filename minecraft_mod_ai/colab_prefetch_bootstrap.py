@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 from concurrent.futures import Future
@@ -70,10 +71,34 @@ def _install_platform_prefetch() -> None:
     _start_platform_future()
 
 
+def _install_request_byte_fastpath() -> None:
+    """Use the C JSON encoder for whole-string byte checks in lossless paging."""
+
+    from . import game_design
+
+    current = game_design._json_text_bytes
+    if getattr(current, "_mmm_c_json_byte_count", False):
+        return
+
+    @wraps(current)
+    def json_text_bytes(value: str) -> int:
+        if not isinstance(value, str):
+            return current(value)
+        # json.dumps(string, ensure_ascii=False) adds exactly the two surrounding
+        # quote bytes. Its escaping rules are the same rules implemented by
+        # _json_character_bytes, but the full scan runs in the C encoder.
+        return len(json.dumps(value, ensure_ascii=False).encode("utf-8")) - 2
+
+    json_text_bytes._mmm_c_json_byte_count = True
+    json_text_bytes.__wrapped__ = current
+    game_design._json_text_bytes = json_text_bytes
+
+
 def start(model_registry_module: Any) -> None:
-    """Start non-blocking metadata prefetch and apply Colab worker defaults."""
+    """Start non-blocking metadata prefetch and install bootstrap hot paths."""
 
     del model_registry_module
+    _install_request_byte_fastpath()
     _install_platform_prefetch()
     if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
         return
