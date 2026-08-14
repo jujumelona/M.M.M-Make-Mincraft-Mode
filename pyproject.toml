@@ -83,3 +83,6 @@ minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/minef
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+  "ignore:The default value of 'allow_tags' in gr.Chatbot will be changed from False to True:DeprecationWarning",
+]
