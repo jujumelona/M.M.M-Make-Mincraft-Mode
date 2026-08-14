@@ -4,6 +4,8 @@ import re
 from functools import wraps
 from typing import Any, Mapping
 
+from .centroid_vector_rag import direct_centroid_vector_search
+from .model_router import ModelRouter
 from .retrieval_adaptation import adapt_query_vector, extract_hit_texts
 
 _SYMBOL = re.compile(r"\b(?:[A-Z][A-Za-z0-9_]{2,}|[a-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]+\.(?:java|json|gradle|kts))\b")
@@ -133,7 +135,6 @@ def install(production_tools_module: Any) -> None:
         errors: list[str] = []
         best: dict[str, Any] | None = None
         best_score = (-1, -1.0, -1.0)
-        router = getattr(self, "router", None)
 
         for retry in (False, True):
             routed_query = _expanded(query, route, retry=retry)
@@ -172,33 +173,75 @@ def install(production_tools_module: Any) -> None:
             if retry:
                 break
 
-        if best is not None and router is not None and route in {"semantic", "dependency", "global"}:
-            try:
-                terms = _centroid_terms(router, query, best)
-                if terms:
-                    adapted_query = query + "\nlocal-adaptation: " + terms
-                    adapted = dict(
-                        current(
-                            self,
-                            adapted_query,
-                            index_path=index_path,
+        # Training-free low-coverage adaptation:
+        # q0 -> first-pass top-K hit embeddings -> local centroid -> q1 blend ->
+        # DIRECT q1 cosine retrieval against stored chunk embeddings -> rerank.
+        if best is not None and route in {"semantic", "dependency", "global"}:
+            router: Any | None = getattr(self, "router", None)
+            if router is None:
+                try:
+                    router = ModelRouter(profile=self.profile)
+                except Exception as exc:
+                    errors.append(f"centroid-router:{type(exc).__name__}:{str(exc)[:240]}")
+            if router is not None:
+                try:
+                    texts = extract_hit_texts(best)
+                    q1_vector = adapt_query_vector(router, query, texts)
+                    if q1_vector:
+                        direct = direct_centroid_vector_search(
+                            self._existing_file(index_path),
+                            query=query,
+                            q1_vector=q1_vector,
+                            router=router,
                             limit=limit,
-                            semantic=True,
-                            rerank=True,
                             required_metadata=required_metadata,
                         )
-                    )
-                    usable, coverage, relevance, count = _quality(adapted)
-                    adapted["query"] = query
-                    adapted["expanded_query"] = adapted_query
-                    adapted["task_route"] = route
-                    adapted["retrieval_mode"] = "centroid-adapted-semantic+rerank"
-                    adapted["retrieval_retry"] = True
-                    adapted["centroid_adaptation"] = True
-                    if usable or (count, coverage, relevance) > best_score:
-                        return adapted
-            except Exception as exc:
-                errors.append(f"centroid-adaptation:{type(exc).__name__}:{str(exc)[:240]}")
+                        if direct is not None:
+                            direct = dict(direct)
+                            usable, coverage, relevance, count = _quality(direct)
+                            direct["query"] = query
+                            direct["expanded_query"] = query
+                            direct["task_route"] = route
+                            direct["retrieval_retry"] = True
+                            direct["centroid_adaptation"] = True
+                            direct["centroid_vector_direct"] = True
+                            if errors:
+                                direct["fallback_errors"] = list(errors)
+                            if usable or (count, coverage, relevance) > best_score:
+                                return direct
+                except Exception as exc:
+                    errors.append(f"centroid-vector:{type(exc).__name__}:{str(exc)[:240]}")
+
+                # Compatibility fallback for semantic indexes that cannot expose
+                # stored vectors directly. q1 still chooses centroid-nearest terms
+                # and performs one final semantic+rereanker text search.
+                try:
+                    terms = _centroid_terms(router, query, best)
+                    if terms:
+                        adapted_query = query + "\nlocal-adaptation: " + terms
+                        adapted = dict(
+                            current(
+                                self,
+                                adapted_query,
+                                index_path=index_path,
+                                limit=limit,
+                                semantic=True,
+                                rerank=True,
+                                required_metadata=required_metadata,
+                            )
+                        )
+                        usable, coverage, relevance, count = _quality(adapted)
+                        adapted["query"] = query
+                        adapted["expanded_query"] = adapted_query
+                        adapted["task_route"] = route
+                        adapted["retrieval_mode"] = "centroid-adapted-semantic+rerank-fallback"
+                        adapted["retrieval_retry"] = True
+                        adapted["centroid_adaptation"] = True
+                        adapted["centroid_vector_direct"] = False
+                        if usable or (count, coverage, relevance) > best_score:
+                            return adapted
+                except Exception as exc:
+                    errors.append(f"centroid-text-fallback:{type(exc).__name__}:{str(exc)[:240]}")
 
         if best is not None:
             best["query"] = query
@@ -206,6 +249,7 @@ def install(production_tools_module: Any) -> None:
             best["retrieval_retry"] = True
             best["retrieval_quality_warning"] = "coverage_or_relevance_below_target"
             best["centroid_adaptation"] = False
+            best["centroid_vector_direct"] = False
             if errors:
                 best["fallback_errors"] = errors
             return best
