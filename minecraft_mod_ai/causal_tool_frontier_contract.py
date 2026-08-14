@@ -7,8 +7,7 @@ import sys
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
-_EVIDENCE = ("search_code_rag", "search_project_rag")
-_INSPECT = ("inspect_existing_mod",)
+_CODER_CORE = ("inspect_existing_mod", "search_project_rag", "search_code_rag")
 _EXTERNAL = ("external_mcp_capabilities", "external_mcp_schema", "external_mcp_call")
 
 
@@ -47,7 +46,7 @@ def _goals(query: str) -> tuple[str, ...]:
     goals: list[str] = []
     marker_groups = (
         ("external", ("external mcp", "mcp server", "capability", "외부 mcp")),
-        ("verify", ("error", "fail", "compile", "diagnostic", "verify", "test", "검증", "오류", "실패")),
+        ("verify", ("repair", "error", "fail", "compile", "diagnostic", "verify", "test", "검증", "오류", "실패", "수리")),
         ("runtime", ("runtime", "playtest", "server", "client", "screenshot", "런타임", "플레이테스트")),
         ("evidence", ("api", "version", "mapping", "yarn", "research", "evidence", "검색", "근거", "버전")),
         ("observe", ("existing", "project", "inspect", "current", "기존", "프로젝트", "확인")),
@@ -112,16 +111,16 @@ def install(max_agent_owner: Any) -> None:
                 selected.append(schema)
                 selected_names.add(name)
 
-        # Fresh production code needs evidence before an action. Keep both evidence
-        # planes; inspect-existing is causal only for an existing/repair context.
-        if require_fresh_evidence and role in {"coder", "coder_safe"}:
-            for name in _EVIDENCE:
+        # Host role/Skill requirements are hard preconditions, not retrieval hints.
+        # A causal frontier may shrink only the optional action surface; it must never
+        # hide a tool the production coder contract declares universally required.
+        if role in {"coder", "coder_safe"}:
+            for name in _CODER_CORE:
                 add(name)
-            if "observe" in goals or "verify" in goals:
-                for name in _INSPECT:
-                    add(name)
 
-        external_needed = "external" in goals or any(_name(item) in _EXTERNAL for item in ranked[:2])
+        external_needed = "external" in goals or any(
+            _name(item) in _EXTERNAL for item in ranked[:2]
+        )
         if external_needed:
             # External MCP discovery/call is an atomic capability/schema/call chain.
             for name in _EXTERNAL:
@@ -145,7 +144,9 @@ def install(max_agent_owner: Any) -> None:
         candidates = sorted(
             ranked,
             key=lambda schema: (
-                ordered_effects.index(_effect(schema)) if _effect(schema) in ordered_effects else len(ordered_effects),
+                ordered_effects.index(_effect(schema))
+                if _effect(schema) in ordered_effects
+                else len(ordered_effects),
                 ranked_index.get(_name(schema), len(ranked)),
             ),
         )
