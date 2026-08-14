@@ -6,9 +6,11 @@ from __future__ import annotations
 def install() -> None:
     from . import (
         agentic_pre_design_rag,
+        agentic_research_game_design,
         centroid_vector_rag,
         complete_spec,
         rag_index,
+        research_adaptive_rag_routing,
         runner,
         small_model_max_agent_contract,
         trajectory_memory,
@@ -16,7 +18,9 @@ def install() -> None:
     )
     from . import research_rag_performance as rag_performance
     from . import validation_execution_contract
-    from .research_adaptive_rag_routing import harden as harden_adaptive_rag
+    from .research_adaptive_provider_routing import (
+        harden as harden_adaptive_providers,
+    )
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
@@ -31,7 +35,14 @@ def install() -> None:
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
     harden_synthesis(agentic_pre_design_rag)
-    harden_adaptive_rag(agentic_pre_design_rag, small_model_max_agent_contract)
+    research_adaptive_rag_routing.harden(
+        agentic_pre_design_rag,
+        small_model_max_agent_contract,
+    )
+    harden_adaptive_providers(
+        agentic_research_game_design,
+        research_adaptive_rag_routing,
+    )
     indexed_append, indexed_relevant = harden_memory(trajectory_memory)
 
     # temporary_skill_contract imported these functions by value before this late
