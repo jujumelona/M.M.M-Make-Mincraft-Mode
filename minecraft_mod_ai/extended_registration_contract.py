@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import sys
+import threading
+from collections import OrderedDict
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from .project_write_lock import project_write_lock
+
+
+_TEXTURE_CACHE_LOCK = threading.RLock()
+_TEXTURE_CACHE: OrderedDict[tuple[str, str, int, int], bytes] = OrderedDict()
+_TEXTURE_CACHE_LIMIT = 512
 
 
 def _render_static_registration(root_name: str | None) -> str:
@@ -65,6 +73,75 @@ def _generated_unit_names(root: Path, package_name: str) -> list[str]:
             names.append(path.stem)
     names.sort()
     return names
+
+
+def _texture_pattern_key(color: str, seed: str, kind: str, size: int) -> tuple[str, str, int, int]:
+    # make_texture_png uses seed_value only through modulo 2 (checker) and modulo 7
+    # (highlight). LCM(2, 7)=14, so every seed with the same residue produces the
+    # exact same raw pixels and therefore the exact same deterministic PNG bytes.
+    seed_residue = sum((index + 1) * ord(char) for index, char in enumerate(seed)) % 14
+    return str(color), str(kind), int(size), seed_residue
+
+
+def _install_texture_equivalence_cache(extended_module: Any) -> None:
+    """Reuse byte-identical deterministic textures instead of recompressing them."""
+
+    from . import generator as generator_module
+
+    original = generator_module.make_texture_png
+    if getattr(original, "_mmm_texture_equivalence_cache", False):
+        if getattr(extended_module, "make_texture_png", None) is not original:
+            extended_module.make_texture_png = original
+        return
+
+    @wraps(original)
+    def make_texture_png(
+        color: str,
+        seed: str,
+        *,
+        kind: str,
+        size: int = 16,
+    ) -> bytes:
+        key = _texture_pattern_key(color, seed, kind, size)
+        with _TEXTURE_CACHE_LOCK:
+            cached = _TEXTURE_CACHE.get(key)
+            if cached is not None:
+                _TEXTURE_CACHE.move_to_end(key)
+                return cached
+
+        rendered = original(color, seed, kind=kind, size=size)
+        with _TEXTURE_CACHE_LOCK:
+            cached = _TEXTURE_CACHE.get(key)
+            if cached is not None:
+                _TEXTURE_CACHE.move_to_end(key)
+                return cached
+            _TEXTURE_CACHE[key] = rendered
+            while len(_TEXTURE_CACHE) > _TEXTURE_CACHE_LIMIT:
+                _TEXTURE_CACHE.popitem(last=False)
+        return rendered
+
+    make_texture_png._mmm_texture_equivalence_cache = True  # type: ignore[attr-defined]
+    make_texture_png._mmm_texture_cache = _TEXTURE_CACHE  # type: ignore[attr-defined]
+    make_texture_png.__wrapped__ = original  # type: ignore[attr-defined]
+    generator_module.make_texture_png = make_texture_png
+
+    # Retarget only package-local aliases that imported the exact original function.
+    for module_name, loaded in tuple(sys.modules.items()):
+        if not (
+            module_name == "minecraft_mod_ai"
+            or module_name.startswith("minecraft_mod_ai.")
+        ):
+            continue
+        if loaded is None:
+            continue
+        try:
+            namespace = vars(loaded)
+        except TypeError:
+            continue
+        if namespace.get("make_texture_png") is original:
+            namespace["make_texture_png"] = make_texture_png
+
+    extended_module.make_texture_png = make_texture_png
 
 
 def _install_static_registration(extended_module: Any) -> None:
@@ -166,6 +243,7 @@ def _install_static_registration(extended_module: Any) -> None:
 
 
 def install(extended_module: Any) -> None:
-    """Replace runtime classpath reflection with a bounded compile-time registrar tree."""
+    """Install deterministic generated-content registration and exact texture reuse."""
 
+    _install_texture_equivalence_cache(extended_module)
     _install_static_registration(extended_module)
