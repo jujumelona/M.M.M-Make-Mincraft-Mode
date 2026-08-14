@@ -3,7 +3,7 @@ from __future__ import annotations
 """Reviewed causal contracts for model-facing MMM tools.
 
 Known MMM tools never derive causal semantics from their natural-language
-description.  Each reviewed name has host-owned preconditions/effects.  Unknown
+description. Each reviewed name has host-owned preconditions/effects. Unknown
 plugin tools are deliberately opaque and therefore cannot satisfy critical goals
 until a reviewed transition is added.
 """
@@ -22,10 +22,7 @@ def _spec(pre: tuple[str, ...] = ("workspace_bound",), effects: tuple[str, ...] 
     return TransitionSpec(frozenset(pre), frozenset(effects), cost)
 
 
-# Critical states are intentionally shared across equivalent tools so shortest-path
-# planning can choose among alternatives without hard-coding one implementation.
 TRANSITIONS: dict[str, TransitionSpec] = {
-    # Discovery / observation.
     "discover_mmm_capabilities": _spec(effects=("capabilities_observed",)),
     "inspect_existing_mod": _spec(effects=("project_observed",)),
     "work_status": _spec(effects=("work_observed",)),
@@ -37,12 +34,10 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "discover_ecosystem_resources": _spec(effects=("ecosystem_evidence", "evidence_ready")),
     "build_technology_radar": _spec(effects=("ecosystem_evidence", "evidence_ready")),
     "assess_technology_compatibility": _spec(effects=("ecosystem_evidence", "evidence_ready")),
-    # Project/code evidence.
     "search_project_rag": _spec(effects=("project_evidence", "evidence_ready")),
     "search_code_rag": _spec(effects=("code_evidence", "evidence_ready")),
     "index_project_rag": _spec(effects=("rag_index_ready",)),
     "java_workspace_symbols": _spec(effects=("code_evidence", "evidence_ready")),
-    # Planning.
     "plan_game": _spec(effects=("plan_ready",)),
     "plan_complete_game": _spec(effects=("plan_ready",)),
     "revise_complete_plan": _spec(pre=("plan_ready",), effects=("plan_ready",)),
@@ -51,9 +46,6 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "approve_complete_plan": _spec(pre=("plan_ready",), effects=("plan_approved",)),
     "read_complete_plan_section": _spec(pre=("plan_ready",), effects=("plan_observed",)),
     "read_quality_contract": _spec(effects=("quality_contract",)),
-    # Generation / mutation.  A production mutation needs both an observed target
-    # and fresh/reviewed evidence; planning-owned full-project execution instead
-    # consumes an approved immutable plan.
     "execute_complete_project": _spec(pre=("plan_approved",), effects=("project_changed", "source_generated"), cost=2),
     "generate_fabric_project": _spec(pre=("evidence_ready",), effects=("project_changed", "source_generated"), cost=2),
     "generate_assets": _spec(pre=("project_observed",), effects=("project_changed", "assets_generated"), cost=2),
@@ -64,7 +56,6 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "repair_project": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed",), cost=2),
     "work_cancel_run": _spec(pre=("work_observed",), effects=("work_changed",), cost=2),
     "work_resume_run": _spec(pre=("work_observed",), effects=("work_changed",), cost=2),
-    # Verification.
     "java_diagnostics": _spec(pre=("project_observed",), effects=("static_verified", "verified"), cost=1),
     "jdt_diagnostics": _spec(pre=("project_observed",), effects=("static_verified", "verified"), cost=1),
     "run_static_validation": _spec(pre=("project_observed",), effects=("static_verified", "verified"), cost=1),
@@ -80,7 +71,6 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "runtime_assertions": _spec(pre=("runtime_observed",), effects=("runtime_verified", "verified"), cost=2),
     "runtime_quality_mcp_probe": _spec(pre=("runtime_observed",), effects=("runtime_verified", "verified"), cost=2),
     "benchmark_resolution_probe": _spec(pre=("project_observed",), effects=("benchmark_verified", "verified"), cost=2),
-    # Runtime state machine.
     "runtime_prepare_instance": _spec(pre=("build_verified",), effects=("runtime_prepared",), cost=2),
     "runtime_start_server": _spec(pre=("runtime_prepared",), effects=("server_started",), cost=2),
     "gradle_run_server": _spec(pre=("build_verified",), effects=("server_started",), cost=2),
@@ -99,20 +89,18 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "mineflayer_playtest": _spec(pre=("mineflayer_connected",), effects=("runtime_observed", "runtime_verified", "verified"), cost=2),
     "mineflayer_disconnect": _spec(pre=("mineflayer_connected",), effects=("runtime_stopped",), cost=1),
     "runtime_stop": _spec(pre=("runtime_prepared",), effects=("runtime_stopped",), cost=1),
-    # Packaging / release.
     "inspect_jar": _spec(pre=("build_verified",), effects=("artifact_observed",)),
     "package_release": _spec(pre=("build_verified",), effects=("packaged",), cost=2),
     "package_mod": _spec(pre=("build_verified",), effects=("packaged",), cost=2),
-    # External MCP is intentionally sequential: only the next meta-tool becomes
-    # causally executable after the prior observation succeeds.
+    # External MCP meta-tools are optional introspection. The bridge permits a direct
+    # reviewed call when capability/arguments are already known; schema is only needed
+    # when argument names are unknown. All three remain read-only outside runtime.
     "external_mcp_capabilities": _spec(effects=("external_capabilities",)),
-    "external_mcp_schema": _spec(pre=("external_capabilities",), effects=("external_schema",)),
-    "external_mcp_call": _spec(pre=("external_schema",), effects=("external_observation",), cost=2),
-    # Training/export commands are observable but never satisfy production goals.
+    "external_mcp_schema": _spec(effects=("external_schema",)),
+    "external_mcp_call": _spec(effects=("external_observation", "evidence_ready"), cost=2),
     "run_model_smoke": _spec(effects=("model_smoke_observed",)),
     "record_training_trace": _spec(effects=("training_trace_recorded",), cost=2),
     "export_training_dataset": _spec(pre=("training_trace_recorded",), effects=("training_dataset_exported",), cost=2),
-    # Router/model inspection helpers sometimes surface through compatibility MCP.
     "model_info": _spec(effects=("model_observed",)),
     "router_status": _spec(effects=("model_observed",)),
     "download_model": _spec(effects=("model_ready",), cost=2),
@@ -134,8 +122,6 @@ def reviewed_transition(name: str) -> TransitionSpec | None:
 
 
 def opaque_transition(name: str) -> TransitionSpec:
-    """Unknown dynamic/plugin tools cannot advance a critical causal goal."""
-
     return TransitionSpec(
         preconditions=frozenset({"workspace_bound"}),
         effects=frozenset({f"opaque:{name}" if name else "opaque:unknown"}),
