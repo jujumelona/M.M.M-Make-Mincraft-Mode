@@ -4,18 +4,9 @@ from __future__ import annotations
 
 
 def install() -> None:
-    from . import (
-        centroid_vector_rag,
-        llama_server_autotune,
-        long_run_resilience_contract,
-        model_adapters,
-        model_router,
-        rag_index,
-        runner,
-        trajectory_memory,
-        validation_execution_contract,
-    )
+    from . import centroid_vector_rag, rag_index, runner, trajectory_memory
     from . import research_rag_performance as rag_performance
+    from . import validation_execution_contract
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
@@ -41,15 +32,6 @@ def install() -> None:
     harden_cpu_retrieval()
     harden_gradle(runner)
     harden_validation_fingerprints(validation_execution_contract)
-    long_run_resilience_contract._install_research_generation_resilience(model_router)
-    long_run_resilience_contract._install_autotune_rearm(llama_server_autotune)
-    long_run_resilience_contract._install_managed_backend_recovery(
-        model_adapters,
-        llama_server_autotune,
-    )
-    long_run_resilience_contract._mmm_long_run_resilience_installed = (
-        long_run_resilience_contract._MARKER
-    )
 
 
 __all__ = ["install"]

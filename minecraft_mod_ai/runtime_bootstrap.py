@@ -426,6 +426,7 @@ def _install_post_bootstrap_contracts() -> None:
     from .agent_security_contract import install as install_agent_security
     from .bottleneck_elimination_contract import install as install_bottleneck_elimination
     from .causal_tool_frontier_contract import install as install_causal_tool_frontier
+    from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
@@ -497,3 +498,4 @@ def _install_post_bootstrap_contracts() -> None:
     install_minecraft_mcp_evidence()
     install_bottleneck_elimination()
     install_research_bottleneck_runtime()
+    install_long_run_resilience()
