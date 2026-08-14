@@ -36,12 +36,18 @@ def _vector(raw: Any) -> list[float]:
     return values if values and all(math.isfinite(item) for item in values) else []
 
 
-def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
+def _cosine(
+    left: Sequence[float],
+    right: Sequence[float],
+    *,
+    left_norm: float | None = None,
+) -> float:
     width = min(len(left), len(right))
     if width <= 0:
         return 0.0
     dot = sum(float(left[index]) * float(right[index]) for index in range(width))
-    left_norm = math.sqrt(sum(float(left[index]) ** 2 for index in range(width)))
+    if left_norm is None:
+        left_norm = math.sqrt(sum(float(left[index]) ** 2 for index in range(width)))
     right_norm = math.sqrt(sum(float(right[index]) ** 2 for index in range(width)))
     if left_norm <= 0.0 or right_norm <= 0.0:
         return 0.0
@@ -105,6 +111,7 @@ def direct_centroid_vector_search(
 
         candidate_limit = max(limit * 6, 32)
         heap: list[tuple[float, str, int, dict[str, Any]]] = []
+        left_norms: dict[int, float] = {}
         considered = 0
         for row in connection.execute(
             """
@@ -118,7 +125,14 @@ def direct_centroid_vector_search(
             if not vector:
                 continue
             considered += 1
-            score = _cosine(q1_vector, vector)
+            width = min(len(q1_vector), len(vector))
+            left_norm = left_norms.get(width)
+            if left_norm is None:
+                left_norm = math.sqrt(
+                    sum(float(q1_vector[index]) ** 2 for index in range(width))
+                )
+                left_norms[width] = left_norm
+            score = _cosine(q1_vector, vector, left_norm=left_norm)
             if not math.isfinite(score):
                 continue
             hit = {
