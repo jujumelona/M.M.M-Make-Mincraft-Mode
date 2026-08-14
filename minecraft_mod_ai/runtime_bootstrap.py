@@ -445,7 +445,6 @@ def _install_post_bootstrap_contracts() -> None:
 
         central_research._bounded_text = _full_research_text
 
-    install_planning_stall_guard()
     install_small_model_research()
     install_agent_security(
         pre_design_rag_module=agentic_pre_design_rag,
@@ -499,3 +498,4 @@ def _install_post_bootstrap_contracts() -> None:
     install_bottleneck_elimination()
     install_research_bottleneck_runtime()
     install_long_run_resilience()
+    install_planning_stall_guard()

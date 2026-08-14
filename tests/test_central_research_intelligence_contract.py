@@ -16,6 +16,14 @@ class _CouncilRouter:
         self._committee_barrier = threading.Barrier(3)
         self._review_barrier = threading.Barrier(2)
         self._lock = threading.Lock()
+        self.profile = "test"
+        self.registry = SimpleNamespace(
+            role=lambda _profile, _role: SimpleNamespace(
+                exclusive_gpu=True,
+                provider="local",
+                adapter="llama_cpp",
+            )
+        )
         self.committee_active = 0
         self.committee_max = 0
         self.review_active = 0
