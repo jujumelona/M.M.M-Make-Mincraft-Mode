@@ -5,6 +5,7 @@ import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -57,6 +58,7 @@ _FABRIC_WRAPPER = (
     "gradle-wrapper.properties"
 )
 _MOJANG_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+_API_METADATA_PATH = "/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"
 
 
 def _fetch(url: str, *, timeout: int = 20) -> bytes:
@@ -78,17 +80,18 @@ def _json(url: str) -> Any:
         raise PlatformDiscoveryError(f"official JSON response was invalid: {url}") from exc
 
 
-def _maven_versions(path: str) -> list[str]:
+@lru_cache(maxsize=8)
+def _maven_versions(path: str) -> tuple[str, ...]:
     raw = _fetch(_MAVEN + path)
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as exc:
         raise PlatformDiscoveryError(f"invalid Fabric Maven metadata: {path}") from exc
-    return [
+    return tuple(
         str(node.text).strip()
         for node in root.findall("./versioning/versions/version")
         if node.text and str(node.text).strip()
-    ]
+    )
 
 
 @lru_cache(maxsize=1)
@@ -113,6 +116,7 @@ def latest_stable_versions(limit: int = 6) -> tuple[str, ...]:
     return tuple(stable[: max(1, int(limit))])
 
 
+@lru_cache(maxsize=1)
 def _stable_loader() -> str:
     payload = _json(_META + "/v2/versions/loader")
     if not isinstance(payload, list):
@@ -123,8 +127,7 @@ def _stable_loader() -> str:
     raise PlatformDiscoveryError("Fabric Meta returned no stable loader")
 
 
-def _api_for(version: str) -> str:
-    versions = _maven_versions("/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml")
+def _api_from_versions(version: str, versions: tuple[str, ...]) -> str:
     exact_suffixes = ("+" + version, "-" + version)
     matches = [value for value in versions if value.endswith(exact_suffixes)]
     if matches:
@@ -144,6 +147,12 @@ def _api_for(version: str) -> str:
     )
 
 
+@lru_cache(maxsize=64)
+def _api_for(version: str) -> str:
+    return _api_from_versions(version, _maven_versions(_API_METADATA_PATH))
+
+
+@lru_cache(maxsize=1)
 def _loom_version() -> str:
     # Do not scrape the rendered Develop page: the version panel is hydrated by
     # client-side JavaScript and therefore is not a stable machine interface. The
@@ -157,6 +166,7 @@ def _loom_version() -> str:
     return match.group(1).strip()
 
 
+@lru_cache(maxsize=1)
 def _gradle_version() -> str:
     text = _fetch(_FABRIC_WRAPPER).decode("utf-8", errors="replace")
     match = re.search(r"gradle-([0-9][0-9A-Za-z_.-]*)-bin\.zip", text)
@@ -165,6 +175,7 @@ def _gradle_version() -> str:
     return match.group(1)
 
 
+@lru_cache(maxsize=8)
 def _gradle_sha256(version: str) -> str:
     raw = _fetch(
         f"https://services.gradle.org/distributions/gradle-{version}-bin.zip.sha256"
@@ -174,14 +185,23 @@ def _gradle_sha256(version: str) -> str:
     return raw
 
 
-def _mojang_java_version(version: str) -> str:
+@lru_cache(maxsize=1)
+def _mojang_version_index() -> tuple[tuple[str, str], ...]:
     manifest = _json(_MOJANG_MANIFEST)
     rows = manifest.get("versions", []) if isinstance(manifest, dict) else []
-    target_url = ""
-    for row in rows:
-        if isinstance(row, dict) and str(row.get("id", "")) == version:
-            target_url = str(row.get("url", ""))
-            break
+    return tuple(
+        (str(row.get("id", "")), str(row.get("url", "")))
+        for row in rows
+        if isinstance(row, dict) and row.get("id") and row.get("url")
+    )
+
+
+@lru_cache(maxsize=64)
+def _mojang_java_version(version: str) -> str:
+    target_url = next(
+        (url for version_id, url in _mojang_version_index() if version_id == version),
+        "",
+    )
     if not target_url:
         raise PlatformDiscoveryError(
             f"Mojang version manifest does not contain Minecraft {version}"
@@ -196,6 +216,39 @@ def _mojang_java_version(version: str) -> str:
     return str(major)
 
 
+def _gradle_bundle() -> tuple[str, str]:
+    version = _gradle_version()
+    return version, _gradle_sha256(version)
+
+
+@lru_cache(maxsize=1)
+def _common_platform_metadata() -> tuple[
+    str,
+    tuple[str, ...],
+    str,
+    str,
+    str,
+    tuple[tuple[str, str], ...],
+]:
+    """Fetch version-independent official metadata once, with independent I/O overlapped."""
+
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="mmm-platform-meta") as pool:
+        loader_future = pool.submit(_stable_loader)
+        api_future = pool.submit(_maven_versions, _API_METADATA_PATH)
+        loom_future = pool.submit(_loom_version)
+        gradle_future = pool.submit(_gradle_bundle)
+        mojang_future = pool.submit(_mojang_version_index)
+        gradle, gradle_sha256 = gradle_future.result()
+        return (
+            loader_future.result(),
+            api_future.result(),
+            loom_future.result(),
+            gradle,
+            gradle_sha256,
+            mojang_future.result(),
+        )
+
+
 @lru_cache(maxsize=32)
 def discover_fabric_target(version: str) -> LiveFabricTarget:
     version = str(version).strip()
@@ -206,10 +259,15 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
             f"Minecraft {version} is not advertised by the official Fabric Meta API"
         )
 
-    loader = _stable_loader()
-    api = _api_for(version)
-    loom = _loom_version()
-    gradle = _gradle_version()
+    (
+        loader,
+        api_versions,
+        loom,
+        gradle,
+        gradle_sha256,
+        _mojang_index,
+    ) = _common_platform_metadata()
+    api = _api_from_versions(version, api_versions)
     java = _mojang_java_version(version)
 
     # MMM's live path deliberately standardizes on Mojang names. For 26.1+ the game
@@ -227,7 +285,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
         "loom_version": loom,
         "java_version": java,
         "gradle_version": gradle,
-        "gradle_sha256": _gradle_sha256(gradle),
+        "gradle_sha256": gradle_sha256,
         "mappings_kind": mappings_kind,
         "mappings_version": mappings_version,
         "sources": [
@@ -250,7 +308,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
         loom_version=loom,
         java_version=java,
         gradle_version=gradle,
-        gradle_sha256=payload["gradle_sha256"],
+        gradle_sha256=gradle_sha256,
         mappings_kind=mappings_kind,
         mappings_version=mappings_version,
         discovery_sha256="sha256:" + digest,
