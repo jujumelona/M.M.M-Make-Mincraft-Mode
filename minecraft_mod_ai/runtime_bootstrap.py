@@ -428,6 +428,7 @@ def _install_post_bootstrap_contracts() -> None:
     from .causal_tool_frontier_contract import install as install_causal_tool_frontier
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
+    from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
     from .small_model_compacting_adapter import CompactingAdapter
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
@@ -495,3 +496,4 @@ def _install_post_bootstrap_contracts() -> None:
     research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
     install_bottleneck_elimination()
+    install_research_bottleneck_runtime()
