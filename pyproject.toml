@@ -52,6 +52,7 @@ production-audio = ["numpy>=1.26,<3", "soundfile>=0.12,<1"]
 training = []
 dev = [
   "gradio>=5.0,<6",
+  "jsonschema>=4.23,<5",
   "nbformat>=5.10,<6",
   "Pillow>=10.4,<13",
   "pytest>=8,<10",
