@@ -6,6 +6,7 @@ from __future__ import annotations
 def install() -> None:
     from . import centroid_vector_rag, rag_index, runner, trajectory_memory
     from . import research_rag_performance as rag_performance
+    from .long_run_resilience_contract import install as install_long_run_resilience
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
@@ -27,6 +28,7 @@ def install() -> None:
 
     harden_cpu_retrieval()
     harden_gradle(runner)
+    install_long_run_resilience()
 
 
 __all__ = ["install"]
