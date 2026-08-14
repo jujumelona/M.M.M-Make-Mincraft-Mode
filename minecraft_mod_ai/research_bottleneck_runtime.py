@@ -6,12 +6,16 @@ from __future__ import annotations
 def install() -> None:
     from . import centroid_vector_rag, rag_index, runner, trajectory_memory
     from . import research_rag_performance as rag_performance
+    from . import validation_execution_contract
     from .long_run_resilience_contract import install as install_long_run_resilience
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
     from .research_rag_amortized_runtime import harden as harden_rag_amortized
     from .research_rag_performance import harden as harden_rag
+    from .research_validation_fingerprint_performance import (
+        harden as harden_validation_fingerprints,
+    )
 
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
@@ -28,6 +32,7 @@ def install() -> None:
 
     harden_cpu_retrieval()
     harden_gradle(runner)
+    harden_validation_fingerprints(validation_execution_contract)
     install_long_run_resilience()
 
 
