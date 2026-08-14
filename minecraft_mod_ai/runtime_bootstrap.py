@@ -420,8 +420,11 @@ def _install_post_bootstrap_contracts() -> None:
         production_tools,
         repair_engine,
         research_coordinator,
+        work_graph,
     )
+    from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .agent_security_contract import install as install_agent_security
+    from .causal_tool_frontier_contract import install as install_causal_tool_frontier
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .small_model_compacting_adapter import CompactingAdapter
@@ -430,6 +433,7 @@ def _install_post_bootstrap_contracts() -> None:
     from .small_model_relation_index_contract import install as install_small_model_relation_index
     from .small_model_research_contract import install as install_small_model_research
     from .small_model_tool_guard_contract import install as install_small_model_tool_guard
+    from .temporary_skill_contract import install as install_temporary_skill
 
     if not hasattr(central_research, "_bounded_text"):
         def _full_research_text(value: str, *, field: str = "research text") -> str:
@@ -453,8 +457,15 @@ def _install_post_bootstrap_contracts() -> None:
         optimization_module=agentic_optimization_contract,
     )
     install_small_model_tool_guard(install_small_model_max_agent)
+    install_causal_tool_frontier(install_small_model_max_agent)
     install_small_model_relation_index(production_tools)
     install_small_model_hybrid_search(production_tools)
+    install_temporary_skill(
+        model_router_module=model_router,
+        work_graph_module=work_graph,
+        repair_module=repair_engine,
+    )
+    install_active_repair_verifier(agentic_optimization_contract)
 
     current_tool_loop = model_router.ModelRouter._generate_with_tools
     if not getattr(current_tool_loop, "_mmm_lossless_context_compaction", False):
