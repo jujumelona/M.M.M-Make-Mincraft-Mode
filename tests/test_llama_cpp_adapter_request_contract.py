@@ -108,7 +108,7 @@ def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatc
     assert "SECRET_PROMPT_SENTINEL" not in message
 
 
-def test_generate_turn_preserves_schema_for_non_tool_json(monkeypatch) -> None:
+def test_generate_turn_keeps_detailed_schema_host_side_for_non_tool_json(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
@@ -127,16 +127,14 @@ def test_generate_turn_preserves_schema_for_non_tool_json(monkeypatch) -> None:
         "required": ["value"],
         "additionalProperties": False,
     }
-    turn = _adapter().generate_turn(
-        GenerationRequest(
-            messages=({"role": "user", "content": "structured"},),
-            response_format="json",
-            response_schema=schema,
-        )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "structured"},),
+        response_format="json",
+        response_schema=schema,
     )
+    turn = _adapter().generate_turn(request)
 
     assert turn.content == '{"value":"ok"}'
-    assert captured["payload"]["response_format"] == {
-        "type": "json_object",
-        "schema": schema,
-    }
+    assert request.response_schema == schema
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert "schema" not in captured["payload"]["response_format"]

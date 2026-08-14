@@ -77,7 +77,6 @@ def test_recovery_expansion_is_collapsed_on_host_before_next_model_level():
     def synthesize(*args, **kwargs):
         group = kwargs["group"]
         frontier_sizes.append(len(group))
-        # Simulate validated recovery children that would otherwise keep/expand work.
         return [_rich_note(), _rich_note()]
 
     module = SimpleNamespace(
@@ -98,6 +97,65 @@ def test_recovery_expansion_is_collapsed_on_host_before_next_model_level():
     )
     assert result["domain_id"] == "mk_platform"
     assert len(frontier_sizes) < 10
+
+
+def test_raw_evidence_leaves_reach_first_synthesis_before_host_compaction():
+    delivered: list[str] = []
+
+    def base_group(notes):
+        return [[note] for note in notes]
+
+    def synthesize(*args, **kwargs):
+        group = kwargs["group"]
+        fragment = group[0].get("evidence_fragment")
+        if isinstance(fragment, dict):
+            delivered.append(str(fragment.get("content", "")))
+        return [
+            {
+                "domain_id": "mk_platform",
+                "claims": [],
+                "gaps": [],
+                "next_queries": [],
+                "sufficient": True,
+            }
+        ]
+
+    module = SimpleNamespace(
+        _SYNTHESIS_PROTOCOL_SCHEMA="v2",
+        _SYNTHESIS_INPUT_BYTES=3600,
+        _group_synthesis_notes=base_group,
+        _synthesize_group_with_recovery=synthesize,
+        _emit_research_progress=lambda *args, **kwargs: None,
+    )
+    contract._install_synthesis_convergence(module)
+    page_notes = [
+        {
+            "domain_id": "mk_platform",
+            "claims": [],
+            "gaps": [],
+            "next_queries": [],
+            "sufficient": True,
+            "evidence_fragment": {
+                "page_ref": f"page-{index}",
+                "content_sha256": f"sha-{index}",
+                "content": content,
+            },
+        }
+        for index, content in enumerate(("RAW-A", "RAW-B"))
+    ]
+
+    result = module._hierarchical_synthesis(
+        None,
+        None,
+        prompt="x",
+        domain={"domain_id": "mk_platform"},
+        page_notes=page_notes,
+        domain_key="unit-test",
+        failures=[],
+    )
+
+    assert result["domain_id"] == "mk_platform"
+    assert delivered == ["RAW-A", "RAW-B"]
 
 
 def test_tool_schema_projection_resolves_refs_and_drops_grammar_hazards():
@@ -146,14 +204,7 @@ def test_tool_schema_projection_resolves_refs_and_drops_grammar_hazards():
     assert tool["function"]["parameters"]["$ref"] == "#/$defs/Request"
 
 
-def test_exact_llama_grammar_400_retries_once_with_minimal_host_validated_schema():
-    class Response:
-        def __init__(self, status_code: int, text: str):
-            self.status_code = status_code
-            self.text = text
-
-    calls: list[dict[str, object]] = []
-
+def test_tool_schema_is_projected_before_first_request_without_retry_layer():
     def raw_payload(adapter, request):
         del adapter, request
         return {
@@ -172,35 +223,22 @@ def test_exact_llama_grammar_400_retries_once_with_minimal_host_validated_schema
             ]
         }
 
-    responses = [
-        Response(400, '{"error":{"message":"Failed to initialize samplers: failed to parse grammar"}}'),
-        Response(200, "ok"),
-    ]
-
-    def raw_post(server_url, payload):
-        del server_url
-        calls.append(payload)
-        return responses.pop(0)
-
     policy = SimpleNamespace(_server_payload=raw_payload)
-    adapter = SimpleNamespace(_post_completion=raw_post)
-    contract._install_llama_grammar_safety(policy, adapter)
+    contract._install_llama_tool_schema_projection(policy)
     payload = policy._server_payload(None, None)
-    response = adapter._post_completion("http://127.0.0.1:8910/v1", payload)
 
-    assert response.status_code == 200
-    assert len(calls) == 2
-    assert calls[0]["tools"][0]["function"]["parameters"]["properties"]["q"] == {"type": "string"}
-    assert calls[1]["tools"][0]["function"]["parameters"] == {
+    assert getattr(policy._server_payload, "_mmm_grammar_safe_tools_v1", False)
+    assert payload["tools"][0]["function"]["parameters"] == {
         "type": "object",
-        "properties": {},
+        "properties": {"q": {"type": "string"}},
+        "required": ["q"],
     }
 
 
-def test_unrelated_http_400_is_never_retried():
+def test_http_400_transport_is_not_wrapped_or_retried_by_stability_contract():
     class Response:
         status_code = 400
-        text = "bad request"
+        text = '{"error":{"message":"Failed to initialize samplers: failed to parse grammar"}}'
 
     calls = 0
 
@@ -210,9 +248,13 @@ def test_unrelated_http_400_is_never_retried():
         calls += 1
         return Response()
 
-    policy = SimpleNamespace(_server_payload=lambda adapter, request: {})
     adapter = SimpleNamespace(_post_completion=raw_post)
-    contract._install_llama_grammar_safety(policy, adapter)
+    original_post = adapter._post_completion
+    policy = SimpleNamespace(_server_payload=lambda adapter, request: {})
+
+    contract._install_llama_tool_schema_projection(policy)
+    assert adapter._post_completion is original_post
+
     response = adapter._post_completion("http://localhost", {})
     assert response.status_code == 400
     assert calls == 1

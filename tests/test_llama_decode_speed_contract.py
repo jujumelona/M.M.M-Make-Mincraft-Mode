@@ -202,10 +202,9 @@ def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
         tools=(),
     )
     payload = hardware_policy._server_payload(adapter, structured)
-    assert payload["response_format"] == {
-        "type": "json_object",
-        "schema": schema,
-    }
+    assert structured.response_schema == schema
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "schema" not in payload["response_format"]
 
     tool_request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then return json"},),
@@ -226,6 +225,7 @@ def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
     tool_payload = hardware_policy._server_payload(adapter, tool_request)
     assert "response_format" not in tool_payload
     assert tool_payload["tools"][0]["function"]["name"] == "lookup"
+
 
 def test_default_policy_searches_for_decode_speed_without_overfitting_exact_grid(
     monkeypatch,

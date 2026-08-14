@@ -154,15 +154,25 @@ def _install_synthesis_convergence(module: Any) -> None:
     module._SYNTHESIS_PROTOCOL_SCHEMA = _SYNTHESIS_PROTOCOL_V3
     synthesize_group = module._synthesize_group_with_recovery
     emit = module._emit_research_progress
+    original_group = getattr(module, "_group_synthesis_notes", None)
 
     def group_synthesis_notes(notes: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-        """Always create a contracting pairwise frontier within the byte budget."""
+        """Preserve raw evidence leaves, then pairwise-contract synthesized notes."""
 
-        compact = [_compact_synthesis_note(note) for note in notes]
-        groups = [compact[index : index + 2] for index in range(0, len(compact), 2)]
+        has_raw_evidence = any(
+            isinstance(note.get("evidence_fragment"), Mapping) for note in notes
+        )
+        if has_raw_evidence and callable(original_group):
+            # Raw page fragments are the lossless model input. The base packer already
+            # respects the synthesis byte budget, so never compact those leaves before
+            # the model has seen them. Only model-produced intermediate notes are bounded.
+            groups = original_group(notes)
+        else:
+            compact = [_compact_synthesis_note(note) for note in notes]
+            groups = [compact[index : index + 2] for index in range(0, len(compact), 2)]
         for group in groups:
             if _json_bytes(group) > int(module._SYNTHESIS_INPUT_BYTES):
-                raise RuntimeError("bounded synthesis pair exceeded its transport budget")
+                raise RuntimeError("bounded synthesis group exceeded its transport budget")
         return groups
 
     def terminal_gap(domain_id: str, reason: str) -> dict[str, Any]:
@@ -185,10 +195,11 @@ def _install_synthesis_convergence(module: Any) -> None:
         failures: list[dict[str, str]],
     ) -> dict[str, Any]:
         domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-        current = page_notes or [
-            terminal_gap(domain_id, "No readable evidence page note was produced.")
-        ]
-        current = [_compact_synthesis_note(note, domain_id=domain_id) for note in current]
+        current = (
+            [dict(note) for note in page_notes]
+            if page_notes
+            else [terminal_gap(domain_id, "No readable evidence page note was produced.")]
+        )
         initial_count = len(current)
         max_levels = 2 * math.ceil(math.log2(max(2, initial_count))) + 4
         seen: set[str] = set()
@@ -234,6 +245,10 @@ def _install_synthesis_convergence(module: Any) -> None:
                 )
 
             if len(next_level) >= len(current):
+                # Once every raw leaf in this frontier has reached the model, a valid but
+                # non-contracting set of summaries can be collapsed deterministically on
+                # the host. This prevents an infinite model loop without dropping evidence
+                # before its first synthesis pass.
                 next_level = [
                     _merge_synthesis_notes(
                         next_level[index : index + 2],

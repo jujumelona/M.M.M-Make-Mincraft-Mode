@@ -13,7 +13,7 @@ def _adapter(max_new_tokens: int = 8192):
     return SimpleNamespace(config=SimpleNamespace(max_new_tokens=max_new_tokens))
 
 
-def test_json_request_uses_schema_when_no_tools_are_present() -> None:
+def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     schema = {
         "type": "object",
         "properties": {"value": {"type": "string"}},
@@ -30,10 +30,9 @@ def test_json_request_uses_schema_when_no_tools_are_present() -> None:
         tools=(),
     )
     payload = _server_payload(_adapter(), request)
-    assert payload["response_format"] == {
-        "type": "json_object",
-        "schema": schema,
-    }
+    assert request.response_schema == schema
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "schema" not in payload["response_format"]
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
