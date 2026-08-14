@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_vram_parallel_policy as policy
@@ -28,6 +29,13 @@ def _agentic(base_width=1, mode="auto"):
     return SimpleNamespace(
         _planner_candidate_count=lambda request, stage: base_width,
         _mode=lambda: mode,
+    )
+
+
+def _runtime_receipt(slots: int) -> str:
+    return json.dumps(
+        {"schema_version": "mmm/llama-runtime-receipt-v1", "slots": slots},
+        sort_keys=True,
     )
 
 
@@ -67,8 +75,9 @@ def test_original_feasible_decision_remains_authoritative():
     assert runtime._parallel_resource_feasible(4, config, "/model.gguf", resources)
 
 
-def test_planner_fills_validated_active_slots(monkeypatch):
+def test_planner_fills_only_receipt_validated_active_slots(monkeypatch):
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "4")
+    monkeypatch.setenv("MMM_LLAMA_RUNTIME_RECEIPT", _runtime_receipt(4))
     monkeypatch.delenv("MMM_PLAN_SEARCH_WIDTH", raising=False)
     monkeypatch.delenv("MMM_PLAN_FILL_ACTIVE_LLAMA_SLOTS", raising=False)
     runtime = _runtime()
@@ -78,8 +87,19 @@ def test_planner_fills_validated_active_slots(monkeypatch):
     assert agentic._planner_candidate_count({}, "plan") == 4
 
 
+def test_planner_does_not_fan_out_from_stale_parallel_env(monkeypatch):
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "4")
+    monkeypatch.delenv("MMM_LLAMA_RUNTIME_RECEIPT", raising=False)
+    runtime = _runtime()
+    agentic = _agentic(base_width=1)
+    policy.install(runtime, agentic)
+
+    assert agentic._planner_candidate_count({}, "plan") == 1
+
+
 def test_planner_respects_explicit_search_width_and_latency(monkeypatch):
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "4")
+    monkeypatch.setenv("MMM_LLAMA_RUNTIME_RECEIPT", _runtime_receipt(4))
     monkeypatch.setenv("MMM_PLAN_SEARCH_WIDTH", "2")
     runtime = _runtime()
     agentic = _agentic(base_width=2)
@@ -103,7 +123,7 @@ def test_selection_version_forces_one_reconsideration_and_install_is_idempotent(
 
     assert runtime._selection_inputs(SimpleNamespace(model_id="qwen"))[
         "vram_parallel_policy_version"
-    ] == 1
+    ] == 2
 
     policy.install(runtime, agentic)
     assert runtime._parallel_resource_feasible is first_resource

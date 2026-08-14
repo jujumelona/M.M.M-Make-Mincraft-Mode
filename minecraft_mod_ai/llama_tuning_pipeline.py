@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 21
+_TUNING_PIPELINE_VERSION = 22
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -155,6 +155,13 @@ class NativeLlamaTuningPipeline:
                 hardware = ""
             if "t4" not in hardware:
                 self.runtime_tuning._ubatch_candidates = original_ubatch_candidates
+            # Keep the public six-stage composition stable. VRAM-first admission is
+            # a final kernel/runtime policy refinement, not a seventh ownership
+            # layer, and is installed only after all planner/decode wrappers exist.
+            install_vram_parallel(
+                self.runtime_tuning,
+                agentic_optimization_contract,
+            )
 
         return (
             TuningStage("hardware", install_hardware_stage),
@@ -176,17 +183,6 @@ class NativeLlamaTuningPipeline:
             # independent K/V cache types first, then let the already-installed
             # MTP/ubatch/cache-reuse stages refine that measured winner.
             TuningStage("kernel-autotune", install_kernel_stage),
-            # Last policy layer: reuse the validated native p1/p2/p4 probes, but do
-            # not double-charge the shared model against host RAM when admitting
-            # extra slots. Then feed every successfully launched slot from planner
-            # candidate search so the selected VRAM capacity is actually exercised.
-            TuningStage(
-                "vram-parallel",
-                lambda: install_vram_parallel(
-                    self.runtime_tuning,
-                    agentic_optimization_contract,
-                ),
-            ),
         )
 
     def install(self) -> None:

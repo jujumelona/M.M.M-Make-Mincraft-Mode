@@ -8,15 +8,18 @@ duplicated host-RAM model reserve from *automatic extra-slot admission* and
 feeds every successfully activated llama slot during planner candidate search.
 """
 
+import json
 import os
 from functools import wraps
 from typing import Any
 
-_POLICY_VERSION = 1
+_POLICY_VERSION = 2
 _MIB = 1024 * 1024
-_RESOURCE_MARKER = "_mmm_vram_parallel_resource_policy_v1"
-_SELECTION_MARKER = "_mmm_vram_parallel_selection_policy_v1"
-_PLANNER_MARKER = "_mmm_fill_active_llama_slots_v1"
+_RESOURCE_MARKER = "_mmm_vram_parallel_resource_policy_v2"
+_SELECTION_MARKER = "_mmm_vram_parallel_selection_policy_v2"
+_PLANNER_MARKER = "_mmm_fill_active_llama_slots_v2"
+_LEGACY_PLANNER_MARKER = "_mmm_fill_active_llama_slots_v1"
+_RUNTIME_RECEIPT_SCHEMA = "mmm/llama-runtime-receipt-v1"
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -32,6 +35,29 @@ def _active_parallelism() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
+
+
+def _validated_active_parallelism() -> int:
+    """Return slots only when the managed runtime receipt proves they are live."""
+    active = _active_parallelism()
+    if active <= 1:
+        return 1
+    raw = os.environ.get("MMM_LLAMA_RUNTIME_RECEIPT", "").strip()
+    if not raw:
+        return 1
+    try:
+        receipt = json.loads(raw)
+    except Exception:
+        return 1
+    if not isinstance(receipt, dict):
+        return 1
+    if str(receipt.get("schema_version", "")) != _RUNTIME_RECEIPT_SCHEMA:
+        return 1
+    try:
+        receipt_slots = max(1, min(8, int(receipt.get("slots", 1))))
+    except (TypeError, ValueError):
+        return 1
+    return active if receipt_slots == active else 1
 
 
 def _install_resource_admission(runtime_tuning: Any) -> None:
@@ -55,11 +81,9 @@ def _install_resource_admission(runtime_tuning: Any) -> None:
 
         # Extra llama-server slots share the one mmap/offloaded model. The old
         # gate charged 40% of model size again against MemAvailable for every
-        # p2/p4 admission decision. On a T4 Colab this can reject all extra
-        # slots while several GiB of VRAM are idle. Keep the full GPU/KV model
-        # budget and a conservative server/slot host-RAM reserve; the existing
-        # live parallel probe and sequential p4->p2->p1 launch fallback remain
-        # the final safety authority.
+        # p2/p4 admission decision. Keep the complete model+KV GPU budget and a
+        # conservative server/slot host reserve; the existing live p1/p2/p4
+        # probe plus sequential launch fallback remains the final authority.
         try:
             context = runtime_tuning._per_request_context(config)
             total_context = runtime_tuning._total_context(context, slots)
@@ -106,6 +130,12 @@ def _install_planner_slot_filling(runtime_tuning: Any, agentic_module: Any) -> N
     current = agentic_module._planner_candidate_count
     if getattr(current, _PLANNER_MARKER, False):
         return
+    # A live Colab can upgrade from v1 without retaining v1's broader env-only
+    # fan-out behavior. functools.wraps exposes the exact previous callable.
+    if getattr(current, _LEGACY_PLANNER_MARKER, False):
+        previous = getattr(current, "__wrapped__", None)
+        if callable(previous):
+            current = previous
 
     @wraps(current)
     def planner_candidate_count(request: Any, stage: str) -> int:
@@ -125,10 +155,10 @@ def _install_planner_slot_filling(runtime_tuning: Any, agentic_module: Any) -> N
         except Exception:
             pass
 
-        # MMM_LLAMA_ACTIVE_PARALLEL is exported only after the managed server
-        # has actually launched a validated slot count. Never fan out beyond
-        # that live capacity.
-        return max(width, _active_parallelism())
+        # ACTIVE_PARALLEL alone can be inherited by tests/external endpoints.
+        # Only the managed receipt is proof that those slots were launched and
+        # validated by this runtime, so only then widen candidate fan-out.
+        return max(width, _validated_active_parallelism())
 
     setattr(planner_candidate_count, _PLANNER_MARKER, True)
     agentic_module._planner_candidate_count = planner_candidate_count
