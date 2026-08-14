@@ -4,7 +4,13 @@ from __future__ import annotations
 
 
 def install() -> None:
-    from . import centroid_vector_rag, rag_index, runner, trajectory_memory
+    from . import (
+        agentic_pre_design_rag,
+        centroid_vector_rag,
+        rag_index,
+        runner,
+        trajectory_memory,
+    )
     from . import research_rag_performance as rag_performance
     from . import validation_execution_contract
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
@@ -12,12 +18,14 @@ def install() -> None:
     from .research_memory_performance import harden as harden_memory
     from .research_rag_amortized_runtime import harden as harden_rag_amortized
     from .research_rag_performance import harden as harden_rag
+    from .research_synthesis_performance import harden as harden_synthesis
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
 
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
+    harden_synthesis(agentic_pre_design_rag)
     indexed_append, indexed_relevant = harden_memory(trajectory_memory)
 
     # temporary_skill_contract imported these functions by value before this late

@@ -15,6 +15,8 @@ from .project_write_lock import project_write_lock
 
 
 _SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
+_SNAPSHOT_WAVE_LOCK = threading.RLock()
+_SNAPSHOT_WAVES: dict[Path, dict[str, Any]] = {}
 _CAPTURE = threading.local()
 _FICLONE = 0x40049409
 _SKIP_STAGE_SUFFIXES = {
@@ -163,10 +165,17 @@ def _install_staged_custom_generator(
         if not live_root.is_dir() or live_root.is_symlink():
             return original(self, project_root, *args, **kwargs)
 
-        # A consistent source snapshot is needed only while the cheap clone is made;
-        # the long LLM call then runs without holding the project mutation lock.
-        with project_write_lock(live_root):
-            staging_root = _clone_source_snapshot(live_root)
+        # Overlapping custom jobs form one immutable source wave. The first job takes
+        # one lock-protected snapshot of the live project; later jobs clone isolated
+        # workspaces from that immutable base without rescanning the live tree under
+        # the project mutation lock. Three-way commit below rebases every result.
+        base_snapshot = _acquire_wave_source_snapshot(live_root)
+        staging_root: Path | None = None
+        try:
+            staging_root = _clone_wave_workspace(base_snapshot, live_root)
+        except BaseException:
+            _release_wave_source_snapshot(live_root, base_snapshot)
+            raise
 
         previous_index = getattr(self, "_cached_index", None)
         previous_root = getattr(self, "_cached_root", None)
@@ -216,16 +225,27 @@ def _install_staged_custom_generator(
                 _CAPTURE.staging_root = old_staging_root
             self._cached_index = previous_index
             self._cached_root = previous_root
-            shutil.rmtree(staging_root, ignore_errors=True)
+            if staging_root is not None:
+                shutil.rmtree(staging_root, ignore_errors=True)
+            _release_wave_source_snapshot(live_root, base_snapshot)
 
     staged_generate._mmm_staged_custom = True
     cls.generate = staged_generate
 
 
-def _clone_source_snapshot(live_root: Path) -> Path:
+def _snapshot_parent(live_root: Path) -> Path:
     parent = live_root.parent / ".mmm-parallel-staging"
     parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix="custom-", dir=parent)).resolve()
+    return parent.resolve()
+
+
+def _clone_snapshot_tree(
+    source_root: Path,
+    *,
+    parent: Path,
+    prefix: str,
+) -> Path:
+    stage = Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
     # mkdtemp creates the target; copytree needs a missing directory.
     stage.rmdir()
 
@@ -249,7 +269,7 @@ def _clone_source_snapshot(live_root: Path) -> Path:
 
     try:
         shutil.copytree(
-            live_root,
+            source_root,
             stage,
             copy_function=_reflink_or_copy,
             ignore=ignore,
@@ -258,6 +278,64 @@ def _clone_source_snapshot(live_root: Path) -> Path:
         shutil.rmtree(stage, ignore_errors=True)
         raise
     return stage
+
+
+def _clone_source_snapshot(live_root: Path) -> Path:
+    """Create one independent filtered source snapshot (public test/helper surface)."""
+
+    return _clone_snapshot_tree(
+        live_root,
+        parent=_snapshot_parent(live_root),
+        prefix="custom-",
+    )
+
+
+def _acquire_wave_source_snapshot(live_root: Path) -> Path:
+    live_root = live_root.resolve()
+    with _SNAPSHOT_WAVE_LOCK:
+        current = _SNAPSHOT_WAVES.get(live_root)
+        if current is not None:
+            snapshot = Path(current["snapshot"])
+            if snapshot.is_dir():
+                current["active"] = int(current.get("active", 0)) + 1
+                return snapshot
+            _SNAPSHOT_WAVES.pop(live_root, None)
+
+        # Only the first overlapping custom job scans the live project. Holding the
+        # wave lock prevents a duplicate creator; commits never take this lock.
+        with project_write_lock(live_root):
+            snapshot = _clone_snapshot_tree(
+                live_root,
+                parent=_snapshot_parent(live_root),
+                prefix="wave-base-",
+            )
+        _SNAPSHOT_WAVES[live_root] = {"snapshot": snapshot, "active": 1}
+        return snapshot
+
+
+def _clone_wave_workspace(base_snapshot: Path, live_root: Path) -> Path:
+    return _clone_snapshot_tree(
+        base_snapshot,
+        parent=_snapshot_parent(live_root),
+        prefix="custom-",
+    )
+
+
+def _release_wave_source_snapshot(live_root: Path, snapshot: Path) -> None:
+    live_root = live_root.resolve()
+    cleanup: Path | None = None
+    with _SNAPSHOT_WAVE_LOCK:
+        current = _SNAPSHOT_WAVES.get(live_root)
+        if current is None or Path(current.get("snapshot", "")) != snapshot:
+            return
+        active = max(0, int(current.get("active", 0)) - 1)
+        if active:
+            current["active"] = active
+        else:
+            _SNAPSHOT_WAVES.pop(live_root, None)
+            cleanup = snapshot
+    if cleanup is not None:
+        shutil.rmtree(cleanup, ignore_errors=True)
 
 
 def _reflink_or_copy(source: str, target: str) -> str:

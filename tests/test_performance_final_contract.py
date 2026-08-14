@@ -9,7 +9,10 @@ from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.performance_final_contract import (
     StagedCommitConflict,
+    _acquire_wave_source_snapshot,
     _clone_source_snapshot,
+    _clone_wave_workspace,
+    _release_wave_source_snapshot,
     _three_way_merge,
 )
 from minecraft_mod_ai.work_graph import _module_stage, _node
@@ -121,6 +124,39 @@ def test_custom_staging_clones_only_indexable_source_text(tmp_path: Path) -> Non
     assert not (stage / image.relative_to(project)).exists()
     assert not (stage / build_output.relative_to(project)).exists()
     assert not (stage / ai_receipt.relative_to(project)).exists()
+
+
+def test_overlapping_custom_jobs_share_one_immutable_wave_snapshot(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    source = project / "src/main/java/example/Example.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("class Example {}\n", encoding="utf-8")
+
+    first = _acquire_wave_source_snapshot(project)
+    second = _acquire_wave_source_snapshot(project)
+    assert first == second
+    assert first.is_dir()
+
+    workspace_a = _clone_wave_workspace(first, project)
+    workspace_b = _clone_wave_workspace(second, project)
+    staged_a = workspace_a / source.relative_to(project)
+    staged_b = workspace_b / source.relative_to(project)
+    staged_a.write_text("class Example { int a; }\n", encoding="utf-8")
+
+    assert staged_b.read_text(encoding="utf-8") == "class Example {}\n"
+    assert (first / source.relative_to(project)).read_text(encoding="utf-8") == (
+        "class Example {}\n"
+    )
+    assert source.read_text(encoding="utf-8") == "class Example {}\n"
+
+    import shutil
+
+    shutil.rmtree(workspace_a, ignore_errors=True)
+    shutil.rmtree(workspace_b, ignore_errors=True)
+    _release_wave_source_snapshot(project, first)
+    assert first.is_dir()
+    _release_wave_source_snapshot(project, second)
+    assert not first.exists()
 
 
 def test_staged_java_merge_preserves_independent_insertions() -> None:
