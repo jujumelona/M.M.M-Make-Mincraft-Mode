@@ -32,6 +32,7 @@ def install() -> None:
         harden as harden_validation_fingerprints,
     )
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
+    from .small_model_concurrency_budget import harden as harden_model_concurrency
     from .work_graph_hash_performance import harden as harden_work_graph_hashes
 
     harden_rag(rag_index, centroid_vector_rag)
@@ -46,6 +47,10 @@ def install() -> None:
         research_adaptive_rag_routing,
     )
     harden_adaptive_compute(
+        agentic_research_game_design,
+        central_intelligence_amplifier,
+    )
+    harden_model_concurrency(
         agentic_research_game_design,
         central_intelligence_amplifier,
     )
