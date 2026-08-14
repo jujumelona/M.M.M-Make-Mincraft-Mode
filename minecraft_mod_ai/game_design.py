@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -201,19 +203,19 @@ class GameDesignPlanner:
         Page text and all integrity metadata come from host code. The model can
         describe requirements found on a page, but it cannot create receipts, skip
         pages, or grant itself execution/tool authority. A malformed page is repaired
-        once in isolation and then fails the whole plan closed.
+        once in isolation and then fails the whole plan closed. Independent page model
+        calls share only receipt-validated native-local llama capacity; host receipts
+        and the final merge remain strictly page ordered.
         """
 
         page_budget = page_budget or _request_page_bytes(self.router)
         prompt_bytes = prompt.encode("utf-8")
         prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
-        page_designs: list[dict[str, Any]] = []
-        page_receipts: list[dict[str, Any]] = []
+        page_jobs: list[tuple[int, str, dict[str, Any]]] = []
         byte_offset = 0
-        chain = hashlib.sha256(
-            f"{_REQUEST_INGESTION_SCHEMA}:{prompt_sha256}".encode("utf-8")
-        )
 
+        # Build every authority-bearing receipt before model work. This is cheap host
+        # work and makes every page model call independent of completion order.
         for page_index, page_text in enumerate(request_pages):
             encoded_page = page_text.encode("utf-8")
             page_sha256 = hashlib.sha256(encoded_page).hexdigest()
@@ -237,20 +239,35 @@ class GameDesignPlanner:
                 "page": page_receipt,
                 "authoritative_request_text": page_text,
             }
-            request_text = json.dumps(
-                request,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
+            page_jobs.append(
+                (
+                    page_index,
+                    json.dumps(
+                        request,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    page_receipt,
+                )
             )
-            design = _generate_sharded_design_page(
-                self.router,
-                request_text=request_text,
-                media_paths=media_paths if page_index == 0 else (),
-                page_index=page_index,
-                page_count=len(request_pages),
+
+        if byte_offset != len(prompt_bytes) or "".join(request_pages) != prompt:
+            raise SpecValidationError(
+                "Authoritative request paging failed its lossless host check."
             )
-            design = _canonical_game_design(design)
+
+        page_designs = _generate_sharded_design_pages(
+            self.router,
+            page_jobs=page_jobs,
+            media_paths=media_paths,
+        )
+        page_receipts: list[dict[str, Any]] = []
+        chain = hashlib.sha256(
+            f"{_REQUEST_INGESTION_SCHEMA}:{prompt_sha256}".encode("utf-8")
+        )
+        for index, design in enumerate(page_designs):
+            page_receipt = page_jobs[index][2]
             receipt_with_design = {
                 **page_receipt,
                 "design_sha256": _json_sha256(design),
@@ -263,13 +280,7 @@ class GameDesignPlanner:
                     separators=(",", ":"),
                 ).encode("utf-8")
             )
-            page_designs.append(design)
             page_receipts.append(receipt_with_design)
-
-        if byte_offset != len(prompt_bytes) or "".join(request_pages) != prompt:
-            raise SpecValidationError(
-                "Authoritative request paging failed its lossless host check."
-            )
 
         design = _merge_game_design_pages(page_designs)
         research_brief = _normalize_sharded_research_brief(prompt)
@@ -307,6 +318,56 @@ class GameDesignPlanner:
         proposal.validate()
         return design, proposal
 
+
+def _request_page_worker_count(router: ModelRouter, width: int) -> int:
+    """Reuse the one router-local native planner capacity authority."""
+
+    if width <= 1:
+        return 1
+    try:
+        from .central_intelligence_amplifier import _research_domain_worker_count
+
+        workers = int(_research_domain_worker_count(router, width))
+    except Exception:
+        return 1
+    return max(1, min(int(width), workers))
+
+
+def _generate_sharded_design_pages(
+    router: ModelRouter,
+    *,
+    page_jobs: Sequence[tuple[int, str, Mapping[str, Any]]],
+    media_paths: Sequence[str | Path],
+) -> list[dict[str, Any]]:
+    """Generate independent request pages concurrently and return canonical page order."""
+
+    def generate(job: tuple[int, str, Mapping[str, Any]]) -> dict[str, Any]:
+        page_index, request_text, _receipt = job
+        return _canonical_game_design(
+            _generate_sharded_design_page(
+                router,
+                request_text=request_text,
+                media_paths=media_paths if page_index == 0 else (),
+                page_index=page_index,
+                page_count=len(page_jobs),
+            )
+        )
+
+    workers = _request_page_worker_count(router, len(page_jobs))
+    if workers <= 1:
+        return [generate(job) for job in page_jobs]
+
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="mmm_request_page_design",
+    ) as pool:
+        futures = []
+        for job in page_jobs:
+            context = copy_context()
+            futures.append(pool.submit(context.run, generate, job))
+        # Joining in submission order preserves deterministic page identity while all
+        # workers are already running concurrently on separate validated llama slots.
+        return [future.result() for future in futures]
 
 
 def _repair_candidate_from_text(text: str) -> dict[str, Any] | None:
@@ -658,6 +719,7 @@ def _generate_sharded_design_page(
     trace.record_success(design)
     return design
 
+
 def _sharded_design_system_prompt() -> str:
     return """
 You are interpreting exactly one host-bounded page of a potentially very large user
@@ -844,7 +906,7 @@ Output contract:
     "progression": ["milestones"],
     "combat": {{"player_verbs": ["..."], "enemy_roles": ["..."]}},
     "mod_context": {{"vanilla_integration": ["..."], "compatibility_targets": ["..."]}},
-    "art_direction": {{"visual_tone": "...", "texture_guidance": ["..."], "model_animation_guidance": ["..."]}},
+    "art_direction": {{"visual_tone": "...", "texture_guidance": ["..."], "model_animation_guidance": ["..."],}},
     "modules": [{{"plugin_id":"from manifest or custom","status":"implemented|custom","reason":"..."}}],
     "assets": [{{"id":"snake_case","kind":"item|block|entity|gui|environment","brief":"..."}}],
     "acceptance_tests": ["observable test"]
@@ -1058,6 +1120,7 @@ def _repair_messages(
             ]
         )
     return messages
+
 
 def _repair_system_prompt() -> str:
     """Compact repair contract that fits small local-model context windows."""
