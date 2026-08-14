@@ -13,6 +13,8 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from functools import wraps
 from typing import Any
 
@@ -147,6 +149,19 @@ def _frontier_sha(notes: Sequence[Mapping[str, Any]]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _synthesis_worker_count(router: Any, width: int) -> int:
+    """Reuse the one native llama capacity authority for independent synthesis groups."""
+
+    if router is None or width <= 1:
+        return 1
+    try:
+        from .central_intelligence_amplifier import _research_domain_worker_count
+
+        return max(1, min(int(width), int(_research_domain_worker_count(router, width))))
+    except Exception:
+        return 1
+
+
 def _install_synthesis_convergence(module: Any) -> None:
     if getattr(module, "_mmm_synthesis_convergence_v3", False):
         return
@@ -215,9 +230,13 @@ def _install_synthesis_convergence(module: Any) -> None:
             seen.add(fingerprint)
 
             groups = group_synthesis_notes(current)
-            next_level: list[dict[str, Any]] = []
-            for group_index, group in enumerate(groups):
-                next_level.extend(
+
+            def run_group(
+                group_index: int,
+                group: list[dict[str, Any]],
+            ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+                local_failures: list[dict[str, str]] = []
+                notes = list(
                     synthesize_group(
                         agentic_module,
                         router,
@@ -225,11 +244,45 @@ def _install_synthesis_convergence(module: Any) -> None:
                         domain=domain,
                         group=group,
                         domain_key=domain_key,
-                        failures=failures,
+                        failures=local_failures,
                         level=level,
                         group_label=str(group_index),
                     )
                 )
+                return notes, local_failures
+
+            workers = _synthesis_worker_count(router, len(groups))
+            group_results: dict[
+                int,
+                tuple[list[dict[str, Any]], list[dict[str, str]]],
+            ] = {}
+            if workers <= 1:
+                for group_index, group in enumerate(groups):
+                    group_results[group_index] = run_group(group_index, group)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix="mmm_research_synthesis",
+                ) as pool:
+                    futures = []
+                    for group_index, group in enumerate(groups):
+                        context = copy_context()
+                        future = pool.submit(
+                            context.run,
+                            run_group,
+                            group_index,
+                            group,
+                        )
+                        futures.append((group_index, future))
+                    for group_index, future in futures:
+                        group_results[group_index] = future.result()
+
+            next_level: list[dict[str, Any]] = []
+            for group_index in range(len(groups)):
+                group_notes, group_failures = group_results[group_index]
+                next_level.extend(group_notes)
+                failures.extend(group_failures)
+
             next_level = [
                 _compact_synthesis_note(note, domain_id=domain_id)
                 for note in next_level
@@ -280,6 +333,7 @@ def _install_synthesis_convergence(module: Any) -> None:
                 frontier_in=len(current),
                 group_count=len(groups),
                 frontier_out=len(next_level),
+                parallel_workers=workers,
             )
             current = next_level
 

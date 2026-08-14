@@ -472,8 +472,19 @@ def install(agentic_module: Any) -> None:
             if not _amplification_enabled(agentic_module, router):
                 return current_collect(router, prompt, trace_metadata=trace_metadata)
 
-            council = build_central_committee(router, prompt)
-            result = current_collect(router, prompt, trace_metadata=trace_metadata)
+            council_context = copy_context()
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="mmm_central_research_overlap",
+            ) as pool:
+                council_future = pool.submit(
+                    council_context.run,
+                    build_central_committee,
+                    router,
+                    prompt,
+                )
+                result = current_collect(router, prompt, trace_metadata=trace_metadata)
+                council = council_future.result()
             reviews = review_research_bundle(router, prompt, result, council=council)
             result = dict(result)
             result["_central_intelligence"] = {
@@ -539,6 +550,9 @@ def install(agentic_module: Any) -> None:
                     "multi_agent_debate": "independent coverage and skeptic reviews",
                     "adaptive_branching": (
                         "disagreement/gap-triggered specialist research"
+                    ),
+                    "council_research_overlap": (
+                        "independent council analysis overlaps deterministic research and I/O"
                     ),
                 }
             )
@@ -723,10 +737,36 @@ def build_central_committee(router: Any, prompt: str) -> dict[str, Any]:
 
     ordered = [{"lens": lens_id, **outputs[lens_id]} for lens_id, _ in _LENSES]
     disagreement = _disagreement(ordered)
-    chair = _chair_synthesis(router, prompt, ordered, disagreement)
+    extra_needed = disagreement >= _disagreement_threshold()
     extra: dict[str, Any] | None = None
-    if disagreement >= _disagreement_threshold():
-        extra = _extra_disagreement_specialist(router, prompt, ordered)
+    if extra_needed and _research_domain_worker_count(router, 2) > 1:
+        chair_context = copy_context()
+        extra_context = copy_context()
+        with ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="mmm_central_consensus",
+        ) as pool:
+            chair_future = pool.submit(
+                chair_context.run,
+                _chair_synthesis,
+                router,
+                prompt,
+                ordered,
+                disagreement,
+            )
+            extra_future = pool.submit(
+                extra_context.run,
+                _extra_disagreement_specialist,
+                router,
+                prompt,
+                ordered,
+            )
+            chair = chair_future.result()
+            extra = extra_future.result()
+    else:
+        chair = _chair_synthesis(router, prompt, ordered, disagreement)
+        if extra_needed:
+            extra = _extra_disagreement_specialist(router, prompt, ordered)
     payload = {
         "schema_version": "mmm/central-specialist-council-v1",
         "authority": "advisory_only_user_request_is_authoritative",
