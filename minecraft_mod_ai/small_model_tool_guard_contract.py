@@ -48,7 +48,10 @@ def install(max_agent_owner: Any) -> None:
             required.extend(
                 name for name in _EXTERNAL if name in available and name not in required
             )
-        limit = max(5, min(8, len(required)))
+        # This guard only guarantees required tools survive pruning. Preserve the
+        # retrieval owner's configured result width unless the required set itself
+        # is larger, rather than silently shrinking a 6-8 tool selection to five.
+        limit = max(len(ranked), len(required))
         required_set = set(required)
         chosen = [available[name] for name in required]
         chosen_names = set(required)
