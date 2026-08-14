@@ -112,17 +112,13 @@ def install(max_agent_owner: Any) -> None:
                 selected_names.add(name)
 
         # Host role/Skill requirements are hard preconditions, not retrieval hints.
-        # A causal frontier may shrink only the optional action surface; it must never
-        # hide a tool the production coder contract declares universally required.
+        # A causal frontier may shrink only optional tools; it must never hide the
+        # production coder core or the reviewed external-MCP capability/schema/call
+        # chain when those schemas are present in the host-authorized surface.
         if role in {"coder", "coder_safe"}:
             for name in _CODER_CORE:
                 add(name)
-
-        external_needed = "external" in goals or any(
-            _name(item) in _EXTERNAL for item in ranked[:2]
-        )
-        if external_needed:
-            # External MCP discovery/call is an atomic capability/schema/call chain.
+        if any(name in by_name for name in _EXTERNAL):
             for name in _EXTERNAL:
                 add(name)
 
@@ -161,8 +157,7 @@ def install(max_agent_owner: Any) -> None:
             selected_names.add(name)
 
         # Preserve original stage order for stable schema prefixes/KV reuse. The
-        # cardinality was already bounded before sorting, so never slice again here:
-        # slicing after reordering can evict a host-required core tool.
+        # cardinality was already bounded before sorting, so never slice again here.
         order = {_name(schema): index for index, schema in enumerate(available)}
         selected.sort(key=lambda schema: order.get(_name(schema), len(order)))
         result = tuple(selected)
