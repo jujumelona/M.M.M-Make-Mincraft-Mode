@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Generate and execute candidate-neutral counterexample oracles from an A/B diff.
 
-The same test specification is applied to both isolated candidate snapshots.  Tests
+The same test specification is applied to both isolated candidate snapshots. Tests
 are derived only from unchanged project consumers, focused resource contracts and
 original verifier failures; a candidate never supplies its own expected answer.
 """
@@ -16,8 +16,25 @@ from typing import Any
 _SCHEMA = "mmm/generated-counterexample-test-v1"
 _ID = re.compile(r"\b([a-z0-9_.-]+):([a-z0-9_./-]+)\b")
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][\w.$]*)\s*;")
-_CLASS = re.compile(r"(?m)^\s*(?:public\s+)?(?:final\s+|abstract\s+)?(?:class|record|enum|interface)\s+([A-Za-z_$][\w$]*)\b")
-_TEXT_SUFFIXES = {".java", ".json", ".mcfunction", ".gradle", ".kts", ".properties", ".toml", ".yml", ".yaml"}
+# Java allows `package x; public final class Y {}` on one physical line. A line-start
+# anchor therefore creates false missing-entrypoint failures. Match the declaration
+# token boundary instead; package qualification remains independently parsed above.
+_CLASS = re.compile(
+    r"\b(?:public\s+|protected\s+|private\s+)?"
+    r"(?:(?:final|abstract|sealed|non-sealed|static)\s+)*"
+    r"(?:class|record|enum|interface)\s+([A-Za-z_$][\w$]*)\b"
+)
+_TEXT_SUFFIXES = {
+    ".java",
+    ".json",
+    ".mcfunction",
+    ".gradle",
+    ".kts",
+    ".properties",
+    ".toml",
+    ".yml",
+    ".yaml",
+}
 
 
 def _paths(operations: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -35,7 +52,9 @@ def _fragments(operations: Sequence[Mapping[str, Any]]) -> str:
         if isinstance(content, str):
             parts.append(content)
         replacements = item.get("replacements")
-        if isinstance(replacements, Sequence) and not isinstance(replacements, (str, bytes, bytearray)):
+        if isinstance(replacements, Sequence) and not isinstance(
+            replacements, (str, bytes, bytearray)
+        ):
             for replacement in replacements:
                 if not isinstance(replacement, Mapping):
                     continue
@@ -72,10 +91,9 @@ def _identifiers(text: str, namespaces: set[str]) -> set[str]:
         for match in _ID.finditer(text)
         if not namespaces or match.group(1) in namespaces
     }
-    # Java commonly constructs Identifier(namespace, path) rather than a combined
-    # literal. Capture the two-string constructor/factory form as the same semantic id.
     constructor = re.compile(
-        r"(?:new\s+Identifier|Identifier\.(?:of|tryParse))\s*\(\s*\"([^\"]+)\"\s*,\s*\"([^\"]+)\"\s*\)"
+        r"(?:new\s+Identifier|Identifier\.(?:of|tryParse))\s*\(\s*"
+        r"\"([^\"]+)\"\s*,\s*\"([^\"]+)\"\s*\)"
     )
     for match in constructor.finditer(text):
         if not namespaces or match.group(1) in namespaces:
@@ -84,11 +102,19 @@ def _identifiers(text: str, namespaces: set[str]) -> set[str]:
 
 
 def _iter_project_text(root: Path):
-    for base in (root / "src/main/java", root / "src/client/java", root / "src/main/resources"):
+    for base in (
+        root / "src/main/java",
+        root / "src/client/java",
+        root / "src/main/resources",
+    ):
         if not base.is_dir():
             continue
         for path in base.rglob("*"):
-            if not path.is_file() or path.is_symlink() or path.suffix.casefold() not in _TEXT_SUFFIXES:
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or path.suffix.casefold() not in _TEXT_SUFFIXES
+            ):
                 continue
             try:
                 if path.stat().st_size > 1_000_000:
@@ -154,7 +180,9 @@ def _unchanged_resource_targets(
                 for raw_key, child in value.items():
                     walk(child, str(raw_key))
                 return
-            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
                 for child in value:
                     walk(child, key)
                 return
@@ -163,20 +191,32 @@ def _unchanged_resource_targets(
             match = _ID.fullmatch(value)
             if match is None or match.group(1) not in namespaces:
                 return
-            kind = "model" if key in {"model", "parent"} else ("texture" if key in {"texture", "textures"} else "")
+            kind = (
+                "model"
+                if key in {"model", "parent"}
+                else ("texture" if key in {"texture", "textures"} else "")
+            )
             target = _resource_target(value, kind=kind) if kind else None
             if target and target in touched:
-                targets[target] = {"target": target, "oracle_path": relative, "reference": value}
+                targets[target] = {
+                    "target": target,
+                    "oracle_path": relative,
+                    "reference": value,
+                }
 
         walk(payload)
     return [targets[key] for key in sorted(targets)][:24]
 
 
-def _diagnostic_seed_assertion(evidence_seed: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _diagnostic_seed_assertion(
+    evidence_seed: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
     if not isinstance(evidence_seed, Mapping):
         return None
     diagnostics = evidence_seed.get("diagnostics")
-    if not isinstance(diagnostics, Sequence) or isinstance(diagnostics, (str, bytes, bytearray)):
+    if not isinstance(diagnostics, Sequence) or isinstance(
+        diagnostics, (str, bytes, bytearray)
+    ):
         return None
     clean: list[dict[str, str]] = []
     for item in diagnostics[:16]:
@@ -186,7 +226,11 @@ def _diagnostic_seed_assertion(evidence_seed: Mapping[str, Any] | None) -> dict[
         message = " ".join(str(item.get("message", "")).casefold().split())[:240]
         if code or message:
             clean.append({"code": code, "message": message})
-    return {"kind": "original_diagnostic_absence", "diagnostics": clean} if clean else None
+    return (
+        {"kind": "original_diagnostic_absence", "diagnostics": clean}
+        if clean
+        else None
+    )
 
 
 def build_generated_test_spec(
@@ -198,7 +242,11 @@ def build_generated_test_spec(
     evidence_seed: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
-    focus = {str(path).replace("\\", "/") for path in focus_paths if str(path).strip()}
+    focus = {
+        str(path).replace("\\", "/")
+        for path in focus_paths
+        if str(path).strip()
+    }
     touched = _paths(left_operations) | _paths(right_operations)
     namespaces = _project_namespaces(root)
     left_ids = _identifiers(_fragments(left_operations), namespaces)
@@ -207,18 +255,33 @@ def build_generated_test_spec(
 
     assertions: list[dict[str, Any]] = []
     if any(path.endswith(".json") for path in focus):
-        assertions.append({"kind": "json_parse_focus", "paths": sorted(path for path in focus if path.endswith(".json"))[:24]})
+        assertions.append(
+            {
+                "kind": "json_parse_focus",
+                "paths": sorted(
+                    path for path in focus if path.endswith(".json")
+                )[:24],
+            }
+        )
     assertions.append({"kind": "fabric_entrypoint_resolution"})
     assertions.append({"kind": "mixin_class_resolution"})
     if any("/assets/" in path and path.endswith(".json") for path in focus):
-        assertions.append({"kind": "model_resource_closure", "paths": sorted(focus)[:24]})
+        assertions.append(
+            {"kind": "model_resource_closure", "paths": sorted(focus)[:24]}
+        )
 
-    external_ids = _external_identifier_contracts(root, focus, candidate_ids, namespaces)
+    external_ids = _external_identifier_contracts(
+        root, focus, candidate_ids, namespaces
+    )
     if external_ids:
-        assertions.append({"kind": "external_identifier_contract", "contracts": external_ids})
+        assertions.append(
+            {"kind": "external_identifier_contract", "contracts": external_ids}
+        )
     targets = _unchanged_resource_targets(root, focus, touched, namespaces)
     if targets:
-        assertions.append({"kind": "unchanged_resource_reference", "contracts": targets})
+        assertions.append(
+            {"kind": "unchanged_resource_reference", "contracts": targets}
+        )
     diagnostic = _diagnostic_seed_assertion(evidence_seed)
     if diagnostic:
         assertions.append(diagnostic)
@@ -248,7 +311,11 @@ def _class_sources(root: Path) -> set[str]:
             package = _PACKAGE.search(text)
             clazz = _CLASS.search(text)
             if clazz:
-                classes.add(f"{package.group(1)}.{clazz.group(1)}" if package else clazz.group(1))
+                classes.add(
+                    f"{package.group(1)}.{clazz.group(1)}"
+                    if package
+                    else clazz.group(1)
+                )
     return classes
 
 
@@ -273,7 +340,9 @@ def _entrypoint_failures(root: Path) -> list[str]:
             value = raw.get("value")
             if isinstance(value, str):
                 yield value
-        elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        elif isinstance(raw, Sequence) and not isinstance(
+            raw, (str, bytes, bytearray)
+        ):
             for item in raw:
                 yield from values(item)
 
@@ -301,7 +370,11 @@ def _mixin_failures(root: Path) -> list[str]:
     classes = _class_sources(root)
     failures: list[str] = []
     for item in raw_mixins[:24]:
-        config_name = item if isinstance(item, str) else (item.get("config") if isinstance(item, Mapping) else None)
+        config_name = (
+            item
+            if isinstance(item, str)
+            else (item.get("config") if isinstance(item, Mapping) else None)
+        )
         if not isinstance(config_name, str) or not config_name.strip():
             continue
         config_path = root / "src/main/resources" / config_name
@@ -316,7 +389,9 @@ def _mixin_failures(root: Path) -> list[str]:
         package = str(config.get("package", "")).strip()
         for key in ("mixins", "client", "server"):
             values = config.get(key, ())
-            if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+            if not isinstance(values, Sequence) or isinstance(
+                values, (str, bytes, bytearray)
+            ):
                 continue
             for value in values[:64]:
                 name = str(value).strip()
@@ -326,7 +401,9 @@ def _mixin_failures(root: Path) -> list[str]:
     return failures[:32]
 
 
-def _model_failures(root: Path, focus_paths: Sequence[str], namespaces: set[str]) -> list[str]:
+def _model_failures(
+    root: Path, focus_paths: Sequence[str], namespaces: set[str]
+) -> list[str]:
     failures: list[str] = []
 
     def resolve(identifier: str, kind: str) -> Path | None:
@@ -349,7 +426,9 @@ def _model_failures(root: Path, focus_paths: Sequence[str], namespaces: set[str]
                 for raw_key, child in value.items():
                     walk(child, str(raw_key))
                 return
-            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
                 for child in value:
                     walk(child, key)
                 return
@@ -358,7 +437,11 @@ def _model_failures(root: Path, focus_paths: Sequence[str], namespaces: set[str]
             match = _ID.fullmatch(value)
             if match is None or match.group(1) not in namespaces:
                 return
-            kind = "model" if key in {"model", "parent"} else ("texture" if key in {"texture", "textures"} else "")
+            kind = (
+                "model"
+                if key in {"model", "parent"}
+                else ("texture" if key in {"texture", "textures"} else "")
+            )
             target = resolve(value, kind) if kind else None
             if target is not None and not target.is_file():
                 failures.append(f"{kind}:{value}")
@@ -367,42 +450,63 @@ def _model_failures(root: Path, focus_paths: Sequence[str], namespaces: set[str]
     return failures[:32]
 
 
-def _focus_identifiers(root: Path, paths: Sequence[str], namespaces: set[str]) -> set[str]:
+def _focus_identifiers(
+    root: Path, paths: Sequence[str], namespaces: set[str]
+) -> set[str]:
     result: set[str] = set()
     for relative in paths[:24]:
         path = root / relative
-        if not path.is_file() or path.is_symlink() or path.suffix.casefold() not in _TEXT_SUFFIXES:
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or path.suffix.casefold() not in _TEXT_SUFFIXES
+        ):
             continue
         try:
-            result.update(_identifiers(path.read_text(encoding="utf-8", errors="replace"), namespaces))
+            result.update(
+                _identifiers(
+                    path.read_text(encoding="utf-8", errors="replace"), namespaces
+                )
+            )
         except OSError:
             continue
     return result
 
 
-def _diagnostic_failures(assertion: Mapping[str, Any], candidate_verifier: Mapping[str, Any] | None) -> list[str]:
+def _diagnostic_failures(
+    assertion: Mapping[str, Any],
+    candidate_verifier: Mapping[str, Any] | None,
+) -> list[str]:
     if not isinstance(candidate_verifier, Mapping):
         return []
     observed = candidate_verifier.get("jdt_diagnostics")
-    if not isinstance(observed, Sequence) or isinstance(observed, (str, bytes, bytearray)):
+    if not isinstance(observed, Sequence) or isinstance(
+        observed, (str, bytes, bytearray)
+    ):
         return []
     expected = assertion.get("diagnostics")
-    if not isinstance(expected, Sequence) or isinstance(expected, (str, bytes, bytearray)):
+    if not isinstance(expected, Sequence) or isinstance(
+        expected, (str, bytes, bytearray)
+    ):
         return []
     failures: list[str] = []
     for original in expected:
         if not isinstance(original, Mapping):
             continue
         code = str(original.get("code", "")).strip()
-        message = " ".join(str(original.get("message", "")).casefold().split())
+        message = " ".join(
+            str(original.get("message", "")).casefold().split()
+        )
         for item in observed:
             if not isinstance(item, Mapping):
                 continue
             current_code = str(item.get("code", "")).strip()
-            current_message = " ".join(str(item.get("message", "")).casefold().split())
-            code_same = bool(code) and code == current_code
-            message_same = bool(message) and message == current_message
-            if code_same or message_same:
+            current_message = " ".join(
+                str(item.get("message", "")).casefold().split()
+            )
+            if (code and code == current_code) or (
+                message and message == current_message
+            ):
                 failures.append(f"original-diagnostic:{code or message[:80]}")
                 break
     return failures[:16]
@@ -415,9 +519,17 @@ def run_generated_test_spec(
     candidate_verifier: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if spec.get("schema_version") != _SCHEMA:
-        return {"schema_version": "mmm/generated-counterexample-result-v1", "status": "ERROR", "assertions": []}
-    namespaces = {str(value) for value in spec.get("project_namespaces", ()) if str(value)}
-    focus_paths = [str(value) for value in spec.get("focus_paths", ()) if str(value)]
+        return {
+            "schema_version": "mmm/generated-counterexample-result-v1",
+            "status": "ERROR",
+            "assertions": [],
+        }
+    namespaces = {
+        str(value) for value in spec.get("project_namespaces", ()) if str(value)
+    }
+    focus_paths = [
+        str(value) for value in spec.get("focus_paths", ()) if str(value)
+    ]
     results: list[dict[str, Any]] = []
     for assertion in spec.get("assertions", ()):
         if not isinstance(assertion, Mapping):
@@ -437,7 +549,9 @@ def run_generated_test_spec(
         elif kind == "mixin_class_resolution":
             failures = _mixin_failures(root)
         elif kind == "model_resource_closure":
-            failures = _model_failures(root, assertion.get("paths", focus_paths), namespaces)
+            failures = _model_failures(
+                root, assertion.get("paths", focus_paths), namespaces
+            )
         elif kind == "external_identifier_contract":
             available = _focus_identifiers(root, focus_paths, namespaces)
             for contract in assertion.get("contracts", ()):
@@ -453,13 +567,19 @@ def run_generated_test_spec(
                         failures.append(f"resource:{target}")
         elif kind == "original_diagnostic_absence":
             failures = _diagnostic_failures(assertion, candidate_verifier)
-        results.append({
-            "kind": kind,
-            "status": "PASS" if not failures else "FAIL",
-            "failure_count": len(failures),
-            "failures": failures[:16],
-        })
-    overall = "FAIL" if any(item["status"] == "FAIL" for item in results) else ("PASS" if results else "INCOMPLETE")
+        results.append(
+            {
+                "kind": kind,
+                "status": "PASS" if not failures else "FAIL",
+                "failure_count": len(failures),
+                "failures": failures[:16],
+            }
+        )
+    overall = (
+        "FAIL"
+        if any(item["status"] == "FAIL" for item in results)
+        else ("PASS" if results else "INCOMPLETE")
+    )
     return {
         "schema_version": "mmm/generated-counterexample-result-v1",
         "status": overall,
@@ -475,7 +595,9 @@ def _junit_mode(root: Path) -> str:
         if path.is_file():
             text += "\n" + path.read_text(encoding="utf-8", errors="replace")
     lowered = text.casefold()
-    if ("junit-jupiter" in lowered or "org.junit.jupiter" in lowered) and "usejunitplatform" in lowered:
+    if (
+        "junit-jupiter" in lowered or "org.junit.jupiter" in lowered
+    ) and "usejunitplatform" in lowered:
         return "junit5"
     if re.search(r"junit\s*[:'\"]", lowered) or "junit:junit" in lowered:
         return "junit4"
@@ -494,15 +616,22 @@ def _junit_required_paths(spec: Mapping[str, Any]) -> list[str]:
     return sorted(required)[:24]
 
 
-def install_generated_junit(root: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
+def install_generated_junit(
+    root: Path, spec: Mapping[str, Any]
+) -> dict[str, Any]:
     """Install the same generated JUnit oracle when the project already has JUnit."""
 
     mode = _junit_mode(root)
     required = _junit_required_paths(spec)
     if not mode or not required:
-        return {"status": "NOT_APPLICABLE", "harness": mode or "none", "assertion_count": 0}
+        return {
+            "status": "NOT_APPLICABLE",
+            "harness": mode or "none",
+            "assertion_count": 0,
+        }
     imports = (
-        "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertTrue;"
+        "import org.junit.jupiter.api.Test;\n"
+        "import static org.junit.jupiter.api.Assertions.assertTrue;"
         if mode == "junit5"
         else "import org.junit.Test;\nimport static org.junit.Assert.assertTrue;"
     )
@@ -519,7 +648,10 @@ def install_generated_junit(root: Path, spec: Mapping[str, Any]) -> dict[str, An
     ]
     for relative in required:
         literal = json.dumps(relative)
-        lines.append(f"        assertTrue(Files.isRegularFile(Path.of({literal})), {json.dumps('Missing referenced resource: ' + relative)});")
+        message = json.dumps("Missing referenced resource: " + relative)
+        lines.append(
+            f"        assertTrue(Files.isRegularFile(Path.of({literal})), {message});"
+        )
     lines.extend(["    }", "}", ""])
     target = root / "src/test/java/mmm/generated/MmmGeneratedCounterexampleTest.java"
     target.parent.mkdir(parents=True, exist_ok=True)
