@@ -131,6 +131,13 @@ class CausalFrontierAdapter:
         from .causal_tool_frontier_contract import goals_for_query
         from .model_adapters import GenerationRequest
 
+        # The core loop intentionally emits an explicit tools=() request for
+        # fixed-point/final synthesis. That is a control signal, not a new planning
+        # round; never resurrect the broader authorization ContextVar on that turn.
+        if not request.tools and request.tool_choice is None:
+            _CURRENT_FRONTIER_NAMES.set(())
+            return self.inner.generate_turn(request)
+
         candidates = authorized_tools(request.tools)
         if not candidates:
             _CURRENT_FRONTIER_NAMES.set(())
@@ -152,9 +159,6 @@ class CausalFrontierAdapter:
         )
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         selected = tuple(by_name[name] for name in names if name in by_name)
-        # Set this before the model call and intentionally retain it until the next
-        # turn. The runtime proxy executes returned tool calls immediately afterward
-        # and checks against this exact set, not the broader authorization surface.
         _CURRENT_FRONTIER_NAMES.set(tuple(_name(schema) for schema in selected))
 
         rebuilt = GenerationRequest(
