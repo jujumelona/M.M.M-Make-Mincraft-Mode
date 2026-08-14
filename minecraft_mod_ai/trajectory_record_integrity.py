@@ -3,8 +3,8 @@ from __future__ import annotations
 """Re-derive trajectory trust metadata from stored verifier chains.
 
 This is the read-side trust boundary for local/remote procedural memory. Stored
-levels, confidence and eligibility booleans are cached claims and must agree with
-the objective verifier chain before a record can influence a temporary skill.
+levels, confidence, procedure structure and eligibility booleans are cached claims
+and must agree with objective evidence before a record can influence a skill.
 """
 
 import hashlib
@@ -15,8 +15,10 @@ from typing import Any
 
 _TRAJECTORY_SCHEMA = "mmm/verified-trajectory-v3"
 _VERIFICATION_SCHEMA = "mmm/trajectory-verification-v1"
+_PROCEDURE_SCHEMA = "mmm/procedure-trace-v1"
 _CODE_TASKS = {"repair", "generation", "build", "runtime", "quality", "release"}
 _TASK_CLASSES = _CODE_TASKS | {"research", "planning", "general"}
+_PROCEDURE_KINDS = {"tool", "action", "operation", "verifier"}
 _FAILURE_LEVEL = {
     "static": 1,
     "build": 2,
@@ -52,6 +54,40 @@ def _chain(row: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
     return result
 
 
+def _procedure_valid(row: Mapping[str, Any]) -> bool:
+    procedure = row.get("procedure")
+    if not isinstance(procedure, Mapping):
+        return False
+    if procedure.get("schema_version") != _PROCEDURE_SCHEMA or procedure.get("ordered") is not True:
+        return False
+    raw_steps = procedure.get("steps")
+    if not isinstance(raw_steps, Sequence) or isinstance(raw_steps, (str, bytes, bytearray)):
+        return False
+    if len(raw_steps) > 32:
+        return False
+    for expected_index, step in enumerate(raw_steps):
+        if not isinstance(step, Mapping):
+            return False
+        if set(step) - {"index", "kind", "action", "effects", "status"}:
+            return False
+        if step.get("index") != expected_index:
+            return False
+        if str(step.get("kind", "")) not in _PROCEDURE_KINDS:
+            return False
+        action = step.get("action")
+        if not isinstance(action, str) or not action.strip() or len(action) > 160:
+            return False
+        status = step.get("status")
+        if status is not None and status not in {"PASS", "FAIL"}:
+            return False
+        effects = step.get("effects")
+        if not isinstance(effects, Sequence) or isinstance(effects, (str, bytes, bytearray)) or len(effects) > 8:
+            return False
+        if any(not isinstance(effect, str) or not effect or len(effect) > 160 for effect in effects):
+            return False
+    return True
+
+
 def _local_identity_valid(row: Mapping[str, Any]) -> bool:
     identity = str(row.get("trajectory_id", ""))
     if not _ID.fullmatch(identity):
@@ -71,6 +107,8 @@ def derive_levels(row: Mapping[str, Any]) -> dict[str, Any] | None:
     if row.get("schema_version") != _TRAJECTORY_SCHEMA:
         return None
     if row.get("record_type") != "verified_trajectory" or row.get("storage_format") != "jsonl":
+        return None
+    if not _procedure_valid(row):
         return None
     verification = row.get("verification")
     if not isinstance(verification, Mapping) or verification.get("schema_version") != _VERIFICATION_SCHEMA:
