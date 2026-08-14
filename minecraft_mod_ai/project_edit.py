@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .project_write_lock import project_write_lock
-from .source_patch import TransactionalSourcePatcher, sha256_file
+from .source_patch import TransactionalSourcePatcher, sha256_bytes
 
 
 class ProjectEditError(RuntimeError):
@@ -25,6 +25,17 @@ class FabricProjectInfo:
     main_java: Path
     fabric_mod_json: Path
     main_entrypoints: tuple[str, ...] = ()
+
+
+def _read_utf8_with_digest(path: Path) -> tuple[str, str]:
+    """Read one project file once and derive both text and its exact byte digest."""
+
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProjectEditError(f"Project file is not UTF-8 text: {path}") from exc
+    return text, sha256_bytes(raw)
 
 
 def _atomic_shared_edit(function):
@@ -123,7 +134,7 @@ def ensure_main_initializer_call(
     import_line = import_line.rstrip(";") + ";"
     call_line = call_line.rstrip(";") + ";"
     if info.main_java.is_file() and not info.main_java.is_symlink():
-        text = info.main_java.read_text(encoding="utf-8")
+        text, text_sha256 = _read_utf8_with_digest(info.main_java)
         with_call, inserted = _insert_initializer_call(
             text,
             call_line,
@@ -147,7 +158,7 @@ def ensure_main_initializer_call(
                         {
                             "operation": "replace",
                             "path": relative,
-                            "expected_sha256": sha256_file(info.main_java),
+                            "expected_sha256": text_sha256,
                             "content": changed,
                         }
                     ]
@@ -213,8 +224,11 @@ def _ensure_generated_initializer(
         + "/MmmGeneratedInitializer.java"
     )
     path = info.root / relative
+    current_source: str | None = None
+    current_source_sha256: str | None = None
     if path.is_file() and not path.is_symlink():
-        source = path.read_text(encoding="utf-8")
+        current_source, current_source_sha256 = _read_utf8_with_digest(path)
+        source = current_source
     else:
         source = f'''package {bridge_package};
 
@@ -246,14 +260,13 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
         )
 
     operations: list[dict[str, Any]] = []
-    if path.is_file():
-        current = path.read_text(encoding="utf-8")
-        if current != source:
+    if current_source is not None:
+        if current_source != source:
             operations.append(
                 {
                     "operation": "replace",
                     "path": relative,
-                    "expected_sha256": sha256_file(path),
+                    "expected_sha256": current_source_sha256,
                     "content": source,
                 }
             )
@@ -266,9 +279,8 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
             }
         )
 
-    metadata = json.loads(
-        info.fabric_mod_json.read_text(encoding="utf-8")
-    )
+    metadata_text, metadata_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
+    metadata = json.loads(metadata_text)
     entrypoints = metadata.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
         raise ProjectEditError(
@@ -290,9 +302,7 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
             {
                 "operation": "replace",
                 "path": "src/main/resources/fabric.mod.json",
-                "expected_sha256": sha256_file(
-                    info.fabric_mod_json
-                ),
+                "expected_sha256": metadata_sha256,
                 "content": json.dumps(
                     metadata,
                     ensure_ascii=False,
@@ -315,9 +325,8 @@ def ensure_client_entrypoint(
     *,
     entrypoint: str,
 ) -> dict[str, Any]:
-    raw = json.loads(
-        info.fabric_mod_json.read_text(encoding="utf-8")
-    )
+    metadata_text, metadata_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
+    raw = json.loads(metadata_text)
     entrypoints = raw.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
         raise ProjectEditError(
@@ -344,9 +353,7 @@ def ensure_client_entrypoint(
             {
                 "operation": "replace",
                 "path": "src/main/resources/fabric.mod.json",
-                "expected_sha256": sha256_file(
-                    info.fabric_mod_json
-                ),
+                "expected_sha256": metadata_sha256,
                 "content": json.dumps(
                     raw,
                     ensure_ascii=False,
@@ -369,7 +376,7 @@ def ensure_dependency(
     build = info.root / "build.gradle"
     if not build.is_file() or build.is_symlink():
         raise ProjectEditError("build.gradle is missing.")
-    text = build.read_text(encoding="utf-8")
+    text, text_sha256 = _read_utf8_with_digest(build)
     changed = text
     repository_marker = f"// MMM:{marker}:repository"
     if repository_block.strip() and repository_marker not in changed:
@@ -418,7 +425,7 @@ def ensure_dependency(
             {
                 "operation": "replace",
                 "path": "build.gradle",
-                "expected_sha256": sha256_file(build),
+                "expected_sha256": text_sha256,
                 "content": changed,
             }
         ]
@@ -440,7 +447,7 @@ def write_text_files(
                 raise ProjectEditError(
                     f"Generated target is not a regular file: {relative}"
                 )
-            current = path.read_text(encoding="utf-8")
+            current, current_sha256 = _read_utf8_with_digest(path)
             if current == content:
                 continue
             if not replace_existing:
@@ -451,7 +458,7 @@ def write_text_files(
                 {
                     "operation": "replace",
                     "path": relative,
-                    "expected_sha256": sha256_file(path),
+                    "expected_sha256": current_sha256,
                     "content": content,
                 }
             )
