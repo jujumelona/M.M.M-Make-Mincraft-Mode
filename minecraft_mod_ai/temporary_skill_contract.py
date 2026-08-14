@@ -3,6 +3,9 @@ from __future__ import annotations
 """Inference-only procedural memory: verified trajectories -> ephemeral skill."""
 
 import json
+import os
+import threading
+from collections import OrderedDict
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -16,12 +19,15 @@ from .remote_trajectory_store import (
 from .trajectory_memory import (
     append_trajectory,
     build_work_trajectory,
+    memory_path,
     relevant_trajectories,
+    remote_cache_path,
     synthesize_temporary_skill,
     task_class_for_stage,
 )
 
 _PREFIX = "MMM TEMPORARY VERIFIED SKILL:\n"
+_CACHE_LOCK = threading.RLock()
 
 
 def _query(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -55,6 +61,167 @@ def _inject(messages: Sequence[Mapping[str, Any]], skill: Mapping[str, Any]) -> 
     return result
 
 
+def _skill_cache_capacity() -> int:
+    raw = os.environ.get("MMM_TEMPORARY_SKILL_CACHE_ENTRIES", "64").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 64
+    return max(0, min(value, 512))
+
+
+def _path_fingerprint(path: Path) -> tuple[Any, ...] | None:
+    """Return a strict local-file identity, or None when safe reuse is impossible."""
+
+    try:
+        if path.is_symlink():
+            return None
+        stat = path.stat()
+    except FileNotFoundError:
+        return ("missing",)
+    except OSError:
+        return None
+    if not path.is_file():
+        return None
+    return (
+        "file",
+        int(stat.st_dev),
+        int(stat.st_ino),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+    )
+
+
+def _trajectory_fingerprint(root: Path, task_class: str) -> tuple[Any, ...] | None:
+    local = _path_fingerprint(memory_path(root))
+    remote = _path_fingerprint(remote_cache_path(root, task_class))
+    if local is None or remote is None:
+        return None
+    return (local, remote)
+
+
+def _temporary_skill(
+    router: Any,
+    root: Path,
+    query: str,
+    *,
+    task_class: str,
+    limit: int = 6,
+) -> Mapping[str, Any] | None:
+    """Reuse only a skill derived from the exact unchanged trajectory corpus."""
+
+    capacity = _skill_cache_capacity()
+    before = _trajectory_fingerprint(root, task_class)
+    key = (str(root), task_class, query, int(limit), before)
+    if capacity > 0 and before is not None:
+        with _CACHE_LOCK:
+            cache = getattr(router, "_mmm_temporary_skill_cache", None)
+            if isinstance(cache, OrderedDict) and key in cache:
+                skill = cache.pop(key)
+                cache[key] = skill
+                return skill
+
+    records = relevant_trajectories(
+        root,
+        query,
+        task_class=task_class,
+        router=router,
+        limit=limit,
+    )
+    skill = synthesize_temporary_skill(query, records, task_class=task_class)
+
+    after = _trajectory_fingerprint(root, task_class)
+    if capacity > 0 and before is not None and before == after:
+        with _CACHE_LOCK:
+            cache = getattr(router, "_mmm_temporary_skill_cache", None)
+            if not isinstance(cache, OrderedDict):
+                cache = OrderedDict()
+                router._mmm_temporary_skill_cache = cache
+            cache[key] = skill
+            cache.move_to_end(key)
+            while len(cache) > capacity:
+                cache.popitem(last=False)
+    return skill
+
+
+def _canonical_read_key(call: Any) -> tuple[str, str] | None:
+    try:
+        name = str(call.name)
+        arguments = json.dumps(
+            dict(call.arguments),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return name, arguments
+
+
+def _install_read_wave_dedup(model_router_module: Any) -> None:
+    """Single-flight exact duplicate read tools inside one mutation-free wave."""
+
+    current = model_router_module._execute_tool_waves
+    if getattr(current, "_mmm_exact_read_wave_dedup", False):
+        return
+
+    parallel_reads = frozenset(model_router_module._PARALLEL_READ_TOOLS)
+
+    @wraps(current)
+    def execute_with_dedup(
+        calls: Sequence[Any],
+        execute: Any,
+    ) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
+        completed: list[tuple[Any, Mapping[str, Any]]] = []
+        pending_reads: list[Any] = []
+
+        def flush_reads() -> None:
+            if not pending_reads:
+                return
+            batch = tuple(pending_reads)
+            pending_reads.clear()
+
+            unique: list[Any] = []
+            representative_index: list[int] = []
+            exact: dict[tuple[str, str], int] = {}
+            for call in batch:
+                key = _canonical_read_key(call)
+                if key is None:
+                    representative_index.append(len(unique))
+                    unique.append(call)
+                    continue
+                index = exact.get(key)
+                if index is None:
+                    index = len(unique)
+                    exact[key] = index
+                    unique.append(call)
+                representative_index.append(index)
+
+            executed_unique = tuple(current(tuple(unique), execute))
+            if len(executed_unique) != len(unique):
+                raise RuntimeError(
+                    "Tool-wave executor returned a result count that does not match "
+                    "the deduplicated read wave."
+                )
+            for call, index in zip(batch, representative_index, strict=True):
+                _representative, payload = executed_unique[index]
+                completed.append((call, payload))
+
+        for call in calls:
+            if call.name in parallel_reads:
+                pending_reads.append(call)
+                continue
+            flush_reads()
+            completed.append(execute(call))
+        flush_reads()
+        return tuple(completed)
+
+    execute_with_dedup._mmm_exact_read_wave_dedup = True  # type: ignore[attr-defined]
+    execute_with_dedup.__wrapped__ = current  # type: ignore[attr-defined]
+    model_router_module._execute_tool_waves = execute_with_dedup
+
+
 def _install_model_skill(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
     current = cls._prepare_generation_request
@@ -77,14 +244,13 @@ def _install_model_skill(model_router_module: Any) -> None:
             hydrate_remote_cache(root, task_class)
             hydrated.add(task_class)
         query = _query(messages)
-        records = relevant_trajectories(
+        skill = _temporary_skill(
+            self,
             root,
             query,
             task_class=task_class,
-            router=self,
             limit=6,
         )
-        skill = synthesize_temporary_skill(query, records, task_class=task_class)
         qualified_count = (
             len(skill.get("source_trajectory_ids", ()))
             if isinstance(skill, Mapping)
@@ -194,6 +360,7 @@ def _install_repair_trajectory(repair_module: Any) -> None:
 
 
 def install(*, model_router_module: Any, work_graph_module: Any, repair_module: Any) -> None:
+    _install_read_wave_dedup(model_router_module)
     _install_model_skill(model_router_module)
     _install_work_trajectory(work_graph_module)
     _install_repair_trajectory(repair_module)
