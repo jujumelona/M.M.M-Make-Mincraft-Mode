@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 19
+_TUNING_PIPELINE_VERSION = 20
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -141,6 +141,20 @@ class NativeLlamaTuningPipeline:
                 repair_engine,
             )
 
+        def install_kernel_stage() -> None:
+            # The expanded 128/256 ubatch sweep is a T4-specific search-space
+            # extension. Keep the generic runtime module's historical bounded
+            # candidate contract untouched on CPU/unknown/other GPUs so importing
+            # the package never mutates platform-independent defaults.
+            original_ubatch_candidates = self.runtime_tuning._ubatch_candidates
+            install_kernel_autotune(self.autotune, self.runtime_tuning)
+            try:
+                hardware = str(self.autotune._hardware_identity()).casefold()
+            except Exception:
+                hardware = ""
+            if "t4" not in hardware:
+                self.runtime_tuning._ubatch_candidates = original_ubatch_candidates
+
         return (
             TuningStage("hardware", install_hardware_stage),
             TuningStage(
@@ -160,10 +174,7 @@ class NativeLlamaTuningPipeline:
             # Outermost cold-start search: select Flash Attention, logical batch and
             # independent K/V cache types first, then let the already-installed
             # MTP/ubatch/cache-reuse stages refine that measured winner.
-            TuningStage(
-                "kernel-autotune",
-                lambda: install_kernel_autotune(self.autotune, self.runtime_tuning),
-            ),
+            TuningStage("kernel-autotune", install_kernel_stage),
         )
 
     def install(self) -> None:
