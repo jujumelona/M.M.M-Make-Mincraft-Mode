@@ -12,6 +12,7 @@
     "task_shape",
     "outcome",
     "verification",
+    "procedure",
     "verified_facts",
     "trajectory_id"
   ],
@@ -43,20 +44,10 @@
     "verification": {
       "type": "object",
       "required": [
-        "schema_version",
-        "level",
-        "level_index",
-        "failure_level",
-        "failure_level_index",
-        "confidence",
-        "memory_eligible",
-        "strong_skill_eligible",
-        "remote_eligible",
-        "verified_failure",
-        "reproduced",
-        "checks",
-        "verifier_chain",
-        "policy"
+        "schema_version", "level", "level_index", "failure_level",
+        "failure_level_index", "confidence", "memory_eligible",
+        "strong_skill_eligible", "remote_eligible", "verified_failure",
+        "reproduced", "checks", "verifier_chain", "policy"
       ],
       "properties": {
         "schema_version": {"const": "mmm/trajectory-verification-v1"},
@@ -75,20 +66,16 @@
           "type": "object",
           "required": ["static", "build", "tests", "runtime", "acceptance"],
           "properties": {
-            "static": {"type": "boolean"},
-            "build": {"type": "boolean"},
-            "tests": {"type": "boolean"},
-            "runtime": {"type": "boolean"},
+            "static": {"type": "boolean"}, "build": {"type": "boolean"},
+            "tests": {"type": "boolean"}, "runtime": {"type": "boolean"},
             "acceptance": {"type": "boolean"}
           },
           "additionalProperties": false
         },
         "verifier_chain": {
-          "type": "array",
-          "maxItems": 48,
+          "type": "array", "maxItems": 48,
           "items": {
-            "type": "object",
-            "required": ["kind", "status", "source"],
+            "type": "object", "required": ["kind", "status", "source"],
             "properties": {
               "kind": {"type": "string"},
               "status": {"type": "string", "enum": ["PASS", "FAIL"]},
@@ -100,6 +87,30 @@
         },
         "error_present": {"type": "boolean"},
         "policy": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "procedure": {
+      "type": "object",
+      "required": ["schema_version", "ordered", "steps"],
+      "properties": {
+        "schema_version": {"const": "mmm/procedure-trace-v1"},
+        "ordered": {"const": true},
+        "steps": {
+          "type": "array", "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": ["index", "kind", "action", "effects"],
+            "properties": {
+              "index": {"type": "integer", "minimum": 0, "maximum": 31},
+              "kind": {"type": "string", "enum": ["tool", "action", "operation", "verifier"]},
+              "action": {"type": "string", "minLength": 1, "maxLength": 160},
+              "effects": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 160}},
+              "status": {"type": "string", "enum": ["PASS", "FAIL"]}
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },
