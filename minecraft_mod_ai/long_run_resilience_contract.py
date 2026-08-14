@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Late-runtime durability for long-running planner research.
 
-The pre-design pipeline can legitimately run for many model calls.  This contract keeps
+The pre-design pipeline can legitimately run for many model calls. This contract keeps
 that work both bounded and resumable without weakening evidence coverage:
 
 * document-backed synthesis never re-enters RAG/MCP after every evidence page was read;
@@ -49,7 +49,10 @@ def _sha256(value: Any) -> str:
 
 def _checkpoint_root() -> Path:
     configured = (os.environ.get(_CACHE_ROOT_ENV) or "").strip()
-    root = Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "mmm-research-checkpoints-v1"
+    if configured:
+        root = Path(configured).expanduser()
+    else:
+        root = Path(tempfile.gettempdir()) / "mmm-research-checkpoints-v1"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -112,24 +115,36 @@ def _checkpoint_path(key: str) -> Path:
     return directory / f"{key}.json"
 
 
-def _valid_research_response(raw: Any) -> bool:
+def _research_note_payload(raw: Any) -> Mapping[str, Any] | None:
     if not isinstance(raw, str) or not raw.strip():
-        return False
+        return None
     try:
         value = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
-        return False
+        return None
     if not isinstance(value, Mapping):
+        return None
+    note = value.get("research_note")
+    if isinstance(note, Mapping):
+        return note
+    # Keep direct-note compatibility for small focused adapters while production uses
+    # the top-level research_note envelope enforced by _RESEARCH_NOTE_SCHEMA.
+    return value
+
+
+def _valid_research_response(raw: Any) -> bool:
+    note = _research_note_payload(raw)
+    if note is None:
         return False
-    if not isinstance(value.get("domain_id"), str):
+    if not isinstance(note.get("domain_id"), str):
         return False
-    if not isinstance(value.get("claims"), list):
+    if not isinstance(note.get("claims"), list):
         return False
-    if not isinstance(value.get("gaps"), list):
+    if not isinstance(note.get("gaps"), list):
         return False
-    if not isinstance(value.get("next_queries"), list):
+    if not isinstance(note.get("next_queries"), list):
         return False
-    return isinstance(value.get("sufficient"), bool)
+    return isinstance(note.get("sufficient"), bool)
 
 
 def _read_checkpoint(key: str) -> str | None:
@@ -140,7 +155,10 @@ def _read_checkpoint(key: str) -> str | None:
         return None
     if not isinstance(payload, Mapping):
         return None
-    if payload.get("schema_version") != _CACHE_SCHEMA or payload.get("request_sha256") != key:
+    if (
+        payload.get("schema_version") != _CACHE_SCHEMA
+        or payload.get("request_sha256") != key
+    ):
         return None
     raw = payload.get("response")
     if not _valid_research_response(raw):
@@ -160,19 +178,31 @@ def _write_checkpoint(key: str, raw: str) -> None:
         "response_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "response": raw,
     }
-    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
     temp_path.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         encoding="utf-8",
     )
     os.replace(temp_path, path)
 
 
 def _json_message_payload(messages: Any) -> Any:
-    if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes, bytearray)):
+    if not isinstance(messages, Sequence) or isinstance(
+        messages,
+        (str, bytes, bytearray),
+    ):
         return None
     for message in reversed(messages):
-        if not isinstance(message, Mapping) or str(message.get("role", "")) != "user":
+        if not isinstance(message, Mapping):
+            continue
+        if str(message.get("role", "")) != "user":
             continue
         content = message.get("content")
         if not isinstance(content, str):
@@ -197,7 +227,13 @@ def _without_prior(value: Any) -> Any:
         return {
             str(key): _without_prior(item)
             for key, item in value.items()
-            if str(key) not in {"prior", "prior_note", "previous_note"}
+            if str(key)
+            not in {
+                "prior",
+                "prior_note",
+                "previous_note",
+                "previous_reflection",
+            }
         }
     if isinstance(value, list):
         return [_without_prior(item) for item in value]
@@ -208,7 +244,10 @@ def _document_synthesis_key(router: Any, role: str, messages: Any) -> str | None
     payload = _json_message_payload(messages)
     if not isinstance(payload, Mapping):
         return None
-    if not (_contains_key(payload, "evidence_document") and _contains_key(payload, "page_notes")):
+    if not (
+        _contains_key(payload, "evidence_document")
+        and _contains_key(payload, "page_notes")
+    ):
         return None
     return _sha256(
         {
@@ -225,14 +264,22 @@ def _install_research_generation_resilience(model_router_module: Any) -> None:
         return
 
     @wraps(current)
-    def generate_text(self: Any, role: str, messages: Any, *args: Any, **kwargs: Any) -> str:
+    def generate_text(
+        self: Any,
+        role: str,
+        messages: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> str:
         call_kwargs = dict(kwargs)
         is_research = str(call_kwargs.get("tool_stage", "")) == "research"
-        synthesis_key = _document_synthesis_key(self, role, messages) if is_research else None
+        synthesis_key = (
+            _document_synthesis_key(self, role, messages) if is_research else None
+        )
 
-        # All evidence pages have already been materialized and read before this synthesis.
-        # Re-entering search_project_rag/search_code_rag/external_mcp_call here only repeats
-        # retrieval over unchanged evidence and was the source of multi-minute tool loops.
+        # All evidence pages have already been materialized and read before this
+        # synthesis. Re-entering search_project_rag/search_code_rag/external_mcp_call
+        # here only repeats retrieval over unchanged evidence.
         if synthesis_key is not None:
             call_kwargs["enable_tools"] = False
 
@@ -243,8 +290,11 @@ def _install_research_generation_resilience(model_router_module: Any) -> None:
             else None
         )
 
-        if request_key is not None:
-            with _key_lock(request_key):
+        lock = _key_lock(request_key) if request_key is not None else None
+        if lock is not None:
+            lock.acquire()
+        try:
+            if request_key is not None:
                 cached = _read_checkpoint(request_key)
                 if cached is not None:
                     if synthesis_key is not None:
@@ -252,23 +302,25 @@ def _install_research_generation_resilience(model_router_module: Any) -> None:
                             _SYNTHESIS_RESULTS.setdefault(synthesis_key, cached)
                     return cached
 
-        # An insufficient but schema-valid synthesis cannot gain new evidence after tools
-        # are disabled. Replaying the first valid synthesis makes the existing caller's
-        # fixed-point detector terminate without another backend generation.
-        if synthesis_key is not None:
-            with _SYNTHESIS_LOCK:
-                prior_result = _SYNTHESIS_RESULTS.get(synthesis_key)
-            if prior_result is not None:
-                return prior_result
+            # An insufficient but schema-valid synthesis cannot gain new evidence after
+            # tools are disabled. Replaying the first valid synthesis makes the existing
+            # caller's fixed-point detector terminate without another backend generation.
+            if synthesis_key is not None:
+                with _SYNTHESIS_LOCK:
+                    prior_result = _SYNTHESIS_RESULTS.get(synthesis_key)
+                if prior_result is not None:
+                    return prior_result
 
-        raw = current(self, role, messages, *args, **call_kwargs)
-        if request_key is not None and _valid_research_response(raw):
-            with _key_lock(request_key):
+            raw = current(self, role, messages, *args, **call_kwargs)
+            if request_key is not None and _valid_research_response(raw):
                 _write_checkpoint(request_key, raw)
-        if synthesis_key is not None and _valid_research_response(raw):
-            with _SYNTHESIS_LOCK:
-                _SYNTHESIS_RESULTS.setdefault(synthesis_key, raw)
-        return raw
+            if synthesis_key is not None and _valid_research_response(raw):
+                with _SYNTHESIS_LOCK:
+                    _SYNTHESIS_RESULTS.setdefault(synthesis_key, raw)
+            return raw
+        finally:
+            if lock is not None:
+                lock.release()
 
     setattr(generate_text, _MARKER, True)
     generate_text.__wrapped__ = current  # type: ignore[attr-defined]
@@ -308,7 +360,8 @@ def _rearm_managed_server(autotune: Any, *, force: bool) -> bool:
             attempted = getattr(autotune, "_ATTEMPTED_KEYS", None)
             if isinstance(attempted, set):
                 attempted.discard(old_key)
-        if old_url and (os.environ.get("LLAMA_SERVER_URL") or "").rstrip("/") == str(old_url).rstrip("/"):
+        configured = (os.environ.get("LLAMA_SERVER_URL") or "").rstrip("/")
+        if old_url and configured == str(old_url).rstrip("/"):
             os.environ.pop("LLAMA_SERVER_URL", None)
         autotune._MANAGED_PROCESS = None
         autotune._MANAGED_KEY = None
@@ -365,11 +418,13 @@ def _install_managed_backend_recovery(llama_adapter_module: Any, autotune: Any) 
         try:
             return current(self, request)
         except Exception as first_error:
-            if not _transport_failure(first_error) or not _managed_server_owned(autotune):
+            if not _transport_failure(first_error):
                 raise
-            # Only an MMM-owned local server is eligible. External/user-provided servers
-            # are never terminated or silently replaced. The exact request object is replayed
-            # once after the cached tuning decision restarts the managed process.
+            if not _managed_server_owned(autotune):
+                raise
+            # Only an MMM-owned local server is eligible. External/user-provided
+            # servers are never terminated or silently replaced. Replay the exact
+            # same request object once after rearming the managed process.
             if not _rearm_managed_server(autotune, force=True):
                 raise
             try:
