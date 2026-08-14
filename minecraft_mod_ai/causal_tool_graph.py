@@ -32,10 +32,56 @@ _GOAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     "plan": frozenset({"plan_ready"}),
     "release": frozenset({"packaged"}),
 }
+_GOAL_SUPPORT: dict[str, frozenset[str]] = {
+    "observe": frozenset({"project_observed", "work_observed", "quality_observed"}),
+    "evidence": frozenset({"evidence_ready", "code_evidence", "project_evidence", "ecosystem_evidence", "external_observation"}),
+    "verify": frozenset({"project_observed", "evidence_ready", "static_verified", "build_verified", "verified"}),
+    "repair": frozenset({"project_observed", "evidence_ready", "code_evidence", "project_evidence", "repaired"}),
+    "generate": frozenset({"project_observed", "evidence_ready", "code_evidence", "project_evidence", "generated"}),
+    "act": frozenset({"project_observed", "evidence_ready", "code_evidence", "project_evidence", "project_changed"}),
+    "runtime": frozenset({"project_observed", "build_verified", "runtime_prepared", "server_started", "client_started", "mineflayer_connected", "runtime_observed"}),
+    "runtime_verify": frozenset({"project_observed", "build_verified", "runtime_prepared", "server_started", "client_started", "runtime_observed", "runtime_verified"}),
+    "external": frozenset({"external_capabilities", "external_schema", "external_observation", "evidence_ready"}),
+    "plan": frozenset({"plan_ready", "plan_observed", "plan_approved"}),
+    "release": frozenset({"project_observed", "build_verified", "artifact_observed", "packaged"}),
+}
 _EXTERNAL_NAMES = frozenset({
     "external_mcp_capabilities",
     "external_mcp_schema",
     "external_mcp_call",
+})
+# When a test/plugin/runtime exposes only a partial reviewed surface, continue with
+# useful read/verification progress instead of dropping out of the tool-capable loop.
+# Mutation/release effects are deliberately absent from this fallback allow-list.
+_SAFE_PROGRESS_EFFECTS = frozenset({
+    "project_observed",
+    "work_observed",
+    "quality_observed",
+    "capabilities_observed",
+    "code_evidence",
+    "project_evidence",
+    "ecosystem_evidence",
+    "evidence_ready",
+    "rag_index_ready",
+    "plan_observed",
+    "quality_contract",
+    "static_verified",
+    "build_verified",
+    "verified",
+    "geometry_verified",
+    "benchmark_verified",
+    "runtime_prepared",
+    "server_started",
+    "client_started",
+    "mineflayer_connected",
+    "runtime_observed",
+    "runtime_verified",
+    "external_capabilities",
+    "external_schema",
+    "external_observation",
+    "artifact_observed",
+    "model_observed",
+    "model_ready",
 })
 
 
@@ -123,6 +169,13 @@ def _goal_facts(goals: Iterable[str]) -> frozenset[str]:
     return frozenset(facts or {"project_observed"})
 
 
+def _support_facts(goals: Iterable[str]) -> frozenset[str]:
+    facts: set[str] = set()
+    for goal in goals:
+        facts.update(_GOAL_SUPPORT.get(goal, ()))
+    return frozenset(facts)
+
+
 def _transitions(schemas: Sequence[Mapping[str, Any]]) -> dict[str, ToolTransition]:
     result: dict[str, ToolTransition] = {}
     for schema in schemas:
@@ -175,6 +228,56 @@ def _path_cost(path: Sequence[str], transitions: Mapping[str, ToolTransition]) -
     return sum(transitions[name].cost for name in path if name in transitions)
 
 
+def _progress_frontier(
+    transitions: Mapping[str, ToolTransition],
+    *,
+    state: frozenset[str],
+    goals: Sequence[str],
+    preference: Mapping[str, int] | None,
+    limit: int,
+) -> tuple[str, ...]:
+    """Best safe progress when the authorized surface cannot complete the goal.
+
+    This is necessary for partial MCP/test/plugin surfaces: evidence can still be
+    gathered and fed back to the model even if the mutation/terminal tool is host-
+    owned elsewhere. Only reviewed non-mutating effects are eligible.
+    """
+
+    support = _support_facts(goals) - set(state)
+    rank = preference or {}
+    fallback_rank = len(rank) + len(transitions) + 1
+    scored: list[tuple[int, int, int, str]] = []
+    for name, transition in transitions.items():
+        if not transition.preconditions.issubset(state):
+            continue
+        new_effects = set(transition.effects) - set(state)
+        safe_effects = new_effects & set(_SAFE_PROGRESS_EFFECTS)
+        if not safe_effects:
+            continue
+        direct_support = len(safe_effects & set(support))
+        # Support-producing reads outrank merely safe observations. Semantic rank is
+        # still only the final tie-breaker within equal causal progress.
+        scored.append(
+            (
+                -direct_support,
+                transition.cost,
+                int(rank.get(name, fallback_rank)),
+                name,
+            )
+        )
+    scored.sort()
+    if not scored:
+        return ()
+    best_support = scored[0][0]
+    best_cost = scored[0][1]
+    selected = [
+        name
+        for support_score, cost, _rank, name in scored
+        if support_score == best_support and cost == best_cost
+    ]
+    return tuple(selected[:limit])
+
+
 def executable_frontier(
     schemas: Sequence[Mapping[str, Any]],
     *,
@@ -187,8 +290,10 @@ def executable_frontier(
     """Return up to three first edges on globally minimum-cost causal paths.
 
     Causal legality and total path cost are authoritative. ``preference`` is used
-    only after all first transitions with greater total causal cost have been
-    discarded, so semantic/tool relevance can never shortcut a precondition.
+    only after more expensive paths have been discarded. If this authorized surface
+    cannot itself reach the terminal state, the bounded safe-progress fallback keeps
+    read/evidence verification in the tool loop rather than silently switching to a
+    text-only model path.
     """
 
     limit = max(1, min(int(limit), 3))
@@ -224,8 +329,6 @@ def executable_frontier(
             total_steps = 1 + len(tail)
         candidates.append((total_cost, total_steps, name))
 
-    # If the entire authorized surface is external-MCP-only, a generic inspect
-    # request means inspect through that external surface rather than expose nothing.
     if not candidates and set(transitions) <= _EXTERNAL_NAMES:
         return executable_frontier(
             schemas,
@@ -236,7 +339,13 @@ def executable_frontier(
             preference=preference,
         )
     if not candidates:
-        return ()
+        return _progress_frontier(
+            transitions,
+            state=state,
+            goals=target_goals,
+            preference=preference,
+            limit=limit,
+        )
 
     min_cost = min(item[0] for item in candidates)
     min_steps = min(item[1] for item in candidates if item[0] == min_cost)
