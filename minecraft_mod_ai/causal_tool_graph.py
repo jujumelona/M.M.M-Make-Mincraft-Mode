@@ -23,6 +23,8 @@ _GOAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     "observe": frozenset({"project_observed"}),
     "evidence": frozenset({"evidence_ready"}),
     "verify": frozenset({"verified"}),
+    "repair": frozenset({"repaired"}),
+    "generate": frozenset({"generated"}),
     "act": frozenset({"project_changed"}),
     "runtime": frozenset({"runtime_observed"}),
     "runtime_verify": frozenset({"runtime_verified"}),
@@ -92,7 +94,13 @@ def verified_state_from_messages(
         if transition.preconditions.issubset(state):
             state.update(transition.effects)
     if require_fresh_evidence and not any(
-        fact in state for fact in ("code_evidence", "project_evidence", "ecosystem_evidence", "external_observation")
+        fact in state
+        for fact in (
+            "code_evidence",
+            "project_evidence",
+            "ecosystem_evidence",
+            "external_observation",
+        )
     ):
         state.discard("evidence_ready")
     return frozenset(state)
@@ -115,6 +123,15 @@ def _goal_facts(goals: Iterable[str]) -> frozenset[str]:
     return frozenset(facts or {"project_observed"})
 
 
+def _transitions(schemas: Sequence[Mapping[str, Any]]) -> dict[str, ToolTransition]:
+    result: dict[str, ToolTransition] = {}
+    for schema in schemas:
+        transition = transition_for_schema(schema)
+        if transition.name and transition.reviewed:
+            result[transition.name] = transition
+    return result
+
+
 def shortest_causal_path(
     schemas: Sequence[Mapping[str, Any]],
     *,
@@ -122,11 +139,7 @@ def shortest_causal_path(
     goals: Iterable[str],
     max_depth: int = 6,
 ) -> tuple[str, ...]:
-    transitions = {
-        transition.name: transition
-        for schema in schemas
-        if (transition := transition_for_schema(schema)).name and transition.reviewed
-    }
+    transitions = _transitions(schemas)
     target = _goal_facts(goals)
     if target.issubset(state):
         return ()
@@ -158,6 +171,10 @@ def shortest_causal_path(
     return solutions[0][2]
 
 
+def _path_cost(path: Sequence[str], transitions: Mapping[str, ToolTransition]) -> int:
+    return sum(transitions[name].cost for name in path if name in transitions)
+
+
 def executable_frontier(
     schemas: Sequence[Mapping[str, Any]],
     *,
@@ -165,50 +182,79 @@ def executable_frontier(
     goals: Iterable[str],
     limit: int = 3,
     max_depth: int = 6,
+    preference: Mapping[str, int] | None = None,
 ) -> tuple[str, ...]:
+    """Return up to three first edges on globally minimum-cost causal paths.
+
+    Causal legality and total path cost are authoritative. ``preference`` is used
+    only after all first transitions with greater total causal cost have been
+    discarded, so semantic/tool relevance can never shortcut a precondition.
+    """
+
     limit = max(1, min(int(limit), 3))
-    transitions = {
-        transition_for_schema(schema).name: transition_for_schema(schema)
-        for schema in schemas
-        if transition_for_schema(schema).name
-    }
-    path = shortest_causal_path(schemas, state=state, goals=goals, max_depth=max_depth)
-    # If the authorized surface is external-MCP-only, a generic "inspect" request
-    # means inspect through that external surface rather than exposing nothing.
-    if not path and transitions and set(transitions) <= _EXTERNAL_NAMES:
-        path = shortest_causal_path(schemas, state=state, goals=("external",), max_depth=max_depth)
-    if not path:
+    transitions = _transitions(schemas)
+    if not transitions:
         return ()
-    first = transitions[path[0]]
-    frontier: list[str] = [first.name]
+    target_goals = tuple(goals)
+    target = _goal_facts(target_goals)
+    if target.issubset(state):
+        return ()
 
-    if first.effects & {"evidence_ready", "project_evidence", "code_evidence", "ecosystem_evidence"}:
-        alternatives: list[tuple[int, str]] = []
-        for name, transition in transitions.items():
-            if (
-                name != first.name
-                and transition.reviewed
-                and transition.preconditions.issubset(state)
-                and transition.effects & {"evidence_ready", "project_evidence", "code_evidence", "ecosystem_evidence"}
-            ):
-                alternatives.append((transition.cost, name))
-        alternatives.sort()
-        frontier.extend(name for _cost, name in alternatives[: limit - 1])
+    candidates: list[tuple[int, int, str]] = []
+    for name, transition in transitions.items():
+        if not transition.preconditions.issubset(state):
+            continue
+        new_facts = set(transition.effects) - set(state)
+        if not new_facts:
+            continue
+        next_state = frozenset(set(state) | set(transition.effects))
+        if target.issubset(next_state):
+            total_cost = transition.cost
+            total_steps = 1
+        else:
+            tail = shortest_causal_path(
+                schemas,
+                state=next_state,
+                goals=target_goals,
+                max_depth=max(0, max_depth - 1),
+            )
+            if not tail:
+                continue
+            total_cost = transition.cost + _path_cost(tail, transitions)
+            total_steps = 1 + len(tail)
+        candidates.append((total_cost, total_steps, name))
 
-    # External capabilities/schema/call are three read-only alternatives, not a fake
-    # mandatory chain. The bridge itself says schema is needed only when arguments are
-    # not already known. Keep all executable choices available, still bounded to 3.
-    if first.name in _EXTERNAL_NAMES:
-        external_alternatives = sorted(
-            name
-            for name, transition in transitions.items()
-            if name in _EXTERNAL_NAMES
-            and name not in frontier
-            and transition.reviewed
-            and transition.preconditions.issubset(state)
+    # If the entire authorized surface is external-MCP-only, a generic inspect
+    # request means inspect through that external surface rather than expose nothing.
+    if not candidates and set(transitions) <= _EXTERNAL_NAMES:
+        return executable_frontier(
+            schemas,
+            state=state,
+            goals=("external",),
+            limit=limit,
+            max_depth=max_depth,
+            preference=preference,
         )
-        frontier.extend(external_alternatives[: limit - len(frontier)])
-    return tuple(frontier[:limit])
+    if not candidates:
+        return ()
+
+    min_cost = min(item[0] for item in candidates)
+    min_steps = min(item[1] for item in candidates if item[0] == min_cost)
+    equally_minimal = [
+        name
+        for cost, steps, name in candidates
+        if cost == min_cost and steps == min_steps
+    ]
+    rank = preference or {}
+    fallback_rank = len(rank) + len(equally_minimal) + 1
+    equally_minimal.sort(
+        key=lambda name: (
+            int(rank.get(name, fallback_rank)),
+            transitions[name].cost,
+            name,
+        )
+    )
+    return tuple(equally_minimal[:limit])
 
 
 def shortest_causal_frontier(
@@ -220,7 +266,13 @@ def shortest_causal_frontier(
     max_depth: int = 4,
 ) -> tuple[str, ...]:
     del protected
-    return executable_frontier(schemas, state=state, goals=goals, limit=3, max_depth=max_depth)
+    return executable_frontier(
+        schemas,
+        state=state,
+        goals=goals,
+        limit=3,
+        max_depth=max_depth,
+    )
 
 
 __all__ = [
