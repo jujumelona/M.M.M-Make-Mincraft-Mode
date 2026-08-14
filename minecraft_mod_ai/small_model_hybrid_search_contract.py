@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from functools import wraps
 from typing import Any, Mapping
+
+from .retrieval_adaptation import adapt_query_vector, extract_hit_texts
 
 _SYMBOL = re.compile(r"\b(?:[A-Z][A-Za-z0-9_]{2,}|[a-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]+\.(?:java|json|gradle|kts))\b")
 
@@ -79,6 +82,40 @@ def _modes(route: str, caller_semantic: bool, caller_rerank: bool):
     )
 
 
+def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
+    texts = extract_hit_texts(result)
+    vector = adapt_query_vector(router, query, texts)
+    if not vector or not texts:
+        return ""
+    # The underlying index accepts text, not an external query vector. Use the
+    # adapted vector only to choose local first-pass terms whose embeddings are
+    # closest to the centroid direction, then issue one text query containing them.
+    candidates: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for text in texts:
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.$:/-]{2,96}", text):
+            lowered = token.casefold()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            try:
+                embedded = router.embed(token)
+                values = [float(item) for item in embedded]
+            except Exception:
+                continue
+            width = min(len(vector), len(values))
+            if not width:
+                continue
+            dot = sum(vector[index] * values[index] for index in range(width))
+            candidates.append((dot, token))
+            if len(candidates) >= 96:
+                break
+        if len(candidates) >= 96:
+            break
+    candidates.sort(key=lambda item: (-item[0], item[1].casefold()))
+    return " ".join(token for _score, token in candidates[:8])
+
+
 def install(production_tools_module: Any) -> None:
     cls = production_tools_module.ProductionToolService
     current = cls.search_code_rag
@@ -100,6 +137,7 @@ def install(production_tools_module: Any) -> None:
         errors: list[str] = []
         best: dict[str, Any] | None = None
         best_score = (-1, -1.0, -1.0)
+        router = getattr(self, "router", None)
 
         for retry in (False, True):
             routed_query = _expanded(query, route, retry=retry)
@@ -135,16 +173,45 @@ def install(production_tools_module: Any) -> None:
                     if errors:
                         result["fallback_errors"] = errors
                     return result
-            # The underlying RAG already performs one coverage-aware correction.
-            # Add at most one host route-specific reformulation, never an open loop.
             if retry:
                 break
+
+        # Training-free q0 -> local top-K centroid -> q1 text adaptation. This is
+        # attempted only after ordinary routed retrieval is below the coverage target.
+        if best is not None and router is not None and route in {"semantic", "dependency", "global"}:
+            try:
+                terms = _centroid_terms(router, query, best)
+                if terms:
+                    adapted_query = query + "\nlocal-adaptation: " + terms
+                    adapted = dict(
+                        current(
+                            self,
+                            adapted_query,
+                            index_path=index_path,
+                            limit=limit,
+                            semantic=True,
+                            rerank=True,
+                            required_metadata=required_metadata,
+                        )
+                    )
+                    usable, coverage, relevance, count = _quality(adapted)
+                    adapted["query"] = query
+                    adapted["expanded_query"] = adapted_query
+                    adapted["task_route"] = route
+                    adapted["retrieval_mode"] = "centroid-adapted-semantic+rerank"
+                    adapted["retrieval_retry"] = True
+                    adapted["centroid_adaptation"] = True
+                    if usable or (count, coverage, relevance) > best_score:
+                        return adapted
+            except Exception as exc:
+                errors.append(f"centroid-adaptation:{type(exc).__name__}:{str(exc)[:240]}")
 
         if best is not None:
             best["query"] = query
             best["task_route"] = route
             best["retrieval_retry"] = True
             best["retrieval_quality_warning"] = "coverage_or_relevance_below_target"
+            best["centroid_adaptation"] = False
             if errors:
                 best["fallback_errors"] = errors
             return best
