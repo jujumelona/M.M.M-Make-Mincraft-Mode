@@ -7,11 +7,38 @@ from functools import wraps
 from typing import Any
 
 
-_MARKER = "_mmm_central_model_capacity_v2"
+_MARKER = "_mmm_central_model_capacity_v3"
+_ROUTER_CAPACITY_MARKER = "_mmm_router_owned_model_capacity_v1"
+_LEGACY_MARKERS = (
+    "_mmm_central_model_capacity_v1",
+    "_mmm_central_model_capacity_v2",
+)
 _ACTIVE_MODEL_ROUTER: ContextVar[Any | None] = ContextVar(
     "mmm_central_model_capacity_router",
     default=None,
 )
+
+
+def _unwrap_legacy(current: Any) -> Any:
+    if any(getattr(current, marker, False) for marker in _LEGACY_MARKERS):
+        previous = getattr(current, "__wrapped__", None)
+        if callable(previous):
+            return previous
+    return current
+
+
+def _owns_native_model(router: Any) -> bool:
+    """Require router-local proof before process-global llama capacity may be reused."""
+
+    try:
+        config = router.registry.role(router.profile, "planner")
+    except Exception:
+        return False
+    return (
+        bool(getattr(config, "exclusive_gpu", False))
+        and str(getattr(config, "provider", "")) == "local"
+        and str(getattr(config, "adapter", "")) in {"llama_cpp", "vllm"}
+    )
 
 
 def harden(agentic_module: Any, central_module: Any) -> None:
@@ -19,16 +46,35 @@ def harden(agentic_module: Any, central_module: Any) -> None:
 
     Provider retrieval remains governed by the generic CPU/I/O worker budget because
     the router context is installed only around model-backed committee, reviewer, and
-    design-section calls.
+    design-section calls. Process-global llama receipts are usable only by a router that
+    itself proves ownership of an exclusive native-local planner model.
     """
 
-    current_worker_count = central_module._worker_count
-    # Upgrade an in-place v1 install without stacking the recursive worker wrapper.
-    if getattr(current_worker_count, "_mmm_central_model_capacity_v1", False):
-        previous = getattr(current_worker_count, "__wrapped__", None)
-        if callable(previous):
-            current_worker_count = previous
+    current_domain_workers = central_module._research_domain_worker_count
+    if not getattr(current_domain_workers, _ROUTER_CAPACITY_MARKER, False):
 
+        @wraps(current_domain_workers)
+        def router_owned_domain_workers(router: Any, width: int) -> int:
+            try:
+                requested = max(1, int(width))
+            except (TypeError, ValueError):
+                return 1
+            if requested <= 1 or not _owns_native_model(router):
+                return 1
+            try:
+                capacity = current_domain_workers(router, requested)
+            except Exception:
+                return 1
+            try:
+                return max(1, min(requested, int(capacity)))
+            except (TypeError, ValueError):
+                return 1
+
+        setattr(router_owned_domain_workers, _ROUTER_CAPACITY_MARKER, True)
+        router_owned_domain_workers.__wrapped__ = current_domain_workers  # type: ignore[attr-defined]
+        central_module._research_domain_worker_count = router_owned_domain_workers
+
+    current_worker_count = _unwrap_legacy(central_module._worker_count)
     if not getattr(current_worker_count, _MARKER, False):
 
         @wraps(current_worker_count)
@@ -57,15 +103,8 @@ def harden(agentic_module: Any, central_module: Any) -> None:
         model_aware_worker_count.__wrapped__ = current_worker_count  # type: ignore[attr-defined]
         central_module._worker_count = model_aware_worker_count
 
-    def unwrap_v1(current: Any) -> Any:
-        if getattr(current, "_mmm_central_model_capacity_v1", False):
-            previous = getattr(current, "__wrapped__", None)
-            if callable(previous):
-                return previous
-        return current
-
     def wrap_router_scope(owner: Any, name: str) -> None:
-        current = unwrap_v1(getattr(owner, name))
+        current = _unwrap_legacy(getattr(owner, name))
         if getattr(current, _MARKER, False):
             return
 
@@ -84,7 +123,7 @@ def harden(agentic_module: Any, central_module: Any) -> None:
     wrap_router_scope(central_module, "build_central_committee")
     wrap_router_scope(central_module, "_parallel_reviews")
 
-    current_generate = unwrap_v1(agentic_module.generate_sectioned_game_design)
+    current_generate = _unwrap_legacy(agentic_module.generate_sectioned_game_design)
     if not getattr(current_generate, _MARKER, False):
 
         @wraps(current_generate)
