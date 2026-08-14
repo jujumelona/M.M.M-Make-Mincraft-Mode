@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from functools import wraps
 from typing import Any, Mapping
@@ -87,9 +86,6 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
     vector = adapt_query_vector(router, query, texts)
     if not vector or not texts:
         return ""
-    # The underlying index accepts text, not an external query vector. Use the
-    # adapted vector only to choose local first-pass terms whose embeddings are
-    # closest to the centroid direction, then issue one text query containing them.
     candidates: list[tuple[float, str]] = []
     seen: set[str] = set()
     for text in texts:
@@ -176,8 +172,6 @@ def install(production_tools_module: Any) -> None:
             if retry:
                 break
 
-        # Training-free q0 -> local top-K centroid -> q1 text adaptation. This is
-        # attempted only after ordinary routed retrieval is below the coverage target.
         if best is not None and router is not None and route in {"semantic", "dependency", "global"}:
             try:
                 terms = _centroid_terms(router, query, best)
