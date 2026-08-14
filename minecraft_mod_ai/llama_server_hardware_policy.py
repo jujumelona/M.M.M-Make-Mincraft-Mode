@@ -64,10 +64,10 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the one authoritative native llama-server chat payload.
 
     Tool-capable turns use the smallest widely compatible function-calling wire
-    contract. Structured non-tool turns use llama.cpp JSON-schema constrained
-    decoding and explicitly disable model-internal thinking so the bounded output
-    budget is reserved for the visible JSON contract. Host parsing and validation
-    remain authoritative in both cases.
+    contract. Structured non-tool turns ask llama.cpp only for a generic JSON object
+    and explicitly disable model-internal thinking. Detailed JSON Schema constraints
+    stay on the host so llama.cpp never has to translate application schemas into
+    fragile GBNF grammars.
     """
 
     payload: dict[str, Any] = {
@@ -90,14 +90,7 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         return payload
 
     if getattr(request, "response_format", None) == "json":
-        schema = getattr(request, "response_schema", None)
-        if schema is not None:
-            payload["response_format"] = {
-                "type": "json_object",
-                "schema": dict(schema),
-            }
-        else:
-            payload["response_format"] = {"type": "json_object"}
+        payload["response_format"] = {"type": "json_object"}
         # llama.cpp exposes both controls on /v1/chat/completions.  reasoning_effort
         # is the server-level hard disable while enable_thinking is consumed by Qwen
         # chat templates.  Supplying both makes the transport intent explicit and
@@ -483,6 +476,7 @@ def install(autotune_module: Any) -> None:
     """Bind local GGUF inference exclusively to managed native llama-server."""
 
     from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
+    from .structured_output import generate_with_host_schema_repair
 
     original_server_binary = autotune_module._server_binary
     if not getattr(original_server_binary, "_mmm_native_bootstrap", False):
@@ -625,7 +619,11 @@ def install(autotune_module: Any) -> None:
                 raise RuntimeError(
                     "native llama-server is required but could not be started"
                 )
-            return _strict_server_generate(self, request, explicit)
+
+            def generate_once(value: Any) -> str:
+                return _strict_server_generate(self, value, explicit)
+
+            return generate_with_host_schema_repair(request, generate_once)
 
         strict_selected_server_generate._mmm_explicit_server_strict = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate = strict_selected_server_generate
