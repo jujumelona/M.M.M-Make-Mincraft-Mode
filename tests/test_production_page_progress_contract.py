@@ -24,7 +24,7 @@ def _production_page(**overrides):
 def _module(**overrides):
     value = {
         "module_id": "platform_lock",
-        "kind": "config",
+        "kind": "custom_java",
         "config": {},
         "depends_on": [],
         "required_gates": [],
@@ -64,6 +64,12 @@ def test_production_schema_rejects_blank_required_module_strings(field) -> None:
         validator.validate(_production_page(modules=[_module(**{field: ""})]))
 
 
+def test_production_schema_rejects_unsupported_module_kind() -> None:
+    validator = Draft202012Validator(_schema())
+    with pytest.raises(ValidationError):
+        validator.validate(_production_page(modules=[_module(kind="config")]))
+
+
 @pytest.mark.parametrize(
     "field",
     ["depends_on", "required_gates", "implements_deliverables"],
@@ -81,4 +87,4 @@ def test_production_schema_rejects_blank_acceptance_test() -> None:
 
 
 def test_stale_loose_production_checkpoints_are_invalidated() -> None:
-    assert durable._VERSION >= 2
+    assert durable._VERSION >= 3
