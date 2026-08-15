@@ -159,7 +159,8 @@ def generate_with_host_schema_repair(
 
     Genuine transport failures are never converted into repair work. Each correction
     pass receives only the latest invalid output and exact validation failures, not the
-    original task conversation.
+    original task conversation. Supplied schemas are validated before model execution
+    so a host configuration error can never consume a model request.
     """
 
     if request.response_format != "json":
@@ -176,13 +177,14 @@ def generate_with_host_schema_repair(
             if current is None:
                 raise
         effective_schema = dict(_GENERIC_JSON_OBJECT_SCHEMA)
+        validator = _validator_for(effective_schema)
     elif isinstance(schema, Mapping):
         effective_schema = dict(schema) if schema else dict(_GENERIC_JSON_OBJECT_SCHEMA)
+        validator = _validator_for(effective_schema)
         current = _generate_json_candidate(request, generate)
     else:
         raise ValueError("response_schema must be a mapping when response_format='json'")
 
-    validator = _validator_for(effective_schema)
     errors = _validation_errors(current, validator)
     if not errors:
         return current
