@@ -10,6 +10,7 @@ from minecraft_mod_ai.complete_planner import (
     _implementation_prompt,
 )
 from minecraft_mod_ai.planner import HeuristicPlanner
+from minecraft_mod_ai.platform_resolver import resolve_platform, retarget_proposal
 from minecraft_mod_ai.research_coordinator import (
     collect_ecosystem_seed_bundle,
     collect_technology_radar,
@@ -310,6 +311,10 @@ def test_planner_sidecar_uses_capability_from_later_technology_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base = HeuristicPlanner().plan("Create one technology anchor item")
+    base = retarget_proposal(
+        base,
+        resolve_platform("Minecraft 1.20.1 Fabric"),
+    )
     game_design = {
         "title": "Paged technology",
         "pitch": "Use every classified capability.",
