@@ -14,6 +14,7 @@
     "verification",
     "procedure",
     "verified_facts",
+    "execution_context",
     "trajectory_id"
   ],
   "properties": {
@@ -115,6 +116,27 @@
       "additionalProperties": false
     },
     "verified_facts": {"type": "object"},
+    "execution_context": {
+      "type": "object",
+      "properties": {
+        "minecraft_version": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "loader": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "loader_version": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "mappings": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "mappings_version": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "java_version": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "platform": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "provider": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "source_api_family": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "model_profile": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "source_commit": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "manifest_sha256": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "platform_lock_sha256": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "error_code": {"type": ["string", "number", "boolean"], "maxLength": 240},
+        "error_type": {"type": ["string", "number", "boolean"], "maxLength": 240}
+      },
+      "additionalProperties": false
+    },
     "error_signature": {"type": "string", "maxLength": 1200},
     "trajectory_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "remote_format_version": {"const": "v3"},
