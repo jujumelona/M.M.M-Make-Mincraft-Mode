@@ -30,7 +30,7 @@ def test_temporary_skill_cache_reuses_only_unchanged_corpus_and_context(tmp_path
             "source_trajectory_ids": ["a", "b"],
         }
 
-    monkeypatch.setattr(contract, "relevant_trajectories", fake_relevant)
+    monkeypatch.setattr(contract._trajectory_memory, "relevant_trajectories", fake_relevant)
     monkeypatch.setattr(contract, "synthesize_temporary_skill", fake_synthesize)
 
     context = {"target_version": "future-1", "loader": "fabric"}

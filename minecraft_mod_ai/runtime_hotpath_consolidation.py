@@ -248,6 +248,7 @@ def harden_memory_lock_scope(
         task_class: str,
         router: Any | None = None,
         limit: int = 6,
+        current_context: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         token = _MEMORY_BASE.set(str(Path(base).expanduser().resolve()))
         try:
@@ -257,6 +258,7 @@ def harden_memory_lock_scope(
                 task_class=task_class,
                 router=router,
                 limit=limit,
+                current_context=current_context,
             )
         finally:
             _MEMORY_BASE.reset(token)

@@ -83,12 +83,12 @@ def install() -> None:
         indexed_relevant,
     )
 
-    # temporary_skill_contract imported these functions by value before this late
-    # bootstrap entry. Rebind only its module globals; do not add another work owner.
+    # temporary_skill_contract still imports append_trajectory by value. Retrieval
+    # is deliberately module-owned so execution-context filtering cannot be bypassed
+    # by a stale late-bootstrap alias.
     try:
         from . import temporary_skill_contract as temporary
         temporary.append_trajectory = indexed_append
-        temporary.relevant_trajectories = indexed_relevant
     except Exception:
         pass
 

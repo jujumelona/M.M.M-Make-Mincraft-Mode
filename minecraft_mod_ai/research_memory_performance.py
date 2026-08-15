@@ -345,6 +345,7 @@ def _indexed_relevant_factory(tm: Any, original: Callable[..., list[dict[str, An
         task_class: str,
         router: Any | None = None,
         limit: int = 6,
+        current_context: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         with _TRAJECTORY_LOCK:
             connection = _open_trajectory_db(tm, base)
@@ -366,7 +367,14 @@ def _indexed_relevant_factory(tm: Any, original: Callable[..., list[dict[str, An
                 rows = _trajectory_candidate_rows(tm, connection, query, task_class, cap=cap)
             except sqlite3.DatabaseError:
                 connection.close()
-                return original(base, query, task_class=task_class, router=router, limit=limit)
+                return original(
+                    base,
+                    query,
+                    task_class=task_class,
+                    router=router,
+                    limit=limit,
+                    current_context=current_context,
+                )
             finally:
                 try:
                     connection.close()
@@ -377,6 +385,8 @@ def _indexed_relevant_factory(tm: Any, original: Callable[..., list[dict[str, An
         scored: list[tuple[float, str, dict[str, Any]]] = []
         for row in rows:
             if str(row.get("task_class", "")) not in {task_class, "general"}:
+                continue
+            if not tm._execution_context_compatible(row, current_context):
                 continue
             rendered = json.dumps(row, ensure_ascii=False, sort_keys=True)
             values = tm._tokens(rendered)

@@ -16,13 +16,13 @@ from .remote_trajectory_store import (
     queue_remote_record,
     remote_configured,
 )
+from . import trajectory_memory as _trajectory_memory
 from .trajectory_memory import (
     append_trajectory,
     build_work_trajectory,
     execution_context_from_messages,
     execution_context_from_values,
     memory_path,
-    relevant_trajectories,
     remote_cache_path,
     synthesize_temporary_skill,
     task_class_for_stage,
@@ -191,7 +191,7 @@ def _temporary_skill(
                 cache[key] = skill
                 return skill
 
-    records = relevant_trajectories(
+    records = _trajectory_memory.relevant_trajectories(
         root,
         query,
         task_class=task_class,
