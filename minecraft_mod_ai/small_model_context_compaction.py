@@ -216,12 +216,14 @@ def _ledger(
                 remaining.append({"tool": item["tool"], "facts": remaining_facts})
         observations.append(item)
 
+    paths = sorted({value for value in _PATH.findall(rendered) if len(value) <= 512})[:256]
+    resources = sorted({value for value in _RESOURCE.findall(rendered.casefold()) if len(value) <= 256})[:256]
     return {
         "schema_version": "mmm/agent-context-compaction-v2",
         "raw_history": dict(archive),
-        "paths": sorted(set(_PATH.findall(rendered)))[:256],
+        "paths": paths,
         "sha256": sorted({value.casefold() for value in _SHA.findall(rendered)})[:256],
-        "resource_ids": sorted(set(_RESOURCE.findall(rendered.casefold())))[:256],
+        "resource_ids": resources,
         "versions": sorted(set(_VERSION.findall(rendered)))[:128],
         "tool_actions": actions[-32:],
         "errors": errors[-32:],
