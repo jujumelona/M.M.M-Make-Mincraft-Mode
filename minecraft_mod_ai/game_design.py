@@ -187,7 +187,6 @@ class GameDesignPlanner:
                 requested_prompt=prompt,
                 approval_hash="",
             ).with_hash()
-        proposal.validate()
         return design, proposal
 
     def _plan_sharded_request(
@@ -315,7 +314,6 @@ class GameDesignPlanner:
                 requested_prompt=prompt,
                 approval_hash="",
             ).with_hash()
-        proposal.validate()
         return design, proposal
 
 
