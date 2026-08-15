@@ -21,29 +21,27 @@ def install(module: Any) -> None:
 
     def normalize(value: Any):
         if value is None:
-            # Backward-compatible standalone technology calls retain the mature
-            # 1.20.1 adapter. Plan-bound calls always pass their selected target.
-            return from_adapter(adapter_for_target("1.20.1", "fabric"))
+            raise module.SpecValidationError(
+                "Technology analysis requires the host-selected platform target; "
+                "targetless calls are not assigned a historical default."
+            )
         if isinstance(value, target_cls):
             value.validate()
             return value
         if isinstance(value, module.PlatformLock):
-            return from_adapter(
-                adapter_for_target(value.minecraft_version, value.loader)
-            )
+            return from_adapter(adapter_for_target(value.minecraft_version, value.loader))
         if isinstance(value, Mapping):
             version = str(value.get("minecraft_version", "")).strip()
-            loader = str(value.get("loader", "fabric")).strip().lower()
-            if not version:
+            loader = str(value.get("loader", "")).strip().casefold()
+            if not version or not loader:
                 raise module.SpecValidationError(
-                    "Technology target mapping requires minecraft_version."
+                    "Technology target mapping requires minecraft_version and loader."
                 )
             try:
                 adapter = adapter_for_target(version, loader)
             except ValueError as exc:
                 raise module.SpecValidationError(str(exc)) from exc
             target = from_adapter(adapter)
-            # If the caller supplied any target coordinate, it must match the adapter.
             aliases = {
                 "edition": adapter.edition,
                 "minecraft_version": adapter.minecraft_version,
@@ -56,8 +54,8 @@ def install(module: Any) -> None:
             for field, expected in aliases.items():
                 if field in value and str(value[field]) != expected:
                     raise module.SpecValidationError(
-                        f"Technology target field {field} disagrees with reviewed "
-                        f"adapter {adapter.adapter_id}: {value[field]!r} != {expected!r}."
+                        f"Technology target field {field} disagrees with executable "
+                        f"provider {adapter.adapter_id}: {value[field]!r} != {expected!r}."
                     )
             target.validate()
             return target
@@ -65,3 +63,6 @@ def install(module: Any) -> None:
 
     normalize._mmm_exact_adapter_normalization = True
     module.normalize_technology_target = normalize
+
+
+__all__ = ["install"]

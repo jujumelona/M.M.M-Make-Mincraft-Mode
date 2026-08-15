@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .conversation import merge_design_brief
 from .pipeline import PipelineResult
@@ -27,11 +27,80 @@ if TYPE_CHECKING:
     from .complete_orchestrator import CompleteExecutionOptions, CompletePipelineResult
     from .complete_spec import CompleteProposal
 
-SUPPORTED_MINECRAFT_VERSIONS = ("1.20.1",)
+# Compatibility symbol only. Runtime support is provider-discovered and therefore
+# must not be frozen into a source-level version allowlist.
+SUPPORTED_MINECRAFT_VERSIONS: tuple[str, ...] = ()
 
 
-def supported_minecraft_versions() -> tuple[str, ...]:
-    return SUPPORTED_MINECRAFT_VERSIONS
+def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
+    from .platform_catalog import supported_minecraft_versions as discover
+
+    return discover(loader=loader)
+
+
+def _normalize_target_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in {"auto", "automatic"}:
+        return None
+    return text
+
+
+def _validate_requested_target(
+    minecraft_version: str | None,
+    loader: str | None,
+) -> tuple[str | None, str | None]:
+    from .platform_catalog import adapters_for_version, provider_for_loader, adapter_for_target
+
+    version = _normalize_target_value(minecraft_version)
+    normalized_loader = _normalize_target_value(loader)
+    if normalized_loader is not None:
+        normalized_loader = normalized_loader.casefold()
+        try:
+            provider_for_loader(normalized_loader)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
+    if version is not None and normalized_loader is not None:
+        try:
+            adapter_for_target(version, normalized_loader)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
+    elif version is not None and not adapters_for_version(version):
+        raise SpecValidationError(
+            f"Minecraft {version!r}을 실행할 수 있는 platform provider가 없습니다."
+        )
+    return version, normalized_loader
+
+
+def _attach_target_constraints(
+    owner: Any,
+    *,
+    minecraft_version: str | None,
+    loader: str | None,
+) -> None:
+    if minecraft_version is not None:
+        owner._mmm_requested_minecraft_version = minecraft_version
+    if loader is not None:
+        owner._mmm_requested_loader = loader
+
+
+def _attach_existing_target(owner: Any, existing_input: Path | None) -> None:
+    if existing_input is None or not existing_input.is_file():
+        return
+    from .importer import inspect_existing_project_archive
+
+    report = inspect_existing_project_archive(existing_input)
+    if report.minecraft_version:
+        owner._mmm_existing_minecraft_version = report.minecraft_version
+    if report.loader:
+        owner._mmm_existing_loader = report.loader
+    owner._mmm_existing_platform_report = {
+        "minecraft_version": report.minecraft_version,
+        "minecraft_versions": list(report.minecraft_versions),
+        "loader": report.loader,
+        "source": str(existing_input),
+    }
 
 
 @dataclass(frozen=True)
@@ -53,26 +122,25 @@ class ModAISession:
         self,
         *,
         output_root: str | Path = "mmm-output",
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
         planner: Planner | None = None,
         model_profile: str = "t4_local",
         existing_input: str | Path | None = None,
     ) -> None:
-        requested_version = minecraft_version.strip()
-        if requested_version not in SUPPORTED_MINECRAFT_VERSIONS:
-            supported = ", ".join(SUPPORTED_MINECRAFT_VERSIONS)
-            raise SpecValidationError(
-                f"지원하지 않는 Minecraft 버전입니다: {requested_version!r}. "
-                f"현재 검증된 버전: {supported}"
-            )
-        self.minecraft_version = requested_version
+        version, loader_id = _validate_requested_target(minecraft_version, loader)
+        self.minecraft_version = version
+        self.loader = loader_id
         self.output_root = Path(output_root)
-        self.existing_input = (
-            Path(existing_input) if existing_input is not None else None
+        self.existing_input = Path(existing_input) if existing_input is not None else None
+        selected_planner = planner or RoutedPlanner(profile=model_profile)
+        _attach_target_constraints(
+            selected_planner,
+            minecraft_version=version,
+            loader=loader_id,
         )
-        self.pipeline = ScalableMinecraftModPipeline(
-            planner=planner or RoutedPlanner(profile=model_profile)
-        )
+        _attach_existing_target(selected_planner, self.existing_input)
+        self.pipeline = ScalableMinecraftModPipeline(planner=selected_planner)
         self.brief = ""
         self.proposal: Proposal | None = None
 
@@ -81,7 +149,8 @@ class ModAISession:
         cls,
         *,
         output_root: str | Path = "mmm-output",
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
         existing_input: str | Path | None = None,
         profile: str = "t4_local",
         model_id: str | None = None,
@@ -94,6 +163,7 @@ class ModAISession:
         return cls(
             output_root=output_root,
             minecraft_version=minecraft_version,
+            loader=loader,
             existing_input=existing_input,
             model_profile=profile,
         )
@@ -106,13 +176,15 @@ class ModAISession:
         model: str,
         api_key: str,
         output_root: str | Path = "mmm-output",
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
         existing_input: str | Path | None = None,
         timeout_seconds: int = 90,
     ) -> "ModAISession":
         return cls(
             output_root=output_root,
             minecraft_version=minecraft_version,
+            loader=loader,
             existing_input=existing_input,
             planner=OpenAICompatiblePlanner(
                 base_url=base_url,
@@ -130,21 +202,21 @@ class ModAISession:
         model: str,
         api_key_env: str = "MMM_API_KEY",
         output_root: str | Path = "mmm-output",
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
         existing_input: str | Path | None = None,
         timeout_seconds: int = 90,
     ) -> "ModAISession":
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
-            raise SpecValidationError(
-                f"환경 변수 {api_key_env}에 외부 AI API 키가 없습니다."
-            )
+            raise SpecValidationError(f"환경 변수 {api_key_env}에 외부 AI API 키가 없습니다.")
         return cls.with_openai_compatible_api(
             base_url=base_url,
             model=model,
             api_key=api_key,
             output_root=output_root,
             minecraft_version=minecraft_version,
+            loader=loader,
             existing_input=existing_input,
             timeout_seconds=timeout_seconds,
         )
@@ -163,10 +235,7 @@ class ModAISession:
         if _is_approval_message(message) and self.proposal is not None:
             return self._reply(self.proposal)
         updated_brief = _merge_brief(self.brief, message)
-        proposal = self.pipeline.plan(
-            updated_brief,
-            existing_input=self.existing_input,
-        )
+        proposal = self.pipeline.plan(updated_brief, existing_input=self.existing_input)
         self.brief = updated_brief
         self.proposal = proposal
         return self._reply(proposal)
@@ -185,27 +254,16 @@ class ModAISession:
         elif candidate is None:
             proposal = self.proposal
         else:
-            raise TypeError(
-                "candidate must be ChatReply, Proposal, or None."
-            )
+            raise TypeError("candidate must be ChatReply, Proposal, or None.")
         if proposal is None:
-            raise SpecValidationError(
-                "먼저 대화로 계획을 만들어 주세요."
-            )
-        questions = _clarification_questions(
-            proposal.requested_prompt,
-            proposal,
-        )
+            raise SpecValidationError("먼저 대화로 계획을 만들어 주세요.")
+        questions = _clarification_questions(proposal.requested_prompt, proposal)
         if not _buildable(proposal, questions):
             raise SpecValidationError(
                 "아직 정하지 않았거나 구현과 연결되지 않은 내용이 있습니다. "
                 "대화에서 필요한 내용을 더 정해 주세요."
             )
-        base_output = (
-            Path(output_root)
-            if output_root is not None
-            else self.output_root
-        )
+        base_output = Path(output_root) if output_root is not None else self.output_root
         return self.pipeline.execute(
             proposal,
             approval_hash=proposal.approval_hash,
@@ -221,10 +279,7 @@ class ModAISession:
 
     @staticmethod
     def _reply(proposal: Proposal) -> ChatReply:
-        questions = _clarification_questions(
-            proposal.requested_prompt,
-            proposal,
-        )
+        questions = _clarification_questions(proposal.requested_prompt, proposal)
         return ChatReply(
             message=_render_plan(proposal, questions),
             ready_to_build=_buildable(proposal, questions),
@@ -253,32 +308,38 @@ class CompleteModAISession:
         self,
         *,
         output_root: str | Path = "mmm-output",
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
         model_profile: str = "t4_local",
         existing_input: str | Path | None = None,
         fast_mode: bool = False,
         kv_cache_quant: str = "q4_0",
     ) -> None:
-        import os
         from .complete_orchestrator import CompleteProductionOrchestrator
         from .complete_planner import CompleteGameDesignPlanner
         from .model_router import ModelRouter
 
-        if minecraft_version != "1.20.1":
-            raise SpecValidationError(
-                "Complete production is pinned to Minecraft Java 1.20.1 Fabric."
-            )
+        version, loader_id = _validate_requested_target(minecraft_version, loader)
+        self.minecraft_version = version
+        self.loader = loader_id
         self.output_root = Path(output_root)
         self.model_profile = model_profile
         self.fast_mode = fast_mode
         self.kv_cache_quant = kv_cache_quant
         os.environ["MMM_KV_CACHE_QUANT"] = kv_cache_quant
-        self.existing_input = (
-            Path(existing_input) if existing_input is not None else None
-        )
+        self.existing_input = Path(existing_input) if existing_input is not None else None
         self.router = ModelRouter(profile=model_profile)
+        _attach_target_constraints(
+            self.router,
+            minecraft_version=version,
+            loader=loader_id,
+        )
+        _attach_existing_target(self.router, self.existing_input)
         if fast_mode:
-            print("⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다 (1~2분 완주).", flush=True)
+            print(
+                "⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다 (1~2분 완주).",
+                flush=True,
+            )
             for role_name in ("planner", "coder", "researcher", "coder_safe", "visual_critic"):
                 try:
                     cfg = self.router.registry.role(model_profile, role_name)
@@ -332,9 +393,7 @@ class CompleteModAISession:
         if self.existing_input is not None:
             if not self.existing_input.is_file():
                 raise FileNotFoundError(self.existing_input)
-            existing_hash = "sha256:" + hashlib.sha256(
-                self.existing_input.read_bytes()
-            ).hexdigest()
+            existing_hash = "sha256:" + hashlib.sha256(self.existing_input.read_bytes()).hexdigest()
         proposal = self.planner.plan(
             updated_brief,
             media_paths=media_paths,
@@ -357,14 +416,9 @@ class CompleteModAISession:
         )
 
     def save_plan(self, target_path: str | Path | None = None) -> Path:
-
         if self.complete_proposal is None:
             raise SpecValidationError("No complete proposal to save.")
-        path = (
-            Path(target_path)
-            if target_path is not None
-            else (self.output_root / "proposal.json")
-        )
+        path = Path(target_path) if target_path is not None else self.output_root / "proposal.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(self.complete_proposal.to_dict(), ensure_ascii=False, indent=2),
@@ -377,11 +431,7 @@ class CompleteModAISession:
         from .complete_spec import CompleteProposal
         from .plan_render import render_complete_plan
 
-        path = (
-            Path(source_path)
-            if source_path is not None
-            else (self.output_root / "proposal.json")
-        )
+        path = Path(source_path) if source_path is not None else self.output_root / "proposal.json"
         if not path.is_file():
             raise FileNotFoundError(f"No saved proposal JSON found at {path}")
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -389,7 +439,6 @@ class CompleteModAISession:
         self.complete_proposal = proposal
         self.brief = proposal.requested_prompt
         print(f"📂 [Session] Existing plan successfully loaded from: {path}", flush=True)
-
         return CompleteChatReply(
             message=render_complete_plan(
                 requested_prompt=proposal.requested_prompt,
@@ -423,23 +472,12 @@ class CompleteModAISession:
         elif candidate is None:
             proposal = self.complete_proposal
         else:
-            raise TypeError(
-                "candidate must be CompleteChatReply, CompleteProposal or None."
-            )
+            raise TypeError("candidate must be CompleteChatReply, CompleteProposal or None.")
         if proposal is None:
-            raise SpecValidationError(
-                "Create a complete plan before building."
-            )
-        selected = options or CompleteExecutionOptions(
-            source_only=source_only
-        )
+            raise SpecValidationError("Create a complete plan before building.")
+        selected = options or CompleteExecutionOptions(source_only=source_only)
         if source_only and not selected.source_only:
-            selected = CompleteExecutionOptions(
-                **{
-                    **selected.__dict__,
-                    "source_only": True,
-                }
-            )
+            selected = CompleteExecutionOptions(**{**selected.__dict__, "source_only": True})
         return self.orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),

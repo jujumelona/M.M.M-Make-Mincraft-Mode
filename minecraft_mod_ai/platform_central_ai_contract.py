@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+"""Single planning owner for platform selection and live-target module lowering."""
+
 from dataclasses import replace
 from functools import wraps
 from typing import Any
 
-from .complete_spec import MODULE_KINDS, CompleteProposal, ProductionModule
+from .complete_spec import CompleteProposal, ProductionModule
 from .platform_resolver import resolve_platform, retarget_proposal
 
 
@@ -12,38 +14,15 @@ _LIVE_NON_SOURCE_KINDS = frozenset({"audio", "integration"})
 
 
 def install(*, game_design_module: Any, complete_planner_module: Any) -> None:
-    """Make live platform selection/model generation the outermost planning contract."""
-
-    _make_old_live_kind_gate_non_blocking()
+    """Install the sole platform-selection wrapper and the execution lowering layer."""
     _install_central_target_choice(game_design_module)
     _install_live_module_lowering(complete_planner_module)
-
-
-def _make_old_live_kind_gate_non_blocking() -> None:
-    from . import platform_planning_contract as legacy_contract
-
-    current = legacy_contract.adapter_for_target
-    if getattr(current, "_mmm_live_ai_kind_gate", False):
-        return
-
-    @wraps(current)
-    def adapter_for_target(version: str, loader: str = "fabric"):
-        adapter = current(version, loader)
-        if adapter.source_api_family == "fabric_live_ai":
-            return replace(
-                adapter,
-                deterministic_module_kinds=frozenset(MODULE_KINDS),
-            )
-        return adapter
-
-    adapter_for_target._mmm_live_ai_kind_gate = True
-    legacy_contract.adapter_for_target = adapter_for_target
 
 
 def _install_central_target_choice(module: Any) -> None:
     cls = module.GameDesignPlanner
     original = cls.plan
-    if getattr(original, "_mmm_central_live_platform_choice", False):
+    if getattr(original, "_mmm_platform_selection_owner", False):
         return
 
     @wraps(original)
@@ -56,27 +35,22 @@ def _install_central_target_choice(module: Any) -> None:
         requested_loader = getattr(router, "_mmm_requested_loader", None)
         effective_prompt = str(prompt)
         if requested_version and str(requested_version) not in effective_prompt:
-            effective_prompt += (
-                f"\n[HOST_TARGET_CONSTRAINT Minecraft {requested_version}]"
-            )
+            effective_prompt += f"\n[HOST_TARGET_CONSTRAINT Minecraft {requested_version}]"
         if requested_loader and str(requested_loader).casefold() not in effective_prompt.casefold():
-            effective_prompt += (
-                f"\n[HOST_LOADER_CONSTRAINT {requested_loader}]"
-            )
+            effective_prompt += f"\n[HOST_LOADER_CONSTRAINT {requested_loader}]"
 
         selection = resolve_platform(
             effective_prompt,
             design=design,
             existing_version=existing_version,
             existing_loader=existing_loader,
-            router=router,
         )
         proposal = retarget_proposal(proposal, selection)
         selection_dict = selection.to_dict()
         if selection.migration_requested and existing_version:
             selection_dict["migration_from"] = {
                 "minecraft_version": str(existing_version),
-                "loader": str(existing_loader or "fabric").strip().lower(),
+                "loader": str(existing_loader or "unknown").strip().casefold(),
             }
         research_brief = design.get("_research_brief")
         if isinstance(research_brief, dict):
@@ -87,32 +61,26 @@ def _install_central_target_choice(module: Any) -> None:
         design = {
             **design,
             "_platform_selection": selection_dict,
-            **(
-                {"_research_brief": research_brief}
-                if isinstance(research_brief, dict)
-                else {}
-            ),
+            **({"_research_brief": research_brief} if isinstance(research_brief, dict) else {}),
         }
         return design, proposal
 
-    plan._mmm_central_live_platform_choice = True
+    plan._mmm_platform_selection_owner = True
     cls.plan = plan
 
 
 def _bootstrap_content_payload(result: CompleteProposal) -> list[dict[str, Any]]:
-    payload: list[dict[str, Any]] = []
-    for content in result.base_proposal.spec.contents:
-        payload.append(
-            {
-                "content_id": content.content_id,
-                "kind": content.kind.value,
-                "display_name_en": content.display_name_en,
-                "display_name_ko": content.display_name_ko,
-                "color": content.color,
-                "recipe": content.recipe,
-            }
-        )
-    return payload
+    return [
+        {
+            "content_id": content.content_id,
+            "kind": content.kind.value,
+            "display_name_en": content.display_name_en,
+            "display_name_ko": content.display_name_ko,
+            "color": content.color,
+            "recipe": content.recipe,
+        }
+        for content in result.base_proposal.spec.contents
+    ]
 
 
 def _bootstrap_boss_payload(result: CompleteProposal) -> dict[str, Any] | None:
@@ -158,25 +126,22 @@ def _recompile_live_contract(
     lowered: tuple[ProductionModule, ...],
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     contract_design = {
-        key: value
-        for key, value in game_design.items()
-        if not str(key).startswith("_")
+        key: value for key, value in game_design.items() if not str(key).startswith("_")
     }
     research_brief = game_design.get("_research_brief")
     compiled = module.compile_production_contract(
         requested_prompt=result.requested_prompt,
         game_design=contract_design,
-        research_brief=(research_brief if isinstance(research_brief, dict) else None),
+        research_brief=research_brief if isinstance(research_brief, dict) else None,
         modules=lowered,
         assets=result.assets,
         audio=result.audio,
         acceptance_tests=_input_acceptance_tests(result),
     )
-    rebound_design = {
-        **game_design,
-        "_production_contract": compiled.contract,
-    }
-    return rebound_design, tuple(compiled.acceptance_tests)
+    return (
+        {**game_design, "_production_contract": compiled.contract},
+        tuple(compiled.acceptance_tests),
+    )
 
 
 def _carrier_index(modules: list[ProductionModule]) -> int | None:
@@ -252,9 +217,7 @@ def _install_live_module_lowering(module: Any) -> None:
         migration_requested = bool(
             isinstance(selection, dict) and selection.get("migration_requested")
         )
-        migration_from = (
-            selection.get("migration_from") if isinstance(selection, dict) else None
-        )
+        migration_from = selection.get("migration_from") if isinstance(selection, dict) else None
         lowered: list[ProductionModule] = []
         changed = False
         bootstrap_bound = False
@@ -265,20 +228,19 @@ def _install_live_module_lowering(module: Any) -> None:
                 and isinstance(item.config.get("uses_base_content"), list)
             )
             if uses_base_content:
-                config = {
-                    **item.config,
-                    "implementation": "custom",
-                    "requested_kind": "bootstrap_content",
-                    "platform_generation": "central_ai_live_target",
-                    "bootstrap_contents": bootstrap_contents,
-                    "bootstrap_boss": bootstrap_boss,
-                    "require_exact_base_spec": True,
-                }
                 lowered.append(
                     ProductionModule(
                         module_id=item.module_id,
                         kind="custom_java",
-                        config=config,
+                        config={
+                            **item.config,
+                            "implementation": "custom",
+                            "requested_kind": "bootstrap_content",
+                            "platform_generation": "central_ai_live_target",
+                            "bootstrap_contents": bootstrap_contents,
+                            "bootstrap_boss": bootstrap_boss,
+                            "require_exact_base_spec": True,
+                        },
                         depends_on=item.depends_on,
                         required_gates=item.required_gates,
                     )
@@ -286,7 +248,6 @@ def _install_live_module_lowering(module: Any) -> None:
                 bootstrap_bound = True
                 changed = True
                 continue
-
             if item.kind in _LIVE_NON_SOURCE_KINDS or item.kind == "custom_java":
                 lowered.append(item)
                 continue
@@ -297,8 +258,7 @@ def _install_live_module_lowering(module: Any) -> None:
             target_index = _carrier_index(lowered)
             if target_index is None:
                 raise module.SpecValidationError(
-                    "Live target has base ModSpec content but no production module "
-                    "that can carry its implementation."
+                    "Live target has base ModSpec content but no production module that can carry it."
                 )
             lowered[target_index] = _as_custom_carrier(
                 lowered[target_index],
@@ -323,14 +283,14 @@ def _install_live_module_lowering(module: Any) -> None:
                         "from": (
                             dict(migration_from)
                             if isinstance(migration_from, dict)
-                            else {"minecraft_version": "existing-project", "loader": "fabric"}
+                            else {"minecraft_version": "existing-project", "loader": "unknown"}
                         ),
                         "to": dict(target),
                         "requirements": [
-                            "migrate Gradle and Fabric metadata to the approved target",
-                            "port Java/API usage using target-scoped official evidence",
+                            "migrate build and loader metadata to the approved target",
+                            "port API usage using target-scoped official evidence",
                             "preserve requested behavior and existing project content",
-                            "finish only after JDT, Gradle and GameTest pass",
+                            "finish only after language, build and game tests pass",
                         ],
                     }
                 },
@@ -347,9 +307,7 @@ def _install_live_module_lowering(module: Any) -> None:
                 "mode": "central_ai_compile_repair",
                 "source_api_family": "fabric_live_ai",
                 "semantic_kinds_preserved_in": "module.config.requested_kind",
-                "base_modspec_bound_to_live_generation": bool(
-                    bootstrap_contents or bootstrap_boss
-                ),
+                "base_modspec_bound_to_live_generation": bool(bootstrap_contents or bootstrap_boss),
                 "migration_bound_to_live_generation": migration_requested,
                 "production_contract_rebound_after_lowering": True,
             },
@@ -366,8 +324,7 @@ def _install_live_module_lowering(module: Any) -> None:
             modules=lowered_tuple,
             acceptance_tests=acceptance_tests,
             approval_hash="",
-        )
-        updated = updated.with_hash()
+        ).with_hash()
         updated.validate(policy=getattr(self, "policy", None))
         return updated
 

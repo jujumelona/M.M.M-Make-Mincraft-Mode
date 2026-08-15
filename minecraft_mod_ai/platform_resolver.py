@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
@@ -8,15 +7,16 @@ from typing import Any, Iterable
 from .platform_catalog import (
     PlatformAdapter,
     adapter_for_target,
-    supported_minecraft_versions,
+    adapters_for_version,
+    discover_target_keys,
+    executable_loaders,
+    provider_for_loader,
 )
+from .platform_optimizer import PlatformOptimization, optimize_platform
 from .spec import PlatformLock, Proposal, SpecValidationError
 
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
-# Python's Unicode \b treats Hangul and ASCII letters as the same word class, so
-# tokens such as "Fabric에" and "NeoForge에" do not have a \b after the English
-# loader name. Use ASCII identifier boundaries for English loader tokens instead.
 _ASCII_WORD = r"A-Za-z0-9_"
 _FABRIC_RE = re.compile(
     rf"(?<![{_ASCII_WORD}])fabric(?![{_ASCII_WORD}])|패브릭",
@@ -46,17 +46,16 @@ class PlatformSelection:
     explicit_loader: bool
     preserved_existing_target: bool = False
     migration_requested: bool = False
+    optimization: PlatformOptimization | None = None
 
     @property
     def lock(self) -> PlatformLock:
         return lock_from_adapter(self.adapter)
 
     def to_dict(self) -> dict[str, Any]:
-        mappings_kind = (
-            "mojang" if self.adapter.yarn_mappings == "mojang" else "yarn"
-        )
-        return {
-            "schema_version": "mmm/platform-selection-v3",
+        mappings_kind = "mojang" if self.adapter.yarn_mappings == "mojang" else "yarn"
+        payload: dict[str, Any] = {
+            "schema_version": "mmm/platform-selection-v4",
             "adapter_id": self.adapter.adapter_id,
             "source": self.source,
             "reason": self.reason,
@@ -78,6 +77,9 @@ class PlatformSelection:
                 "source_api_family": self.adapter.source_api_family,
             },
         }
+        if self.optimization is not None:
+            payload["optimizer"] = self.optimization.to_dict()
+        return payload
 
 
 def lock_from_adapter(adapter: PlatformAdapter) -> PlatformLock:
@@ -103,207 +105,178 @@ def resolve_platform(
     existing_loader: str | None = None,
     router: Any | None = None,
 ) -> PlatformSelection:
-    """Resolve an immutable target without a Minecraft-version source allowlist.
+    """Resolve one executable target using hard constraints then host evidence ranking.
 
-    Explicit user targets and existing-project targets are hard constraints. A Revise
-    target mismatch is permitted only when the request explicitly asks for a version
-    migration/port. For a new unpinned project, the host first resolves complete
-    official toolchain profiles and the central planner AI chooses only among them.
+    The router is accepted for API compatibility but does not choose coordinates.  The
+    small model may already have contributed semantic capability labels in ``design``;
+    exact compatibility, provider gates and final target ranking are host-owned.
     """
-
+    del router
     text = str(prompt or "")
     explicit_version = _explicit_minecraft_version(text)
     explicit_loader = _explicit_loader(text)
     migration_requested = bool(existing_version and _MIGRATION_RE.search(text))
+    kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
 
-    if explicit_loader and explicit_loader != "fabric":
-        raise SpecValidationError(
-            f"요청한 로더 {explicit_loader!r}는 아직 실행 가능한 provider가 없습니다. "
-            "지원되는 척 다른 로더 코드를 생성하지 않습니다."
-        )
-
-    if explicit_version:
+    if explicit_loader:
         try:
-            adapter = adapter_for_target(explicit_version, explicit_loader or "fabric")
+            provider_for_loader(explicit_loader)
         except ValueError as exc:
             raise SpecValidationError(str(exc)) from exc
-        _require_supported_kinds(adapter, module_kinds, explicit=True)
+
+    if explicit_version and explicit_loader:
+        adapter = _exact_adapter(explicit_version, explicit_loader)
+        _require_supported_kinds(adapter, kinds, explicit=True)
         return PlatformSelection(
             adapter=adapter,
-            source=(
-                "user_explicit_migration_target"
-                if migration_requested
-                else "user_explicit_target"
-            ),
-            reason=(
-                f"기존 프로젝트를 사용자가 명시한 Minecraft {adapter.minecraft_version} "
-                f"{adapter.loader} target으로 migration합니다."
-                if migration_requested
-                else f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다."
-            ),
+            source="user_explicit_migration_target" if migration_requested else "user_explicit_target",
+            reason=_explicit_reason(adapter, migration_requested),
             explicit_version=True,
-            explicit_loader=bool(explicit_loader),
+            explicit_loader=True,
+            migration_requested=migration_requested,
+        )
+
+    if explicit_version and not explicit_loader:
+        exact = adapters_for_version(explicit_version)
+        if not exact:
+            raise SpecValidationError(
+                f"Minecraft {explicit_version}을 실행할 수 있는 provider가 없습니다."
+            )
+        if len(exact) == 1:
+            adapter = exact[0]
+            _require_supported_kinds(adapter, kinds, explicit=True)
+            return PlatformSelection(
+                adapter=adapter,
+                source="user_explicit_version_unique_provider",
+                reason=(
+                    f"사용자가 Minecraft {adapter.minecraft_version}을 명시했고, "
+                    f"실행 가능한 provider가 {adapter.loader} 하나뿐입니다."
+                ),
+                explicit_version=True,
+                explicit_loader=False,
+                migration_requested=migration_requested,
+            )
+        optimization = _optimize(
+            text,
+            design=design,
+            module_kinds=kinds,
+            version_constraint=explicit_version,
+        )
+        return _optimized_selection(
+            optimization,
+            source="host_optimizer_explicit_version",
+            explicit_version=True,
+            explicit_loader=False,
             migration_requested=migration_requested,
         )
 
     if existing_version and not migration_requested:
-        loader = (existing_loader or "fabric").strip().lower()
-        try:
-            adapter = adapter_for_target(existing_version, loader)
-        except ValueError as exc:
-            raise SpecValidationError(
-                "기존 프로젝트 target을 보존할 provider가 없습니다: " + str(exc)
-            ) from exc
-        _require_supported_kinds(adapter, module_kinds, explicit=True)
+        adapter = _existing_adapter(existing_version, existing_loader)
+        _require_supported_kinds(adapter, kinds, explicit=True)
         return PlatformSelection(
             adapter=adapter,
             source="existing_project_target",
             reason=(
                 f"Revise 입력 프로젝트의 Minecraft {adapter.minecraft_version} "
-                f"{adapter.loader} target을 유지합니다."
+                f"{adapter.loader} target을 그대로 유지합니다."
             ),
             explicit_version=False,
             explicit_loader=False,
             preserved_existing_target=True,
-            migration_requested=False,
         )
 
-    ready = _ready_live_profiles(limit=8)
-    if not ready:
-        raise SpecValidationError(
-            "Fabric의 공식 stable 버전은 발견됐지만 Loader/API/Loom/Java/Gradle까지 "
-            "완전히 resolve된 실행 가능한 target이 없습니다."
-        )
-    by_version = {adapter.minecraft_version: adapter for adapter in ready}
-    candidates = tuple(by_version)
-    selected_version, ai_reason = _choose_with_central_ai(
-        router,
-        prompt=text,
+    optimization = _optimize(
+        text,
         design=design,
-        candidates=ready,
+        module_kinds=kinds,
+        loader_constraint=explicit_loader,
     )
-    if selected_version not in by_version:
-        selected_version = candidates[0]
-        ai_reason = (
-            "중앙 AI 응답이 host가 완전히 resolve한 후보 밖이어서 가장 최신의 "
-            "실행 가능한 공식 stable profile로 fail-closed했습니다."
-        )
-    adapter = by_version[selected_version]
-    _require_supported_kinds(adapter, module_kinds, explicit=False)
-    return PlatformSelection(
-        adapter=adapter,
-        source=(
-            "central_ai_migration_over_live_discovery"
-            if migration_requested
-            else "central_ai_over_live_discovery"
-        ),
-        reason=ai_reason,
+    return _optimized_selection(
+        optimization,
+        source="host_evidence_optimizer",
         explicit_version=False,
         explicit_loader=bool(explicit_loader),
         migration_requested=migration_requested,
     )
 
 
-def _ready_live_profiles(*, limit: int) -> tuple[PlatformAdapter, ...]:
-    result: list[PlatformAdapter] = []
-    seen: set[str] = set()
-    for version in supported_minecraft_versions(loader="fabric"):
-        if version in seen:
-            continue
-        seen.add(version)
-        try:
-            adapter = adapter_for_target(version, "fabric")
-        except ValueError:
-            continue
-        result.append(adapter)
-        if len(result) >= max(1, int(limit)):
-            break
-    return tuple(result)
-
-
-def _choose_with_central_ai(
-    router: Any | None,
-    *,
+def _optimize(
     prompt: str,
+    *,
     design: dict[str, Any] | None,
-    candidates: tuple[PlatformAdapter, ...],
-) -> tuple[str, str]:
-    newest = candidates[0].minecraft_version
-    if router is None:
-        return newest, (
-            "중앙 AI router가 없는 API 경로이므로 공식 메타데이터가 완전히 resolve된 "
-            f"최신 stable profile Minecraft {newest}을 선택했습니다."
-        )
-
-    design_view = design if isinstance(design, dict) else {}
-    encoded_design = json.dumps(design_view, ensure_ascii=False, default=str)
-    if len(encoded_design) > 12000:
-        encoded_design = encoded_design[:12000]
-    profiles = [
-        {
-            "minecraft_version": item.minecraft_version,
-            "loader": item.loader,
-            "java": item.java_version,
-            "mappings": (
-                "mojang" if item.yarn_mappings == "mojang" else item.yarn_mappings
-            ),
-            "fabric_loader": item.fabric_loader,
-            "fabric_api": item.fabric_api,
-            "loom": item.fabric_loom,
-            "gradle": item.gradle,
-            "generation_mode": (
-                "central_ai_compile_repair"
-                if item.source_api_family == "fabric_live_ai"
-                else "legacy_optimized_adapter"
-            ),
-        }
-        for item in candidates
-    ]
-    candidate_versions = tuple(item.minecraft_version for item in candidates)
-    request = {
-        "task": "choose_minecraft_fabric_target",
-        "user_request": prompt,
-        "game_design": encoded_design,
-        "ready_profiles": profiles,
-        "candidate_order": "newest_stable_first_after_full_official_resolution",
-        "rules": [
-            "Choose exactly one ready_profiles.minecraft_version value.",
-            "Prefer the newest ready profile unless the requested mod has a concrete compatibility reason to use an older profile.",
-            "Evaluate the supplied Java, mappings, Loader, Fabric API, Loom and Gradle profile; never invent or alter coordinates.",
-            "Existing-project preservation and explicit user versions are handled before this decision.",
-        ],
-        "output": {
-            "minecraft_version": "exact ready profile version",
-            "reason": "short Korean or English compatibility reason",
-        },
-    }
+    module_kinds: Iterable[str],
+    loader_constraint: str | None = None,
+    version_constraint: str | None = None,
+) -> PlatformOptimization:
     try:
-        raw = router.generate_text(
-            "planner",
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the central platform-selection controller. Select one "
-                        "fully host-resolved Fabric target profile. Never invent a version or "
-                        "toolchain coordinate. Return JSON only."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
-            ],
-            response_format="json",
+        return optimize_platform(
+            prompt,
+            design=design,
+            module_kinds=module_kinds,
+            loader_constraint=loader_constraint,
+            version_constraint=version_constraint,
         )
-        payload = json.loads(str(raw).strip())
-        selected = str(payload.get("minecraft_version", "")).strip()
-        reason = str(payload.get("reason", "")).strip()
-        if selected in candidate_versions and reason:
-            return selected, reason
-    except Exception:
-        pass
-    return newest, (
-        "중앙 AI의 플랫폼 선택 응답을 host가 검증하지 못해, 완전히 resolve된 "
-        f"최신 stable profile Minecraft {newest}을 사용했습니다."
+    except ValueError as exc:
+        raise SpecValidationError(str(exc)) from exc
+
+
+def _optimized_selection(
+    optimization: PlatformOptimization,
+    *,
+    source: str,
+    explicit_version: bool,
+    explicit_loader: bool,
+    migration_requested: bool,
+) -> PlatformSelection:
+    adapter = optimization.selected
+    evidence = optimization.evidence
+    return PlatformSelection(
+        adapter=adapter,
+        source=source,
+        reason=(
+            f"실행 provider gate를 통과한 후보를 비교해 {adapter.minecraft_version}/"
+            f"{adapter.loader}을 선택했습니다: 필수 capability "
+            f"{len(evidence.covered_capabilities)}/{len(evidence.requested_capabilities)}, "
+            f"검증 project {len(evidence.exact_projects)}, residual {evidence.residual_cost}. "
+            "최신성은 마지막 tie-breaker로만 사용됩니다."
+        ),
+        explicit_version=explicit_version,
+        explicit_loader=explicit_loader,
+        migration_requested=migration_requested,
+        optimization=optimization,
     )
+
+
+def _exact_adapter(version: str, loader: str) -> PlatformAdapter:
+    try:
+        return adapter_for_target(version, loader)
+    except ValueError as exc:
+        raise SpecValidationError(str(exc)) from exc
+
+
+def _existing_adapter(version: str, loader: str | None) -> PlatformAdapter:
+    if loader and str(loader).strip():
+        return _exact_adapter(str(version), str(loader))
+    candidates = adapters_for_version(str(version))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise SpecValidationError(
+            f"기존 프로젝트 Minecraft {version} target을 실행할 provider가 없습니다."
+        )
+    raise SpecValidationError(
+        "기존 프로젝트 loader를 식별할 수 없고 같은 Minecraft 버전에 여러 실행 "
+        "provider가 존재합니다. 기존 target을 추측하지 않습니다."
+    )
+
+
+def _explicit_reason(adapter: PlatformAdapter, migration_requested: bool) -> str:
+    if migration_requested:
+        return (
+            f"기존 프로젝트를 사용자가 명시한 Minecraft {adapter.minecraft_version} "
+            f"{adapter.loader} target으로 migration합니다."
+        )
+    return f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다."
 
 
 def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Proposal:
@@ -317,36 +290,35 @@ def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Propo
     assumptions = tuple(
         value
         for value in proposal.assumptions
-        if not (
-            "Minecraft Java Edition" in value
-            or "Minecraft " in value and "Fabric" in value
-        )
+        if not ("Minecraft Java Edition" in value or "Minecraft " in value and "Fabric" in value)
     ) + (
         (
-            f"Target: Minecraft Java {selection.adapter.minecraft_version}, Fabric, "
-            f"Java {selection.adapter.java_version}. {selection.reason}"
+            f"Target: Minecraft Java {selection.adapter.minecraft_version}, "
+            f"{selection.adapter.loader}, Java {selection.adapter.java_version}. "
+            f"{selection.reason}"
         ),
     )
-    updated = replace(
+    return replace(
         proposal,
         spec=spec,
         assumptions=assumptions,
         evidence_sources=evidence,
         evidence_snapshot_hash=evidence_snapshot_hash(evidence),
         approval_hash="",
-    )
-    return updated.with_hash()
+    ).with_hash()
 
 
 def supported_target_summary() -> tuple[dict[str, str], ...]:
-    return tuple(
-        {
-            "minecraft_version": version,
-            "loader": "fabric",
-            "provider": "official_live_discovery",
-        }
-        for version in supported_minecraft_versions(loader="fabric")
-    )
+    result: list[dict[str, str]] = []
+    for loader, version in discover_target_keys(limit_per_loader=32):
+        result.append(
+            {
+                "minecraft_version": version,
+                "loader": loader,
+                "provider": provider_for_loader(loader).provider_id,
+            }
+        )
+    return tuple(result)
 
 
 def _explicit_minecraft_version(prompt: str) -> str | None:
@@ -366,9 +338,7 @@ def _explicit_loader(prompt: str) -> str | None:
         found.append("forge")
     unique = list(dict.fromkeys(found))
     if len(unique) > 1:
-        raise SpecValidationError(
-            f"하나의 프로젝트에 여러 로더가 동시에 명시되었습니다: {unique}"
-        )
+        raise SpecValidationError(f"하나의 프로젝트에 여러 로더가 동시에 명시되었습니다: {unique}")
     return unique[0] if unique else None
 
 
@@ -388,4 +358,13 @@ def _require_supported_kinds(
     raise SpecValidationError(
         f"{prefix} {adapter.minecraft_version}/{adapter.loader}의 deterministic legacy "
         f"generator가 지원하지 않는 종류가 있습니다: {unsupported}."
+    )
+
+
+def executable_target_names() -> tuple[str, ...]:
+    return tuple(
+        f"{version}/{loader}"
+        for loader in executable_loaders()
+        for candidate_loader, version in discover_target_keys(loader=loader, limit_per_loader=32)
+        if candidate_loader == loader
     )
