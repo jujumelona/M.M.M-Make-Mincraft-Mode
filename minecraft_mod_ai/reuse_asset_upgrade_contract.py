@@ -30,6 +30,7 @@ from .source_transplant import materialize_source_slices
 
 _MATERIALIZE_LOCK = threading.RLock()
 _MATERIALIZE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_MATERIALIZE_KEY_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
 
 def install_prebootstrap() -> None:
@@ -187,14 +188,20 @@ def _materialize_once(project_root: str | Path, reuse_plan: Mapping[str, Any]) -
     key = (root, hashlib.sha256(encoded).hexdigest())
     with _MATERIALIZE_LOCK:
         cached = _MATERIALIZE_CACHE.get(key)
+        key_lock = _MATERIALIZE_KEY_LOCKS.setdefault(key, threading.Lock())
     if cached is not None:
         return dict(cached)
-    receipt = materialize_source_slices(root, reuse_plan)
-    with _MATERIALIZE_LOCK:
-        _MATERIALIZE_CACHE[key] = dict(receipt)
-        while len(_MATERIALIZE_CACHE) > 64:
-            _MATERIALIZE_CACHE.pop(next(iter(_MATERIALIZE_CACHE)))
-    return dict(receipt)
+    with key_lock:
+        with _MATERIALIZE_LOCK:
+            cached = _MATERIALIZE_CACHE.get(key)
+        if cached is not None:
+            return dict(cached)
+        receipt = materialize_source_slices(root, reuse_plan)
+        with _MATERIALIZE_LOCK:
+            _MATERIALIZE_CACHE[key] = dict(receipt)
+            while len(_MATERIALIZE_CACHE) > 64:
+                _MATERIALIZE_CACHE.pop(next(iter(_MATERIALIZE_CACHE)))
+        return dict(receipt)
 
 
 def _materialized_donor_context(
@@ -219,6 +226,9 @@ def _materialized_donor_context(
             path = Path(str(item.get("path") or ""))
             if not path.is_file() or path.is_symlink():
                 continue
+            size = path.stat().st_size
+            if used + size > byte_budget:
+                return context
             raw = path.read_bytes()
             if used + len(raw) > byte_budget:
                 return context
