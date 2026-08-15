@@ -159,7 +159,10 @@ def test_progress_source_wrappers_report_domains_pages_retries_and_checkpoints(
     assert "stage=page-retry" in output
     assert "checkpoint=checkpoint-saved" in output
     assert "stage=domain-complete" in output
-    assert "completed=1 total=2" in output
+    assert "completed=1" in output
+    assert "gaps=0" in output
+    assert "terminal=1" in output
+    assert "total=2" in output
 
 
 def test_live_wrapper_composition_has_one_progress_owner_per_probe() -> None:
@@ -277,7 +280,9 @@ def test_structured_research_hook_maps_exact_checkpoint_events() -> None:
     terminal = progress.snapshot()
     assert terminal["stage"] == "domain-gap-receipt"
     assert terminal["checkpoint"] == "domain-gap-saved"
-    assert terminal["completed"] == 1
+    assert terminal["completed"] == 0
+    assert terminal["gaps"] == 1
+    assert terminal["terminal"] == 1
     assert terminal["total"] == 7
 
 
