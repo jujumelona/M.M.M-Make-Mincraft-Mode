@@ -8,6 +8,7 @@ Code RAG is reserved for explicit local/source-code evidence and is used as a
 corrective fallback when the authoritative catalog has no usable source.
 """
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
@@ -115,6 +116,20 @@ def _has_code_hits(value: Any) -> bool:
     return isinstance(value, Mapping) and bool(value.get("hits"))
 
 
+def _job_key(job: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Identity for one semantically equivalent retrieval execution."""
+
+    route = job["route"]
+    return (
+        str(job["query"]),
+        bool(route["catalog"]),
+        bool(route["code"]),
+        tuple(sorted(route["providers"])),
+        tuple(sorted(route["evidence_kinds"])),
+        str(route["reason"]),
+    )
+
+
 def harden(pre_design_module: Any, small_model_module: Any) -> None:
     """Replace blanket project/code fan-out with routed retrieval and correction."""
 
@@ -130,6 +145,7 @@ def harden(pre_design_module: Any, small_model_module: Any) -> None:
         code_index = pre_design_module._existing_code_index()
 
         jobs: list[dict[str, Any]] = []
+        unique_jobs: dict[tuple[Any, ...], dict[str, Any]] = {}
         for domain in domains:
             domain_id = str(domain.get("domain_id", "")).strip()
             queries = domain.get("queries")
@@ -140,14 +156,14 @@ def harden(pre_design_module: Any, small_model_module: Any) -> None:
                 query_text = str(query).strip()
                 if not query_text:
                     continue
-                jobs.append(
-                    {
-                        "index": len(jobs),
-                        "domain_id": domain_id,
-                        "query": query_text,
-                        "route": route,
-                    }
-                )
+                job = {
+                    "index": len(jobs),
+                    "domain_id": domain_id,
+                    "query": query_text,
+                    "route": route,
+                }
+                jobs.append(job)
+                unique_jobs.setdefault(_job_key(job), job)
 
         def search_code(query: str) -> dict[str, Any]:
             context = getattr(small_model_module, "_RAG_ROUTER", None)
@@ -159,7 +175,7 @@ def harden(pre_design_module: Any, small_model_module: Any) -> None:
             finally:
                 context.reset(token)
 
-        def run(job: Mapping[str, Any]) -> tuple[int, str, dict[str, Any]]:
+        def run(job: Mapping[str, Any]) -> tuple[tuple[Any, ...], dict[str, Any]]:
             query = str(job["query"])
             route = job["route"]
             planned_catalog = bool(route["catalog"])
@@ -226,35 +242,43 @@ def harden(pre_design_module: Any, small_model_module: Any) -> None:
                     "reason": str(route["reason"]),
                 },
             }
-            return int(job["index"]), str(job["domain_id"]), result
+            return _job_key(job), result
 
-        indexed: dict[int, tuple[str, dict[str, Any]]] = {}
+        executed_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+        unique_values = list(unique_jobs.values())
         search_jobs = [
-            job for job in jobs if bool(job["route"]["catalog"] or job["route"]["code"])
+            job
+            for job in unique_values
+            if bool(job["route"]["catalog"] or job["route"]["code"])
         ]
         skipped_jobs = [
-            job for job in jobs if not bool(job["route"]["catalog"] or job["route"]["code"])
+            job
+            for job in unique_values
+            if not bool(job["route"]["catalog"] or job["route"]["code"])
         ]
 
         for job in skipped_jobs:
-            index, domain_id, result = run(job)
-            indexed[index] = (domain_id, result)
+            key, result = run(job)
+            executed_by_key[key] = result
 
-        if search_jobs:
-            worker_count = max(1, min(8, len(search_jobs)))
+        if len(search_jobs) == 1:
+            key, result = run(search_jobs[0])
+            executed_by_key[key] = result
+        elif search_jobs:
+            worker_count = min(8, len(search_jobs))
             with ThreadPoolExecutor(
                 max_workers=worker_count,
                 thread_name_prefix="mmm_adaptive_pre_design_rag",
             ) as pool:
-                for index, domain_id, result in pool.map(run, search_jobs):
-                    indexed[index] = (domain_id, result)
+                for key, result in pool.map(run, search_jobs):
+                    executed_by_key[key] = result
 
         by_domain: dict[str, list[dict[str, Any]]] = {
             str(item.get("domain_id", "")): [] for item in domains
         }
-        for index in range(len(jobs)):
-            domain_id, result = indexed[index]
-            by_domain.setdefault(domain_id, []).append(result)
+        for job in jobs:
+            result = executed_by_key[_job_key(job)]
+            by_domain.setdefault(str(job["domain_id"]), []).append(copy.deepcopy(result))
 
         query_results = [result for values in by_domain.values() for result in values]
         payload = {
@@ -262,6 +286,7 @@ def harden(pre_design_module: Any, small_model_module: Any) -> None:
             "versions": list(versions),
             "domain_count": len(domains),
             "query_count": len(jobs),
+            "unique_route_query_count": len(unique_jobs),
             "project_source_count": sum(
                 len(item.get("project_rag", {}).get("sources", []))
                 for item in query_results
