@@ -32,6 +32,7 @@ QUANTIZATION = "bnb_4bit_nf4"
 PLAN_SCHEMA = "mmm/resource-asset-generation-plan-v1"
 _PROMPTS_PER_ASSET = 4
 _PROMPT_BATCH = 12
+_LEGACY_GENERATE_ASSETS: Any | None = None
 
 
 class AssetProductionError(RuntimeError):
@@ -144,6 +145,9 @@ def bind_reuse_plan(proposal: CompleteProposal) -> CompleteProposal:
     modules: list[ProductionModule] = []
     for index, module in enumerate(proposal.modules):
         owned = owners.get(index, ())
+        if not owned:
+            modules.append(module)
+            continue
         owned_plan = {**dict(reuse_plan), "capabilities": [dict(item) for item in owned]}
         # Bind before live-target lowering. Later lowering copies module.config, so the
         # exact ownership survives when semantic modules become custom Java carriers.
@@ -219,11 +223,15 @@ def _semantic_words(value: str) -> set[str]:
 def install_prebootstrap_asset_runtime() -> None:
     """Install the raw producer/backend before existing GPU handoff wraps it."""
 
+    global _LEGACY_GENERATE_ASSETS
     from . import complete_orchestrator_services
     from . import model_runtime_performance
     from .model_adapters import base as base_module
     from .model_adapters.image_diffusion import ImageDiffusionAdapter
 
+    current = complete_orchestrator_services.generate_assets
+    if _LEGACY_GENERATE_ASSETS is None and current is not generate_assets:
+        _LEGACY_GENERATE_ASSETS = current
     complete_orchestrator_services.generate_assets = generate_assets
     install_flux2_q4_image_adapter(ImageDiffusionAdapter, model_runtime_performance, base_module)
 
@@ -236,6 +244,11 @@ def generate_assets(
 ) -> dict[str, Any]:
     """Materialize requested assets from persisted prompt candidates and validate them."""
 
+    if not hasattr(proposal, "game_design"):
+        legacy = _LEGACY_GENERATE_ASSETS
+        if legacy is None:
+            raise AssetProductionError("Legacy asset producer is unavailable.")
+        return legacy(router, proposal, project_root, run_root)
     if not proposal.assets:
         return {
             "status": "TEXTURE_PRODUCTION_PASS",
