@@ -64,10 +64,10 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the one authoritative native llama-server chat payload.
 
     Tool-capable turns use the smallest widely compatible function-calling wire
-    contract. Structured non-tool turns ask llama.cpp only for a generic JSON object
-    and explicitly disable model-internal thinking. Detailed JSON Schema constraints
-    stay on the host so llama.cpp never has to translate application schemas into
-    fragile GBNF grammars.
+    contract. Structured non-tool turns deliberately do *not* send response_format,
+    json_schema, or grammar to llama.cpp: those controls can compile through fragile
+    server-side GBNF and fail before the model runs. JSON syntax/schema validation and
+    isolated repair are host-owned. We only disable model-internal thinking here.
     """
 
     payload: dict[str, Any] = {
@@ -90,11 +90,8 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         return payload
 
     if getattr(request, "response_format", None) == "json":
-        payload["response_format"] = {"type": "json_object"}
-        # llama.cpp exposes both controls on /v1/chat/completions.  reasoning_effort
-        # is the server-level hard disable while enable_thinking is consumed by Qwen
-        # chat templates.  Supplying both makes the transport intent explicit and
-        # prevents reasoning tokens from exhausting the visible structured response.
+        # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
+        # JSON decoding, schema validation, and isolated repair are host-owned.
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
@@ -299,7 +296,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             if getattr(adapter.__class__, "_reported_server_url", None) != server_url:
                 print("llama server: connected", server_url, flush=True)
                 adapter.__class__._reported_server_url = server_url
-            structured = payload.get("response_format") is not None
+            structured = getattr(request, "response_format", None) == "json"
             print(
                 "llama server: request accepted; streaming",
                 f" input_chars={_request_content_chars(payload)}",

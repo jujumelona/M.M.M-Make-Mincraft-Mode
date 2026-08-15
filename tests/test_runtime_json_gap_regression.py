@@ -1,0 +1,35 @@
+from types import SimpleNamespace
+
+from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
+from minecraft_mod_ai import planning_stall_guard_contract as guard
+
+
+def test_json_requests_never_enable_native_llama_grammar():
+    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
+    request = SimpleNamespace(messages=({"role": "user", "content": "return JSON"},), tools=(), response_format="json")
+    payload = _server_payload(adapter, request)
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_terminal_gap_is_not_counted_as_verified_completion():
+    progress = guard._PlanningProgress(total=2)
+    progress_token = guard._ACTIVE_PROGRESS.set(progress)
+    cursor_token = guard._ACTIVE_PROGRESS_CURSOR.set(None)
+    try:
+        guard._research_progress_hook({"event": "domain_gap_receipt", "domain_id": "broken-domain", "page_index": 2, "page_count": 2})
+        snapshot = progress.snapshot()
+        assert snapshot["completed"] == 0
+        assert snapshot["gaps"] == 1
+        assert snapshot["terminal"] == 1
+        guard._research_progress_hook({"event": "domain_complete", "domain_id": "verified-domain", "page_index": 1, "page_count": 1})
+        snapshot = progress.snapshot()
+        assert snapshot["completed"] == 1
+        assert snapshot["gaps"] == 1
+        assert snapshot["terminal"] == 2
+    finally:
+        guard._ACTIVE_PROGRESS_CURSOR.reset(cursor_token)
+        guard._ACTIVE_PROGRESS.reset(progress_token)

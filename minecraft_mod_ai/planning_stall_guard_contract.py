@@ -81,6 +81,7 @@ class _PlanningProgress:
     total: int = 0
     updated_at: float = field(default_factory=time.monotonic)
     _completed_domains: set[str] = field(default_factory=set, repr=False)
+    _gap_domains: set[str] = field(default_factory=set, repr=False)
     _domain_attempts: dict[str, int] = field(default_factory=dict, repr=False)
     _page_attempts: dict[tuple[str, int, int], int] = field(
         default_factory=dict,
@@ -99,6 +100,7 @@ class _PlanningProgress:
         checkpoint: Any = _UNSET,
         total: Any = _UNSET,
         complete_domain: str | None = None,
+        gap_domain: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if stage is not _UNSET:
@@ -119,7 +121,13 @@ class _PlanningProgress:
             if total is not _UNSET:
                 self.total = max(0, int(total))
             if complete_domain:
-                self._completed_domains.add(_safe_progress_value(complete_domain))
+                safe_complete = _safe_progress_value(complete_domain)
+                self._completed_domains.add(safe_complete)
+                self._gap_domains.discard(safe_complete)
+            if gap_domain:
+                safe_gap = _safe_progress_value(gap_domain)
+                if safe_gap not in self._completed_domains:
+                    self._gap_domains.add(safe_gap)
             self.updated_at = time.monotonic()
             return self._snapshot_locked()
 
@@ -180,6 +188,8 @@ class _PlanningProgress:
             "attempt": self.attempt,
             "checkpoint": self.checkpoint,
             "completed": len(self._completed_domains),
+            "gaps": len(self._gap_domains),
+            "terminal": len(self._completed_domains | self._gap_domains),
             "total": self.total,
             "updated_at": self.updated_at,
         }
@@ -206,6 +216,8 @@ def _progress_fields(progress: _PlanningProgress, *, now: float | None = None) -
         f" attempt={snapshot['attempt']}"
         f" checkpoint={snapshot['checkpoint']}"
         f" completed={snapshot['completed']}"
+        f" gaps={snapshot['gaps']}"
+        f" terminal={snapshot['terminal']}"
         f" total={total}"
     )
     if now is not None:
@@ -230,6 +242,7 @@ def report_planner_research_progress(
     attempt: int | None = None,
     checkpoint: str | None = None,
     completed_domain: str | None = None,
+    gap_domain: str | None = None,
     total: int | None = None,
     emit: bool = True,
 ) -> bool:
@@ -257,7 +270,7 @@ def report_planner_research_progress(
         kwargs["checkpoint"] = checkpoint
     if total is not None:
         kwargs["total"] = total
-    progress.record(complete_domain=completed_domain, **kwargs)
+    progress.record(complete_domain=completed_domain, gap_domain=gap_domain, **kwargs)
     if emit:
         _emit_progress(progress)
     return True
@@ -334,11 +347,11 @@ def _research_progress_hook(payload: Any) -> None:
     elif event == "domain_gap_receipt":
         checkpoint = "domain-gap-saved"
 
-    terminal = event in {
+    successful_terminal = event in {
         "domain_checkpoint_complete",
         "domain_complete",
-        "domain_gap_receipt",
     }
+    gap_terminal = event == "domain_gap_receipt"
     report_planner_research_progress(
         stage=stages.get(event, event),
         domain=cursor.get("domain"),
@@ -346,7 +359,8 @@ def _research_progress_hook(payload: Any) -> None:
         page_total=cursor.get("page_total"),
         attempt=attempt,
         checkpoint=checkpoint,
-        completed_domain=cursor.get("domain") if terminal else None,
+        completed_domain=cursor.get("domain") if successful_terminal else None,
+        gap_domain=cursor.get("domain") if gap_terminal else None,
         total=_progress_int(payload.get("total"), minimum=1),
         # The source already prints one structured event. Avoid doubling every line;
         # the heartbeat renders this mapped state in its compact human-readable form.
@@ -801,9 +815,16 @@ def _patch_pre_design_observability(agentic_module: Any) -> None:
             stop.set()
             _ACTIVE_PROGRESS_CURSOR.reset(cursor_token)
             _ACTIVE_PROGRESS.reset(progress_token)
-        progress.record(stage="complete", checkpoint="research-saved")
+        final_snapshot = progress.snapshot()
+        gap_count = int(final_snapshot.get("gaps", 0) or 0)
+        if gap_count:
+            progress.record(stage="complete-with-gaps", checkpoint="research-saved-with-gaps")
+            final_label = "planner research: pre-design terminal with gaps"
+        else:
+            progress.record(stage="complete", checkpoint="research-saved")
+            final_label = "planner research: pre-design complete"
         print(
-            "planner research: pre-design complete",
+            final_label,
             _progress_fields(progress),
             f"elapsed={time.monotonic() - started:.1f}s",
             flush=True,
