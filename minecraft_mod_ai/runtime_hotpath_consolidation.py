@@ -89,8 +89,8 @@ def _install_external_mcp_admission(bottlenecks: Any, external: Any) -> None:
             if lane is None:
                 return current_worker(router, server_name, entry)
             # server_name is used by the existing owner only to derive its persistent
-            # worker key/error context.  The provider transport/configuration is still
-            # taken verbatim from entry, so no provider-visible identifier changes.
+            # worker key/error context. The transport/configuration still comes from
+            # entry, so no provider-visible identifier changes.
             worker_key_name = f"{server_name}#read-lane-{lane}"
             return current_worker(router, worker_key_name, entry)
 
@@ -174,8 +174,6 @@ def _install_central_research_dedup(central_research: Any) -> None:
                 return cached
             value = retrieve(query, **kwargs)
             with receipts_lock:
-                # The current central owner is synchronous.  setdefault also keeps
-                # this correct if a later owner parallelizes independent domains.
                 return receipts.setdefault(key, value)
 
         return current(research_brief, retrieve=retrieve_once)
@@ -185,17 +183,18 @@ def _install_central_research_dedup(central_research: Any) -> None:
     central_research.retrieve_domain_evidence = deduplicated_retrieve_domain_evidence
 
 
-def install() -> None:
-    """Install only the residual admission policies, once, after their owners."""
+def harden(
+    bottlenecks: Any,
+    central_research: Any,
+    external_mcp_router: Any,
+) -> None:
+    """Harden existing owners once; package bootstrap remains the only composer."""
     with _INSTALL_LOCK:
-        if getattr(install, _MARKER, False):
+        if getattr(harden, _MARKER, False):
             return
-        from . import bottleneck_elimination_contract as bottlenecks
-        from . import central_research, external_mcp_router
-
         _install_external_mcp_admission(bottlenecks, external_mcp_router)
         _install_central_research_dedup(central_research)
-        setattr(install, _MARKER, True)
+        setattr(harden, _MARKER, True)
 
 
-__all__ = ["install"]
+__all__ = ["harden"]
