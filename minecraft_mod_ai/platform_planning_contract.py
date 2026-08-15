@@ -17,7 +17,9 @@ def install(
     game_design_module: Any,
     complete_planner_module: Any,
     central_research_module: Any,
+    retrieval_module: Any | None = None,
 ) -> None:
+    del retrieval_module
     _install_target_neutral_prompts(game_design_module)
     _install_selected_target_evidence(
         complete_planner_module,
