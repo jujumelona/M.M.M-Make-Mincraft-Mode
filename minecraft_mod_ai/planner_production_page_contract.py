@@ -32,7 +32,28 @@ _NON_EMPTY_MODULE_ARRAY_FIELDS = (
     "implements_deliverables",
 )
 _NON_EMPTY_PAGE_ARRAY_FIELDS = ("acceptance_tests", "completed_deliverables")
-_PRODUCTION_CHECKPOINT_VERSION = 2
+_PRODUCTION_CHECKPOINT_VERSION = 3
+_MODULE_KIND_ALIASES = {
+    "": "custom_java",
+    "config": "custom_java",
+    "configuration": "custom_java",
+    "gradle": "custom_java",
+    "build": "custom_java",
+    "platform": "custom_java",
+    "bootstrap": "custom_java",
+    "ui": "gui",
+    "screen": "gui",
+    "menu": "gui",
+    "network": "networking",
+    "packet": "networking",
+    "mob": "entity",
+    "sound": "audio",
+    "sfx": "audio",
+    "event": "world_event",
+    "compat": "integration",
+    "compatibility": "integration",
+    "bridge": "integration",
+}
 
 
 class _StagedCatalog:
@@ -80,7 +101,9 @@ def _require_non_empty_string_items(schema: Any) -> None:
 
 
 def _align_durable_item_semantics(schema: dict[str, Any]) -> dict[str, Any]:
-    """Tighten structured output that durable production parsing rejects when blank."""
+    """Make structured production output a subset of durable parser semantics."""
+
+    from .complete_spec import MODULE_KINDS
 
     aligned = deepcopy(schema)
     properties = aligned.get("properties")
@@ -97,6 +120,9 @@ def _align_durable_item_semantics(schema: dict[str, Any]) -> dict[str, Any]:
             field_schema = deepcopy(module_properties.get(field))
             module_properties[field] = field_schema
             _require_non_empty_string(field_schema)
+        kind_schema = module_properties.get("kind")
+        if isinstance(kind_schema, dict):
+            kind_schema["enum"] = sorted(MODULE_KINDS)
         for field in _NON_EMPTY_MODULE_ARRAY_FIELDS:
             field_schema = deepcopy(module_properties.get(field))
             module_properties[field] = field_schema
@@ -133,10 +159,11 @@ def _require_concrete_production_output(schema: dict[str, Any]) -> dict[str, Any
 
 
 def _install_production_runtime_invariants() -> None:
-    """Keep generation grammar and durable resume policy consistent with this owner."""
+    """Keep generation grammar and durable resume/repair policy mutually valid."""
 
     from . import planner_json_runtime_contract as runtime
     from . import production_page_durable_contract as durable
+    from .complete_spec import MODULE_KINDS
 
     original_schema_for_contract = runtime._schema_for_contract
     if not getattr(original_schema_for_contract, "_mmm_production_progress_schema", False):
@@ -151,8 +178,44 @@ def _install_production_runtime_invariants() -> None:
         schema_for_contract._mmm_production_progress_schema = True  # type: ignore[attr-defined]
         runtime._schema_for_contract = schema_for_contract
 
-    # Pages saved under the older loose grammar must not bypass the new schema on
-    # resume. Advancing the epoch produces a fresh deterministic checkpoint key.
+    # The durable parser owns structural normalization. Module kind previously lacked
+    # the same compatibility normalization already provided for asset/audio kinds, so a
+    # repair model could legally emit kind="" under its loose field-patch schema and
+    # immediately re-enter the identical invalid state. Normalize only blank/common
+    # legacy aliases; arbitrary unknown non-empty kinds still go through semantic repair.
+    original_normalize = durable._deterministic_normalize
+    if not getattr(original_normalize, "_mmm_module_kind_compat", False):
+
+        @wraps(original_normalize)
+        def deterministic_normalize(
+            *,
+            kind: str,
+            index: int,
+            raw: Any,
+            catalog: Any,
+        ) -> tuple[Any, list[str]]:
+            value, changes = original_normalize(
+                kind=kind,
+                index=index,
+                raw=raw,
+                catalog=catalog,
+            )
+            if kind != "module" or not isinstance(value, dict):
+                return value, changes
+
+            raw_kind = str(value.get("kind") or "").strip().lower()
+            normalized_kind = _MODULE_KIND_ALIASES.get(raw_kind, raw_kind)
+            if normalized_kind in MODULE_KINDS and value.get("kind") != normalized_kind:
+                value = dict(value)
+                value["kind"] = normalized_kind
+                changes = [*changes, "kind:module_normalized"]
+            return value, changes
+
+        deterministic_normalize._mmm_module_kind_compat = True  # type: ignore[attr-defined]
+        durable._deterministic_normalize = deterministic_normalize
+
+    # Pages saved under an older, looser grammar must not bypass the tightened module
+    # kind enum on resume. Advancing the epoch produces a fresh deterministic key.
     durable._VERSION = max(
         int(getattr(durable, "_VERSION", 0) or 0),
         _PRODUCTION_CHECKPOINT_VERSION,
