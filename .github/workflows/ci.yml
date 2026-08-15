@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-audit-v6-${{ github.workflow }}-${{ github.ref }}
+  group: ci-audit-v7-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Independent regression gates intentionally fan out in parallel; the remaining
