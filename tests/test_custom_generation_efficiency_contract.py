@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai.custom_generation_search_contract import (
-    _host_evidence_router,
+    _ResearchEvidenceRouter,
     _width,
 )
 
@@ -35,7 +35,7 @@ def test_explicit_custom_search_remains_user_opt_in(monkeypatch) -> None:
     assert _width(_complex_module()) == 2
 
 
-def test_host_evidence_router_removes_only_mandatory_rag(monkeypatch, tmp_path) -> None:
+def test_research_router_preserves_fresh_evidence_binding(monkeypatch, tmp_path) -> None:
     class Router:
         def __init__(self) -> None:
             self.binds = []
@@ -50,15 +50,25 @@ def test_host_evidence_router_removes_only_mandatory_rag(monkeypatch, tmp_path) 
             return "ok"
 
     base = Router()
-    proxy = _host_evidence_router(base)
+    proxy = _ResearchEvidenceRouter(
+        base,
+        owner=SimpleNamespace(policy=None, _cached_index=None, _cached_root=None),
+        project_root=tmp_path,
+        module=_complex_module(),
+        minecraft_version="1.20.1",
+        loader="fabric",
+        mappings="1.20.1+build.1",
+    )
     proxy.bind_agent_workspace(tmp_path, require_fresh_evidence=True)
-    assert base.binds == [(tmp_path, False)]
+    assert base.binds == [(tmp_path, True)]
 
+    messages = ({"role": "user", "content": "plan"},)
     result = proxy.generate_text(
-        "coder",
-        ({"role": "user", "content": "patch"},),
+        "planner",
+        messages,
         response_format="json",
         enable_tools=True,
     )
     assert result == "ok"
+    assert base.calls[-1][1] == messages
     assert base.calls[-1][2]["enable_tools"] is True
