@@ -5,8 +5,8 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
-from .platform_catalog import adapter_for_target
 from .dependency_decode_monitor import activate_dependency_decode_monitor
+from .platform_catalog import adapter_for_target
 
 
 _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
@@ -16,12 +16,12 @@ _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
 
 
 def install(custom_module_generator_module: Any) -> None:
-    """Bind custom coder prompts, evidence and patch scope to one approved target."""
+    """Bind the custom coder to one executable host-selected platform target."""
 
     activate_dependency_decode_monitor()
     _install_custom_generator_scope(custom_module_generator_module)
     _install_gradle_metadata_scope(custom_module_generator_module)
-    _install_router_rewrite()
+    _install_router_target_binding()
 
 
 def _required_target(
@@ -93,7 +93,7 @@ def _install_custom_generator_scope(module_api: Any) -> None:
 
 
 def _install_gradle_metadata_scope(module_api: Any) -> None:
-    """Permit only project-owned Gradle metadata needed for target-safe generation."""
+    """Permit only project-owned source/resources and target-safe Gradle metadata."""
 
     cls = module_api.CustomModuleGenerator
     current = cls._validate_operations
@@ -152,7 +152,9 @@ def _install_gradle_metadata_scope(module_api: Any) -> None:
     cls._validate_operations = validate_operations
 
 
-def _install_router_rewrite() -> None:
+def _install_router_target_binding() -> None:
+    """Bind structured coder requests to the active target; never rewrite prose defaults."""
+
     from . import model_router as router_module
 
     cls = router_module.ModelRouter
@@ -170,77 +172,40 @@ def _install_router_rewrite() -> None:
         adapter = _ACTIVE_CODER_TARGET.get()
         rewritten = messages
         if adapter is not None and role == "coder":
-            rewritten = tuple(
-                _rewrite_message(message, adapter)
-                for message in messages
-            )
-        return original(
-            self,
-            role,
-            rewritten,
-            **kwargs,
-        )
+            rewritten = tuple(_bind_target(message, adapter) for message in messages)
+        return original(self, role, rewritten, **kwargs)
 
     generate_text._mmm_dynamic_coder_target = True
     cls.generate_text = generate_text
 
 
-def _rewrite_message(
-    message: Mapping[str, Any],
-    adapter: Any,
-) -> dict[str, Any]:
+def _bind_target(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]:
     result = dict(message)
     content = result.get("content")
-    if not isinstance(content, str):
+    if not isinstance(content, str) or not content.lstrip().startswith("{"):
         return result
-
     try:
         payload = json.loads(content)
     except json.JSONDecodeError:
-        payload = None
-    if isinstance(payload, dict) and payload.get("phase") == "generate_patch":
-        payload["target"] = {
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-            "java": adapter.java_version,
-            "fabric_loader": adapter.fabric_loader,
-            "fabric_api": adapter.fabric_api,
-            "loom": adapter.fabric_loom,
-            "gradle": adapter.gradle,
-        }
-        result["content"] = json.dumps(payload, ensure_ascii=False)
         return result
-
-    target_label = (
-        f"Minecraft Java {adapter.minecraft_version} "
-        f"{adapter.loader.capitalize()}"
-    )
-    replacements = {
-        "Minecraft Java 1.20.1 Fabric": target_label,
-        "Minecraft 1.20.1 Fabric Java mod": (
-            f"Minecraft {adapter.minecraft_version} "
-            f"{adapter.loader.capitalize()} Java mod"
-        ),
-        "Minecraft Fabric 1.20.1": (
-            f"Minecraft {adapter.minecraft_version} "
-            f"{adapter.loader.capitalize()}"
-        ),
-        "create/replace patch operations for Java source files.": (
-            "create/replace/edit patch operations for source, resources, "
-            "and approved Gradle metadata."
-        ),
-        (
-            "array containing exact Java source file patches under "
-            "'src/main/java/'."
-        ): (
-            "array containing exact patches within the host-approved source, "
-            "resource, and Gradle metadata scope."
-        ),
+    if not isinstance(payload, dict) or payload.get("phase") != "generate_patch":
+        return result
+    payload["target"] = {
+        "minecraft_version": adapter.minecraft_version,
+        "loader": adapter.loader,
+        "mappings": adapter.yarn_mappings,
+        "java": adapter.java_version,
+        "fabric_loader": adapter.fabric_loader,
+        "fabric_api": adapter.fabric_api,
+        "loom": adapter.fabric_loom,
+        "gradle": adapter.gradle,
     }
-    for old, new in replacements.items():
-        content = content.replace(old, new)
-    result["content"] = content
+    result["content"] = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return result
 
 
