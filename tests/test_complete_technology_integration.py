@@ -177,6 +177,7 @@ def test_complete_plan_binds_dynamic_technology_radar_and_defers_provider_io(
     )
 
     radar = proposal.game_design["_technology_radar"]
+    selection = proposal.game_design["_platform_selection"]["target"]
     kinds = {item["capability_kind"] for item in radar["requirements"]}
     assert {
         "ai_inference",
@@ -186,7 +187,8 @@ def test_complete_plan_binds_dynamic_technology_radar_and_defers_provider_io(
         "voice_adaptation",
         "voice_transport",
     } <= kinds
-    assert radar["target"]["minecraft_version"] == "1.20.1"
+    assert radar["target"]["minecraft_version"] == selection["minecraft_version"]
+    assert radar["target"]["loader"] == selection["loader"]
     assert radar["target_evidence_policy"][
         "official_exact_version_receipt_required"
     ] is True

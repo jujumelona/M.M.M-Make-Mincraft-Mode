@@ -58,13 +58,10 @@ def test_no_historical_constructor_placeholder_or_newest_fallback() -> None:
     api_source = (PACKAGE / "api.py").read_text(encoding="utf-8")
     api_contract = (PACKAGE / "platform_api_contract.py").read_text(encoding="utf-8")
     resolver = (PACKAGE / "platform_resolver.py").read_text(encoding="utf-8")
-    selection_contract = (PACKAGE / "platform_selection_efficiency_contract.py").read_text(
-        encoding="utf-8"
-    )
     assert 'minecraft_version: str = "1.20.1"' not in api_source
     assert 'kwargs["minecraft_version"] = "1.20.1"' not in api_contract
     assert "_choose_with_central_ai" not in resolver
-    assert "newest fully resolved" not in selection_contract
+    assert not (PACKAGE / "platform_selection_efficiency_contract.py").exists()
 
 
 def test_platform_planning_does_not_select_target() -> None:

@@ -5,6 +5,21 @@ from pathlib import Path
 import pytest
 
 
+def _fabric_1201_target() -> dict[str, str]:
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+
+    adapter = adapter_for_target("1.20.1", "fabric")
+    return {
+        "edition": adapter.edition,
+        "minecraft_version": adapter.minecraft_version,
+        "loader": adapter.loader,
+        "mappings": adapter.yarn_mappings,
+        "java_version": adapter.java_version,
+        "fabric_loader": adapter.fabric_loader,
+        "fabric_api": adapter.fabric_api,
+    }
+
+
 @pytest.fixture(autouse=True)
 def _isolate_test_runtime_state(
     monkeypatch: pytest.MonkeyPatch,
@@ -25,22 +40,11 @@ def _isolate_test_runtime_state(
         str(tmp_path / "research-evidence"),
     )
 
-    # Technology-radar unit tests exercise capability/gate semantics directly.
-    # Supply an explicit executable fixture target there instead of depending on
-    # the removed production-wide historical platform default.
+    # These unit tests exercise technology semantics directly. Supply an explicit
+    # executable fixture target instead of depending on the removed production-wide
+    # historical target default.
     if request.module.__name__ == "test_technology_radar":
-        from minecraft_mod_ai.platform_catalog import adapter_for_target
-
-        adapter = adapter_for_target("1.20.1", "fabric")
-        target = {
-            "edition": adapter.edition,
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-            "java_version": adapter.java_version,
-            "fabric_loader": adapter.fabric_loader,
-            "fabric_api": adapter.fabric_api,
-        }
+        target = _fabric_1201_target()
         original = request.module.build_technology_radar
 
         def build_with_explicit_test_target(*args, **kwargs):
@@ -51,4 +55,24 @@ def _isolate_test_runtime_state(
             request.module,
             "build_technology_radar",
             build_with_explicit_test_target,
+        )
+
+    # This test module intentionally replaces GameDesignPlanner.plan, which bypasses
+    # the production platform-selection owner. Bind an explicit target only at that
+    # mocked boundary so CompleteGameDesignPlanner can still exercise radar/sidecar
+    # behavior without reintroducing any product default.
+    if request.module.__name__ == "test_complete_planner_technology_sidecar":
+        import minecraft_mod_ai.complete_planner as planner_module
+
+        target = _fabric_1201_target()
+        original_collect = planner_module.collect_technology_radar
+
+        def collect_with_explicit_test_target(*args, **kwargs):
+            kwargs.setdefault("target", target)
+            return original_collect(*args, **kwargs)
+
+        monkeypatch.setattr(
+            planner_module,
+            "collect_technology_radar",
+            collect_with_explicit_test_target,
         )
