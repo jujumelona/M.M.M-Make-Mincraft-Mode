@@ -156,7 +156,12 @@ class LlamaCppAdapter(ModelAdapter):
         error: Exception | None = None
         for repair_attempt in range(_MAX_HOST_TOOL_REPAIR_ATTEMPTS + 1):
             try:
-                return _parse_host_tool_envelope(raw, allowed, reasoning=reasoning)
+                return _parse_host_tool_envelope(
+                    raw,
+                    allowed,
+                    allow_direct_json_final=request.response_format == "json",
+                    reasoning=reasoning,
+                )
             except (json.JSONDecodeError, RuntimeError, ValueError, TypeError) as exc:
                 error = exc
                 if repair_attempt >= _MAX_HOST_TOOL_REPAIR_ATTEMPTS:
@@ -330,6 +335,7 @@ def _parse_host_tool_envelope(
     raw: str,
     allowed_tools: frozenset[str],
     *,
+    allow_direct_json_final: bool = False,
     reasoning: str = "",
 ) -> GenerationResponse:
     if not raw:
@@ -344,6 +350,10 @@ def _parse_host_tool_envelope(
             raise RuntimeError("Host final envelope requires non-empty string content")
         return GenerationResponse(content=content.strip(), reasoning_content=reasoning)
     if kind != "tool_calls":
+        if allow_direct_json_final and "calls" not in value and "tool_calls" not in value:
+            # Tool availability does not force tool use. Preserve the caller's exact
+            # structured JSON so the normal host schema validator remains authoritative.
+            return GenerationResponse(content=raw.strip(), reasoning_content=reasoning)
         raise RuntimeError("Host tool envelope kind must be 'tool_calls' or 'final'")
 
     raw_calls = value.get("calls")

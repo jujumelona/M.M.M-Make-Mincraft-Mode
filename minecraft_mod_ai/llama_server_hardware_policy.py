@@ -63,11 +63,11 @@ def _bootstrap_native_server() -> str | None:
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the one authoritative native llama-server chat payload.
 
-    Tool-capable turns use the smallest widely compatible function-calling wire
-    contract. Structured non-tool turns deliberately do *not* send response_format,
-    json_schema, or grammar to llama.cpp: those controls can compile through fragile
-    server-side GBNF and fail before the model runs. JSON syntax/schema validation and
-    isolated repair are host-owned. We only disable model-internal thinking here.
+    Native tool/JSON sampler controls are never sent to llama.cpp. They can compile
+    through server-side GBNF and fail before the model runs. Tool-capable turns must
+    first be translated by LlamaCppAdapter into the host-owned JSON envelope; direct
+    tool metadata here is therefore a programming error. JSON syntax/schema validation
+    and isolated repair are host-owned. We only disable model-internal thinking here.
     """
 
     payload: dict[str, Any] = {
@@ -78,16 +78,10 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     tools = getattr(request, "tools", ()) or ()
     if tools:
-        payload["tools"] = [dict(tool) for tool in tools]
-        tool_choice = getattr(request, "tool_choice", None)
-        if tool_choice is not None:
-            payload["tool_choice"] = (
-                dict(tool_choice) if isinstance(tool_choice, dict) else tool_choice
-            )
-        # Do not combine optional structured/reasoning/parallel transport controls
-        # with native tool calls. Some llama-server/chat-template combinations reject
-        # that mixed payload even though each feature is valid independently.
-        return payload
+        raise RuntimeError(
+            "Native llama-server tool transport is disabled; translate tools through "
+            "the host-owned tool envelope before building the server payload"
+        )
 
     if getattr(request, "response_format", None) == "json":
         # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
