@@ -182,6 +182,45 @@ def test_parser_normalizable_module_does_not_spend_llm_call(monkeypatch, tmp_pat
     ]
 
 
+@pytest.mark.parametrize(
+    "raw_kind,expected_kind",
+    [
+        ("", "custom_java"),
+        ("config", "custom_java"),
+        ("gradle", "custom_java"),
+        ("network", "networking"),
+    ],
+)
+def test_module_kind_parser_mismatches_are_normalized_without_llm(
+    monkeypatch,
+    tmp_path,
+    raw_kind,
+    expected_kind,
+) -> None:
+    router = _NeverRouter()
+    page = {
+        "modules": [_module("mk_gradle_config", kind=raw_kind)],
+        "assets": [],
+        "audio": [],
+        "acceptance_tests": ["platform module exists"],
+        "completed_deliverables": ["d1"],
+        "complete": True,
+        "next_cursor": "",
+    }
+
+    parts, _ = _run_batch(
+        monkeypatch,
+        tmp_path,
+        page=page,
+        deliverables=("d1",),
+        router=router,
+    )
+
+    assert router.calls == []
+    assert [item.module_id for item in parts.modules] == ["mk_gradle_config"]
+    assert parts.modules[0].kind == expected_kind
+
+
 def test_duplicate_ids_are_resolved_deterministically_without_llm(monkeypatch, tmp_path) -> None:
     router = _NeverRouter()
     page = {
