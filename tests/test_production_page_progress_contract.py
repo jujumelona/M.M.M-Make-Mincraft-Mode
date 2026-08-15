@@ -4,6 +4,7 @@ import pytest
 from jsonschema import Draft202012Validator, ValidationError
 
 from minecraft_mod_ai import planner_json_runtime_contract as runtime
+from minecraft_mod_ai import production_page_durable_contract as durable
 from minecraft_mod_ai import production_stream_efficiency_contract as stream
 
 
@@ -21,6 +22,18 @@ def _production_page(**overrides):
     return page
 
 
+def _module(**overrides):
+    value = {
+        "module_id": "platform_lock",
+        "kind": "config",
+        "config": {},
+        "depends_on": [],
+        "required_gates": [],
+    }
+    value.update(overrides)
+    return value
+
+
 def _schema():
     return runtime._schema_for_contract(_production_page())
 
@@ -34,18 +47,7 @@ def test_production_schema_rejects_all_empty_concrete_outputs() -> None:
 @pytest.mark.parametrize(
     "field,value",
     [
-        (
-            "modules",
-            [
-                {
-                    "module_id": "platform_lock",
-                    "kind": "config",
-                    "config": {},
-                    "depends_on": [],
-                    "required_gates": [],
-                }
-            ],
-        ),
+        ("modules", [_module()]),
         ("assets", [{}]),
         ("audio", [{}]),
         ("acceptance_tests", ["platform lock is host-verifiable"]),
@@ -54,6 +56,33 @@ def test_production_schema_rejects_all_empty_concrete_outputs() -> None:
 def test_production_schema_accepts_each_concrete_output_family(field, value) -> None:
     validator = Draft202012Validator(_schema())
     validator.validate(_production_page(**{field: value}))
+
+
+@pytest.mark.parametrize("field", ["module_id", "kind"])
+def test_production_schema_rejects_blank_required_module_strings(field) -> None:
+    validator = Draft202012Validator(_schema())
+    with pytest.raises(ValidationError):
+        validator.validate(_production_page(modules=[_module(**{field: ""})]))
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["depends_on", "required_gates", "implements_deliverables"],
+)
+def test_production_schema_rejects_blank_module_string_array_items(field) -> None:
+    validator = Draft202012Validator(_schema())
+    with pytest.raises(ValidationError):
+        validator.validate(_production_page(modules=[_module(**{field: [""]})]))
+
+
+def test_production_schema_rejects_blank_acceptance_test() -> None:
+    validator = Draft202012Validator(_schema())
+    with pytest.raises(ValidationError):
+        validator.validate(_production_page(acceptance_tests=[""]))
+
+
+def test_stale_loose_production_checkpoints_are_invalidated() -> None:
+    assert durable._VERSION >= 2
 
 
 def test_stream_retry_budget_cannot_undercut_canonical_production_budget() -> None:
