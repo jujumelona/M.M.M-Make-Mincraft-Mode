@@ -8,9 +8,12 @@ planning boundary to that same host-owned resolver so target-neutral semantic pl
 are never validated or approved before a complete executable provider receipt exists.
 """
 
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Mapping
 
+
+_SEMANTIC_PLANNING = ContextVar("mmm_semantic_platform_planning", default=False)
 
 _PROMPT_REPLACEMENTS = (
     ("Minecraft Java 1.20.1 Fabric", "the host-selected Minecraft Java target"),
@@ -29,6 +32,7 @@ def install(
     complete_planner_module: Any,
     central_research_module: Any,
 ) -> None:
+    _install_semantic_target_validation(game_design_module)
     _install_target_neutral_game_design_prompts(game_design_module)
     _neutralize_complete_planner_prompts(complete_planner_module)
     _install_selected_target_evidence(
@@ -36,6 +40,46 @@ def install(
         central_research_module,
     )
     _install_pipeline_target_binding()
+
+
+def _install_semantic_target_validation(module: Any) -> None:
+    """Permit an all-empty platform sentinel only inside semantic design.
+
+    ``GameDesignPlanner`` validates its proposal before the central platform owner can
+    attach a provider receipt.  The validation bypass is therefore context-local and
+    only skips the unresolved platform leaf.  Every approval, generation, publishing,
+    and ordinary ``Proposal.validate`` call keeps the strict fail-closed contract.
+    """
+
+    from .spec import PlatformLock
+
+    current_lock_validate = PlatformLock.validate
+    if not getattr(current_lock_validate, "_mmm_semantic_planning", False):
+
+        @wraps(current_lock_validate)
+        def validate_platform(lock: PlatformLock) -> None:
+            if _SEMANTIC_PLANNING.get() and lock.is_unresolved():
+                return
+            current_lock_validate(lock)
+
+        validate_platform._mmm_semantic_planning = True
+        PlatformLock.validate = validate_platform
+
+    cls = module.GameDesignPlanner
+    current_plan = cls.plan
+    if getattr(current_plan, "_mmm_semantic_planning", False):
+        return
+
+    @wraps(current_plan)
+    def plan(self: Any, *args: Any, **kwargs: Any):
+        token = _SEMANTIC_PLANNING.set(True)
+        try:
+            return current_plan(self, *args, **kwargs)
+        finally:
+            _SEMANTIC_PLANNING.reset(token)
+
+    plan._mmm_semantic_planning = True
+    cls.plan = plan
 
 
 def _install_target_neutral_game_design_prompts(module: Any) -> None:
