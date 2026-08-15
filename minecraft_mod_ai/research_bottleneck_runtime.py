@@ -46,6 +46,7 @@ def install() -> None:
         bottleneck_elimination_contract,
         central_research,
         external_mcp_router,
+        agentic_research_game_design,
     )
 
     harden_rag(rag_index, centroid_vector_rag)
