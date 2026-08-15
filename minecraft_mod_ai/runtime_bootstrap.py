@@ -31,6 +31,9 @@ def runtime_initialized() -> bool:
 
 def _install_runtime_contracts() -> None:
     """Compose runtime policies in dependency order."""
+    from .reuse_asset_upgrade_contract import install_postbootstrap, install_prebootstrap
+
+    install_prebootstrap()
     _install_core_contracts()
     _install_model_runtime_contracts()
     _install_validation_contracts()
@@ -41,6 +44,7 @@ def _install_runtime_contracts() -> None:
     _install_late_safety_contracts()
     _install_public_boundary_contracts()
     _install_post_bootstrap_contracts()
+    install_postbootstrap()
 
 
 def _install_core_contracts() -> None:
