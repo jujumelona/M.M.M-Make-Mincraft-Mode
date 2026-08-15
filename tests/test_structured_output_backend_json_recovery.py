@@ -58,13 +58,19 @@ def test_host_repair_recovers_json_rejected_by_early_stop_syntax_check() -> None
     assert "ORIGINAL_TASK_SENTINEL" not in repair_text
 
 
-def test_schema_less_json_requests_still_get_syntax_repair() -> None:
-    outputs = iter(['{"plan":"build"\n"steps":[]}', '{"plan":"build","steps":[]}'])
+def test_schema_less_strict_json_rejection_gets_syntax_repair() -> None:
+    malformed = '{"plan":"build"\n"steps":[]}'
     calls: list[GenerationRequest] = []
 
     def generate(request: GenerationRequest) -> str:
         calls.append(request)
-        return next(outputs)
+        if len(calls) == 1:
+            raise ModelBackendError(
+                role="planner",
+                model_id="local-test",
+                cause=_decode_error(malformed),
+            )
+        return '{"plan":"build","steps":[]}'
 
     request = GenerationRequest(
         messages=({"role": "user", "content": "json only"},),
@@ -75,6 +81,23 @@ def test_schema_less_json_requests_still_get_syntax_repair() -> None:
     assert json.loads(result) == {"plan": "build", "steps": []}
     assert len(calls) == 2
     assert calls[1].response_schema == {"type": "object"}
+
+
+def test_schema_less_successful_backend_return_is_not_newly_validated() -> None:
+    calls = 0
+
+    def generate(_request: GenerationRequest) -> str:
+        nonlocal calls
+        calls += 1
+        return "native-only"
+
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "json transport hint"},),
+        response_format="json",
+    )
+
+    assert generate_with_host_schema_repair(request, generate) == "native-only"
+    assert calls == 1
 
 
 def test_transport_json_failure_is_not_misclassified_as_model_output() -> None:

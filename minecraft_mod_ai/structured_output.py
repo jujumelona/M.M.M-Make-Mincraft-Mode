@@ -114,10 +114,10 @@ def _recover_invalid_json_document(exc: ModelBackendError) -> str | None:
     """Recover model JSON rejected at the host syntax boundary, never transport JSON.
 
     The early-stop transport may close a structurally complete root object before a
-    Python syntax check.  In that case its direct ModelBackendError cause is the
+    Python syntax check. In that case its direct ModelBackendError cause is the
     JSONDecodeError raised by json.loads(content), whose ``doc`` is the exact model
-    output.  SSE/protocol failures are intentionally wrapped in another RuntimeError,
-    so they do not match this narrow recovery path and remain transport failures.
+    output. SSE/protocol failures are wrapped in another RuntimeError, so they do not
+    match this narrow recovery path and remain transport failures.
     """
 
     cause = exc.cause
@@ -150,17 +150,16 @@ def generate_with_host_schema_repair(
 ) -> str:
     """Generate JSON, then correct only an existing invalid JSON result.
 
-    Genuine transport failures are deliberately not caught. Detailed JSON Schema
-    enforcement belongs to this host boundary; the native server only needs to
-    produce a JSON candidate. A malformed candidate rejected by the local early-stop
-    syntax check is recovered from the direct JSONDecodeError and enters the same
-    isolated correction path instead of being misreported as a backend outage.
+    Detailed JSON Schema enforcement belongs to this host boundary. For historical
+    schema-less JSON calls, a successful backend return is intentionally left alone;
+    callers may use that mode as a transport hint. The only schema-less value that is
+    intercepted is a structurally complete model JSON document that the strict native
+    server has already rejected with a direct JSONDecodeError. That exact document is
+    then repaired against the generic object grammar.
 
-    Schema-less ``response_format='json'`` requests still receive a generic object
-    validator, so syntax errors cannot escape merely because the caller did not add a
-    detailed application schema. Each correction pass receives the latest invalid
-    output and its exact validation failures, and never replays the original task
-    conversation.
+    Genuine transport failures are never converted into repair work. Each correction
+    pass receives only the latest invalid output and exact validation failures, not the
+    original task conversation.
     """
 
     if request.response_format != "json":
@@ -170,19 +169,25 @@ def generate_with_host_schema_repair(
 
     schema = request.response_schema
     if schema is None:
+        try:
+            return generate(request)
+        except ModelBackendError as exc:
+            current = _recover_invalid_json_document(exc)
+            if current is None:
+                raise
         effective_schema = dict(_GENERIC_JSON_OBJECT_SCHEMA)
     elif isinstance(schema, Mapping):
         effective_schema = dict(schema) if schema else dict(_GENERIC_JSON_OBJECT_SCHEMA)
+        current = _generate_json_candidate(request, generate)
     else:
         raise ValueError("response_schema must be a mapping when response_format='json'")
 
     validator = _validator_for(effective_schema)
-    current = _generate_json_candidate(request, generate)
     errors = _validation_errors(current, validator)
     if not errors:
         return current
 
-    for attempt in range(1, max_repair_attempts + 1):
+    for _attempt in range(1, max_repair_attempts + 1):
         repair_request = replace(
             request,
             messages=_repair_messages(
