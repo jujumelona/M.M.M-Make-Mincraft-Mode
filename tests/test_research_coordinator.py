@@ -9,7 +9,6 @@ from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _implementation_prompt,
 )
-from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.research_coordinator import (
     collect_ecosystem_seed_bundle,
@@ -310,9 +309,7 @@ def test_ecosystem_coordinator_rejects_bad_cursor_progress(failure: str) -> None
 def test_planner_sidecar_uses_capability_from_later_technology_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(
-        "Create one technology anchor item"
-    )
+    base = HeuristicPlanner().plan("Create one technology anchor item")
     game_design = {
         "title": "Paged technology",
         "pitch": "Use every classified capability.",
