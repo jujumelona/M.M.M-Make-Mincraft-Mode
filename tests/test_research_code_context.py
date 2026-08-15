@@ -7,9 +7,9 @@ from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai import research_code_context as research
 
 
-_TEST_MINECRAFT_VERSION = "1.20.1"
+_TEST_MINECRAFT_VERSION = "mmm-test-target"
 _TEST_LOADER = "fabric"
-_TEST_MAPPINGS = "1.20.1+build.1"
+_TEST_MAPPINGS = "mmm-test-target+test-mappings"
 
 
 @dataclass
@@ -85,9 +85,9 @@ public final class Unused {
             (
                 f"minecraft_version={_TEST_MINECRAFT_VERSION}",
                 f"yarn_mappings={_TEST_MAPPINGS}",
-                "loader_version=0.17.2",
-                "fabric_version=0.92.11+1.20.1",
-                "loom_version=1.10.5",
+                "loader_version=test-loader",
+                "fabric_version=test-api",
+                "loom_version=test-loom",
             )
         )
         + "\n",
@@ -210,7 +210,7 @@ def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_an
                 {
                     "operation": "replace",
                     "path": "gradle.properties",
-                    "content": "minecraft_version=1.21.1\n",
+                    "content": "minecraft_version=wrong-target\n",
                 },
             ]
         }
@@ -220,7 +220,7 @@ def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_an
     assert ("package", "evil.fake:nonexistent") in values
     assert ("coordinate", "net.fabricmc.fabric-api:fabric-api:999.0") in values
     assert ("repository", "https://evil.example/repo") in values
-    assert ("target_property", "minecraft_version=1.21.1") in values
+    assert ("target_property", "minecraft_version=wrong-target") in values
 
     good = json.dumps(
         {
@@ -231,7 +231,7 @@ def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_an
                     "content": (
                         'repositories { maven { url "https://maven.fabricmc.net" } }\n'
                         'dependencies { implementation '
-                        '"net.fabricmc.fabric-api:fabric-api:0.92.11+1.20.1" }'
+                        '"net.fabricmc.fabric-api:fabric-api:test-api" }'
                     ),
                 }
             ]

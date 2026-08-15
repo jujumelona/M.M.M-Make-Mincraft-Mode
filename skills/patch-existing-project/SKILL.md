@@ -15,7 +15,7 @@ inputs:
 
 required_rag:
   - extracted project source and metadata
-  - Fabric 1.20.1 and Yarn symbols
+  - the exact approved loader/version and PlatformLock mapping symbols
   - prior diagnostics and build receipts
 
 allowed_tools:

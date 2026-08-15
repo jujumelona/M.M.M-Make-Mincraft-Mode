@@ -192,20 +192,22 @@ _REALTIME_CUES = (
 
 @dataclass(frozen=True)
 class TechnologyTarget:
-    edition: str = "java"
-    minecraft_version: str = "1.20.1"
-    loader: str = "fabric"
-    mappings: str = "yarn-1.20.1+build.1"
-    java_version: str = "17"
-    fabric_loader: str = "0.16.10"
-    fabric_api: str = "0.92.11+1.20.1"
+    edition: str = ""
+    minecraft_version: str = ""
+    loader: str = ""
+    mappings: str = ""
+    java_version: str = ""
+    fabric_loader: str = ""
+    fabric_api: str = ""
 
     def validate(self) -> None:
-        expected = TechnologyTarget()
-        if self != expected:
+        required = (
+            self.edition, self.minecraft_version, self.loader, self.mappings,
+            self.java_version, self.fabric_loader, self.fabric_api,
+        )
+        if not all(str(value).strip() for value in required):
             raise SpecValidationError(
-                "Technology assessment must use the exact Minecraft 1.20.1 "
-                "Fabric/Yarn/Java 17 adapter."
+                "Technology assessment requires an explicit executable platform target."
             )
 
     def to_dict(self) -> dict[str, str]:
@@ -429,7 +431,9 @@ def normalize_technology_target(
     value: TechnologyTarget | Mapping[str, Any] | PlatformLock | None,
 ) -> TechnologyTarget:
     if value is None:
-        target = TechnologyTarget()
+        raise SpecValidationError(
+            "Technology analysis requires an explicit host-selected platform target."
+        )
     elif isinstance(value, TechnologyTarget):
         target = value
     elif isinstance(value, PlatformLock):
@@ -437,7 +441,7 @@ def normalize_technology_target(
             edition=value.edition,
             minecraft_version=value.minecraft_version,
             loader=value.loader,
-            mappings=f"yarn-{value.yarn_mappings}",
+            mappings=value.yarn_mappings,
             java_version=value.java_version,
             fabric_loader=value.fabric_loader,
             fabric_api=value.fabric_api,
@@ -622,7 +626,7 @@ def _assess_technology_candidate_with_receipt_key(
         add(
             "exact_minecraft_bridge",
             "pass",
-            "Bridge is verified for Minecraft 1.20.1, Fabric, Yarn and Java 17.",
+            f"Bridge is verified for Minecraft {requirement.target.minecraft_version}, {requirement.target.loader}, mappings {requirement.target.mappings} and Java {requirement.target.java_version}.",
         )
 
     revision = normalized["revision"]
@@ -1005,8 +1009,8 @@ def _make_requirement(
             maximum=4096,
         ),
         (
-            f"Minecraft 1.20.1 Fabric Yarn 1.20.1 build 1 Java 17 "
-            f"{capability.replace('_', ' ')} integration compatibility testing"
+            f"Minecraft {target.minecraft_version} {target.loader} mappings {target.mappings} "
+            f"Java {target.java_version} {capability.replace('_', ' ')} integration compatibility testing"
         ),
     )
     return TechniqueRequirement(

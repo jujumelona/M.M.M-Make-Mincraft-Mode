@@ -6,6 +6,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
 
+from .platform_catalog import adapter_from_project
 from .project_edit import (
     ensure_main_initializer_call,
     inspect_fabric_project,
@@ -79,6 +80,7 @@ def generate_system_pack(
     info = inspect_fabric_project(project_root)
     if info.mod_id != mod_id or info.package_name != package_name:
         raise ValueError("System pack target does not match fabric.mod.json.")
+    adapter = adapter_from_project(info.root)
     merged_by_id = {
         str(item["module_id"]): item
         for item in iter_system_module_records(
@@ -125,6 +127,8 @@ def generate_system_pack(
         modules=merged_modules,
         shard_size=policy.java_shard_size,
         contract_relative=contract_relative,
+        minecraft_version=adapter.minecraft_version,
+        loader=adapter.loader,
     )
     files.update(contract_files)
     write_receipt = write_text_files(info, files, replace_existing=True)
@@ -167,6 +171,8 @@ def _system_contract_files(
     modules: list[dict[str, Any]],
     shard_size: int,
     contract_relative: str,
+    minecraft_version: str,
+    loader: str,
 ) -> tuple[dict[str, str], int]:
     relative_base = (
         f"src/main/resources/data/{mod_id}/mmm_systems/{pack_id}"
@@ -194,8 +200,8 @@ def _system_contract_files(
             "directory": records_resource,
             "server_authoritative": True,
             "persistent": pack_id != "gui-networking",
-            "minecraft_version": "1.20.1",
-            "loader": "fabric",
+            "minecraft_version": minecraft_version,
+            "loader": loader,
         }
     )
     logical_shards = (len(modules) + shard_size - 1) // shard_size

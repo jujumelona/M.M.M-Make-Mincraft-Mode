@@ -154,7 +154,7 @@ def _install_cpu_retrieval_coalescing() -> None:
             documents: Sequence[str],
             *,
             instruction: str = (
-                "Retrieve Minecraft Fabric 1.20.1 and Yarn 1.20.1 evidence that directly "
+                "Retrieve the exact approved Minecraft loader and mappings evidence that directly "
                 "answers the query. Reject other loaders and versions."
             ),
         ) -> list[float]:

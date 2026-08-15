@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -67,8 +68,6 @@ def _sanitized_messages(
     adapter = adapter_for_target(minecraft_version, loader)
     result: list[dict[str, Any]] = []
     replacements = (
-        ("Minecraft Java 1.20.1 Fabric", f"Minecraft Java {minecraft_version} {loader}"),
-        ("Minecraft 1.20.1 Fabric", f"Minecraft {minecraft_version} {loader}"),
         ("Minecraft Fabric", f"Minecraft {loader}"),
         ("Fabric Java", f"{loader} Java"),
     )
@@ -78,7 +77,11 @@ def _sanitized_messages(
         if not isinstance(content, str):
             result.append(message)
             continue
-        updated = content
+        updated = re.sub(
+            r"Minecraft(?: Java)? \d+(?:\.\d+){1,2}(?: Fabric)?",
+            f"Minecraft Java {minecraft_version} {loader}",
+            content,
+        )
         for old, new in replacements:
             updated = updated.replace(old, new)
         if message.get("role") == "user" and updated.lstrip().startswith("{"):

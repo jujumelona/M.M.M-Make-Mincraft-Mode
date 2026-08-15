@@ -109,7 +109,7 @@ def capability_manifest() -> dict[str, Any]:
             "Mod-owned structures, biomes, dimensions and configured/placed features "
             "are generated only when explicitly required by the mod."
         ),
-        "runtime_target": "disposable-minecraft-java-1.20.1-only",
+        "runtime_target": "disposable-approved-minecraft-java-target-only",
         "staged_discovery": {
             "planning_research": [
                 record.name

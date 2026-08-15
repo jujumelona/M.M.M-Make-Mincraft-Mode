@@ -12,7 +12,7 @@ Use when the user asks to create, redesign, or scope a Minecraft mod, mod system
 - `prompt`: required natural-language brief.
 - `media_paths`: optional local reference images.
 - `profile`: `t4_quality`, `t4_local`, or `remote_quality`.
-- Target is fixed to Minecraft Java 1.20.1/Fabric unless a separate validated platform profile exists.
+- Target is supplied exclusively by the validated host-selected PlatformLock.
 
 ## required_rag
 Call `search_project_rag` for Fabric build, metadata, datagen, GameTest, or mapping evidence. Use `minecraft-dev` for source/mapping questions that are not answered by the code-owned catalog.

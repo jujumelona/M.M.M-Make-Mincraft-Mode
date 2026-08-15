@@ -16,15 +16,16 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
     The synthetic version is deliberately not a real Minecraft release. This keeps
     tests that exercise source/catalog mechanics independent from a historical
     production target while production discovery remains authoritative. The test
-    receipt deliberately identifies the reviewed fabric_1201 source-template family
-    so unit-only deterministic generators exercise the same guarded template path.
+    receipt advertises deterministic module capabilities directly so unit-only
+    generators exercise capability routing without impersonating a historical target.
     """
 
+    from minecraft_mod_ai.complete_spec import MODULE_KINDS
     from minecraft_mod_ai.platform_catalog import PlatformAdapter
 
     normalized = str(version).strip() or _TEST_MINECRAFT_VERSION
     return PlatformAdapter(
-        adapter_id="fabric_unit_test_receipt",
+        adapter_id="fabric_unit_test_" + "_".join(part for part in normalized.replace("-", "_").split(".")),
         edition="java",
         loader=_TEST_LOADER,
         minecraft_version=normalized,
@@ -36,8 +37,8 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
         gradle="test-gradle",
         gradle_sha256="sha256:" + "0" * 64,
         resource_pack_format=0,
-        source_api_family="fabric_1201",
-        deterministic_module_kinds=frozenset(),
+        source_api_family="fabric_reviewed_test_template",
+        deterministic_module_kinds=MODULE_KINDS,
     )
 
 
@@ -56,22 +57,6 @@ def _platform_lock_from_adapter(adapter):
         gradle=adapter.gradle,
     )
 
-
-def _fabric_1201_target() -> dict[str, str]:
-    """Compatibility fixture for legacy tests that explicitly exercise that target."""
-
-    from minecraft_mod_ai.platform_catalog import adapter_for_target
-
-    adapter = adapter_for_target("1.20.1", "fabric")
-    return {
-        "edition": adapter.edition,
-        "minecraft_version": adapter.minecraft_version,
-        "loader": adapter.loader,
-        "mappings": adapter.yarn_mappings,
-        "java_version": adapter.java_version,
-        "fabric_loader": adapter.fabric_loader,
-        "fabric_api": adapter.fabric_api,
-    }
 
 
 @pytest.fixture(autouse=True)
@@ -106,9 +91,12 @@ def _isolate_test_runtime_state(
     synthetic_adapter = _synthetic_test_adapter()
 
     def resolve_test_or_production(version: str):
-        if str(version).strip() == _TEST_MINECRAFT_VERSION:
+        normalized = str(version).strip()
+        if not normalized:
+            raise ValueError("Test platform target must be explicit.")
+        if normalized == _TEST_MINECRAFT_VERSION:
             return synthetic_adapter
-        return production_provider.resolve(version)
+        return _synthetic_test_adapter(normalized)
 
     monkeypatch.setitem(
         platform_catalog._PROVIDERS,
@@ -116,10 +104,55 @@ def _isolate_test_runtime_state(
         PlatformProvider(
             loader=_TEST_LOADER,
             provider_id=production_provider.provider_id,
-            discover_versions=production_provider.discover_versions,
+            discover_versions=lambda limit=32: (_TEST_MINECRAFT_VERSION,)[: max(1, int(limit))],
             resolve=resolve_test_or_production,
         ),
     )
+
+    # Runtime-manager unit tests receive a synthetic run-scoped profile instead of
+    # reviving a repository-level production default target.
+    import json
+    import minecraft_mod_ai.runtime_manager as runtime_manager
+
+    runtime_config = tmp_path.parent / f"{tmp_path.name}-runtime-profiles.yaml"
+    runtime_config.write_text(
+        json.dumps(
+            {
+                "schema_version": "mmm/runtime-profiles-v1",
+                "profiles": {
+                    "fabric_target_disposable": {
+                        "minecraft_version": synthetic_adapter.minecraft_version,
+                        "loader": synthetic_adapter.loader,
+                        "java_project_version": int(synthetic_adapter.java_version),
+                        "server_java_command": "java",
+                        "server_memory_mb": 512,
+                        "server_launcher_relative": "runtime/server.jar",
+                        "client_command_env": "MMM_MINECRAFT_CLIENT_COMMAND_JSON",
+                        "allowed_server_commands": [
+                            "^list$",
+                            "^stop$",
+                            "^say [A-Za-z0-9 _.,!?-]{1,120}$",
+                            "^gametest runall$",
+                        ],
+                        "startup_ready_patterns": ["Done"],
+                        "disposable_only": True,
+                        "eula_must_be_explicitly_accepted": True,
+                    }
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original_config_resolver = runtime_manager.resolve_config_path
+
+    def test_config_path(name: str):
+        if name == "runtime_profiles.yaml":
+            return runtime_config
+        return original_config_resolver(name)
+
+    monkeypatch.setattr(runtime_manager, "resolve_config_path", test_config_path)
 
     original_generate = FabricProjectGenerator.generate
 
@@ -137,7 +170,16 @@ def _isolate_test_runtime_state(
     # These unit tests exercise technology semantics directly. Supply an explicit
     # executable fixture target instead of depending on a production-wide default.
     if request.module.__name__ == "test_technology_radar":
-        target = _fabric_1201_target()
+        adapter = _synthetic_test_adapter()
+        target = {
+            "edition": adapter.edition,
+            "minecraft_version": adapter.minecraft_version,
+            "loader": adapter.loader,
+            "mappings": adapter.yarn_mappings,
+            "java_version": adapter.java_version,
+            "fabric_loader": adapter.fabric_loader,
+            "fabric_api": adapter.fabric_api,
+        }
         original = request.module.build_technology_radar
 
         def build_with_explicit_test_target(*args, **kwargs):
@@ -156,7 +198,16 @@ def _isolate_test_runtime_state(
     if request.module.__name__ == "test_complete_planner_technology_sidecar":
         import minecraft_mod_ai.complete_planner as planner_module
 
-        target = _fabric_1201_target()
+        adapter = _synthetic_test_adapter()
+        target = {
+            "edition": adapter.edition,
+            "minecraft_version": adapter.minecraft_version,
+            "loader": adapter.loader,
+            "mappings": adapter.yarn_mappings,
+            "java_version": adapter.java_version,
+            "fabric_loader": adapter.fabric_loader,
+            "fabric_api": adapter.fabric_api,
+        }
         original_collect = planner_module.collect_technology_radar
 
         def collect_with_explicit_test_target(*args, **kwargs):

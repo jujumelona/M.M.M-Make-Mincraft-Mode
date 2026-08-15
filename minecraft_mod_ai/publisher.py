@@ -141,8 +141,8 @@ def build_distribution_metadata(
     version: str,
     name: str,
     changelog: str,
-    game_versions: tuple[str, ...] = ("1.20.1",),
-    loaders: tuple[str, ...] = ("fabric",),
+    game_versions: tuple[str, ...] | None = None,
+    loaders: tuple[str, ...] | None = None,
     release_type: str = "release",
     platform_lock: Any | None = None,
     modrinth_project_ids: Mapping[str, str] | None = None,
@@ -162,6 +162,8 @@ def build_distribution_metadata(
     platform_lock.validate()
     expected_games = (platform_lock.minecraft_version,)
     expected_loaders = (platform_lock.loader,)
+    game_versions = expected_games if game_versions is None else tuple(game_versions)
+    loaders = expected_loaders if loaders is None else tuple(loaders)
     if game_versions != expected_games:
         raise PublishingError(
             "Distribution game_versions must exactly match the tested PlatformLock."
@@ -440,9 +442,15 @@ def _validated_jar(metadata: dict[str, Any]) -> Path:
 
     from .spec import PlatformLock
 
-    platform_lock = PlatformLock()
-    platform_lock.validate()
-    if metadata.get("platform_lock") != asdict(platform_lock):
+    raw_lock = metadata.get("platform_lock")
+    if not isinstance(raw_lock, dict):
+        raise PublishingError("Distribution PlatformLock is missing or changed.")
+    try:
+        platform_lock = PlatformLock(**raw_lock)
+        platform_lock.validate()
+    except (TypeError, ValueError) as exc:
+        raise PublishingError(f"Distribution PlatformLock is invalid: {exc}") from exc
+    if raw_lock != asdict(platform_lock):
         raise PublishingError("Distribution PlatformLock is missing or changed.")
     if metadata.get("game_versions") != [platform_lock.minecraft_version]:
         raise PublishingError("Distribution game versions are not the tested target.")
@@ -707,10 +715,9 @@ def _dependency_purl(dependency_id: str, version: str) -> str | None:
     if dependency_id == "fabric-api":
         return f"pkg:maven/net.fabricmc.fabric-api/fabric-api@{version}"
     if dependency_id == "geckolib":
-        return (
-            "pkg:maven/software.bernie.geckolib/"
-            f"geckolib-fabric-1.20.1@{version}"
-        )
+        # GeckoLib artifact names are target-specific; do not invent a coordinate
+        # without an exact dependency receipt from the generated project.
+        return None
     if dependency_id in {"minecraft", "java"}:
         return f"pkg:generic/{dependency_id}@{version}"
     return None

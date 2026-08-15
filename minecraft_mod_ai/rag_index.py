@@ -1249,11 +1249,9 @@ def _validate_metadata(metadata: dict[str, Any]) -> None:
     missing = required - set(metadata)
     if missing:
         raise ValueError(f"RAG metadata is missing: {sorted(missing)}")
-    if (
-        metadata["minecraft_version"] != "1.20.1"
-        or metadata["loader"] != "fabric"
-    ):
-        raise ValueError("This index accepts only the pinned Fabric 1.20.1 corpus.")
+    for field in ("minecraft_version", "loader", "java_version"):
+        if not str(metadata[field]).strip():
+            raise ValueError(f"RAG metadata field {field} must be non-empty.")
     if metadata["mapping_namespace"] not in {
         "yarn",
         "intermediary",

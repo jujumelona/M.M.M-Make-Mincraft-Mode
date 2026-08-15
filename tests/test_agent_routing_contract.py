@@ -10,8 +10,8 @@ from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
 
 _STALE_MCP_ALIASES = frozenset(
     {
-        "minecraft-runtime-1201",
-        "mineflayer-1201",
+        "minecraft-runtime",
+        "mineflayer",
         "mmm-planning",
     }
 )

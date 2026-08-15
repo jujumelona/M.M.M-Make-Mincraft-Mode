@@ -488,7 +488,7 @@ def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
             else "아직 정하지 않음"
         ),
         f"- 제작 규모: {scope_label}",
-        "- 실행 대상: Minecraft Java 1.20.1 · Fabric · Java 17",
+        "- 실행 대상: 승인된 PlatformLock의 Minecraft Java · loader · Java target",
         "- 원문 요구:",
         quoted_brief,
         "",

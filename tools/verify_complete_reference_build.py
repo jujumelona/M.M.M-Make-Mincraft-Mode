@@ -280,7 +280,7 @@ def build_reference(output: Path) -> dict:
         acceptance_tests=(
             "The explicit village structure is generated in the reference mod",
             "All generated registries load in GameTest",
-            "All generated Java compiles on Fabric 1.20.1",
+            "All generated Java compiles on the approved Minecraft target",
             "The built JAR passes independent validation",
         ),
     )

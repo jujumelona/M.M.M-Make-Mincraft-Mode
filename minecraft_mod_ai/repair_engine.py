@@ -253,7 +253,7 @@ class RepairEngine:
             profile=self.router.profile,
         ).index_project_rag(
             [root.name],
-            metadata=_repair_rag_metadata(manifest),
+            metadata=_repair_rag_metadata(root, manifest),
             semantic=False,
         )
 
@@ -338,19 +338,31 @@ def _extract_json(text: str) -> dict[str, Any]:
     raise RepairEngineError("Coder repair response did not contain a JSON object.")
 
 
-def _repair_rag_metadata(manifest: dict[str, Any]) -> dict[str, Any]:
-    mappings = os.environ.get("MMM_MAPPING_NAMESPACE", os.environ.get("MMM_MAPPINGS", "yarn")).strip().lower()
+def _repair_rag_metadata(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    lock_path = project_root / ".minecraft_ai" / "platform-lock.json"
+    if not lock_path.is_file() or lock_path.is_symlink():
+        raise RepairEngineError("Repair RAG requires the project's exact platform lock.")
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RepairEngineError("Repair RAG platform lock is unreadable.") from exc
+    mappings = str(lock.get("yarn_mappings", lock.get("mappings", ""))).strip().lower()
     if "intermediary" in mappings:
         namespace = "intermediary"
     elif "official" in mappings or "mojang" in mappings:
         namespace = "official"
     else:
         namespace = "yarn"
+    version = str(lock.get("minecraft_version", "")).strip()
+    loader = str(lock.get("loader", "")).strip()
+    java_version = str(lock.get("java_version", "")).strip()
+    if not version or not loader or not java_version:
+        raise RepairEngineError("Repair RAG platform lock is incomplete.")
     return {
-        "minecraft_version": os.environ.get("MMM_MINECRAFT_VERSION", "1.20.1").strip() or "1.20.1",
-        "loader": os.environ.get("MMM_LOADER", "fabric").strip() or "fabric",
+        "minecraft_version": version,
+        "loader": loader,
         "mapping_namespace": namespace,
-        "java_version": os.environ.get("MMM_JAVA_VERSION", "17").strip() or "17",
+        "java_version": java_version,
         "license": os.environ.get("MMM_PROJECT_LICENSE", "project-local").strip() or "project-local",
         "source_commit": str(manifest["sha256"]),
     }

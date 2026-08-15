@@ -17,7 +17,7 @@ class MineflayerBridgeError(RuntimeError):
 
 
 class MineflayerBridge:
-    """Persistent JSONL client for the first-party Mineflayer 1.20.1 bridge.
+    """Persistent JSONL client for the first-party target-aware Mineflayer bridge.
 
     Calls are serialized because the bridge protocol has one request/response stream.
     Dedicated reader threads continuously drain stdout/stderr so a noisy Node child
@@ -301,7 +301,7 @@ def _default_bridge_path() -> Path:
     repository = (
         Path(__file__).resolve().parents[1]
         / "integrations"
-        / "mineflayer-1201"
+        / "mineflayer"
         / "bridge.mjs"
     )
     if repository.is_file():
@@ -309,6 +309,6 @@ def _default_bridge_path() -> Path:
     return (
         Path(__file__).resolve().parent
         / "integrations"
-        / "mineflayer-1201"
+        / "mineflayer"
         / "bridge.mjs"
     )

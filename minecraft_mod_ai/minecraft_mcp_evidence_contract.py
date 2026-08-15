@@ -115,28 +115,14 @@ def _target(research_brief: Mapping[str, Any]) -> dict[str, str]:
     raw = research_brief.get("_mmm_platform_target")
     if not isinstance(raw, Mapping):
         raw = {}
-    return {
-        "minecraft_version": str(
-            raw.get(
-                "minecraft_version",
-                os.environ.get("MMM_MINECRAFT_VERSION", "1.20.1"),
-            )
-        ).strip()
-        or "1.20.1",
-        "loader": str(
-            raw.get("loader", os.environ.get("MMM_LOADER", "fabric"))
-        ).strip()
-        or "fabric",
-        "mappings": str(
-            raw.get(
-                "mappings",
-                raw.get(
-                    "yarn_mappings",
-                    os.environ.get("MMM_MAPPINGS", "yarn-1.20.1+build.1"),
-                ),
-            )
-        ).strip(),
+    values = {
+        "minecraft_version": str(raw.get("minecraft_version", os.environ.get("MMM_MINECRAFT_VERSION", ""))).strip(),
+        "loader": str(raw.get("loader", os.environ.get("MMM_LOADER", ""))).strip(),
+        "mappings": str(raw.get("mappings", raw.get("yarn_mappings", os.environ.get("MMM_MAPPINGS", "")))).strip(),
     }
+    # Target-neutral evidence batching may run before platform selection. Missing
+    # coordinates remain blank and are never replaced by a historical default.
+    return values
 
 
 def _capabilities(domain: Mapping[str, Any]) -> tuple[str, ...]:

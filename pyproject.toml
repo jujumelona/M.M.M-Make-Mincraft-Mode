@@ -78,7 +78,7 @@ packages = ["minecraft_mod_ai", "minecraft_mod_ai.config", "minecraft_mod_ai.int
 py-modules = ["mcp_gateway", "download_resources"]
 
 [tool.setuptools.package-data]
-minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/mineflayer-1201/*", "training_configs/*"]
+minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/mineflayer/*", "training_configs/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -36,7 +36,11 @@ from minecraft_mod_ai.research_ledger import (
 from minecraft_mod_ai.retrieval import retrieve_official_evidence
 
 
-_TEST_TARGET = adapter_for_target("1.20.1", "fabric")
+_TEST_TARGET = SimpleNamespace(
+    minecraft_version="mmm-test-target",
+    loader="fabric",
+    yarn_mappings="mmm-test-target+test-mappings",
+)
 
 
 def _base_proposal():
@@ -383,11 +387,12 @@ def test_oversized_candidate_evidence_fragments_without_losing_safety_anchors() 
 
 
 def test_verified_official_claim_text_and_provenance_reach_planning_and_rag() -> None:
+    target = adapter_for_target("1.20.1", "fabric")
     receipt = retrieve_official_evidence(
-        "Fabric 1.20.1 datagen recipes loot tags",
-        minecraft_version="1.20.1",
-        loader="fabric",
-        mappings="yarn-1.20.1+build.1",
+        "Fabric datagen recipes loot tags",
+        minecraft_version=target.minecraft_version,
+        loader=target.loader,
+        mappings=target.yarn_mappings,
         limit=2,
     )
     design = {

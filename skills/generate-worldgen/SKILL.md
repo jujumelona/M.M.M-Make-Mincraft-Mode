@@ -5,7 +5,7 @@ description: Generate only explicitly requested mod-owned structures, biomes, di
 
 activate_when:
   - The request-resolved method plan contains fabric_worldgen.
-  - Minecraft target is Java 1.20.1, Fabric, Java 17 and Yarn 1.20.1+build.1.
+  - Minecraft target is the exact host-selected PlatformLock (version, loader, mappings, Java, and dependency coordinates).
   - The approved proposal names the exact structure, biome, dimension, ore or configured/placed feature behavior.
 
 inputs:
@@ -16,8 +16,8 @@ inputs:
   - resolved fabric_worldgen method and required gates
 
 required_rag:
-  - Fabric 1.20.1 world generation documentation and metadata
-  - Yarn 1.20.1+build.1 symbols for referenced registries, codecs and bootstrap APIs
+  - world-generation documentation and metadata for the exact approved target
+  - exact PlatformLock mapping symbols for referenced registries, codecs and bootstrap APIs
   - exact datapack schema and optional-library compatibility evidence
   - project-local source and prior build/runtime receipts
 

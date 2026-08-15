@@ -10,7 +10,7 @@ Use for API signatures, mappings, Fabric metadata, Gradle dependencies, datagen,
 
 ## inputs
 - `query`: concrete technical question.
-- `minecraft_version`: defaults to `1.20.1`.
+- `minecraft_version`: required from the host-selected PlatformLock; there is no historical default.
 - Optional project/JAR path inside the configured workspace.
 
 ## required_rag
@@ -25,7 +25,7 @@ Start with `mmm-local.search_project_rag`. Escalate to `minecraft-dev` for sourc
 Produce an evidence bundle with source title, version scope, authority, retrieved claim, and the code task that the claim constrains.
 
 ## validators
-- Evidence version matches 1.20.1/Yarn 1.20.1+build.1.
+- Evidence version and mappings exactly match the host-selected PlatformLock.
 - Official Fabric sources take priority for platform contracts.
 - Decompiled/source evidence is labeled separately from public API documentation.
 - No evidence record contains secrets or workspace-external paths.

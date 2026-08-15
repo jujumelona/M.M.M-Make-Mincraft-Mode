@@ -9,11 +9,12 @@ from .model_router import ModelRouter
 from .retrieval_adaptation import adapt_query_vector, extract_hit_texts
 
 _SYMBOL = re.compile(r"\b(?:[A-Z][A-Za-z0-9_]{2,}|[a-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]+\.(?:java|json|gradle|kts))\b")
+_MC_VERSION = re.compile(r"(?<![0-9])(?:1\.)?[0-9]{1,2}(?:\.[0-9]{1,3}){1,2}(?![0-9])")
 
 
 def _route(query: str) -> str:
     value = query.casefold()
-    if any(marker in value for marker in ("minecraft version", "fabric api version", "mapping", "yarn", "signature", "1.20.1")):
+    if any(marker in value for marker in ("minecraft version", "fabric api version", "mapping", "yarn", "signature")) or _MC_VERSION.search(value):
         return "exact_version"
     if any(marker in value for marker in ("dependency", "depends", "call chain", "caller", "callee", "import", "extends", "implements", "의존", "호출", "연결")):
         return "dependency"

@@ -377,6 +377,22 @@ def _parallel_retrieve_domain_evidence_factory(
                 retrieve=selected_retrieve,
             )
 
+        raw_target = research_brief.get("_mmm_platform_target")
+        if not isinstance(raw_target, dict):
+            return original_retrieve_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+        version = str(raw_target.get("minecraft_version", "")).strip()
+        loader = str(raw_target.get("loader", "")).strip().casefold()
+        if not version or not loader:
+            return original_retrieve_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+        from .platform_catalog import adapter_for_target
+        adapter = adapter_for_target(version, loader)
+
         workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
         primary_results: dict[tuple[int, int], Any] = {}
         correction_futures: dict[tuple[int, int, int], Future[Any]] = {}
@@ -388,9 +404,9 @@ def _parallel_retrieve_domain_evidence_factory(
                 pool.submit(
                     selected_retrieve,
                     query,
-                    minecraft_version="1.20.1",
-                    loader="fabric",
-                    mappings="yarn-1.20.1+build.1",
+                    minecraft_version=adapter.minecraft_version,
+                    loader=adapter.loader,
+                    mappings=adapter.yarn_mappings,
                     limit=8,
                 ): (domain_index, query_index, query)
                 for domain_index, query_index, query in ordered_jobs
@@ -407,9 +423,9 @@ def _parallel_retrieve_domain_evidence_factory(
                     ] = pool.submit(
                         selected_retrieve,
                         correction_query,
-                        minecraft_version="1.20.1",
-                        loader="fabric",
-                        mappings="yarn-1.20.1+build.1",
+                        minecraft_version=adapter.minecraft_version,
+                        loader=adapter.loader,
+                        mappings=adapter.yarn_mappings,
                         limit=4,
                     )
 

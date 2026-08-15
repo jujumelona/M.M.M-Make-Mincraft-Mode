@@ -13,7 +13,7 @@ inputs:
   - optional reviewed existing OGG files
 
 required_rag:
-  - Minecraft 1.20.1 sound resource format
+  - sound resource format for the exact approved Minecraft target
   - Fabric SoundEvent registration APIs
   - audio asset license and provenance
 

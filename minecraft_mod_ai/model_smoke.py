@@ -31,14 +31,14 @@ def run_model_smoke(
     output_file: Path | None = None
     try:
         if role == "embedding":
-            vectors = router.embed(["Fabric 1.20.1 register a custom item"])
+            vectors = router.embed(["approved-target Fabric register a custom item"])
             output = {"dimensions": len(vectors[0]), "norm": sum(v * v for v in vectors[0]) ** 0.5}
         elif role == "reranker":
             output = {
                 "scores": router.rerank(
-                    "Fabric 1.20.1 item registration",
+                    "approved-target Fabric item registration",
                     [
-                        "Fabric 1.20.1 Registry.register example",
+                        "approved-target Fabric Registry.register example",
                         "Forge 1.21 DeferredRegister example",
                     ],
                 )
@@ -73,7 +73,7 @@ def run_model_smoke(
                     {
                         "role": "user",
                         "content": (
-                            '{"status":"ok","role":"' + role + '","target":"Fabric 1.20.1"}'
+                            '{"status":"ok","role":"' + role + '","target":"approved-target Fabric"}'
                         ),
                     },
                 ],

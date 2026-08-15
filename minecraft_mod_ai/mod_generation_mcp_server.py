@@ -112,7 +112,7 @@ def generate_fabric_project(
     approval_hash: str,
     run_name: str = "mcp-run",
 ) -> dict[str, Any]:
-    """Generate the approved Fabric 1.20.1 mod project without a map artifact."""
+    """Generate the approved target mod project without a map artifact."""
     return _core().generate_fabric_project(proposal, approval_hash, run_name)
 
 

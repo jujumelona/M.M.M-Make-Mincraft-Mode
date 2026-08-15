@@ -1,7 +1,7 @@
 # Verified Minecraft fine-tuning
 
 Training data is not scraped blindly. A trace enters the dataset only after the
-pinned Fabric 1.20.1 build, JDT diagnostics, request-fidelity checks, GameTest,
+pinned the approved Fabric target build, JDT diagnostics, request-fidelity checks, GameTest,
 registry-reference validation and JAR validation all pass.
 
 ## Models

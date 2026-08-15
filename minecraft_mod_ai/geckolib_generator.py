@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .generator import make_texture_png
+from .platform_catalog import adapter_from_project
 from .project_edit import (
     ensure_client_entrypoint,
     ensure_dependency,
@@ -190,10 +191,14 @@ def generate_geckolib_entity_assets(
                 size=max(texture_width, texture_height),
             )
         )
+    adapter = adapter_from_project(info.root)
     dependency = ensure_dependency(
         info,
         repository_block="""maven {\n    name = 'GeckoLib'\n    url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'\n}""",
-        dependency_line=f'modImplementation("software.bernie.geckolib:geckolib-fabric-1.20.1:{geckolib_version}")',
+        dependency_line=(
+            'modImplementation("software.bernie.geckolib:'
+            f'geckolib-{adapter.loader}-{adapter.minecraft_version}:{geckolib_version}")'
+        ),
         marker="geckolib",
     )
     main = ensure_main_initializer_call(

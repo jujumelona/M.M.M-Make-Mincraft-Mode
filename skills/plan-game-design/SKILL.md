@@ -5,7 +5,7 @@ description: Produce a Fabric mod design, request-resolved implementation method
 
 activate_when:
   - The current task matches this skill's single responsibility.
-  - Minecraft target is Java 1.20.1, Fabric, Java 17 and Yarn 1.20.1+build.1.
+  - Minecraft target is the exact host-selected PlatformLock (version, loader, mappings, Java, and dependency coordinates).
   - Required operator configuration and prior gates are available.
 
 inputs:
@@ -16,8 +16,8 @@ inputs:
   - resolved mod-development method plan
 
 required_rag:
-  - Fabric 1.20.1 official documentation and metadata
-  - Yarn 1.20.1+build.1 symbols for referenced Minecraft APIs
+  - official documentation and metadata for the exact approved loader/version
+  - exact PlatformLock mapping symbols for referenced Minecraft APIs
   - exact library version evidence for optional dependencies
   - project-local source and prior build/runtime receipts
 

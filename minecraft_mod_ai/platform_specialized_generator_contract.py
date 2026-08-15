@@ -15,15 +15,29 @@ _SYSTEM_INCREMENTAL_STATE: ContextVar[tuple[frozenset[str], bool] | None] = Cont
 )
 
 
-def _require_fabric_1201(project_root: str | Path, feature: str) -> None:
+def _require_deterministic_capability(
+    project_root: str | Path,
+    *,
+    required_kinds: frozenset[str],
+    feature: str,
+) -> None:
     adapter = adapter_from_project(project_root)
-    if adapter.source_api_family == "fabric_1201":
+    if required_kinds and required_kinds.issubset(adapter.deterministic_module_kinds):
         return
     raise ValueError(
-        f"{feature} deterministic templates are reviewed only for fabric_1201; "
-        f"target {adapter.minecraft_version}/{adapter.loader} ({adapter.adapter_id}) "
-        "must be implemented through the target-aware custom_java/RAG compiler."
+        f"{feature} deterministic templates are not declared by provider "
+        f"{adapter.adapter_id} for {adapter.minecraft_version}/{adapter.loader}; "
+        "route this work through target-aware custom_java/RAG generation."
     )
+
+
+_SYSTEM_PACK_KINDS = {
+    "quest-system": frozenset({"quest"}),
+    "class-skill-system": frozenset({"class", "skill"}),
+    "economy-shop": frozenset({"economy", "shop"}),
+    "gui-networking": frozenset({"gui", "networking"}),
+    "party-guild": frozenset({"party", "guild"}),
+}
 
 
 def _install_incremental_system_records(system_module: Any) -> None:
@@ -89,7 +103,10 @@ def install(
                 config = args[4]
             if project_root is None:
                 raise ValueError("project_root is required for system-pack generation.")
-            _require_fabric_1201(project_root, "Built-in system-pack")
+            required_kinds = _SYSTEM_PACK_KINDS.get(str(pack_id), frozenset())
+            _require_deterministic_capability(
+                project_root, required_kinds=required_kinds, feature="Built-in system-pack"
+            )
 
             root = Path(project_root).expanduser().resolve()
             contract = (
@@ -139,7 +156,9 @@ def install(
                 project_root = args[0]
             if project_root is None:
                 raise ValueError("project_root is required for GeckoLib generation.")
-            _require_fabric_1201(project_root, "Built-in GeckoLib entity")
+            _require_deterministic_capability(
+                project_root, required_kinds=frozenset({"entity"}), feature="Built-in GeckoLib entity"
+            )
             return current_gecko(*args, **kwargs)
 
         generate_geckolib_entity_assets._mmm_platform_specialized_guard = True

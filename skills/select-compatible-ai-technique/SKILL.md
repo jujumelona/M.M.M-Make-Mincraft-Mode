@@ -1,6 +1,6 @@
 ---
 name: select-compatible-ai-technique
-description: Research, compare, and fail-closed gate request-derived AI, agent, speech, translation, or consented voice-adaptation techniques for a Minecraft 1.20.1 Fabric mod. Use when a requested feature may need model inference, tool use, semantic memory, ASR, VAD, TTS, voice transport, LoRA, voice conversion, a local sidecar, an in-process Java runtime, or a remote API.
+description: Research, compare, and fail-closed gate request-derived AI, agent, speech, translation, or consented voice-adaptation techniques for a Minecraft Java mod on the host-selected executable target. Use when a requested feature may need model inference, tool use, semantic memory, ASR, VAD, TTS, voice transport, LoRA, voice conversion, a local sidecar, an in-process Java runtime, or a remote API.
 ---
 
 # Select Compatible AI Technique
@@ -15,7 +15,7 @@ description: Research, compare, and fail-closed gate request-derived AI, agent, 
    sidecar, remote API with explicit data consent, and offline build-time tool.
    Keep Minecraft ticks deterministic and return only small typed intents to the
    server thread.
-4. Prove Minecraft 1.20.1, Fabric, Yarn, Java 17, client/server placement,
+4. Prove the exact approved Minecraft version, loader, mappings, and Java target, client/server placement,
    networking authority, OS/architecture, model format, CPU/GPU/RAM, startup,
    latency, concurrency, offline behavior, and deterministic fallback.
 5. Record code, model weights, base model, dataset, adapter, and media licenses
@@ -51,7 +51,7 @@ activate_when:
   - Planning must choose between Java in-process, localhost sidecar, remote API, or offline build-time inference.
 inputs:
   - original user request and request-derived research domains
-  - exact Minecraft 1.20.1, Fabric, Yarn and Java 17 target
+  - exact the exact approved Minecraft version, loader, mappings, and Java target target
   - current hardware, network, privacy, language and latency constraints
 required_rag:
   - exact target-version Minecraft implementation evidence

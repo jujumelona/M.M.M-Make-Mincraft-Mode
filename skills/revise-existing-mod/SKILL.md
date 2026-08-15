@@ -11,7 +11,7 @@ Use when the user provides an existing source ZIP or JAR and requests changes, m
 ## inputs
 - Workspace-local source ZIP or JAR.
 - Requested change.
-- Target remains Fabric 1.20.1 unless a validated migration profile exists.
+- Target remains the approved PlatformLock unless an explicitly validated migration is requested.
 
 ## required_rag
 Use `minecraft-dev` for JAR analysis, decompilation, remapping, and affected APIs. Use local RAG for build/metadata contracts.

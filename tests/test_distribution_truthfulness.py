@@ -30,12 +30,16 @@ def _jar(path: Path, metadata: dict[str, object]) -> Path:
     return path
 
 
+def _platform_lock():
+    return MinecraftModPipeline().plan("Create one truth item").spec.platform
+
+
 def _metadata(
     *,
     mod_id: str = "truth_test",
     version: str = "1.0.0",
 ) -> dict[str, object]:
-    platform = MinecraftModPipeline().plan("Create one truth item").spec.platform
+    platform = _platform_lock()
     return {
         "schemaVersion": 1,
         "id": mod_id,
@@ -78,11 +82,12 @@ def test_distribution_preserves_geckolib_custom_and_modrinth_dependencies(
         version="1.0.0",
         name="Truth Test",
         changelog="Verified dependency metadata.",
+        platform_lock=_platform_lock(),
         modrinth_project_ids={"custom-library": "AbC12345"},
     )
 
     by_id = {item["mod_id"]: item for item in metadata["fabric_dependencies"]}
-    assert by_id["fabric-api"]["version_predicates"] == ["0.92.11+1.20.1"]
+    assert by_id["fabric-api"]["version_predicates"] == ["test-api"]
     assert by_id["geckolib"]["version_predicates"] == ["4.8.2"]
     assert by_id["custom-library"]["fabric_section"] == "recommends"
     assert metadata["modrinth_dependencies"] == [
@@ -118,6 +123,7 @@ def test_unknown_custom_dependency_blocks_modrinth_instead_of_being_omitted(
         version="1.0.0",
         name="Truth Test",
         changelog="Custom runtime.",
+        platform_lock=_platform_lock(),
     )
     monkeypatch.setenv("MODRINTH_TOKEN", "not-used")
 
@@ -137,6 +143,7 @@ def test_modrinth_upload_uses_resolved_declared_dependencies(
         version="1.0.0",
         name="Truth Test",
         changelog="Resolved dependencies.",
+        platform_lock=_platform_lock(),
     )
     captured: dict[str, object] = {}
 
@@ -195,7 +202,7 @@ def test_invalid_or_unbounded_dependency_metadata_fails_closed(
 ) -> None:
     fabric = _metadata()
     mutation(fabric)
-    platform = MinecraftModPipeline().plan("Create one truth item").spec.platform
+    platform = _platform_lock()
 
     with pytest.raises(PublishingError, match=message):
         dependency_inventory_from_metadata(fabric, platform_lock=platform)

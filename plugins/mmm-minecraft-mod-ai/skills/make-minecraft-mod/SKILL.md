@@ -1,6 +1,6 @@
 ---
 name: make-minecraft-mod
-description: Plan, revise, build, validate, or resume a Minecraft Java 1.20.1 Fabric mod with M.M.M. Use when the user describes any Minecraft mod idea, asks to change an existing source project, wants a small or very large game-scale mod, or wants the Colab production run continued.
+description: Plan, revise, build, validate, or resume a Minecraft Java mod on the host-selected executable target with M.M.M. Use when the user describes any Minecraft mod idea, asks to change an existing source project, wants a small or very large game-scale mod, or wants the Colab production run continued.
 ---
 
 # Make Minecraft Mod
@@ -19,7 +19,7 @@ template into the design.
    GitHub and license-aware media evidence for the domains that actually need
    them. Never use a named example game as a fixed feature template.
 4. Before implementation facts are uncertain, apply
-   `gather-adaptive-minecraft-evidence`. Pin Minecraft 1.20.1, Fabric, Yarn,
+   `gather-adaptive-minecraft-evidence`. Pin the approved Minecraft target, Fabric, Yarn,
    Java, dependency, license, and project-local evidence.
 5. For accepted work, apply `compile-massive-work-graph`. Preserve every
    requested deliverable, split work into bounded dependency shards, and save

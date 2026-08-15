@@ -57,12 +57,7 @@ def _install_runtime_manager(module: Any) -> None:
         profiles = raw.get("profiles", {})
         entry = profiles.get(profile_name) if isinstance(profiles, dict) else None
         if not isinstance(entry, dict):
-            legacy = profiles.get("fabric_1201_disposable") if isinstance(profiles, dict) else None
-            if profile_name == "fabric_target_disposable" and isinstance(legacy, dict):
-                entry = legacy
-                profile_name = "fabric_1201_disposable"
-            else:
-                raise module.RuntimePolicyError(f"Unknown runtime profile: {profile_name}")
+            raise module.RuntimePolicyError(f"Unknown runtime profile: {profile_name}")
 
         minecraft_version = str(entry.get("minecraft_version", "")).strip()
         loader = str(entry.get("loader", "fabric")).strip().lower()
@@ -141,13 +136,13 @@ def _install_mineflayer_target(module: Any) -> None:
     @wraps(original_start)
     def start(self: Any) -> None:
         adapter = _ACTIVE_ADAPTER.get()
-        if adapter is None:
-            version = os.environ.get("MMM_MINEFLAYER_MC_VERSION", "1.20.1").strip()
-            try:
-                adapter = adapter_for_target(version, "fabric")
-            except ValueError as exc:
-                raise module.MineflayerBridgeError(str(exc)) from exc
-        os.environ["MMM_MINEFLAYER_MC_VERSION"] = adapter.minecraft_version
+        if adapter is not None:
+            os.environ["MMM_MINEFLAYER_MC_VERSION"] = adapter.minecraft_version
+        elif not os.environ.get("MMM_MINEFLAYER_MC_VERSION", "").strip():
+            raise module.MineflayerBridgeError(
+                "Mineflayer requires an explicit approved Minecraft target; "
+                "set MMM_MINEFLAYER_MC_VERSION or start it inside an approved runtime."
+            )
         return original_start(self)
 
     start._mmm_dynamic_platform_runtime = True

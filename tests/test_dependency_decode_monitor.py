@@ -9,12 +9,12 @@ from minecraft_mod_ai import custom_generation_search_contract as generation_sea
 from minecraft_mod_ai import llama_server_hardware_policy as llama_hardware
 
 
-_TEST_MINECRAFT_VERSION = "1.20.1"
+_TEST_MINECRAFT_VERSION = "mmm-test-target"
 _TEST_LOADER = "fabric"
-_TEST_MAPPINGS = "1.20.1+build.1"
-_TEST_FABRIC_LOADER = "0.17.2"
-_TEST_FABRIC_API = "0.92.11+1.20.1"
-_TEST_FABRIC_LOOM = "1.10.5"
+_TEST_MAPPINGS = "mmm-test-target+test-mappings"
+_TEST_FABRIC_LOADER = "test-loader"
+_TEST_FABRIC_API = "test-api"
+_TEST_FABRIC_LOOM = "test-loom"
 
 
 def _project(tmp_path):

@@ -42,16 +42,30 @@ class VerifiedTrainingTrace:
 
     def validate(self, policy: dict[str, Any]) -> None:
         target = policy["target"]
-        if self.minecraft_version != target["minecraft_version"]:
-            raise TrainingTraceError("Wrong Minecraft version.")
-        if self.loader != target["loader"]:
-            raise TrainingTraceError("Wrong mod loader.")
-        if self.java_version != int(target["java_version"]):
-            raise TrainingTraceError("Wrong Java version.")
-        if self.mappings != target["mappings"]:
-            raise TrainingTraceError("Wrong mappings.")
-        if self.fabric_api != target["fabric_api"]:
-            raise TrainingTraceError("Wrong Fabric API.")
+        if target.get("mode") == "trace_exact":
+            exact_fields = {
+                "minecraft_version": self.minecraft_version,
+                "loader": self.loader,
+                "java_version": str(self.java_version),
+                "mappings": self.mappings,
+                "fabric_api": self.fabric_api,
+            }
+            missing = [key for key, value in exact_fields.items() if not str(value).strip()]
+            if missing:
+                raise TrainingTraceError(
+                    "Training trace target is incomplete: " + ", ".join(missing)
+                )
+        else:
+            if self.minecraft_version != target["minecraft_version"]:
+                raise TrainingTraceError("Wrong Minecraft version.")
+            if self.loader != target["loader"]:
+                raise TrainingTraceError("Wrong mod loader.")
+            if self.java_version != int(target["java_version"]):
+                raise TrainingTraceError("Wrong Java version.")
+            if self.mappings != target["mappings"]:
+                raise TrainingTraceError("Wrong mappings.")
+            if self.fabric_api != target["fabric_api"]:
+                raise TrainingTraceError("Wrong Fabric API.")
         if self.source_license not in set(policy["allowed_source_licenses"]):
             raise TrainingTraceError(
                 f"Source license is not allowlisted: {self.source_license}"
@@ -177,8 +191,9 @@ class TrainingTraceStore:
                         {
                             "role": "system",
                             "content": (
-                                "You are the Fabric 1.20.1 MinecraftCoder. Produce only "
-                                "version-pinned, request-faithful code or a minimal patch."
+                                f"You are the MinecraftCoder for Minecraft {trace.minecraft_version} "
+                                f"{trace.loader}, mappings {trace.mappings}, Java {trace.java_version}. "
+                                "Produce only exact-target, request-faithful code or a minimal patch."
                             ),
                         },
                         {"role": "user", "content": trace.prompt},

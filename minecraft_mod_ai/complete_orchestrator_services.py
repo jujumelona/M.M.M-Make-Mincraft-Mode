@@ -679,37 +679,45 @@ def package_source_only(
 
 
 def runtime_profile(run_root: Path, memory_mb: int) -> Path:
+    version = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
+    loader = os.environ.get("MMM_LOADER", "").strip().casefold()
+    java_raw = os.environ.get("MMM_JAVA_VERSION", "").strip()
+    if not version or not loader or not java_raw:
+        raise CompleteProductionError(
+            "Runtime profile requires an explicit approved Minecraft target; "
+            "the platform runtime contract normally supplies it."
+        )
+    try:
+        java_version = int(java_raw)
+    except ValueError as exc:
+        raise CompleteProductionError("MMM_JAVA_VERSION must be an integer.") from exc
     path = run_root / "integration-inputs/runtime-profile.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": "mmm/runtime-profiles-v1",
         "profiles": {
-            "fabric_1201_disposable": {
-                "minecraft_version": "1.20.1",
-                "java_project_version": 17,
+            "minecraft_target_disposable": {
+                "minecraft_version": version,
+                "loader": loader,
+                "java_project_version": java_version,
                 "server_java_command": "java",
                 "server_memory_mb": memory_mb,
                 "server_launcher_relative": "runtime/fabric-server-launch.jar",
                 "client_command_env": "MMM_MINECRAFT_CLIENT_COMMAND_JSON",
                 "allowed_server_commands": [
-                    "^list$",
-                    "^stop$",
-                    "^say [A-Za-z0-9 _.,!?-]{1,120}$",
+                    "^list$", "^stop$", "^say [A-Za-z0-9 _.,!?-]{1,120}$",
                     "^gametest runall$",
                     "^tp testplayer -?[0-9]{1,7} -?[0-9]{1,7} -?[0-9]{1,7}$",
                     "^give testplayer [a-z0-9_.-]+:[a-z0-9_./-]+( [1-9][0-9]{0,3})?$",
                 ],
                 "startup_ready_patterns": [
                     "Done \\([0-9.]+s\\)! For help, type",
-                    "For help, type \\\"help\\\"",
+                    "For help, type \"help\"",
                 ],
                 "disposable_only": True,
                 "eula_must_be_explicitly_accepted": True,
             }
         },
     }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path

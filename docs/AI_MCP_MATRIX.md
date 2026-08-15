@@ -14,9 +14,9 @@ This matrix is executable configuration, not a marketing capability list. Model 
 ## MCP policy
 
 - `mmm-local`: real stdio FastMCP server. It exposes planning, approval, RAG, archive inspection, Fabric source generation, assets, validation, Gradle, GameTest, JAR inspection, and packaging.
-- `minecraft-dev`: enabled through `npx -y @mcdxai/minecraft-dev-mcp` for 1.20.1 source, mappings, decompilation, search, and JAR analysis.
-- Runtime Minecraft MCP: disabled. The reviewed upstream runtime projects target different Minecraft versions. A 1.20.1 fork must pass initialize, tools/list, command, screenshot, player-control, and disconnect tests before it is configured.
-- Mineflayer runtime MCP: disabled until an explicit 1.20.1 compatibility run passes.
+- `minecraft-dev`: enabled through `npx -y @mcdxai/minecraft-dev-mcp` for the host-selected target source, mappings, decompilation, search, and JAR analysis.
+- Runtime Minecraft MCP: disabled. The reviewed upstream runtime projects target different Minecraft versions. A target-compatible fork must pass initialize, tools/list, command, screenshot, player-control, and disconnect tests before it is configured.
+- Mineflayer runtime MCP: disabled until an explicit target compatibility run passes.
 
 ## T4 residency rule
 

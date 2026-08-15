@@ -8,7 +8,7 @@ The old item/block slice remains only as an explicit compatibility command.
 1. Parse a multimodal brief and inspect an optional existing source ZIP.
 2. Produce a dependency-checked module graph covering content, entities, systems, assets, audio, custom Java and explicitly requested native Minecraft modules.
 3. Freeze the complete proposal and all external-input hashes.
-4. Generate or safely patch a Fabric 1.20.1 project.
+4. Generate or safely patch a the approved Fabric target project.
 5. Bind extended content, persistent quests/classes/economy/GUI/party systems, GeckoLib entities, requested native Minecraft modules, textures and SoundEvents.
 6. Run deterministic validation and JDT LS.
 7. Run Gradle and GameTest, applying at most three hash-guarded minimal repair transactions from new diagnostics.

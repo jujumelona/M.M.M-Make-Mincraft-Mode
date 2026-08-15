@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-M.M.M creates or patches Minecraft Java 1.20.1 Fabric mod projects.
+M.M.M creates or patches Minecraft Java on the host-selected executable target mod projects.
 
 It does **not** create standalone world saves, downloadable map ZIPs, schematics, Litematica files, or block-delta handoffs for an external map Builder. World generation remains available only as code and data owned by a requested mod: structures, biomes, dimensions, ores, configured features, placed features, processors, tags, and bootstrap or registration code.
 

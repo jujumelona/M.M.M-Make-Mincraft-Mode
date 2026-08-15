@@ -459,7 +459,7 @@ class MMMToolService:
     def search_project_rag(
         self,
         query: str,
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str,
         limit: int = 6,
     ) -> dict[str, Any]:
         if type(limit) is not int or limit < 1:

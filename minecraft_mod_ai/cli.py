@@ -29,7 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mmm",
         description=(
-            "대화식 게임 기획을 Minecraft Fabric 1.20.1 모드로 "
+            "대화식 게임 기획을 Minecraft Java 모드로 "
             "제작하고 확인합니다."
         ),
     )

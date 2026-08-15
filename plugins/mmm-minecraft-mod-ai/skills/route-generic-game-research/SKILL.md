@@ -13,7 +13,7 @@ requirements that are truly relevant. Empty categories stay empty.
 
 1. Build a dependency graph of request-derived research domains. Preserve every
    distinct requirement; group only genuinely repetitive catalogs.
-2. Route Minecraft API and build questions to exact 1.20.1 Fabric/Yarn evidence,
+2. Route Minecraft API and build questions to exact evidence for the approved Minecraft loader/mappings target,
    local behavior to project RAG, code/library candidates to Modrinth and GitHub,
    gameplay/domain meaning to Wikipedia as a secondary reference, and media
    references to reviewed license-aware catalogs.
@@ -52,7 +52,7 @@ activate_when:
   - Initial retrieval leaves a request-derived domain uncovered or contradictory.
 inputs:
   - original user request and current design domains
-  - Minecraft 1.20.1, Fabric, Yarn and Java target profile
+  - the exact host-selected PlatformLock target profile
   - optional existing authorized project inventory
 required_rag:
   - exact-version official implementation evidence for technical claims

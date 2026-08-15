@@ -13,12 +13,7 @@ from typing import Any, Mapping
 
 
 _PROMPT_REPLACEMENTS = (
-    ("Minecraft Java 1.20.1 Fabric", "the host-selected Minecraft Java target"),
-    ("Minecraft 1.20.1 Fabric", "the host-selected Minecraft target"),
-    (
-        "the host-selected Minecraft Java Fabric target",
-        "the host-selected Minecraft Java target",
-    ),
+    ("the host-selected Minecraft Java Fabric target", "the host-selected Minecraft Java target"),
     ("the host-selected Minecraft Fabric target", "the host-selected Minecraft target"),
 )
 
@@ -44,10 +39,7 @@ def _install_target_neutral_game_design_prompts(module: Any) -> None:
 
         @wraps(original_system)
         def system_prompt() -> str:
-            text = original_system().replace(
-                "GameDesignPlanner for a Minecraft Java 1.20.1 Fabric production system.",
-                "GameDesignPlanner for a Minecraft Java mod production system.",
-            )
+            text = original_system()
             return text + (
                 "\n\nPlatform rule: describe capabilities only. Do not choose or assume a "
                 "Minecraft version, loader, mappings, Java, build tool, or package coordinate. "
@@ -62,10 +54,7 @@ def _install_target_neutral_game_design_prompts(module: Any) -> None:
 
         @wraps(original_sharded)
         def sharded_prompt() -> str:
-            text = original_sharded().replace(
-                "request for a Minecraft Java 1.20.1 Fabric mod.",
-                "request for a Minecraft Java mod.",
-            )
+            text = original_sharded()
             return text + (
                 "\nReturn semantic requirements only; exact platform coordinates are host-owned."
             )

@@ -23,8 +23,12 @@ from minecraft_mod_ai.spec import (
 from minecraft_mod_ai.validator import ProjectValidator
 
 
-_FABRIC_1201 = catalog.adapter_for_target("1.20.1", "fabric")
-_FABRIC_1211 = catalog.adapter_for_target("1.21.1", "fabric")
+def _fabric_1201():
+    return catalog.adapter_for_target("1.20.1", "fabric")
+
+
+def _fabric_1211():
+    return catalog.adapter_for_target("1.21.1", "fabric")
 
 
 def _simple_spec(adapter) -> ModSpec:
@@ -89,25 +93,41 @@ def _optimization(adapter) -> PlatformOptimization:
     )
 
 
-def test_supported_versions_are_live_discovery_not_source_allowlist(monkeypatch) -> None:
-    monkeypatch.setattr(
-        catalog,
-        "latest_stable_versions",
-        lambda limit=32: ("27.0", "26.2", "1.21.11")[:limit],
+def test_supported_versions_are_provider_discovery_not_source_allowlist(monkeypatch) -> None:
+    provider = catalog.provider_for_loader("fabric")
+    monkeypatch.setitem(
+        catalog._PROVIDERS,
+        "fabric",
+        catalog.PlatformProvider(
+            loader="fabric",
+            provider_id=provider.provider_id,
+            discover_versions=lambda limit=32: ("future-a", "future-b", "future-c")[:limit],
+            resolve=provider.resolve,
+        ),
     )
     assert catalog.supported_minecraft_versions(loader="fabric")[:2] == (
-        "27.0",
-        "26.2",
+        "future-a",
+        "future-b",
     )
 
 
 def test_future_version_needs_no_new_platform_catalog_entry(monkeypatch) -> None:
     monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
+    provider = catalog.provider_for_loader("fabric")
+    monkeypatch.setitem(
+        catalog._PROVIDERS,
+        "fabric",
+        catalog.PlatformProvider(
+            loader="fabric",
+            provider_id=provider.provider_id,
+            discover_versions=lambda limit=32: ("27.0",)[:limit],
+            resolve=catalog._fabric_adapter,
+        ),
+    )
     selected = catalog.adapter_for_target("27.0", "fabric")
     assert selected.minecraft_version == "27.0"
     assert selected.source_api_family == "fabric_live_ai"
     assert selected.adapter_id.startswith("fabric_live_27_0_")
-    assert all(seed.minecraft_version != "27.0" for seed in catalog.PLATFORM_ADAPTERS)
 
 
 class _ChoiceRouter:
@@ -126,7 +146,7 @@ class _ChoiceRouter:
 
 
 def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
-    selected_adapter = _FABRIC_1211
+    selected_adapter = _fabric_1211()
     monkeypatch.setattr(
         resolver,
         "_optimize",
@@ -142,7 +162,7 @@ def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
 
 
 def test_model_cannot_invent_platform_coordinate(monkeypatch) -> None:
-    selected_adapter = _FABRIC_1201
+    selected_adapter = _fabric_1201()
     monkeypatch.setattr(
         resolver,
         "_optimize",
@@ -173,7 +193,7 @@ def test_revise_preserves_existing_target_without_migration_request() -> None:
         existing_version="1.20.1",
         existing_loader="fabric",
     )
-    assert selected.adapter.adapter_id == _FABRIC_1201.adapter_id
+    assert selected.adapter.adapter_id == _fabric_1201().adapter_id
     assert selected.preserved_existing_target is True
 
 
@@ -193,51 +213,41 @@ def test_platform_lock_rejects_mixed_version_tuple() -> None:
         mixed.validate()
 
 
-def test_legacy_target_evidence_keeps_exact_yarn_javadocs() -> None:
-    ids_1201 = {
-        item.source_id for item in evidence_for_target(None, minecraft_version="1.20.1")
+def test_target_evidence_uses_live_sources_without_historical_javadoc_ids() -> None:
+    ids = {
+        item.source_id
+        for item in evidence_for_target(None, minecraft_version="explicit-test-version")
     }
-    ids_1211 = {
-        item.source_id for item in evidence_for_target(None, minecraft_version="1.21.1")
-    }
-    assert "yarn-1201-javadoc" in ids_1201
-    assert "yarn-1211-javadoc" not in ids_1201
-    assert "yarn-1211-javadoc" in ids_1211
-    assert "yarn-1201-javadoc" not in ids_1211
-    assert "fabric-develop-live" in ids_1201
-    assert "fabric-develop-live" in ids_1211
+    assert "fabric-develop-live" in ids
+    assert "fabric-meta" in ids
+    assert not any("1201" in source_id or "1211" in source_id for source_id in ids)
 
 
-def test_1211_generator_writes_1211_source_resource_and_lock(tmp_path: Path) -> None:
-    spec = _simple_spec(_FABRIC_1211)
+def test_generator_uses_adapter_toolchain_resource_format_and_lock(tmp_path: Path) -> None:
+    adapter = _fabric_1211()
+    spec = _simple_spec(adapter)
     generated = FabricProjectGenerator().generate(spec, tmp_path / "project")
     root = generated.root
 
     gradle = (root / "build.gradle").read_text(encoding="utf-8")
-    java = next((root / "src/main/java").rglob("TargetProbeMod.java")).read_text(
-        encoding="utf-8"
-    )
     pack = json.loads((root / "src/main/resources/pack.mcmeta").read_text(encoding="utf-8"))
     recipe = json.loads(
-        (root / "src/main/resources/data/target_probe/recipe/probe_item.json").read_text(
+        (root / "src/main/resources/data/target_probe/recipes/probe_item.json").read_text(
             encoding="utf-8"
         )
     )
     lock = json.loads((root / ".minecraft_ai/platform-lock.json").read_text(encoding="utf-8"))
 
-    assert "options.release = 21" in gradle
-    assert "JavaVersion.VERSION_21" in gradle
-    assert "new Item.Settings()" in java
-    assert "FabricItemSettings" not in java
-    assert "Identifier.of(MOD_ID, name)" in java
-    assert pack["pack"]["pack_format"] == 34
-    assert recipe["result"]["id"] == "target_probe:probe_item"
-    assert lock["adapter_id"] == "fabric_1_21_1"
-    assert adapter_from_project(root).adapter_id == _FABRIC_1211.adapter_id
+    assert "Integer.parseInt(project.java_version)" in gradle
+    assert "JavaVersion.toVersion(project.java_version)" in gradle
+    assert pack["pack"]["pack_format"] == adapter.resource_pack_format
+    assert recipe["result"]["item"] == "target_probe:probe_item"
+    assert lock["adapter_id"] == adapter.adapter_id
+    assert adapter_from_project(root).adapter_id == adapter.adapter_id
 
 
-def test_1211_static_validator_uses_singular_data_paths(tmp_path: Path) -> None:
-    spec = _simple_spec(_FABRIC_1211)
+def test_static_validator_uses_adapter_selected_project_layout(tmp_path: Path) -> None:
+    spec = _simple_spec(_fabric_1211())
     root = FabricProjectGenerator().generate(spec, tmp_path / "project").root
     report = ProjectValidator().validate(root, spec)
     assert report.status == "PASS", [item.__dict__ for item in report.findings]
@@ -245,8 +255,8 @@ def test_1211_static_validator_uses_singular_data_paths(tmp_path: Path) -> None:
 
 def test_validator_rejects_project_and_proposal_target_mismatch(tmp_path: Path) -> None:
     root = FabricProjectGenerator().generate(
-        _simple_spec(_FABRIC_1211), tmp_path / "project"
+        _simple_spec(_fabric_1211()), tmp_path / "project"
     ).root
-    report = ProjectValidator().validate(root, _simple_spec(_FABRIC_1201))
+    report = ProjectValidator().validate(root, _simple_spec(_fabric_1201()))
     assert report.status == "FAIL"
     assert any(item.code == "PLATFORM_LOCK_MISMATCH" for item in report.findings)

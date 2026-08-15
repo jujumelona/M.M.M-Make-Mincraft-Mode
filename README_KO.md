@@ -4,7 +4,7 @@
 
 [![Google Colab에서 열기](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft-Mode/blob/main/M.M.M_Make_Mincraft_Mode_Colab.ipynb)
 
-M.M.M은 자연어 요구를 Minecraft Java 1.20.1 Fabric 모드 기획으로 만들고, 사용자가 대화로 수정·확정한 뒤 새 모드 프로젝트를 만들거나 기존 소스 프로젝트를 수정합니다. **독립 맵, 월드 세이브, 월드 ZIP, schematic, Litematica 파일, 외부 Builder용 블록 변경 작업은 만들지 않습니다.**
+M.M.M은 자연어 요구를 Minecraft Java on the host-selected executable target 모드 기획으로 만들고, 사용자가 대화로 수정·확정한 뒤 새 모드 프로젝트를 만들거나 기존 소스 프로젝트를 수정합니다. **독립 맵, 월드 세이브, 월드 ZIP, schematic, Litematica 파일, 외부 Builder용 블록 변경 작업은 만들지 않습니다.**
 
 월드 생성은 별도 맵 제품이 아니라 일반적인 모드 기능입니다. 구조물·바이옴·차원·광석·configured feature·placed feature는 요청한 모드에 실제로 필요할 때만 만들고, 결과는 Fabric 소스 프로젝트의 코드와 데이터 리소스 안에 남습니다.
 

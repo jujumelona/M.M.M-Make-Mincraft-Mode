@@ -388,7 +388,7 @@ def test_official_target_receipt_cannot_be_missing_or_tampered() -> None:
     tampered = _complete_candidate(requirement)
     tampered["official_target_evidence"]["sources"][0]["facts"][
         "java_version"
-    ] = "21"
+    ] = "tampered-java"
     tampered_assessment = _assess_technology_candidate_with_receipt_key(
         requirement, tampered, receipt_key=_RECEIPT_KEY
     )

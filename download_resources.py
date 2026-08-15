@@ -20,12 +20,9 @@ def resource_manifest() -> dict[str, object]:
             "sha256": GRADLE_SHA256,
         },
         "minecraft_target": {
-            "minecraft": "1.20.1",
-            "java": 17,
-            "loader": "0.16.10",
-            "fabric_api": "0.92.11+1.20.1",
-            "yarn": "1.20.1+build.1",
-            "loom": "1.5.4",
+            "selection": "host-selected PlatformLock",
+            "historical_default": None,
+            "discovery": "platform provider receipt",
         },
     }
 

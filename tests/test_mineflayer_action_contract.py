@@ -14,7 +14,7 @@ def _bridge_path() -> Path:
     return (
         Path(__file__).resolve().parents[1]
         / "integrations"
-        / "mineflayer-1201"
+        / "mineflayer"
         / "bridge.mjs"
     )
 

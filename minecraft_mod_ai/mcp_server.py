@@ -271,7 +271,7 @@ def discover_ecosystem_resources(
 
 @_stage_tool()
 def inspect_modrinth_project(project_id: str) -> dict[str, Any]:
-    """Inspect exact 1.20.1 Fabric versions, hashes and dependencies read-only."""
+    """Inspect exact host-selected Minecraft/Fabric versions, hashes and dependencies read-only."""
     return _core().inspect_modrinth_project(project_id)
 
 
@@ -450,7 +450,7 @@ def approve_plan(proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]
 @_stage_tool()
 def search_project_rag(
     query: str,
-    minecraft_version: str = "1.20.1",
+    minecraft_version: str,
     limit: int = 6,
 ) -> dict[str, Any]:
     """Search the code-owned, version-pinned primary evidence catalog."""
@@ -505,7 +505,7 @@ def generate_fabric_project(
     approval_hash: str,
     run_name: str = "mcp-run",
 ) -> dict[str, Any]:
-    """Generate the core Fabric 1.20.1 project after immutable approval."""
+    """Generate the approved target project after immutable approval."""
     return _core().generate_fabric_project(proposal, approval_hash, run_name)
 
 
@@ -651,7 +651,7 @@ def runtime_prepare_instance(
     proposal: dict[str, Any],
     approval_hash: str,
 ) -> dict[str, Any]:
-    """Prepare a disposable local Minecraft 1.20.1 integration instance."""
+    """Prepare a disposable local instance for the approved Minecraft target."""
     return _production().runtime_prepare_instance(
         instance_name=instance_name,
         mod_jar=mod_jar,
@@ -710,7 +710,7 @@ def mineflayer_connect(
     port: int = 25565,
     username: str = "MMMTestBot",
 ) -> dict[str, Any]:
-    """Connect the first-party Mineflayer bridge to localhost Minecraft 1.20.1."""
+    """Connect the first-party Mineflayer bridge to the explicit localhost Minecraft target."""
     return _production().mineflayer_connect(host, port, username)
 
 
@@ -804,7 +804,7 @@ def package_release(
 @mcp.prompt()
 def design_conversation(
     request: str,
-    minecraft_version: str = "1.20.1",
+    minecraft_version: str,
 ) -> str:
     """Guide a natural-language design conversation before any build begins."""
     return (
@@ -821,8 +821,8 @@ def design_conversation(
 @mcp.prompt()
 def evidence_before_implementation(
     feature: str,
-    minecraft_version: str = "1.20.1",
-    mappings: str = "yarn-1.20.1+build.1",
+    minecraft_version: str,
+    mappings: str,
 ) -> str:
     """Require exact-version evidence and executable gates for a feature."""
     return (

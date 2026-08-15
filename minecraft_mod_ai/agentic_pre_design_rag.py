@@ -1817,7 +1817,7 @@ def _research_versions(router: Any) -> tuple[str, ...]:
         return (requested,)
     if existing:
         return (existing,)
-    return ("1.20.1", "1.21.1")
+    return ()
 
 
 def _search_authoritative_catalog(

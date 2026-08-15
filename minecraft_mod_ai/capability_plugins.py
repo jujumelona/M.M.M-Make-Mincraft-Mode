@@ -51,7 +51,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
         "implemented",
         "minecraft_mod_ai.scalable_generator",
         (
-            "Fabric 1.20.1 Java project",
+            "approved-target Minecraft Java project",
             "version-locked Gradle contract",
             "common/client initializer split",
             "sharded registrars",
@@ -290,7 +290,7 @@ PLUGIN_STATUSES: tuple[PluginStatus, ...] = (
     PluginStatus(
         "mineflayer-playtest",
         "implemented",
-        "first-party Mineflayer 1.20.1 JSONL bridge",
+        "first-party target-aware Mineflayer JSONL bridge",
         ("movement", "crafting", "container interaction", "chat", "inventory", "condition assertions"),
         ("mmm-runtime",),
         ("localhost runtime", "interaction plus wait_for assertion"),

@@ -437,25 +437,14 @@ async def _provider_schema(
 
 
 def _target(payload: Mapping[str, Any]) -> dict[str, str]:
-    return {
-        "minecraft_version": str(
-            payload.get(
-                "minecraft_version",
-                os.environ.get("MMM_MINECRAFT_VERSION", "1.20.1"),
-            )
-        ).strip()
-        or "1.20.1",
-        "loader": str(
-            payload.get("loader", os.environ.get("MMM_LOADER", "fabric"))
-        ).strip()
-        or "fabric",
-        "mappings": str(
-            payload.get(
-                "mappings",
-                os.environ.get("MMM_MAPPINGS", "yarn-1.20.1+build.1"),
-            )
-        ).strip(),
+    values = {
+        "minecraft_version": str(payload.get("minecraft_version", os.environ.get("MMM_MINECRAFT_VERSION", ""))).strip(),
+        "loader": str(payload.get("loader", os.environ.get("MMM_LOADER", ""))).strip(),
+        "mappings": str(payload.get("mappings", os.environ.get("MMM_MAPPINGS", ""))).strip(),
     }
+    # Pre-target discovery is allowed, but empty coordinates stay empty. Exact
+    # target-scoped federation is rebound after the host selects PlatformLock.
+    return values
 
 
 def _jsonable(value: Any) -> Any:

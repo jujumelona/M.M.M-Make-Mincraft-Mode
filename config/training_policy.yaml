@@ -1,10 +1,6 @@
 schema_version: mmm/training-policy-v1
 target:
-  minecraft_version: "1.20.1"
-  loader: fabric
-  java_version: 17
-  mappings: "1.20.1+build.1"
-  fabric_api: "0.92.11+1.20.1"
+  mode: trace_exact
 allowed_source_licenses:
   - Apache-2.0
   - MIT

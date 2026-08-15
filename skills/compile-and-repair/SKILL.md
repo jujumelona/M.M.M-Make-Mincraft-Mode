@@ -6,7 +6,7 @@ schema_version: mmm/skill-v2
 
 activate_when:
   - Generated or modified Fabric source requires compilation or repair.
-  - Minecraft Java 1.20.1, Fabric, Java 17 and Yarn 1.20.1+build.1 are pinned.
+  - The exact host-selected PlatformLock (Minecraft version, loader, mappings, Java, and dependency coordinates) is pinned.
 
 inputs:
   - approved proposal
@@ -14,8 +14,8 @@ inputs:
   - current source hashes and diagnostics
 
 required_rag:
-  - Fabric 1.20.1 official metadata
-  - Yarn 1.20.1+build.1 symbols
+  - official metadata for the exact approved loader/version
+  - exact PlatformLock mapping symbols
   - exact optional dependency evidence
   - project-local source and prior receipts
 

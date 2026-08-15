@@ -4,7 +4,7 @@
 
 [![Open in Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft-Mode/blob/main/M.M.M_Make_Mincraft_Mode_Colab.ipynb)
 
-M.M.M turns a natural-language request into a Minecraft Java 1.20.1 Fabric mod plan, lets the user revise and approve that plan, then creates or patches the mod project. It does **not** produce standalone maps, world saves, world ZIPs, schematics, Litematica files, or external Builder block-delta jobs.
+M.M.M turns a natural-language request into a Minecraft Java on the host-selected executable target mod plan, lets the user revise and approve that plan, then creates or patches the mod project. It does **not** produce standalone maps, world saves, world ZIPs, schematics, Litematica files, or external Builder block-delta jobs.
 
 World generation is an ordinary mod capability. Structures, biomes, dimensions, ores, configured features, and placed features are generated only when the requested mod needs them, and remain inside the Fabric source project and data resources.
 

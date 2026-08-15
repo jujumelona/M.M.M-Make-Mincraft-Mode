@@ -7,6 +7,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .platform_catalog import adapter_for_lock_values
 from .spec import BossSpec, ContentKind, ContentSpec, ModSpec
 from .toolchain_contract import fabric_dependency_predicates
 
@@ -35,10 +36,11 @@ def _json_text(value: object) -> str:
 
 
 class FabricProjectGenerator:
-    """Compile a validated ModSpec into a pinned Fabric 1.20.1 project."""
+    """Compile a validated ModSpec into its approved Fabric platform target."""
 
     def generate(self, spec: ModSpec, root: Path) -> GeneratedProject:
         spec.validate()
+        adapter = adapter_for_lock_values(spec.platform)
         root = root.resolve()
         if root.exists() and any(root.iterdir()):
             raise GenerationError(f"Refusing to generate into non-empty directory: {root}")
@@ -86,7 +88,7 @@ class FabricProjectGenerator:
             _json_text(
                 {
                     "pack": {
-                        "pack_format": 15,
+                        "pack_format": adapter.resource_pack_format,
                         "description": f"{spec.mod_name} resources",
                     }
                 }
@@ -232,7 +234,7 @@ loom {{
 
 dependencies {{
     minecraft "com.mojang:minecraft:${{project.minecraft_version}}"
-    mappings "net.fabricmc:yarn:${{project.yarn_mappings}}:v2"
+    {self._mappings_dependency(spec)}
     modImplementation "net.fabricmc:fabric-loader:${{project.loader_version}}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${{project.fabric_version}}"
 
@@ -248,7 +250,7 @@ processResources {{
 }}
 
 tasks.withType(JavaCompile).configureEach {{
-    options.release = 17
+    options.release = Integer.parseInt(project.java_version)
     options.encoding = 'UTF-8'
 }}
 
@@ -258,8 +260,8 @@ test {{
 
 java {{
     withSourcesJar()
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.toVersion(project.java_version)
+    targetCompatibility = JavaVersion.toVersion(project.java_version)
 }}
 
 tasks.register('verifyGeneratedResources') {{
@@ -291,6 +293,12 @@ jar {{
 }}
 """
 
+    def _mappings_dependency(self, spec: ModSpec) -> str:
+        mappings = str(spec.platform.yarn_mappings).strip()
+        if mappings.casefold() in {"mojang", "official", "official_mojang"}:
+            return "mappings loom.officialMojangMappings()"
+        return 'mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"'
+
     def _gradle_properties(self, spec: ModSpec) -> str:
         platform = spec.platform
         return f"""org.gradle.jvmargs=-Xmx2G -Dfile.encoding=UTF-8
@@ -302,6 +310,7 @@ yarn_mappings={platform.yarn_mappings}
 loader_version={platform.fabric_loader}
 loom_version={platform.fabric_loom}
 fabric_version={platform.fabric_api}
+java_version={platform.java_version}
 
 mod_version={spec.version}
 maven_group={spec.package_name}

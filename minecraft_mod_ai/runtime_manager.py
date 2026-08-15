@@ -35,13 +35,13 @@ class RuntimeProfile:
 
 
 class MinecraftRuntimeManager:
-    """Bounded process manager for disposable Minecraft 1.20.1 instances."""
+    """Bounded process manager for one explicitly selected disposable Minecraft target."""
 
     def __init__(
         self,
         workspace_root: str | Path,
         *,
-        profile_name: str = "fabric_1201_disposable",
+        profile_name: str = "fabric_target_disposable",
         config_path: str | Path | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -75,8 +75,10 @@ class MinecraftRuntimeManager:
                 entry["eula_must_be_explicitly_accepted"]
             ),
         )
-        if self.profile.minecraft_version != "1.20.1" or not self.profile.disposable_only:
-            raise RuntimePolicyError("Only disposable Minecraft 1.20.1 runtime is supported.")
+        if not self.profile.minecraft_version.strip():
+            raise RuntimePolicyError("Runtime profile must declare an explicit Minecraft target.")
+        if not self.profile.disposable_only:
+            raise RuntimePolicyError("MMM runtime profiles must be disposable-only.")
         self.server_process: subprocess.Popen[str] | None = None
         self.client_process: subprocess.Popen[str] | None = None
         self.instance_root: Path | None = None
