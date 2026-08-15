@@ -13,14 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .platform_catalog import FABRIC_1201, adapter_from_project
-
-
-# Legacy import aliases. Build execution resolves the project's adapter and does not
-# use these globals as its target source of truth.
-GRADLE_VERSION = FABRIC_1201.gradle
-GRADLE_URL = f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip"
-GRADLE_SHA256 = FABRIC_1201.gradle_sha256
+from .platform_catalog import adapter_from_project
 
 
 class BuildRunnerError(RuntimeError):
