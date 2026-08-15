@@ -31,34 +31,12 @@ jobs:
           path = Path('tests/conftest.py')
           text = path.read_text(encoding='utf-8')
           if 'def synthetic_platform_lock()' not in text:
-              old = '''def _platform_lock_from_adapter(adapter):
-              from minecraft_mod_ai.spec import PlatformLock
-
-              return PlatformLock(
-                  edition=adapter.edition,
-                  loader=adapter.loader,
-                  minecraft_version=adapter.minecraft_version,
-                  java_version=adapter.java_version,
-                  yarn_mappings=adapter.yarn_mappings,
-                  fabric_loader=adapter.fabric_loader,
-                  fabric_api=adapter.fabric_api,
-                  fabric_loom=adapter.fabric_loom,
-                  gradle=adapter.gradle,
-              )
-
-
-              '''
-              new = old + '''@pytest.fixture
-              def synthetic_platform_lock():
-                  """Resolved non-release target for version-independent generation tests."""
-
-                  return _platform_lock_from_adapter(_synthetic_test_adapter())
-
-
-              '''
-              if old not in text:
-                  raise SystemExit('conftest insertion point not found')
-              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              marker = '@pytest.fixture(autouse=True)\ndef _isolate_test_runtime_state'
+              insert = '''@pytest.fixture\ndef synthetic_platform_lock():\n    """Resolved non-release target for version-independent generation tests."""\n\n    return _platform_lock_from_adapter(_synthetic_test_adapter())\n\n\n'''
+              if marker not in text:
+                  raise SystemExit('conftest isolate-fixture marker not found')
+              text = text.replace(marker, insert + marker, 1)
+              path.write_text(text, encoding='utf-8')
 
           path = Path('tests/test_hardened_release_gates.py')
           text = path.read_text(encoding='utf-8')
