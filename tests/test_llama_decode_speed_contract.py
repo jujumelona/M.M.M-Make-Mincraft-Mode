@@ -208,9 +208,12 @@ def test_structured_local_payload_keeps_json_validation_host_side_without_tools(
         ),
         tool_choice="auto",
     )
-    tool_payload = hardware_policy._server_payload(adapter, tool_request)
-    assert "response_format" not in tool_payload
-    assert tool_payload["tools"][0]["function"]["name"] == "lookup"
+    try:
+        hardware_policy._server_payload(adapter, tool_request)
+    except RuntimeError as exc:
+        assert "Native llama-server tool transport is disabled" in str(exc)
+    else:
+        raise AssertionError("native llama tool metadata must fail closed")
 
 
 def test_default_policy_searches_for_decode_speed_without_overfitting_exact_grid(monkeypatch) -> None:
