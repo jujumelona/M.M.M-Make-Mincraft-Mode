@@ -112,6 +112,11 @@ def _install_runtime_manager(module: Any) -> None:
 
     @wraps(original_prepare)
     def prepare_instance(self: Any, *args: Any, **kwargs: Any):
+        if (
+            self.profile.eula_must_be_explicitly_accepted
+            and not kwargs.get("eula_accepted", False)
+        ):
+            raise module.RuntimePolicyError("Minecraft EULA acceptance must be explicit.")
         _validate_java_command(
             self.profile.server_java_command,
             expected_major=int(self._mmm_platform_adapter.java_version),
