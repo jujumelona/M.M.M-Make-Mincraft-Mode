@@ -136,5 +136,6 @@ def test_generate_turn_keeps_detailed_schema_host_side_for_non_tool_json(monkeyp
 
     assert turn.content == '{"value":"ok"}'
     assert request.response_schema == schema
-    assert captured["payload"]["response_format"] == {"type": "json_object"}
-    assert "schema" not in captured["payload"]["response_format"]
+    assert "response_format" not in captured["payload"]
+    assert "json_schema" not in captured["payload"]
+    assert "grammar" not in captured["payload"]
