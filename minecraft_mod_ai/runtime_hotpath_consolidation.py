@@ -3,7 +3,7 @@ from __future__ import annotations
 """Consolidate the remaining read-only hot-path work without duplicating owners.
 
 The existing bottleneck contract owns MCP transport/session reuse and the central
-research module owns evidence semantics.  This module only supplies two missing
+research module owns evidence semantics. This module only supplies two missing
 admission policies around those owners: identical central-research retrievals are
 memoized for one evidence build, and independent read-only external MCP requests
 are deterministically spread across a bounded set of already-persistent workers.
@@ -136,10 +136,10 @@ def _install_external_mcp_admission(bottlenecks: Any, external: Any) -> None:
     external.ExternalMCPRouter._call_provider = admitted_call
 
 
-def _install_central_research_dedup(central_research: Any) -> None:
+def _install_central_research_dedup(central_research: Any) -> Any:
     current = central_research.retrieve_domain_evidence
     if getattr(current, "_mmm_per_build_retrieval_dedup", False):
-        return
+        return current
 
     defaults = getattr(current, "__kwdefaults__", None) or {}
     default_retrieve = defaults.get(
@@ -181,19 +181,24 @@ def _install_central_research_dedup(central_research: Any) -> None:
     deduplicated_retrieve_domain_evidence._mmm_per_build_retrieval_dedup = True  # type: ignore[attr-defined]
     deduplicated_retrieve_domain_evidence.__wrapped__ = current  # type: ignore[attr-defined]
     central_research.retrieve_domain_evidence = deduplicated_retrieve_domain_evidence
+    return deduplicated_retrieve_domain_evidence
 
 
 def harden(
     bottlenecks: Any,
     central_research: Any,
     external_mcp_router: Any,
+    agentic_research: Any,
 ) -> None:
     """Harden existing owners once; package bootstrap remains the only composer."""
     with _INSTALL_LOCK:
         if getattr(harden, _MARKER, False):
             return
         _install_external_mcp_admission(bottlenecks, external_mcp_router)
-        _install_central_research_dedup(central_research)
+        shared_research = _install_central_research_dedup(central_research)
+        # agentic_research_game_design imports this function by value before the late
+        # hot-path phase. Rebind that stale reference instead of adding another wrapper.
+        agentic_research.retrieve_domain_evidence = shared_research
         setattr(harden, _MARKER, True)
 
 
