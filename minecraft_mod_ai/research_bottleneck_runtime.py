@@ -15,6 +15,7 @@ def install() -> None:
         external_mcp_router,
         rag_index,
         research_adaptive_rag_routing,
+        research_code_context,
         research_memory_performance,
         runner,
         small_model_max_agent_contract,
@@ -26,6 +27,7 @@ def install() -> None:
     from .research_adaptive_provider_routing import (
         harden as harden_adaptive_providers,
     )
+    from .research_code_context_performance import harden as harden_code_context
     from .research_cpu_retrieval_performance import harden as harden_cpu_retrieval
     from .research_gradle_performance import harden as harden_gradle
     from .research_memory_performance import harden as harden_memory
@@ -60,6 +62,7 @@ def install() -> None:
         agentic_pre_design_rag,
         small_model_max_agent_contract,
     )
+    harden_code_context(research_code_context)
     harden_adaptive_providers(
         agentic_research_game_design,
         research_adaptive_rag_routing,
