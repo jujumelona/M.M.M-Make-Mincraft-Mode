@@ -79,7 +79,7 @@ def test_custom_generation_public_target_defaults_are_disabled() -> None:
 
 
 def test_target_values_fail_closed_without_complete_host_target() -> None:
-    with pytest.raises(ValueError, match="host-selected"):
+    with pytest.raises(ValueError, match="must provide minecraft_version"):
         custom_search._target_values(
             {
                 "minecraft_version": "1.20.1",

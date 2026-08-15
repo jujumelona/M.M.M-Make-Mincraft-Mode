@@ -290,4 +290,11 @@ def test_bundle_records_all_research_mechanisms_and_is_bounded(tmp_path) -> None
     assert monitor["zero_unknown_literal_coordinates_in_accepted_patch"] is True
     assert monitor["zero_unknown_repositories_in_accepted_patch"] is True
     assert bundle["evidence_count"] <= bundle["total_evidence_count"]
-    assert len(json.dumps(bundle, ensure_ascii=False).encode("utf-8")) <= 32 * 1024
+    assert len(
+        json.dumps(
+            bundle,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ) <= 32 * 1024

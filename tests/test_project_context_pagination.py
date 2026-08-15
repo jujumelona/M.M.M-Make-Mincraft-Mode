@@ -5,6 +5,7 @@ from pathlib import Path
 
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.platform_catalog import FABRIC_1201
 from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai.scale_policy import ScalePolicy
 
@@ -184,7 +185,13 @@ def test_custom_generator_consumes_relevant_source_beyond_first_context_page(
     result = CustomModuleGenerator(
         router,
         policy=ScalePolicy(model_context_bytes=budget),
-    ).generate(root, module=module)
+    ).generate(
+        root,
+        module=module,
+        minecraft_version=FABRIC_1201.minecraft_version,
+        loader=FABRIC_1201.loader,
+        mappings=FABRIC_1201.yarn_mappings,
+    )
 
     generated = source / "GeneratedHook.java"
     assert result["status"] == "SOURCE_GENERATED"

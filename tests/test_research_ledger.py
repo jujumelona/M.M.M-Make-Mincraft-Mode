@@ -25,6 +25,7 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
+from minecraft_mod_ai.platform_catalog import FABRIC_1201
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.research_ledger import (
     ResearchLedgerError,
@@ -473,6 +474,9 @@ def test_custom_module_generation_receives_bounded_relevant_research(
         root,
         module=module,
         research_modules=research,
+        minecraft_version=FABRIC_1201.minecraft_version,
+        loader=FABRIC_1201.loader,
+        mappings=FABRIC_1201.yarn_mappings,
     )
 
     assert result["status"] == "SOURCE_GENERATED"
@@ -552,7 +556,7 @@ def test_orchestrator_writes_shards_without_invoking_a_model(
                     "depends_on": [],
                 }
             ],
-        },
+        }
     }
     modules = _ensure_research_shards(
         (ProductionModule("ledger_anchor", "item", {}),),
