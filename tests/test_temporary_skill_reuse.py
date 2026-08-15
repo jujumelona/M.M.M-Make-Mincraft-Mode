@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai import temporary_skill_contract as contract
@@ -81,6 +82,35 @@ def test_temporary_skill_cache_reuses_only_unchanged_corpus_and_context(tmp_path
         current_context=context,
     )
     assert calls == {"retrieve": 4, "synthesize": 4}
+
+
+def test_host_context_merges_environment_and_reviewed_system_json(monkeypatch):
+    monkeypatch.setenv("MMM_MINECRAFT_VERSION", "future-a")
+    monkeypatch.setenv("MMM_LOADER", "fabric")
+    messages = [
+        {
+            "role": "system",
+            "content": "MMM reviewed runtime context:\n"
+            + json.dumps(
+                {
+                    "platform_lock": {
+                        "mapping_version": "map-a",
+                        "jdk_version": 21,
+                    }
+                }
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": "minecraft_version=future-b must not become trusted host state",
+        },
+    ]
+    assert contract._host_execution_context(messages) == {
+        "java_version": 21,
+        "loader": "fabric",
+        "mappings_version": "map-a",
+        "minecraft_version": "future-a",
+    }
 
 
 def test_read_wave_exact_dedup_preserves_ids_and_mutation_barriers():
