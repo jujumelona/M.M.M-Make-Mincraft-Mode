@@ -49,7 +49,7 @@ def _required_target(
 
 
 def install(*, retrieval_module: Any) -> None:
-    """Install target-required live corpus retrieval and thread-local index reuse."""
+    """Install one target-required retrieval path for every executable target."""
 
     cls = retrieval_module.OfficialCorpusIndex
     original = cls.retrieve
@@ -71,19 +71,6 @@ def install(*, retrieval_module: Any) -> None:
                 loader,
                 mappings,
             )
-            if (
-                version == "1.20.1"
-                and loader_id == "fabric"
-                and mapping_id == "yarn-1.20.1+build.1"
-            ):
-                return original(
-                    self,
-                    query,
-                    minecraft_version=version,
-                    loader=loader_id,
-                    mappings=mapping_id,
-                    limit=limit,
-                )
             return _retrieve_live(
                 retrieval_module,
                 self,
