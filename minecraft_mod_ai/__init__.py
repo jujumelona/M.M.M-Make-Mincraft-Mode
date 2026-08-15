@@ -4,10 +4,6 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
-from .production_page_progress_contract import install as install_production_page_progress_contract
-
-install_production_page_progress_contract()
-
 from .api import (
     ChatReply,
     CompleteChatReply,
