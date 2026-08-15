@@ -1,18 +1,8 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .reuse_asset_upgrade_contract import install_prebootstrap as _install_reuse_asset_prebootstrap
-
-_install_reuse_asset_prebootstrap()
-del _install_reuse_asset_prebootstrap
-
 from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
-
-from .reuse_asset_upgrade_contract import install_postbootstrap as _install_reuse_asset_postbootstrap
-
-_install_reuse_asset_postbootstrap()
-del _install_reuse_asset_postbootstrap
 
 from .api import (
     ChatReply,
