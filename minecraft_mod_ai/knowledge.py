@@ -255,6 +255,34 @@ def evidence_snapshot_hash(sources: tuple[EvidenceSource, ...]) -> str:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def _ranked_core_plus_topical(
+    query: str,
+    *,
+    catalog: tuple[EvidenceSource, ...],
+    minecraft_version: str | None,
+    core_ids: frozenset[str],
+    max_sources: int,
+) -> tuple[EvidenceSource, ...]:
+    """Keep authority roots while reserving bounded slots for request-specific evidence."""
+
+    selected = {
+        source.source_id: source
+        for source in catalog
+        if source.source_id in core_ids
+    }
+    ranked = AuthoritativeEvidenceRetriever().search(
+        query,
+        minecraft_version=minecraft_version,
+        limit=len(catalog),
+    )
+    target_size = min(max_sources, len(catalog))
+    for source in ranked:
+        selected.setdefault(source.source_id, source)
+        if len(selected) >= target_size:
+            break
+    return tuple(selected[source_id] for source_id in sorted(selected))
+
+
 def evidence_for_target(
     query: str | None = None,
     *,
@@ -264,29 +292,25 @@ def evidence_for_target(
     if query is None:
         return catalog
 
-    mandatory_ids = {
-        "fabric-project-creation",
-        "fabric-building",
-        "fabric-mod-json",
-        "fabric-develop-live",
-        "fabric-meta",
-        "fabric-api-maven",
-    }
-    selected = {
-        source.source_id: source
-        for source in catalog
-        if source.source_id in mandatory_ids
-    }
-    ranked = AuthoritativeEvidenceRetriever().search(
-        query,
-        minecraft_version=minecraft_version,
-        limit=len(catalog),
+    # These records establish project/build/metadata and live dependency authority.
+    # Two remaining slots are deliberately topical, so GameTest/entity requests and
+    # data-generation/item requests do not collapse to one identical evidence snapshot.
+    core_ids = frozenset(
+        {
+            "fabric-project-creation",
+            "fabric-building",
+            "fabric-mod-json",
+            "fabric-meta",
+            "fabric-api-maven",
+        }
     )
-    for source in ranked:
-        selected.setdefault(source.source_id, source)
-        if len(selected) >= min(8, len(catalog)):
-            break
-    result = tuple(selected[source_id] for source_id in sorted(selected))
+    result = _ranked_core_plus_topical(
+        query,
+        catalog=catalog,
+        minecraft_version=minecraft_version,
+        core_ids=core_ids,
+        max_sources=7,
+    )
     validate_trusted_evidence(result, minecraft_version=minecraft_version)
     return result
 
@@ -296,8 +320,10 @@ def evidence_for_mvp(query: str | None = None) -> tuple[EvidenceSource, ...]:
     catalog = target_neutral_evidence_catalog()
     if query is None:
         return catalog
+    # Planning needs a compact topical seed, not the whole official catalog. Exact
+    # coordinate authority is rebound after the host selects the executable target.
     return AuthoritativeEvidenceRetriever().search(
         query,
         minecraft_version=None,
-        limit=min(len(catalog), 8),
+        limit=min(len(catalog), 4),
     )
