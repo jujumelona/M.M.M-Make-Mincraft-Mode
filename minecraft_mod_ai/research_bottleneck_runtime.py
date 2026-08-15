@@ -15,6 +15,7 @@ def install() -> None:
         external_mcp_router,
         rag_index,
         research_adaptive_rag_routing,
+        research_memory_performance,
         runner,
         small_model_max_agent_contract,
         trajectory_memory,
@@ -34,7 +35,10 @@ def install() -> None:
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
-    from .runtime_hotpath_consolidation import harden as harden_hotpath
+    from .runtime_hotpath_consolidation import (
+        harden as harden_hotpath,
+        harden_memory_lock_scope,
+    )
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_concurrency_budget import harden as harden_model_concurrency
     from .work_graph_hash_performance import harden as harden_work_graph_hashes
@@ -69,9 +73,15 @@ def install() -> None:
         central_intelligence_amplifier,
     )
     indexed_append, indexed_relevant = harden_memory(trajectory_memory)
+    indexed_append, indexed_relevant = harden_memory_lock_scope(
+        trajectory_memory,
+        research_memory_performance,
+        indexed_append,
+        indexed_relevant,
+    )
 
     # temporary_skill_contract imported these functions by value before this late
-    # bootstrap entry. Rebind only its module globals; do not add another wrapper.
+    # bootstrap entry. Rebind only its module globals; do not add another work owner.
     try:
         from . import temporary_skill_contract as temporary
         temporary.append_trajectory = indexed_append
