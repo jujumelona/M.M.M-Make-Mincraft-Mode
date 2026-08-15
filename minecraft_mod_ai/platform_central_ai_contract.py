@@ -102,6 +102,7 @@ def _install_central_target_choice(module: Any) -> None:
             target_research_fn=target_research,
         )
         proposal = retarget_proposal(proposal, selection)
+        proposal.validate()
         selection_dict = selection.to_dict()
         if selection.migration_requested and existing_version:
             selection_dict["migration_from"] = {
