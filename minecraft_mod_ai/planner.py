@@ -102,11 +102,7 @@ def _count(
 
 
 class HeuristicPlanner:
-    """Offline planner that maps common requests into a strict, safe MVP ModSpec.
-
-    It supports bounded item/block/boss archetypes. Capabilities outside that
-    reviewed slice remain explicit deferrals.
-    """
+    """Offline semantic planner; platform selection is deliberately deferred."""
 
     def plan(self, prompt: str) -> Proposal:
         prompt = prompt.strip()
@@ -336,8 +332,8 @@ class HeuristicPlanner:
             requested_prompt=prompt,
             spec=spec,
             assumptions=(
-                "Minecraft Java Edition 1.20.1, Fabric, Java 17만 지원합니다.",
-                "텍스처는 라이선스 문제가 없는 결정론적 16x16 PNG를 생성합니다.",
+                "플랫폼 target은 사용자 제약, 기존 프로젝트 target, 실행 가능한 provider 근거를 바탕으로 중앙 optimizer가 선택합니다.",
+                "텍스처는 라이선스 문제가 없는 결정론적 PNG를 생성합니다.",
                 "사용자의 실제 Minecraft 월드에는 쓰지 않습니다.",
             ),
             exclusions=(
@@ -349,10 +345,10 @@ class HeuristicPlanner:
             acceptance_tests=(
                 "승인 해시가 일치해야만 프로젝트 파일을 생성한다.",
                 "모든 JSON/PNG/리소스 참조와 ID가 결정론적 검증을 통과한다.",
-                "Gradle clean build가 exit code 0으로 끝난 경우에만 JAR를 제공한다.",
-                "JAR가 ZIP 형식이며 fabric.mod.json, 클래스, 생성 리소스를 포함한다.",
+                "provider가 선택한 toolchain build가 exit code 0으로 끝난 경우에만 JAR를 제공한다.",
+                "JAR가 ZIP 형식이며 선택된 loader metadata, 클래스, 생성 리소스를 포함한다.",
                 "영어와 한국어 번역 키가 모든 생성 콘텐츠를 포함한다.",
-                "보스 요청 시 서버 권위 엔티티·보스바·loot·spawn egg와 GameTest를 포함한다.",
+                "보스 요청 시 서버 권위 엔티티·보스바·loot·spawn egg와 실행 검증을 포함한다.",
                 "지원되는 보스 3D 요청 시 bbmodel·texture·runtime renderer를 포함한다.",
             ),
             evidence_sources=evidence_sources,
@@ -360,10 +356,11 @@ class HeuristicPlanner:
             capability_manifest_hash=capability_manifest_hash(),
             imported_source_snapshot_hash="",
             risk_approvals=(
-                "Gradle 빌드는 승인 후 공식 Gradle/Fabric/Mojang 저장소에 네트워크로 접근합니다.",
+                "빌드는 승인 후 선택된 provider가 검증한 공식 플랫폼·게임 저장소에 네트워크로 접근할 수 있습니다.",
             ),
         ).with_hash()
-        proposal.validate()
+        # Platform selection deliberately happens after semantic planning. Exact
+        # proposal validation therefore belongs to the resolver/approval boundary.
         return proposal
 
 
@@ -407,11 +404,7 @@ class LocalTransformersPlanner:
 
 
 class OpenAICompatiblePlanner:
-    """Planner for an explicitly configured HTTPS chat-completions API.
-
-    The runtime API key is never copied into proposals, generated projects,
-    notebook cells, or release bundles.
-    """
+    """Planner for an explicitly configured HTTPS chat-completions API."""
 
     def __init__(
         self,
@@ -495,9 +488,12 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 def _planner_system_prompt() -> str:
     return """
-You are a Minecraft Fabric 1.20.1 requirements planner. Output exactly one JSON
-object and no markdown. You may plan only simple items and blocks. Never emit Java,
-paths, shell commands, entities, GUI, worldgen, networking, or publication actions.
+You are a Minecraft Java mod requirements planner. Output exactly one JSON object
+and no markdown. Do not choose or assume a Minecraft version, loader, mappings,
+Java version, dependency coordinate, or build-tool version. Platform selection is
+owned by the host optimizer after semantic planning. You may plan only simple items
+and blocks. Never emit Java, paths, shell commands, entities, GUI, worldgen,
+networking, or publication actions.
 
 JSON contract:
 {
@@ -520,7 +516,7 @@ JSON contract:
 Create 0-8 content entries. Include only items or blocks the user explicitly
 requested. For vague or unsupported requests, return an empty contents list and
 preserve the request in deferred_capabilities. Never invent a boss, item, block,
-map type, or gameplay system.
+map type, gameplay system, platform, or version.
 """.strip()
 
 
@@ -571,9 +567,6 @@ def _proposal_from_model_data(prompt: str, data: dict[str, Any]) -> Proposal:
         boss=heuristic_spec.boss,
         platform=PlatformLock(),
     )
-    # A remote/local model may explain a capability already found by the
-    # deterministic request parser, but it may not invent a new requested
-    # capability. The deterministic records carry the reviewed reason/phase.
     deferred = base.deferred_requests
     proposal = replace(base, spec=spec, deferred_requests=deferred, approval_hash="")
     return proposal.with_hash()
