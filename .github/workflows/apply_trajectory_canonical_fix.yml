@@ -1,4 +1,4 @@
-name: Apply canonical trajectory retrieval fix
+name: Diagnose trajectory retrieval wrapper owner
 
 on:
   push:
@@ -8,28 +8,31 @@ permissions:
   contents: write
 
 jobs:
-  apply:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Apply product patch
-        run: python scripts/apply_trajectory_canonical_call_fix.py
-      - name: Verify focused runtime contracts
+      - name: Locate every trajectory retrieval binding
         run: |
-          python -m pip install --prefer-binary -e '.[dev]'
-          python -m pytest -q tests/test_runtime_json_gap_regression.py tests/test_temporary_skill_reuse.py tests/test_llama_parallel_runtime_contract.py
-          python -m compileall -q minecraft_mod_ai tests/test_runtime_json_gap_regression.py
-          git diff --check
-      - name: Commit product fix and remove bootstrap files
+          grep -RIn "relevant_trajectories" minecraft_mod_ai tests || true
+      - name: Inspect composed runtime callable
         run: |
-          git config user.name jujumelona
-          git config user.email qasdaa025@gmail.com
-          git rm .github/workflows/apply_trajectory_canonical_fix.yml scripts/apply_trajectory_canonical_call_fix.py
-          git add minecraft_mod_ai/temporary_skill_contract.py tests/test_runtime_json_gap_regression.py
-          git commit -m "Preserve execution context in trajectory retrieval"
-          git push origin HEAD:main
+          python -m pip install --prefer-binary -e '.[dev]' >/dev/null
+          python - <<'PY'
+          import inspect
+          from minecraft_mod_ai import temporary_skill_contract as contract
+          from minecraft_mod_ai import trajectory_memory as tm
+          for label, fn in (
+              ("trajectory_memory.relevant_trajectories", tm.relevant_trajectories),
+              ("temporary_skill_contract.relevant_trajectories", getattr(contract, "relevant_trajectories", None)),
+          ):
+              print(label, "=", fn)
+              if fn is not None:
+                  print(" module=", getattr(fn, "__module__", None))
+                  print(" qualname=", getattr(fn, "__qualname__", None))
+                  print(" signature=", inspect.signature(fn))
+                  print(" wrapped=", getattr(fn, "__wrapped__", None))
+          PY
