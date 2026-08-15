@@ -150,7 +150,6 @@ def _install_platform_contracts() -> None:
         complete_planner,
         complete_spec,
         custom_module_generator,
-        ecosystem_discovery,
         game_design,
         geckolib_generator,
         generator,
@@ -170,7 +169,6 @@ def _install_platform_contracts() -> None:
     from .mod_scope_contract import install as install_mod_scope
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
-    from .platform_ecosystem_contract import install as install_platform_ecosystem
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
     from .platform_live_rag_contract import install as install_platform_live_rag
@@ -203,7 +201,6 @@ def _install_platform_contracts() -> None:
         platform_planning_module=platform_planning_contract,
     )
     install_platform_technology(technology_radar)
-    install_platform_ecosystem(ecosystem_discovery, complete_planner)
     install_platform_prompts(complete_planner)
     central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)

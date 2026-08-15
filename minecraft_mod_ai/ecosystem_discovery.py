@@ -8,12 +8,13 @@ import json
 import os
 import re
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 
 from .central_research import external_discovery_routes
+from .platform_catalog import adapter_for_target
 from .spec import SpecValidationError, canonical_json
 
 
@@ -56,7 +57,7 @@ _MAX_QUERY_BYTES = 16 * 1024
 _MAX_PAGE_ITEMS = 100
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _USER_AGENT = (
-    "M.M.M-Make-Mincraft-Mode/0.7.0 "
+    "M.M.M-Make-Mincraft-Mode/0.8.0 "
     "(https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
 )
 _PERMISSIVE_CODE_LICENSES = frozenset(
@@ -141,12 +142,47 @@ class EcosystemCandidate:
         return payload
 
 
-class EcosystemDiscoveryClient:
-    """Read-only, paginated discovery over reviewed public ecosystem APIs.
+@dataclass(frozen=True)
+class _DiscoveryTarget:
+    minecraft_version: str
+    loader: str
+    exact: bool
 
-    Search results are evidence candidates, never executable dependencies or
-    automatically imported media. Exact version, origin license, file hash and
-    dependency inspection remain gates before reuse.
+
+def _normalize_discovery_target(
+    minecraft_version: str | None,
+    loader: str | None,
+    *,
+    target_profile: str,
+    exact_required: bool = False,
+) -> _DiscoveryTarget:
+    if target_profile != "minecraft_mod":
+        return _DiscoveryTarget("not_applicable", "not_applicable", False)
+    version = str(minecraft_version or "").strip()
+    loader_name = str(loader or "").strip().casefold()
+    if bool(version) != bool(loader_name):
+        raise SpecValidationError(
+            "Minecraft ecosystem target requires both minecraft_version and loader."
+        )
+    if not version:
+        if exact_required:
+            raise SpecValidationError(
+                "Exact ecosystem inspection requires the host-selected Minecraft target."
+            )
+        return _DiscoveryTarget("unresolved", "unresolved", False)
+    try:
+        adapter = adapter_for_target(version, loader_name)
+    except ValueError as exc:
+        raise SpecValidationError(str(exc)) from exc
+    return _DiscoveryTarget(adapter.minecraft_version, adapter.loader, True)
+
+
+class EcosystemDiscoveryClient:
+    """Read-only paginated discovery over reviewed public ecosystem APIs.
+
+    Targetless Minecraft searches are intentionally shallow and platform-neutral.
+    Exact compatibility claims and project inspection are available only after the
+    host has selected an executable provider target.
     """
 
     def __init__(
@@ -174,8 +210,8 @@ class EcosystemDiscoveryClient:
         *,
         cursor: str = "",
         limit: int = 20,
-        minecraft_version: str = "1.20.1",
-        loader: str = "fabric",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
         target_profile: str = "minecraft_mod",
     ) -> dict[str, Any]:
         provider = provider.strip().lower()
@@ -197,10 +233,11 @@ class EcosystemDiscoveryClient:
             raise SpecValidationError(
                 f"limit must be between 1 and {_MAX_PAGE_ITEMS}."
             )
-        if minecraft_version != "1.20.1" or loader != "fabric":
-            raise SpecValidationError(
-                "This release discovers dependencies for Minecraft 1.20.1 Fabric only."
-            )
+        target = _normalize_discovery_target(
+            minecraft_version,
+            loader,
+            target_profile=target_profile,
+        )
         if provider in {
             "huggingface_models",
             "openalex_works",
@@ -212,6 +249,8 @@ class EcosystemDiscoveryClient:
                 provider=provider,
                 query=query,
                 target_profile=target_profile,
+                minecraft_version=target.minecraft_version,
+                loader=target.loader,
             )
         else:
             position_kind = (
@@ -223,6 +262,8 @@ class EcosystemDiscoveryClient:
                 query=query,
                 position_kind=position_kind,
                 target_profile=target_profile,
+                minecraft_version=target.minecraft_version,
+                loader=target.loader,
             )
         if provider == "huggingface_models":
             candidates, total, next_position = self._search_huggingface_models(
@@ -235,6 +276,7 @@ class EcosystemDiscoveryClient:
                 query,
                 offset=position,
                 limit=limit,
+                target=target,
             )
         elif provider == "github":
             candidates, total, next_position = self._search_github(
@@ -242,6 +284,7 @@ class EcosystemDiscoveryClient:
                 page=position or 1,
                 limit=limit,
                 target_profile=target_profile,
+                target=target,
             )
         elif provider == "wikipedia":
             candidates, total, next_position = self._search_wikipedia(
@@ -250,9 +293,7 @@ class EcosystemDiscoveryClient:
                 limit=limit,
             )
         elif provider in {"openverse_images", "openverse_audio"}:
-            media_type = (
-                "images" if provider == "openverse_images" else "audio"
-            )
+            media_type = "images" if provider == "openverse_images" else "audio"
             candidates, total, next_position = self._search_openverse(
                 query,
                 media_type=media_type,
@@ -265,7 +306,7 @@ class EcosystemDiscoveryClient:
                 cursor=provider_cursor,
                 limit=limit,
             )
-        elif provider == "crossref_works":
+        else:
             candidates, total, next_position = self._search_crossref_works(
                 query,
                 cursor=provider_cursor,
@@ -282,6 +323,8 @@ class EcosystemDiscoveryClient:
                     query=query,
                     target_profile=target_profile,
                     token=next_position,
+                    minecraft_version=target.minecraft_version,
+                    loader=target.loader,
                 )
                 if next_position is not None
                 else ""
@@ -294,33 +337,35 @@ class EcosystemDiscoveryClient:
                     position_kind=position_kind,
                     position=next_position,
                     target_profile=target_profile,
+                    minecraft_version=target.minecraft_version,
+                    loader=target.loader,
                 )
                 if next_position is not None
                 else ""
             )
         payload = {
-            "schema_version": "mmm/ecosystem-discovery-page-v1",
+            "schema_version": "mmm/ecosystem-discovery-page-v2",
             "provider": provider,
             "query": query,
             "query_sha256": _sha256_text(query),
-            "minecraft_version": minecraft_version,
-            "loader": loader,
+            "minecraft_version": target.minecraft_version,
+            "loader": target.loader,
+            "target_exact": target.exact,
             "target_profile": target_profile,
             "candidates": [candidate.to_dict() for candidate in candidates],
             "returned": len(candidates),
             "provider_total_estimate": total,
             "provider_truncated": bool(
-                provider == "github"
-                and isinstance(total, int)
-                and total > 1000
+                provider == "github" and isinstance(total, int) and total > 1000
             ),
             "provider_result_limit": 1000 if provider == "github" else None,
             "next_cursor": next_cursor,
             "download_performed": False,
             "authorization": "none",
             "selection_policy": (
-                "A candidate is not selected or downloaded until exact-version, "
-                "origin-license, dependency and immutable-file-hash gates pass."
+                "Targetless results are metadata hypotheses only. Exact-target candidates "
+                "are still not selected or downloaded until origin-license, dependency "
+                "closure and immutable-file-hash gates pass."
             ),
         }
         payload["page_sha256"] = _sha256_text(canonical_json(payload))
@@ -330,23 +375,25 @@ class EcosystemDiscoveryClient:
         self,
         project_id: str,
         *,
-        minecraft_version: str = "1.20.1",
-        loader: str = "fabric",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
     ) -> dict[str, Any]:
         if not _MODRINTH_ID.fullmatch(project_id):
             raise SpecValidationError("Invalid Modrinth project ID or slug.")
-        if minecraft_version != "1.20.1" or loader != "fabric":
-            raise SpecValidationError(
-                "This release inspects Minecraft 1.20.1 Fabric versions only."
-            )
+        target = _normalize_discovery_target(
+            minecraft_version,
+            loader,
+            target_profile="minecraft_mod",
+            exact_required=True,
+        )
         project_url = f"https://api.modrinth.com/v2/project/{project_id}"
         version_url = project_url + "/version"
         project = self._get_json(project_url)
         versions = self._get_json(
             version_url,
             params={
-                "loaders": json.dumps([loader]),
-                "game_versions": json.dumps([minecraft_version]),
+                "loaders": json.dumps([target.loader]),
+                "game_versions": json.dumps([target.minecraft_version]),
                 "include_changelog": "false",
             },
         )
@@ -361,37 +408,31 @@ class EcosystemDiscoveryClient:
         else:
             license_id = str(license_value or "").strip()
             license_url = ""
-        normalized_versions: list[dict[str, Any]] = []
-        for version in versions:
-            if not isinstance(version, dict):
-                continue
-            normalized_versions.append(
-                _normalize_modrinth_version(
-                    version,
-                    minecraft_version=minecraft_version,
-                    loader=loader,
-                )
+        normalized_versions = [
+            _normalize_modrinth_version(
+                version,
+                minecraft_version=target.minecraft_version,
+                loader=target.loader,
             )
+            for version in versions
+            if isinstance(version, dict)
+        ]
         compatible = [
-            version
-            for version in normalized_versions
-            if version["eligible_for_selection"]
+            version for version in normalized_versions if version["eligible_for_selection"]
         ]
         payload = {
-            "schema_version": "mmm/modrinth-inspection-v1",
+            "schema_version": "mmm/modrinth-inspection-v2",
             "project_id": str(project.get("id", project_id)),
             "slug": str(project.get("slug", project_id)),
             "title": str(project.get("title", "")),
             "license_id": license_id,
             "license_url": _safe_https_url(license_url, allow_empty=True),
             "license_policy": _code_license_policy(license_id),
-            "minecraft_version": minecraft_version,
-            "loader": loader,
+            "minecraft_version": target.minecraft_version,
+            "loader": target.loader,
             "versions": normalized_versions,
             "exact_compatible_version_found": bool(compatible),
-            "eligible_version_ids": [
-                version["version_id"] for version in compatible
-            ],
+            "eligible_version_ids": [version["version_id"] for version in compatible],
             "compatibility_gate": (
                 "candidate_requires_dependency_closure_and_verified_download"
                 if compatible
@@ -399,55 +440,41 @@ class EcosystemDiscoveryClient:
             ),
             "download_performed": False,
             "required_next_gate": (
-                "Select one listed version, resolve required/incompatible dependencies, "
-                "download only after approval, and verify the advertised SHA-512."
+                "Select one listed exact-target version, resolve required/incompatible "
+                "dependencies, download only after approval, and verify the advertised SHA-512."
             ),
         }
         payload["inspection_sha256"] = _sha256_text(canonical_json(payload))
         return payload
 
     def inspect_github_repository(self, full_name: str) -> dict[str, Any]:
-        """Pin a public repository revision and hash its detected license text."""
-
         if not _GITHUB_REPOSITORY.fullmatch(full_name):
             raise SpecValidationError("Invalid GitHub owner/repository name.")
         repository_url = f"https://api.github.com/repos/{full_name}"
         repository = self._get_json(repository_url, provider="github")
         if not isinstance(repository, dict):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub returned an invalid repository response."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub returned an invalid repository response.")
         if repository.get("private") or repository.get("archived"):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub repository is private or archived."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub repository is private or archived.")
         default_branch = str(repository.get("default_branch") or "").strip()
         if not default_branch or len(default_branch.encode("utf-8")) > 512:
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub repository has no usable default branch."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub repository has no usable default branch.")
         commit = self._get_json(
             repository_url + "/commits/" + quote(default_branch, safe=""),
             provider="github",
         )
         if not isinstance(commit, dict):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub returned invalid commit evidence."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub returned invalid commit evidence.")
         commit_sha = str(commit.get("sha") or "").strip().lower()
         if not _GIT_COMMIT.fullmatch(commit_sha):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub did not return an immutable commit SHA."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub did not return an immutable commit SHA.")
         license_data = self._get_json(
             repository_url + "/license",
             params={"ref": commit_sha},
             provider="github",
         )
         if not isinstance(license_data, dict):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub returned invalid commit or license evidence."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub returned invalid commit or license evidence.")
         license_value = license_data.get("license")
         license_id = (
             str(license_value.get("spdx_id") or "").strip()
@@ -455,51 +482,24 @@ class EcosystemDiscoveryClient:
             else ""
         )
         if not license_id or license_id == "NOASSERTION":
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub did not detect a reviewable SPDX license."
-            )
-        encoded_license = str(license_data.get("content") or "").replace(
-            "\n", ""
-        )
+            raise EcosystemDiscoveryUnavailable("GitHub did not detect a reviewable SPDX license.")
+        encoded_license = str(license_data.get("content") or "").replace("\n", "")
         if license_data.get("encoding") != "base64" or not encoded_license:
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub license evidence has no base64 content."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub license evidence has no base64 content.")
         try:
-            license_bytes = base64.b64decode(
-                encoded_license,
-                validate=True,
-            )
+            license_bytes = base64.b64decode(encoded_license, validate=True)
         except (ValueError, binascii.Error) as exc:
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub license evidence is invalid base64."
-            ) from exc
+            raise EcosystemDiscoveryUnavailable("GitHub license evidence is invalid base64.") from exc
         if not license_bytes or len(license_bytes) > _MAX_RESPONSE_BYTES:
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub license text exceeds the byte policy."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub license text exceeds the byte policy.")
         verification = commit.get("commit")
-        verification = (
-            verification.get("verification")
-            if isinstance(verification, dict)
-            else None
-        )
+        verification = verification.get("verification") if isinstance(verification, dict) else None
         source_url = _safe_https_url(repository.get("html_url"))
         if urlparse(source_url).hostname != "github.com":
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub repository origin URL is invalid."
-            )
-        license_path = str(license_data.get("path") or "LICENSE").replace(
-            "\\", "/"
-        )
-        if (
-            not license_path
-            or license_path.startswith("/")
-            or ".." in license_path.split("/")
-        ):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub license path is invalid."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub repository origin URL is invalid.")
+        license_path = str(license_data.get("path") or "LICENSE").replace("\\", "/")
+        if not license_path or license_path.startswith("/") or ".." in license_path.split("/"):
+            raise EcosystemDiscoveryUnavailable("GitHub license path is invalid.")
         payload = {
             "schema_version": "mmm/github-repository-inspection-v1",
             "full_name": str(repository.get("full_name") or full_name),
@@ -507,39 +507,27 @@ class EcosystemDiscoveryClient:
             "default_branch": default_branch,
             "commit_sha": commit_sha,
             "commit_verified": bool(
-                isinstance(verification, dict)
-                and verification.get("verified") is True
+                isinstance(verification, dict) and verification.get("verified") is True
             ),
             "license_id": license_id,
             "license_url": (
-                f"https://github.com/{full_name}/blob/{commit_sha}/"
-                + quote(license_path, safe="/_.-")
+                f"https://github.com/{full_name}/blob/{commit_sha}/" + quote(license_path, safe="/_.-")
             ),
             "license_blob_sha": str(license_data.get("sha") or ""),
-            "license_text_sha256": (
-                "sha256:" + hashlib.sha256(license_bytes).hexdigest()
-            ),
+            "license_text_sha256": "sha256:" + hashlib.sha256(license_bytes).hexdigest(),
             "license_policy": _code_license_policy(license_id),
             "download_performed": False,
             "compatibility": "unverified_until_pinned_metadata_and_build_pass",
             "required_next_gate": (
-                "Read fabric.mod.json and build files at this commit, resolve exact "
-                "1.20.1 Fabric dependencies, then verify any selected release file "
-                "with its own immutable SHA-256 or stronger digest."
+                "Read platform metadata and build files at this commit, bind an exact host-selected "
+                "target, resolve dependencies, then verify any selected release file with its own "
+                "immutable SHA-256 or stronger digest."
             ),
         }
         payload["inspection_sha256"] = _sha256_text(canonical_json(payload))
         return payload
 
     def inspect_huggingface_model(self, repo_id: str) -> dict[str, Any]:
-        """Inspect public model metadata at an immutable Hub revision.
-
-        This reads only the Hub metadata API. It never requests a ``resolve``
-        URL, downloads model artifacts, imports repository code, or executes a
-        model. A model license is evaluated independently from integration code,
-        dataset provenance and runtime compatibility.
-        """
-
         normalized_repo_id = _normalize_hf_repo_id(repo_id)
         if not normalized_repo_id:
             raise SpecValidationError("Invalid Hugging Face model repository ID.")
@@ -577,23 +565,18 @@ class EcosystemDiscoveryClient:
             raise EcosystemDiscoveryUnavailable(
                 "Hugging Face did not return matching metadata for the pinned revision."
             )
-
         files = normalized.pop("files")
         card = normalized.pop("card")
         model_license_policy = _model_license_policy(card["license_id"])
         access_blocked = bool(
-            normalized["private"]
-            or normalized["gated"]
-            or normalized["disabled"]
+            normalized["private"] or normalized["gated"] or normalized["disabled"]
         )
         license_blocked = model_license_policy.startswith("reject_")
         format_inventory = _hf_format_inventory(files)
         payload = {
             "schema_version": "mmm/huggingface-model-inspection-v1",
             "model_id": normalized_repo_id,
-            "source_url": (
-                f"https://huggingface.co/{encoded_repo_id}/tree/{revision_sha}"
-            ),
+            "source_url": f"https://huggingface.co/{encoded_repo_id}/tree/{revision_sha}",
             "api_url": pinned_url,
             "revision_sha": revision_sha,
             "model": normalized,
@@ -610,11 +593,7 @@ class EcosystemDiscoveryClient:
                     ),
                 },
                 "model_license": {
-                    "status": (
-                        "blocked_unresolved"
-                        if license_blocked
-                        else "manual_review_required"
-                    ),
+                    "status": "blocked_unresolved" if license_blocked else "manual_review_required",
                     "license_id": card["license_id"],
                     "license_url": card["license_url"],
                     "policy": model_license_policy,
@@ -622,23 +601,23 @@ class EcosystemDiscoveryClient:
                 "code_license": {
                     "status": "unresolved_separate_review_required",
                     "reason": (
-                        "The model artifact license does not license the runtime, "
-                        "client library, sidecar or generated integration code."
+                        "The model artifact license does not license the runtime, client library, "
+                        "sidecar or generated integration code."
                     ),
                 },
                 "dataset_provenance": {
                     "status": "manual_review_required",
                     "declared_datasets": card["datasets"],
                     "reason": (
-                        "Card declarations are claims, not proof of training-data "
-                        "rights, consent, quality or permitted downstream use."
+                        "Card declarations are claims, not proof of training-data rights, consent, "
+                        "quality or permitted downstream use."
                     ),
                 },
                 "runtime_compatibility": {
                     "status": "unverified",
                     "reason": (
-                        "Benchmark the exact revision and selected runtime for Java 17, "
-                        "Minecraft 1.20.1 Fabric, hardware, latency and memory budgets."
+                        "Benchmark the exact revision against the host-selected executable Minecraft "
+                        "target, runtime, hardware, latency and memory budgets."
                     ),
                 },
             },
@@ -663,30 +642,26 @@ class EcosystemDiscoveryClient:
         *,
         offset: int,
         limit: int,
+        target: _DiscoveryTarget,
     ) -> tuple[list[EcosystemCandidate], int, int | None]:
-        url = "https://api.modrinth.com/v2/search"
+        facets: list[list[str]] = []
+        if target.exact:
+            facets.extend(
+                [[f"versions:{target.minecraft_version}"], [f"categories:{target.loader}"]]
+            )
+        facets.extend([["project_type:mod"], ["open_source:true"]])
         raw = self._get_json(
-            url,
+            "https://api.modrinth.com/v2/search",
             params={
                 "query": query,
-                "facets": json.dumps(
-                    [
-                        ["versions:1.20.1"],
-                        ["categories:fabric"],
-                        ["project_type:mod"],
-                        ["open_source:true"],
-                    ],
-                    separators=(",", ":"),
-                ),
+                "facets": json.dumps(facets, separators=(",", ":")),
                 "index": "relevance",
                 "offset": str(offset),
                 "limit": str(limit),
             },
         )
         if not isinstance(raw, dict) or not isinstance(raw.get("hits"), list):
-            raise EcosystemDiscoveryUnavailable(
-                "Modrinth returned an invalid search response."
-            )
+            raise EcosystemDiscoveryUnavailable("Modrinth returned an invalid search response.")
         total = _nonnegative_int(raw.get("total_hits"))
         candidates: list[EcosystemCandidate] = []
         for hit in raw["hits"]:
@@ -698,7 +673,6 @@ class EcosystemDiscoveryClient:
             if not project_id or not slug or not license_id:
                 continue
             project_type = str(hit.get("project_type", "mod"))
-            source_url = f"https://modrinth.com/{project_type}/{slug}"
             stable = {
                 "project_id": project_id,
                 "slug": slug,
@@ -715,15 +689,17 @@ class EcosystemDiscoveryClient:
                     resource_kind=project_type,
                     title=stable["title"],
                     summary=stable["description"],
-                    source_url=source_url,
+                    source_url=f"https://modrinth.com/{project_type}/{slug}",
                     api_url=f"https://api.modrinth.com/v2/project/{project_id}",
                     license_id=license_id,
                     license_url="",
                     license_policy=_code_license_policy(license_id),
-                    minecraft_version="1.20.1",
-                    loader="fabric",
+                    minecraft_version=target.minecraft_version,
+                    loader=target.loader,
                     compatibility=(
                         "search_metadata_exact; version_file_inspection_required"
+                        if target.exact
+                        else "platform_neutral_metadata; target_hypothesis_required"
                     ),
                     attribution="",
                     preview_urls=_safe_preview_urls(
@@ -743,19 +719,18 @@ class EcosystemDiscoveryClient:
         *,
         page: int,
         limit: int,
-        target_profile: str = "minecraft_mod",
+        target_profile: str,
+        target: _DiscoveryTarget,
     ) -> tuple[list[EcosystemCandidate], int, int | None]:
-        url = "https://api.github.com/search/repositories"
         scoped_query = query
         if target_profile == "minecraft_mod":
-            scoped_query += " minecraft fabric"
+            scoped_query += (
+                f" minecraft {target.loader}" if target.exact else " minecraft mod"
+            )
         raw = self._get_json(
-            url,
+            "https://api.github.com/search/repositories",
             params={
-                "q": (
-                    f"{scoped_query} in:name,description,readme "
-                    "fork:false archived:false"
-                ),
+                "q": f"{scoped_query} in:name,description,readme fork:false archived:false",
                 "sort": "stars",
                 "order": "desc",
                 "page": str(page),
@@ -764,9 +739,7 @@ class EcosystemDiscoveryClient:
             provider="github",
         )
         if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
-            raise EcosystemDiscoveryUnavailable(
-                "GitHub returned an invalid repository search response."
-            )
+            raise EcosystemDiscoveryUnavailable("GitHub returned an invalid repository search response.")
         total = _nonnegative_int(raw.get("total_count"))
         candidates: list[EcosystemCandidate] = []
         for item in raw["items"]:
@@ -792,6 +765,7 @@ class EcosystemDiscoveryClient:
                 "license": license_id,
                 "topics": sorted(str(value) for value in item.get("topics", [])),
             }
+            is_minecraft = target_profile == "minecraft_mod"
             candidates.append(
                 EcosystemCandidate(
                     candidate_id=f"github:{full_name.lower()}",
@@ -802,23 +776,15 @@ class EcosystemDiscoveryClient:
                     source_url=source_url,
                     api_url=f"https://api.github.com/repos/{full_name}",
                     license_id=license_id,
-                    license_url=(
-                        f"https://api.github.com/repos/{full_name}/license"
-                    ),
+                    license_url=f"https://api.github.com/repos/{full_name}/license",
                     license_policy=_code_license_policy(license_id),
-                    minecraft_version=(
-                        "1.20.1"
-                        if target_profile == "minecraft_mod"
-                        else "not_applicable"
-                    ),
-                    loader=(
-                        "fabric"
-                        if target_profile == "minecraft_mod"
-                        else "not_applicable"
-                    ),
+                    minecraft_version=(target.minecraft_version if is_minecraft else "not_applicable"),
+                    loader=(target.loader if is_minecraft else "not_applicable"),
                     compatibility=(
-                        "unverified; commit and build inspection required"
-                        if target_profile == "minecraft_mod"
+                        "unverified; exact commit, platform metadata and build inspection required"
+                        if is_minecraft and target.exact
+                        else "platform_neutral_metadata; target_hypothesis_required"
+                        if is_minecraft
                         else "unverified; pin commit, inspect license and benchmark runtime"
                     ),
                     attribution="",
@@ -854,9 +820,7 @@ class EcosystemDiscoveryClient:
             include_next_url=True,
         )
         if not isinstance(raw, list):
-            raise EcosystemDiscoveryUnavailable(
-                "Hugging Face returned an invalid model search response."
-            )
+            raise EcosystemDiscoveryUnavailable("Hugging Face returned an invalid model search response.")
         candidates: list[EcosystemCandidate] = []
         for item in raw:
             normalized = _normalize_hf_model(item)
@@ -866,9 +830,7 @@ class EcosystemDiscoveryClient:
             card = normalized.pop("card")
             license_policy = _model_license_policy(card["license_id"])
             access_blocked = bool(
-                normalized["private"]
-                or normalized["gated"]
-                or normalized["disabled"]
+                normalized["private"] or normalized["gated"] or normalized["disabled"]
             )
             license_blocked = license_policy.startswith("reject_")
             model_id = normalized["model_id"]
@@ -881,10 +843,7 @@ class EcosystemDiscoveryClient:
                 "file_count": len(files),
                 "format_inventory": _hf_format_inventory(files),
             }
-            stable = {
-                "model": metadata,
-                "file_paths": [file["path"] for file in files],
-            }
+            stable = {"model": metadata, "file_paths": [file["path"] for file in files]}
             if access_blocked:
                 reuse_status = "blocked_gated_private_or_disabled"
             elif license_blocked:
@@ -900,8 +859,8 @@ class EcosystemDiscoveryClient:
                     resource_kind="ai_model",
                     title=model_id,
                     summary=(
-                        f"{pipeline_tag} model metadata for {library_name}; exact "
-                        "runtime, performance, provenance and license remain unverified."
+                        f"{pipeline_tag} model metadata for {library_name}; exact runtime, "
+                        "performance, provenance and license remain unverified."
                     ),
                     source_url=f"https://huggingface.co/{encoded_model_id}",
                     api_url=f"https://huggingface.co/api/models/{encoded_model_id}",
@@ -911,21 +870,17 @@ class EcosystemDiscoveryClient:
                     minecraft_version="not_applicable",
                     loader="not_applicable",
                     compatibility=(
-                        "unverified; exact runtime, hardware, latency, memory and "
-                        "Minecraft integration benchmark required"
+                        "unverified; exact runtime, hardware, latency, memory and Minecraft "
+                        "integration benchmark required"
                     ),
-                    attribution=(
-                        "Hugging Face Hub model-card metadata; author claims "
-                        "require review"
-                    ),
+                    attribution="Hugging Face Hub model-card metadata; author claims require review",
                     preview_urls=(),
                     reuse_status=reuse_status,
                     evidence_sha256=_sha256_text(canonical_json(stable)),
                     metadata=metadata,
                 )
             )
-        next_cursor = _huggingface_cursor_from_next_url(next_url)
-        return candidates, None, next_cursor
+        return candidates, None, _huggingface_cursor_from_next_url(next_url)
 
     def _search_openalex_works(
         self,
@@ -934,8 +889,6 @@ class EcosystemDiscoveryClient:
         cursor: str,
         limit: int,
     ) -> tuple[list[EcosystemCandidate], int, str | None]:
-        """Search scholarly metadata; papers remain evidence, never authority."""
-
         raw = self._get_json(
             "https://api.openalex.org/works",
             params={
@@ -952,9 +905,7 @@ class EcosystemDiscoveryClient:
         results = raw.get("results") if isinstance(raw, dict) else None
         meta = raw.get("meta") if isinstance(raw, dict) else None
         if not isinstance(results, list) or not isinstance(meta, dict):
-            raise EcosystemDiscoveryUnavailable(
-                "OpenAlex returned an invalid works search response."
-            )
+            raise EcosystemDiscoveryUnavailable("OpenAlex returned an invalid works search response.")
         candidates: list[EcosystemCandidate] = []
         for item in results:
             if not isinstance(item, dict):
@@ -979,19 +930,11 @@ class EcosystemDiscoveryClient:
             metadata = {
                 "openalex_id": work_key,
                 "doi": doi,
-                "publication_year": _nonnegative_int(
-                    item.get("publication_year")
-                ),
+                "publication_year": _nonnegative_int(item.get("publication_year")),
                 "work_type": str(item.get("type") or ""),
-                "cited_by_count": _nonnegative_int(
-                    item.get("cited_by_count")
-                ),
+                "cited_by_count": _nonnegative_int(item.get("cited_by_count")),
                 "authors": authors,
-                "open_access": (
-                    dict(item.get("open_access"))
-                    if isinstance(item.get("open_access"), dict)
-                    else {}
-                ),
+                "open_access": dict(item.get("open_access")) if isinstance(item.get("open_access"), dict) else {},
                 "asserted_paper_license": paper_license,
             }
             stable = {"title": title, **metadata}
@@ -1006,21 +949,16 @@ class EcosystemDiscoveryClient:
                     api_url=f"https://api.openalex.org/works/{work_key}",
                     license_id=paper_license or "paper-license-unverified",
                     license_url="",
-                    license_policy=(
-                        "bibliographic_metadata_only; inspect the paper license "
-                        "before full-text reuse"
-                    ),
+                    license_policy="bibliographic_metadata_only; inspect the paper license before full-text reuse",
                     minecraft_version="not_applicable",
                     loader="not_applicable",
                     compatibility=(
-                        "research candidate only; translate claims to the pinned "
-                        "Minecraft target and reproduce relevant measurements"
+                        "research candidate only; translate claims to the host-selected Minecraft "
+                        "target and reproduce relevant measurements"
                     ),
                     attribution="OpenAlex bibliographic metadata",
                     preview_urls=(),
-                    reuse_status=(
-                        "research_evidence_only_not_implementation_authority"
-                    ),
+                    reuse_status="research_evidence_only_not_implementation_authority",
                     evidence_sha256=_sha256_text(canonical_json(stable)),
                     metadata=metadata,
                 )
@@ -1035,8 +973,6 @@ class EcosystemDiscoveryClient:
         cursor: str,
         limit: int,
     ) -> tuple[list[EcosystemCandidate], int, str | None]:
-        """Cross-check scholarly metadata through a second independent index."""
-
         raw = self._get_json(
             "https://api.crossref.org/works",
             params={
@@ -1053,20 +989,14 @@ class EcosystemDiscoveryClient:
         message = raw.get("message") if isinstance(raw, dict) else None
         items = message.get("items") if isinstance(message, dict) else None
         if not isinstance(message, dict) or not isinstance(items, list):
-            raise EcosystemDiscoveryUnavailable(
-                "Crossref returned an invalid works search response."
-            )
+            raise EcosystemDiscoveryUnavailable("Crossref returned an invalid works search response.")
         candidates: list[EcosystemCandidate] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             doi = _normalized_doi(item.get("DOI"))
             raw_title = item.get("title")
-            title = (
-                " ".join(str(raw_title[0]).split())
-                if isinstance(raw_title, list) and raw_title
-                else ""
-            )
+            title = " ".join(str(raw_title[0]).split()) if isinstance(raw_title, list) and raw_title else ""
             if not doi or not title:
                 continue
             license_items = item.get("license")
@@ -1074,10 +1004,7 @@ class EcosystemDiscoveryClient:
             if isinstance(license_items, list):
                 for license_item in license_items:
                     if isinstance(license_item, dict):
-                        license_url = _safe_https_url(
-                            license_item.get("URL"),
-                            allow_empty=True,
-                        )
+                        license_url = _safe_https_url(license_item.get("URL"), allow_empty=True)
                         if license_url:
                             break
             metadata = {
@@ -1085,9 +1012,7 @@ class EcosystemDiscoveryClient:
                 "published": _crossref_date(item.get("published")),
                 "work_type": str(item.get("type") or ""),
                 "publisher": str(item.get("publisher") or ""),
-                "cited_by_count": _nonnegative_int(
-                    item.get("is-referenced-by-count")
-                ),
+                "cited_by_count": _nonnegative_int(item.get("is-referenced-by-count")),
                 "authors": _crossref_authors(item.get("author")),
                 "abstract": _plain_bounded_text(item.get("abstract"), 1200),
             }
@@ -1102,36 +1027,26 @@ class EcosystemDiscoveryClient:
                     summary=_scholarly_summary(metadata),
                     source_url=f"https://doi.org/{encoded_doi}",
                     api_url=f"https://api.crossref.org/works/{encoded_doi}",
-                    license_id=(
-                        "paper-license-link-present"
-                        if license_url
-                        else "paper-license-unverified"
-                    ),
+                    license_id="paper-license-link-present" if license_url else "paper-license-unverified",
                     license_url=license_url,
-                    license_policy=(
-                        "bibliographic_metadata_only; inspect the paper license "
-                        "before full-text reuse"
-                    ),
+                    license_policy="bibliographic_metadata_only; inspect the paper license before full-text reuse",
                     minecraft_version="not_applicable",
                     loader="not_applicable",
                     compatibility=(
-                        "research candidate only; translate claims to the pinned "
-                        "Minecraft target and reproduce relevant measurements"
+                        "research candidate only; translate claims to the host-selected Minecraft "
+                        "target and reproduce relevant measurements"
                     ),
                     attribution="Crossref bibliographic metadata",
                     preview_urls=(),
-                    reuse_status=(
-                        "research_evidence_only_not_implementation_authority"
-                    ),
+                    reuse_status="research_evidence_only_not_implementation_authority",
                     evidence_sha256=_sha256_text(canonical_json(stable)),
                     metadata=metadata,
                 )
             )
-        next_cursor = str(message.get("next-cursor") or "").strip() or None
         return (
             candidates,
             _nonnegative_int(message.get("total-results")),
-            next_cursor,
+            str(message.get("next-cursor") or "").strip() or None,
         )
 
     def _search_openverse(
@@ -1142,9 +1057,8 @@ class EcosystemDiscoveryClient:
         page: int,
         limit: int,
     ) -> tuple[list[EcosystemCandidate], int, int | None]:
-        url = f"https://api.openverse.org/v1/{media_type}/"
         raw = self._get_json(
-            url,
+            f"https://api.openverse.org/v1/{media_type}/",
             params={
                 "q": query,
                 "license": "cc0,pdm,by,by-sa",
@@ -1156,9 +1070,7 @@ class EcosystemDiscoveryClient:
             provider="openverse",
         )
         if not isinstance(raw, dict) or not isinstance(raw.get("results"), list):
-            raise EcosystemDiscoveryUnavailable(
-                "Openverse returned an invalid media search response."
-            )
+            raise EcosystemDiscoveryUnavailable("Openverse returned an invalid media search response.")
         total = _nonnegative_int(raw.get("result_count"))
         candidates: list[EcosystemCandidate] = []
         for item in raw["results"]:
@@ -1170,9 +1082,7 @@ class EcosystemDiscoveryClient:
             if not identifier or license_name not in {"cc0", "pdm", "by", "by-sa"}:
                 continue
             license_id = _creative_commons_id(license_name, license_version)
-            source_url = _safe_https_url(
-                item.get("foreign_landing_url") or item.get("detail_url")
-            )
+            source_url = _safe_https_url(item.get("foreign_landing_url") or item.get("detail_url"))
             if not source_url:
                 continue
             stable = {
@@ -1188,35 +1098,28 @@ class EcosystemDiscoveryClient:
                 EcosystemCandidate(
                     candidate_id=f"openverse:{media_type}:{identifier}",
                     provider=f"openverse_{media_type}",
-                    resource_kind=("image" if media_type == "images" else "audio"),
+                    resource_kind="image" if media_type == "images" else "audio",
                     title=stable["title"],
                     summary=(
-                        "Openly licensed media search result; origin license metadata "
-                        "must be rechecked before any import."
+                        "Openly licensed media search result; origin license metadata must be "
+                        "rechecked before any import."
                     ),
                     source_url=source_url,
                     api_url=_safe_https_url(item.get("detail_url")),
                     license_id=license_id,
-                    license_url=_safe_https_url(
-                        item.get("license_url"),
-                        allow_empty=True,
-                    ),
+                    license_url=_safe_https_url(item.get("license_url"), allow_empty=True),
                     license_policy=_media_license_policy(license_name),
                     minecraft_version="not_applicable",
                     loader="not_applicable",
                     compatibility="reference_or_source_asset; conversion and visual review required",
                     attribution=str(item.get("attribution") or ""),
-                    preview_urls=_safe_preview_urls(
-                        [item.get("thumbnail")],
-                        allowed_hosts=None,
-                    ),
+                    preview_urls=_safe_preview_urls([item.get("thumbnail")], allowed_hosts=None),
                     reuse_status="origin_license_verification_required",
                     evidence_sha256=_sha256_text(canonical_json(stable)),
                 )
             )
         page_count = _nonnegative_int(raw.get("page_count"))
-        next_page = page + 1 if page_count and page < page_count else None
-        return candidates, total, next_page
+        return candidates, total, page + 1 if page_count and page < page_count else None
 
     def _search_wikipedia(
         self,
@@ -1244,15 +1147,9 @@ class EcosystemDiscoveryClient:
         query_data = raw.get("query") if isinstance(raw, dict) else None
         search = query_data.get("search") if isinstance(query_data, dict) else None
         if not isinstance(search, list):
-            raise EcosystemDiscoveryUnavailable(
-                "Wikipedia returned an invalid search response."
-            )
+            raise EcosystemDiscoveryUnavailable("Wikipedia returned an invalid search response.")
         search_info = query_data.get("searchinfo")
-        total = (
-            _nonnegative_int(search_info.get("totalhits"))
-            if isinstance(search_info, dict)
-            else 0
-        )
+        total = _nonnegative_int(search_info.get("totalhits")) if isinstance(search_info, dict) else 0
         candidates: list[EcosystemCandidate] = []
         for item in search:
             if not isinstance(item, dict):
@@ -1261,13 +1158,8 @@ class EcosystemDiscoveryClient:
             title = str(item.get("title") or "").strip()
             if not page_id or not title:
                 continue
-            source_url = (
-                f"https://{host}/wiki/"
-                + quote(title.replace(" ", "_"), safe="()_-.")
-            )
-            snippet = html.unescape(
-                re.sub(r"<[^>]*>", " ", str(item.get("snippet") or ""))
-            )
+            source_url = f"https://{host}/wiki/" + quote(title.replace(" ", "_"), safe="()_-.")
+            snippet = html.unescape(re.sub(r"<[^>]*>", " ", str(item.get("snippet") or "")))
             snippet = " ".join(snippet.split())
             stable = {
                 "language": language,
@@ -1286,12 +1178,8 @@ class EcosystemDiscoveryClient:
                     source_url=source_url,
                     api_url=url,
                     license_id="CC-BY-SA-4.0",
-                    license_url=(
-                        "https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use"
-                    ),
-                    license_policy=(
-                        "reference_only; page media and external links have separate rights"
-                    ),
+                    license_url="https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use",
+                    license_policy="reference_only; page media and external links have separate rights",
                     minecraft_version="not_applicable",
                     loader="not_applicable",
                     compatibility="design_reference_only; verify primary sources",
@@ -1304,8 +1192,7 @@ class EcosystemDiscoveryClient:
         continuation = raw.get("continue") if isinstance(raw, dict) else None
         next_offset = (
             _nonnegative_int(continuation.get("sroffset"))
-            if isinstance(continuation, dict)
-            and type(continuation.get("sroffset")) is int
+            if isinstance(continuation, dict) and type(continuation.get("sroffset")) is int
             else None
         )
         return candidates, total, next_offset
@@ -1331,28 +1218,18 @@ class EcosystemDiscoveryClient:
         }:
             raise SpecValidationError("Discovery request escaped the API allowlist.")
         if parsed.hostname == "huggingface.co" and not (
-            parsed.path == "/api/models"
-            or parsed.path.startswith("/api/models/")
+            parsed.path == "/api/models" or parsed.path.startswith("/api/models/")
         ):
-            raise SpecValidationError(
-                "Hugging Face discovery is restricted to metadata API paths."
-            )
+            raise SpecValidationError("Hugging Face discovery is restricted to metadata API paths.")
         if parsed.hostname == "api.openalex.org" and not (
             parsed.path == "/works" or parsed.path.startswith("/works/")
         ):
-            raise SpecValidationError(
-                "OpenAlex discovery is restricted to works metadata paths."
-            )
+            raise SpecValidationError("OpenAlex discovery is restricted to works metadata paths.")
         if parsed.hostname == "api.crossref.org" and not (
             parsed.path == "/works" or parsed.path.startswith("/works/")
         ):
-            raise SpecValidationError(
-                "Crossref discovery is restricted to works metadata paths."
-            )
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": _USER_AGENT,
-        }
+            raise SpecValidationError("Crossref discovery is restricted to works metadata paths.")
+        headers = {"Accept": "application/json", "User-Agent": _USER_AGENT}
         if provider == "github":
             headers["X-GitHub-Api-Version"] = "2022-11-28"
             headers["Accept"] = "application/vnd.github+json"
@@ -1388,11 +1265,7 @@ class EcosystemDiscoveryClient:
             ) from exc
         if include_next_url:
             next_link = response.links.get("next")
-            next_url = (
-                str(next_link.get("url") or "")
-                if isinstance(next_link, dict)
-                else ""
-            )
+            next_url = str(next_link.get("url") or "") if isinstance(next_link, dict) else ""
             return payload, next_url
         return payload
 
@@ -1406,18 +1279,9 @@ def discover_seed_bundle(
     route_cursor: str = "",
     route_limit: int = 12,
 ) -> dict[str, Any]:
-    """Gather small adaptive seed pages; specialist tools continue all pages.
-
-    The seed does not pretend to exhaust the internet. It gives the production
-    outline current ecosystem evidence, while each later batch can continue the
-    provider cursor until its own dependency and asset coverage gates pass.
-    """
-
     mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
     if mode not in {"auto", "on", "off"}:
-        raise SpecValidationError(
-            "MMM_ECOSYSTEM_DISCOVERY must be auto, on or off."
-        )
+        raise SpecValidationError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
     if type(route_limit) is not int or not 1 <= route_limit <= 100:
         raise SpecValidationError("route_limit must be between 1 and 100.")
     query = _seed_query(prompt, game_design)
@@ -1428,18 +1292,12 @@ def discover_seed_bundle(
                 "provider": provider,
                 "query": query,
                 "target_profile": (
-                    "media"
-                    if provider in {"openverse_images", "openverse_audio"}
-                    else "minecraft_mod"
+                    "media" if provider in {"openverse_images", "openverse_audio"} else "minecraft_mod"
                 ),
             }
-            for provider in (
-                ["modrinth", "openverse_images", "openverse_audio"]
-            )
+            for provider in ["modrinth", "openverse_images", "openverse_audio"]
         ]
-        if (client is not None and client.github_token) or os.environ.get(
-            "GITHUB_TOKEN"
-        ):
+        if (client is not None and client.github_token) or os.environ.get("GITHUB_TOKEN"):
             routes.append(
                 {
                     "domain_id": "request",
@@ -1450,7 +1308,23 @@ def discover_seed_bundle(
             )
     else:
         routes = list(external_discovery_routes(research_brief))
-    route_receipt = _sha256_text(canonical_json(routes))
+    selected_target: Mapping[str, Any] = {}
+    if isinstance(research_brief, Mapping):
+        raw_target = research_brief.get("_mmm_platform_target")
+        if isinstance(raw_target, Mapping):
+            selected_target = raw_target
+    minecraft_version = str(selected_target.get("minecraft_version") or "") or None
+    loader = str(selected_target.get("loader") or "") or None
+
+    route_receipt = _sha256_text(
+        canonical_json(
+            {
+                "routes": routes,
+                "minecraft_version": minecraft_version or "unresolved",
+                "loader": loader or "unresolved",
+            }
+        )
+    )
     route_offset = _decode_seed_route_cursor(
         route_cursor,
         route_sha256=route_receipt,
@@ -1471,7 +1345,7 @@ def discover_seed_bundle(
     )
     if mode == "off":
         return {
-            "schema_version": "mmm/ecosystem-seed-bundle-v1",
+            "schema_version": "mmm/ecosystem-seed-bundle-v2",
             "status": "disabled",
             "query_sha256": _sha256_text(query),
             "route_sha256": route_receipt,
@@ -1498,14 +1372,15 @@ def discover_seed_bundle(
             provider_query += " ambience sound effects music"
         elif provider == "openverse_images":
             provider_query += " visual reference texture architecture objects"
+        target_profile = str(route.get("target_profile", "minecraft_mod"))
         try:
             page = discovery.search(
                 provider,
                 provider_query,
                 limit=10,
-                target_profile=str(
-                    route.get("target_profile", "minecraft_mod")
-                ),
+                minecraft_version=minecraft_version if target_profile == "minecraft_mod" else None,
+                loader=loader if target_profile == "minecraft_mod" else None,
+                target_profile=target_profile,
             )
             pages.append(
                 {
@@ -1525,23 +1400,13 @@ def discover_seed_bundle(
                 }
             )
     candidate_count = sum(
-        int(page.get("returned", 0))
-        for page in pages
-        if isinstance(page, dict)
+        int(page.get("returned", 0)) for page in pages if isinstance(page, dict)
     )
-    status = (
-        "available"
-        if candidate_count
-        else "empty"
-        if pages
-        else "unavailable"
-    )
+    status = "available" if candidate_count else "empty" if pages else "unavailable"
     if mode == "on" and not pages:
-        raise EcosystemDiscoveryUnavailable(
-            "Required ecosystem discovery providers were unavailable."
-        )
+        raise EcosystemDiscoveryUnavailable("Required ecosystem discovery providers were unavailable.")
     return {
-        "schema_version": "mmm/ecosystem-seed-bundle-v1",
+        "schema_version": "mmm/ecosystem-seed-bundle-v2",
         "status": status,
         "query_sha256": _sha256_text(query),
         "route_sha256": route_receipt,
@@ -1555,7 +1420,8 @@ def discover_seed_bundle(
         "pages": pages,
         "errors": errors,
         "coverage": (
-            "seed pages only; continue each provider cursor and run exact project "
+            "seed pages only; targetless Minecraft pages are shallow metadata hypotheses; "
+            "after host target selection continue provider cursors and run exact project "
             "inspection for every dependency or third-party asset considered"
         ),
         "authorization": "none",
@@ -1563,12 +1429,7 @@ def discover_seed_bundle(
     }
 
 
-def _encode_seed_route_cursor(
-    offset: int,
-    *,
-    route_sha256: str,
-    route_limit: int,
-) -> str:
+def _encode_seed_route_cursor(offset: int, *, route_sha256: str, route_limit: int) -> str:
     payload = f"{route_sha256}\0{route_limit}\0{offset}"
     checksum = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     return f"routes:{offset}:{checksum}"
@@ -1593,18 +1454,12 @@ def _decode_seed_route_cursor(
         route_sha256=route_sha256,
         route_limit=route_limit,
     ) != cursor:
-        raise SpecValidationError(
-            "Seed route cursor does not match this route catalog and page size."
-        )
+        raise SpecValidationError("Seed route cursor does not match this route catalog and page size.")
     return offset
 
 
 def _seed_query(prompt: str, game_design: dict[str, Any]) -> str:
-    parts = [
-        prompt,
-        str(game_design.get("title", "")),
-        str(game_design.get("pitch", "")),
-    ]
+    parts = [prompt, str(game_design.get("title", "")), str(game_design.get("pitch", ""))]
     for item in game_design.get("modules", []):
         if isinstance(item, dict):
             parts.append(str(item.get("reason") or item.get("name") or ""))
@@ -1625,10 +1480,12 @@ def _encode_cursor(
     position_kind: str,
     position: int,
     target_profile: str = "minecraft_mod",
+    minecraft_version: str = "unresolved",
+    loader: str = "unresolved",
 ) -> str:
     payload = (
-        f"{provider}\0{_sha256_text(query)}\0{target_profile}"
-        f"\0{position_kind}\0{position}"
+        f"{provider}\0{_sha256_text(query)}\0{target_profile}\0{minecraft_version}\0"
+        f"{loader}\0{position_kind}\0{position}"
     )
     checksum = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     return f"{position_kind}:{position}:{checksum}"
@@ -1641,6 +1498,8 @@ def _decode_cursor(
     query: str,
     position_kind: str,
     target_profile: str = "minecraft_mod",
+    minecraft_version: str = "unresolved",
+    loader: str = "unresolved",
 ) -> int:
     if not cursor:
         return 0
@@ -1656,6 +1515,8 @@ def _decode_cursor(
         position_kind=position_kind,
         position=position,
         target_profile=target_profile,
+        minecraft_version=minecraft_version,
+        loader=loader,
     ) != cursor:
         raise SpecValidationError(
             "Discovery cursor does not match this provider and query or target profile."
@@ -1669,17 +1530,15 @@ def _encode_token_cursor(
     query: str,
     target_profile: str,
     token: str,
+    minecraft_version: str = "not_applicable",
+    loader: str = "not_applicable",
 ) -> str:
-    if (
-        not isinstance(token, str)
-        or not token
-        or len(token.encode("utf-8")) > 1024
-    ):
+    if not isinstance(token, str) or not token or len(token.encode("utf-8")) > 1024:
         raise SpecValidationError("Provider pagination token is invalid.")
-    encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii")
-    encoded = encoded.rstrip("=")
+    encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
     payload = (
-        f"{provider}\0{_sha256_text(query)}\0{target_profile}\0token\0{token}"
+        f"{provider}\0{_sha256_text(query)}\0{target_profile}\0{minecraft_version}\0"
+        f"{loader}\0token\0{token}"
     )
     checksum = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     return f"token:{encoded}:{checksum}"
@@ -1691,6 +1550,8 @@ def _decode_token_cursor(
     provider: str,
     query: str,
     target_profile: str,
+    minecraft_version: str = "not_applicable",
+    loader: str = "not_applicable",
 ) -> str:
     if not cursor:
         return ""
@@ -1702,11 +1563,7 @@ def _decode_token_cursor(
     encoded = match.group(1)
     padded = encoded + "=" * (-len(encoded) % 4)
     try:
-        token_bytes = base64.b64decode(
-            padded,
-            altchars=b"-_",
-            validate=True,
-        )
+        token_bytes = base64.b64decode(padded, altchars=b"-_", validate=True)
         token = token_bytes.decode("utf-8")
     except (UnicodeDecodeError, ValueError, binascii.Error) as exc:
         raise SpecValidationError("Discovery cursor is invalid.") from exc
@@ -1715,6 +1572,8 @@ def _decode_token_cursor(
         query=query,
         target_profile=target_profile,
         token=token,
+        minecraft_version=minecraft_version,
+        loader=loader,
     ) != cursor:
         raise SpecValidationError(
             "Discovery cursor does not match this provider and query or target profile."
@@ -1732,19 +1591,13 @@ def _huggingface_cursor_from_next_url(next_url: str) -> str | None:
         or parsed.path.rstrip("/") != "/api/models"
         or parsed.fragment
     ):
-        raise EcosystemDiscoveryUnavailable(
-            "Hugging Face returned an unsafe pagination link."
-        )
+        raise EcosystemDiscoveryUnavailable("Hugging Face returned an unsafe pagination link.")
     values = parse_qs(parsed.query, keep_blank_values=True).get("cursor", [])
     if len(values) != 1:
-        raise EcosystemDiscoveryUnavailable(
-            "Hugging Face returned an invalid pagination cursor."
-        )
+        raise EcosystemDiscoveryUnavailable("Hugging Face returned an invalid pagination cursor.")
     token = values[0]
     if not token or len(token.encode("utf-8")) > 1024:
-        raise EcosystemDiscoveryUnavailable(
-            "Hugging Face returned an invalid pagination cursor."
-        )
+        raise EcosystemDiscoveryUnavailable("Hugging Face returned an invalid pagination cursor.")
     return token
 
 
@@ -1803,22 +1656,15 @@ def _normalize_hf_model(value: Any) -> dict[str, Any] | None:
 
 def _normalize_hf_card(value: Any, *, tags: list[str]) -> dict[str, Any]:
     card = value if isinstance(value, dict) else {}
-    card_license = (
-        str(card.get("license") or "").strip()
-        if isinstance(card.get("license"), str)
-        else ""
-    )
+    card_license = str(card.get("license") or "").strip() if isinstance(card.get("license"), str) else ""
     tag_licenses = sorted(
         {
             tag.split(":", 1)[1].strip()
             for tag in tags
-            if tag.lower().startswith("license:")
-            and tag.split(":", 1)[1].strip()
+            if tag.lower().startswith("license:") and tag.split(":", 1)[1].strip()
         }
     )
-    declared = sorted(
-        {license_id for license_id in [card_license, *tag_licenses] if license_id}
-    )
+    declared = sorted({license_id for license_id in [card_license, *tag_licenses] if license_id})
     license_conflict = len({item.lower() for item in declared}) > 1
     if license_conflict:
         license_id = ""
@@ -1832,13 +1678,9 @@ def _normalize_hf_card(value: Any, *, tags: list[str]) -> dict[str, Any]:
     else:
         license_id = ""
         license_evidence = "missing"
-    license_url = _safe_https_url(
-        card.get("license_link"),
-        allow_empty=True,
-    )
     return {
         "license_id": license_id,
-        "license_url": license_url,
+        "license_url": _safe_https_url(card.get("license_link"), allow_empty=True),
         "license_evidence": license_evidence,
         "declared_license_ids": declared,
         "license_conflict": license_conflict,
@@ -1855,6 +1697,11 @@ def _normalize_hf_files(value: Any) -> list[dict[str, Any]]:
         return []
     files: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
+    suffixes = sorted(
+        _SAFE_MODEL_SUFFIXES | _UNSAFE_SERIALIZATION_SUFFIXES,
+        key=len,
+        reverse=True,
+    )
     for item in value:
         if not isinstance(item, dict):
             continue
@@ -1862,18 +1709,7 @@ def _normalize_hf_files(value: Any) -> list[dict[str, Any]]:
         if not path or path in seen_paths:
             continue
         seen_paths.add(path)
-        suffix = next(
-            (
-                candidate
-                for candidate in sorted(
-                    _SAFE_MODEL_SUFFIXES | _UNSAFE_SERIALIZATION_SUFFIXES,
-                    key=len,
-                    reverse=True,
-                )
-                if path.lower().endswith(candidate)
-            ),
-            "",
-        )
+        suffix = next((candidate for candidate in suffixes if path.lower().endswith(candidate)), "")
         lfs = item.get("lfs") if isinstance(item.get("lfs"), dict) else {}
         lfs_sha256 = str(lfs.get("sha256") or "").strip().lower()
         if not re.fullmatch(r"[0-9a-f]{64}", lfs_sha256):
@@ -1881,9 +1717,7 @@ def _normalize_hf_files(value: Any) -> list[dict[str, Any]]:
         blob_id = str(item.get("blobId") or "").strip().lower()
         if not re.fullmatch(r"[0-9a-f]{40,64}", blob_id):
             blob_id = ""
-        size = _nonnegative_int(item.get("size"))
-        if not size:
-            size = _nonnegative_int(lfs.get("size"))
+        size = _nonnegative_int(item.get("size")) or _nonnegative_int(lfs.get("size"))
         files.append(
             {
                 "path": path,
@@ -1893,9 +1727,7 @@ def _normalize_hf_files(value: Any) -> list[dict[str, Any]]:
                 "safe_data_format": suffix in _SAFE_MODEL_SUFFIXES,
                 "unsafe_serialization": suffix in _UNSAFE_SERIALIZATION_SUFFIXES,
                 "is_weight_artifact": bool(suffix),
-                "is_repository_code": path.lower().endswith(
-                    (".bat", ".cmd", ".jar", ".js", ".ps1", ".py", ".sh")
-                ),
+                "is_repository_code": path.lower().endswith((".bat", ".cmd", ".jar", ".js", ".ps1", ".py", ".sh")),
             }
         )
     return sorted(files, key=lambda item: item["path"])
@@ -1903,9 +1735,7 @@ def _normalize_hf_files(value: Any) -> list[dict[str, Any]]:
 
 def _hf_format_inventory(files: list[dict[str, Any]]) -> dict[str, Any]:
     safe_paths = [file["path"] for file in files if file["safe_data_format"]]
-    unsafe_paths = [
-        file["path"] for file in files if file["unsafe_serialization"]
-    ]
+    unsafe_paths = [file["path"] for file in files if file["unsafe_serialization"]]
     code_paths = [file["path"] for file in files if file["is_repository_code"]]
     return {
         "has_safetensors": any(path.lower().endswith(".safetensors") for path in safe_paths),
@@ -1959,19 +1789,10 @@ def _bounded_metadata_text(value: Any) -> str:
 def _model_license_policy(license_id: str) -> str:
     normalized = license_id.strip().lower()
     if normalized in _REVIEWABLE_MODEL_LICENSES:
-        return (
-            "model_artifact_license_manual_review_required; code, datasets and "
-            "outputs have separate rights"
-        )
+        return "model_artifact_license_manual_review_required; code, datasets and outputs have separate rights"
     if normalized in _RESTRICTED_MODEL_LICENSES:
-        return (
-            "restricted_model_license_manual_review_required; verify use, "
-            "distribution and acceptable-use terms"
-        )
-    return (
-        "reject_until_a_recognized_model_license_is_verified; custom, missing "
-        "or conflicting metadata is not permission"
-    )
+        return "restricted_model_license_manual_review_required; verify use, distribution and acceptable-use terms"
+    return "reject_until_a_recognized_model_license_is_verified; custom, missing or conflicting metadata is not permission"
 
 
 def _normalize_modrinth_version(
@@ -1997,7 +1818,6 @@ def _normalize_modrinth_version(
         reasons.append("version_is_not_listed")
     if version_type and version_type not in {"release", "beta", "alpha"}:
         reasons.append("unrecognized_version_type")
-
     files: list[dict[str, Any]] = []
     for item in version.get("files", []):
         if not isinstance(item, dict):
@@ -2015,9 +1835,7 @@ def _normalize_modrinth_version(
             and "\\" not in filename
             and filename.lower().endswith(".jar")
         )
-        safe_origin = bool(
-            host == "cdn.modrinth.com" or host.endswith(".modrinth.com")
-        )
+        safe_origin = bool(host == "cdn.modrinth.com" or host.endswith(".modrinth.com"))
         size = _nonnegative_int(item.get("size"))
         files.append(
             {
@@ -2042,7 +1860,6 @@ def _normalize_modrinth_version(
         and primary_files[0]["strong_digest_valid"]
     ):
         reasons.append("primary_file_requires_safe_origin_size_and_sha512")
-
     dependencies: list[dict[str, Any]] = []
     allowed_dependency_types = {"required", "optional", "incompatible", "embedded"}
     for item in version.get("dependencies", []):
@@ -2063,7 +1880,6 @@ def _normalize_modrinth_version(
                 "dependency_type": dependency_type,
             }
         )
-
     return {
         "version_id": version_id,
         "version_number": version_number,
@@ -2098,11 +1914,7 @@ def _openalex_authors(value: Any) -> list[str]:
     authors: list[str] = []
     for authorship in value[:100]:
         author = authorship.get("author") if isinstance(authorship, dict) else None
-        name = (
-            " ".join(str(author.get("display_name") or "").split())
-            if isinstance(author, dict)
-            else ""
-        )
+        name = " ".join(str(author.get("display_name") or "").split()) if isinstance(author, dict) else ""
         if name and name not in authors:
             authors.append(name[:256])
     return authors
@@ -2117,10 +1929,7 @@ def _crossref_authors(value: Any) -> list[str]:
             continue
         name = " ".join(
             part.strip()
-            for part in (
-                str(author.get("given") or ""),
-                str(author.get("family") or ""),
-            )
+            for part in (str(author.get("given") or ""), str(author.get("family") or ""))
             if part.strip()
         )
         if name and name not in authors:
@@ -2134,16 +1943,12 @@ def _crossref_date(value: Any) -> str:
     if not isinstance(first, list) or not first:
         return ""
     integers = [part for part in first[:3] if type(part) is int and part >= 1]
-    return "-".join(
-        str(part) if index == 0 else f"{part:02d}"
-        for index, part in enumerate(integers)
-    )
+    return "-".join(str(part) if index == 0 else f"{part:02d}" for index, part in enumerate(integers))
 
 
 def _plain_bounded_text(value: Any, limit: int) -> str:
     text = html.unescape(re.sub(r"<[^>]*>", " ", str(value or "")))
-    text = " ".join(text.split())
-    return text[:limit]
+    return " ".join(text.split())[:limit]
 
 
 def _scholarly_summary(metadata: dict[str, Any]) -> str:
@@ -2152,9 +1957,7 @@ def _scholarly_summary(metadata: dict[str, Any]) -> str:
     citations = _nonnegative_int(metadata.get("cited_by_count"))
     abstract = str(metadata.get("abstract") or "").strip()
     base = f"{work_type}, {year}; cited-by metadata: {citations}."
-    if abstract:
-        return (base + " " + abstract)[:1600]
-    return base
+    return (base + " " + abstract)[:1600] if abstract else base
 
 
 def _code_license_policy(license_id: str) -> str:
@@ -2162,10 +1965,7 @@ def _code_license_policy(license_id: str) -> str:
         return "permissive_candidate; preserve notices and inspect dependencies"
     if not license_id or license_id.upper() in {"ARR", "NOASSERTION"}:
         return "reject_until_a_recognized_license_is_verified"
-    return (
-        "copyleft_or_custom_review_required; dependency use is not permission "
-        "to copy source or assets"
-    )
+    return "copyleft_or_custom_review_required; dependency use is not permission to copy source or assets"
 
 
 def _media_license_policy(license_name: str) -> str:
@@ -2182,8 +1982,7 @@ def _creative_commons_id(name: str, version: str) -> str:
         return "PDM-1.0"
     if name == "cc0":
         return "CC0-1.0"
-    suffix = version or "unknown"
-    return f"CC-{name.upper()}-{suffix}"
+    return f"CC-{name.upper()}-{version or 'unknown'}"
 
 
 def _safe_https_url(value: Any, *, allow_empty: bool = False) -> str:

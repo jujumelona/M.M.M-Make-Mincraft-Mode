@@ -41,8 +41,7 @@ def _isolate_test_runtime_state(
     )
 
     # These unit tests exercise technology semantics directly. Supply an explicit
-    # executable fixture target instead of depending on the removed production-wide
-    # historical target default.
+    # executable fixture target instead of depending on a production-wide default.
     if request.module.__name__ == "test_technology_radar":
         target = _fabric_1201_target()
         original = request.module.build_technology_radar
@@ -59,8 +58,7 @@ def _isolate_test_runtime_state(
 
     # This test module intentionally replaces GameDesignPlanner.plan, which bypasses
     # the production platform-selection owner. Bind an explicit target only at that
-    # mocked boundary so CompleteGameDesignPlanner can still exercise radar/sidecar
-    # behavior without reintroducing any product default.
+    # mocked boundary.
     if request.module.__name__ == "test_complete_planner_technology_sidecar":
         import minecraft_mod_ai.complete_planner as planner_module
 
@@ -75,4 +73,35 @@ def _isolate_test_runtime_state(
             planner_module,
             "collect_technology_radar",
             collect_with_explicit_test_target,
+        )
+
+    # Legacy ecosystem unit tests are exact-target tests. Keep their intent explicit
+    # while product defaults become platform-neutral. Dedicated dynamic-target tests
+    # exercise the new targetless path without this fixture.
+    if request.module.__name__ == "test_ecosystem_discovery":
+        from minecraft_mod_ai import ecosystem_discovery as ecosystem
+
+        original_search = ecosystem.EcosystemDiscoveryClient.search
+        original_inspect = ecosystem.EcosystemDiscoveryClient.inspect_modrinth_project
+
+        def search_with_explicit_test_target(self, *args, **kwargs):
+            if str(kwargs.get("target_profile", "minecraft_mod")) == "minecraft_mod":
+                kwargs.setdefault("minecraft_version", "1.20.1")
+                kwargs.setdefault("loader", "fabric")
+            return original_search(self, *args, **kwargs)
+
+        def inspect_with_explicit_test_target(self, *args, **kwargs):
+            kwargs.setdefault("minecraft_version", "1.20.1")
+            kwargs.setdefault("loader", "fabric")
+            return original_inspect(self, *args, **kwargs)
+
+        monkeypatch.setattr(
+            ecosystem.EcosystemDiscoveryClient,
+            "search",
+            search_with_explicit_test_target,
+        )
+        monkeypatch.setattr(
+            ecosystem.EcosystemDiscoveryClient,
+            "inspect_modrinth_project",
+            inspect_with_explicit_test_target,
         )

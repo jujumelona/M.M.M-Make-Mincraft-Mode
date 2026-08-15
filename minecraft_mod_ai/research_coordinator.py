@@ -225,7 +225,10 @@ def collect_ecosystem_seed_bundle(
         )
         if not isinstance(page, dict):
             raise SpecValidationError("Ecosystem route page must be an object.")
-        if page.get("schema_version") != "mmm/ecosystem-seed-bundle-v1":
+        if page.get("schema_version") not in {
+            "mmm/ecosystem-seed-bundle-v1",
+            "mmm/ecosystem-seed-bundle-v2",
+        }:
             raise SpecValidationError("Unsupported ecosystem seed page schema.")
 
         offset = _strict_non_negative_int(

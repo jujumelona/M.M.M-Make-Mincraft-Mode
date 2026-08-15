@@ -99,6 +99,7 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
     assert "platform_selection_efficiency_contract" not in source
     assert "parallel_platform_rag_contract" not in source
     assert "colab_auto_platform_contract" not in source
+    assert "platform_ecosystem_contract" not in source
 
     required_once = (
         "install_runner_lock(",
@@ -111,7 +112,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
         "install_proposal_deserialization(",
         "install_platform_live_rag(",
         "install_platform_technology(",
-        "install_platform_ecosystem(",
         "install_platform_prompts(",
         "install_mod_scope(",
         "install_planner_json_runtime(",
@@ -257,5 +257,6 @@ def test_specialized_installers_are_single_responsibility() -> None:
         "platform_selection_efficiency_contract.py",
         "parallel_platform_rag_contract.py",
         "colab_auto_platform_contract.py",
+        "platform_ecosystem_contract.py",
     ):
         assert not (PACKAGE / removed).exists(), removed
