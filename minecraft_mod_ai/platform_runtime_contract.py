@@ -112,6 +112,18 @@ def _install_runtime_manager(module: Any) -> None:
 
     @wraps(original_prepare)
     def prepare_instance(self: Any, *args: Any, **kwargs: Any):
+        # Preserve base fail-fast ordering before probing the selected JDK.
+        instance_name = (
+            str(args[0]) if args else str(kwargs.get("instance_name", ""))
+        )
+        if self._process_running(self.server_process) or self._process_running(
+            self.client_process
+        ):
+            raise module.RuntimePolicyError(
+                "Stop the active disposable runtime before preparing another instance."
+            )
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", instance_name):
+            raise module.RuntimePolicyError("Invalid runtime instance name.")
         result = original_prepare(self, *args, **kwargs)
         result = dict(result)
         result["platform_adapter"] = self._mmm_platform_adapter.adapter_id
@@ -125,6 +137,9 @@ def _install_runtime_manager(module: Any) -> None:
 
     @wraps(original_start_server)
     def start_server(self: Any, *args: Any, **kwargs: Any):
+        # Missing artifacts are request errors; do not mask them with host-JDK drift.
+        self._existing_file(kwargs.get("mod_jar"))
+        self._existing_file(kwargs.get("server_launcher"))
         _validate_java_command(
             self.profile.server_java_command,
             expected_major=int(self._mmm_platform_adapter.java_version),

@@ -295,8 +295,13 @@ def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Propo
     from .knowledge import evidence_for_target, evidence_snapshot_hash
 
     spec = replace(proposal.spec, platform=selection.lock)
+    evidence_terms: list[str] = [proposal.requested_prompt, "project build metadata dependency"]
+    if proposal.spec.boss is not None:
+        evidence_terms.append("boss entity gametest runtime server")
+    if proposal.spec.contents:
+        evidence_terms.append("item block recipe data generation resource")
     evidence = evidence_for_target(
-        proposal.requested_prompt,
+        " ".join(evidence_terms),
         minecraft_version=selection.adapter.minecraft_version,
     )
     assumptions = tuple(

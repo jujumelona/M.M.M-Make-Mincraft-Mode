@@ -284,6 +284,33 @@ def optimize_platform(
             version_fn=version_fn,
         )
 
+    discovery_mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
+    if discovery_mode not in {"auto", "on", "off"}:
+        raise ValueError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
+    if discovery_mode == "off":
+        # Do not silently perform public-network discovery when the operator or test
+        # harness disabled it. A single executable provider receipt is sufficient to
+        # preserve exact target ownership; multiple unscored candidates are ambiguous
+        # and therefore fail closed instead of falling back to newest/order bias.
+        if len(adapters) != 1:
+            raise ValueError(
+                "Ecosystem discovery is disabled and multiple executable platform "
+                "targets remain. Supply an explicit Minecraft target or enable discovery."
+            )
+        offline = _optimize_fixture_path(
+            queries,
+            adapters=adapters,
+            search_fn=lambda _query: (),
+            version_fn=lambda _project: (),
+        )
+        return PlatformOptimization(
+            selected=offline.selected,
+            evidence=offline.evidence,
+            candidates=offline.candidates,
+            capability_queries=offline.capability_queries,
+            discovery_mode="provider-receipt-only_discovery-disabled",
+        )
+
     client = discovery_client or EcosystemDiscoveryClient()
     neutral, neutral_errors = _parallel_neutral_shallow(queries, client)
     shallow_count = sum(len(value) for value in neutral.values())

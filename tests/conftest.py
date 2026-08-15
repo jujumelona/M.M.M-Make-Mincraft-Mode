@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -121,6 +122,15 @@ def _isolate_test_runtime_state(
     import json
     import minecraft_mod_ai.runtime_manager as runtime_manager
 
+    fake_java = tmp_path / "fake-java-21"
+    fake_java.write_text(
+        "#!" + sys.executable + "\n"
+        "import sys\n"
+        "print('openjdk version \"21.0.0\"', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    fake_java.chmod(0o755)
+
     runtime_config = tmp_path.parent / f"{tmp_path.name}-runtime-profiles.yaml"
     runtime_config.write_text(
         json.dumps(
@@ -131,7 +141,7 @@ def _isolate_test_runtime_state(
                         "minecraft_version": synthetic_adapter.minecraft_version,
                         "loader": synthetic_adapter.loader,
                         "java_project_version": int(synthetic_adapter.java_version),
-                        "server_java_command": "java",
+                        "server_java_command": str(fake_java),
                         "server_memory_mb": 512,
                         "server_launcher_relative": "runtime/server.jar",
                         "client_command_env": "MMM_MINECRAFT_CLIENT_COMMAND_JSON",

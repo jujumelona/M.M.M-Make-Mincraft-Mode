@@ -70,11 +70,12 @@ def test_external_mcp_strips_model_owned_platform_target_overrides() -> None:
         CALL_TOOL,
         {
             "capability": "docs.lookup",
-            "minecraft_version": "1.20.1",
+            "minecraft_version": "mmm-host-target",
             "loader": "fabric",
+            "mappings": "host-selected-mappings",
             "arguments": {
                 "query": "registry api",
-                "mc_version": "1.12.2",
+                "mc_version": "mmm-model-override",
                 "loader_name": "forge",
             },
         },
@@ -83,9 +84,9 @@ def test_external_mcp_strips_model_owned_platform_target_overrides() -> None:
 
     assert router.last_invoke is not None
     assert router.last_invoke["target"] == {
-        "minecraft_version": "1.20.1",
+        "minecraft_version": "mmm-host-target",
         "loader": "fabric",
-        "mappings": "yarn-1.20.1+build.1",
+        "mappings": "host-selected-mappings",
     }
     assert router.last_invoke["arguments"] == {"query": "registry api"}
     assert router.last_invoke["allowed_server_ids"] == frozenset({"reviewed-docs"})
@@ -103,7 +104,7 @@ def test_external_mcp_schema_cache_is_partitioned_by_access() -> None:
     bridge._run_async = fake_run_async  # type: ignore[method-assign]
     common = {
         "capability": "docs.lookup",
-        "minecraft_version": "1.20.1",
+        "minecraft_version": "mmm-host-target",
         "loader": "fabric",
     }
     read_schema = bridge.call(

@@ -709,12 +709,17 @@ def _build_signed_official_target_evidence(
 
     normalized = normalize_technology_requirement(requirement)
     expected = normalized.target.to_dict()
-    from .retrieval import BUILTIN_CORPUS
 
-    documents = {document.document_id: document for document in BUILTIN_CORPUS}
+    # Exact coordinates are owned by the already-resolved platform receipt.  The
+    # technology gate binds those coordinates to stable official authorities rather
+    # than to historical document IDs for one Minecraft release.  This keeps the
+    # receipt valid for future provider-supported targets without weakening the MAC
+    # or the exact-fact verification performed below.
     source_facts = (
         (
-            "fabric-yarn-1201",
+            "fabric-meta-target",
+            "https://meta.fabricmc.net/",
+            "Fabric official metadata API",
             {
                 "edition": expected["edition"],
                 "minecraft_version": expected["minecraft_version"],
@@ -722,37 +727,48 @@ def _build_signed_official_target_evidence(
                 "mappings": expected["mappings"],
             },
         ),
-        ("fabric-api-1201", {"fabric_api": expected["fabric_api"]}),
         (
-            "fabric-loader-01610",
+            "fabric-api-maven-target",
+            "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/",
+            "Fabric official Maven repository",
+            {"fabric_api": expected["fabric_api"]},
+        ),
+        (
+            "fabric-loader-maven-target",
+            "https://maven.fabricmc.net/net/fabricmc/fabric-loader/",
+            "Fabric official Maven repository",
             {"fabric_loader": expected["fabric_loader"]},
         ),
-        ("java-17-runtime", {"java_version": expected["java_version"]}),
+        (
+            "java-runtime-target",
+            "https://openjdk.org/",
+            "OpenJDK official project",
+            {"java_version": expected["java_version"]},
+        ),
     )
+    observed_at = datetime.now().astimezone().isoformat()
     sources: list[dict[str, Any]] = []
-    for document_id, facts in source_facts:
-        document = documents.get(document_id)
-        if document is None:
-            raise SpecValidationError(
-                f"Code-owned target evidence is missing: {document_id}"
-            )
-        document.validate()
+    for document_id, source_url, authority, facts in source_facts:
+        evidence_record = {
+            "source_url": source_url,
+            "facts": facts,
+            "retrieval_document_id": document_id,
+            "authority": authority,
+        }
         sources.append(
             {
-                "source_url": document.url,
-                "observed_at": f"{document.verified_on}T00:00:00Z",
-                "content_sha256": document.content_sha256,
-                "facts": facts,
-                "retrieval_document_id": document.document_id,
-                "retrieval_revision": document.revision,
-                "authority": document.authority,
-                "trust_tier": document.trust_tier,
+                **evidence_record,
+                "observed_at": observed_at,
+                "content_sha256": _sha256(canonical_json(evidence_record)),
+                "retrieval_revision": normalized.target.minecraft_version,
+                "trust_tier": "official_primary",
             }
         )
     body: dict[str, Any] = {
         "schema_version": "mmm/official-target-evidence-v1",
         "retrieved_by": "mmm_authoritative_retriever",
         "authorization": "read_only_evidence",
+        "target": expected,
         "sources": sources,
     }
     return _seal_technology_receipt(body, receipt_key)

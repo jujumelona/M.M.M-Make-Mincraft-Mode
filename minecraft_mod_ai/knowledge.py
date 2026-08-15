@@ -309,7 +309,7 @@ def evidence_for_target(
         catalog=catalog,
         minecraft_version=minecraft_version,
         core_ids=core_ids,
-        max_sources=7,
+        max_sources=6,
     )
     validate_trusted_evidence(result, minecraft_version=minecraft_version)
     return result

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
@@ -13,7 +14,7 @@ from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
 from minecraft_mod_ai.scalable_validator import ScalableProjectValidator
 from minecraft_mod_ai.scale_policy import ScalePolicy
-from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
+from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, PlatformLock
 from minecraft_mod_ai.system_pack_generator import generate_system_pack
 
 
@@ -62,10 +63,10 @@ def test_complete_spec_accepts_large_iterative_dependency_graph() -> None:
 
 
 def test_scalable_generator_shards_bootstrap_content_and_gametests(
-    tmp_path: Path,
+    tmp_path: Path, synthetic_platform_lock: PlatformLock
 ) -> None:
     policy = ScalePolicy(java_shard_size=16)
-    spec = _spec(count=130)
+    spec = replace(_spec(count=130), platform=synthetic_platform_lock)
     project = tmp_path / "project"
     result = ScalableFabricProjectGenerator(policy=policy).generate(spec, project)
     assert result.root == project.resolve()

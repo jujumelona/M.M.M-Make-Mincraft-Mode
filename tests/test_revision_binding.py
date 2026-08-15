@@ -16,7 +16,7 @@ def _source_zip(
     path: Path,
     *,
     marker: str = "v1",
-    minecraft_version: str = "1.20.1",
+    minecraft_version: str = "mmm-existing-target",
 ) -> Path:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
@@ -89,19 +89,22 @@ def test_bound_existing_input_is_required_and_rechecked_before_writes(
     assert not output_root.exists()
 
 
-def test_incompatible_existing_project_version_is_not_silently_migrated(
+def test_existing_project_version_is_preserved_without_silent_migration(
     tmp_path: Path,
 ) -> None:
     archive = _source_zip(
         tmp_path / "future.zip",
-        minecraft_version="1.21.4",
+        minecraft_version="mmm-future-target",
     )
 
-    with pytest.raises(SpecValidationError, match="Minecraft constraint is incompatible"):
-        MinecraftModPipeline().plan(
-            "Add a crafted item",
-            existing_input=archive,
-        )
+    proposal = MinecraftModPipeline().plan(
+        "Add a crafted item",
+        existing_input=archive,
+    )
+
+    assert proposal.spec.platform.minecraft_version == "mmm-future-target"
+    assert proposal.spec.platform.loader == "fabric"
+    assert proposal.imported_source_snapshot_hash.startswith("sha256:")
 
 
 def test_revision_candidate_release_contains_import_inventory(
@@ -146,7 +149,7 @@ def test_generated_release_bundle_recovers_nested_editable_source_inventory(
         "id": "nested_existing",
         "name": "Nested Existing",
         "version": "4.5.6",
-        "depends": {"minecraft": "1.20.1"},
+        "depends": {"minecraft": "mmm-nested-target"},
     }
     source_bytes = io.BytesIO()
     with zipfile.ZipFile(source_bytes, "w") as source:

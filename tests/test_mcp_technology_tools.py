@@ -38,6 +38,7 @@ class _DiscoveryStub:
 
 def test_service_dispatches_profile_bound_discovery_and_hf_inspection(
     tmp_path,
+    synthetic_platform_lock,
 ) -> None:
     discovery = _DiscoveryStub()
     service = MMMToolService(
@@ -51,6 +52,8 @@ def test_service_dispatches_profile_bound_discovery_and_hf_inspection(
         "cursor-token",
         7,
         "speech_ai",
+        minecraft_version=synthetic_platform_lock.minecraft_version,
+        loader=synthetic_platform_lock.loader,
     )
     inspection = service.inspect_huggingface_model("owner/model")
 
@@ -66,10 +69,13 @@ def test_service_dispatches_profile_bound_discovery_and_hf_inspection(
 
 def test_service_builds_and_fail_closed_assesses_voice_requirements(
     tmp_path,
+    synthetic_platform_lock,
 ) -> None:
     service = MMMToolService(workspace_root=tmp_path / "workspace")
     radar = service.build_technology_radar(
-        "실시간 한국어 음성인식과 TTS NPC를 만들어줘."
+        "실시간 한국어 음성인식과 TTS NPC를 만들어줘.",
+        minecraft_version=synthetic_platform_lock.minecraft_version,
+        loader=synthetic_platform_lock.loader,
     )
     requirement = next(
         item
@@ -96,11 +102,8 @@ def test_service_builds_and_fail_closed_assesses_voice_requirements(
     evidence = assessment["candidate"]["official_target_evidence"]
     assert evidence["schema_version"] == "mmm/official-target-evidence-v1"
     assert evidence["receipt_mac"].startswith("hmac-sha256:")
-    assert {
-        source["retrieval_document_id"] for source in evidence["sources"]
-    } == {
-        "fabric-yarn-1201",
-        "fabric-api-1201",
-        "fabric-loader-01610",
-        "java-17-runtime",
-    }
+    assert evidence["target"]["minecraft_version"] == synthetic_platform_lock.minecraft_version
+    assert evidence["target"]["loader"] == synthetic_platform_lock.loader
+    assert evidence["target"]["mappings"] == synthetic_platform_lock.yarn_mappings
+    assert evidence["sources"]
+    assert all(source["retrieval_document_id"] for source in evidence["sources"])

@@ -12,7 +12,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
 
-from .knowledge import AuthoritativeEvidenceRetriever, evidence_catalog_for_version
+from .knowledge import (
+    AuthoritativeEvidenceRetriever,
+    evidence_catalog_for_version,
+    target_neutral_evidence_catalog,
+)
 from .rag_index import ProjectRAGIndex
 
 
@@ -1827,6 +1831,25 @@ def _search_authoritative_catalog(
     retriever = AuthoritativeEvidenceRetriever()
     sources: dict[str, dict[str, Any]] = {}
     errors: list[dict[str, str]] = []
+
+    # Forced research runs before target selection too. At that point use only
+    # wildcard official sources and keep target coordinates unresolved.
+    if not versions:
+        try:
+            catalog = target_neutral_evidence_catalog()
+            limit = min(6, len(catalog))
+            for source in retriever.search(query, limit=limit):
+                payload = asdict(source)
+                payload["matched_version"] = ""
+                sources.setdefault(source.source_id, payload)
+        except Exception as exc:
+            errors.append(
+                {
+                    "minecraft_version": "",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
     for version in versions:
         try:
             catalog = evidence_catalog_for_version(version)
