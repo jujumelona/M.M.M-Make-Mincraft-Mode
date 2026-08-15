@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Platform-neutral planner prompts and selected-evidence handoff.
 
-Target selection has exactly one owner:
-``platform_central_ai_contract`` -> ``platform_resolver`` -> ``platform_optimizer``.
-This contract does not select coordinates and does not perform a second target RAG
-when the selection owner already produced evidence.
+Exact coordinate selection is always delegated to ``platform_resolver`` ->
+``platform_optimizer``. This contract also binds the legacy ``MinecraftModPipeline``
+planning boundary to that same host-owned resolver so target-neutral semantic planners
+are never validated or approved before a complete executable provider receipt exists.
 """
 
 from functools import wraps
@@ -35,6 +35,7 @@ def install(
         complete_planner_module,
         central_research_module,
     )
+    _install_pipeline_target_binding()
 
 
 def _install_target_neutral_game_design_prompts(module: Any) -> None:
@@ -109,6 +110,45 @@ def _install_selected_target_evidence(module: Any, central: Any) -> None:
 
     retrieve_implementation_evidence._mmm_selected_target_evidence = True
     module._retrieve_implementation_evidence = retrieve_implementation_evidence
+
+
+def _install_pipeline_target_binding() -> None:
+    """Resolve a complete provider receipt before the legacy pipeline validates."""
+
+    from . import pipeline as pipeline_module
+    from . import platform_resolver
+
+    cls = pipeline_module.MinecraftModPipeline
+    current = cls.plan
+    if getattr(current, "_mmm_host_target_binding", False):
+        return
+
+    @wraps(current)
+    def plan(
+        self: Any,
+        prompt: str,
+        *,
+        existing_input: str | Any | None = None,
+    ):
+        proposal = self.planner.plan(prompt)
+        report = None
+        if existing_input is not None:
+            report = pipeline_module.inspect_existing_project_archive(existing_input)
+
+        selection = platform_resolver.resolve_platform(
+            prompt,
+            existing_version=(report.minecraft_version if report is not None else None),
+            existing_loader=(report.loader if report is not None else None),
+        )
+        proposal = platform_resolver.retarget_proposal(proposal, selection)
+
+        if report is not None:
+            proposal = self._bind_existing_input(proposal, report)
+        proposal.validate()
+        return proposal
+
+    plan._mmm_host_target_binding = True
+    cls.plan = plan
 
 
 __all__ = ["install"]
