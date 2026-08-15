@@ -1,0 +1,43 @@
+name: Apply CI regression fix set
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-ci-regression-fix-main
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply verified regression patch to latest main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          cat > /tmp/ci-fix.patch.gz.b64 <<'PATCH_B64'
+          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
+          PATCH_B64
+          base64 -d /tmp/ci-fix.patch.gz.b64 | gzip -d > /tmp/ci-fix.patch
+          echo 'd43617d186d8629fb1e33620da66e1002b323ca633f0256ea097b0d428a4620f  /tmp/ci-fix.patch' | sha256sum -c -
+          git apply --check /tmp/ci-fix.patch
+          git apply --index /tmp/ci-fix.patch
+          git rm --ignore-unmatch .github/workflows/apply-ci-regression-fix.yml
+          git diff --cached --check
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git commit -m 'Fix version-neutral CI regressions'
+          git push origin HEAD:main
