@@ -7,10 +7,11 @@ from typing import Any, Callable, Mapping, Sequence
 from jsonschema import validators
 from jsonschema.exceptions import SchemaError
 
-from .model_adapters import GenerationRequest
+from .model_adapters import GenerationRequest, ModelBackendError
 
 
 _MAX_REPAIR_ATTEMPTS = 2
+_GENERIC_JSON_OBJECT_SCHEMA: Mapping[str, Any] = {"type": "object"}
 
 
 class StructuredOutputValidationError(RuntimeError):
@@ -109,28 +110,74 @@ def _repair_messages(
     )
 
 
+def _recover_invalid_json_document(exc: ModelBackendError) -> str | None:
+    """Recover model JSON rejected at the host syntax boundary, never transport JSON.
+
+    The early-stop transport may close a structurally complete root object before a
+    Python syntax check.  In that case its direct ModelBackendError cause is the
+    JSONDecodeError raised by json.loads(content), whose ``doc`` is the exact model
+    output.  SSE/protocol failures are intentionally wrapped in another RuntimeError,
+    so they do not match this narrow recovery path and remain transport failures.
+    """
+
+    cause = exc.cause
+    if not isinstance(cause, json.JSONDecodeError):
+        return None
+    output = str(cause.doc).strip()
+    if not output.startswith("{"):
+        return None
+    return output
+
+
+def _generate_json_candidate(
+    request: GenerationRequest,
+    generate: Callable[[GenerationRequest], str],
+) -> str:
+    try:
+        return generate(request)
+    except ModelBackendError as exc:
+        recovered = _recover_invalid_json_document(exc)
+        if recovered is None:
+            raise
+        return recovered
+
+
 def generate_with_host_schema_repair(
     request: GenerationRequest,
     generate: Callable[[GenerationRequest], str],
     *,
     max_repair_attempts: int = _MAX_REPAIR_ATTEMPTS,
 ) -> str:
-    """Generate once, then correct only an existing invalid JSON result.
+    """Generate JSON, then correct only an existing invalid JSON result.
 
-    Transport failures are deliberately not caught. Detailed JSON Schema enforcement
-    belongs to this host boundary; the native server only needs to guarantee JSON
-    syntax. Each correction pass receives the latest invalid output and its exact
-    validation failures, and never replays the original task conversation.
+    Genuine transport failures are deliberately not caught. Detailed JSON Schema
+    enforcement belongs to this host boundary; the native server only needs to
+    produce a JSON candidate. A malformed candidate rejected by the local early-stop
+    syntax check is recovered from the direct JSONDecodeError and enters the same
+    isolated correction path instead of being misreported as a backend outage.
+
+    Schema-less ``response_format='json'`` requests still receive a generic object
+    validator, so syntax errors cannot escape merely because the caller did not add a
+    detailed application schema. Each correction pass receives the latest invalid
+    output and its exact validation failures, and never replays the original task
+    conversation.
     """
 
-    schema = request.response_schema
-    if request.response_format != "json" or not isinstance(schema, Mapping) or not schema:
+    if request.response_format != "json":
         return generate(request)
     if max_repair_attempts < 0:
         raise ValueError("max_repair_attempts must be non-negative")
 
-    validator = _validator_for(schema)
-    current = generate(request)
+    schema = request.response_schema
+    if schema is None:
+        effective_schema = dict(_GENERIC_JSON_OBJECT_SCHEMA)
+    elif isinstance(schema, Mapping):
+        effective_schema = dict(schema) if schema else dict(_GENERIC_JSON_OBJECT_SCHEMA)
+    else:
+        raise ValueError("response_schema must be a mapping when response_format='json'")
+
+    validator = _validator_for(effective_schema)
+    current = _generate_json_candidate(request, generate)
     errors = _validation_errors(current, validator)
     if not errors:
         return current
@@ -138,15 +185,19 @@ def generate_with_host_schema_repair(
     for attempt in range(1, max_repair_attempts + 1):
         repair_request = replace(
             request,
-            messages=_repair_messages(output=current, errors=errors, schema=schema),
+            messages=_repair_messages(
+                output=current,
+                errors=errors,
+                schema=effective_schema,
+            ),
             media_paths=(),
             response_format="json",
-            response_schema=dict(schema),
+            response_schema=effective_schema,
             tools=(),
             tool_choice=None,
             parallel_tool_calls=False,
         )
-        current = generate(repair_request)
+        current = _generate_json_candidate(repair_request, generate)
         errors = _validation_errors(current, validator)
         if not errors:
             return current
