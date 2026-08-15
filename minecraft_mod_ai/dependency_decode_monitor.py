@@ -15,7 +15,6 @@ import json
 import re
 from contextvars import ContextVar
 from functools import wraps
-from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
