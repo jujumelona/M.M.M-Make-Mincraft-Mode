@@ -51,6 +51,19 @@ def _archive_root() -> Path:
     return Path(workspace).expanduser().resolve() / ".minecraft_ai" / "context-memory"
 
 
+def _archive_preview(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    payload = _canonical_bytes(list(messages))
+    digest = _sha256_bytes(payload)
+    target = _archive_root() / f"{digest.removeprefix('sha256:')}.json"
+    return {
+        "available": True,
+        "sha256": digest,
+        "bytes": len(payload),
+        "path": str(target),
+        "format": "canonical-json",
+    }
+
+
 def _archive_transcript(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Persist exact dropped history and return a content-addressed recovery pointer."""
 
@@ -243,11 +256,7 @@ def compact_messages(messages: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str
         dropped = original[first:start]
         if not dropped:
             continue
-        archive = _archive_transcript(dropped)
-        if not archive.get("available"):
-            # The research contract is lossless: if raw history cannot be recovered,
-            # skip compaction instead of silently replacing it with only a hash.
-            return original
+        archive = _archive_preview(dropped)
         context = {
             "role": "system",
             "content": "HOST COMPACTED VERIFIED CONTEXT. Exact facts/tool outcomes are authoritative; omitted prose is recoverable from raw_history and is not itself verified.\n"
@@ -259,8 +268,28 @@ def compact_messages(messages: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str
             ),
         }
         compacted: tuple[Mapping[str, Any], ...] = (*original[:first], context, *original[start:])
-        if len(_canonical_bytes(compacted)) <= budget:
-            return compacted
+        if len(_canonical_bytes(compacted)) > budget:
+            continue
+        persisted_archive = _archive_transcript(dropped)
+        if not persisted_archive.get("available"):
+            # The research contract is lossless: if raw history cannot be recovered,
+            # skip compaction instead of silently replacing it with only a hash.
+            return original
+        if persisted_archive != archive:
+            context = {
+                "role": "system",
+                "content": "HOST COMPACTED VERIFIED CONTEXT. Exact facts/tool outcomes are authoritative; omitted prose is recoverable from raw_history and is not itself verified.\n"
+                + json.dumps(
+                    _ledger(dropped, archive=persisted_archive),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            }
+            compacted = (*original[:first], context, *original[start:])
+            if len(_canonical_bytes(compacted)) > budget:
+                return original
+        return compacted
     return original
 
 
