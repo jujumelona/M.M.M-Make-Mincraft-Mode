@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""Consolidate the remaining read-only hot-path work without duplicating owners.
+"""Consolidate residual hot-path admission without duplicating work owners.
 
-The existing bottleneck contract owns MCP transport/session reuse and the central
-research module owns evidence semantics. This module only supplies two missing
-admission policies around those owners: identical central-research retrievals are
-memoized for one evidence build, and independent read-only external MCP requests
-are deterministically spread across a bounded set of already-persistent workers.
-Runtime/write MCP traffic keeps the original single worker and therefore remains
-serialized.
+The existing bottleneck contract owns MCP transport/session reuse, central research
+owns evidence semantics, and trajectory-memory performance owns its SQLite index.
+This module only adjusts admission around those owners: duplicate central retrievals
+are memoized, independent read-only MCP requests use bounded persistent lanes, and
+trajectory memory locks are scoped to the project instead of serializing unrelated
+projects in one process.
 """
 
 import hashlib
@@ -17,6 +16,7 @@ import os
 import threading
 from contextvars import ContextVar
 from functools import wraps
+from pathlib import Path
 from typing import Any, Mapping
 
 _INSTALL_LOCK = threading.RLock()
@@ -24,10 +24,46 @@ _MCP_REQUEST_LANE: ContextVar[int | None] = ContextVar(
     "mmm_external_mcp_read_lane",
     default=None,
 )
+_MEMORY_BASE: ContextVar[str] = ContextVar("mmm_trajectory_memory_base", default="")
 _MARKER = "_mmm_runtime_hotpath_consolidation_v1"
+_MEMORY_MARKER = "_mmm_project_scoped_trajectory_memory_v1"
 _DEFAULT_EXTERNAL_READ_LANES = 4
 _MAX_EXTERNAL_READ_LANES = 8
 _MAX_READ_CACHE_ENTRIES = 512
+
+
+class _ProjectScopedRLock:
+    """One reentrant lock per active project, with a safe global fallback."""
+
+    def __init__(self) -> None:
+        self._guard = threading.RLock()
+        self._locks: dict[str, threading.RLock] = {}
+        self._local = threading.local()
+
+    def _lock(self) -> threading.RLock:
+        key = _MEMORY_BASE.get() or "__global__"
+        with self._guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                self._locks[key] = lock
+            return lock
+
+    def __enter__(self) -> "_ProjectScopedRLock":
+        lock = self._lock()
+        lock.acquire()
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = []
+            self._local.stack = stack
+        stack.append(lock)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        stack = getattr(self._local, "stack", None)
+        if not stack:
+            raise RuntimeError("Project-scoped trajectory lock exit without enter")
+        stack.pop().release()
 
 
 def _external_read_lanes() -> int:
@@ -88,9 +124,6 @@ def _install_external_mcp_admission(bottlenecks: Any, external: Any) -> None:
             lane = _MCP_REQUEST_LANE.get()
             if lane is None:
                 return current_worker(router, server_name, entry)
-            # server_name is used by the existing owner only to derive its persistent
-            # worker key/error context. The transport/configuration still comes from
-            # entry, so no provider-visible identifier changes.
             worker_key_name = f"{server_name}#read-lane-{lane}"
             return current_worker(router, worker_key_name, entry)
 
@@ -184,6 +217,59 @@ def _install_central_research_dedup(central_research: Any) -> Any:
     return deduplicated_retrieve_domain_evidence
 
 
+def harden_memory_lock_scope(
+    trajectory_memory: Any,
+    memory_performance: Any,
+    indexed_append: Any,
+    indexed_relevant: Any,
+) -> tuple[Any, Any]:
+    """Remove process-global memory waits while preserving same-project exclusion."""
+
+    if getattr(indexed_append, _MEMORY_MARKER, False):
+        return indexed_append, indexed_relevant
+
+    keyed_lock = _ProjectScopedRLock()
+    trajectory_memory._LOCK = keyed_lock
+    memory_performance._TRAJECTORY_LOCK = keyed_lock
+
+    @wraps(indexed_append)
+    def append(base: str | Path, row: Mapping[str, Any]) -> bool:
+        token = _MEMORY_BASE.set(str(Path(base).expanduser().resolve()))
+        try:
+            return bool(indexed_append(base, row))
+        finally:
+            _MEMORY_BASE.reset(token)
+
+    @wraps(indexed_relevant)
+    def relevant(
+        base: str | Path,
+        query: str,
+        *,
+        task_class: str,
+        router: Any | None = None,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        token = _MEMORY_BASE.set(str(Path(base).expanduser().resolve()))
+        try:
+            return indexed_relevant(
+                base,
+                query,
+                task_class=task_class,
+                router=router,
+                limit=limit,
+            )
+        finally:
+            _MEMORY_BASE.reset(token)
+
+    setattr(append, _MEMORY_MARKER, True)
+    append.__wrapped__ = indexed_append  # type: ignore[attr-defined]
+    setattr(relevant, _MEMORY_MARKER, True)
+    relevant.__wrapped__ = indexed_relevant  # type: ignore[attr-defined]
+    trajectory_memory.append_trajectory = append
+    trajectory_memory.relevant_trajectories = relevant
+    return append, relevant
+
+
 def harden(
     bottlenecks: Any,
     central_research: Any,
@@ -196,10 +282,8 @@ def harden(
             return
         _install_external_mcp_admission(bottlenecks, external_mcp_router)
         shared_research = _install_central_research_dedup(central_research)
-        # agentic_research_game_design imports this function by value before the late
-        # hot-path phase. Rebind that stale reference instead of adding another wrapper.
         agentic_research.retrieve_domain_evidence = shared_research
         setattr(harden, _MARKER, True)
 
 
-__all__ = ["harden"]
+__all__ = ["harden", "harden_memory_lock_scope"]
