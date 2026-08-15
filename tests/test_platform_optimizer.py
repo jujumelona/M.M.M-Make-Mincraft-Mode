@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import api
-from minecraft_mod_ai.platform_catalog import FABRIC_1201, FABRIC_1211, provider_for_loader
+from minecraft_mod_ai.platform_catalog import adapter_for_target, provider_for_loader
 from minecraft_mod_ai.platform_optimizer import TargetEvidence
 
 
@@ -25,7 +25,7 @@ def _evidence(adapter, *, coverage: int, requested: int, freshness: float) -> Ta
         verified_hash_files=coverage,
         dependency_edges=0,
         maintenance_signals=coverage,
-        adoption=1_000_000 if adapter is FABRIC_1211 else 1,
+        adoption=1_000_000 if adapter.minecraft_version == "1.21.1" else 1,
         freshness=freshness,
         evidence_quality=1.0,
         integration_risk=0.0,
@@ -35,8 +35,18 @@ def _evidence(adapter, *, coverage: int, requested: int, freshness: float) -> Ta
 
 
 def test_reuse_coverage_beats_newer_more_popular_target() -> None:
-    older = _evidence(FABRIC_1201, coverage=11, requested=12, freshness=1.0)
-    newer = _evidence(FABRIC_1211, coverage=4, requested=12, freshness=9_999_999_999.0)
+    older = _evidence(
+        adapter_for_target("1.20.1", "fabric"),
+        coverage=11,
+        requested=12,
+        freshness=1.0,
+    )
+    newer = _evidence(
+        adapter_for_target("1.21.1", "fabric"),
+        coverage=4,
+        requested=12,
+        freshness=9_999_999_999.0,
+    )
     assert older.rank_key > newer.rank_key
 
 
@@ -67,10 +77,11 @@ def test_no_historical_constructor_placeholder_or_newest_fallback() -> None:
     assert not (PACKAGE / "platform_selection_efficiency_contract.py").exists()
 
 
-def test_platform_planning_does_not_select_target_or_duplicate_target_rag() -> None:
+def test_platform_planning_only_binds_legacy_pipeline_target() -> None:
     source = (PACKAGE / "platform_planning_contract.py").read_text(encoding="utf-8")
-    assert "resolve_platform" not in source
-    assert "retarget_proposal" not in source
+    assert "_install_pipeline_target_binding" in source
+    assert "platform_resolver.resolve_platform" in source
+    assert "platform_resolver.retarget_proposal" in source
     assert "GameDesignPlanner.plan =" not in source
-    assert '_platform_evidence' in source
+    assert "_platform_evidence" in source
     assert "platform_prompt_contract" in source  # behavior is folded here, not imported
