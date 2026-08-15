@@ -31,8 +31,9 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     )
     payload = _server_payload(_adapter(), request)
     assert request.response_schema == schema
-    assert payload["response_format"] == {"type": "json_object"}
-    assert "schema" not in payload["response_format"]
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
