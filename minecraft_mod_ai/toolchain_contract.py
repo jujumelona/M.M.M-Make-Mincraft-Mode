@@ -2,19 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .platform_catalog import FABRIC_1201, adapter_for_lock_values
-
-
-# Backward-compatible exports. Runtime execution no longer uses these globals as the
-# source of truth; it resolves the selected project's adapter instead.
-LOOM_VERSION = FABRIC_1201.fabric_loom
-GRADLE_VERSION = FABRIC_1201.gradle
-GRADLE_SHA256 = FABRIC_1201.gradle_sha256
-FABRIC_LOADER_VERSION = FABRIC_1201.fabric_loader
+from .platform_catalog import adapter_for_lock_values
 
 
 def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
-    """Return exact dependency predicates from one reviewed platform lock."""
+    """Return exact dependency predicates from one host-selected provider receipt."""
 
     platform.validate()
     adapter_for_lock_values(platform)
@@ -38,15 +30,11 @@ def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
 
 
 def install(spec_module: Any, runner_module: Any) -> None:
-    """Install only backward-compatible toolchain aliases.
+    """Retain the explicit bootstrap hook without installing target aliases.
 
-    Platform generation and runner locking are composed explicitly by
-    ``runtime_bootstrap`` so this installer has no hidden child installers.
+    Toolchain values are resolved only from the selected project's executable
+    platform-provider receipt. The bootstrap therefore has nothing to copy into the
+    runner as process-global defaults.
     """
 
-    del spec_module
-    runner_module.GRADLE_VERSION = GRADLE_VERSION
-    runner_module.GRADLE_URL = (
-        f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip"
-    )
-    runner_module.GRADLE_SHA256 = GRADLE_SHA256
+    del spec_module, runner_module
