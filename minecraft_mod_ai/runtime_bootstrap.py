@@ -7,7 +7,6 @@ owns their composition. No installer re-enters another package bootstrap and no
 runtime contract is intentionally installed twice.
 """
 
-import os
 from threading import RLock
 
 _BOOTSTRAP_LOCK = RLock()
@@ -157,9 +156,7 @@ def _install_platform_contracts() -> None:
         generator,
         mineflayer_bridge,
         minecraft_knowledge_contract,
-        platform_central_ai_contract,
         platform_planning_contract,
-        platform_resolver,
         production_contract,
         repair_engine,
         retrieval,
@@ -170,9 +167,7 @@ def _install_platform_contracts() -> None:
         technology_radar,
         validator,
     )
-    from .colab_auto_platform_contract import install as install_colab_auto_platform
     from .mod_scope_contract import install as install_mod_scope
-    from .parallel_platform_rag_contract import install as install_parallel_platform_rag
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_ecosystem_contract import install as install_platform_ecosystem
@@ -183,7 +178,6 @@ def _install_platform_contracts() -> None:
     from .platform_prompt_contract import install as install_platform_prompts
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
-    from .platform_selection_efficiency_contract import install as install_platform_selection_efficiency
     from .platform_specialized_generator_contract import install as install_specialized_generator_guards
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
@@ -203,7 +197,6 @@ def _install_platform_contracts() -> None:
         complete_planner_module=complete_planner,
         central_research_module=central_research,
         retrieval_module=retrieval,
-        technology_module=technology_radar,
     )
     install_platform_live_rag(
         retrieval_module=retrieval,
@@ -212,10 +205,6 @@ def _install_platform_contracts() -> None:
     install_platform_technology(technology_radar)
     install_platform_ecosystem(ecosystem_discovery, complete_planner)
     install_platform_prompts(complete_planner)
-    install_platform_selection_efficiency(
-        resolver_module=platform_resolver,
-        central_contract_module=platform_central_ai_contract,
-    )
     central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
     central_intelligence_amplifier.install(agentic_research_game_design)
@@ -226,13 +215,6 @@ def _install_platform_contracts() -> None:
         complete_planner_module=complete_planner,
     )
     install_mod_scope(complete_spec, complete_planner)
-    install_parallel_platform_rag(
-        complete_planner_module=complete_planner,
-        central_module=central_research,
-        retrieval_module=retrieval,
-    )
-    if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
-        install_colab_auto_platform(game_design)
     install_platform_custom_coder(custom_module_generator)
     install_platform_repair(repair_engine)
     install_live_execution(complete_orchestrator)
@@ -391,7 +373,10 @@ def _install_late_safety_contracts() -> None:
         orchestrator_module=complete_orchestrator,
     )
     install_production_tool_parallel_safety(production_tools)
-    install_runner_parallel_validation(runner_module=runner, validation_module=validation_execution_contract)
+    install_runner_parallel_validation(
+        runner_module=runner,
+        validation_module=validation_execution_contract,
+    )
     install_parallel_result_determinism(
         orchestrator_module=complete_orchestrator,
         audio_generator_module=audio_generator,

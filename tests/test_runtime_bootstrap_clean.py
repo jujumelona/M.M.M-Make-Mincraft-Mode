@@ -96,6 +96,9 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
     assert "platform_mcp_compatibility_contract" not in source
     assert "agent_tool_calling_contract" not in source
     assert "platform_policy_runtime_contract" not in source
+    assert "platform_selection_efficiency_contract" not in source
+    assert "parallel_platform_rag_contract" not in source
+    assert "colab_auto_platform_contract" not in source
 
     required_once = (
         "install_runner_lock(",
@@ -111,8 +114,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
         "install_platform_ecosystem(",
         "install_platform_prompts(",
         "install_mod_scope(",
-        "install_parallel_platform_rag(",
-        "install_colab_auto_platform(",
         "install_planner_json_runtime(",
         "install_planner_strict_json(",
         "install_planner_outline_prompt(",
@@ -176,8 +177,6 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
         in source
     )
     assert "install_hardware(self.autotune)" in source
-    # A six-axis T4 calibration module may be kept for explicit/offline tuning,
-    # but production requests must never compose or execute that sweep.
     assert "qwen35_t4_single_stream_tuning" not in source
     assert "install_qwen35_t4_single_stream" not in source
     order = (
@@ -249,8 +248,14 @@ def test_specialized_installers_are_single_responsibility() -> None:
     assert "max_performance_module" not in cache_reuse
     assert "runtime_tuning_module" in cache_reuse
 
-    assert not (PACKAGE / "integrated_contract_bootstrap.py").exists()
-    assert not (PACKAGE / "platform_mcp_compatibility_contract.py").exists()
-    assert not (PACKAGE / "final_architecture_contract.py").exists()
-    assert not (PACKAGE / "llama_server_max_performance.py").exists()
-    assert not (PACKAGE / "production_stream_resume_contract.py").exists()
+    for removed in (
+        "integrated_contract_bootstrap.py",
+        "platform_mcp_compatibility_contract.py",
+        "final_architecture_contract.py",
+        "llama_server_max_performance.py",
+        "production_stream_resume_contract.py",
+        "platform_selection_efficiency_contract.py",
+        "parallel_platform_rag_contract.py",
+        "colab_auto_platform_contract.py",
+    ):
+        assert not (PACKAGE / removed).exists(), removed

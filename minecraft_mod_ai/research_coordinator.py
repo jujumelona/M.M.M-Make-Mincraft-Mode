@@ -26,12 +26,19 @@ def collect_technology_radar(
 ) -> dict[str, Any]:
     """Collect every technology page into one backwards-compatible aggregate.
 
-    ``page_size`` remains the bound for each call.  Completion is controlled by
-    the page contract and its declared total, never by a coordinator-wide item or page limit.
+    ``page_size`` remains the bound for each call. Completion is controlled by
+    the page contract and its declared total, never by a coordinator-wide item
+    or page limit. When platform selection has already attached an exact target
+    to the research brief, that host-owned target is propagated automatically.
     """
 
     if type(page_size) is not int or not 1 <= page_size <= 100:
         raise SpecValidationError("Technology page_size must be between 1 and 100.")
+
+    if target is None and isinstance(research_brief, Mapping):
+        selected_target = research_brief.get("_mmm_platform_target")
+        if isinstance(selected_target, Mapping):
+            target = dict(selected_target)
 
     cursor = ""
     seen_cursors: set[str] = set()

@@ -99,17 +99,18 @@ def test_explicit_supported_request_can_build_source_twice_in_unique_runs(
     assert output_root.resolve() in Path(second.project_root).resolve().parents
 
 
-def test_unsupported_minecraft_version_fails_before_creating_output(
+def test_explicit_provider_target_is_not_rejected_by_static_constructor_allowlist(
     tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / "unsupported-output"
+    output_root = tmp_path / "dynamic-target-output"
+    session = ModAISession(
+        output_root=output_root,
+        minecraft_version="1.21.1",
+        planner=HeuristicPlanner(),
+    )
 
-    with pytest.raises(ValueError, match="1\\.20\\.1|1\\.21\\.4|unsupported|지원"):
-        ModAISession(
-            output_root=output_root,
-            minecraft_version="1.21.4",
-        )
-
+    assert session.minecraft_version == "1.21.1"
+    assert session.loader is None
     assert not output_root.exists()
 
 

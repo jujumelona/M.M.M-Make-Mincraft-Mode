@@ -15,6 +15,7 @@ from minecraft_mod_ai.platform_catalog import (
     adapter_from_project,
 )
 from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget
+from minecraft_mod_ai.platform_optimizer import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_resolver import lock_from_adapter, resolve_platform
 from minecraft_mod_ai.spec import (
     ContentKind,
@@ -62,6 +63,32 @@ def _future_live(version: str = "27.0") -> LiveFabricTarget:
     )
 
 
+def _optimization(adapter) -> PlatformOptimization:
+    evidence = TargetEvidence(
+        adapter=adapter,
+        requested_capabilities=(),
+        covered_capabilities=(),
+        exact_projects=(),
+        exact_versions=1,
+        verified_hash_files=1,
+        dependency_edges=0,
+        maintenance_signals=1,
+        adoption=0,
+        freshness=0.0,
+        evidence_quality=1.0,
+        integration_risk=0.0,
+        residual_cost=0,
+        dependency_complexity=0,
+    )
+    return PlatformOptimization(
+        selected=adapter,
+        evidence=evidence,
+        candidates=(evidence,),
+        capability_queries=("test capability",),
+        discovery_mode="test-host-evidence",
+    )
+
+
 def test_supported_versions_are_live_discovery_not_source_allowlist(monkeypatch) -> None:
     monkeypatch.setattr(
         catalog,
@@ -93,38 +120,41 @@ class _ChoiceRouter:
         return json.dumps(
             {
                 "minecraft_version": self.selected,
-                "reason": "central compatibility choice",
+                "reason": "model coordinate guess",
             }
         )
 
 
-def _patch_future_candidates(monkeypatch) -> None:
+def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
+    selected_adapter = FABRIC_1211
     monkeypatch.setattr(
         resolver,
-        "supported_minecraft_versions",
-        lambda loader="fabric": ("27.0", "26.2"),
+        "_optimize",
+        lambda *_args, **_kwargs: _optimization(selected_adapter),
     )
-    monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
+    router = _ChoiceRouter("1.20.1")
 
-
-def test_central_ai_selects_from_live_discovered_candidates(monkeypatch) -> None:
-    _patch_future_candidates(monkeypatch)
-    router = _ChoiceRouter("26.2")
-    selected = resolve_platform(
-        "새 모드를 만들어줘",
-        router=router,
-    )
-    assert router.calls == 1
-    assert selected.adapter.minecraft_version == "26.2"
-    assert selected.source == "central_ai_over_live_discovery"
-
-
-def test_central_ai_cannot_invent_undiscovered_version(monkeypatch) -> None:
-    _patch_future_candidates(monkeypatch)
-    router = _ChoiceRouter("99.99")
     selected = resolve_platform("새 모드를 만들어줘", router=router)
-    assert selected.adapter.minecraft_version == "27.0"
-    assert selected.reason
+
+    assert router.calls == 0
+    assert selected.adapter.adapter_id == selected_adapter.adapter_id
+    assert selected.source == "host_evidence_optimizer"
+
+
+def test_model_cannot_invent_platform_coordinate(monkeypatch) -> None:
+    selected_adapter = FABRIC_1201
+    monkeypatch.setattr(
+        resolver,
+        "_optimize",
+        lambda *_args, **_kwargs: _optimization(selected_adapter),
+    )
+    router = _ChoiceRouter("99.99")
+
+    selected = resolve_platform("새 모드를 만들어줘", router=router)
+
+    assert router.calls == 0
+    assert selected.adapter.minecraft_version == "1.20.1"
+    assert selected.adapter.minecraft_version != router.selected
 
 
 def test_explicit_future_target_is_hard_constraint_when_officially_discovered(monkeypatch) -> None:

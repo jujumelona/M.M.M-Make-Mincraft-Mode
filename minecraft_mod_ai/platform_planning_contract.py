@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Platform planning consumers.
+"""Platform-neutral planning consumers after host target selection.
 
-This module does not select a Minecraft target.  Selection has exactly one owner:
+Target selection has exactly one owner:
 ``platform_central_ai_contract`` -> ``platform_resolver`` -> ``platform_optimizer``.
-The helpers here only make prompts target-neutral and consume the already selected
-target for official implementation evidence and technology validation.
+This module only keeps prompts target-neutral and retrieves implementation evidence
+for the already selected executable target.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,10 +21,8 @@ def install(
     complete_planner_module: Any,
     central_research_module: Any,
     retrieval_module: Any,
-    technology_module: Any,
 ) -> None:
     _install_target_neutral_prompts(game_design_module)
-    _install_dynamic_technology_target(technology_module)
     _install_selected_target_evidence(
         complete_planner_module,
         central_research_module,
@@ -66,55 +64,6 @@ def _install_target_neutral_prompts(module: Any) -> None:
 
         sharded_prompt._mmm_target_neutral_prompt = True
         module._sharded_design_system_prompt = sharded_prompt
-
-
-def _install_dynamic_technology_target(module: Any) -> None:
-    target_cls = module.TechnologyTarget
-    if getattr(target_cls.validate, "_mmm_provider_verified_target", False):
-        return
-
-    def validate(self: Any) -> None:
-        try:
-            adapter = adapter_for_target(self.minecraft_version, self.loader)
-        except ValueError as exc:
-            raise module.SpecValidationError(str(exc)) from exc
-        expected = {
-            "edition": adapter.edition,
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-            "java_version": adapter.java_version,
-            "fabric_loader": adapter.fabric_loader,
-            "fabric_api": adapter.fabric_api,
-        }
-        for field, value in expected.items():
-            if getattr(self, field) != value:
-                raise module.SpecValidationError(
-                    f"Technology target is mixed at {field}: expected {value!r}, "
-                    f"got {getattr(self, field)!r}."
-                )
-
-    validate._mmm_provider_verified_target = True
-    target_cls.validate = validate
-
-    original_normalize = module.normalize_technology_target
-
-    @wraps(original_normalize)
-    def normalize(value: Any):
-        if isinstance(value, module.PlatformLock):
-            return target_cls(
-                edition=value.edition,
-                minecraft_version=value.minecraft_version,
-                loader=value.loader,
-                mappings=value.yarn_mappings,
-                java_version=value.java_version,
-                fabric_loader=value.fabric_loader,
-                fabric_api=value.fabric_api,
-            )
-        return original_normalize(value)
-
-    normalize._mmm_provider_verified_target = True
-    module.normalize_technology_target = normalize
 
 
 def _install_selected_target_evidence(module: Any, central: Any, retrieval: Any) -> None:
@@ -183,7 +132,11 @@ def _retrieve_domain_evidence_target(
         domain = central._research_domain(raw_domain)
         if "official_docs" not in domain.providers:
             routed.append(
-                {"domain_id": domain.domain_id, "strategy": "routed_to_other_providers", "queries": []}
+                {
+                    "domain_id": domain.domain_id,
+                    "strategy": "routed_to_other_providers",
+                    "queries": [],
+                }
             )
             continue
         official_jobs.extend((domain.domain_id, query) for query in domain.queries)
@@ -215,7 +168,10 @@ def _retrieve_domain_evidence_target(
         domain = central._research_domain(raw_domain)
         if "official_docs" not in domain.providers:
             continue
-        values = sorted(by_domain.get(domain.domain_id, []), key=lambda item: item["query_sha256"])
+        values = sorted(
+            by_domain.get(domain.domain_id, []),
+            key=lambda item: item["query_sha256"],
+        )
         has_hits = any(
             isinstance(item.get("primary"), dict) and bool(item["primary"].get("hits"))
             for item in values
@@ -223,7 +179,11 @@ def _retrieve_domain_evidence_target(
         if not has_hits:
             unresolved.append(domain.domain_id)
         results.append(
-            {"domain_id": domain.domain_id, "strategy": "parallel_target_multi_path", "queries": values}
+            {
+                "domain_id": domain.domain_id,
+                "strategy": "parallel_target_multi_path",
+                "queries": values,
+            }
         )
 
     payload = {
@@ -251,7 +211,9 @@ def _target_query(central: Any, retrieval: Any, query: str, adapter: Any) -> dic
     ]
     return {
         "query_sha256": central._sha256(query),
-        "strategy": "single" if not primary.correction_required else "evolving_corrective_multi_hop",
+        "strategy": "single"
+        if not primary.correction_required
+        else "evolving_corrective_multi_hop",
         "primary": primary.to_dict(),
         "corrections": corrections,
     }
