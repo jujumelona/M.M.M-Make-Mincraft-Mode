@@ -14,6 +14,8 @@ concurrency:
   group: ci-audit-v6-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Independent regression gates intentionally fan out in parallel; the remaining
+# suite is deterministically sharded so a slow group cannot serialize validation.
 jobs:
   audit:
     runs-on: ubuntu-latest
