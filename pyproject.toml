@@ -45,7 +45,13 @@ qwen-fastpath = [
   "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6; sys_platform == 'linux'",
 ]
 rag = ["sentence-transformers>=3.0,<6"]
-image = ["diffusers>=0.35,<1", "sentencepiece>=0.2,<1"]
+image = [
+  "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
+  "diffusers>=0.39,<1",
+  "peft>=0.17,<1",
+  "sentencepiece>=0.2,<1",
+  "transformers>=4.56.0",
+]
 speech = ["soundfile>=0.12,<1"]
 production-audio = ["numpy>=1.26,<3", "soundfile>=0.12,<1"]
 # The current mmm-training command records/exports trace data and does not import

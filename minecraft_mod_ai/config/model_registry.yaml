@@ -17,12 +17,18 @@ _shared_reranker: &shared_reranker
   max_new_tokens: 1
 
 _shared_image_gen: &shared_image_gen
-  model_id: black-forest-labs/FLUX.2-klein-4B
+  model_id: black-forest-labs/FLUX.2-klein-9B
   adapter: image_diffusion
+  quantization: bnb_4bit_nf4
   torch_dtype: float16
   exclusive_gpu: true
   cpu_offload: true
-  min_free_vram_mb: 12500
+  min_free_vram_mb: 9000
+  lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+  lora_weight_name: "[FLUX.2.Klein]PixelArt_Redmond.safetensors"
+  lora_adapter_name: mmm_pixelart_redmond
+  lora_scale: 1.0
+  lora_trigger: "Pixel Art, PixArFK"
 
 _shared_speech: &shared_speech
   model_id: openai/whisper-small
@@ -283,12 +289,7 @@ profiles:
         max_new_tokens: 3000
       embedding: *shared_embedding
       reranker: *shared_reranker
-      image_generator:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_IMAGE_MODEL
-        base_url_env: MMM_IMAGE_BASE_URL
-        api_key_env: MMM_IMAGE_API_KEY
+      image_generator: *shared_image_gen
       speech_recognition:
         provider: openai_compatible
         adapter: openai_compatible
