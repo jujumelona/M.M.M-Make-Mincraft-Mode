@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Executable Minecraft platform-provider registry.
 
-A loader name is not support.  A target becomes selectable only when a registered
-provider can resolve the complete toolchain needed by generation/build/validation.
-The registry is loader-neutral; the built-in provider currently implemented by MMM
-is Fabric.  Additional loaders must register a real resolver/provider before the
-optimizer can ever select them.
+A loader name is not support. A target becomes selectable only when a registered
+provider resolves the complete toolchain needed by generation/build/validation.
+No Minecraft version, mappings, loader/API coordinate, Java version, Loom version,
+Gradle version, or resource-pack format is selected from an offline default here.
 """
 
 from dataclasses import asdict, dataclass
@@ -52,57 +51,6 @@ class PlatformProvider:
     resolve: Callable[[str], PlatformAdapter]
 
 
-_GRADLE_8_12_SHA256 = "7a00d51fb93147819aab76024feece20b6b84e420694101f276be952e08bef03"
-
-# These are offline compatibility receipts for already exercised targets, not an
-# allowlist and not an automatic preference order.
-FABRIC_1201 = PlatformAdapter(
-    adapter_id="fabric_1_20_1",
-    edition="java",
-    loader="fabric",
-    minecraft_version="1.20.1",
-    java_version="17",
-    yarn_mappings="1.20.1+build.1",
-    fabric_loader="0.17.2",
-    fabric_api="0.92.11+1.20.1",
-    fabric_loom="1.10.5",
-    gradle="8.12",
-    gradle_sha256=_GRADLE_8_12_SHA256,
-    resource_pack_format=15,
-    source_api_family="fabric_1201",
-    deterministic_module_kinds=frozenset(
-        {
-            "item", "block", "tool", "weapon", "armor", "food", "crop",
-            "machine", "recipe", "effect", "enchantment", "command",
-            "advancement", "loot", "entity", "boss", "npc", "quest",
-            "class", "skill", "economy", "shop", "gui", "networking",
-            "party", "guild", "structure", "biome", "dimension",
-            "world_event", "audio", "integration", "custom_java", "fluid",
-        }
-    ),
-)
-
-FABRIC_1211 = PlatformAdapter(
-    adapter_id="fabric_1_21_1",
-    edition="java",
-    loader="fabric",
-    minecraft_version="1.21.1",
-    java_version="21",
-    yarn_mappings="1.21.1+build.3",
-    fabric_loader="0.19.3",
-    fabric_api="0.116.15+1.21.1",
-    fabric_loom="1.10.5",
-    gradle="8.12",
-    gradle_sha256=_GRADLE_8_12_SHA256,
-    resource_pack_format=34,
-    source_api_family="fabric_1211",
-    deterministic_module_kinds=frozenset(
-        {"item", "block", "recipe", "advancement", "loot", "command"}
-    ),
-)
-
-PLATFORM_ADAPTERS: tuple[PlatformAdapter, ...] = (FABRIC_1201, FABRIC_1211)
-_BY_SEED_TARGET = {(item.loader, item.minecraft_version): item for item in PLATFORM_ADAPTERS}
 _PROVIDER_LOCK = RLock()
 _PROVIDERS: dict[str, PlatformProvider] = {}
 
@@ -141,7 +89,7 @@ def provider_for_loader(loader: str) -> PlatformProvider:
 
 
 def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
-    """Return provider-discovered versions; never imply support for an absent provider."""
+    """Return only provider-discovered versions; no offline version fallback exists."""
     if loader is not None:
         return provider_for_loader(loader).discover_versions(32)
     values: list[str] = []
@@ -169,8 +117,6 @@ def discover_target_keys(
         if minecraft_version:
             versions = tuple(value for value in versions if value == minecraft_version)
             if not versions:
-                # Exact explicit/existing targets may be older than the discovery
-                # window. Resolve them directly and include only if executable.
                 try:
                     provider.resolve(str(minecraft_version))
                 except ValueError:
@@ -251,8 +197,14 @@ def adapter_from_project(project_root: str | Path) -> PlatformAdapter:
         version = str(raw.get("minecraft_version") or "").strip()
         adapter = adapter_for_target(version, loader)
         for field in (
-            "minecraft_version", "loader", "java_version", "yarn_mappings",
-            "fabric_loader", "fabric_api", "fabric_loom", "gradle",
+            "minecraft_version",
+            "loader",
+            "java_version",
+            "yarn_mappings",
+            "fabric_loader",
+            "fabric_api",
+            "fabric_loom",
+            "gradle",
         ):
             if raw.get(field) != getattr(adapter, field):
                 raise ValueError(
@@ -264,7 +216,7 @@ def adapter_from_project(project_root: str | Path) -> PlatformAdapter:
     minecraft_version = properties.get("minecraft_version", "").strip()
     loader = properties.get("loader", "").strip().casefold()
     if not loader:
-        # Detect only unambiguous, executable Gradle markers. Never assume Fabric.
+        # Detection is evidence-based only; no loader is assumed.
         if properties.get("loader_version") and properties.get("fabric_version"):
             loader = "fabric"
         else:
@@ -301,7 +253,6 @@ def platform_catalog_receipt() -> dict[str, Any]:
     return {
         "schema_version": "mmm/executable-platform-registry-v1",
         "providers": providers,
-        "offline_compatibility_seeds": [item.public_dict() for item in PLATFORM_ADAPTERS],
     }
 
 
@@ -309,14 +260,14 @@ def _fabric_versions(limit: int) -> tuple[str, ...]:
     try:
         return latest_stable_versions(limit=max(1, int(limit)))
     except PlatformDiscoveryError:
-        return tuple(item.minecraft_version for item in PLATFORM_ADAPTERS)[: max(1, int(limit))]
+        # Discovery failure must not silently revive an old target.
+        return ()
 
 
 def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
     version = str(minecraft_version).strip()
-    seed = _BY_SEED_TARGET.get(("fabric", version))
-    if seed is not None:
-        return seed
+    if not version:
+        raise ValueError("Minecraft version must not be empty for Fabric discovery.")
     try:
         target = discover_fabric_target(version)
     except PlatformDiscoveryError as exc:
@@ -334,7 +285,7 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
         fabric_loom=target.loom_version,
         gradle=target.gradle_version,
         gradle_sha256=target.gradle_sha256,
-        resource_pack_format=0,
+        resource_pack_format=int(getattr(target, "resource_pack_format", 0) or 0),
         source_api_family="fabric_live_ai",
         deterministic_module_kinds=frozenset(),
     )
