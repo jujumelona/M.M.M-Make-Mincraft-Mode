@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai import retrieval
-from minecraft_mod_ai import platform_planning_contract
+from minecraft_mod_ai import central_research
 from minecraft_mod_ai import platform_live_rag_contract as live_rag
+from minecraft_mod_ai import retrieval
 
 
 def test_builtin_rag_index_is_constructed_once_per_thread(monkeypatch) -> None:
@@ -34,7 +34,7 @@ def test_runtime_rag_entrypoints_use_shared_index_contract() -> None:
         False,
     )
     assert getattr(
-        platform_planning_contract._target_retrieve,
+        central_research.retrieve_official_evidence,
         "_mmm_thread_local_index_reuse",
         False,
     )
