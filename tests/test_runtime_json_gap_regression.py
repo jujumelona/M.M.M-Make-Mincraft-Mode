@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
 from minecraft_mod_ai import planning_stall_guard_contract as guard
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
 def test_json_requests_never_enable_native_llama_grammar():
@@ -19,8 +21,10 @@ def test_json_requests_never_enable_native_llama_grammar():
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_tool_json_turn_never_mixes_native_grammar_controls():
-    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
+def test_llama_tool_turn_uses_host_envelope_without_native_tool_grammar(monkeypatch):
+    from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
+
     tool = {
         "type": "function",
         "function": {
@@ -29,20 +33,71 @@ def test_tool_json_turn_never_mixes_native_grammar_controls():
             "parameters": {"type": "object", "properties": {}},
         },
     }
-    request = SimpleNamespace(
+    request = GenerationRequest(
         messages=({"role": "user", "content": "use the tool"},),
         tools=(tool,),
         tool_choice="auto",
+        parallel_tool_calls=True,
         response_format="json",
     )
-    payload = _server_payload(adapter, request)
-    assert payload["tools"] == [tool]
-    assert payload["tool_choice"] == "auto"
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
-    assert "grammar" not in payload
-    assert "reasoning_effort" not in payload
-    assert "chat_template_kwargs" not in payload
+    adapter = LlamaCppAdapter(
+        AdapterConfig(
+            role="planner",
+            adapter="llama_cpp",
+            model_id="local-test",
+            max_new_tokens=512,
+        )
+    )
+    monkeypatch.setattr(adapter, "_server_url", lambda _request: "http://unit.test/v1")
+    monkeypatch.setattr(stream_contract, "_report_server_connection", lambda _url: None)
+
+    sent_payloads = []
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"kind":"tool_calls","calls":[{"id":"call_0",'
+                                '"name":"search_project_rag","arguments":{"query":"x"}}]}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(_url, *, json, timeout=None):
+        del timeout
+        sent_payloads.append(dict(json))
+        return Response()
+
+    monkeypatch.setattr(llama_adapter_module.httpx, "post", fake_post)
+    turn = adapter.generate_turn(request)
+
+    assert [call.name for call in turn.tool_calls] == ["search_project_rag"]
+    assert turn.tool_calls[0].arguments == {"query": "x"}
+    assert len(sent_payloads) == 1
+    payload = sent_payloads[0]
+    for forbidden in (
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "response_format",
+        "json_schema",
+        "grammar",
+    ):
+        assert forbidden not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    rendered = "\n".join(str(message.get("content", "")) for message in payload["messages"])
+    assert "mmm/host-tool-envelope-v1" in rendered
+    assert "search_project_rag" in rendered
 
 
 def test_terminal_gap_is_not_counted_as_verified_completion():
