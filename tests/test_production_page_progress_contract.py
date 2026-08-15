@@ -80,6 +80,66 @@ def test_production_schema_rejects_blank_module_string_array_items(field) -> Non
         validator.validate(_production_page(modules=[_module(**{field: [""]})]))
 
 
+@pytest.mark.parametrize(
+    "asset",
+    [
+        {"kind": "texture"},
+        {"kind": "item", "width": "16"},
+        {"kind": "item", "height": 16.5},
+    ],
+)
+def test_production_schema_rejects_asset_parser_mismatches(asset) -> None:
+    validator = Draft202012Validator(_schema())
+    with pytest.raises(ValidationError):
+        validator.validate(_production_page(assets=[asset]))
+
+
+@pytest.mark.parametrize(
+    "audio",
+    [
+        {"kind": "sfx"},
+        {"kind": "effect", "duration_seconds": "1"},
+        {"kind": "effect", "loop": "false"},
+    ],
+)
+def test_production_schema_rejects_audio_parser_mismatches(audio) -> None:
+    validator = Draft202012Validator(_schema())
+    with pytest.raises(ValidationError):
+        validator.validate(_production_page(audio=[audio]))
+
+
+def test_production_schema_accepts_canonical_asset_and_audio_fields() -> None:
+    validator = Draft202012Validator(_schema())
+    validator.validate(
+        _production_page(
+            assets=[
+                {
+                    "asset_id": "icon",
+                    "kind": "item",
+                    "prompt": "icon",
+                    "target_path": "assets/mod/textures/icon.png",
+                    "width": 16,
+                    "height": 16,
+                }
+            ]
+        )
+    )
+    validator.validate(
+        _production_page(
+            audio=[
+                {
+                    "sound_id": "click",
+                    "kind": "effect",
+                    "duration_seconds": 1.0,
+                    "frequency_hz": 440.0,
+                    "volume": 0.8,
+                    "loop": False,
+                }
+            ]
+        )
+    )
+
+
 def test_production_schema_rejects_blank_acceptance_test() -> None:
     validator = Draft202012Validator(_schema())
     with pytest.raises(ValidationError):
@@ -87,4 +147,5 @@ def test_production_schema_rejects_blank_acceptance_test() -> None:
 
 
 def test_stale_loose_production_checkpoints_are_invalidated() -> None:
-    assert durable._VERSION >= 3
+    assert durable._VERSION >= 4
+    assert durable._ITEM_VERSION >= 3
