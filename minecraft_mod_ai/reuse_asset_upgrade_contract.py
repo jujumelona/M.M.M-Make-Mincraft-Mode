@@ -24,7 +24,6 @@ from .resource_asset_production import (
 )
 from .reuse_planner import (
     decompose_capability_graph,
-    optimize_platform_and_reuse,
     plan_fixed_target,
 )
 from .source_transplant import materialize_source_slices
@@ -87,80 +86,27 @@ def _install_reuse_aware_resolver(resolver: Any) -> None:
         router: Any | None = None,
         target_research_fn: Any | None = None,
     ):
-        del router
         text = str(prompt or "")
-        explicit_version = resolver._explicit_minecraft_version(text)
-        explicit_loader = resolver._explicit_loader(text)
-        migration_requested = bool(existing_version and resolver._MIGRATION_RE.search(text))
         kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
+        selection = current(
+            text,
+            design=design,
+            module_kinds=kinds,
+            existing_version=existing_version,
+            existing_loader=existing_loader,
+            router=router,
+            target_research_fn=target_research_fn,
+        )
         graph = decompose_capability_graph(text, design=design, module_kinds=kinds)
-
-        fixed = bool(explicit_version and explicit_loader)
-        if existing_version and not migration_requested:
-            fixed = True
-        elif explicit_version and not explicit_loader:
-            fixed = len(resolver.adapters_for_version(explicit_version)) == 1
-
-        if fixed:
-            selection = current(
-                text,
-                design=design,
-                module_kinds=kinds,
-                existing_version=existing_version,
-                existing_loader=existing_loader,
-                target_research_fn=target_research_fn,
-            )
-            evidence = selection.optimization.evidence if selection.optimization is not None else None
-            allow_network = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower() != "off"
-            plan = plan_fixed_target(
-                selection.adapter,
-                capabilities=graph.nodes,
-                design=design,
-                platform_evidence=evidence,
-                allow_network=allow_network,
-                capability_graph=graph.to_dict(),
-            )
-            object.__setattr__(selection, "_mmm_reuse_plan", plan.to_dict())
-            return selection
-
-        if explicit_loader:
-            try:
-                resolver.provider_for_loader(explicit_loader)
-            except ValueError as exc:
-                raise resolver.SpecValidationError(str(exc)) from exc
-        try:
-            joint = optimize_platform_and_reuse(
-                text,
-                design=design,
-                module_kinds=kinds,
-                loader_constraint=explicit_loader,
-                version_constraint=explicit_version,
-                target_research_fn=target_research_fn,
-            )
-        except ValueError as exc:
-            raise resolver.SpecValidationError(str(exc)) from exc
-
-        adapter = joint.selected
-        plan = joint.selected_plan
-        selection = resolver.PlatformSelection(
-            adapter=adapter,
-            source=(
-                "host_joint_reuse_optimizer_explicit_version"
-                if explicit_version
-                else "host_joint_reuse_optimizer"
-            ),
-            reason=(
-                f"{adapter.minecraft_version}/{adapter.loader} selected by minimum expected "
-                f"implementation+verification work after verified reuse: "
-                f"expected={plan.total_expected_cost:.2f}, "
-                f"verified_reuse_value={plan.weighted_verified_reuse:.2f}, "
-                f"fresh_capabilities={plan.unresolved_capabilities}. Freshness is tie-break only."
-            ),
-            explicit_version=bool(explicit_version),
-            explicit_loader=bool(explicit_loader),
-            preserved_existing_target=False,
-            migration_requested=migration_requested,
-            optimization=joint.base_optimization,
+        evidence = selection.optimization.evidence if selection.optimization is not None else None
+        allow_network = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower() != "off"
+        plan = plan_fixed_target(
+            selection.adapter,
+            capabilities=graph.nodes,
+            design=design,
+            platform_evidence=evidence,
+            allow_network=allow_network,
+            capability_graph=graph.to_dict(),
         )
         object.__setattr__(selection, "_mmm_reuse_plan", plan.to_dict())
         return selection
