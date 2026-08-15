@@ -8,7 +8,7 @@ from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerationError,
     CustomModuleGenerator,
 )
-from minecraft_mod_ai.platform_catalog import FABRIC_1201, FABRIC_1211, PlatformAdapter
+from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
 from minecraft_mod_ai.platform_resolver import resolve_platform
 from minecraft_mod_ai import repair_engine
@@ -100,7 +100,7 @@ def test_revise_explicit_version_port_is_bound_as_migration() -> None:
         existing_version="1.20.1",
         existing_loader="fabric",
     )
-    assert selection.adapter.adapter_id == FABRIC_1211.adapter_id
+    assert selection.adapter.adapter_id == adapter_for_target("1.21.1", "fabric").adapter_id
     assert selection.migration_requested is True
     assert selection.preserved_existing_target is False
     assert selection.to_dict()["migration_requested"] is True
@@ -112,6 +112,6 @@ def test_revise_without_port_request_preserves_existing_target() -> None:
         existing_version="1.20.1",
         existing_loader="fabric",
     )
-    assert selection.adapter.adapter_id == FABRIC_1201.adapter_id
+    assert selection.adapter.adapter_id == adapter_for_target("1.20.1", "fabric").adapter_id
     assert selection.migration_requested is False
     assert selection.preserved_existing_target is True
