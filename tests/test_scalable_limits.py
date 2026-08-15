@@ -12,10 +12,12 @@ from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
 from minecraft_mod_ai.scalable_pipeline import ScalableMinecraftModPipeline
 from minecraft_mod_ai.scalable_validator import ScalableProjectValidator
-from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
+from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, PlatformLock
 
 
-def test_257_contents_generate_in_deterministic_shards(tmp_path: Path) -> None:
+def test_257_contents_generate_in_deterministic_shards(
+    tmp_path: Path, synthetic_platform_lock: PlatformLock
+) -> None:
     contents = tuple(
         ContentSpec(
             content_id=f"scale_item_{index:03d}",
@@ -33,6 +35,7 @@ def test_257_contents_generate_in_deterministic_shards(tmp_path: Path) -> None:
         version="1.0.0",
         summary="scale contract",
         contents=contents,
+        platform=synthetic_platform_lock,
     )
     policy = ScalePolicy(java_shard_size=32)
     root = tmp_path / "project"
@@ -100,7 +103,7 @@ def test_300_module_chain_validates_without_recursion_or_count_cap() -> None:
 
 
 def test_validator_uses_explicit_file_policy_not_legacy_4_mib(
-    tmp_path: Path,
+    tmp_path: Path, synthetic_platform_lock: PlatformLock
 ) -> None:
     spec = ModSpec(
         mod_id="large_file_test",
@@ -108,6 +111,7 @@ def test_validator_uses_explicit_file_policy_not_legacy_4_mib(
         package_name="ai.minecraft.large_file_test",
         version="1.0.0",
         summary="policy file size contract",
+        platform=synthetic_platform_lock,
         contents=(
             ContentSpec(
                 content_id="anchor_item",

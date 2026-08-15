@@ -17,8 +17,10 @@ from minecraft_mod_ai.spec import (
 )
 
 
-def test_every_platform_component_is_exactly_pinned() -> None:
-    platform = PlatformLock()
+def test_every_platform_component_is_exactly_pinned(
+    synthetic_platform_lock: PlatformLock,
+) -> None:
+    platform = synthetic_platform_lock
     platform.validate()
     for field_name in (
         "yarn_mappings",
