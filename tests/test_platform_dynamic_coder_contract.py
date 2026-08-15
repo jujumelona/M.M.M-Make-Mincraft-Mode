@@ -9,7 +9,7 @@ from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerator,
 )
 from minecraft_mod_ai.platform_catalog import FABRIC_1201, FABRIC_1211, PlatformAdapter
-from minecraft_mod_ai.platform_custom_coder_contract import _rewrite_message
+from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
 from minecraft_mod_ai.platform_resolver import resolve_platform
 from minecraft_mod_ai import repair_engine
 
@@ -50,7 +50,7 @@ def test_custom_coder_structured_request_uses_exact_live_target() -> None:
             }
         ),
     }
-    rewritten = _rewrite_message(message, adapter)
+    rewritten = _bind_target(message, adapter)
     payload = json.loads(rewritten["content"])
     assert payload["target"] == {
         "minecraft_version": "27.0",
@@ -64,19 +64,15 @@ def test_custom_coder_structured_request_uses_exact_live_target() -> None:
     }
 
 
-def test_custom_coder_system_prompt_cannot_leak_legacy_version() -> None:
-    rewritten = _rewrite_message(
-        {
-            "role": "system",
-            "content": (
-                "Implement compilable Minecraft Java 1.20.1 Fabric code and data. "
-                "You are an expert Minecraft 1.20.1 Fabric Java mod developer."
-            ),
-        },
-        _future_adapter(),
-    )
-    assert "1.20.1" not in rewritten["content"]
-    assert "27.0" in rewritten["content"]
+def test_custom_coder_prose_prompt_is_not_rewritten() -> None:
+    message = {
+        "role": "system",
+        "content": (
+            "Implement compilable Minecraft Java 1.20.1 Fabric code and data. "
+            "You are an expert Minecraft 1.20.1 Fabric Java mod developer."
+        ),
+    }
+    assert _bind_target(message, _future_adapter()) == message
 
 
 def test_custom_patch_scope_allows_kotlin_gradle_metadata_but_not_arbitrary_files() -> None:
