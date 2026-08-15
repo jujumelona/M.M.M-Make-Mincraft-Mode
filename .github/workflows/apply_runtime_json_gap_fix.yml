@@ -1,0 +1,279 @@
+name: Apply runtime JSON and research-gap fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: startsWith(github.event.head_commit.message, 'Bootstrap runtime JSON and research-gap fix')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply exact product fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, got {count}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          hw = 'minecraft_mod_ai/llama_server_hardware_policy.py'
+          replace_once(
+              hw,
+              '''    Tool-capable turns use the smallest widely compatible function-calling wire
+    contract. Structured non-tool turns ask llama.cpp only for a generic JSON object
+    and explicitly disable model-internal thinking. Detailed JSON Schema constraints
+    stay on the host so llama.cpp never has to translate application schemas into
+    fragile GBNF grammars.
+''',
+              '''    Tool-capable turns use the smallest widely compatible function-calling wire
+    contract. Structured non-tool turns deliberately do *not* send response_format,
+    json_schema, or grammar to llama.cpp: those controls can compile through fragile
+    server-side GBNF and fail before the model runs. JSON syntax/schema validation and
+    isolated repair are host-owned. We only disable model-internal thinking here.
+''',
+          )
+          replace_once(
+              hw,
+              '''    if getattr(request, "response_format", None) == "json":
+        payload["response_format"] = {"type": "json_object"}
+        # llama.cpp exposes both controls on /v1/chat/completions.  reasoning_effort
+        # is the server-level hard disable while enable_thinking is consumed by Qwen
+        # chat templates.  Supplying both makes the transport intent explicit and
+        # prevents reasoning tokens from exhausting the visible structured response.
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+''',
+              '''    if getattr(request, "response_format", None) == "json":
+        # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
+        # The host already owns JSON decoding, schema validation, and isolated repair.
+        # Keeping the native request grammar-free avoids pre-generation HTTP 400s
+        # ("Failed to initialize samplers: failed to parse grammar").
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+''',
+          )
+          replace_once(
+              hw,
+              '            structured = payload.get("response_format") is not None\n',
+              '            structured = getattr(request, "response_format", None) == "json"\n',
+          )
+
+          guard = 'minecraft_mod_ai/planning_stall_guard_contract.py'
+          replace_once(
+              guard,
+              '    _completed_domains: set[str] = field(default_factory=set, repr=False)\n',
+              '    _completed_domains: set[str] = field(default_factory=set, repr=False)\n    _gap_domains: set[str] = field(default_factory=set, repr=False)\n',
+          )
+          replace_once(
+              guard,
+              '''        total: Any = _UNSET,
+        complete_domain: str | None = None,
+    ) -> dict[str, Any]:
+''',
+              '''        total: Any = _UNSET,
+        complete_domain: str | None = None,
+        gap_domain: str | None = None,
+    ) -> dict[str, Any]:
+''',
+          )
+          replace_once(
+              guard,
+              '''            if complete_domain:
+                self._completed_domains.add(_safe_progress_value(complete_domain))
+            self.updated_at = time.monotonic()
+''',
+              '''            if complete_domain:
+                safe_complete = _safe_progress_value(complete_domain)
+                self._completed_domains.add(safe_complete)
+                self._gap_domains.discard(safe_complete)
+            if gap_domain:
+                safe_gap = _safe_progress_value(gap_domain)
+                if safe_gap not in self._completed_domains:
+                    self._gap_domains.add(safe_gap)
+            self.updated_at = time.monotonic()
+''',
+          )
+          replace_once(
+              guard,
+              '''            "completed": len(self._completed_domains),
+            "total": self.total,
+''',
+              '''            "completed": len(self._completed_domains),
+            "gaps": len(self._gap_domains),
+            "terminal": len(self._completed_domains | self._gap_domains),
+            "total": self.total,
+''',
+          )
+          replace_once(
+              guard,
+              '''        f" completed={snapshot['completed']}"
+        f" total={total}"
+''',
+              '''        f" completed={snapshot['completed']}"
+        f" gaps={snapshot['gaps']}"
+        f" terminal={snapshot['terminal']}"
+        f" total={total}"
+''',
+          )
+          replace_once(
+              guard,
+              '''    completed_domain: str | None = None,
+    total: int | None = None,
+''',
+              '''    completed_domain: str | None = None,
+    gap_domain: str | None = None,
+    total: int | None = None,
+''',
+          )
+          replace_once(
+              guard,
+              '    progress.record(complete_domain=completed_domain, **kwargs)\n',
+              '    progress.record(complete_domain=completed_domain, gap_domain=gap_domain, **kwargs)\n',
+          )
+          replace_once(
+              guard,
+              '''    terminal = event in {
+        "domain_checkpoint_complete",
+        "domain_complete",
+        "domain_gap_receipt",
+    }
+    report_planner_research_progress(
+''',
+              '''    successful_terminal = event in {
+        "domain_checkpoint_complete",
+        "domain_complete",
+    }
+    gap_terminal = event == "domain_gap_receipt"
+    report_planner_research_progress(
+''',
+          )
+          replace_once(
+              guard,
+              '''        completed_domain=cursor.get("domain") if terminal else None,
+        total=_progress_int(payload.get("total"), minimum=1),
+''',
+              '''        completed_domain=cursor.get("domain") if successful_terminal else None,
+        gap_domain=cursor.get("domain") if gap_terminal else None,
+        total=_progress_int(payload.get("total"), minimum=1),
+''',
+          )
+          replace_once(
+              guard,
+              '''        progress.record(stage="complete", checkpoint="research-saved")
+        print(
+            "planner research: pre-design complete",
+            _progress_fields(progress),
+            f"elapsed={time.monotonic() - started:.1f}s",
+            flush=True,
+        )
+''',
+              '''        final_snapshot = progress.snapshot()
+        gap_count = int(final_snapshot.get("gaps", 0) or 0)
+        if gap_count:
+            progress.record(
+                stage="complete-with-gaps",
+                checkpoint="research-saved-with-gaps",
+            )
+            final_label = "planner research: pre-design terminal with gaps"
+        else:
+            progress.record(stage="complete", checkpoint="research-saved")
+            final_label = "planner research: pre-design complete"
+        print(
+            final_label,
+            _progress_fields(progress),
+            f"elapsed={time.monotonic() - started:.1f}s",
+            flush=True,
+        )
+''',
+          )
+          PY
+      - name: Add focused regression tests
+        shell: bash
+        run: |
+          cat > tests/test_runtime_json_gap_regression.py <<'PY'
+          from types import SimpleNamespace
+
+          from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
+          from minecraft_mod_ai import planning_stall_guard_contract as guard
+
+
+          def test_json_requests_never_enable_native_llama_grammar():
+              adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
+              request = SimpleNamespace(
+                  messages=({"role": "user", "content": "return JSON"},),
+                  tools=(),
+                  response_format="json",
+              )
+              payload = _server_payload(adapter, request)
+              assert "response_format" not in payload
+              assert "json_schema" not in payload
+              assert "grammar" not in payload
+              assert payload["reasoning_effort"] == "none"
+              assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+          def test_terminal_gap_is_not_counted_as_verified_completion():
+              progress = guard._PlanningProgress(total=2)
+              progress_token = guard._ACTIVE_PROGRESS.set(progress)
+              cursor_token = guard._ACTIVE_PROGRESS_CURSOR.set(None)
+              try:
+                  guard._research_progress_hook(
+                      {
+                          "event": "domain_gap_receipt",
+                          "domain_id": "broken-domain",
+                          "page_index": 2,
+                          "page_count": 2,
+                      }
+                  )
+                  snapshot = progress.snapshot()
+                  assert snapshot["completed"] == 0
+                  assert snapshot["gaps"] == 1
+                  assert snapshot["terminal"] == 1
+
+                  guard._research_progress_hook(
+                      {
+                          "event": "domain_complete",
+                          "domain_id": "verified-domain",
+                          "page_index": 1,
+                          "page_count": 1,
+                      }
+                  )
+                  snapshot = progress.snapshot()
+                  assert snapshot["completed"] == 1
+                  assert snapshot["gaps"] == 1
+                  assert snapshot["terminal"] == 2
+              finally:
+                  guard._ACTIVE_PROGRESS_CURSOR.reset(cursor_token)
+                  guard._ACTIVE_PROGRESS.reset(progress_token)
+          PY
+      - name: Verify focused contracts
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m pytest -q tests/test_runtime_json_gap_regression.py tests/test_planning_stall_guard_contract.py tests/test_planner_strict_json_contract.py
+          python -m compileall -q minecraft_mod_ai tests/test_runtime_json_gap_regression.py
+          git diff --check
+      - name: Commit product fix and remove bootstrap workflow
+        shell: bash
+        run: |
+          git config user.name jujumelona
+          git config user.email qasdaa025@gmail.com
+          git rm .github/workflows/apply_runtime_json_gap_fix.yml
+          git add minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/planning_stall_guard_contract.py tests/test_runtime_json_gap_regression.py
+          git commit -m "Fix native JSON grammar crash and research gap accounting"
+          git push origin HEAD:main
