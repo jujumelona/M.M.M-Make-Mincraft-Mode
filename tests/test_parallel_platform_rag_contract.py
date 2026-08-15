@@ -2,69 +2,53 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai import central_research
-from minecraft_mod_ai.parallel_platform_rag_contract import (
-    _target_parallel_retrieve_factory,
-)
 from minecraft_mod_ai.platform_catalog import adapter_for_target
+from minecraft_mod_ai.platform_planning_contract import _target_retrieve
 
 
-class _Receipt:
-    correction_queries = ()
-    hits = (object(),)
-    correction_required = False
+class _Index:
+    def __init__(self, *, documents) -> None:
+        self.documents = documents
 
-    def __init__(self, *, query: str, version: str, mappings: str) -> None:
-        self.query = query
-        self.version = version
-        self.mappings = mappings
+    def __enter__(self):
+        return self
 
-    def to_dict(self):
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def retrieve(
+        self,
+        query: str,
+        *,
+        minecraft_version: str,
+        loader: str,
+        mappings: str,
+        limit: int,
+    ):
         return {
-            "query": self.query,
-            "minecraft_version": self.version,
-            "mappings": self.mappings,
-            "hits": [{"document_id": "fake"}],
+            "query": query,
+            "minecraft_version": minecraft_version,
+            "loader": loader,
+            "mappings": mappings,
+            "limit": limit,
         }
 
 
-def test_target_parallel_rag_never_falls_back_to_1201_after_selection() -> None:
+def test_selected_target_rag_never_falls_back_to_historical_target() -> None:
     adapter = adapter_for_target("1.21.1", "fabric")
-    brief = central_research.normalize_research_brief(
-        "Add one simple item with a right-click interaction.",
-        {},
+    retrieval = SimpleNamespace(
+        BUILTIN_CORPUS=(),
+        OfficialCorpusIndex=_Index,
     )
-    brief = {
-        **brief,
-        "_mmm_platform_target": {
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-        },
-    }
-    calls: list[tuple[str, str, str]] = []
 
-    def retrieve(query: str, *, minecraft_version: str, loader: str, mappings: str, limit: int):
-        calls.append((minecraft_version, loader, mappings))
-        return _Receipt(query=query, version=minecraft_version, mappings=mappings)
-
-    def legacy(*args, **kwargs):
-        raise AssertionError("selected target must not use legacy RAG")
-
-    fn = _target_parallel_retrieve_factory(
-        central_module=central_research,
-        retrieval_module=SimpleNamespace(retrieve_official_evidence=retrieve),
-        legacy_retrieve=legacy,
+    result = _target_retrieve(
+        retrieval,
+        "right click item interaction",
+        adapter=adapter,
+        limit=8,
     )
-    result = fn(brief, retrieve=retrieve)
 
-    assert calls
-    assert all(
-        value == (adapter.minecraft_version, adapter.loader, adapter.yarn_mappings)
-        for value in calls
-    )
-    assert result["target"] == {
-        "minecraft_version": adapter.minecraft_version,
-        "loader": adapter.loader,
-        "mappings": adapter.yarn_mappings,
-    }
+    assert result["minecraft_version"] == adapter.minecraft_version
+    assert result["loader"] == adapter.loader
+    assert result["mappings"] == adapter.yarn_mappings
+    assert result["minecraft_version"] != "1.20.1"
