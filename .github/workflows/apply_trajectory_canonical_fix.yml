@@ -1,0 +1,35 @@
+name: Apply canonical trajectory retrieval fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply product patch
+        run: python scripts/apply_trajectory_canonical_call_fix.py
+      - name: Verify focused runtime contracts
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m pytest -q tests/test_runtime_json_gap_regression.py tests/test_temporary_skill_reuse.py tests/test_llama_parallel_runtime_contract.py
+          python -m compileall -q minecraft_mod_ai tests/test_runtime_json_gap_regression.py
+          git diff --check
+      - name: Commit product fix and remove bootstrap files
+        run: |
+          git config user.name jujumelona
+          git config user.email qasdaa025@gmail.com
+          git rm .github/workflows/apply_trajectory_canonical_fix.yml scripts/apply_trajectory_canonical_call_fix.py
+          git add minecraft_mod_ai/temporary_skill_contract.py tests/test_runtime_json_gap_regression.py
+          git commit -m "Preserve execution context in trajectory retrieval"
+          git push origin HEAD:main
