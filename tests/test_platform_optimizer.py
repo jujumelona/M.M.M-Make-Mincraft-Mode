@@ -56,16 +56,21 @@ def test_public_sessions_default_to_unpinned_target() -> None:
 
 def test_no_historical_constructor_placeholder_or_newest_fallback() -> None:
     api_source = (PACKAGE / "api.py").read_text(encoding="utf-8")
-    api_contract = (PACKAGE / "platform_api_contract.py").read_text(encoding="utf-8")
     resolver = (PACKAGE / "platform_resolver.py").read_text(encoding="utf-8")
+    live_rag = (PACKAGE / "platform_live_rag_contract.py").read_text(encoding="utf-8")
     assert 'minecraft_version: str = "1.20.1"' not in api_source
-    assert 'kwargs["minecraft_version"] = "1.20.1"' not in api_contract
+    assert 'minecraft_version: str = "1.20.1"' not in live_rag
+    assert 'loader: str = "fabric"' not in live_rag
     assert "_choose_with_central_ai" not in resolver
+    assert not (PACKAGE / "platform_api_contract.py").exists()
+    assert not (PACKAGE / "platform_prompt_contract.py").exists()
     assert not (PACKAGE / "platform_selection_efficiency_contract.py").exists()
 
 
-def test_platform_planning_does_not_select_target() -> None:
+def test_platform_planning_does_not_select_target_or_duplicate_target_rag() -> None:
     source = (PACKAGE / "platform_planning_contract.py").read_text(encoding="utf-8")
     assert "resolve_platform" not in source
     assert "retarget_proposal" not in source
     assert "GameDesignPlanner.plan =" not in source
+    assert '_platform_evidence' in source
+    assert "platform_prompt_contract" in source  # behavior is folded here, not imported

@@ -12,7 +12,11 @@ from .platform_catalog import (
     executable_loaders,
     provider_for_loader,
 )
-from .platform_optimizer import PlatformOptimization, optimize_platform
+from .platform_optimizer import (
+    PlatformOptimization,
+    TargetResearchFn,
+    optimize_platform,
+)
 from .spec import PlatformLock, Proposal, SpecValidationError
 
 
@@ -104,13 +108,16 @@ def resolve_platform(
     existing_version: str | None = None,
     existing_loader: str | None = None,
     router: Any | None = None,
+    target_research_fn: TargetResearchFn | None = None,
 ) -> PlatformSelection:
     """Resolve one executable target using hard constraints then host evidence ranking.
 
-    The router is accepted for API compatibility but does not choose coordinates.  The
-    small model may already have contributed semantic capability labels in ``design``;
-    exact compatibility, provider gates and final target ranking are host-owned.
+    The model may contribute semantic capability labels through ``design`` but never
+    chooses exact coordinates. Target-scoped deep research is an evidence callback,
+    not another selector: the host optimiser invokes it only for executable target
+    hypotheses and ranks its receipt with ecosystem/dependency evidence.
     """
+
     del router
     text = str(prompt or "")
     explicit_version = _explicit_minecraft_version(text)
@@ -161,6 +168,7 @@ def resolve_platform(
             design=design,
             module_kinds=kinds,
             version_constraint=explicit_version,
+            target_research_fn=target_research_fn,
         )
         return _optimized_selection(
             optimization,
@@ -190,6 +198,7 @@ def resolve_platform(
         design=design,
         module_kinds=kinds,
         loader_constraint=explicit_loader,
+        target_research_fn=target_research_fn,
     )
     return _optimized_selection(
         optimization,
@@ -207,6 +216,7 @@ def _optimize(
     module_kinds: Iterable[str],
     loader_constraint: str | None = None,
     version_constraint: str | None = None,
+    target_research_fn: TargetResearchFn | None = None,
 ) -> PlatformOptimization:
     try:
         return optimize_platform(
@@ -215,6 +225,7 @@ def _optimize(
             module_kinds=module_kinds,
             loader_constraint=loader_constraint,
             version_constraint=version_constraint,
+            target_research_fn=target_research_fn,
         )
     except ValueError as exc:
         raise SpecValidationError(str(exc)) from exc
@@ -237,7 +248,8 @@ def _optimized_selection(
             f"실행 provider gate를 통과한 후보를 비교해 {adapter.minecraft_version}/"
             f"{adapter.loader}을 선택했습니다: 필수 capability "
             f"{len(evidence.covered_capabilities)}/{len(evidence.requested_capabilities)}, "
-            f"검증 project {len(evidence.exact_projects)}, residual {evidence.residual_cost}. "
+            f"검증 reuse {evidence.reuse_coverage}, residual {evidence.residual_cost}, "
+            f"dependency closure {'complete' if evidence.dependency_closure_complete else 'incomplete'}. "
             "최신성은 마지막 tie-breaker로만 사용됩니다."
         ),
         explicit_version=explicit_version,

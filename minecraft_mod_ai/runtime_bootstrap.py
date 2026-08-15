@@ -155,7 +155,6 @@ def _install_platform_contracts() -> None:
         generator,
         mineflayer_bridge,
         minecraft_knowledge_contract,
-        platform_planning_contract,
         production_contract,
         repair_engine,
         retrieval,
@@ -173,7 +172,6 @@ def _install_platform_contracts() -> None:
     from .platform_live_execution_contract import install as install_live_execution
     from .platform_live_rag_contract import install as install_platform_live_rag
     from .platform_planning_contract import install as install_platform_planning
-    from .platform_prompt_contract import install as install_platform_prompts
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
     from .platform_specialized_generator_contract import install as install_specialized_generator_guards
@@ -194,14 +192,9 @@ def _install_platform_contracts() -> None:
         game_design_module=game_design,
         complete_planner_module=complete_planner,
         central_research_module=central_research,
-        retrieval_module=retrieval,
     )
-    install_platform_live_rag(
-        retrieval_module=retrieval,
-        platform_planning_module=platform_planning_contract,
-    )
+    install_platform_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
-    install_platform_prompts(complete_planner)
     central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
     central_intelligence_amplifier.install(agentic_research_game_design)

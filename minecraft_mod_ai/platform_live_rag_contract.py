@@ -32,15 +32,25 @@ def _replace_kwonly_default(function: Any, name: str, value: Any) -> None:
     function.__kwdefaults__ = updated
 
 
-def install(*, retrieval_module: Any, platform_planning_module: Any | None = None) -> None:
-    """Use version-applicable documents and reuse immutable search indexes.
+def _required_target(
+    retrieval: Any,
+    minecraft_version: str | None,
+    loader: str | None,
+    mappings: str | None,
+) -> tuple[str, str, str]:
+    version = str(minecraft_version or "").strip()
+    loader_id = str(loader or "").strip().casefold()
+    mapping_id = str(mappings or "").strip()
+    if not version or not loader_id or not mapping_id:
+        raise retrieval.SpecValidationError(
+            "Official RAG requires a host-selected minecraft_version, loader and mappings."
+        )
+    return version, loader_id, mapping_id
 
-    ``platform_planning_module`` is accepted only for bootstrap compatibility; this
-    contract no longer injects any planning RAG helper. Central research is the sole
-    owner of target-aware official evidence retrieval.
-    """
 
-    del platform_planning_module
+def install(*, retrieval_module: Any) -> None:
+    """Install target-required live corpus retrieval and thread-local index reuse."""
+
     cls = retrieval_module.OfficialCorpusIndex
     original = cls.retrieve
     if not getattr(original, "_mmm_live_platform_rag", False):
@@ -50,30 +60,37 @@ def install(*, retrieval_module: Any, platform_planning_module: Any | None = Non
             self: Any,
             query: str,
             *,
-            minecraft_version: str = "1.20.1",
-            loader: str = "fabric",
-            mappings: str = "yarn-1.20.1+build.1",
+            minecraft_version: str | None = None,
+            loader: str | None = None,
+            mappings: str | None = None,
             limit: int = 6,
         ):
+            version, loader_id, mapping_id = _required_target(
+                retrieval_module,
+                minecraft_version,
+                loader,
+                mappings,
+            )
             if (
-                minecraft_version == "1.20.1"
-                and mappings == "yarn-1.20.1+build.1"
+                version == "1.20.1"
+                and loader_id == "fabric"
+                and mapping_id == "yarn-1.20.1+build.1"
             ):
                 return original(
                     self,
                     query,
-                    minecraft_version=minecraft_version,
-                    loader=loader,
-                    mappings=mappings,
+                    minecraft_version=version,
+                    loader=loader_id,
+                    mappings=mapping_id,
                     limit=limit,
                 )
             return _retrieve_live(
                 retrieval_module,
                 self,
                 query,
-                minecraft_version=minecraft_version,
-                loader=loader,
-                mappings=mappings,
+                minecraft_version=version,
+                loader=loader_id,
+                mappings=mapping_id,
                 limit=limit,
             )
 
@@ -89,16 +106,22 @@ def install(*, retrieval_module: Any, platform_planning_module: Any | None = Non
         def shared_retrieve(
             query: str,
             *,
-            minecraft_version: str = "1.20.1",
-            loader: str = "fabric",
-            mappings: str = "yarn-1.20.1+build.1",
+            minecraft_version: str | None = None,
+            loader: str | None = None,
+            mappings: str | None = None,
             limit: int = 6,
         ):
+            version, loader_id, mapping_id = _required_target(
+                retrieval_module,
+                minecraft_version,
+                loader,
+                mappings,
+            )
             return _thread_index(retrieval_module).retrieve(
                 query,
-                minecraft_version=minecraft_version,
-                loader=loader,
-                mappings=mappings,
+                minecraft_version=version,
+                loader=loader_id,
+                mappings=mapping_id,
                 limit=limit,
             )
 
@@ -129,8 +152,10 @@ def _retrieve_live(
     if not 2 <= len(query) <= 2_000:
         raise retrieval.SpecValidationError("RAG query length must be between 2 and 2000.")
     if loader != "fabric":
-        raise retrieval.SpecValidationError("The local official RAG lane supports Fabric only.")
-    if not minecraft_version.strip() or not mappings.strip():
+        raise retrieval.SpecValidationError(
+            f"No reviewed local official corpus is installed for loader={loader!r}."
+        )
+    if not minecraft_version or not mappings:
         raise retrieval.SpecValidationError("Live RAG requires an approved target and mappings policy.")
     if type(limit) is not int or not 1 <= limit <= 12:
         raise retrieval.SpecValidationError("RAG result limit must be between 1 and 12.")
@@ -152,7 +177,7 @@ def _retrieve_live(
     }
     if not eligible:
         raise retrieval.SpecValidationError(
-            f"No official corpus documents apply to Minecraft {minecraft_version}."
+            f"No official corpus documents apply to Minecraft {minecraft_version}/{loader}."
         )
 
     lexical = index._lexical_ranking(canonical, eligible)
@@ -200,6 +225,7 @@ def _retrieve_live(
                 "rank": rank,
                 "snapshot": index.snapshot_hash,
                 "target": minecraft_version,
+                "loader": loader,
                 "mappings": mappings,
             }
         ).encode("utf-8")
@@ -233,9 +259,9 @@ def _retrieve_live(
     correction_required = quality != "strong"
     corrections = (
         (
-            f"{family} official Fabric documentation Minecraft {minecraft_version}",
+            f"{family} official {loader} documentation Minecraft {minecraft_version}",
             f"{family} {mappings} current symbol signature",
-            f"{family} compile GameTest validation",
+            f"{family} compile runtime validation",
         )
         if correction_required
         else ()
@@ -269,3 +295,6 @@ def _retrieve_live(
         correction_queries=corrections,
         hits=tuple(hits),
     )
+
+
+__all__ = ["install"]

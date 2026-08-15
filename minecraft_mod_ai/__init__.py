@@ -1,4 +1,4 @@
-"""M.M.M Make Mincraft Mode: scalable multimodal Fabric mod production tools."""
+"""M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
 from .runtime_bootstrap import initialize_runtime
 

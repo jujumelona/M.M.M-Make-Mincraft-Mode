@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from functools import wraps
-from typing import Any
+from typing import Any, Mapping
 
 from .complete_spec import CompleteProposal, ProductionModule
+from .platform_catalog import PlatformAdapter
 from .platform_resolver import resolve_platform, retarget_proposal
 
 
@@ -17,6 +18,55 @@ def install(*, game_design_module: Any, complete_planner_module: Any) -> None:
     """Install the sole platform-selection wrapper and the execution lowering layer."""
     _install_central_target_choice(game_design_module)
     _install_live_module_lowering(complete_planner_module)
+
+
+def _target_research_callback(research_brief: Mapping[str, Any]):
+    """Create one host-owned target-scoped evidence callback for optimizer hypotheses."""
+
+    def retrieve(adapter: PlatformAdapter) -> Mapping[str, Any]:
+        from . import central_research, retrieval
+        from .agentic_research_fusion import retrieve_target_agentic_evidence
+
+        brief = {
+            **dict(research_brief),
+            "_mmm_platform_target": {
+                "minecraft_version": adapter.minecraft_version,
+                "loader": adapter.loader,
+                "mappings": adapter.yarn_mappings,
+            },
+        }
+        return retrieve_target_agentic_evidence(
+            brief,
+            central_module=central_research,
+            retrieve=retrieval.retrieve_official_evidence,
+            minecraft_version=adapter.minecraft_version,
+            loader=adapter.loader,
+            mappings=adapter.yarn_mappings,
+        )
+
+    return retrieve
+
+
+def _research_failure(adapter: PlatformAdapter, exc: Exception) -> dict[str, Any]:
+    return {
+        "schema_version": "mmm/central-evidence-graph-v1",
+        "target": {
+            "minecraft_version": adapter.minecraft_version,
+            "loader": adapter.loader,
+            "mappings": adapter.yarn_mappings,
+        },
+        "domains": [],
+        "unresolved_official_domains": ["target_research_unavailable"],
+        "authorization": "none",
+        "retrieval_is_authority": False,
+        "status": "unavailable",
+        "errors": [
+            {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+        ],
+    }
 
 
 def _install_central_target_choice(module: Any) -> None:
@@ -39,11 +89,17 @@ def _install_central_target_choice(module: Any) -> None:
         if requested_loader and str(requested_loader).casefold() not in effective_prompt.casefold():
             effective_prompt += f"\n[HOST_LOADER_CONSTRAINT {requested_loader}]"
 
+        research_brief = design.get("_research_brief")
+        if not isinstance(research_brief, dict):
+            research_brief = module.normalize_research_brief(prompt, design)
+        target_research = _target_research_callback(research_brief)
+
         selection = resolve_platform(
             effective_prompt,
             design=design,
             existing_version=existing_version,
             existing_loader=existing_loader,
+            target_research_fn=target_research,
         )
         proposal = retarget_proposal(proposal, selection)
         selection_dict = selection.to_dict()
@@ -52,18 +108,41 @@ def _install_central_target_choice(module: Any) -> None:
                 "minecraft_version": str(existing_version),
                 "loader": str(existing_loader or "unknown").strip().casefold(),
             }
-        research_brief = design.get("_research_brief")
-        if not isinstance(research_brief, dict):
-            research_brief = module.normalize_research_brief(prompt, design)
-        research_brief = {
-            **research_brief,
-            "_mmm_platform_target": dict(selection_dict["target"]),
-        }
+
+        target = dict(selection_dict["target"])
+        bound_brief = {**research_brief, "_mmm_platform_target": target}
+        platform_evidence: Mapping[str, Any] | None = None
+        if selection.optimization is not None:
+            deep = selection.optimization.evidence.deep_research
+            if isinstance(deep, Mapping):
+                platform_evidence = dict(deep)
+        if platform_evidence is None:
+            try:
+                platform_evidence = dict(target_research(selection.adapter))
+            except Exception as exc:
+                platform_evidence = _research_failure(selection.adapter, exc)
+
+        pre_design = design.get("_pre_design_research")
+        if isinstance(pre_design, dict):
+            deterministic = pre_design.get("deterministic")
+            if isinstance(deterministic, dict):
+                deterministic = {**deterministic, "official_rag": dict(platform_evidence)}
+            else:
+                deterministic = {"official_rag": dict(platform_evidence)}
+            pre_design = {
+                **pre_design,
+                "research_brief": bound_brief,
+                "deterministic": deterministic,
+            }
+
         design = {
             **design,
             "_platform_selection": selection_dict,
-            "_research_brief": research_brief,
+            "_platform_evidence": dict(platform_evidence),
+            "_research_brief": bound_brief,
         }
+        if isinstance(pre_design, dict):
+            design["_pre_design_research"] = pre_design
         return design, proposal
 
     plan._mmm_platform_selection_owner = True
