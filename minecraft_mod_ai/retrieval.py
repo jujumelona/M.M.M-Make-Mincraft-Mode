@@ -1,24 +1,22 @@
-"""Version-aware, provenance-bearing retrieval over a code-owned corpus.
+"""Target-bound official retrieval without historical platform defaults.
 
-This is the local RAG lane used by the planner and MCP adapter.  It is not a
-web-search simulator: every built-in document is a reviewed primary source with
-an explicit version scope and content hash.  Query text can rank records but
-cannot add sources, instructions, capabilities, or permissions.
+The static corpus is deliberately target-neutral. Exact Minecraft version, loader,
+mappings and toolchain coordinates are admitted only through the executable platform
+provider selected by the host. Query text may rank trusted records but cannot invent
+or select a platform target.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
-import sqlite3
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from .platform_catalog import adapter_for_target
 from .spec import SpecValidationError, canonical_json
 
-
-SUPPORTED_VERSIONS = frozenset({"1.20.1"})
 _ALLOWED_SOURCE_PREFIXES = (
     "https://docs.fabricmc.net/",
     "https://maven.fabricmc.net/",
@@ -63,9 +61,7 @@ class CorpusDocument:
 
     def validate(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_.-]{2,127}", self.document_id):
-            raise SpecValidationError(
-                f"Invalid corpus document id: {self.document_id!r}"
-            )
+            raise SpecValidationError(f"Invalid corpus document id: {self.document_id!r}")
         if not any(self.url.startswith(prefix) for prefix in _ALLOWED_SOURCE_PREFIXES):
             raise SpecValidationError(
                 f"Corpus URL is outside the primary-source allowlist: {self.url}"
@@ -79,9 +75,15 @@ class CorpusDocument:
             raise SpecValidationError(
                 f"Corpus document has no indexed content: {self.document_id}"
             )
-        if not self.minecraft_versions:
+        # Static source code must never freeze a Minecraft target. Exact version and
+        # mapping authority belongs to the live executable-provider receipt.
+        if self.minecraft_versions != ("*",):
             raise SpecValidationError(
-                f"Corpus document has no version scope: {self.document_id}"
+                f"Built-in corpus document {self.document_id} is not target-neutral."
+            )
+        if self.mappings not in {"agnostic", "provider-selected"}:
+            raise SpecValidationError(
+                f"Built-in corpus document {self.document_id} freezes mappings."
             )
 
     def public_metadata(self) -> dict[str, Any]:
@@ -104,33 +106,31 @@ class CorpusDocument:
         }
 
 
-def _fabric_document(
+def _concept_document(
     document_id: str,
     title: str,
     url: str,
     *,
+    authority: str,
+    license_id: str,
+    loader: str,
     families: tuple[str, ...],
     topics: tuple[str, ...],
     content: str,
-    exact: bool = False,
     related_ids: tuple[str, ...] = (),
 ) -> CorpusDocument:
     return CorpusDocument(
         document_id=document_id,
         title=title,
         url=url,
-        authority="Fabric official documentation or artifact repository",
+        authority=authority,
         trust_tier="official_primary",
-        license_id="CC-BY-NC-SA-4.0-or-project-license",
-        revision=(
-            "minecraft-1.20.1/fabric-api-0.92.11+yarn-1.20.1+build.1"
-            if exact
-            else "live-concept-documentation-checked-2026-07-29"
-        ),
-        verified_on="2026-07-29",
-        minecraft_versions=("1.20.1",) if exact else ("*",),
-        loader="fabric",
-        mappings="yarn-1.20.1+build.1" if exact else "concept-only",
+        license_id=license_id,
+        revision="target-neutral-concept-source",
+        verified_on="2026-08-15",
+        minecraft_versions=("*",),
+        loader=loader,
+        mappings="agnostic",
         families=families,
         topics=topics,
         content=content,
@@ -139,301 +139,107 @@ def _fabric_document(
 
 
 BUILTIN_CORPUS: tuple[CorpusDocument, ...] = (
-    _fabric_document(
-        "fabric-yarn-1201",
-        "Yarn 1.20.1+build.1 Javadoc",
-        "https://maven.fabricmc.net/docs/yarn-1.20.1%2Bbuild.1/",
-        families=("source", "entity", "world", "networking"),
-        topics=("class", "method", "symbol", "mapping", "entity", "world", "server"),
-        content=(
-            "Exact named Minecraft 1.20.1 API surface for Yarn mappings build 1. "
-            "Use this lane for class and method signatures; do not substitute current-version examples."
-        ),
-        exact=True,
-        related_ids=("fabric-api-1201",),
-    ),
-    _fabric_document(
-        "fabric-api-1201",
-        "Fabric API 0.92.11+1.20.1 artifacts",
-        "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.92.11%2B1.20.1/",
-        families=("profile", "source", "build"),
-        topics=("fabric api", "dependency", "artifact", "version", "maven"),
-        content=(
-            "Pinned Fabric API artifact lane for Minecraft 1.20.1. Dependency resolution "
-            "and compiled signatures are authoritative for the selected target profile."
-        ),
-        exact=True,
-        related_ids=("fabric-yarn-1201", "fabric-datagen-1201", "fabric-gametest-1201"),
-    ),
-    _fabric_document(
-        "fabric-datagen-1201",
-        "Fabric API 1.20.1 datagen package",
-        "https://maven.fabricmc.net/docs/fabric-api-0.92.11%2B1.20.1/net/fabricmc/fabric/api/datagen/v1/package-summary.html",
-        families=("datagen", "content", "world"),
-        topics=("recipe", "loot", "tag", "language", "model", "data generation"),
-        content=(
-            "Exact Fabric API datagen package for the pinned 1.20.1 profile. JSON resources "
-            "must be generated or schema-validated and then checked for reference integrity."
-        ),
-        exact=True,
-        related_ids=("fabric-api-1201",),
-    ),
-    _fabric_document(
-        "fabric-gametest-1201",
-        "Fabric API 1.20.1 GameTest package",
-        "https://maven.fabricmc.net/docs/fabric-api-0.92.11%2B1.20.1/net/fabricmc/fabric/api/gametest/v1/package-summary.html",
-        families=("test", "entity", "world", "content"),
-        topics=("gametest", "server", "test", "seed", "runtime"),
-        content=(
-            "Exact Fabric GameTest API lane for Minecraft 1.20.1. A successful model response "
-            "is not test evidence; record real test identifiers, exit status, and report hashes."
-        ),
-        exact=True,
-        related_ids=("fabric-api-1201",),
-    ),
-    _fabric_document(
-        "fabric-meta",
-        "Fabric Meta API",
-        "https://meta.fabricmc.net/",
-        families=("profile", "build"),
-        topics=("loader", "mapping", "minecraft version", "metadata", "dependency"),
-        content=(
-            "Official Fabric metadata service used to resolve loader and mapping versions. "
-            "Resolution results must be frozen into a target profile before generation."
-        ),
-        exact=True,
-        related_ids=("fabric-api-1201",),
-    ),
-    CorpusDocument(
-        document_id="fabric-loader-01610",
-        title="Fabric Loader 0.16.10 metadata for Minecraft 1.20.1",
-        url="https://meta.fabricmc.net/v2/versions/loader/1.20.1/0.16.10",
-        authority="Fabric official metadata service",
-        trust_tier="official_primary",
-        license_id="Apache-2.0-or-service-terms",
-        revision="minecraft-1.20.1/fabric-loader-0.16.10",
-        verified_on="2026-07-29",
-        minecraft_versions=("1.20.1",),
-        loader="fabric-0.16.10",
-        mappings="not_applicable",
-        families=("profile", "build"),
-        topics=("loader", "minecraft version", "metadata", "dependency"),
-        content=(
-            "Exact official Fabric Meta endpoint for Minecraft 1.20.1 with "
-            "Fabric Loader 0.16.10. Freeze the resolved coordinate before generation."
-        ),
-        related_ids=("fabric-yarn-1201", "fabric-api-1201"),
-    ),
-    CorpusDocument(
-        document_id="java-17-runtime",
-        title="Java Platform Standard Edition 17 documentation",
-        url="https://docs.oracle.com/en/java/javase/17/",
-        authority="Oracle Java SE documentation",
-        trust_tier="official_primary",
-        license_id="Oracle-documentation-license",
-        revision="java-se-17",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
-        loader="not_applicable",
-        mappings="not_applicable",
-        families=("profile", "build", "runtime"),
-        topics=("java", "jdk", "runtime", "version"),
-        content=(
-            "Official documentation lane for the pinned Java SE 17 build and runtime target."
-        ),
-        related_ids=("fabric-loader-01610",),
-    ),
-    _fabric_document(
-        "fabric-project-structure",
-        "Fabric project structure",
-        "https://docs.fabricmc.net/develop/getting-started/project-structure",
-        families=("project", "build", "client-server"),
-        topics=("source set", "client", "server", "resources", "entrypoint"),
-        content=(
-            "Concept documentation for separating common and client-only source and resources. "
-            "The live examples may target a newer Minecraft version, so exact signatures require the pinned source lane."
-        ),
-        related_ids=("fabric-yarn-1201", "fabric-api-1201"),
-    ),
-    _fabric_document(
-        "fabric-build",
-        "Building a Fabric mod",
-        "https://docs.fabricmc.net/develop/getting-started/building-a-mod",
-        families=("build", "release"),
-        topics=("gradle", "build", "jar", "artifact", "remap"),
-        content=(
-            "Concept documentation for Gradle build and JAR output. Release status still requires "
-            "a real pinned build, GameTest report, and post-build JAR inspection."
-        ),
-        related_ids=("fabric-api-1201",),
-    ),
-    _fabric_document(
-        "fabric-datagen-concepts",
-        "Fabric data generation setup",
-        "https://docs.fabricmc.net/develop/data-generation/setup",
-        families=("datagen", "content"),
-        topics=("advancement", "loot", "recipe", "tag", "translation", "model"),
-        content=(
-            "Datagen can produce recipes, advancements, tags, models, language files and loot tables. "
-            "The current documentation is conceptual evidence only for a 1.20.1 build."
-        ),
-        related_ids=("fabric-datagen-1201",),
-    ),
-    _fabric_document(
-        "fabric-worldgen-concepts",
-        "Fabric feature generation",
-        "https://docs.fabricmc.net/develop/data-generation/features",
-        families=("world", "datagen"),
-        topics=("configured feature", "placed feature", "biome modification", "ore", "worldgen"),
-        content=(
-            "Feature generation separates configured features, placed features and biome modifications. "
-            "This source alone does not prove arbitrary villages, dungeons, structures or dimensions are implemented."
-        ),
-        related_ids=("fabric-datagen-1201",),
-    ),
-    _fabric_document(
-        "fabric-networking-concepts",
-        "Fabric networking",
-        "https://docs.fabricmc.net/develop/networking",
-        families=("networking", "security", "multiplayer"),
-        topics=("packet", "payload", "codec", "client", "server", "validation"),
-        content=(
-            "Networking bridges logical client and server state. Serverbound data must be validated "
-            "on the server, including target existence, distance, type, permission and replay-sensitive state."
-        ),
-        related_ids=("fabric-yarn-1201",),
-    ),
-    _fabric_document(
-        "fabric-entity-concepts",
-        "Creating a Fabric entity",
-        "https://docs.fabricmc.net/develop/entities/first-entity",
-        families=("entity", "asset", "client-server"),
-        topics=("entity type", "attribute", "goal", "renderer", "model", "texture"),
-        content=(
-            "Entity logic and behavior are server concerns while rendering is client-side. "
-            "Current examples are not 1.20.1 signatures and must be translated through the exact source lane."
-        ),
-        related_ids=("fabric-yarn-1201", "fabric-networking-concepts"),
-    ),
-    CorpusDocument(
-        document_id="blockbench-formats",
-        title="Blockbench formats",
-        url="https://www.blockbench.net/wiki/blockbench/formats/",
-        authority="Blockbench official documentation",
-        trust_tier="official_primary",
-        license_id="Blockbench-documentation-license",
-        revision="live-docs-checked-2026-07-29",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
-        loader="agnostic",
-        mappings="agnostic",
-        families=("asset", "model", "animation"),
-        topics=("bbmodel", "geckolib", "model", "texture", "animation", "export"),
-        content=(
-            "Blockbench supports multiple project formats. Java mod animation workflows may use "
-            "GeckoLib; project source and runtime export are separate artifacts."
-        ),
-        related_ids=("blockbench-bbmodel", "geckolib-official"),
-    ),
-    CorpusDocument(
-        document_id="blockbench-bbmodel",
-        title="Blockbench BBModel format notes",
-        url="https://www.blockbench.net/wiki/docs/bbmodel/",
-        authority="Blockbench official documentation",
-        trust_tier="official_primary",
-        license_id="Blockbench-documentation-license",
-        revision="live-docs-checked-2026-07-29",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
-        loader="agnostic",
-        mappings="agnostic",
-        families=("asset", "model"),
-        topics=("bbmodel", "internal format", "backup", "plugin"),
-        content=(
-            "BBModel is Blockbench's internal project format and is not promised as a stable complete interchange specification. "
-            "Preserve originals and validate any runtime export independently."
-        ),
-        related_ids=("blockbench-formats",),
-    ),
-    CorpusDocument(
-        document_id="geckolib-official",
-        title="GeckoLib official repository",
-        url="https://github.com/bernie-g/geckolib",
-        authority="GeckoLib official repository",
-        trust_tier="official_primary",
-        license_id="MIT",
-        revision="version-matrix-required",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
+    _concept_document(
+        "fabric-project-creation",
+        "Fabric Documentation - Creating a Project",
+        "https://docs.fabricmc.net/develop/getting-started/creating-a-project",
+        authority="Fabric official documentation",
+        license_id="CC-BY-NC-SA-4.0-or-project-license",
         loader="fabric",
-        mappings="version-dependent",
-        families=("asset", "animation", "entity"),
-        topics=("geckolib", "bone", "animation controller", "geo json", "texture"),
+        families=("profile", "build", "project"),
+        topics=("project", "loader", "mappings", "loom", "gradle", "dependency"),
         content=(
-            "GeckoLib versions and asset paths vary by Minecraft target. Select a compatible major "
-            "in the target profile and validate bone, texture and animation references before runtime use."
+            "Project structure and dependency concepts are retrieved here only as "
+            "target-neutral guidance. Exact coordinates must come from the selected "
+            "executable platform provider."
         ),
-        related_ids=("blockbench-formats", "fabric-entity-concepts"),
+        related_ids=("fabric-building", "fabric-mod-json"),
     ),
-    CorpusDocument(
-        document_id="mcp-server-primitives",
-        title="MCP server primitives",
-        url="https://modelcontextprotocol.io/specification/2025-11-25/server/index",
+    _concept_document(
+        "fabric-building",
+        "Fabric Documentation - Building a Mod",
+        "https://docs.fabricmc.net/develop/getting-started/building-a-mod",
+        authority="Fabric official documentation",
+        license_id="CC-BY-NC-SA-4.0-or-project-license",
+        loader="fabric",
+        families=("build", "project"),
+        topics=("gradle", "build", "jar", "artifact", "validation"),
+        content=(
+            "Build and JAR production guidance. The host-selected provider owns the "
+            "actual Gradle, Java, loader and toolchain coordinates."
+        ),
+        related_ids=("fabric-project-creation",),
+    ),
+    _concept_document(
+        "fabric-datagen",
+        "Fabric Documentation - Data Generation",
+        "https://docs.fabricmc.net/develop/data-generation/setup",
+        authority="Fabric official documentation",
+        license_id="CC-BY-NC-SA-4.0-or-project-license",
+        loader="fabric",
+        families=("datagen", "content"),
+        topics=("datagen", "recipe", "loot", "tag", "language", "model"),
+        content=(
+            "Data-generation concepts for recipes, loot, tags, language and models. "
+            "Version-specific symbols are intentionally not stored in this corpus."
+        ),
+    ),
+    _concept_document(
+        "fabric-automatic-testing",
+        "Fabric Documentation - Automated Testing",
+        "https://docs.fabricmc.net/develop/automatic-testing",
+        authority="Fabric official documentation",
+        license_id="CC-BY-NC-SA-4.0-or-project-license",
+        loader="fabric",
+        families=("test", "entity", "project"),
+        topics=("test", "gametest", "runtime", "server", "validation"),
+        content=(
+            "Automated runtime validation concepts. Exact test APIs must be grounded "
+            "against live target evidence before code generation."
+        ),
+    ),
+    _concept_document(
+        "fabric-mod-json",
+        "Fabric Documentation - Mod Metadata",
+        "https://docs.fabricmc.net/develop/loader/fabric-mod-json",
+        authority="Fabric official documentation",
+        license_id="CC-BY-NC-SA-4.0-or-project-license",
+        loader="fabric",
+        families=("profile", "build", "project"),
+        topics=("metadata", "entrypoint", "dependency", "loader", "compatibility"),
+        content=(
+            "Loader metadata concepts. Dependency ranges and target coordinates are "
+            "bound from the provider receipt, never from this static source."
+        ),
+        related_ids=("fabric-project-creation",),
+    ),
+    _concept_document(
+        "mcp-specification",
+        "Model Context Protocol Specification",
+        "https://modelcontextprotocol.io/specification/",
         authority="Model Context Protocol official specification",
-        trust_tier="official_primary",
-        license_id="MCP-documentation-license",
-        revision="2025-11-25",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
+        license_id="project-license",
         loader="agnostic",
-        mappings="agnostic",
-        families=("mcp", "security"),
-        topics=("tools", "resources", "prompts", "server", "protocol"),
+        families=("mcp", "project"),
+        topics=("mcp", "tools", "resources", "prompts", "transport", "security"),
         content=(
-            "MCP servers expose tools, resources and prompts. Tool descriptions and annotations do not grant authority; "
-            "application policy must independently enforce scope and approval."
+            "MCP tools, resources, prompts and transport semantics are platform-neutral "
+            "evidence and do not authorize writes or execution."
         ),
-        related_ids=("mcp-transports", "mcp-python-sdk"),
     ),
-    CorpusDocument(
-        document_id="mcp-transports",
-        title="MCP transports",
-        url="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports",
-        authority="Model Context Protocol official specification",
-        trust_tier="official_primary",
-        license_id="MCP-documentation-license",
-        revision="2025-11-25",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
+    _concept_document(
+        "blockbench-documentation",
+        "Blockbench Documentation",
+        "https://www.blockbench.net/wiki/",
+        authority="Blockbench official documentation",
+        license_id="project-license",
         loader="agnostic",
-        mappings="agnostic",
-        families=("mcp", "security"),
-        topics=("stdio", "streamable http", "json-rpc", "origin", "authentication"),
+        families=("asset", "project"),
+        topics=("model", "texture", "animation", "geometry", "asset"),
         content=(
-            "Stdio reserves stdout for protocol messages. Streamable HTTP servers must validate Origin, "
-            "bind local services to loopback where appropriate, and implement authentication."
+            "Model, texture and animation authoring concepts independent of a Minecraft "
+            "target. Runtime integration still requires target-specific evidence."
         ),
-        related_ids=("mcp-server-primitives",),
-    ),
-    CorpusDocument(
-        document_id="mcp-python-sdk",
-        title="MCP Python SDK 2.0.0",
-        url="https://github.com/modelcontextprotocol/python-sdk",
-        authority="Model Context Protocol official Python SDK",
-        trust_tier="official_primary",
-        license_id="MIT",
-        revision="v2.0.0",
-        verified_on="2026-07-29",
-        minecraft_versions=("*",),
-        loader="agnostic",
-        mappings="agnostic",
-        families=("mcp", "implementation"),
-        topics=("python", "mcpserver", "client", "stdio", "structured output"),
-        content=(
-            "The official Python SDK 2.0.0 exposes typed tools, resources and prompts and supports "
-            "stdio and Streamable HTTP. This project pins the SDK version so protocol behavior cannot drift silently."
-        ),
-        related_ids=("mcp-server-primitives", "mcp-transports"),
     ),
 )
 
@@ -527,14 +333,14 @@ def _canonical_query(query: str, family: str) -> str:
     family_terms = {
         "mcp": ("mcp", "tools", "resources", "prompts", "security"),
         "networking": ("server", "validation", "packet", "codec"),
-        "native_minecraft": ("fabric", "registry", "gametest", "compatibility"),
+        "native_minecraft": ("registry", "world", "validation", "compatibility"),
         "asset": ("model", "texture", "animation", "runtime"),
-        "entity": ("entity", "attributes", "goals", "gametest"),
-        "test": ("gametest", "report", "runtime", "evidence"),
+        "entity": ("entity", "attributes", "goals", "runtime", "test"),
+        "test": ("test", "report", "runtime", "evidence"),
         "datagen": ("datagen", "recipe", "loot", "tag", "model"),
-        "build": ("gradle", "loom", "jar", "fabric"),
-        "profile": ("minecraft", "fabric", "loader", "mapping"),
-        "project": ("fabric", "project", "requirements"),
+        "build": ("gradle", "jar", "loader", "toolchain"),
+        "profile": ("minecraft", "loader", "mapping", "provider"),
+        "project": ("project", "requirements", "provider", "evidence"),
     }[family]
     for term in family_terms:
         if term not in terms:
@@ -543,7 +349,7 @@ def _canonical_query(query: str, family: str) -> str:
 
 
 class OfficialCorpusIndex:
-    """SQLite FTS5/BM25 index plus deterministic semantic and graph reranking."""
+    """Deterministic multi-signal ranking over target-neutral primary sources."""
 
     def __init__(self, documents: Iterable[CorpusDocument] = BUILTIN_CORPUS) -> None:
         self.documents = tuple(documents)
@@ -553,23 +359,18 @@ class OfficialCorpusIndex:
         for document in self.documents:
             document.validate()
             if document.document_id in by_id:
-                raise SpecValidationError(
-                    f"Duplicate corpus document: {document.document_id}"
-                )
+                raise SpecValidationError(f"Duplicate corpus document: {document.document_id}")
             by_id[document.document_id] = document
         for document in self.documents:
             unknown = set(document.related_ids) - set(by_id)
             if unknown:
                 raise SpecValidationError(
-                    f"Corpus graph has unknown relations for {document.document_id}: "
-                    f"{sorted(unknown)}"
+                    f"Corpus graph has unknown relations for {document.document_id}: {sorted(unknown)}"
                 )
         self._by_id = by_id
-        self._connection = sqlite3.connect(":memory:")
-        self._build_index()
 
     def close(self) -> None:
-        self._connection.close()
+        return None
 
     def __enter__(self) -> "OfficialCorpusIndex":
         return self
@@ -593,126 +394,87 @@ class OfficialCorpusIndex:
             for document in sorted(self.documents, key=lambda item: item.document_id)
         )
 
-    def _build_index(self) -> None:
-        connection = self._connection
-        connection.execute(
-            """
-            CREATE TABLE documents (
-                document_id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                topics TEXT NOT NULL,
-                families TEXT NOT NULL
-            )
-            """
-        )
-        try:
-            connection.execute(
-                """
-                CREATE VIRTUAL TABLE documents_fts USING fts5(
-                    document_id UNINDEXED,
-                    title,
-                    content,
-                    topics,
-                    families,
-                    tokenize='unicode61'
-                )
-                """
-            )
-            self._fts_available = True
-        except sqlite3.OperationalError:
-            self._fts_available = False
-        rows = [
-            (
-                document.document_id,
-                document.title,
-                document.content,
-                " ".join(document.topics),
-                " ".join(document.families),
-            )
-            for document in self.documents
-        ]
-        connection.executemany(
-            "INSERT INTO documents VALUES (?, ?, ?, ?, ?)",
-            rows,
-        )
-        if self._fts_available:
-            connection.executemany(
-                "INSERT INTO documents_fts VALUES (?, ?, ?, ?, ?)",
-                rows,
-            )
-        connection.commit()
-
     def retrieve(
         self,
         query: str,
         *,
-        minecraft_version: str = "1.20.1",
-        loader: str = "fabric",
-        mappings: str = "yarn-1.20.1+build.1",
+        minecraft_version: str,
+        loader: str,
+        mappings: str,
         limit: int = 6,
     ) -> RetrievalReceipt:
         query = query.strip()
         if not 2 <= len(query) <= 2_000:
             raise SpecValidationError("RAG query length must be between 2 and 2000.")
-        if minecraft_version not in SUPPORTED_VERSIONS:
+        minecraft_version = str(minecraft_version).strip()
+        loader = str(loader).strip().casefold()
+        mappings = str(mappings).strip()
+        if not minecraft_version or not loader or not mappings:
             raise SpecValidationError(
-                f"No reviewed RAG profile for Minecraft {minecraft_version}."
+                "Official retrieval requires an explicit Minecraft version, loader and mappings."
             )
-        if loader != "fabric":
-            raise SpecValidationError("The reviewed local RAG profile supports Fabric only.")
-        if mappings != "yarn-1.20.1+build.1":
-            raise SpecValidationError("The reviewed local RAG profile uses pinned Yarn mappings.")
         if type(limit) is not int or not 1 <= limit <= 12:
             raise SpecValidationError("RAG result limit must be between 1 and 12.")
+        try:
+            adapter = adapter_for_target(minecraft_version, loader)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
+        if mappings != adapter.yarn_mappings:
+            raise SpecValidationError(
+                "Retrieval mappings do not match the executable provider receipt."
+            )
 
         family = _classify_query(query)
         canonical = _canonical_query(query, family)
         eligible = {
             document.document_id: document
             for document in self.documents
-            if (
-                minecraft_version in document.minecraft_versions
-                or "*" in document.minecraft_versions
+            if document.loader in {adapter.loader, "agnostic"}
+        }
+        query_terms = frozenset(_tokens(canonical))
+        query_grams = _trigrams(canonical)
+        graph_boost: dict[str, float] = {document_id: 0.0 for document_id in eligible}
+        lexical: dict[str, float] = {}
+        semantic: dict[str, float] = {}
+        family_score: dict[str, float] = {}
+        for document_id, document in eligible.items():
+            searchable = " ".join((document.title, document.content, *document.topics))
+            document_terms = frozenset(_tokens(searchable))
+            lexical[document_id] = (
+                len(query_terms & document_terms) / max(1, len(query_terms))
             )
-            and document.loader in {loader, "agnostic"}
-        }
-        lexical = self._lexical_ranking(canonical, eligible)
-        semantic = self._semantic_ranking(canonical, eligible)
-        graph = self._graph_ranking(lexical, eligible)
-        family_rank = sorted(
+            semantic[document_id] = _jaccard(query_grams, _trigrams(searchable))
+            family_score[document_id] = 1.0 if family in document.families else 0.0
+        lexical_order = sorted(
             eligible,
-            key=lambda document_id: (
-                family not in eligible[document_id].families,
-                document_id,
-            ),
+            key=lambda document_id: (-lexical[document_id], document_id),
         )
-        rankings = {
-            "bm25": lexical,
-            "semantic_fallback": semantic,
-            "graph": graph,
-            "family_filter": family_rank,
-        }
-        weights = {
-            "bm25": 1.0,
-            "semantic_fallback": 0.55,
-            "graph": 0.35,
-            "family_filter": 0.7,
-        }
-        scores: dict[str, float] = {document_id: 0.0 for document_id in eligible}
-        channels: dict[str, list[str]] = {document_id: [] for document_id in eligible}
-        for channel, ranking in rankings.items():
-            for rank, document_id in enumerate(ranking, start=1):
-                scores[document_id] += weights[channel] / (60 + rank)
-                if rank <= max(limit * 2, 8):
-                    channels[document_id].append(channel)
-        ordered = sorted(
-            eligible,
-            key=lambda document_id: (
-                -scores[document_id],
-                eligible[document_id].document_id,
-            ),
-        )[:limit]
+        for rank, document_id in enumerate(lexical_order[:5], start=1):
+            graph_boost[document_id] += 1.0 / rank
+            for related_id in eligible[document_id].related_ids:
+                if related_id in graph_boost:
+                    graph_boost[related_id] += 0.45 / rank
+
+        score: dict[str, float] = {}
+        channels: dict[str, tuple[str, ...]] = {}
+        for document_id in eligible:
+            score[document_id] = (
+                0.42 * lexical[document_id]
+                + 0.28 * semantic[document_id]
+                + 0.20 * family_score[document_id]
+                + 0.10 * min(1.0, graph_boost[document_id])
+            )
+            active: list[str] = []
+            if lexical[document_id] > 0:
+                active.append("lexical")
+            if semantic[document_id] > 0:
+                active.append("semantic")
+            if family_score[document_id] > 0:
+                active.append("family")
+            if graph_boost[document_id] > 0:
+                active.append("graph")
+            channels[document_id] = tuple(active)
+        ordered = sorted(eligible, key=lambda document_id: (-score[document_id], document_id))[:limit]
 
         hits: list[RetrievalHit] = []
         for rank, document_id in enumerate(ordered, start=1):
@@ -724,6 +486,11 @@ class OfficialCorpusIndex:
                     "content_sha256": document.content_sha256,
                     "rank": rank,
                     "snapshot": self.snapshot_hash,
+                    "target": {
+                        "minecraft_version": adapter.minecraft_version,
+                        "loader": adapter.loader,
+                        "mappings": adapter.yarn_mappings,
+                    },
                 }
             ).encode("utf-8")
             hits.append(
@@ -735,34 +502,30 @@ class OfficialCorpusIndex:
                     excerpt=document.content,
                     content_sha256=document.content_sha256,
                     revision=document.revision,
-                    minecraft_versions=document.minecraft_versions,
-                    score=round(scores[document_id], 8),
-                    channels=tuple(channels[document_id]),
+                    minecraft_versions=("*",),
+                    score=round(score[document_id], 8),
+                    channels=channels[document_id],
                 )
             )
 
-        exact_hits = sum(
-            minecraft_version in hit.minecraft_versions for hit in hits
-        )
-        family_hits = sum(
-            family in eligible[hit.document_id].families for hit in hits
-        )
+        family_hits = sum(family in eligible[hit.document_id].families for hit in hits)
+        signal_hits = sum(bool(hit.channels) for hit in hits)
         coverage = min(
             1.0,
-            (exact_hits / max(1, min(2, len(hits)))) * 0.6
-            + (family_hits / max(1, min(3, len(hits)))) * 0.4,
+            0.6 * family_hits / max(1, min(2, len(hits)))
+            + 0.4 * signal_hits / max(1, min(3, len(hits))),
         )
         quality = (
             "strong"
-            if len(hits) >= min(3, limit) and exact_hits >= 1 and family_hits >= 1
+            if hits and signal_hits >= min(2, len(hits)) and (family_hits > 0 or family == "project")
             else "weak"
         )
         correction_required = quality != "strong"
         corrections = (
             (
-                f"{family} exact API Minecraft {minecraft_version} {loader}",
-                f"{family} Yarn {mappings} symbol signature",
-                f"{family} deterministic validation GameTest",
+                f"{family} official API for Minecraft {adapter.minecraft_version} {adapter.loader}",
+                f"{family} mapping symbols for {adapter.yarn_mappings}",
+                f"{family} deterministic runtime validation",
             )
             if correction_required
             else ()
@@ -773,9 +536,9 @@ class OfficialCorpusIndex:
                     "query": query,
                     "canonical": canonical,
                     "family": family,
-                    "minecraft_version": minecraft_version,
-                    "loader": loader,
-                    "mappings": mappings,
+                    "minecraft_version": adapter.minecraft_version,
+                    "loader": adapter.loader,
+                    "mappings": adapter.yarn_mappings,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -784,9 +547,9 @@ class OfficialCorpusIndex:
             query=query,
             canonical_query=canonical,
             query_family=family,
-            minecraft_version=minecraft_version,
-            loader=loader,
-            mappings=mappings,
+            minecraft_version=adapter.minecraft_version,
+            loader=adapter.loader,
+            mappings=adapter.yarn_mappings,
             query_hash=query_hash,
             corpus_snapshot_hash=self.snapshot_hash,
             quality=quality,
@@ -796,81 +559,13 @@ class OfficialCorpusIndex:
             hits=tuple(hits),
         )
 
-    def _lexical_ranking(
-        self,
-        query: str,
-        eligible: dict[str, CorpusDocument],
-    ) -> list[str]:
-        terms = list(dict.fromkeys(_tokens(query)))[:24]
-        if self._fts_available and terms:
-            match_query = " OR ".join(f'"{term.replace(chr(34), "")}"' for term in terms)
-            try:
-                rows = self._connection.execute(
-                    """
-                    SELECT document_id, bm25(documents_fts, 0.0, 2.0, 1.0, 1.5, 1.2)
-                    FROM documents_fts
-                    WHERE documents_fts MATCH ?
-                    ORDER BY 2 ASC, document_id ASC
-                    """,
-                    (match_query,),
-                ).fetchall()
-                ranked = [
-                    str(document_id)
-                    for document_id, _score in rows
-                    if document_id in eligible
-                ]
-            except sqlite3.OperationalError:
-                ranked = []
-        else:
-            ranked = []
-        missing = sorted(set(eligible) - set(ranked))
-        return [*ranked, *missing]
-
-    @staticmethod
-    def _semantic_ranking(
-        query: str,
-        eligible: dict[str, CorpusDocument],
-    ) -> list[str]:
-        query_grams = _trigrams(query)
-        return sorted(
-            eligible,
-            key=lambda document_id: (
-                -_jaccard(
-                    query_grams,
-                    _trigrams(
-                        " ".join(
-                            (
-                                eligible[document_id].title,
-                                eligible[document_id].content,
-                                *eligible[document_id].topics,
-                            )
-                        )
-                    ),
-                ),
-                document_id,
-            ),
-        )
-
-    @staticmethod
-    def _graph_ranking(
-        lexical: list[str],
-        eligible: dict[str, CorpusDocument],
-    ) -> list[str]:
-        scores = {document_id: 0.0 for document_id in eligible}
-        for rank, document_id in enumerate(lexical[:5], start=1):
-            scores[document_id] += 1.0 / rank
-            for related_id in eligible[document_id].related_ids:
-                if related_id in scores:
-                    scores[related_id] += 0.45 / rank
-        return sorted(scores, key=lambda document_id: (-scores[document_id], document_id))
-
 
 def retrieve_official_evidence(
     query: str,
     *,
-    minecraft_version: str = "1.20.1",
-    loader: str = "fabric",
-    mappings: str = "yarn-1.20.1+build.1",
+    minecraft_version: str,
+    loader: str,
+    mappings: str,
     limit: int = 6,
 ) -> RetrievalReceipt:
     with OfficialCorpusIndex() as index:
@@ -889,6 +584,7 @@ def corpus_manifest() -> dict[str, Any]:
             "schema_version": "minecraft-mod-ai/rag-corpus-v1",
             "snapshot_hash": index.snapshot_hash,
             "retrieval_policy": "data_only",
+            "target_policy": "explicit-provider-bound-only",
             "documents": list(index.catalog()),
         }
 
