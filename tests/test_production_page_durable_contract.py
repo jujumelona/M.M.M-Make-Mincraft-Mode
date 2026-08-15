@@ -5,6 +5,7 @@ import json
 import pytest
 
 from minecraft_mod_ai import complete_planner
+from minecraft_mod_ai import production_page_durable_contract as durable
 from minecraft_mod_ai.planner_production_page_contract import install
 
 
@@ -46,13 +47,21 @@ class _EscalatingRouter:
             }
         )
         if len(self.calls) == 1:
-            set_fields = {"kind": "item"}
+            config = {
+                "integration_type": "mmm_local_ai_sidecar",
+                "capabilities": ["ai_inference"],
+                "authentication": "invalid",
+            }
         else:
-            set_fields = {"config": {}}
+            config = {
+                "integration_type": "mmm_local_ai_sidecar",
+                "capabilities": ["ai_inference"],
+                "authentication": "none",
+            }
         return json.dumps(
             {
                 "target_fingerprint": request["target_fingerprint"],
-                "set_fields": set_fields,
+                "set_fields": {"config": config},
                 "delete_fields": [],
             }
         )
@@ -75,7 +84,13 @@ class _StuckRouter:
         return json.dumps(
             {
                 "target_fingerprint": request["target_fingerprint"],
-                "set_fields": {"kind": "not_a_real_kind"},
+                "set_fields": {
+                    "config": {
+                        "integration_type": "mmm_local_ai_sidecar",
+                        "capabilities": ["ai_inference"],
+                        "authentication": "invalid",
+                    }
+                },
                 "delete_fields": [],
             }
         )
@@ -189,6 +204,7 @@ def test_parser_normalizable_module_does_not_spend_llm_call(monkeypatch, tmp_pat
         ("config", "custom_java"),
         ("gradle", "custom_java"),
         ("network", "networking"),
+        ("future_unknown_kind", "custom_java"),
     ],
 )
 def test_module_kind_parser_mismatches_are_normalized_without_llm(
@@ -219,6 +235,40 @@ def test_module_kind_parser_mismatches_are_normalized_without_llm(
     assert router.calls == []
     assert [item.module_id for item in parts.modules] == ["mk_gradle_config"]
     assert parts.modules[0].kind == expected_kind
+
+
+def test_module_structural_fields_are_canonicalized_without_llm(monkeypatch, tmp_path) -> None:
+    router = _NeverRouter()
+    module = _module("self_module", kind="custom_java")
+    module.update(
+        {
+            "config": {"implementation": "fabric"},
+            "depends_on": ["self_module", "Bad-ID", "Bad-ID", ""],
+            "required_gates": ["", " Gradle ", "Gradle"],
+        }
+    )
+    page = {
+        "modules": [module],
+        "assets": [],
+        "audio": [],
+        "acceptance_tests": ["module exists"],
+        "completed_deliverables": ["d1"],
+        "complete": True,
+        "next_cursor": "",
+    }
+
+    parts, _ = _run_batch(
+        monkeypatch,
+        tmp_path,
+        page=page,
+        deliverables=("d1",),
+        router=router,
+    )
+
+    assert router.calls == []
+    assert parts.modules[0].config["implementation"] == "custom"
+    assert parts.modules[0].depends_on == ("bad_id",)
+    assert parts.modules[0].required_gates == ("Gradle",)
 
 
 def test_duplicate_ids_are_resolved_deterministically_without_llm(monkeypatch, tmp_path) -> None:
@@ -257,21 +307,28 @@ def test_asset_audio_parser_contract_mismatches_are_normalized_without_llm(
         "modules": [_module("core")],
         "assets": [
             {
-                "kind": "texture",
+                "kind": "sprite",
                 "description": "Core item texture",
+                "target_path": "../escape.png",
+                "width": 0,
+                "height": "not-an-int",
                 "implements_deliverables": ["d1"],
             },
             {
-                "kind": "texture",
-                "description": "Second item texture",
+                "kind": "unknown_texture_kind",
+                "description": "Block texture",
+                "target_path": "assets/mod/textures/block/second.png",
                 "implements_deliverables": ["d2"],
             },
         ],
         "audio": [
             {
-                "kind": "sfx",
-                "duration_seconds": 1,
+                "kind": "voice",
+                "duration_seconds": "nan",
+                "frequency_hz": 0,
+                "volume": 99,
                 "loop": "false",
+                "subtitle_en": 123,
                 "implements_deliverables": ["d2"],
             }
         ],
@@ -291,10 +348,59 @@ def test_asset_audio_parser_contract_mismatches_are_normalized_without_llm(
 
     assert router.calls == []
     assert [asset.asset_id for asset in parts.assets] == ["d1", "d2"]
-    assert all(asset.kind == "item" for asset in parts.assets)
+    assert [asset.kind for asset in parts.assets] == ["item", "block"]
+    assert parts.assets[0].target_path == "assets/mod/textures/d1.png"
+    assert (parts.assets[0].width, parts.assets[0].height) == (1, 16)
     assert [sound.sound_id for sound in parts.audio] == ["d2"]
     assert parts.audio[0].kind == "effect"
+    assert parts.audio[0].duration_seconds == 1.0
+    assert parts.audio[0].frequency_hz == 1.0
+    assert parts.audio[0].volume == 4.0
     assert parts.audio[0].loop is False
+    assert parts.audio[0].subtitle_en == "123"
+
+
+def test_child_repair_schema_uses_parser_field_types_and_enums() -> None:
+    install(complete_planner)
+
+    module_schema = durable._patch_schema(
+        fields=sorted(durable._SPECS["module"]["fields"]),
+        replacement=False,
+    )
+    module_fields = module_schema["properties"]["set_fields"]["properties"]
+    assert "custom_java" in module_fields["kind"]["enum"]
+    assert module_fields["config"]["type"] == "object"
+    assert module_fields["depends_on"]["items"]["minLength"] == 1
+    assert set(module_schema["properties"]["delete_fields"]["items"]["enum"]) == set(
+        durable._SPECS["module"]["fields"]
+    )
+
+    asset_schema = durable._patch_schema(
+        fields=sorted(durable._SPECS["asset"]["fields"]),
+        replacement=False,
+    )
+    asset_fields = asset_schema["properties"]["set_fields"]["properties"]
+    assert asset_fields["width"]["type"] == "integer"
+    assert "item" in asset_fields["kind"]["enum"]
+
+    audio_schema = durable._patch_schema(
+        fields=sorted(durable._SPECS["audio"]["fields"]),
+        replacement=False,
+    )
+    audio_fields = audio_schema["properties"]["set_fields"]["properties"]
+    assert audio_fields["duration_seconds"]["type"] == "number"
+    assert audio_fields["loop"]["type"] == "boolean"
+    assert "effect" in audio_fields["kind"]["enum"]
+
+
+def _sidecar_module(authentication: str) -> dict[str, object]:
+    value = _module("semantic_sidecar", kind="integration")
+    value["config"] = {
+        "integration_type": "mmm_local_ai_sidecar",
+        "capabilities": ["ai_inference"],
+        "authentication": authentication,
+    }
+    return value
 
 
 def test_semantic_validation_keeps_field_patching_while_state_changes(
@@ -303,7 +409,7 @@ def test_semantic_validation_keeps_field_patching_while_state_changes(
 ) -> None:
     router = _EscalatingRouter()
     page = {
-        "modules": [dict(_module("semantic_bad", kind="not_a_real_kind"), config="invalid")],
+        "modules": [_sidecar_module("broken")],
         "assets": [],
         "audio": [],
         "acceptance_tests": ["semantic item exists"],
@@ -324,8 +430,8 @@ def test_semantic_validation_keeps_field_patching_while_state_changes(
         "field_patch",
         "field_patch",
     ]
-    assert [item.module_id for item in parts.modules] == ["semantic_bad"]
-    assert parts.modules[0].kind == "item"
+    assert [item.module_id for item in parts.modules] == ["semantic_sidecar"]
+    assert parts.modules[0].config["authentication"] == "none"
 
 
 def test_repeated_invalid_model_output_stops_exact_cycle(
@@ -334,7 +440,7 @@ def test_repeated_invalid_model_output_stops_exact_cycle(
 ) -> None:
     router = _StuckRouter()
     page = {
-        "modules": [_module("stuck", kind="not_a_real_kind")],
+        "modules": [_sidecar_module("invalid")],
         "assets": [],
         "audio": [],
         "acceptance_tests": ["stuck item exists"],
