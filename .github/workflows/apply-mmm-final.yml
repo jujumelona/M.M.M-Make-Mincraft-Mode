@@ -1,1 +1,212 @@
-name: placeholder
+name: Apply MMM final patch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply verified final tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Reassemble and verify patch
+        run: |
+          cat .mmm-final/patch.* > /tmp/mmm-final.patch.gz.b64
+          base64 -d /tmp/mmm-final.patch.gz.b64 > /tmp/mmm-final.patch.gz
+          gzip -dc /tmp/mmm-final.patch.gz > /tmp/mmm-final.patch
+          echo "cd0db19f4f3b9375c8bd187cae5d548e64b969bb444bb98be53a3747b89a4e07  /tmp/mmm-final.patch" | sha256sum -c -
+      - name: Apply complete local result
+        run: |
+          git apply --index --binary /tmp/mmm-final.patch
+          rm -rf .mmm-final
+          rm -f .github/workflows/apply-mmm-final.yml
+          git add -A
+          tree="$(git write-tree)"
+          echo "final tree: $tree"
+          test "$tree" = "1a2c23af41360154f77b6de0d809aafbfb95d6a9"
+      - name: Commit and push final tree
+        id: publish
+        run: |
+          git config user.name "jujumelona"
+          git config user.email "qasdaa025@gmail.com"
+          git commit -m "Generalize target handling and harden small-model research runtime"
+          sha="$(git rev-parse HEAD)"
+          git push origin HEAD:main
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  audit:
+    name: Static and packaging audit
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - run: python .github/scripts/debug_repo_audit.py
+      - run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+      - run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+      - run: vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+      - run: python -c "import minecraft_mod_ai"
+      - run: node --check integrations/mineflayer/bridge.mjs
+      - run: python tools/validate_colab_notebook.py
+      - run: |
+          python tools/package_skills.py
+          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
+
+  runtime-clean:
+    name: Runtime composition
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
+
+  mcp-evidence:
+    name: Minecraft MCP evidence
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - run: >-
+          python -m pytest -q
+          tests/test_minecraft_mcp_evidence_contract.py
+          tests/test_external_mcp_role_scope.py
+          tests/test_research_coordinator.py
+
+  planner-repair:
+    name: Planner repair termination
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - run: >-
+          python -m pytest -q
+          tests/test_production_page_durable_contract.py
+          tests/test_planner_incremental_repair_contract.py
+          tests/test_planner_strict_json_contract.py
+
+  parallel-repair:
+    name: Parallel repair safety
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - run: >-
+          python -m pytest -q
+          tests/test_agentic_search_efficiency_contract.py
+          tests/test_repair_candidate_purity_contract.py
+          tests/test_llama_parallel_runtime_contract.py
+
+  remaining-tests:
+    name: Remaining tests ${{ matrix.shard }}/3
+    needs: apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.apply.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run deterministic pytest shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          dedicated = {
+              "test_runtime_bootstrap_clean.py",
+              "test_minecraft_mcp_evidence_contract.py",
+              "test_external_mcp_role_scope.py",
+              "test_research_coordinator.py",
+              "test_production_page_durable_contract.py",
+              "test_planner_incremental_repair_contract.py",
+              "test_planner_strict_json_contract.py",
+              "test_agentic_search_efficiency_contract.py",
+              "test_repair_candidate_purity_contract.py",
+              "test_llama_parallel_runtime_contract.py",
+          }
+          shard = int(os.environ["SHARD"]) - 1
+          files = [
+              str(path)
+              for index, path in enumerate(sorted(Path("tests").glob("test_*.py")))
+              if path.name not in dedicated and index % 3 == shard
+          ]
+          if not files:
+              raise SystemExit("pytest shard selected no files")
+          raise SystemExit(
+              subprocess.call(
+                  [
+                      sys.executable,
+                      "-m",
+                      "pytest",
+                      "-vv",
+                      "--tb=short",
+                      "--durations=15",
+                      "--maxfail=25",
+                      *files,
+                  ]
+              )
+          )
+          PY
