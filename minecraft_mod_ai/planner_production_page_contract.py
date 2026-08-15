@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from functools import wraps
 from typing import Any, Sequence
@@ -32,7 +33,10 @@ _NON_EMPTY_MODULE_ARRAY_FIELDS = (
     "implements_deliverables",
 )
 _NON_EMPTY_PAGE_ARRAY_FIELDS = ("acceptance_tests", "completed_deliverables")
-_PRODUCTION_CHECKPOINT_VERSION = 3
+_PRODUCTION_CHECKPOINT_VERSION = 4
+_PRODUCTION_ITEM_CHECKPOINT_VERSION = 3
+_ASSET_KINDS = frozenset({"item", "block", "entity", "gui", "environment", "icon"})
+_AUDIO_KINDS = frozenset({"effect", "ambient", "music", "ui"})
 _MODULE_KIND_ALIASES = {
     "": "custom_java",
     "config": "custom_java",
@@ -53,6 +57,26 @@ _MODULE_KIND_ALIASES = {
     "compat": "integration",
     "compatibility": "integration",
     "bridge": "integration",
+}
+_ASSET_KIND_ALIASES = {
+    "texture": "item",
+    "textures": "item",
+    "sprite": "item",
+    "item_texture": "item",
+    "block_texture": "block",
+    "entity_texture": "entity",
+    "ui": "gui",
+}
+_AUDIO_KIND_ALIASES = {
+    "": "effect",
+    "sfx": "effect",
+    "sound": "effect",
+    "voice": "effect",
+    "ambience": "ambient",
+    "background": "ambient",
+    "bgm": "music",
+    "background_music": "music",
+    "interface": "ui",
 }
 
 
@@ -89,6 +113,45 @@ def _string_list(value: Any) -> list[str]:
     ]
 
 
+def _unique_strings(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _bounded_float(
+    value: Any,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
 def _require_non_empty_string(schema: Any) -> None:
     if isinstance(schema, dict) and schema.get("type") == "string":
         schema["minLength"] = max(1, int(schema.get("minLength", 0) or 0))
@@ -100,8 +163,90 @@ def _require_non_empty_string_items(schema: Any) -> None:
     _require_non_empty_string(schema.get("items"))
 
 
+def _string_schema(*, non_empty: bool = False) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "string"}
+    if non_empty:
+        schema["minLength"] = 1
+    return schema
+
+
+def _string_array_schema(*, non_empty_items: bool = True) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": _string_schema(non_empty=non_empty_items),
+    }
+
+
+def _field_schemas(kind: str) -> dict[str, dict[str, Any]]:
+    """Canonical structured-output field grammar accepted by the real parsers."""
+
+    from .complete_spec import MODULE_KINDS
+
+    strings = _string_array_schema()
+    if kind == "module":
+        return {
+            "module_id": _string_schema(non_empty=True),
+            "id": _string_schema(non_empty=True),
+            "name": _string_schema(non_empty=True),
+            "kind": {"type": "string", "enum": sorted(MODULE_KINDS)},
+            "type": {"type": "string", "enum": sorted(MODULE_KINDS)},
+            "config": {"type": "object", "additionalProperties": True},
+            "depends_on": deepcopy(strings),
+            "required_gates": deepcopy(strings),
+            "implements_deliverables": deepcopy(strings),
+            "implements": deepcopy(strings),
+        }
+    if kind == "asset":
+        return {
+            "asset_id": _string_schema(non_empty=True),
+            "id": _string_schema(non_empty=True),
+            "kind": {"type": "string", "enum": sorted(_ASSET_KINDS)},
+            "prompt": _string_schema(),
+            "description": _string_schema(),
+            "target_path": _string_schema(),
+            "width": {"type": "integer"},
+            "height": {"type": "integer"},
+            "implements_deliverables": deepcopy(strings),
+            "implements": deepcopy(strings),
+        }
+    if kind == "audio":
+        return {
+            "sound_id": _string_schema(non_empty=True),
+            "id": _string_schema(non_empty=True),
+            "kind": {"type": "string", "enum": sorted(_AUDIO_KINDS)},
+            "duration_seconds": {"type": "number"},
+            "frequency_hz": {"type": "number"},
+            "volume": {"type": "number"},
+            "loop": {"type": "boolean"},
+            "subtitle_en": _string_schema(),
+            "subtitle_ko": _string_schema(),
+            "implements_deliverables": deepcopy(strings),
+            "implements": deepcopy(strings),
+        }
+    return {}
+
+
+def _item_schema(kind: str) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": _field_schemas(kind),
+        "additionalProperties": True,
+    }
+
+
+def _repair_kind_from_fields(fields: Sequence[str]) -> str:
+    values = frozenset(fields)
+    if "module_id" in values:
+        return "module"
+    if "asset_id" in values:
+        return "asset"
+    if "sound_id" in values:
+        return "audio"
+    return ""
+
+
 def _align_durable_item_semantics(schema: dict[str, Any]) -> dict[str, Any]:
-    """Make structured production output a subset of durable parser semantics."""
+    """Make page structured output a subset of durable parser input semantics."""
 
     from .complete_spec import MODULE_KINDS
 
@@ -128,10 +273,17 @@ def _align_durable_item_semantics(schema: dict[str, Any]) -> dict[str, Any]:
             module_properties[field] = field_schema
             _require_non_empty_string_items(field_schema)
 
+    # Assets/audio used to be unconstrained objects even though their parsers enforce
+    # concrete kinds and primitive types. Give generation the same canonical grammar;
+    # optional fields remain optional because deterministic normalization owns defaults.
+    for field, kind in (("assets", "asset"), ("audio", "audio")):
+        array_schema = properties.get(field)
+        if isinstance(array_schema, dict) and array_schema.get("type") == "array":
+            array_schema["items"] = _item_schema(kind)
+
     # planner_json_runtime_contract intentionally reuses one compact string-array
     # schema object in several properties. Detach each property before tightening it;
-    # otherwise minItems applied to acceptance_tests in one anyOf branch leaks into
-    # completed_deliverables and module arrays through Python object aliasing.
+    # otherwise one branch can leak constraints into unrelated arrays by object aliasing.
     for field in _NON_EMPTY_PAGE_ARRAY_FIELDS:
         field_schema = deepcopy(properties.get(field))
         properties[field] = field_schema
@@ -158,12 +310,38 @@ def _require_concrete_production_output(schema: dict[str, Any]) -> dict[str, Any
     return {"anyOf": variants}
 
 
+def _safe_asset_path(value: Any, *, asset_id: str) -> str:
+    path = str(value or "").replace("\\", "/").strip()
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        return f"assets/mod/textures/{asset_id}.png"
+    return path
+
+
+def _asset_kind(value: dict[str, Any]) -> str:
+    raw_kind = str(value.get("kind") or "").strip().lower()
+    kind = _ASSET_KIND_ALIASES.get(raw_kind, raw_kind)
+    if kind in _ASSET_KINDS:
+        return kind
+    path = str(value.get("target_path") or "").replace("\\", "/").lower()
+    for candidate in ("block", "entity", "gui", "environment", "icon", "item"):
+        if f"/{candidate}/" in path or path.endswith(f"/{candidate}.png"):
+            return candidate
+    return "item"
+
+
+def _audio_kind(value: dict[str, Any]) -> str:
+    raw_kind = str(value.get("kind") or "").strip().lower()
+    kind = _AUDIO_KIND_ALIASES.get(raw_kind, raw_kind)
+    return kind if kind in _AUDIO_KINDS else "effect"
+
+
 def _install_production_runtime_invariants() -> None:
-    """Keep generation grammar and durable resume/repair policy mutually valid."""
+    """Keep page generation, child repair, normalization, and resume mutually valid."""
 
     from . import planner_json_runtime_contract as runtime
     from . import production_page_durable_contract as durable
     from .complete_spec import MODULE_KINDS
+    from .scale_policy import ScalePolicy
 
     original_schema_for_contract = runtime._schema_for_contract
     if not getattr(original_schema_for_contract, "_mmm_production_progress_schema", False):
@@ -178,13 +356,50 @@ def _install_production_runtime_invariants() -> None:
         schema_for_contract._mmm_production_progress_schema = True  # type: ignore[attr-defined]
         runtime._schema_for_contract = schema_for_contract
 
-    # The durable parser owns structural normalization. Module kind previously lacked
-    # the same compatibility normalization already provided for asset/audio kinds, so a
-    # repair model could legally emit kind="" under its loose field-patch schema and
-    # immediately re-enter the identical invalid state. Normalize only blank/common
-    # legacy aliases; arbitrary unknown non-empty kinds still go through semantic repair.
+    # Tighten the child-repair grammar as well. The previous set_fields values were `{}`,
+    # so an invalid child could repeatedly return another schema-valid but parser-invalid
+    # kind/config/number. Keep the durable function signature intact and infer the item
+    # family from its unique identity field.
+    original_patch_schema = durable._patch_schema
+    if not getattr(original_patch_schema, "_mmm_parser_aligned_fields", False):
+
+        @wraps(original_patch_schema)
+        def patch_schema(*, fields: Sequence[str], replacement: bool) -> dict[str, Any]:
+            schema = original_patch_schema(fields=fields, replacement=replacement)
+            item_kind = _repair_kind_from_fields(fields)
+            if not item_kind:
+                return schema
+            properties = schema.get("properties")
+            if not isinstance(properties, dict):
+                return schema
+            if replacement:
+                properties["replacement"] = _item_schema(item_kind)
+                return schema
+            set_fields = properties.get("set_fields")
+            set_properties = (
+                set_fields.get("properties") if isinstance(set_fields, dict) else None
+            )
+            canonical = _field_schemas(item_kind)
+            if isinstance(set_properties, dict):
+                for field in list(set_properties):
+                    if field in canonical:
+                        set_properties[field] = deepcopy(canonical[field])
+            delete_fields = properties.get("delete_fields")
+            if isinstance(delete_fields, dict):
+                delete_fields["items"] = {
+                    "type": "string",
+                    "enum": sorted(map(str, fields)),
+                }
+            return schema
+
+        patch_schema._mmm_parser_aligned_fields = True  # type: ignore[attr-defined]
+        durable._patch_schema = patch_schema
+
+    # Structural parser/validator requirements are host-owned. Normalize them before
+    # spending any LLM repair call so arbitrary model spelling, primitive coercion, or
+    # resource-bound violations cannot enter a repeated-validation loop.
     original_normalize = durable._deterministic_normalize
-    if not getattr(original_normalize, "_mmm_module_kind_compat", False):
+    if not getattr(original_normalize, "_mmm_full_parser_compat", False):
 
         @wraps(original_normalize)
         def deterministic_normalize(
@@ -200,25 +415,141 @@ def _install_production_runtime_invariants() -> None:
                 raw=raw,
                 catalog=catalog,
             )
-            if kind != "module" or not isinstance(value, dict):
+            if not isinstance(value, dict):
                 return value, changes
+            value = dict(value)
+            changes = list(changes)
 
-            raw_kind = str(value.get("kind") or "").strip().lower()
-            normalized_kind = _MODULE_KIND_ALIASES.get(raw_kind, raw_kind)
-            if normalized_kind in MODULE_KINDS and value.get("kind") != normalized_kind:
-                value = dict(value)
-                value["kind"] = normalized_kind
-                changes = [*changes, "kind:module_normalized"]
+            if kind == "module":
+                raw_kind = str(value.get("kind") or "").strip().lower()
+                normalized_kind = _MODULE_KIND_ALIASES.get(raw_kind, raw_kind)
+                if normalized_kind not in MODULE_KINDS:
+                    normalized_kind = "custom_java"
+                if value.get("kind") != normalized_kind:
+                    value["kind"] = normalized_kind
+                    changes.append("kind:module_normalized")
+
+                config = value.get("config")
+                if not isinstance(config, dict):
+                    config = {"summary": str(config or "")}
+                    value["config"] = config
+                    changes.append("config:object_normalized")
+                elif config.get("implementation") not in (None, "custom"):
+                    config = dict(config)
+                    config["implementation"] = "custom"
+                    value["config"] = config
+                    changes.append("config:implementation_normalized")
+
+                module_id = str(value.get("module_id") or "").strip()
+                dependencies: list[str] = []
+                for dependency in _unique_strings(value.get("depends_on", [])):
+                    normalized = durable._safe_identifier(
+                        dependency,
+                        fallback="dependency",
+                    )
+                    if normalized != module_id and normalized not in dependencies:
+                        dependencies.append(normalized)
+                if value.get("depends_on") != dependencies:
+                    value["depends_on"] = dependencies
+                    changes.append("depends_on:normalized_unique")
+
+                gates = _unique_strings(value.get("required_gates", []))
+                if value.get("required_gates") != gates:
+                    value["required_gates"] = gates
+                    changes.append("required_gates:normalized_unique")
+
+                claims = _unique_strings(value.get("implements_deliverables", []))
+                if "implements_deliverables" in value and value.get("implements_deliverables") != claims:
+                    value["implements_deliverables"] = claims
+                    changes.append("implements_deliverables:normalized")
+
+            elif kind == "asset":
+                asset_id = str(value.get("asset_id") or f"asset_{index + 1}")
+                normalized_kind = _asset_kind(value)
+                if value.get("kind") != normalized_kind:
+                    value["kind"] = normalized_kind
+                    changes.append("kind:asset_canonical")
+                safe_path = _safe_asset_path(value.get("target_path"), asset_id=asset_id)
+                if value.get("target_path") != safe_path:
+                    value["target_path"] = safe_path
+                    changes.append("target_path:safe_normalized")
+                policy = ScalePolicy.from_environment()
+                width = _bounded_int(
+                    value.get("width", 16),
+                    default=16,
+                    minimum=1,
+                    maximum=policy.max_texture_dimension,
+                )
+                height = _bounded_int(
+                    value.get("height", 16),
+                    default=16,
+                    minimum=1,
+                    maximum=policy.max_texture_dimension,
+                )
+                if value.get("width") != width:
+                    value["width"] = width
+                    changes.append("width:bounded_integer")
+                if value.get("height") != height:
+                    value["height"] = height
+                    changes.append("height:bounded_integer")
+
+            elif kind == "audio":
+                normalized_kind = _audio_kind(value)
+                if value.get("kind") != normalized_kind:
+                    value["kind"] = normalized_kind
+                    changes.append("kind:audio_canonical")
+                policy = ScalePolicy.from_environment()
+                duration = _bounded_float(
+                    value.get("duration_seconds", 1.0),
+                    default=1.0,
+                    minimum=0.001,
+                    maximum=float(policy.max_audio_seconds),
+                )
+                frequency = _bounded_float(
+                    value.get("frequency_hz", 440.0),
+                    default=440.0,
+                    minimum=1.0,
+                    maximum=96_000.0,
+                )
+                volume = _bounded_float(
+                    value.get("volume", 0.8),
+                    default=0.8,
+                    minimum=0.001,
+                    maximum=4.0,
+                )
+                for field, normalized, marker in (
+                    ("duration_seconds", duration, "duration_seconds:bounded_number"),
+                    ("frequency_hz", frequency, "frequency_hz:bounded_number"),
+                    ("volume", volume, "volume:bounded_number"),
+                ):
+                    if value.get(field) != normalized:
+                        value[field] = normalized
+                        changes.append(marker)
+                loop = durable._normalize_bool(value.get("loop", False))
+                if type(loop) is not bool:
+                    loop = bool(loop)
+                if value.get("loop") is not loop:
+                    value["loop"] = loop
+                    changes.append("loop:boolean_normalized")
+                for field in ("subtitle_en", "subtitle_ko"):
+                    if field in value and not isinstance(value[field], str):
+                        value[field] = str(value[field])
+                        changes.append(f"{field}:string_normalized")
+
             return value, changes
 
-        deterministic_normalize._mmm_module_kind_compat = True  # type: ignore[attr-defined]
+        deterministic_normalize._mmm_full_parser_compat = True  # type: ignore[attr-defined]
         durable._deterministic_normalize = deterministic_normalize
 
-    # Pages saved under an older, looser grammar must not bypass the tightened module
-    # kind enum on resume. Advancing the epoch produces a fresh deterministic key.
+    # Old page and child-item checkpoints were accepted under looser grammars. Bump
+    # both epochs so neither can bypass the unified generation/repair/parser contract.
     durable._VERSION = max(
         int(getattr(durable, "_VERSION", 0) or 0),
         _PRODUCTION_CHECKPOINT_VERSION,
+    )
+    durable._ITEM_VERSION = max(
+        int(getattr(durable, "_ITEM_VERSION", 0) or 0),
+        _PRODUCTION_ITEM_CHECKPOINT_VERSION,
     )
 
 
