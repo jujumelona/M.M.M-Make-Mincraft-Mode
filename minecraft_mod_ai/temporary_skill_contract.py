@@ -30,6 +30,18 @@ from .trajectory_memory import (
 
 _PREFIX = "MMM TEMPORARY VERIFIED SKILL:\n"
 _CACHE_LOCK = threading.RLock()
+_HOST_CONTEXT_ENV = {
+    "MMM_MINECRAFT_VERSION": "minecraft_version",
+    "MMM_LOADER": "loader",
+    "MMM_LOADER_VERSION": "loader_version",
+    "MMM_MAPPINGS": "mappings",
+    "MMM_MAPPINGS_VERSION": "mappings_version",
+    "MMM_JAVA_VERSION": "java_version",
+    "MMM_SOURCE_COMMIT": "source_commit",
+    "MMM_MANIFEST_SHA256": "manifest_sha256",
+    "MMM_PLATFORM_LOCK_SHA256": "platform_lock_sha256",
+    "MMM_MODEL_PROFILE": "model_profile",
+}
 
 
 def _query(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -43,6 +55,54 @@ def _query(messages: Sequence[Mapping[str, Any]]) -> str:
         if sum(len(item) for item in parts) >= 8000:
             break
     return "\n".join(reversed(parts))[-8000:]
+
+
+def _host_execution_context(
+    messages: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Merge host-owned runtime identity without trusting free-form model prose."""
+
+    environment = {
+        key: value
+        for env_name, key in _HOST_CONTEXT_ENV.items()
+        if (value := os.environ.get(env_name, "").strip())
+    }
+    prefixed_payloads: list[Any] = []
+    for message in messages:
+        if str(message.get("role", "")).casefold() != "system":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or "\n" not in content:
+            continue
+        prefix, payload = content.split("\n", 1)
+        if not prefix.startswith(("MMM ", "HOST ")):
+            continue
+        payload = payload.strip()
+        if not payload or payload[0] not in "[{":
+            continue
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, (Mapping, list)):
+            prefixed_payloads.append(decoded)
+    return execution_context_from_values(
+        environment,
+        execution_context_from_messages(messages),
+        *prefixed_payloads,
+    )
+
+
+def _task_with_host_context(task: Mapping[str, Any]) -> dict[str, Any]:
+    context = _host_execution_context()
+    if not context:
+        return dict(task)
+    enriched = dict(task)
+    raw_payload = task.get("payload")
+    payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else {}
+    payload["host_execution_context"] = context
+    enriched["payload"] = payload
+    return enriched
 
 
 def _inject(messages: Sequence[Mapping[str, Any]], skill: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -255,7 +315,7 @@ def _install_model_skill(model_router_module: Any) -> None:
             hydrate_remote_cache(root, task_class)
             hydrated.add(task_class)
         query = _query(messages)
-        current_context = execution_context_from_messages(messages)
+        current_context = _host_execution_context(messages)
         skill = _temporary_skill(
             self,
             root,
@@ -311,7 +371,11 @@ def _install_work_trajectory(work_graph_module: Any) -> None:
         def succeed_with_trajectory(self: Any, node_id: str, receipt: dict[str, Any], *, output_hash: str = ""):
             result = current_succeed(self, node_id, receipt, output_hash=output_hash)
             task = result if isinstance(result, Mapping) else self.task(node_id)
-            row = build_work_trajectory(task, outcome="SUCCESS", receipt=receipt)
+            row = build_work_trajectory(
+                _task_with_host_context(task),
+                outcome="SUCCESS",
+                receipt=receipt,
+            )
             base = Path(self.path).resolve().parent
             _record(base, row)
             if task_class_for_stage(str(task.get("stage", ""))) == "release":
@@ -333,7 +397,11 @@ def _install_work_trajectory(work_graph_module: Any) -> None:
         def fail_with_trajectory(self: Any, node_id: str, error: str, *, input_required: bool = False):
             result = current_fail(self, node_id, error, input_required=input_required)
             task = result if isinstance(result, Mapping) else self.task(node_id)
-            row = build_work_trajectory(task, outcome="FAIL", error=error)
+            row = build_work_trajectory(
+                _task_with_host_context(task),
+                outcome="FAIL",
+                error=error,
+            )
             _record(Path(self.path).resolve().parent, row)
             return result
 
@@ -354,11 +422,13 @@ def _install_repair_trajectory(repair_module: Any) -> None:
         if not isinstance(result, Mapping):
             return result
         status = str(result.get("status", ""))
-        task = {
-            "node_id": "repair",
-            "stage": "repair",
-            "payload": {"kind": "repair"},
-        }
+        task = _task_with_host_context(
+            {
+                "node_id": "repair",
+                "stage": "repair",
+                "payload": {"kind": "repair"},
+            }
+        )
         row = build_work_trajectory(
             task,
             outcome="SUCCESS" if status == "PASS" else "FAIL",
