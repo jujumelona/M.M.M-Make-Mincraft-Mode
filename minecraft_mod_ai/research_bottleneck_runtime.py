@@ -7,9 +7,12 @@ def install() -> None:
     from . import (
         agentic_pre_design_rag,
         agentic_research_game_design,
+        bottleneck_elimination_contract,
         centroid_vector_rag,
         central_intelligence_amplifier,
+        central_research,
         complete_spec,
+        external_mcp_router,
         rag_index,
         research_adaptive_rag_routing,
         runner,
@@ -31,15 +34,19 @@ def install() -> None:
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
-    from .runtime_hotpath_consolidation import install as install_hotpath_consolidation
+    from .runtime_hotpath_consolidation import harden as harden_hotpath
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_concurrency_budget import harden as harden_model_concurrency
     from .work_graph_hash_performance import harden as harden_work_graph_hashes
 
-    # bottleneck_elimination_contract is installed immediately before this late
-    # research bootstrap. Consolidate only the residual admission work around those
-    # existing owners before adding research-specific performance layers.
-    install_hotpath_consolidation()
+    # Package bootstrap remains the only install/composition owner. This hardener
+    # only adjusts residual admission around contracts already installed immediately
+    # before this research performance phase.
+    harden_hotpath(
+        bottleneck_elimination_contract,
+        central_research,
+        external_mcp_router,
+    )
 
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
