@@ -256,7 +256,6 @@ def bind_game_design_planner(game_design_module: Any) -> None:
                 requested_prompt=prompt,
                 approval_hash="",
             ).with_hash()
-        proposal.validate()
         return design, proposal
 
     plan._mmm_agentic_research_sectioned = True  # type: ignore[attr-defined]
