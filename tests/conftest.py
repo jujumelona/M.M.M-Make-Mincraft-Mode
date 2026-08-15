@@ -122,7 +122,8 @@ def _isolate_test_runtime_state(
     import json
     import minecraft_mod_ai.runtime_manager as runtime_manager
 
-    fake_java = tmp_path / "fake-java-21"
+    # Runtime helpers must live outside a project root that generator tests expect empty.
+    fake_java = tmp_path.parent / f"{tmp_path.name}-fake-java-21"
     fake_java.write_text(
         "#!" + sys.executable + "\n"
         "import sys\n"
