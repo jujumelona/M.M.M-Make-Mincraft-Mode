@@ -2,8 +2,10 @@ from __future__ import annotations
 
 """Short-window CPU retrieval coalescing for frozen embed/rerank models.
 
-Concurrent requests sharing one resident CPU model are merged into the model's native
-batch dimension, improving throughput without loading duplicate model copies.
+Concurrent singleton requests sharing one resident CPU model are merged into the
+model's native batch dimension. Calls that are already native batches execute
+directly: queueing them would add a coalescing delay and serialize work that has
+nothing left to combine.
 """
 
 import queue
@@ -101,7 +103,10 @@ def _install_cpu_retrieval_coalescing() -> None:
         @wraps(current_embed)
         def embed(self: Any, texts: Sequence[str]) -> list[list[float]]:
             cleaned = tuple(str(text) for text in texts)
-            if threading.current_thread().name == "mmm-cpu-embed-batcher":
+            if (
+                len(cleaned) != 1
+                or threading.current_thread().name == "mmm-cpu-embed-batcher"
+            ):
                 return current_embed(self, cleaned)
             future: Future[Any] = Future()
             return embed_batcher.submit(
@@ -154,7 +159,10 @@ def _install_cpu_retrieval_coalescing() -> None:
             ),
         ) -> list[float]:
             docs = tuple(str(document) for document in documents)
-            if threading.current_thread().name == "mmm-cpu-rerank-batcher":
+            if (
+                len(docs) != 1
+                or threading.current_thread().name == "mmm-cpu-rerank-batcher"
+            ):
                 return current_score(self, query, docs, instruction=instruction)
             future: Future[Any] = Future()
             return rerank_batcher.submit(
