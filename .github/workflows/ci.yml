@@ -14,13 +14,10 @@ concurrency:
   group: ci-audit-v6-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-x-python-job: &python_job
-  runs-on: ubuntu-latest
-  timeout-minutes: 30
-
 jobs:
   audit:
-    <<: *python_job
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Static and packaging audit
     steps:
       - uses: actions/checkout@v6
@@ -50,7 +47,8 @@ jobs:
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
 
   runtime-clean:
-    <<: *python_job
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Runtime composition
     steps:
       - uses: actions/checkout@v6
@@ -62,7 +60,8 @@ jobs:
       - run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
 
   mcp-evidence:
-    <<: *python_job
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Minecraft MCP evidence
     steps:
       - uses: actions/checkout@v6
@@ -78,7 +77,8 @@ jobs:
           tests/test_research_coordinator.py
 
   planner-repair:
-    <<: *python_job
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Planner repair termination
     steps:
       - uses: actions/checkout@v6
@@ -94,7 +94,8 @@ jobs:
           tests/test_planner_strict_json_contract.py
 
   parallel-repair:
-    <<: *python_job
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Parallel repair safety
     steps:
       - uses: actions/checkout@v6
@@ -110,7 +111,8 @@ jobs:
           tests/test_llama_parallel_runtime_contract.py
 
   remaining-tests:
-    <<: *python_job
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Remaining tests ${{ matrix.shard }}/3
     strategy:
       fail-fast: false
