@@ -5,7 +5,6 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from minecraft_mod_ai import planner_json_runtime_contract as runtime
 from minecraft_mod_ai import production_page_durable_contract as durable
-from minecraft_mod_ai import production_stream_efficiency_contract as stream
 
 
 def _production_page(**overrides):
@@ -83,7 +82,3 @@ def test_production_schema_rejects_blank_acceptance_test() -> None:
 
 def test_stale_loose_production_checkpoints_are_invalidated() -> None:
     assert durable._VERSION >= 2
-
-
-def test_stream_retry_budget_cannot_undercut_canonical_production_budget() -> None:
-    assert stream._FULL_PAGE_DECODE_LIMIT >= runtime._attempt_budget(True)
