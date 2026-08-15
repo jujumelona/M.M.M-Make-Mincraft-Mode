@@ -10,13 +10,15 @@ class _Call:
         self.arguments = arguments
 
 
-def test_temporary_skill_cache_reuses_only_unchanged_corpus(tmp_path, monkeypatch):
+def test_temporary_skill_cache_reuses_only_unchanged_corpus_and_context(tmp_path, monkeypatch):
     monkeypatch.setenv("MMM_TEMPORARY_SKILL_CACHE_ENTRIES", "4")
     router = SimpleNamespace()
     calls = {"retrieve": 0, "synthesize": 0}
+    contexts: list[dict[str, object]] = []
 
-    def fake_relevant(root, query, *, task_class, router, limit):
+    def fake_relevant(root, query, *, task_class, router, limit, current_context):
         calls["retrieve"] += 1
+        contexts.append(dict(current_context))
         return [{"trajectory_id": "sha256:test"}]
 
     def fake_synthesize(query, records, *, task_class):
@@ -30,20 +32,55 @@ def test_temporary_skill_cache_reuses_only_unchanged_corpus(tmp_path, monkeypatc
     monkeypatch.setattr(contract, "relevant_trajectories", fake_relevant)
     monkeypatch.setattr(contract, "synthesize_temporary_skill", fake_synthesize)
 
-    first = contract._temporary_skill(router, tmp_path, "same query", task_class="planning")
-    second = contract._temporary_skill(router, tmp_path, "same query", task_class="planning")
+    context = {"target_version": "future-1", "loader": "fabric"}
+    first = contract._temporary_skill(
+        router,
+        tmp_path,
+        "same query",
+        task_class="planning",
+        current_context=context,
+    )
+    second = contract._temporary_skill(
+        router,
+        tmp_path,
+        "same query",
+        task_class="planning",
+        current_context={"minecraft_version": "future-1", "loader": "fabric"},
+    )
     assert second == first
     assert calls == {"retrieve": 1, "synthesize": 1}
+    assert contexts == [{"loader": "fabric", "minecraft_version": "future-1"}]
 
     local = contract.memory_path(tmp_path)
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text('{"trajectory_id":"new"}\n', encoding="utf-8")
-    third = contract._temporary_skill(router, tmp_path, "same query", task_class="planning")
+    third = contract._temporary_skill(
+        router,
+        tmp_path,
+        "same query",
+        task_class="planning",
+        current_context=context,
+    )
     assert third == first
     assert calls == {"retrieve": 2, "synthesize": 2}
 
-    contract._temporary_skill(router, tmp_path, "different query", task_class="planning")
+    contract._temporary_skill(
+        router,
+        tmp_path,
+        "same query",
+        task_class="planning",
+        current_context={"minecraft_version": "future-2", "loader": "fabric"},
+    )
     assert calls == {"retrieve": 3, "synthesize": 3}
+
+    contract._temporary_skill(
+        router,
+        tmp_path,
+        "different query",
+        task_class="planning",
+        current_context=context,
+    )
+    assert calls == {"retrieve": 4, "synthesize": 4}
 
 
 def test_read_wave_exact_dedup_preserves_ids_and_mutation_barriers():
