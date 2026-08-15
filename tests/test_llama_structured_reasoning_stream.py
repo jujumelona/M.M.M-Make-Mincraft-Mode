@@ -40,7 +40,7 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     assert payload["max_tokens"] == 8192
 
 
-def test_tool_request_uses_minimal_payload_even_when_schema_exists() -> None:
+def test_native_tool_request_is_rejected_before_llama_transport() -> None:
     request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then plan"},),
         response_format="json",
@@ -61,12 +61,12 @@ def test_tool_request_uses_minimal_payload_even_when_schema_exists() -> None:
         tool_choice="auto",
         parallel_tool_calls=True,
     )
-    payload = _server_payload(_adapter(), request)
-    assert payload["tools"][0]["function"]["name"] == "lookup"
-    assert payload["tool_choice"] == "auto"
-    assert "response_format" not in payload
-    assert "reasoning_effort" not in payload
-    assert "parallel_tool_calls" not in payload
+    try:
+        _server_payload(_adapter(), request)
+    except RuntimeError as exc:
+        assert "Native llama-server tool transport is disabled" in str(exc)
+    else:
+        raise AssertionError("native llama tool metadata must fail closed")
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
