@@ -140,16 +140,25 @@ def test_github_only_injects_minecraft_terms_for_minecraft_profile() -> None:
 
     client = _client(handler)
     client.search("github", "streaming inference", target_profile="minecraft_mod")
+    client.search(
+        "github",
+        "streaming inference",
+        target_profile="minecraft_mod",
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
     client.search("github", "streaming inference", target_profile="speech_ai")
     client.search("github", "agent tool runtime", target_profile="ai_runtime")
 
-    assert queries[0].startswith("streaming inference minecraft fabric ")
-    assert queries[1].startswith("streaming inference in:name")
-    assert queries[2].startswith("agent tool runtime in:name")
-    assert "minecraft" not in queries[1]
-    assert "fabric" not in queries[1]
+    assert queries[0].startswith("streaming inference minecraft mod ")
+    assert "fabric" not in queries[0]
+    assert queries[1].startswith("streaming inference minecraft fabric ")
+    assert queries[2].startswith("streaming inference in:name")
+    assert queries[3].startswith("agent tool runtime in:name")
     assert "minecraft" not in queries[2]
     assert "fabric" not in queries[2]
+    assert "minecraft" not in queries[3]
+    assert "fabric" not in queries[3]
 
 
 def test_github_provider_hard_limit_is_explicit_not_silent() -> None:
