@@ -32,12 +32,13 @@ def _request(*, schema=_SCHEMA) -> GenerationRequest:
     )
 
 
-def test_llama_server_uses_generic_json_object_not_schema_grammar() -> None:
+def test_llama_server_keeps_structured_validation_host_side() -> None:
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
     payload = _server_payload(adapter, _request())
 
-    assert payload["response_format"] == {"type": "json_object"}
-    assert "schema" not in payload["response_format"]
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
 
 
