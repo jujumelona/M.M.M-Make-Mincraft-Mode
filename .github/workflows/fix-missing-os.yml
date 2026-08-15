@@ -1,0 +1,41 @@
+name: Fix missing os import
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply verified one-line import fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('minecraft_mod_ai/complete_orchestrator_services.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'import hashlib\nimport json\nimport zipfile\n'
+          new = 'import hashlib\nimport json\nimport os\nimport zipfile\n'
+          if new in text:
+              raise SystemExit(0)
+          if old not in text:
+              raise SystemExit('expected import block not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git diff --check
+          git diff --exit-code --quiet && exit 0
+          git config user.name "jujumelona"
+          git config user.email "qasdaa025@gmail.com"
+          git add minecraft_mod_ai/complete_orchestrator_services.py
+          git commit -m "Fix runtime profile environment import"
+          git push origin HEAD:main
