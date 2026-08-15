@@ -31,9 +31,15 @@ def install() -> None:
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
+    from .runtime_hotpath_consolidation import install as install_hotpath_consolidation
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_concurrency_budget import harden as harden_model_concurrency
     from .work_graph_hash_performance import harden as harden_work_graph_hashes
+
+    # bottleneck_elimination_contract is installed immediately before this late
+    # research bootstrap. Consolidate only the residual admission work around those
+    # existing owners before adding research-specific performance layers.
+    install_hotpath_consolidation()
 
     harden_rag(rag_index, centroid_vector_rag)
     harden_rag_amortized(rag_index, rag_performance)
