@@ -21,6 +21,22 @@ def _serialized_size(value: object) -> int:
     )
 
 
+def _latest_json_request(messages) -> dict:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            request = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(request, dict) and request.get("phase"):
+            return request
+    raise AssertionError("No structured coder request was found in the message history.")
+
+
 def test_project_context_pages_reconstruct_large_utf8_source_within_budget(
     tmp_path: Path,
 ) -> None:
@@ -73,7 +89,7 @@ class _ContextPagingRouter:
     def generate_text(self, role, messages, **kwargs):
         assert role == "coder"
         assert kwargs["response_format"] == "json"
-        request = json.loads(messages[-1]["content"])
+        request = _latest_json_request(messages)
         assert request["phase"] == "generate_patch"
         self.requests.append(request)
         context = request["relevant_context"]
