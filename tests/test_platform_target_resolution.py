@@ -9,11 +9,7 @@ from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.knowledge import evidence_for_target
 from minecraft_mod_ai import platform_catalog as catalog
 from minecraft_mod_ai import platform_resolver as resolver
-from minecraft_mod_ai.platform_catalog import (
-    FABRIC_1201,
-    FABRIC_1211,
-    adapter_from_project,
-)
+from minecraft_mod_ai.platform_catalog import adapter_from_project
 from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget
 from minecraft_mod_ai.platform_optimizer import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_resolver import lock_from_adapter, resolve_platform
@@ -25,6 +21,10 @@ from minecraft_mod_ai.spec import (
     SpecValidationError,
 )
 from minecraft_mod_ai.validator import ProjectValidator
+
+
+_FABRIC_1201 = catalog.adapter_for_target("1.20.1", "fabric")
+_FABRIC_1211 = catalog.adapter_for_target("1.21.1", "fabric")
 
 
 def _simple_spec(adapter) -> ModSpec:
@@ -126,7 +126,7 @@ class _ChoiceRouter:
 
 
 def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
-    selected_adapter = FABRIC_1211
+    selected_adapter = _FABRIC_1211
     monkeypatch.setattr(
         resolver,
         "_optimize",
@@ -142,7 +142,7 @@ def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
 
 
 def test_model_cannot_invent_platform_coordinate(monkeypatch) -> None:
-    selected_adapter = FABRIC_1201
+    selected_adapter = _FABRIC_1201
     monkeypatch.setattr(
         resolver,
         "_optimize",
@@ -173,7 +173,7 @@ def test_revise_preserves_existing_target_without_migration_request() -> None:
         existing_version="1.20.1",
         existing_loader="fabric",
     )
-    assert selected.adapter.adapter_id == FABRIC_1201.adapter_id
+    assert selected.adapter.adapter_id == _FABRIC_1201.adapter_id
     assert selected.preserved_existing_target is True
 
 
@@ -209,7 +209,7 @@ def test_legacy_target_evidence_keeps_exact_yarn_javadocs() -> None:
 
 
 def test_1211_generator_writes_1211_source_resource_and_lock(tmp_path: Path) -> None:
-    spec = _simple_spec(FABRIC_1211)
+    spec = _simple_spec(_FABRIC_1211)
     generated = FabricProjectGenerator().generate(spec, tmp_path / "project")
     root = generated.root
 
@@ -233,11 +233,11 @@ def test_1211_generator_writes_1211_source_resource_and_lock(tmp_path: Path) -> 
     assert pack["pack"]["pack_format"] == 34
     assert recipe["result"]["id"] == "target_probe:probe_item"
     assert lock["adapter_id"] == "fabric_1_21_1"
-    assert adapter_from_project(root).adapter_id == FABRIC_1211.adapter_id
+    assert adapter_from_project(root).adapter_id == _FABRIC_1211.adapter_id
 
 
 def test_1211_static_validator_uses_singular_data_paths(tmp_path: Path) -> None:
-    spec = _simple_spec(FABRIC_1211)
+    spec = _simple_spec(_FABRIC_1211)
     root = FabricProjectGenerator().generate(spec, tmp_path / "project").root
     report = ProjectValidator().validate(root, spec)
     assert report.status == "PASS", [item.__dict__ for item in report.findings]
@@ -245,8 +245,8 @@ def test_1211_static_validator_uses_singular_data_paths(tmp_path: Path) -> None:
 
 def test_validator_rejects_project_and_proposal_target_mismatch(tmp_path: Path) -> None:
     root = FabricProjectGenerator().generate(
-        _simple_spec(FABRIC_1211), tmp_path / "project"
+        _simple_spec(_FABRIC_1211), tmp_path / "project"
     ).root
-    report = ProjectValidator().validate(root, _simple_spec(FABRIC_1201))
+    report = ProjectValidator().validate(root, _simple_spec(_FABRIC_1201))
     assert report.status == "FAIL"
     assert any(item.code == "PLATFORM_LOCK_MISMATCH" for item in report.findings)
