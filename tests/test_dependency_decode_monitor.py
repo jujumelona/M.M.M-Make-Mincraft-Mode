@@ -7,7 +7,14 @@ from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.dependency_decode_monitor import activate_dependency_decode_monitor
 from minecraft_mod_ai import custom_generation_search_contract as generation_search
 from minecraft_mod_ai import llama_server_hardware_policy as llama_hardware
-from minecraft_mod_ai.platform_catalog import FABRIC_1201
+
+
+_TEST_MINECRAFT_VERSION = "1.20.1"
+_TEST_LOADER = "fabric"
+_TEST_MAPPINGS = "1.20.1+build.1"
+_TEST_FABRIC_LOADER = "0.17.2"
+_TEST_FABRIC_API = "0.92.11+1.20.1"
+_TEST_FABRIC_LOOM = "1.10.5"
 
 
 def _project(tmp_path):
@@ -22,11 +29,11 @@ def _project(tmp_path):
     (tmp_path / "gradle.properties").write_text(
         "\n".join(
             (
-                f"minecraft_version={FABRIC_1201.minecraft_version}",
-                f"yarn_mappings={FABRIC_1201.yarn_mappings}",
-                f"loader_version={FABRIC_1201.fabric_loader}",
-                f"fabric_version={FABRIC_1201.fabric_api}",
-                f"loom_version={FABRIC_1201.fabric_loom}",
+                f"minecraft_version={_TEST_MINECRAFT_VERSION}",
+                f"yarn_mappings={_TEST_MAPPINGS}",
+                f"loader_version={_TEST_FABRIC_LOADER}",
+                f"fabric_version={_TEST_FABRIC_API}",
+                f"loom_version={_TEST_FABRIC_LOOM}",
             )
         )
         + "\n",
@@ -39,9 +46,9 @@ def _monitor(tmp_path):
     _project(tmp_path)
     return research.DependencyMonitor(
         tmp_path,
-        minecraft_version=FABRIC_1201.minecraft_version,
-        loader=FABRIC_1201.loader,
-        mappings=FABRIC_1201.yarn_mappings,
+        minecraft_version=_TEST_MINECRAFT_VERSION,
+        loader=_TEST_LOADER,
+        mappings=_TEST_MAPPINGS,
     )
 
 
@@ -100,11 +107,11 @@ def test_decode_monitor_defers_partial_coordinate_then_blocks_completed_unknown(
 
     admitted_partial = (
         '"net.fabricmc.fabric-api:fabric-api:'
-        + FABRIC_1201.fabric_api[:-2]
+        + _TEST_FABRIC_API[:-2]
     )
     assert monitor.stream_violations(admitted_partial, final=False) == ()
     admitted_complete = (
-        '"net.fabricmc.fabric-api:fabric-api:' + FABRIC_1201.fabric_api + '"'
+        '"net.fabricmc.fabric-api:fabric-api:' + _TEST_FABRIC_API + '"'
     )
     assert monitor.stream_violations(admitted_complete, final=False) == ()
 
