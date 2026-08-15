@@ -26,7 +26,7 @@ def _domain(
         "objective": f"Research {domain_id} without assuming a genre template.",
         "requirements": [f"Preserve the requested {domain_id} capability."],
         "evidence_kinds": ["dependency", "compatibility", "license"],
-        "queries": [query or f"{domain_id} Fabric 1.20.1 evidence"],
+        "queries": [query or f"{domain_id} implementation evidence"],
         "providers": providers or ["official_docs", "github"],
         "depends_on": depends_on or [],
     }
@@ -37,6 +37,17 @@ def _candidate(domains: list[dict[str, object]]) -> dict[str, object]:
         "summary": "A generic request-derived research DAG.",
         "domains": domains,
         "unresolved_questions": [],
+    }
+
+
+def _selected_design(version: str = "1.20.1", loader: str = "fabric") -> dict[str, object]:
+    return {
+        "_platform_selection": {
+            "target": {
+                "minecraft_version": version,
+                "loader": loader,
+            }
+        }
     }
 
 
@@ -72,6 +83,19 @@ def test_normalize_research_brief_accepts_a_generic_planner_dag() -> None:
         "presentation",
     ]
     assert normalized["domains"][2]["depends_on"] == ["simulation"]
+    assert "_mmm_platform_target" not in normalized
+
+
+def test_normalize_research_brief_preserves_host_selected_target() -> None:
+    normalized = normalize_research_brief(
+        "Build the requested simulation.",
+        _selected_design("1.21.1", "fabric"),
+        _candidate([_domain("request")]),
+    )
+    assert normalized["_mmm_platform_target"] == {
+        "minecraft_version": "1.21.1",
+        "loader": "fabric",
+    }
 
 
 def test_normalize_research_brief_rejects_cycles_and_unknown_providers() -> None:
@@ -180,7 +204,7 @@ def test_simple_decorative_item_does_not_invent_audio_research_or_quality() -> N
     }
     assert "openverse_audio" not in providers
     assert "audio" not in evidence_kinds
-    assert "openverse_images" in providers  # the declared item texture is visual
+    assert "openverse_images" in providers
 
     compiled = compile_production_contract(
         requested_prompt=prompt,
@@ -360,6 +384,27 @@ def _receipt(
     )
 
 
+def test_targetless_official_research_is_deferred_without_retrieval() -> None:
+    brief = normalize_research_brief(
+        "Research all routed facts.",
+        {},
+        _candidate([_domain("official_one", providers=["official_docs"])]),
+    )
+    calls: list[str] = []
+
+    def fake_retrieve(query: str, **_kwargs: object) -> RetrievalReceipt:
+        calls.append(query)
+        return _receipt(query)
+
+    evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
+
+    assert calls == []
+    assert evidence["target"] is None
+    assert evidence["deferred_official_domains"] == ["official_one"]
+    assert evidence["unresolved_official_domains"] == []
+    assert evidence["domains"][0]["strategy"] == "deferred_until_platform_selected"
+
+
 def test_retrieve_domain_evidence_calls_every_query_and_every_correction() -> None:
     official_queries = (
         "official query alpha",
@@ -368,7 +413,7 @@ def test_retrieve_domain_evidence_calls_every_query_and_every_correction() -> No
     )
     brief = normalize_research_brief(
         "Research all routed facts.",
-        {},
+        _selected_design(),
         _candidate(
             [
                 {
@@ -425,5 +470,40 @@ def test_retrieve_domain_evidence_calls_every_query_and_every_correction() -> No
         for _, kwargs in calls
     )
     assert [kwargs["limit"] for _, kwargs in calls] == [8, 4, 4] * 3
+    assert evidence["target"] == {
+        "minecraft_version": "1.20.1",
+        "loader": "fabric",
+        "mappings": "yarn-1.20.1+build.1",
+    }
+    assert evidence["deferred_official_domains"] == []
     assert evidence["unresolved_official_domains"] == []
     assert evidence["retrieval_is_authority"] is False
+
+
+def test_selected_target_drives_rag_coordinates_without_model_choice() -> None:
+    brief = normalize_research_brief(
+        "Research exact target evidence.",
+        _selected_design("1.21.1", "fabric"),
+        _candidate([_domain("official_one", providers=["official_docs"])]),
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_retrieve(query: str, **kwargs: object) -> RetrievalReceipt:
+        calls.append(kwargs)
+        return _receipt(query)
+
+    evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
+
+    assert calls == [
+        {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "1.21.1+build.3",
+            "limit": 8,
+        }
+    ]
+    assert evidence["target"] == {
+        "minecraft_version": "1.21.1",
+        "loader": "fabric",
+        "mappings": "1.21.1+build.3",
+    }

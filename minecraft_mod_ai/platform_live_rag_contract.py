@@ -32,9 +32,15 @@ def _replace_kwonly_default(function: Any, name: str, value: Any) -> None:
     function.__kwdefaults__ = updated
 
 
-def install(*, retrieval_module: Any, platform_planning_module: Any) -> None:
-    """Use only version-applicable documents and reuse immutable search indexes."""
+def install(*, retrieval_module: Any, platform_planning_module: Any | None = None) -> None:
+    """Use version-applicable documents and reuse immutable search indexes.
 
+    ``platform_planning_module`` is accepted only for bootstrap compatibility; this
+    contract no longer injects any planning RAG helper. Central research is the sole
+    owner of target-aware official evidence retrieval.
+    """
+
+    del platform_planning_module
     cls = retrieval_module.OfficialCorpusIndex
     original = cls.retrieve
     if not getattr(original, "_mmm_live_platform_rag", False):
@@ -49,7 +55,6 @@ def install(*, retrieval_module: Any, platform_planning_module: Any) -> None:
             mappings: str = "yarn-1.20.1+build.1",
             limit: int = 6,
         ):
-            # Preserve the exact legacy profile and its existing regression behavior.
             if (
                 minecraft_version == "1.20.1"
                 and mappings == "yarn-1.20.1+build.1"
@@ -100,9 +105,6 @@ def install(*, retrieval_module: Any, platform_planning_module: Any) -> None:
         shared_retrieve._mmm_thread_local_index_reuse = True
         retrieval_module.retrieve_official_evidence = shared_retrieve
 
-    # central_research imported retrieve_official_evidence directly and captured it as
-    # a keyword-only default. Replace both references before the later parallel RAG
-    # wrapper captures the legacy lane, otherwise each query would still rebuild FTS.
     from . import central_research as central_module
 
     central_module.retrieve_official_evidence = shared_retrieve
@@ -111,21 +113,6 @@ def install(*, retrieval_module: Any, platform_planning_module: Any) -> None:
         "retrieve",
         shared_retrieve,
     )
-
-    def target_retrieve(retrieval: Any, query: str, *, adapter: Any, limit: int):
-        return _thread_index(retrieval).retrieve(
-            query,
-            minecraft_version=adapter.minecraft_version,
-            loader=adapter.loader,
-            mappings=adapter.yarn_mappings,
-            limit=limit,
-        )
-
-    target_retrieve._mmm_live_platform_rag = True
-    target_retrieve._mmm_thread_local_index_reuse = True
-    # Replaces the old compatibility shim that queried a 1.20.1 source lane and then
-    # rewrote the receipt target. No evidence is relabeled across versions anymore.
-    platform_planning_module._target_retrieve = target_retrieve
 
 
 def _retrieve_live(
@@ -231,12 +218,8 @@ def _retrieve_live(
             )
         )
 
-    family_hits = sum(
-        family in eligible[hit.document_id].families for hit in hits
-    )
-    exact_hits = sum(
-        minecraft_version in hit.minecraft_versions for hit in hits
-    )
+    family_hits = sum(family in eligible[hit.document_id].families for hit in hits)
+    exact_hits = sum(minecraft_version in hit.minecraft_versions for hit in hits)
     applicable_hits = sum(
         minecraft_version in hit.minecraft_versions or "*" in hit.minecraft_versions
         for hit in hits
@@ -246,9 +229,6 @@ def _retrieve_live(
         (applicable_hits / max(1, min(3, len(hits)))) * 0.55
         + (family_hits / max(1, min(3, len(hits)))) * 0.45,
     )
-    # Version-neutral Fabric docs are valid conceptual evidence for a newly released
-    # target; exact API correctness is established later by the official template,
-    # JDT, Gradle and GameTest rather than by pretending an old Javadoc is exact.
     quality = "strong" if len(hits) >= min(3, limit) and family_hits >= 1 else "weak"
     correction_required = quality != "strong"
     corrections = (

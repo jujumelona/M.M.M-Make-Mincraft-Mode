@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
+from .platform_catalog import adapter_for_target
 from .retrieval import RetrievalReceipt, retrieve_official_evidence
 from .spec import SpecValidationError, canonical_json
 
@@ -145,7 +146,7 @@ def normalize_research_brief(
 
     domains = tuple(_augment_domain_routes(domain) for domain in domains)
     _validate_domain_graph(domains)
-    payload = {
+    payload: dict[str, Any] = {
         "schema_version": "mmm/central-research-brief-v1",
         "summary": summary,
         "origin": origin,
@@ -160,6 +161,11 @@ def normalize_research_brief(
             "continue with cursors and production batches."
         ),
     }
+    selection = game_design.get("_platform_selection")
+    if isinstance(selection, Mapping):
+        target = selection.get("target")
+        if isinstance(target, Mapping):
+            payload["_mmm_platform_target"] = dict(target)
     payload["brief_sha256"] = _sha256(canonical_json(payload))
     return payload
 
@@ -169,13 +175,36 @@ def retrieve_domain_evidence(
     *,
     retrieve: Callable[..., RetrievalReceipt] = retrieve_official_evidence,
 ) -> dict[str, Any]:
-    """Run adaptive official-document RAG for every routed domain query."""
+    """Retrieve official evidence only after the host has selected a target.
+
+    Pre-target research remains semantic and platform-neutral. Once a target exists,
+    its version/loader pair is resolved through the executable provider registry and
+    every primary/corrective query is pinned to that provider's exact mappings.
+    """
 
     domains = research_brief.get("domains")
     if not isinstance(domains, list) or not domains:
         raise SpecValidationError("Central research brief has no domains.")
+
+    raw_target = research_brief.get("_mmm_platform_target")
+    adapter = None
+    if raw_target is not None:
+        if not isinstance(raw_target, Mapping):
+            raise SpecValidationError("Central research platform target must be an object.")
+        version = str(raw_target.get("minecraft_version", "")).strip()
+        loader = str(raw_target.get("loader", "")).strip().casefold()
+        if not version or not loader:
+            raise SpecValidationError(
+                "Central research platform target requires minecraft_version and loader."
+            )
+        try:
+            adapter = adapter_for_target(version, loader)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
+
     results: list[dict[str, Any]] = []
     unresolved: list[str] = []
+    deferred: list[str] = []
     for raw_domain in domains:
         domain = _research_domain(raw_domain)
         if "official_docs" not in domain.providers:
@@ -187,23 +216,34 @@ def retrieve_domain_evidence(
                 }
             )
             continue
+        if adapter is None:
+            deferred.append(domain.domain_id)
+            results.append(
+                {
+                    "domain_id": domain.domain_id,
+                    "strategy": "deferred_until_platform_selected",
+                    "queries": [],
+                }
+            )
+            continue
+
         query_results: list[dict[str, Any]] = []
         has_hits = False
         for query in domain.queries:
             primary = retrieve(
                 query,
-                minecraft_version="1.20.1",
-                loader="fabric",
-                mappings="yarn-1.20.1+build.1",
+                minecraft_version=adapter.minecraft_version,
+                loader=adapter.loader,
+                mappings=adapter.yarn_mappings,
                 limit=8,
             )
             corrections: list[dict[str, Any]] = []
             for correction_query in primary.correction_queries:
                 correction = retrieve(
                     correction_query,
-                    minecraft_version="1.20.1",
-                    loader="fabric",
-                    mappings="yarn-1.20.1+build.1",
+                    minecraft_version=adapter.minecraft_version,
+                    loader=adapter.loader,
+                    mappings=adapter.yarn_mappings,
                     limit=4,
                 )
                 corrections.append(correction.to_dict())
@@ -230,10 +270,22 @@ def retrieve_domain_evidence(
                 "queries": query_results,
             }
         )
+
+    target_payload = (
+        {
+            "minecraft_version": adapter.minecraft_version,
+            "loader": adapter.loader,
+            "mappings": adapter.yarn_mappings,
+        }
+        if adapter is not None
+        else None
+    )
     payload = {
         "schema_version": "mmm/central-evidence-graph-v1",
         "brief_sha256": research_brief.get("brief_sha256", ""),
+        "target": target_payload,
         "domains": results,
+        "deferred_official_domains": deferred,
         "unresolved_official_domains": unresolved,
         "authorization": "none",
         "retrieval_is_authority": False,
@@ -937,10 +989,7 @@ def _lossless_query_pages(statement: str, max_bytes: int) -> tuple[str, ...]:
 
 
 def _query_chunks(statement: str) -> tuple[str, ...]:
-    suffix = (
-        " Minecraft Java 1.20.1 Fabric Yarn implementation dependencies "
-        "assets license tests"
-    )
+    suffix = " Minecraft Java mod implementation dependencies assets license tests"
     budget = _MAX_QUERY_BYTES - len(suffix.encode("utf-8"))
     if budget <= 0:
         raise RuntimeError("Central research query suffix exceeds its byte policy.")
