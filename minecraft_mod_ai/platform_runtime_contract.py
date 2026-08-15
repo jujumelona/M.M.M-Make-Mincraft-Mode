@@ -112,16 +112,6 @@ def _install_runtime_manager(module: Any) -> None:
 
     @wraps(original_prepare)
     def prepare_instance(self: Any, *args: Any, **kwargs: Any):
-        if (
-            self.profile.eula_must_be_explicitly_accepted
-            and not kwargs.get("eula_accepted", False)
-        ):
-            raise module.RuntimePolicyError("Minecraft EULA acceptance must be explicit.")
-        _validate_java_command(
-            self.profile.server_java_command,
-            expected_major=int(self._mmm_platform_adapter.java_version),
-            error_type=module.RuntimePolicyError,
-        )
         result = original_prepare(self, *args, **kwargs)
         result = dict(result)
         result["platform_adapter"] = self._mmm_platform_adapter.adapter_id
@@ -130,6 +120,20 @@ def _install_runtime_manager(module: Any) -> None:
 
     prepare_instance._mmm_dynamic_platform_runtime = True
     cls.prepare_instance = prepare_instance
+
+    original_start_server = cls.start_server
+
+    @wraps(original_start_server)
+    def start_server(self: Any, *args: Any, **kwargs: Any):
+        _validate_java_command(
+            self.profile.server_java_command,
+            expected_major=int(self._mmm_platform_adapter.java_version),
+            error_type=module.RuntimePolicyError,
+        )
+        return original_start_server(self, *args, **kwargs)
+
+    start_server._mmm_dynamic_platform_runtime = True
+    cls.start_server = start_server
 
 
 def _install_mineflayer_target(module: Any) -> None:
