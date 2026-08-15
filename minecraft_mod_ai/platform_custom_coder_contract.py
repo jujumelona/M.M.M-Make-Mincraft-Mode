@@ -6,6 +6,7 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .platform_catalog import adapter_for_target
+from .dependency_decode_monitor import activate_dependency_decode_monitor
 
 
 _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
@@ -15,11 +16,28 @@ _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
 
 
 def install(custom_module_generator_module: Any) -> None:
-    """Bind custom coder prompts and patch scope to the approved target."""
+    """Bind custom coder prompts, evidence and patch scope to one approved target."""
 
+    activate_dependency_decode_monitor()
     _install_custom_generator_scope(custom_module_generator_module)
     _install_gradle_metadata_scope(custom_module_generator_module)
     _install_router_rewrite()
+
+
+def _required_target(
+    module_api: Any,
+    minecraft_version: str | None,
+    loader: str | None,
+    mappings: str | None,
+) -> tuple[str, str, str]:
+    version = str(minecraft_version or "").strip()
+    loader_id = str(loader or "").strip().casefold()
+    mapping_id = str(mappings or "").strip()
+    if not version or not loader_id or not mapping_id:
+        raise module_api.CustomModuleGenerationError(
+            "Custom coder requires a host-selected minecraft_version, loader and mappings."
+        )
+    return version, loader_id, mapping_id
 
 
 def _install_custom_generator_scope(module_api: Any) -> None:
@@ -35,20 +53,26 @@ def _install_custom_generator_scope(module_api: Any) -> None:
         *,
         module: Any,
         research_modules=(),
-        minecraft_version: str = "1.20.1",
-        loader: str = "fabric",
-        mappings: str = "1.20.1+build.1",
+        minecraft_version: str | None = None,
+        loader: str | None = None,
+        mappings: str | None = None,
     ):
+        version, loader_id, mapping_id = _required_target(
+            module_api,
+            minecraft_version,
+            loader,
+            mappings,
+        )
         try:
-            adapter = adapter_for_target(minecraft_version, loader)
+            adapter = adapter_for_target(version, loader_id)
         except ValueError as exc:
             raise module_api.CustomModuleGenerationError(
                 "Custom coder target could not be resolved: " + str(exc)
             ) from exc
-        if mappings != adapter.yarn_mappings:
+        if mapping_id != adapter.yarn_mappings:
             raise module_api.CustomModuleGenerationError(
                 "Custom coder mappings disagree with the approved platform target: "
-                f"{mappings!r} != {adapter.yarn_mappings!r}."
+                f"{mapping_id!r} != {adapter.yarn_mappings!r}."
             )
         token = _ACTIVE_CODER_TARGET.set(adapter)
         try:
@@ -69,14 +93,17 @@ def _install_custom_generator_scope(module_api: Any) -> None:
 
 
 def _install_gradle_metadata_scope(module_api: Any) -> None:
-    """Permit only project-owned Gradle metadata needed for version migration."""
+    """Permit only project-owned Gradle metadata needed for target-safe generation."""
 
     cls = module_api.CustomModuleGenerator
     current = cls._validate_operations
     if getattr(current, "_mmm_live_gradle_metadata_scope", False):
         return
 
-    def validate_operations(self: Any, operations: list[dict[str, Any]]) -> None:
+    def validate_operations(
+        self: Any,
+        operations: list[dict[str, Any]],
+    ) -> None:
         gradle_metadata = {
             "build.gradle",
             "build.gradle.kts",
@@ -138,9 +165,7 @@ def _install_router_rewrite() -> None:
         self: Any,
         role: str,
         messages: Sequence[Mapping[str, Any]],
-        *,
-        media_paths=(),
-        response_format: str = "text",
+        **kwargs: Any,
     ) -> str:
         adapter = _ACTIVE_CODER_TARGET.get()
         rewritten = messages
@@ -153,15 +178,17 @@ def _install_router_rewrite() -> None:
             self,
             role,
             rewritten,
-            media_paths=media_paths,
-            response_format=response_format,
+            **kwargs,
         )
 
     generate_text._mmm_dynamic_coder_target = True
     cls.generate_text = generate_text
 
 
-def _rewrite_message(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]:
+def _rewrite_message(
+    message: Mapping[str, Any],
+    adapter: Any,
+) -> dict[str, Any]:
     result = dict(message)
     content = result.get("content")
     if not isinstance(content, str):
@@ -186,27 +213,35 @@ def _rewrite_message(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]
         return result
 
     target_label = (
-        f"Minecraft Java {adapter.minecraft_version} {adapter.loader.capitalize()}"
+        f"Minecraft Java {adapter.minecraft_version} "
+        f"{adapter.loader.capitalize()}"
     )
-    content = content.replace(
-        "Minecraft Java 1.20.1 Fabric",
-        target_label,
-    )
-    content = content.replace(
-        "Minecraft 1.20.1 Fabric Java mod",
-        f"Minecraft {adapter.minecraft_version} {adapter.loader.capitalize()} Java mod",
-    )
-    content = content.replace(
-        "Minecraft Fabric 1.20.1",
-        f"Minecraft {adapter.minecraft_version} {adapter.loader.capitalize()}",
-    )
-    content = content.replace(
-        "create/replace patch operations for Java source files.",
-        "create/replace/edit patch operations for source, resources, and approved Gradle metadata.",
-    )
-    content = content.replace(
-        "array containing exact Java source file patches under 'src/main/java/'.",
-        "array containing exact patches within the host-approved source, resource, and Gradle metadata scope.",
-    )
+    replacements = {
+        "Minecraft Java 1.20.1 Fabric": target_label,
+        "Minecraft 1.20.1 Fabric Java mod": (
+            f"Minecraft {adapter.minecraft_version} "
+            f"{adapter.loader.capitalize()} Java mod"
+        ),
+        "Minecraft Fabric 1.20.1": (
+            f"Minecraft {adapter.minecraft_version} "
+            f"{adapter.loader.capitalize()}"
+        ),
+        "create/replace patch operations for Java source files.": (
+            "create/replace/edit patch operations for source, resources, "
+            "and approved Gradle metadata."
+        ),
+        (
+            "array containing exact Java source file patches under "
+            "'src/main/java/'."
+        ): (
+            "array containing exact patches within the host-approved source, "
+            "resource, and Gradle metadata scope."
+        ),
+    }
+    for old, new in replacements.items():
+        content = content.replace(old, new)
     result["content"] = content
     return result
+
+
+__all__ = ["install"]
