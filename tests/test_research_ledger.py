@@ -25,7 +25,7 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
-from minecraft_mod_ai.platform_catalog import FABRIC_1201
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.research_ledger import (
     ResearchLedgerError,
@@ -34,6 +34,9 @@ from minecraft_mod_ai.research_ledger import (
     write_research_shard,
 )
 from minecraft_mod_ai.retrieval import retrieve_official_evidence
+
+
+_TEST_TARGET = adapter_for_target("1.20.1", "fabric")
 
 
 def _base_proposal():
@@ -490,9 +493,9 @@ def test_custom_module_generation_receives_bounded_relevant_research(
         root,
         module=module,
         research_modules=research,
-        minecraft_version=FABRIC_1201.minecraft_version,
-        loader=FABRIC_1201.loader,
-        mappings=FABRIC_1201.yarn_mappings,
+        minecraft_version=_TEST_TARGET.minecraft_version,
+        loader=_TEST_TARGET.loader,
+        mappings=_TEST_TARGET.yarn_mappings,
     )
 
     assert result["status"] == "SOURCE_GENERATED"
