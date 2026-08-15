@@ -8,9 +8,8 @@ from urllib.parse import urlparse
 from .spec import EvidenceSource, SpecValidationError, canonical_json
 
 
-# Hosts remain code-owned; version numbers do not. A model can select/rank only
-# records on these official domains, while the selected Minecraft version is bound by
-# the separate live platform receipt.
+# Hosts are code-owned trust anchors. Target versions and dependency coordinates are
+# never code-owned defaults; they come from the selected live platform receipt.
 OFFICIAL_EVIDENCE_HOSTS = frozenset(
     {
         "docs.fabricmc.net",
@@ -19,8 +18,6 @@ OFFICIAL_EVIDENCE_HOSTS = frozenset(
         "meta.fabricmc.net",
     }
 )
-# Backward-compatible public symbol only. It is not used as an allowlist anymore.
-SUPPORTED_MINECRAFT_VERSIONS = frozenset({"1.20.1", "1.21.1"})
 
 
 @dataclass(frozen=True)
@@ -102,10 +99,10 @@ _CATALOG_RECORDS: tuple[_CatalogRecord, ...] = (
         title="Fabric Meta API",
         url="https://meta.fabricmc.net/",
         authority="Fabric official API",
-        version_scope="Live game, loader and Yarn metadata",
+        version_scope="Live game, loader and mapping metadata",
         verified_on="2026-08-12",
         minecraft_versions=_ALL,
-        topics=("version", "loader", "mapping", "yarn", "metadata", "api"),
+        topics=("version", "loader", "mapping", "metadata", "api"),
     ),
     _CatalogRecord(
         source_id="fabric-api-maven",
@@ -117,31 +114,12 @@ _CATALOG_RECORDS: tuple[_CatalogRecord, ...] = (
         minecraft_versions=_ALL,
         topics=("dependency", "maven", "fabric", "api", "artifact", "version"),
     ),
-    # Exact old Javadocs are retained as optional evidence for legacy targets only.
-    _CatalogRecord(
-        source_id="yarn-1201-javadoc",
-        title="Yarn 1.20.1+build.1 Javadoc",
-        url="https://maven.fabricmc.net/docs/yarn-1.20.1%2Bbuild.1/",
-        authority="Fabric official Maven Javadoc",
-        version_scope="Exact named Minecraft API surface for Yarn 1.20.1+build.1",
-        verified_on="2026-07-28",
-        minecraft_versions=("1.20.1",),
-        topics=("yarn", "mapping", "javadoc", "class", "method", "entity", "structure"),
-    ),
-    _CatalogRecord(
-        source_id="yarn-1211-javadoc",
-        title="Yarn 1.21.1+build.3 Javadoc",
-        url="https://maven.fabricmc.net/docs/yarn-1.21.1%2Bbuild.3/",
-        authority="Fabric official Maven Javadoc",
-        version_scope="Exact named Minecraft API surface for Yarn 1.21.1+build.3",
-        verified_on="2026-08-12",
-        minecraft_versions=("1.21.1",),
-        topics=("yarn", "mapping", "javadoc", "class", "method", "identifier", "item", "block"),
-    ),
 )
 
 
-def _applies(record: _CatalogRecord, minecraft_version: str) -> bool:
+def _applies(record: _CatalogRecord, minecraft_version: str | None) -> bool:
+    if minecraft_version is None:
+        return "*" in record.minecraft_versions
     return "*" in record.minecraft_versions or minecraft_version in record.minecraft_versions
 
 
@@ -182,7 +160,7 @@ def _as_evidence(record: _CatalogRecord) -> EvidenceSource:
 def evidence_catalog_for_version(minecraft_version: str) -> tuple[EvidenceSource, ...]:
     version = str(minecraft_version).strip()
     if not version:
-        raise SpecValidationError("Minecraft version is required for evidence selection.")
+        raise SpecValidationError("Minecraft version is required for target-bound evidence selection.")
     result = tuple(
         _as_evidence(record)
         for record in _CATALOG_RECORDS
@@ -193,23 +171,34 @@ def evidence_catalog_for_version(minecraft_version: str) -> tuple[EvidenceSource
     return result
 
 
-FABRIC_1201_EVIDENCE: tuple[EvidenceSource, ...] = evidence_catalog_for_version("1.20.1")
-FABRIC_1211_EVIDENCE: tuple[EvidenceSource, ...] = evidence_catalog_for_version("1.21.1")
+def target_neutral_evidence_catalog() -> tuple[EvidenceSource, ...]:
+    """Return only version-neutral primary sources for pre-target planning."""
+    result = tuple(
+        _as_evidence(record)
+        for record in _CATALOG_RECORDS
+        if _applies(record, None)
+    )
+    if not result:
+        raise SpecValidationError("No target-neutral official evidence is configured.")
+    return result
+
+
 _TRUSTED_BY_ID = {record.source_id: record for record in _CATALOG_RECORDS}
 
 
 class AuthoritativeEvidenceRetriever:
-    """Rank only code-owned official sources; target versions come from live discovery."""
+    """Rank only code-owned primary sources; the target comes from host state."""
 
     def search(
         self,
         query: str,
         *,
-        minecraft_version: str = "1.20.1",
+        minecraft_version: str | None = None,
         limit: int = 4,
     ) -> tuple[EvidenceSource, ...]:
         available = [
-            record for record in _CATALOG_RECORDS
+            record
+            for record in _CATALOG_RECORDS
             if _applies(record, minecraft_version)
         ]
         if type(limit) is not int or not 1 <= limit <= len(available):
@@ -303,4 +292,12 @@ def evidence_for_target(
 
 
 def evidence_for_mvp(query: str | None = None) -> tuple[EvidenceSource, ...]:
-    return evidence_for_target(query, minecraft_version="1.20.1")
+    """Pre-target planning evidence; intentionally contains no target default."""
+    catalog = target_neutral_evidence_catalog()
+    if query is None:
+        return catalog
+    return AuthoritativeEvidenceRetriever().search(
+        query,
+        minecraft_version=None,
+        limit=min(len(catalog), 8),
+    )
