@@ -72,8 +72,9 @@ def test_compaction_persists_exact_recoverable_raw_history(tmp_path, monkeypatch
     assert "sha256:" + hashlib.sha256(saved).hexdigest() == raw["sha256"]
     decoded = json.loads(saved)
     assert decoded[0]["content"].startswith("old-a:")
-    assert decoded[1]["error"] if False else True
-    assert decoded[1]["content"]
+    archived_tool = json.loads(decoded[1]["content"])
+    assert archived_tool["error"] == "compiler mismatch"
+    assert archived_tool["result"]["remaining_files"] == 3
 
 
 def test_compaction_keeps_original_when_raw_archive_cannot_be_persisted(tmp_path, monkeypatch) -> None:
