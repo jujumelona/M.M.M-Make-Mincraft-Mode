@@ -53,15 +53,16 @@ def _install_central_target_choice(module: Any) -> None:
                 "loader": str(existing_loader or "unknown").strip().casefold(),
             }
         research_brief = design.get("_research_brief")
-        if isinstance(research_brief, dict):
-            research_brief = {
-                **research_brief,
-                "_mmm_platform_target": dict(selection_dict["target"]),
-            }
+        if not isinstance(research_brief, dict):
+            research_brief = module.normalize_research_brief(prompt, design)
+        research_brief = {
+            **research_brief,
+            "_mmm_platform_target": dict(selection_dict["target"]),
+        }
         design = {
             **design,
             "_platform_selection": selection_dict,
-            **({"_research_brief": research_brief} if isinstance(research_brief, dict) else {}),
+            "_research_brief": research_brief,
         }
         return design, proposal
 
