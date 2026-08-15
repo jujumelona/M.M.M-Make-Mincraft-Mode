@@ -58,12 +58,12 @@ def _platform_lock_from_adapter(adapter):
     )
 
 
-
 @pytest.fixture
 def synthetic_platform_lock():
     """Resolved non-release target for version-independent generation tests."""
 
     return _platform_lock_from_adapter(_synthetic_test_adapter())
+
 
 
 @pytest.fixture(autouse=True)
