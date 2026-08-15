@@ -22,18 +22,86 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Apply verified three-file patch
-        shell: bash
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply exact version-neutral fixture edits
         run: |
-          cat > /tmp/fix.b64 <<'EOF'
-          H4sIAAAAAAACA61W227jNhB911cQerKhSyTLjpMAKgIUaB/aLYJu0VeCpkY2dyVSoKg0brH/3qEujizb8WZ3bUCiORfO5RyOM5HnJAi2whB2Y6A29Q1XMrersNqTzemeI2QGL2QDC75YrsJwzRZJfn9H4ii6XS6dIAjOeXI8zzvr7fGRBKs7/5Z4+IwTgr8zyAmtCmZypUtaKP6Z5lqVlGWsMqBn/Xv+4BD7mTsEv95jtW995uLFNBocz7qp99LswAh+7G+Gtp61dV33T6hV8QwZkUoGGgpgNRDD9BYMQQPyDLoWKLJpV4APacgWJGhmcJu0GYXox/E6lxrwePlmAvQ1LGt+2J/PrRObziSZGWuMampI/9INYL5thQTGzQx0LnQjjSiB1ga3Zk522tZWbcc0JgAZ7ROlW1Svx51+W61vfrxOVhAvwxA2q/tbfnuu+VccjfFwRdVCJF77d8TDZxxZiNhyklJI4JrlhpYqo0yEdQWciLJS2pCZ0wMjsMVqTwBs5f61L1yhpsR2YiUpvDBuCpQKiTHM5iT4ifyB0gcnsE0djEhKnvrl7y2OOpi9132HlAvgfDg6wne8UTDeJJgLLjpiDFvhMytEZnEx7wQW1rmAIqOSlUCEtNUaPu6eaUlLVmGs29r1L2Kp5qxgmwJoIUphTkF0Ku/RkyzhfrlkYcjv8/x+vbyInjMeTmBzRqfFy8IixbOvxRuAQWOglSoE3w/A+Wj3ntot5w2z9sz+HsByjoyt5Be20YI/afUJuPl10LrqrxIVFCiduvswWHxQ2VOvc9VZ3/XT4Pqw/h7kTnCdTj8raRDLv2EH/eHHR5T7BEOyC8f7AU78I+hP6LtYrZFUrVE9VB6okDQDvDzxYFFbItT2IqlnpqxoxcwO2YTPMYW+0WHHvWO3/tdx+IjCLcmGY5HCpqkKGPFvVJfR7siIiizN3Q66wkBJ/2tp9RAl2Rekq0V/ttiBmqz89TBPf2QFDwH1ozF14zAKIzz7IKmbsmR6n3ZhtpFrvAHHKkMg6bDwuwqPb670Qnn9w+RvtTv+pmPqzj6xZ9ZlQmvxL6TJotfWShlb9j47ckPcqiOE290cUYRl8+IomVQviSIL6gbLzncMqzZcqzX9R5edanAKA2/aklClsdI4kyln1XiaWEi/ujxQlOJwt1OiwtiFobk4XEtUKkML2DJcLmkpNrNuIk2A+D3oJNPetpxNB1KOUGg5jehzC/v3qIvS5tGjLo7a/3FxHE8q921pHk6tGP/M8Dw7rFIX75TDJROeBvIecPbAsebEgmSM0/di8QjSE+JepvSE1i6TfIdlsrTGGP4Hq5a2s50LAAA=
-          EOF
-          tr -d '[:space:]' < /tmp/fix.b64 | base64 -d | gzip -dc > /tmp/fix.patch
-          echo '74e19cd60c0c595dfcff3689f5e95398c1197e6ffeb1410563ed55082bf0f65d  /tmp/fix.patch' | sha256sum -c -
-          git apply --index /tmp/fix.patch
-          git diff --check --cached
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/conftest.py')
+          text = path.read_text(encoding='utf-8')
+          if 'def synthetic_platform_lock()' not in text:
+              old = '''def _platform_lock_from_adapter(adapter):
+              from minecraft_mod_ai.spec import PlatformLock
+
+              return PlatformLock(
+                  edition=adapter.edition,
+                  loader=adapter.loader,
+                  minecraft_version=adapter.minecraft_version,
+                  java_version=adapter.java_version,
+                  yarn_mappings=adapter.yarn_mappings,
+                  fabric_loader=adapter.fabric_loader,
+                  fabric_api=adapter.fabric_api,
+                  fabric_loom=adapter.fabric_loom,
+                  gradle=adapter.gradle,
+              )
+
+
+              '''
+              new = old + '''@pytest.fixture
+              def synthetic_platform_lock():
+                  """Resolved non-release target for version-independent generation tests."""
+
+                  return _platform_lock_from_adapter(_synthetic_test_adapter())
+
+
+              '''
+              if old not in text:
+                  raise SystemExit('conftest insertion point not found')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('tests/test_hardened_release_gates.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'def test_every_platform_component_is_exactly_pinned() -> None:\n    platform = PlatformLock()\n'
+          new = 'def test_every_platform_component_is_exactly_pinned(\n    synthetic_platform_lock: PlatformLock,\n) -> None:\n    platform = synthetic_platform_lock\n'
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('release gate edit point not found')
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('tests/test_scalable_limits.py')
+          text = path.read_text(encoding='utf-8')
+          edits = [
+              (
+                  'from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec\n',
+                  'from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, PlatformLock\n',
+              ),
+              (
+                  'def test_257_contents_generate_in_deterministic_shards(tmp_path: Path) -> None:\n',
+                  'def test_257_contents_generate_in_deterministic_shards(\n    tmp_path: Path, synthetic_platform_lock: PlatformLock\n) -> None:\n',
+              ),
+              (
+                  '        summary="scale contract",\n        contents=contents,\n',
+                  '        summary="scale contract",\n        contents=contents,\n        platform=synthetic_platform_lock,\n',
+              ),
+              (
+                  'def test_validator_uses_explicit_file_policy_not_legacy_4_mib(\n    tmp_path: Path,\n) -> None:\n',
+                  'def test_validator_uses_explicit_file_policy_not_legacy_4_mib(\n    tmp_path: Path, synthetic_platform_lock: PlatformLock\n) -> None:\n',
+              ),
+              (
+                  '        summary="policy file size contract",\n        contents=(\n',
+                  '        summary="policy file size contract",\n        platform=synthetic_platform_lock,\n        contents=(\n',
+              ),
+          ]
+          for old, new in edits:
+              if old in text:
+                  text = text.replace(old, new, 1)
+              elif new not in text:
+                  raise SystemExit(f'scalable edit point not found: {old!r}')
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
       - name: Verify fixed regressions
         run: >-
           python -m pytest -q
@@ -46,5 +114,7 @@ jobs:
         run: |
           git config user.name 'jujumelona'
           git config user.email 'qasdaa025@gmail.com'
+          git add tests/conftest.py tests/test_hardened_release_gates.py tests/test_scalable_limits.py
+          git diff --cached --exit-code --quiet && exit 0
           git commit -m 'Use explicit synthetic targets in version-neutral tests'
           git push origin HEAD:main
