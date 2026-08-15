@@ -52,6 +52,53 @@ _ALLOWED_FACT_KEYS = frozenset(
         "active_build_status",
     }
 )
+_EXECUTION_CONTEXT_ALIASES = {
+    "minecraft_version": "minecraft_version",
+    "target_version": "minecraft_version",
+    "mc_version": "minecraft_version",
+    "loader": "loader",
+    "loader_id": "loader",
+    "mod_loader": "loader",
+    "loader_version": "loader_version",
+    "mappings": "mappings",
+    "mapping": "mappings",
+    "mapping_id": "mappings",
+    "mappings_version": "mappings_version",
+    "mapping_version": "mappings_version",
+    "java_version": "java_version",
+    "jdk_version": "java_version",
+    "platform": "platform",
+    "platform_id": "platform",
+    "provider": "provider",
+    "provider_id": "provider",
+    "source_api_family": "source_api_family",
+    "model_profile": "model_profile",
+    "source_commit": "source_commit",
+    "git_commit": "source_commit",
+    "revision": "source_commit",
+    "manifest_sha256": "manifest_sha256",
+    "platform_lock_sha256": "platform_lock_sha256",
+    "error_code": "error_code",
+    "diagnostic_code": "error_code",
+    "failure_code": "error_code",
+    "error_type": "error_type",
+}
+_STRICT_EXECUTION_CONTEXT_KEYS = frozenset(
+    {
+        "minecraft_version",
+        "loader",
+        "loader_version",
+        "mappings",
+        "mappings_version",
+        "java_version",
+        "source_commit",
+        "manifest_sha256",
+        "platform_lock_sha256",
+        "error_code",
+        "error_type",
+    }
+)
+_CONTEXT_VALUE_TYPES = (str, int, float, bool)
 
 
 def _tokens(value: str) -> set[str]:
@@ -111,6 +158,105 @@ def _structural_facts(value: Any, *, depth: int = 0) -> dict[str, Any]:
     return result
 
 
+def _normalize_context_value(value: Any) -> str | int | float | bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, _CONTEXT_VALUE_TYPES):
+        return None
+    if isinstance(value, str):
+        normalized = " ".join(value.split())[:240]
+        return normalized if normalized else None
+    return value
+
+
+def _collect_execution_context(value: Any, output: dict[str, Any], *, depth: int = 0) -> None:
+    if depth > 6:
+        return
+    if isinstance(value, Mapping):
+        for raw_key, raw_value in value.items():
+            key = _EXECUTION_CONTEXT_ALIASES.get(str(raw_key).casefold())
+            if key is not None:
+                normalized = _normalize_context_value(raw_value)
+                if normalized is not None:
+                    prior = output.get(key)
+                    if prior is None:
+                        output[key] = normalized
+                    elif prior != normalized:
+                        # Ambiguous host state must never accidentally match reusable
+                        # experience from one of the conflicting environments.
+                        digest = hashlib.sha256(
+                            json.dumps(
+                                [prior, normalized],
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                default=str,
+                            ).encode("utf-8")
+                        ).hexdigest()[:16]
+                        output[key] = f"__conflict__:{digest}"
+            _collect_execution_context(raw_value, output, depth=depth + 1)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value[:64]:
+            _collect_execution_context(item, output, depth=depth + 1)
+
+
+def execution_context_from_values(*values: Any) -> dict[str, Any]:
+    """Extract only structured host/runtime identity fields, never model prose."""
+
+    result: dict[str, Any] = {}
+    for value in values:
+        _collect_execution_context(value, result)
+    return dict(sorted(result.items()))
+
+
+def execution_context_from_messages(messages: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Extract reusable-state identity only from structured message payloads.
+
+    Free-form natural-language content is intentionally ignored. A string contributes
+    context only when it is a complete JSON object/array, preventing model prose from
+    becoming a trusted environment selector.
+    """
+
+    structured: list[Any] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, Mapping):
+            structured.append(content)
+            continue
+        if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+            structured.append(content)
+            continue
+        if not isinstance(content, str):
+            continue
+        text = content.strip()
+        if not text or text[0] not in "[{":
+            continue
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, (Mapping, list)):
+            structured.append(decoded)
+    return execution_context_from_values(*structured)
+
+
+def _execution_context_compatible(
+    row: Mapping[str, Any],
+    current_context: Mapping[str, Any] | None,
+) -> bool:
+    current = execution_context_from_values(current_context or {})
+    if not current:
+        return True
+    stored_raw = row.get("execution_context")
+    stored = execution_context_from_values(stored_raw) if isinstance(stored_raw, Mapping) else {}
+    for key, current_value in current.items():
+        if key in _STRICT_EXECUTION_CONTEXT_KEYS and key not in stored:
+            return False
+        if key in stored and stored[key] != current_value:
+            return False
+    return True
+
+
 def _task_shape(task: Mapping[str, Any]) -> dict[str, Any]:
     payload = task.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
@@ -151,6 +297,7 @@ def build_work_trajectory(
         receipt=receipt,
         error=error,
     )
+    execution_context = execution_context_from_values(task, receipt or {})
     body: dict[str, Any] = {
         "schema_version": TRAJECTORY_SCHEMA_VERSION,
         "record_type": "verified_trajectory",
@@ -162,6 +309,7 @@ def build_work_trajectory(
         "verification": verification,
         "procedure": extract_procedure(receipt),
         "verified_facts": _structural_facts(receipt or {}),
+        "execution_context": execution_context,
         "error_signature": " ".join(str(error).split())[:1200],
     }
     identity_source = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -241,12 +389,15 @@ def relevant_trajectories(
     task_class: str,
     router: Any | None = None,
     limit: int = 6,
+    current_context: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     rows = _load_rows(memory_path(base)) + _load_rows(remote_cache_path(base, task_class))
     target = _tokens(query + " " + task_class)
     scored: list[tuple[float, str, dict[str, Any]]] = []
     for row in rows:
         if str(row.get("task_class", "")) not in {task_class, "general"}:
+            continue
+        if not _execution_context_compatible(row, current_context):
             continue
         rendered = json.dumps(row, ensure_ascii=False, sort_keys=True)
         values = _tokens(rendered)
@@ -342,6 +493,8 @@ def synthesize_temporary_skill(
 __all__ = [
     "append_trajectory",
     "build_work_trajectory",
+    "execution_context_from_messages",
+    "execution_context_from_values",
     "memory_path",
     "relevant_trajectories",
     "remote_cache_path",
