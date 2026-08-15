@@ -3,13 +3,21 @@ import mineflayer from "mineflayer";
 import { pathfinder, Movements, goals } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
 
-const SUPPORTED_MINECRAFT_VERSIONS = new Set(["1.20.1", "1.21.1"]);
-const TARGET_VERSION = String(process.env.MMM_MINEFLAYER_MC_VERSION || "1.20.1").trim();
-if (!SUPPORTED_MINECRAFT_VERSIONS.has(TARGET_VERSION)) {
-  throw new Error(`Unsupported MMM Mineflayer target: ${TARGET_VERSION}`);
-}
-
 let bot = null;
+let targetVersion = null;
+
+function resolveTargetVersion(params = {}) {
+  const requested = String(params.minecraft_version ?? params.version ?? "").trim();
+  const discovered = String(process.env.MMM_MINEFLAYER_MC_VERSION || "").trim();
+  if (requested && discovered && requested !== discovered) {
+    throw new Error(`Mineflayer target mismatch: request=${requested}, runtime=${discovered}`);
+  }
+  const resolved = requested || discovered;
+  if (!resolved) {
+    throw new Error("Mineflayer requires a runtime-discovered Minecraft target");
+  }
+  return resolved;
+}
 
 function requireBot() {
   if (!bot) throw new Error("Mineflayer bot is not connected");
@@ -69,6 +77,7 @@ async function connect(params) {
   const host = String(params.host || "127.0.0.1");
   const port = Number(params.port || 25565);
   const username = String(params.username || "MMMTestBot");
+  const resolvedTarget = resolveTargetVersion(params);
   if (!["127.0.0.1", "localhost"].includes(host)) {
     throw new Error("The local MMM profile permits Mineflayer only on localhost");
   }
@@ -79,11 +88,12 @@ async function connect(params) {
     throw new Error("Invalid Minecraft bot username");
   }
 
+  targetVersion = resolvedTarget;
   const current = mineflayer.createBot({
     host,
     port,
     username,
-    version: TARGET_VERSION,
+    version: resolvedTarget,
     auth: "offline"
   });
   bot = current;
@@ -131,12 +141,10 @@ async function connect(params) {
       current.once("end", onEnd);
     });
 
-    if (current.version !== TARGET_VERSION) {
-      throw new Error(`Mineflayer connected as ${current.version}, expected ${TARGET_VERSION}`);
+    if (current.version !== resolvedTarget) {
+      throw new Error(`Mineflayer connected as ${current.version}, expected ${resolvedTarget}`);
     }
 
-    // Keep the global state truthful after a server-side disconnect. Without this,
-    // a dead bot object permanently blocks later connect attempts.
     current.once("end", () => {
       if (bot === current) bot = null;
     });
@@ -148,7 +156,7 @@ async function connect(params) {
 }
 
 function status() {
-  if (!bot) return { connected: false, version: TARGET_VERSION };
+  if (!bot) return { connected: false, version: targetVersion };
   return {
     connected: true,
     version: bot.version,
