@@ -1,6 +1,8 @@
 name: Apply runtime JSON gap fix
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
