@@ -94,12 +94,22 @@ def _align_durable_item_semantics(schema: dict[str, Any]) -> dict[str, Any]:
     )
     if isinstance(module_properties, dict):
         for field in _NON_EMPTY_MODULE_FIELDS:
-            _require_non_empty_string(module_properties.get(field))
+            field_schema = deepcopy(module_properties.get(field))
+            module_properties[field] = field_schema
+            _require_non_empty_string(field_schema)
         for field in _NON_EMPTY_MODULE_ARRAY_FIELDS:
-            _require_non_empty_string_items(module_properties.get(field))
+            field_schema = deepcopy(module_properties.get(field))
+            module_properties[field] = field_schema
+            _require_non_empty_string_items(field_schema)
 
+    # planner_json_runtime_contract intentionally reuses one compact string-array
+    # schema object in several properties. Detach each property before tightening it;
+    # otherwise minItems applied to acceptance_tests in one anyOf branch leaks into
+    # completed_deliverables and module arrays through Python object aliasing.
     for field in _NON_EMPTY_PAGE_ARRAY_FIELDS:
-        _require_non_empty_string_items(properties.get(field))
+        field_schema = deepcopy(properties.get(field))
+        properties[field] = field_schema
+        _require_non_empty_string_items(field_schema)
 
     return aligned
 
@@ -123,11 +133,10 @@ def _require_concrete_production_output(schema: dict[str, Any]) -> dict[str, Any
 
 
 def _install_production_runtime_invariants() -> None:
-    """Keep generation, resume, and stream retry policy consistent with this owner."""
+    """Keep generation grammar and durable resume policy consistent with this owner."""
 
     from . import planner_json_runtime_contract as runtime
     from . import production_page_durable_contract as durable
-    from . import production_stream_efficiency_contract as stream
 
     original_schema_for_contract = runtime._schema_for_contract
     if not getattr(original_schema_for_contract, "_mmm_production_progress_schema", False):
@@ -147,13 +156,6 @@ def _install_production_runtime_invariants() -> None:
     durable._VERSION = max(
         int(getattr(durable, "_VERSION", 0) or 0),
         _PRODUCTION_CHECKPOINT_VERSION,
-    )
-
-    # The canonical runtime owns the retry budget; stream optimization may not lower it.
-    production_budget = runtime._attempt_budget(True)
-    stream._FULL_PAGE_DECODE_LIMIT = max(
-        int(getattr(stream, "_FULL_PAGE_DECODE_LIMIT", 0) or 0),
-        production_budget,
     )
 
 
