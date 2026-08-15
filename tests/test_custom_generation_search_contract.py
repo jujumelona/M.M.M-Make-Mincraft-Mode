@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 
+import pytest
+
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
+from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 
 
 @dataclass
@@ -51,14 +55,34 @@ def test_strategy_router_only_augments_coder_role() -> None:
     base = _Router()
     router = custom_search._StrategyRouter(
         base,
-        strategy="fabric_api_contract_first",
+        strategy="api_contract_first",
         candidate_index=1,
         count=2,
     )
-    messages = [{"role": "system", "content": "base"}, {"role": "user", "content": "task"}]
+    messages = [
+        {"role": "system", "content": "base"},
+        {"role": "user", "content": "task"},
+    ]
     router.generate_text("coder", messages, response_format="json")
     assert len(base.calls[0][1]) == 3
-    assert "fabric_api_contract_first" in base.calls[0][1][1]["content"]
+    assert "api_contract_first" in base.calls[0][1][1]["content"]
 
     router.generate_text("planner", messages, response_format="json")
     assert base.calls[1][1] == messages
+
+
+def test_custom_generation_public_target_defaults_are_disabled() -> None:
+    signature = inspect.signature(CustomModuleGenerator.generate)
+    assert signature.parameters["minecraft_version"].default is None
+    assert signature.parameters["loader"].default is None
+    assert signature.parameters["mappings"].default is None
+
+
+def test_target_values_fail_closed_without_complete_host_target() -> None:
+    with pytest.raises(ValueError, match="host-selected"):
+        custom_search._target_values(
+            {
+                "minecraft_version": "1.20.1",
+                "loader": "fabric",
+            }
+        )
