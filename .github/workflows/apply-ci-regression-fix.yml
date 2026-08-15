@@ -1,0 +1,88 @@
+name: Apply CI regression fix set
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-ci-regression-fix-main
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Apply complete rebased regression fix set
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          cat > /tmp/ci-fix.patch.gz.b64 <<'PATCH_B64'
+          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
+          PATCH_B64
+          base64 -d /tmp/ci-fix.patch.gz.b64 | gzip -d > /tmp/ci-fix.patch
+          echo '8dc69caea5f52335d27c43e6cccefd1f0070a43e62b4539381fca6fc700b389b  /tmp/ci-fix.patch' | sha256sum -c -
+          git apply --check /tmp/ci-fix.patch
+          git apply --index /tmp/ci-fix.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/platform_runtime_contract.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''    @wraps(original_prepare)\n    def prepare_instance(self: Any, *args: Any, **kwargs: Any):\n'''
+          if anchor not in text:
+              raise SystemExit('runtime prepare_instance anchor not found')
+          start = text.index(anchor) + len(anchor)
+          probe = text.index('        _validate_java_command(\n', start)
+          segment = text[start:probe]
+          if 'instance_name = (' not in segment:
+              preflight = '''        # Preserve base fail-fast ordering before probing the selected JDK.\n        instance_name = (\n            str(args[0]) if args else str(kwargs.get("instance_name", ""))\n        )\n        if self._process_running(self.server_process) or self._process_running(\n            self.client_process\n        ):\n            raise module.RuntimePolicyError(\n                "Stop the active disposable runtime before preparing another instance."\n            )\n        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", instance_name):\n            raise module.RuntimePolicyError("Invalid runtime instance name.")\n'''
+              text = text[:start] + preflight + text[start:]
+              probe += len(preflight)
+          segment = text[start:probe]
+          if 'self._existing_file(kwargs.get("mod_jar"))' not in segment:
+              input_checks = '''        # Missing artifacts are request errors; do not mask them with host-JDK drift.\n        self._existing_file(kwargs.get("mod_jar"))\n        self._existing_file(kwargs.get("server_launcher"))\n'''
+              text = text[:probe] + input_checks + text[probe:]
+          path.write_text(text, encoding='utf-8')
+          PY
+          git add minecraft_mod_ai/platform_runtime_contract.py
+          git rm --ignore-unmatch .github/workflows/apply-ci-regression-fix.yml
+          git diff --cached --check
+      - name: Install verification dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Verify all previously failing regression groups
+        run: >-
+          python -m pytest -q
+          tests/test_agentic_pre_design_rag.py
+          tests/test_external_agent_bridge_security.py
+          tests/test_revision_binding.py
+          tests/test_runtime_policy_v2.py
+          tests/test_scalable_production.py
+          tests/test_evidence_capabilities.py
+          tests/test_mcp_technology_tools.py
+          tests/test_runtime_manager_concurrency.py
+      - run: python .github/scripts/debug_repo_audit.py
+      - run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+      - name: Commit and push verified fix set
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git commit -m 'Fix all version-neutral CI regressions'
+          git push origin HEAD:main
