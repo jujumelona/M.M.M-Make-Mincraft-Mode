@@ -90,10 +90,7 @@ def test_parallel_probe_lookup_requires_exact_execution_shape() -> None:
     selected = SpeedServerVariant(
         "mtp-2|p1", "draft-mtp", 2, ubatch=512, parallel=1, cache_reuse=64
     )
-    p1 = SimpleNamespace(
-        ok=True,
-        variant=selected,
-    )
+    p1 = SimpleNamespace(ok=True, variant=selected)
     p4 = SimpleNamespace(
         ok=True,
         variant=SpeedServerVariant(
@@ -107,15 +104,7 @@ def test_p_min_latency_stage_remeasures_same_combined_workload(monkeypatch) -> N
     monkeypatch.setenv("MMM_LLAMA_MTP_P_MIN_CANDIDATES", "0,0.8")
     calls: list[tuple[float, int]] = []
 
-    def aggregate_probe(
-        _autotune,
-        _url,
-        _request,
-        *,
-        max_tokens,
-        variant,
-        concurrency,
-    ):
+    def aggregate_probe(_autotune, _url, _request, *, max_tokens, variant, concurrency):
         p_min = float(variant.draft_p_min)
         calls.append((p_min, concurrency))
         return autotune.ProbeResult(
@@ -135,9 +124,7 @@ def test_p_min_latency_stage_remeasures_same_combined_workload(monkeypatch) -> N
         _free_port=lambda preferred: preferred,
         _start_server=lambda *_args: object(),
         _wait_ready=lambda _process, _port: "http://127.0.0.1:8910/v1",
-        _probe_server=lambda _url, _request, *, max_tokens, variant: SimpleNamespace(
-            ok=True
-        ),
+        _probe_server=lambda _url, _request, *, max_tokens, variant: SimpleNamespace(ok=True),
         _stop_server=lambda _process: None,
         _BENCHMARK_OUTPUT_TOKENS=64,
         ProbeResult=autotune.ProbeResult,
@@ -147,9 +134,7 @@ def test_p_min_latency_stage_remeasures_same_combined_workload(monkeypatch) -> N
         "mtp-2|pm0.8|p1", "draft-mtp", 2, ubatch=512, parallel=1, draft_p_min=0.8
     )
     raw_decode_probe = autotune.ProbeResult(
-        variant=SpeedServerVariant(
-            "mtp-2|p1", "draft-mtp", 2, ubatch=512, parallel=1
-        ),
+        variant=SpeedServerVariant("mtp-2|p1", "draft-mtp", 2, ubatch=512, parallel=1),
         ok=True,
         output_sha256="raw-short-only",
         predicted_tokens=64,
@@ -187,7 +172,7 @@ def test_kv_autotune_can_be_explicitly_disabled(monkeypatch) -> None:
     assert _kv_autotune_enabled(autotune) is False
 
 
-def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
+def test_structured_local_payload_keeps_json_validation_host_side_without_tools() -> None:
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
     schema = {
         "type": "object",
@@ -203,8 +188,9 @@ def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
     )
     payload = hardware_policy._server_payload(adapter, structured)
     assert structured.response_schema == schema
-    assert payload["response_format"] == {"type": "json_object"}
-    assert "schema" not in payload["response_format"]
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
 
     tool_request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then return json"},),
@@ -227,9 +213,7 @@ def test_structured_local_payload_uses_server_json_only_without_tools() -> None:
     assert tool_payload["tools"][0]["function"]["name"] == "lookup"
 
 
-def test_default_policy_searches_for_decode_speed_without_overfitting_exact_grid(
-    monkeypatch,
-) -> None:
+def test_default_policy_searches_for_decode_speed_without_overfitting_exact_grid(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_MTP_P_MIN_CANDIDATES", raising=False)
     monkeypatch.delenv("MMM_LLAMA_KV_AUTOTUNE", raising=False)
     monkeypatch.delenv("MMM_LLAMA_SERVER_AUTOTUNE", raising=False)
