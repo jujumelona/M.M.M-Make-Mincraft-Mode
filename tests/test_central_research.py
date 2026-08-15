@@ -373,7 +373,7 @@ def _receipt(
         query_family="project",
         minecraft_version="1.20.1",
         loader="fabric",
-        mappings="yarn-1.20.1+build.1",
+        mappings="1.20.1+build.1",
         query_hash="sha256:" + "3" * 64,
         corpus_snapshot_hash="sha256:" + "4" * 64,
         quality="strong",
@@ -466,14 +466,14 @@ def test_retrieve_domain_evidence_calls_every_query_and_every_correction() -> No
     assert all(
         kwargs["minecraft_version"] == "1.20.1"
         and kwargs["loader"] == "fabric"
-        and kwargs["mappings"] == "yarn-1.20.1+build.1"
+        and kwargs["mappings"] == "1.20.1+build.1"
         for _, kwargs in calls
     )
     assert [kwargs["limit"] for _, kwargs in calls] == [8, 4, 4] * 3
     assert evidence["target"] == {
         "minecraft_version": "1.20.1",
         "loader": "fabric",
-        "mappings": "yarn-1.20.1+build.1",
+        "mappings": "1.20.1+build.1",
     }
     assert evidence["deferred_official_domains"] == []
     assert evidence["unresolved_official_domains"] == []
