@@ -66,21 +66,58 @@ class ProposalStatus(str, Enum):
 
 @dataclass(frozen=True)
 class PlatformLock:
-    # Defaults retain backwards compatibility for saved 1.20.1 proposals. New plans
-    # are retargeted by PlatformResolver before approval.
-    edition: str = "java"
-    loader: str = "fabric"
-    minecraft_version: str = "1.20.1"
-    java_version: str = "17"
-    yarn_mappings: str = "1.20.1+build.1"
-    fabric_loader: str = "0.17.2"
-    fabric_api: str = "0.92.11+1.20.1"
-    fabric_loom: str = "1.10.5"
-    gradle: str = "8.12"
+    """Exact host-selected platform receipt, or an all-empty planning sentinel.
+
+    No target component has a code default. Planning may carry an entirely unresolved
+    lock, but generation/approval must replace it with one complete provider receipt.
+    """
+
+    edition: str = ""
+    loader: str = ""
+    minecraft_version: str = ""
+    java_version: str = ""
+    yarn_mappings: str = ""
+    fabric_loader: str = ""
+    fabric_api: str = ""
+    fabric_loom: str = ""
+    gradle: str = ""
+
+    def is_unresolved(self) -> bool:
+        return not any(
+            (
+                self.edition,
+                self.loader,
+                self.minecraft_version,
+                self.java_version,
+                self.yarn_mappings,
+                self.fabric_loader,
+                self.fabric_api,
+                self.fabric_loom,
+                self.gradle,
+            )
+        )
 
     def validate(self) -> None:
-        # A target is valid only as one exact code-owned adapter tuple. This prevents
-        # accidental mixtures such as 1.21.1 Minecraft with Java 17 or 1.20.1 Yarn.
+        values = (
+            self.edition,
+            self.loader,
+            self.minecraft_version,
+            self.java_version,
+            self.yarn_mappings,
+            self.fabric_loader,
+            self.fabric_api,
+            self.fabric_loom,
+            self.gradle,
+        )
+        if not any(values):
+            raise SpecValidationError(
+                "Platform target is unresolved. Resolve one executable provider receipt before approval or generation."
+            )
+        if not all(str(value).strip() for value in values):
+            raise SpecValidationError(
+                "Platform target is partial. A platform lock must be either fully unresolved during planning or a complete provider receipt."
+            )
+
         from .platform_catalog import adapter_for_lock_values
 
         try:
