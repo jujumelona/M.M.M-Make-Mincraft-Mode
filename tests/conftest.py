@@ -15,7 +15,9 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
 
     The synthetic version is deliberately not a real Minecraft release. This keeps
     tests that exercise source/catalog mechanics independent from a historical
-    production target while production discovery remains authoritative.
+    production target while production discovery remains authoritative. The test
+    receipt deliberately identifies the reviewed fabric_1201 source-template family
+    so unit-only deterministic generators exercise the same guarded template path.
     """
 
     from minecraft_mod_ai.platform_catalog import PlatformAdapter
@@ -34,7 +36,7 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
         gradle="test-gradle",
         gradle_sha256="sha256:" + "0" * 64,
         resource_pack_format=0,
-        source_api_family="fabric_unit_test",
+        source_api_family="fabric_1201",
         deterministic_module_kinds=frozenset(),
     )
 
