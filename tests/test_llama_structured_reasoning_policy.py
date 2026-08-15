@@ -37,7 +37,9 @@ def test_structured_json_reserves_budget_for_visible_contract() -> None:
         ),
     )
 
-    assert payload["response_format"]["type"] == "json_object"
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
