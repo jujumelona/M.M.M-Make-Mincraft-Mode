@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from minecraft_mod_ai.platform_catalog import FABRIC_1201
 from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai import research_code_context as research
+
+
+_TEST_MINECRAFT_VERSION = "1.20.1"
+_TEST_LOADER = "fabric"
+_TEST_MAPPINGS = "1.20.1+build.1"
 
 
 @dataclass
@@ -79,8 +83,8 @@ public final class Unused {
     (tmp_path / "gradle.properties").write_text(
         "\n".join(
             (
-                "minecraft_version=1.20.1",
-                "yarn_mappings=1.20.1+build.1",
+                f"minecraft_version={_TEST_MINECRAFT_VERSION}",
+                f"yarn_mappings={_TEST_MAPPINGS}",
                 "loader_version=0.17.2",
                 "fabric_version=0.92.11+1.20.1",
                 "loom_version=1.10.5",
@@ -99,9 +103,9 @@ def _context(tmp_path):
         project_index=index,
         router=_Router(),
         module=_Module(),
-        minecraft_version=FABRIC_1201.minecraft_version,
-        loader=FABRIC_1201.loader,
-        mappings=FABRIC_1201.yarn_mappings,
+        minecraft_version=_TEST_MINECRAFT_VERSION,
+        loader=_TEST_LOADER,
+        mappings=_TEST_MAPPINGS,
         byte_budget=32 * 1024,
     )
 
@@ -185,9 +189,9 @@ def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_an
     _repo(tmp_path)
     monitor = research.DependencyMonitor(
         tmp_path,
-        minecraft_version=FABRIC_1201.minecraft_version,
-        loader=FABRIC_1201.loader,
-        mappings=FABRIC_1201.yarn_mappings,
+        minecraft_version=_TEST_MINECRAFT_VERSION,
+        loader=_TEST_LOADER,
+        mappings=_TEST_MAPPINGS,
     )
     bad = json.dumps(
         {
