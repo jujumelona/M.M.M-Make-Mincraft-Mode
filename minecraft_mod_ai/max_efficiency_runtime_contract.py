@@ -81,9 +81,9 @@ def _install_work_graph_compile_cache(work_graph_module: Any) -> None:
 
     CompleteProposal.validate already validates every proposal-owned module before
     build_production_work_plan historically validates that exact same object set a
-    second time.  The builder also asks for the same canonical proposal hash three
-    times.  Keep those checks authoritative on every invocation, but reuse their
-    successful result only for the lifetime of that one synchronous compile.  The
+    second time. The builder also asks for the same canonical proposal hash three
+    times. Keep those checks authoritative on every invocation, but reuse their
+    successful result only for the lifetime of that one synchronous compile. The
     ContextVars make concurrent compiles independent and prevent stale cross-call
     validation or hash reuse after callers mutate nested proposal data.
     """
@@ -142,8 +142,6 @@ def _install_work_graph_compile_cache(work_graph_module: Any) -> None:
     build_production_work_plan._mmm_compile_local_cache = True  # type: ignore[attr-defined]
     work_graph_module.build_production_work_plan = build_production_work_plan
 
-    # Runtime composition installs this layer late. Replace only aliases that still
-    # point at the exact pre-install function; unrelated names are never touched.
     for loaded in tuple(sys.modules.values()):
         if loaded is None:
             continue
@@ -196,8 +194,6 @@ def _install_work_ledger_read_batching(work_graph_module: Any) -> None:
                 dependencies: dict[str, list[str]] = {
                     node_id: [] for node_id in node_ids
                 }
-                # Keep under SQLite builds with the historical 999-variable limit.
-                # One connection still owns the whole status snapshot.
                 for start in range(0, len(node_ids), 900):
                     batch = node_ids[start : start + 900]
                     if not batch:
@@ -339,8 +335,7 @@ def _candidate_patch_capture(
         seen_paths.add(relative)
         if operation not in {"create", "replace", "edit", "delete"}:
             raise RuntimeError(
-                f"Custom candidate patch receipt has invalid operation for {relative}: "
-                f"{operation!r}"
+                f"Custom candidate patch receipt has invalid operation for {relative}: {operation!r}"
             )
 
         base_path = (base_root / relative).resolve()
@@ -367,15 +362,10 @@ def _candidate_patch_capture(
             actual_after = _sha256_receipt(candidate_bytes)
             if str(after_sha) != actual_after:
                 raise RuntimeError(
-                    f"Custom candidate after hash drifted for {relative}: "
-                    f"{actual_after} != {after_sha}"
+                    f"Custom candidate after hash drifted for {relative}: {actual_after} != {after_sha}"
                 )
             operations.append(
-                {
-                    "operation": "create",
-                    "path": relative,
-                    "content": candidate_bytes.decode("utf-8"),
-                }
+                {"operation": "create", "path": relative, "content": candidate_bytes.decode("utf-8")}
             )
             continue
 
@@ -384,8 +374,7 @@ def _candidate_patch_capture(
         actual_before = _sha256_receipt(base_bytes)
         if str(before_sha) != actual_before:
             raise RuntimeError(
-                f"Custom candidate base hash drifted for {relative}: "
-                f"{actual_before} != {before_sha}"
+                f"Custom candidate base hash drifted for {relative}: {actual_before} != {before_sha}"
             )
 
         if operation == "delete":
@@ -394,11 +383,7 @@ def _candidate_patch_capture(
             if candidate_path.exists() or candidate_bytes is not None:
                 raise RuntimeError(f"Custom candidate delete output still exists: {relative}")
             operations.append(
-                {
-                    "operation": "delete",
-                    "path": relative,
-                    "expected_sha256": actual_before,
-                }
+                {"operation": "delete", "path": relative, "expected_sha256": actual_before}
             )
             continue
 
@@ -407,8 +392,7 @@ def _candidate_patch_capture(
         actual_after = _sha256_receipt(candidate_bytes)
         if str(after_sha) != actual_after:
             raise RuntimeError(
-                f"Custom candidate after hash drifted for {relative}: "
-                f"{actual_after} != {after_sha}"
+                f"Custom candidate after hash drifted for {relative}: {actual_after} != {after_sha}"
             )
         operations.append(
             {
@@ -430,10 +414,7 @@ def _clone_candidate_snapshot(
     """Clone one candidate under its own workspace/RAG parent directory."""
 
     workspace = Path(
-        tempfile.mkdtemp(
-            prefix=f"candidate-{candidate_index:02d}-",
-            dir=base_root.parent,
-        )
+        tempfile.mkdtemp(prefix=f"candidate-{candidate_index:02d}-", dir=base_root.parent)
     ).resolve()
     candidate_root = workspace / "project"
     shutil.copytree(
@@ -445,7 +426,7 @@ def _clone_candidate_snapshot(
 
 
 def _install_parallel_custom_search(custom_module_generator_module: Any) -> None:
-    """Parallelize the expensive custom candidate generation, not just verification."""
+    """Parallelize candidate generation while the inner owner installs research once."""
 
     from . import custom_generation_search_contract as search_module
     from . import performance_final_contract as performance_module
@@ -478,15 +459,13 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
             worker = copy.copy(self)
             worker._cached_index = None
             worker._cached_root = None
-            worker.router = search_module._host_evidence_router(
-                search_module._fork_router_for_candidate(self.router)
-            )
+            worker.router = search_module._fork_router_for_candidate(self.router)
             return current(worker, project_root, *args, **kwargs)
 
         live_root = Path(project_root).expanduser().resolve()
         base_root = performance_module._clone_source_snapshot(live_root)
         candidates: list[tuple[int, Path, dict[str, Any]]] = []
-        errors: dict[int, Exception] = {}
+        errors: dict[int, BaseException] = {}
 
         def solve(candidate_index: int) -> tuple[int, Path, dict[str, Any]]:
             candidate_root = _clone_candidate_snapshot(
@@ -501,9 +480,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                 candidate_index % len(search_module._STRATEGIES)
             ]
             worker.router = search_module._StrategyRouter(
-                search_module._host_evidence_router(
-                    search_module._fork_router_for_candidate(self.router)
-                ),
+                search_module._fork_router_for_candidate(self.router),
                 strategy=strategy,
                 candidate_index=candidate_index,
                 count=count,
@@ -530,8 +507,10 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                 for candidate_index, future in enumerate(futures):
                     try:
                         candidates.append(future.result())
-                    except Exception as exc:
+                    except BaseException as exc:
                         errors[candidate_index] = exc
+                        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                            raise
             candidates.sort(key=lambda item: item[0])
             if not candidates:
                 if errors:
@@ -574,7 +553,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
             rewritten = performance_module._rewrite_root_paths(result, winner_root, live_root)
             rewritten["patch_receipt"] = commit_receipt
             rewritten["agentic_generation_search"] = {
-                "schema_version": "mmm/custom-generation-search-v2",
+                "schema_version": "mmm/custom-generation-search-v3",
                 "candidate_count": len(evaluations),
                 "candidate_workers": workers,
                 "winner_index": int(winner_index),
@@ -588,6 +567,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
                     }
                     for item in sorted(evaluations, key=lambda value: value[1])
                 ],
+                "research_aware": True,
             }
             print(
                 "custom generation search:",
@@ -605,7 +585,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
 
     generate._mmm_max_parallel_custom_search = True  # type: ignore[attr-defined]
     generate._mmm_custom_verifier_search = True  # type: ignore[attr-defined]
-    generate._mmm_host_evidence_router = True  # type: ignore[attr-defined]
+    generate._mmm_research_generation_search = True  # type: ignore[attr-defined]
     cls.generate = generate
 
 

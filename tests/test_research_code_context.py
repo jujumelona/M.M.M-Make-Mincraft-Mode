@@ -181,7 +181,7 @@ public class X {
     assert clean_quality.example_quality > unsafe_quality.example_quality
 
 
-def test_dependency_monitor_rejects_unknown_packages_and_target_drift(tmp_path) -> None:
+def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_and_target_drift(tmp_path) -> None:
     _repo(tmp_path)
     monitor = research.DependencyMonitor(
         tmp_path,
@@ -195,7 +195,13 @@ def test_dependency_monitor_rejects_unknown_packages_and_target_drift(tmp_path) 
                 {
                     "operation": "replace",
                     "path": "build.gradle",
-                    "content": 'dependencies { implementation "evil.fake:nonexistent:1.0" }',
+                    "content": (
+                        'repositories { maven { url "https://evil.example/repo" } }\n'
+                        'dependencies {\n'
+                        ' implementation "evil.fake:nonexistent:1.0"\n'
+                        ' implementation "net.fabricmc.fabric-api:fabric-api:999.0"\n'
+                        '}'
+                    ),
                 },
                 {
                     "operation": "replace",
@@ -208,6 +214,8 @@ def test_dependency_monitor_rejects_unknown_packages_and_target_drift(tmp_path) 
     violations = monitor.validate_model_output(bad)
     values = {(item.kind, item.value) for item in violations}
     assert ("package", "evil.fake:nonexistent") in values
+    assert ("coordinate", "net.fabricmc.fabric-api:fabric-api:999.0") in values
+    assert ("repository", "https://evil.example/repo") in values
     assert ("target_property", "minecraft_version=1.21.1") in values
 
     good = json.dumps(
@@ -217,6 +225,7 @@ def test_dependency_monitor_rejects_unknown_packages_and_target_drift(tmp_path) 
                     "operation": "replace",
                     "path": "build.gradle",
                     "content": (
+                        'repositories { maven { url "https://maven.fabricmc.net" } }\n'
                         'dependencies { implementation '
                         '"net.fabricmc.fabric-api:fabric-api:0.92.11+1.20.1" }'
                     ),
@@ -276,6 +285,9 @@ def test_bundle_records_all_research_mechanisms_and_is_bounded(tmp_path) -> None
         "example_quality_multi_aspect_selection",
         "packmonitor_authoritative_package_admission",
     } <= methods
-    assert bundle["dependency_monitor"]["zero_unknown_packages_in_accepted_patch"] is True
+    monitor = bundle["dependency_monitor"]
+    assert monitor["zero_unknown_packages_in_accepted_patch"] is True
+    assert monitor["zero_unknown_literal_coordinates_in_accepted_patch"] is True
+    assert monitor["zero_unknown_repositories_in_accepted_patch"] is True
     assert bundle["evidence_count"] <= bundle["total_evidence_count"]
     assert len(json.dumps(bundle, ensure_ascii=False).encode("utf-8")) <= 32 * 1024
