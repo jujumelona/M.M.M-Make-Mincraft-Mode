@@ -19,6 +19,8 @@ from .remote_trajectory_store import (
 from .trajectory_memory import (
     append_trajectory,
     build_work_trajectory,
+    execution_context_from_messages,
+    execution_context_from_values,
     memory_path,
     relevant_trajectories,
     remote_cache_path,
@@ -107,12 +109,20 @@ def _temporary_skill(
     *,
     task_class: str,
     limit: int = 6,
+    current_context: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any] | None:
-    """Reuse only a skill derived from the exact unchanged trajectory corpus."""
+    """Reuse only a skill from the unchanged corpus and compatible current state."""
 
     capacity = _skill_cache_capacity()
     before = _trajectory_fingerprint(root, task_class)
-    key = (str(root), task_class, query, int(limit), before)
+    normalized_context = execution_context_from_values(current_context or {})
+    context_key = json.dumps(
+        normalized_context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    key = (str(root), task_class, query, int(limit), context_key, before)
     if capacity > 0 and before is not None:
         with _CACHE_LOCK:
             cache = getattr(router, "_mmm_temporary_skill_cache", None)
@@ -127,6 +137,7 @@ def _temporary_skill(
         task_class=task_class,
         router=router,
         limit=limit,
+        current_context=normalized_context,
     )
     skill = synthesize_temporary_skill(query, records, task_class=task_class)
 
@@ -244,12 +255,14 @@ def _install_model_skill(model_router_module: Any) -> None:
             hydrate_remote_cache(root, task_class)
             hydrated.add(task_class)
         query = _query(messages)
+        current_context = execution_context_from_messages(messages)
         skill = _temporary_skill(
             self,
             root,
             query,
             task_class=task_class,
             limit=6,
+            current_context=current_context,
         )
         qualified_count = (
             len(skill.get("source_trajectory_ids", ()))
@@ -275,6 +288,7 @@ def _install_model_skill(model_router_module: Any) -> None:
             f"class={task_class}",
             f"qualified_trajectories={qualified_count}",
             f"patterns={len(skill.get('proven_patterns', ()))}/{len(skill.get('avoid_patterns', ())) }",
+            f"context_keys={len(current_context)}",
             flush=True,
         )
         return stage, runtime, tools, rebuilt
