@@ -692,23 +692,97 @@ def complete_proposal_from_parts(
     acceptance_tests: tuple[str, ...],
     existing_input_sha256: str = "",
 ) -> CompleteProposal:
-    valid_module_ids = {m.module_id for m in modules}
+    seen_module_ids: set[str] = set()
     sanitized_modules: list[ProductionModule] = []
     for m in modules:
+        mod_id = m.module_id
+        if mod_id in seen_module_ids:
+            counter = 2
+            while f"{mod_id}_{counter}" in seen_module_ids:
+                counter += 1
+            mod_id = f"{mod_id}_{counter}"
+        seen_module_ids.add(mod_id)
+        sanitized_modules.append(
+            ProductionModule(
+                module_id=mod_id,
+                kind=m.kind,
+                config=m.config,
+                depends_on=m.depends_on,
+                required_gates=m.required_gates,
+            )
+        )
+    valid_module_ids = set(seen_module_ids)
+    for idx, m in enumerate(sanitized_modules):
         clean_deps = tuple(
             dep for dep in m.depends_on
             if dep in valid_module_ids and dep != m.module_id
         )
         if clean_deps != m.depends_on:
-            m = ProductionModule(
+            sanitized_modules[idx] = ProductionModule(
                 module_id=m.module_id,
                 kind=m.kind,
                 config=m.config,
                 depends_on=clean_deps,
                 required_gates=m.required_gates,
             )
-        sanitized_modules.append(m)
     modules = tuple(sanitized_modules)
+
+    seen_asset_ids: set[str] = set()
+    seen_asset_paths: set[str] = set()
+    sanitized_assets: list[AssetRequest] = []
+    for a in assets:
+        asset_id = a.asset_id
+        if asset_id in seen_asset_ids:
+            counter = 2
+            while f"{asset_id}_{counter}" in seen_asset_ids:
+                counter += 1
+            asset_id = f"{asset_id}_{counter}"
+        seen_asset_ids.add(asset_id)
+
+        target_path = a.target_path.replace("\\", "/")
+        if target_path in seen_asset_paths:
+            base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "png")
+            counter = 2
+            while f"{base_p}_{counter}.{ext}" in seen_asset_paths:
+                counter += 1
+            target_path = f"{base_p}_{counter}.{ext}"
+        seen_asset_paths.add(target_path)
+
+        sanitized_assets.append(
+            AssetRequest(
+                asset_id=asset_id,
+                kind=a.kind,
+                target_path=target_path,
+                prompt=a.prompt,
+                width=a.width,
+                height=a.height,
+                implements_deliverables=a.implements_deliverables,
+            )
+        )
+    assets = tuple(sanitized_assets)
+
+    seen_audio_ids: set[str] = set()
+    sanitized_audio: list[AudioRequest] = []
+    for au in audio:
+        sound_id = au.sound_id
+        if sound_id in seen_audio_ids:
+            counter = 2
+            while f"{sound_id}_{counter}" in seen_audio_ids:
+                counter += 1
+            sound_id = f"{sound_id}_{counter}"
+        seen_audio_ids.add(sound_id)
+        sanitized_audio.append(
+            AudioRequest(
+                sound_id=sound_id,
+                kind=au.kind,
+                target_path=au.target_path,
+                prompt=au.prompt,
+                duration_seconds=au.duration_seconds,
+                implements_deliverables=au.implements_deliverables,
+            )
+        )
+    audio = tuple(sanitized_audio)
+
     proposal = CompleteProposal(
         schema_version=(
             "mmm/complete-proposal-v2"

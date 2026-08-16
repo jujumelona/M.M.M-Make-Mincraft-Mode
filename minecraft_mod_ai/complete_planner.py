@@ -107,16 +107,23 @@ class _ModuleCatalog:
     def __contains__(self, module_id: str) -> bool:
         return module_id in self._ids
 
-    def add(self, module_id: str) -> None:
+    def resolve_unique(self, module_id: str) -> str:
+        if module_id not in self._ids:
+            return module_id
+        counter = 2
+        while f"{module_id}_{counter}" in self._ids:
+            counter += 1
+        return f"{module_id}_{counter}"
+
+    def add(self, module_id: str) -> str:
         if module_id in self._ids:
-            raise SpecValidationError(
-                f"Paginated planner returned duplicate module ID: {module_id}"
-            )
+            module_id = self.resolve_unique(module_id)
         encoded = module_id.encode("utf-8")
         self._digest.update(len(encoded).to_bytes(8, "big"))
         self._digest.update(encoded)
         self._ids.add(module_id)
         self._recent.append(module_id)
+        return module_id
 
     def receipt(self) -> dict[str, Any]:
         return {
