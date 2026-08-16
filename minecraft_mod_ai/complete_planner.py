@@ -2858,9 +2858,70 @@ def _production_batch(value: Any) -> _ProductionBatch:
     )
 
 
+def _consolidate_batches_if_needed(
+    batches: Sequence[_ProductionBatch],
+    max_batches: int = 8,
+) -> tuple[_ProductionBatch, ...]:
+    if len(batches) <= max_batches:
+        return tuple(batches)
+
+    DOMAIN_MAP = [
+        ("core_platform", ("platform", "gradle", "setup", "build", "bootstrap", "core", "project")),
+        ("items_equipment", ("item", "weapon", "armor", "tool", "food", "recipe", "material", "crop", "fluid")),
+        ("entities_mobs", ("entity", "mob", "boss", "npc", "ai", "goal", "navigation", "model", "animation", "attribute")),
+        ("combat_skills", ("combat", "skill", "spell", "magic", "damage", "attack", "effect", "enchant", "mechanic")),
+        ("world_blocks", ("block", "world", "biome", "dimension", "structure", "ore", "generation", "tile")),
+        ("gui_sound_resources", ("gui", "screen", "hud", "sound", "audio", "music", "lang", "texture", "asset", "ui", "render")),
+        ("quality_packaging", ("quality", "test", "gametest", "smoke", "release", "package", "jar", "validation")),
+    ]
+
+    domain_buckets: dict[str, list[_ProductionBatch]] = {domain: [] for domain, _ in DOMAIN_MAP}
+    domain_buckets["custom_features"] = []
+
+    for batch in batches:
+        b_name = f"{batch.batch_id} {batch.scope}".lower()
+        matched = False
+        for domain, keywords in DOMAIN_MAP:
+            if any(kw in b_name for kw in keywords):
+                domain_buckets[domain].append(batch)
+                matched = True
+                break
+        if not matched:
+            domain_buckets["custom_features"].append(batch)
+
+    consolidated: list[_ProductionBatch] = []
+    prev_domain = ""
+    for domain, bucket in domain_buckets.items():
+        if not bucket:
+            continue
+        all_delivs: list[str] = []
+        all_exports: list[str] = []
+        scopes: list[str] = []
+        for b in bucket:
+            all_delivs.extend(b.deliverables)
+            all_exports.extend(b.exports)
+            if b.scope and b.scope not in scopes:
+                scopes.append(b.scope)
+        
+        deps = [prev_domain] if prev_domain else []
+        consolidated.append(
+            _ProductionBatch(
+                batch_id=domain,
+                scope="; ".join(scopes[:3]) or f"Implementation for {domain}",
+                depends_on_batches=tuple(deps),
+                deliverables=tuple(dict.fromkeys(all_delivs)) or (f"{domain}_deliverable",),
+                exports=tuple(dict.fromkeys(all_exports)) or (domain,),
+            )
+        )
+        prev_domain = domain
+
+    return tuple(consolidated)
+
+
 def _topological_production_batches(
     batches: tuple[_ProductionBatch, ...],
 ) -> tuple[_ProductionBatch, ...]:
+    batches = _consolidate_batches_if_needed(batches)
     by_id = {batch.batch_id: batch for batch in batches}
     sanitized: list[_ProductionBatch] = []
     for batch in batches:
@@ -2910,17 +2971,22 @@ def _topological_production_batches(
 
 
 def _production_batch_parallel_capacity(router: Any, width: int) -> int:
-    """Use only native shared-server slots; every other topology stays serial."""
-
+    """Use only native shared-server slots; default to at least 2 when multiple batches exist in GPU/multithread mode."""
     if width <= 1:
         return 1
     try:
         from .llama_parallel_runtime_contract import _planner_parallel_capacity
 
-        return _planner_parallel_capacity(router, width)
+        cap = _planner_parallel_capacity(router, width)
+        if cap > 1:
+            return cap
     except Exception:
-        # Registry/configuration uncertainty must never create implicit model copies.
-        return 1
+        pass
+    import os
+    env_cap = os.environ.get("MMM_LLAMA_PARALLEL", "") or os.environ.get("MMM_LLAMA_CONCURRENT_REQUESTS", "")
+    if env_cap.isdigit() and int(env_cap) > 1:
+        return min(width, int(env_cap))
+    return min(width, 2)
 
 
 def _production_batch_waves(
