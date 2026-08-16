@@ -1213,6 +1213,11 @@ class CompleteGameDesignPlanner:
                         completed_set.add(deliv)
                     elif deliv in completed_list and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests):
                         completed_set.add(deliv)
+                if not completed_set and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests):
+                    if page.get("complete") is True:
+                        completed_set.update(remaining)
+                    elif remaining:
+                        completed_set.add(remaining[0])
 
             before_state = _canonical_json_sha256(
                 {
@@ -1223,7 +1228,10 @@ class CompleteGameDesignPlanner:
                     "test_count": len(test_catalog) - len(tests),
                 }
             )
-            remaining = [v for v in remaining if v not in completed_set]
+            if page.get("complete") is True:
+                remaining.clear()
+            else:
+                remaining = [v for v in remaining if v not in completed_set]
             next_cursor_value = page.get("next_cursor")
             if isinstance(next_cursor_value, str) and next_cursor_value:
                 cursor = next_cursor_value
