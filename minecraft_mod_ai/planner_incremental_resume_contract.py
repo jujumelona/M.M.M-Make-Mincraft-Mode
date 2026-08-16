@@ -119,7 +119,7 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
         checkpoint_path: Any,
         checkpoint_state: dict[str, Any],
     ) -> dict[str, Any]:
-        """Field-patch once, then regenerate this one batch once; never retry a mode."""
+        """Patch one invalid batch with a bounded semantic-progress escalation."""
 
         original_fingerprint = incremental_module._fingerprint(raw_batch)
         pending = checkpoint_state.get("pending_patch")
@@ -140,8 +140,15 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
 
         while True:
             attempt += 1
-            replacement = not isinstance(current_value, dict) or attempt > 1
-            repair_mode = "replacement" if replacement else "field_patch"
+            if not isinstance(current_value, dict):
+                repair_mode = "replacement"
+            elif attempt == 1:
+                repair_mode = "field_patch"
+            elif attempt == 2:
+                repair_mode = "replacement"
+            else:
+                repair_mode = "replacement_must_change"
+            replacement = repair_mode != "field_patch"
             state_sha256 = incremental_module._fingerprint(
                 {
                     "repair_mode": repair_mode,
@@ -182,7 +189,26 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
             )
             incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
 
-            if replacement:
+            if repair_mode == "replacement_must_change":
+                system_prompt = (
+                    "You regenerate exactly ONE invalid production batch. The previous full "
+                    "replacement made no semantic progress. Return only target_fingerprint "
+                    "and replacement_batch. The replacement MUST materially change at least "
+                    "one field implicated by validation_error and MUST NOT reproduce the "
+                    "current invalid batch. Preserve every valid part not implicated by the "
+                    "error. No page, sibling, Markdown, or explanation."
+                )
+                output_contract: dict[str, Any] = {
+                    "target_fingerprint": original_fingerprint,
+                    "replacement_batch": {
+                        "batch_id": "string",
+                        "scope": "string",
+                        "depends_on_batches": ["string"],
+                        "deliverables": ["string"],
+                        "exports": ["string"],
+                    },
+                }
+            elif replacement:
                 system_prompt = (
                     "You regenerate exactly ONE invalid production batch. Return only "
                     "target_fingerprint and replacement_batch. Preserve every valid part of "
@@ -190,7 +216,7 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                     "complete object that fixes validation_error. No page, sibling, Markdown, "
                     "or explanation."
                 )
-                output_contract: dict[str, Any] = {
+                output_contract = {
                     "target_fingerprint": original_fingerprint,
                     "replacement_batch": {
                         "batch_id": "string",
@@ -229,6 +255,10 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                 },
                 "output_contract": output_contract,
             }
+            if repair_mode == "replacement_must_change":
+                request["must_change_from_fingerprint"] = incremental_module._fingerprint(
+                    current_value
+                )
 
             token = runtime_module._JSON_SCHEMA.set(_batch_schema(replacement=replacement))
             try:
@@ -408,6 +438,7 @@ def _install_pending_queue(incremental_module: Any) -> None:
 
 def _install_outline_cycle_guard(incremental_module: Any) -> None:
     from . import complete_planner
+    from .planner_structured_router import structured_planner_router
 
     current = complete_planner._generate_json_page_with_repair
     if getattr(current, "_mmm_outline_cycle_guard", False):
@@ -488,7 +519,7 @@ def _install_outline_cycle_guard(incremental_module: Any) -> None:
                 stage=stage,
             )
         return current(
-            _GuardedRouter(router),
+            _GuardedRouter(structured_planner_router(router)),
             system_prompt=system_prompt,
             request=request,
             media_paths=media_paths,
