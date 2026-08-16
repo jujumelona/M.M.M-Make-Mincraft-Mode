@@ -1,0 +1,65 @@
+name: one-shot-clean-refactor
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-clean-refactor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare refactor tooling
+        run: python -m pip install --disable-pip-version-check pyyaml pytest
+      - name: Apply clean refactor to current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          apply_and_verify() {
+            python scripts/one_shot_clean_refactor.py
+            python -m compileall -q minecraft_mod_ai
+            python -m pytest -q tests/test_clean_production_contract.py
+            git diff --check
+          }
+          apply_and_verify
+          git fetch origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            git reset --hard origin/main
+            apply_and_verify
+          fi
+      - name: Commit only the refactor result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+              git reset --hard origin/main
+              python scripts/one_shot_clean_refactor.py
+              python -m compileall -q minecraft_mod_ai
+              python -m pytest -q tests/test_clean_production_contract.py
+              git diff --check
+            fi
+            git rm -f scripts/one_shot_clean_refactor.py .github/workflows/one-shot-clean-refactor.yml
+            git add -A
+            git commit -m "refactor: collapse production contracts and remove media capability layer"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git reset --hard origin/main
+          done
+          echo "main changed repeatedly; refusing to overwrite newer work" >&2
+          exit 1
