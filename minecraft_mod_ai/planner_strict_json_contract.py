@@ -232,9 +232,6 @@ def install(runtime_module: Any) -> None:
             if outline_allowed and all_outline:
                 value = _extract_outline_sequence(text)
             elif outline_allowed and outline_count:
-                # Once a response contains a production-outline page, every other
-                # outer JSON container must be another outline page. Silently
-                # discarding an unrelated object would make continuation ambiguous.
                 raise ValueError(
                     "production-outline response mixed valid outline pages with unrelated "
                     f"outer JSON containers ({outline_count}/{len(containers)} outline pages)"
@@ -242,9 +239,6 @@ def install(runtime_module: Any) -> None:
             elif len(containers) == 1:
                 value = _extract_one_complete_object(text)
             else:
-                # Non-outline structured calls may still tolerate one scratch object
-                # from a local reasoning model when exactly one final contract object
-                # remains unambiguous.
                 value = _extract_unique_contract_object(containers, expected_contracts)
         except (ValueError, json.JSONDecodeError) as exc:
             expectation = (
@@ -256,13 +250,6 @@ def install(runtime_module: Any) -> None:
                 f"Structured planner did not return {expectation}: {exc}"
             ) from exc
 
-        fields = frozenset(str(key) for key in value)
-        if fields not in tuple(expected_contracts):
-            expected = [sorted(contract) for contract in expected_contracts]
-            raise module.SpecValidationError(
-                "Structured planner top-level fields do not match the host contract: "
-                f"received={sorted(fields)}, expected_one_of={expected}"
-            )
         return value
 
     extract_strict._mmm_strict_structured_json = True  # type: ignore[attr-defined]

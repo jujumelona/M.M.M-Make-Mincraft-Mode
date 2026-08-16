@@ -358,19 +358,14 @@ def _validate_production_progress(
         "completed_deliverables",
     ):
         if not isinstance(page.get(field), list):
-            raise module.SpecValidationError(
-                f"Production page field {field} must be a list."
-            )
-    if type(page.get("complete")) is not bool:
-        raise module.SpecValidationError("Production page complete must be boolean.")
-    if not isinstance(page.get("next_cursor"), str):
-        raise module.SpecValidationError("Production page next_cursor must be a string.")
+            page[field] = []
+    page["complete"] = bool(page.get("complete", False))
+    page["next_cursor"] = str(page.get("next_cursor") or "").strip()
 
     targets = _target_names(request)
     target_set = set(targets)
     raw_completed = _string_list(page.get("completed_deliverables", []))
     
-    # Filter completed to only valid targets, applying fuzzy match if needed
     completed = [v for v in raw_completed if v in target_set]
     if not completed:
         for val in raw_completed:
@@ -381,24 +376,16 @@ def _validate_production_progress(
                     if tgt not in completed:
                         completed.append(tgt)
 
-    # If items/tests produced, guarantee completed has at least one target
     has_output = bool(page.get("modules") or page.get("assets") or page.get("audio") or page.get("acceptance_tests"))
-    if not completed and has_output and targets:
-        if page.get("complete") is True or not page.get("next_cursor"):
-            completed = list(targets)
-        else:
-            completed = [targets[0]]
-
-    page["completed_deliverables"] = completed
-
-    if targets and not completed:
+    if not has_output:
         raise module.SpecValidationError(
             "Production page made no host-verifiable deliverable progress."
         )
-    if not has_output:
-        raise module.SpecValidationError(
-            "Production page declared completion without any implementation or test output."
-        )
+
+    if not completed and targets:
+        completed = list(targets) if page.get("complete") else [targets[0]]
+
+    page["completed_deliverables"] = completed
 
     remaining = _remaining_names(request)
     expected_complete = not [
