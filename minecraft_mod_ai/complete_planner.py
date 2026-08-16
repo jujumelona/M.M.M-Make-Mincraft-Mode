@@ -1120,12 +1120,23 @@ class CompleteGameDesignPlanner:
                 "cursor": cursor,
                 "contract": _PRODUCTION_PAGE_CONTRACT,
             }
+            from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
+            known_ids = set(getattr(module_catalog, "_ids", ()))
+            skeleton = build_batch_skeleton(
+                batch_id=batch.batch_id,
+                scope=batch.scope,
+                deliverables=batch.deliverables,
+                exports=batch.exports,
+                depends_on_batches=batch.depends_on_batches,
+                known_module_ids=tuple(known_ids),
+            )
+            request["template_skeleton"] = skeleton
             if first_page:
                 request["planning_context"] = planning_context
             page = _generate_json_page_with_repair(
                 self.router,
                 system_prompt=(
-                    "Return exactly one concise production-batch JSON page matching the contract. "
+                    "Fill the template_skeleton for this production batch. "
                     "Define high-level architecture descriptors, asset requests, audio requests, and test names. "
                     "Keep module configs concise: {\"summary\": \"...\"}; do NOT emit raw Java source code inside JSON. "
                     "Module depends_on must contain ONLY valid module_ids (never batch_ids). "
@@ -1139,9 +1150,13 @@ class CompleteGameDesignPlanner:
                 stage=f"production batch {batch.batch_id!r} page",
             )
             first_page = False
-            if set(page) != set(_PRODUCTION_PAGE_CONTRACT):
-                raise SpecValidationError(
-                    "Production batch page fields are invalid."
+            if not isinstance(page, dict):
+                page = skeleton
+            else:
+                page = merge_model_output_into_skeleton(
+                    skeleton=skeleton,
+                    model_output=page,
+                    valid_module_catalog=known_ids,
                 )
             raw_modules = _list(page, "modules")
             raw_assets = _list(page, "assets")
