@@ -160,7 +160,7 @@ def _parse_json_value(text: str) -> tuple[Any, str, json.JSONDecodeError | None]
     combined = _repair_truncated_json(repaired)
     try:
         return json.loads(combined, strict=False), combined, None
-    except json.JSONDecodeError as final_err:
+    except json.JSONDecodeError:
         return None, raw, last_err
 
 
