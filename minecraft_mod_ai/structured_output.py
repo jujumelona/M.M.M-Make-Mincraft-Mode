@@ -318,11 +318,11 @@ def _coerce_value_to_schema(value: Any, schema: dict[str, Any], *, aggressive: b
 def _coerce_json_to_schema(json_text: str, schema: Mapping[str, Any], *, aggressive: bool = False) -> str | None:
     """Safely parse JSON text, coerce structure to match schema, and re-encode."""
     try:
-        data = _parse_json_value(json_text)
+        data, _, exc = _parse_json_value(json_text)
     except Exception:
         return None
 
-    if not isinstance(data, (dict, list)):
+    if exc is not None or not isinstance(data, (dict, list)):
         return None
 
     try:
