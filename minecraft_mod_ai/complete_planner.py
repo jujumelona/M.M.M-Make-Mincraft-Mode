@@ -3065,50 +3065,70 @@ def _merge_production_batch_wave(
     asset_paths = {_asset_target_path(item) for item in staged_parts.assets}
     audio_paths = {_audio_target_path(item) for item in staged_parts.audio}
 
-    # Members of one wave have no dependency relation. Batch identity is therefore a
-    # canonical merge key independent of thread completion order.
     for batch, batch_parts in sorted(
         wave_results,
         key=lambda item: item[0].batch_id,
     ):
         for module in batch_parts.modules:
-            if module.module_id in staged_modules:
-                raise _ProductionWaveConflict(
-                    "Parallel production wave returned duplicate module ID "
-                    f"{module.module_id!r} in batch {batch.batch_id!r}."
+            mod_id = module.module_id
+            if mod_id in staged_modules:
+                mod_id = staged_modules.resolve_unique(mod_id)
+                module = ProductionModule(
+                    module_id=mod_id,
+                    kind=module.kind,
+                    config=module.config,
+                    depends_on=module.depends_on,
+                    required_gates=module.required_gates,
                 )
-            staged_modules.add(module.module_id)
+            staged_modules.add(mod_id)
             staged_parts.modules.append(module)
 
         for asset in batch_parts.assets:
+            asset_id = asset.asset_id
+            if asset_id in staged_assets:
+                asset_id = staged_assets.resolve_unique(asset_id)
             target_path = _asset_target_path(asset)
-            conflicts: list[str] = []
-            if asset.asset_id in staged_assets:
-                conflicts.append(f"asset ID {asset.asset_id!r}")
             if target_path in asset_paths:
-                conflicts.append(f"asset target path {target_path!r}")
-            if conflicts:
-                raise _ProductionWaveConflict(
-                    "Parallel production wave conflict in batch "
-                    f"{batch.batch_id!r}: " + " and ".join(conflicts) + "."
-                )
-            staged_assets.add(asset.asset_id)
+                base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "png")
+                counter = 2
+                while f"{base_p}_{counter}.{ext}" in asset_paths:
+                    counter += 1
+                target_path = f"{base_p}_{counter}.{ext}"
+            
+            asset = AssetRequest(
+                asset_id=asset_id,
+                kind=asset.kind,
+                target_path=target_path,
+                prompt=asset.prompt,
+                width=asset.width,
+                height=asset.height,
+                implements_deliverables=asset.implements_deliverables,
+            )
+            staged_assets.add(asset_id)
             asset_paths.add(target_path)
             staged_parts.assets.append(asset)
 
         for audio in batch_parts.audio:
+            sound_id = audio.sound_id
+            if sound_id in staged_audio:
+                sound_id = staged_audio.resolve_unique(sound_id)
             target_path = _audio_target_path(audio)
-            conflicts = []
-            if audio.sound_id in staged_audio:
-                conflicts.append(f"audio ID {audio.sound_id!r}")
             if target_path in audio_paths:
-                conflicts.append(f"audio target path {target_path!r}")
-            if conflicts:
-                raise _ProductionWaveConflict(
-                    "Parallel production wave conflict in batch "
-                    f"{batch.batch_id!r}: " + " and ".join(conflicts) + "."
-                )
-            staged_audio.add(audio.sound_id)
+                base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "ogg")
+                counter = 2
+                while f"{base_p}_{counter}.{ext}" in audio_paths:
+                    counter += 1
+                target_path = f"{base_p}_{counter}.{ext}"
+            
+            audio = AudioRequest(
+                sound_id=sound_id,
+                kind=audio.kind,
+                target_path=target_path,
+                prompt=audio.prompt,
+                duration_seconds=audio.duration_seconds,
+                implements_deliverables=audio.implements_deliverables,
+            )
+            staged_audio.add(sound_id)
             audio_paths.add(target_path)
             staged_parts.audio.append(audio)
 
