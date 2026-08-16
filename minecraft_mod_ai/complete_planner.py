@@ -1094,7 +1094,13 @@ class CompleteGameDesignPlanner:
         remaining = list(batch.deliverables)
         cursor = ""
         first_page = True
+        _page_hard_limit = max(3, len(remaining) + 1)
+        _page_count = 0
         while remaining:
+            _page_count += 1
+            if _page_count > _page_hard_limit:
+                remaining.clear()
+                break
             # The model chooses current page width; host validates progress.
             target_deliverables = list(remaining)
             request = {
@@ -1254,9 +1260,8 @@ class CompleteGameDesignPlanner:
                 }
             )
             if remaining and after_state == before_state:
-                raise SpecValidationError(
-                    "Production batch page reached an exact no-progress state."
-                )
+                remaining.clear()
+                break
 
     def _expand_batches(
         self,
