@@ -254,7 +254,6 @@ def _install_planner_contracts() -> None:
     from .planner_parser_safety_contract import install as install_planner_parser_safety
     from .planner_production_page_contract import install as install_planner_production_page
     from .planner_strict_json_contract import install as install_planner_strict_json
-    from .production_stream_efficiency_contract import install as install_production_stream_efficiency
 
     install_planner_json_runtime(complete_planner)
     install_planner_strict_json(planner_json_runtime_contract)
@@ -265,7 +264,6 @@ def _install_planner_contracts() -> None:
     install_asset_resume_efficiency(complete_orchestrator_services)
     install_audio_resume_efficiency(audio_generator)
     complete_orchestrator.synthesize_audio_files = audio_generator.synthesize_audio_files
-    install_production_stream_efficiency(complete_planner)
     install_execution_efficiency(work_graph_module=work_graph)
     install_incremental_resume(planner_incremental_repair_contract)
     install_planner_parser_safety(complete_planner)
