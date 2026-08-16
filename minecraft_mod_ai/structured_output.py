@@ -102,7 +102,7 @@ def _parse_json_value(text: str) -> tuple[Any, str, json.JSONDecodeError | None]
     )
     try:
         return json.loads(repaired, strict=False), repaired, None
-    except json.JSONDecodeError as final_err:
+    except json.JSONDecodeError:
         return None, raw, last_err
 
 
