@@ -642,10 +642,11 @@ def _valid_plan(value: Any, assets: Sequence[AssetRequest]) -> bool:
             not isinstance(prompts, Sequence)
             or isinstance(prompts, (str, bytes))
             or len(prompts) != _PROMPTS_PER_ASSET
-            or len(set(prompts)) != _PROMPTS_PER_ASSET
         ):
             return False
         if any(not isinstance(prompt, str) or not prompt.strip() for prompt in prompts):
+            return False
+        if len(set(prompts)) != _PROMPTS_PER_ASSET:
             return False
         found.add(asset_id)
     return found == set(expected)
