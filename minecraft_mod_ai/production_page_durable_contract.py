@@ -244,13 +244,17 @@ def _infer_asset_kind(raw: dict[str, Any]) -> str:
     aliases = {
         "texture": "",
         "textures": "",
+        "sprite": "item",
+        "item_texture": "item",
+        "block_texture": "block",
+        "entity_texture": "entity",
     }
     kind = aliases.get(kind, kind)
-    if kind:
+    if kind in {"item", "block", "entity", "gui", "environment", "icon"}:
         return kind
     path = str(raw.get("target_path") or "").replace("\\", "/").lower()
     for candidate in ("block", "entity", "gui", "environment", "icon", "item"):
-        if f"/{candidate}/" in path or path.endswith(f"/{candidate}.png"):
+        if f"/{candidate}/" in path or path.endswith(f"/{candidate}.png") or f"/{candidate}s/" in path:
             return candidate
     return "item"
 
@@ -275,7 +279,7 @@ def _deterministic_normalize(
     """Repair host-owned structural facts without spending an LLM call."""
 
     if not isinstance(raw, dict):
-        return raw, []
+        raw = {"summary": str(raw or "")}
 
     value = dict(raw)
     changes: list[str] = []
@@ -315,42 +319,128 @@ def _deterministic_normalize(
         changes.append(f"{id_attr}:normalized_unique")
 
     if kind == "module":
-        # An omitted config has one unambiguous host representation. Do not waste a
-        # model call asking it to return an empty object. A present non-object config,
-        # however, may carry intended semantics and is left for semantic repair.
-        if "config" not in value:
-            value["config"] = {}
-            changes.append("config:defaulted_empty")
+        from .complete_spec import MODULE_KINDS
+        raw_kind = str(value.get("kind") or value.get("type") or "").strip().lower()
+        normalized_kind = {
+            "": "custom_java",
+            "config": "custom_java",
+            "configuration": "custom_java",
+            "gradle": "custom_java",
+            "build": "custom_java",
+            "platform": "custom_java",
+            "bootstrap": "custom_java",
+            "ui": "gui",
+            "screen": "gui",
+            "menu": "gui",
+            "network": "networking",
+            "packet": "networking",
+            "mob": "entity",
+            "sound": "audio",
+            "sfx": "audio",
+            "event": "world_event",
+            "compat": "integration",
+            "compatibility": "integration",
+            "bridge": "integration",
+        }.get(raw_kind, raw_kind or "custom_java")
+        if normalized_kind not in MODULE_KINDS:
+            normalized_kind = "custom_java"
+        if value.get("kind") != normalized_kind:
+            value["kind"] = normalized_kind
+            changes.append("kind:module_normalized")
+
+        config = value.get("config")
+        if not isinstance(config, dict):
+            config = {"summary": str(config or "")}
+            value["config"] = config
+            changes.append("config:object_normalized")
+        elif config.get("implementation") not in (None, "custom"):
+            config = dict(config)
+            config["implementation"] = "custom"
+            value["config"] = config
+            changes.append("config:implementation_normalized")
+
+        raw_deps = value.get("depends_on", ())
+        if not isinstance(raw_deps, (list, tuple)):
+            raw_deps = ()
+        clean_deps: list[str] = []
+        for dep in raw_deps:
+            s_dep = str(dep).strip()
+            if s_dep:
+                clean_deps.append(_safe_identifier(s_dep, fallback="dep"))
+        value["depends_on"] = list(dict.fromkeys(clean_deps))
+
+        raw_gates = value.get("required_gates", ())
+        if not isinstance(raw_gates, (list, tuple)):
+            raw_gates = ()
+        clean_gates = [str(g).strip() for g in raw_gates if str(g).strip()]
+        value["required_gates"] = list(dict.fromkeys(clean_gates))
+
     elif kind == "asset":
         inferred_kind = _infer_asset_kind(value)
+        if inferred_kind not in {"item", "block", "entity", "gui", "environment", "icon"}:
+            inferred_kind = "item"
         if value.get("kind") != inferred_kind:
             value["kind"] = inferred_kind
             changes.append("kind:asset_normalized")
-        if not value.get("prompt"):
+        if not str(value.get("prompt") or "").strip():
             description = value.get("description")
             value["prompt"] = (
                 str(description).strip()
-                if description
-                else f"Asset for {unique_id}"
+                if description and str(description).strip()
+                else f"Asset texture for {unique_id}"
             )
             changes.append("prompt:defaulted")
-        if not value.get("target_path"):
+        target_path = str(value.get("target_path") or "").replace("\\", "/").strip()
+        if not target_path or target_path.startswith("/") or ".." in target_path.split("/"):
             value["target_path"] = f"assets/mod/textures/{unique_id}.png"
             changes.append("target_path:defaulted")
+        else:
+            value["target_path"] = target_path
+        try:
+            w = int(value.get("width", 16))
+        except (TypeError, ValueError):
+            w = 16
+        try:
+            h = int(value.get("height", 16))
+        except (TypeError, ValueError):
+            h = 16
+        value["width"] = max(1, min(64, w))
+        value["height"] = max(1, min(64, h))
+
     elif kind == "audio":
+        import math
         raw_kind = str(value.get("kind") or "").strip().lower()
-        normalized_kind = {"sfx": "effect", "sound": "effect"}.get(
+        normalized_kind = {"sfx": "effect", "sound": "effect", "voice": "effect"}.get(
             raw_kind,
             raw_kind or "effect",
         )
+        if normalized_kind not in {"effect", "ambient", "music", "ui"}:
+            normalized_kind = "effect"
         if value.get("kind") != normalized_kind:
             value["kind"] = normalized_kind
             changes.append("kind:audio_normalized")
-        if "loop" in value:
-            normalized_loop = _normalize_bool(value["loop"])
-            if normalized_loop != value["loop"]:
-                value["loop"] = normalized_loop
-                changes.append("loop:boolean_normalized")
+        value["loop"] = bool(_normalize_bool(value.get("loop", False)))
+        try:
+            dur = float(value.get("duration_seconds", 1.0))
+            if not math.isfinite(dur) or dur < 0.001:
+                dur = 1.0
+        except (TypeError, ValueError):
+            dur = 1.0
+        value["duration_seconds"] = max(0.001, min(60.0, dur))
+        try:
+            freq = float(value.get("frequency_hz", 440.0))
+            if not math.isfinite(freq) or freq < 1.0:
+                freq = 1.0
+        except (TypeError, ValueError):
+            freq = 440.0
+        value["frequency_hz"] = max(1.0, min(96000.0, freq))
+        try:
+            vol = float(value.get("volume", 0.8))
+            if not math.isfinite(vol) or vol < 0.0:
+                vol = 0.8
+        except (TypeError, ValueError):
+            vol = 0.8
+        value["volume"] = max(0.0, min(4.0, vol))
 
     return value, changes
 
