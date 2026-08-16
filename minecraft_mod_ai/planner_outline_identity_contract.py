@@ -27,22 +27,14 @@ def install(pagination_module: Any) -> None:
     ) -> None:
         for raw in raw_batches:
             if not isinstance(raw, dict):
-                continue
-            try:
-                batch = module._production_batch(raw)
-            except Exception:
-                continue
-            original_id = batch.batch_id
-            suffix = 2
-            while batch.batch_id in catalog:
-                batch = module._ProductionBatch(
-                    batch_id=f"{original_id}_{suffix}",
-                    scope=batch.scope,
-                    depends_on_batches=batch.depends_on_batches,
-                    deliverables=batch.deliverables,
-                    exports=batch.exports,
+                raise module.SpecValidationError(
+                    "Production outline batch must be a JSON object."
                 )
-                suffix += 1
+            batch = module._production_batch(raw)
+            if batch.batch_id in catalog:
+                raise module.SpecValidationError(
+                    f"Production outline repeated batch id {batch.batch_id!r}."
+                )
             catalog.add(batch.batch_id)
             result.append(batch)
 
