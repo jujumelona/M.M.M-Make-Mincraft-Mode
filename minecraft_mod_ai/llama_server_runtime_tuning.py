@@ -1070,13 +1070,17 @@ def install(autotune_module: Any) -> None:
         @wraps(current_launch)
         def launch_selected(binary: str, model_path: str, config: Any, selected: ServerVariant) -> str:
             explicit_parallel = _explicit_parallel()
+            resources = _runtime_resources()
             requested_slots = (
                 explicit_parallel
                 if explicit_parallel is not None
                 else max(1, int(getattr(selected, "parallel", 1) or 1))
             )
+            if explicit_parallel is None and requested_slots == 1:
+                gpu_bytes = resources.gpu_total_bytes or resources.gpu_free_bytes
+                if gpu_bytes and gpu_bytes >= 10 * _MIB * 1024:
+                    requested_slots = 2
             exact_parallel = explicit_parallel is not None
-            resources = _runtime_resources()
             attempts: list[int] = [requested_slots]
             if not exact_parallel:
                 attempts = [
