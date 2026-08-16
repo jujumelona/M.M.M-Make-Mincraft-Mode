@@ -140,6 +140,21 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
 
         while True:
             attempt += 1
+            if attempt > 3:
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=original_fingerprint,
+                    round_index=attempt - 1,
+                    current_value=current_value,
+                    validation_error=current_error,
+                    reason="repair_attempt_limit",
+                    last_output_sha256=last_output_sha256,
+                )
+                raise module.SpecValidationError(
+                    "Production batch repair exhausted its bounded semantic-progress attempts."
+                )
             if not isinstance(current_value, dict):
                 repair_mode = "replacement"
             elif attempt == 1:
