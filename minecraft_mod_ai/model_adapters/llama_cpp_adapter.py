@@ -25,6 +25,16 @@ from .base import (
 _DEFAULT_HTTPX_POST = httpx.post
 _HOST_TOOL_PROTOCOL_VERSION = "mmm/host-tool-envelope-v1"
 _MAX_HOST_TOOL_REPAIR_ATTEMPTS = 1
+_NATIVE_GRAMMAR_CONTROL_KEYS = frozenset(
+    {
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "response_format",
+        "json_schema",
+        "grammar",
+    }
+)
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -138,17 +148,11 @@ class LlamaCppAdapter(ModelAdapter):
             raise RuntimeError("Tool-capable llama request contains no callable tool names")
 
         wire_messages = _host_tool_messages(request.messages, request.tools)
-        wire_request = GenerationRequest(
-            messages=wire_messages,
+        wire_request = _host_tool_request(
+            wire_messages,
             media_paths=request.media_paths,
-            response_format="json",
-            response_schema=None,
-            tools=(),
-            tool_choice=None,
-            parallel_tool_calls=False,
         )
-        payload = payload_builder(self, wire_request)
-        _assert_no_native_grammar_controls(payload)
+        payload = _host_tool_payload(self, wire_request, payload_builder)
         message = _completion_message(server_url, payload)
         raw = str(message.get("content") or "").strip()
         reasoning = str(message.get("reasoning_content") or "").strip()
@@ -179,15 +183,12 @@ class LlamaCppAdapter(ModelAdapter):
                         ),
                     },
                 ]
-                repair_request = GenerationRequest(
-                    messages=repair_messages,
-                    response_format="json",
-                    tools=(),
-                    tool_choice=None,
-                    parallel_tool_calls=False,
+                repair_request = _host_tool_request(repair_messages)
+                repair_payload = _host_tool_payload(
+                    self,
+                    repair_request,
+                    payload_builder,
                 )
-                repair_payload = payload_builder(self, repair_request)
-                _assert_no_native_grammar_controls(repair_payload)
                 repair_message = _completion_message(server_url, repair_payload)
                 raw = str(repair_message.get("content") or "").strip()
                 repair_reasoning = repair_message.get("reasoning_content")
@@ -201,6 +202,38 @@ class LlamaCppAdapter(ModelAdapter):
 
     def close(self) -> None:
         return None
+
+
+def _host_tool_request(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    media_paths: tuple[Any, ...] = (),
+) -> GenerationRequest:
+    """Build host-tool transport without any native llama.cpp grammar request."""
+
+    return GenerationRequest(
+        messages=messages,
+        media_paths=media_paths,
+        response_format="text",
+        response_schema=None,
+        tools=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+
+def _host_tool_payload(
+    adapter: Any,
+    request: GenerationRequest,
+    payload_builder: Any,
+) -> dict[str, Any]:
+    """Normalize host-tool wire payload so native grammar controls cannot leak."""
+
+    payload = dict(payload_builder(adapter, request))
+    for key in _NATIVE_GRAMMAR_CONTROL_KEYS:
+        payload.pop(key, None)
+    _assert_no_native_grammar_controls(payload)
+    return payload
 
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -351,8 +384,6 @@ def _parse_host_tool_envelope(
         return GenerationResponse(content=content.strip(), reasoning_content=reasoning)
     if kind != "tool_calls":
         if allow_direct_json_final and "calls" not in value and "tool_calls" not in value:
-            # Tool availability does not force tool use. Preserve the caller's exact
-            # structured JSON so the normal host schema validator remains authoritative.
             return GenerationResponse(content=raw.strip(), reasoning_content=reasoning)
         raise RuntimeError("Host tool envelope kind must be 'tool_calls' or 'final'")
 
@@ -386,8 +417,7 @@ def _parse_host_tool_envelope(
 
 
 def _assert_no_native_grammar_controls(payload: Mapping[str, Any]) -> None:
-    forbidden = {"tools", "tool_choice", "parallel_tool_calls", "response_format", "json_schema", "grammar"}
-    present = sorted(key for key in forbidden if key in payload)
+    present = sorted(key for key in _NATIVE_GRAMMAR_CONTROL_KEYS if key in payload)
     if present:
         raise RuntimeError(
             "Host-owned llama tool protocol leaked native grammar controls: "
