@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-"""Late runtime policy that makes declared parallel capacity real end to end.
+"""Late runtime policy for compile, routing, and isolated candidate efficiency.
 
-The production graph already owns dependency safety, durable leases and narrow commits.
-This contract removes the remaining execution bottlenecks without weakening those
-boundaries: exact executor capacity, exact integration routing, and isolated parallel
-custom candidate generation with a single winner commit. Scheduler claim ownership
-stays exclusively in scheduler_parallel_safety_contract.
+The production graph owns dependency safety, durable leases and executor capacity.
+This contract keeps only optimizations that belong outside that scheduler owner:
+compile-local reuse, exact integration routing, batched ledger status reads, and
+isolated parallel custom candidate generation with a single winner commit.
 """
 
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import hashlib
 import json
@@ -35,7 +34,6 @@ _WORK_GRAPH_VALIDATION_CACHE: ContextVar[set[tuple[int, int]] | None] = ContextV
     "mmm_work_graph_validation_cache",
     default=None,
 )
-_ORIGINAL_THREAD_POOL = concurrent.futures.ThreadPoolExecutor
 
 
 def _active_parallelism() -> int:
@@ -44,36 +42,6 @@ def _active_parallelism() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
-
-
-def _install_exact_llm_executor() -> None:
-    """Make the production ``llm`` pool match the native server slot capacity."""
-
-    current = concurrent.futures.ThreadPoolExecutor
-    if getattr(current, "_mmm_exact_llm_executor", False):
-        return
-    base = current
-
-    class ExactCapacityThreadPoolExecutor(base):
-        def __init__(
-            self,
-            max_workers: int | None = None,
-            thread_name_prefix: str = "",
-            initializer: Any = None,
-            initargs: tuple[Any, ...] = (),
-        ) -> None:
-            if thread_name_prefix == "llm":
-                max_workers = _active_parallelism()
-            super().__init__(
-                max_workers=max_workers,
-                thread_name_prefix=thread_name_prefix,
-                initializer=initializer,
-                initargs=initargs,
-            )
-
-    ExactCapacityThreadPoolExecutor._mmm_exact_llm_executor = True  # type: ignore[attr-defined]
-    ExactCapacityThreadPoolExecutor._mmm_base_executor = base  # type: ignore[attr-defined]
-    concurrent.futures.ThreadPoolExecutor = ExactCapacityThreadPoolExecutor
 
 
 def _install_work_graph_compile_cache(work_graph_module: Any) -> None:
@@ -499,7 +467,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
 
         try:
             workers = min(count, _active_parallelism())
-            with _ORIGINAL_THREAD_POOL(
+            with ThreadPoolExecutor(
                 max_workers=workers,
                 thread_name_prefix="mmm_custom_generate",
             ) as pool:
@@ -525,7 +493,7 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
             if len(candidates) == 1:
                 evaluations = [verify(candidates[0])]
             else:
-                with _ORIGINAL_THREAD_POOL(
+                with ThreadPoolExecutor(
                     max_workers=min(2, len(candidates)),
                     thread_name_prefix="mmm_custom_verify",
                 ) as pool:
@@ -590,12 +558,11 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
 
 
 def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
-    """Install throughput features after scheduler and llama safety contracts."""
+    """Install non-scheduler throughput features after runtime safety contracts."""
 
     from . import custom_module_generator
 
     del scheduler_module
-    _install_exact_llm_executor()
     _install_work_graph_compile_cache(work_graph_module)
     _install_work_ledger_read_batching(work_graph_module)
     _install_module_routing(work_graph_module)
@@ -604,7 +571,6 @@ def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
 
 __all__ = [
     "_active_parallelism",
-    "_install_exact_llm_executor",
     "_install_work_graph_compile_cache",
     "_install_work_ledger_read_batching",
     "_install_module_routing",
