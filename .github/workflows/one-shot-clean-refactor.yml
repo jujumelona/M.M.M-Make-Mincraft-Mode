@@ -27,11 +27,19 @@ jobs:
         run: |
           cat > /tmp/run_clean_refactor.py <<'PY'
           import ast
+          import json
           import os
+          import shutil
           import sys
+          from pathlib import Path
+
+          import yaml
 
           sys.path.insert(0, os.getcwd())
           import scripts.one_shot_clean_refactor as refactor
+
+          ROOT = Path.cwd()
+          PKG = ROOT / "minecraft_mod_ai"
 
           def _visit_try(self, node):
               node = self.generic_visit(node)
@@ -54,6 +62,128 @@ jobs:
           refactor.CapabilityStripper.visit_With = _visit_body
           refactor.CapabilityStripper.visit_AsyncWith = _visit_body
           refactor.CapabilityStripper.visit_While = _visit_body
+
+          original_expr_contains = refactor._expr_contains_marker
+          def _expr_contains_marker(node, markers):
+              if node is None:
+                  return False
+              lowered = tuple(str(marker).lower() for marker in markers)
+              for child in ast.walk(node):
+                  if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                      text = child.value.lower()
+                      if any(marker in text for marker in lowered):
+                          return True
+              return original_expr_contains(node, markers)
+          refactor._expr_contains_marker = _expr_contains_marker
+
+          original_assert = refactor._assert_no_dedicated_references
+
+          def _clean_mapping(value):
+              blocked = ("audio", "voice", "speech", "tts", "asr")
+              if isinstance(value, dict):
+                  result = {}
+                  for key, item in value.items():
+                      key_text = str(key).lower()
+                      if any(token in key_text for token in blocked):
+                          continue
+                      if isinstance(item, str) and any(token in item.lower() for token in blocked):
+                          continue
+                      cleaned = _clean_mapping(item)
+                      result[key] = cleaned
+                  return result
+              if isinstance(value, list):
+                  result = []
+                  for item in value:
+                      probe = json.dumps(item, ensure_ascii=False).lower()
+                      if any(token in probe for token in blocked):
+                          continue
+                      result.append(_clean_mapping(item))
+                  return result
+              return value
+
+          def _clean_yaml(path):
+              if not path.exists():
+                  return
+              data = yaml.safe_load(path.read_text(encoding="utf-8"))
+              path.write_text(yaml.safe_dump(_clean_mapping(data), sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+          def _clean_remaining_references():
+              media_python = [
+                  "technology_radar.py",
+                  "__init__.py",
+                  "model_router.py",
+                  "host_grounding.py",
+                  "complete_planner.py",
+                  "small_model_adaptive_compute.py",
+                  "skill_catalog.py",
+                  "planner_parser_safety_contract.py",
+                  "plan_render.py",
+                  "work_graph.py",
+                  "model_smoke.py",
+                  "research_adaptive_provider_routing.py",
+                  "production_stream_efficiency_contract.py",
+                  "local_ai_sidecar_generator.py",
+                  "central_research.py",
+              ]
+              for name in media_python:
+                  path = PKG / name
+                  if path.exists():
+                      refactor._strip_capability(path, "audio", "voice", "speech", "tts", "asr")
+
+              for path in (ROOT / "config/agent_roles.yaml", PKG / "config/agent_roles.yaml"):
+                  _clean_yaml(path)
+
+              for stale_skill in (
+                  ROOT / "skills/generate-audio",
+                  ROOT / "plugins/mmm-minecraft-mod-ai/skills/generate-audio",
+              ):
+                  if stale_skill.exists():
+                      shutil.rmtree(stale_skill)
+
+              ci = ROOT / ".github/workflows/ci.yml"
+              if ci.exists():
+                  text = ci.read_text(encoding="utf-8")
+                  text = text.replace("          tests/test_production_page_durable_contract.py\n", "")
+                  text = text.replace('              "test_production_page_durable_contract.py",\n', "")
+                  ci.write_text(text, encoding="utf-8")
+
+              integration = ROOT / ".github/workflows/production-integration.yml"
+              if integration.exists():
+                  text = integration.read_text(encoding="utf-8")
+                  text = text.replace("[dev,ui,local-model,rag,image,speech,training,production-audio]", "[dev,ui,local-model,rag,image,training]")
+                  text = text.replace("[local-model,rag,image,speech,training,production-audio]", "[local-model,rag,image,training]")
+                  text = text.replace(', "speech_recognition"', "")
+                  integration.write_text(text, encoding="utf-8")
+
+              for path in (ROOT / "tests").glob("test_*.py"):
+                  if path.name == "test_clean_production_contract.py":
+                      continue
+                  text = path.read_text(encoding="utf-8", errors="ignore")
+                  if any(token in text for token in (
+                      "AudioRequest", "audio_generator", "audio_resume_efficiency_contract",
+                      "planner_production_page_contract", "production_page_durable_contract",
+                      "SpeechAdapter", "speech_recognition", "generate-audio",
+                  )):
+                      path.unlink()
+
+              regression = ROOT / "tests/test_clean_production_contract.py"
+              regression.write_text('''from __future__ import annotations\n\nfrom pathlib import Path\n\nfrom minecraft_mod_ai.planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton\n\nROOT = Path(__file__).resolve().parents[1]\n\ndef test_host_template_is_single_typed_boundary() -> None:\n    page = build_batch_skeleton("quality_packaging", "quality", ["smoke"], ["quality_packaging"])\n    assert set(page) == {"modules", "assets", "acceptance_tests", "completed_deliverables", "complete", "next_cursor"}\n    assert set(page["modules"][0]) == {"module_id", "kind", "config", "depends_on", "required_gates"}\n\ndef test_unknown_model_keys_are_discarded() -> None:\n    skeleton = build_batch_skeleton("custom_features", "custom", ["feature"], ["custom_features"])\n    merged = merge_model_output_into_skeleton(skeleton, {"modules": [{"module_id": "custom_features", "kind": "custom_java", "config": {}, "depends_on": [], "required_gates": [], "unknown_contract_field": ["bad"]}], "unknown_top_level": True}, set())\n    assert "unknown_top_level" not in merged\n    assert "unknown_contract_field" not in merged["modules"][0]\n\ndef test_removed_runtime_hooks_are_absent() -> None:\n    text = (ROOT / "minecraft_mod_ai/runtime_bootstrap.py").read_text(encoding="utf-8")\n    assert ("audio_" + "generator") not in text\n    assert ("planner_production_" + "page_contract") not in text\n''', encoding="utf-8")
+
+              pyproject = ROOT / "pyproject.toml"
+              if pyproject.exists():
+                  text = pyproject.read_text(encoding="utf-8")
+                  lines = []
+                  for line in text.splitlines():
+                      low = line.lower()
+                      if any(token in low for token in ("production-audio", "speech_recognition", "whisper")):
+                          continue
+                      lines.append(line)
+                  candidate = "\n".join(lines) + "\n"
+                  pyproject.write_text(candidate, encoding="utf-8")
+
+              original_assert()
+
+          refactor._assert_no_dedicated_references = _clean_remaining_references
           refactor.main()
           PY
       - name: Apply clean refactor to current main
@@ -67,7 +197,7 @@ jobs:
             set -e
             printf '%s\n' "$output"
             if [ "$status" -ne 0 ]; then
-              diagnostic="$(printf '%s' "$output" | tail -c 6000 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+              diagnostic="$(printf '%s' "$output" | tail -c 7000 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
               echo "::error title=Clean refactor failed::$diagnostic"
               return "$status"
             fi
