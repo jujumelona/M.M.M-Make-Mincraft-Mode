@@ -1205,18 +1205,16 @@ class CompleteGameDesignPlanner:
                     if item_id and item_id in target_deliverables:
                         completed_set.add(item_id)
 
-            # Direct output ID match or model completed_deliverables fallback
+            # Guaranteed forward progress: if model produced anything or completed items, advance remaining list
             if not completed_set:
                 completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]
                 for deliv in target_deliverables:
-                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids or deliv in page_tests:
+                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids or deliv in page_tests or deliv in completed_list:
                         completed_set.add(deliv)
-                    elif deliv in completed_list and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests):
-                        completed_set.add(deliv)
-                if not completed_set and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests):
+                if not completed_set and remaining:
                     if page.get("complete") is True:
                         completed_set.update(remaining)
-                    elif remaining:
+                    else:
                         completed_set.add(remaining[0])
 
             before_state = _canonical_json_sha256(
