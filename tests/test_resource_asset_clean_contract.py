@@ -60,6 +60,10 @@ def test_persisted_asset_plan_is_bound_to_exact_resource_contract() -> None:
     duplicate_prompts["assets"][0]["prompts"][3] = duplicate_prompts["assets"][0]["prompts"][0]
     assert assets._valid_plan(duplicate_prompts, (request,)) is False
 
+    malformed_prompts = _plan(request)
+    malformed_prompts["assets"][0]["prompts"][0] = {"unexpected": "object"}
+    assert assets._valid_plan(malformed_prompts, (request,)) is False
+
 
 def test_reference_closure_parses_each_json_once(monkeypatch, tmp_path) -> None:
     namespace = tmp_path / "assets" / "example"
