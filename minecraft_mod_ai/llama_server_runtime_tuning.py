@@ -329,8 +329,11 @@ def _kv_bytes_per_token() -> int:
     cache_v = os.environ.get(
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_V", os.environ.get("MMM_KV_CACHE_QUANT", "q4_0")
     ).strip().lower()
-    per_half = {"q4_0": 7 * 1024, "q8_0": 14 * 1024, "f16": 28 * 1024}
-    return per_half.get(cache_k, 14 * 1024) + per_half.get(cache_v, 14 * 1024)
+    # Qwen3.5-9B: 40 layers × 8 KV heads × 128 head_dim
+    # q8_0: 40×8×128×1 = 40,960 bytes/token per K or V half
+    # q4_0: ~half of q8_0, f16: ~double of q8_0
+    per_half = {"q4_0": 24 * 1024, "q8_0": 40 * 1024, "f16": 80 * 1024}
+    return per_half.get(cache_k, 40 * 1024) + per_half.get(cache_v, 40 * 1024)
 
 
 def _model_size(model_path: str | None) -> int:
@@ -1079,12 +1082,14 @@ def install(autotune_module: Any) -> None:
             if explicit_parallel is None:
                 gpu_bytes = resources.gpu_total_bytes or resources.gpu_free_bytes
                 if gpu_bytes:
-                    model_bytes = _model_size(model_path) or int(6.1 * _MIB * 1024)
-                    available_kv = max(0, int(gpu_bytes * 0.95) - int(model_bytes * 1.05) - 512 * _MIB)
-                    kv_per_slot = _per_request_context(config) * _kv_bytes_per_token()
-                    if kv_per_slot > 0:
-                        calc_slots = max(1, min(16, int(available_kv // kv_per_slot)))
-                        requested_slots = max(requested_slots, calc_slots)
+                    if gpu_bytes >= 80 * _MIB * 1024:
+                        requested_slots = 8
+                    elif gpu_bytes >= 40 * _MIB * 1024:
+                        requested_slots = 4
+                    elif gpu_bytes >= 10 * _MIB * 1024:
+                        requested_slots = 2
+                    else:
+                        requested_slots = 1
             exact_parallel = explicit_parallel is not None
             attempts: list[int] = [requested_slots]
             if not exact_parallel:
@@ -1095,7 +1100,7 @@ def install(autotune_module: Any) -> None:
                 ]
                 attempts.extend(
                     value
-                    for value in (16, 12, 8, 6, 4, 2, 1)
+                    for value in (4, 2, 1)
                     if value < requested_slots
                     and value not in attempts
                     and _parallel_resource_feasible(value, config, model_path, resources)
