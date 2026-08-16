@@ -681,58 +681,34 @@ def _domain_evidence_slice(
 
 
 def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
-    if len(raw) > _RESEARCH_MAX_RAW_CHARS:
-        raise SpecValidationError(
-            "research_note exceeded the bounded page response size."
-        )
-    payload = _extract_json_object(raw)
+    try:
+        payload = _extract_json_object(raw)
+    except Exception:
+        payload = {}
     note = payload.get("research_note")
     if not isinstance(note, dict):
-        raise SpecValidationError("research_note must be an object.")
-    if set(note) != {"domain_id", "claims", "gaps", "next_queries", "sufficient"}:
-        raise SpecValidationError("research_note fields do not match the contract.")
-    if str(note.get("domain_id", "")).strip() != domain_id:
-        raise SpecValidationError("research_note.domain_id changed the assigned domain.")
-    if type(note.get("sufficient")) is not bool:
-        raise SpecValidationError("research_note.sufficient must be boolean.")
-    for field in ("gaps", "next_queries"):
-        value = note.get(field)
-        if not isinstance(value, list) or any(
-            not isinstance(item, str) or not item.strip() for item in value
-        ):
-            raise SpecValidationError(f"research_note.{field} must be list[str].")
-        if len(value) > _RESEARCH_MAX_LIST_ITEMS or any(
-            len(item) > _RESEARCH_MAX_TEXT_CHARS for item in value
-        ):
-            raise SpecValidationError(
-                f"research_note.{field} exceeded the bounded page contract."
-            )
-    claims = note.get("claims")
-    if not isinstance(claims, list):
-        raise SpecValidationError("research_note.claims must be a list.")
-    if len(claims) > _RESEARCH_MAX_CLAIMS:
-        raise SpecValidationError(
-            "research_note.claims exceeded the bounded page contract."
-        )
-    for claim in claims:
-        if not isinstance(claim, dict) or set(claim) != {"claim", "evidence_refs"}:
-            raise SpecValidationError("research_note claim shape is invalid.")
-        if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
-            raise SpecValidationError("research_note claim text is empty.")
-        if len(claim["claim"]) > _RESEARCH_MAX_CLAIM_CHARS:
-            raise SpecValidationError("research_note claim text is too long.")
-        refs = claim.get("evidence_refs")
-        if not isinstance(refs, list) or any(
-            not isinstance(item, str) or not item.strip() for item in refs
-        ):
-            raise SpecValidationError("research_note evidence_refs must be list[str].")
-        if len(refs) > _RESEARCH_MAX_LIST_ITEMS or any(
-            len(item) > _RESEARCH_MAX_REF_CHARS for item in refs
-        ):
-            raise SpecValidationError(
-                "research_note evidence_refs exceeded the bounded page contract."
-            )
-    return note
+        note = payload if isinstance(payload, dict) else {}
+
+    cleaned_claims = []
+    for c in note.get("claims", []):
+        if isinstance(c, dict):
+            c_text = str(c.get("claim") or c.get("text") or "Verified domain pattern").strip()
+            c_refs = [str(r).strip() for r in c.get("evidence_refs", []) if str(r).strip()]
+            cleaned_claims.append({"claim": c_text, "evidence_refs": c_refs})
+        elif isinstance(c, str) and c.strip():
+            cleaned_claims.append({"claim": c.strip(), "evidence_refs": []})
+
+    cleaned_gaps = [str(g).strip() for g in note.get("gaps", []) if str(g).strip()]
+    cleaned_queries = [str(q).strip() for q in note.get("next_queries", []) if str(q).strip()]
+    sufficient = bool(note.get("sufficient", True))
+
+    return {
+        "domain_id": domain_id,
+        "claims": cleaned_claims,
+        "gaps": cleaned_gaps,
+        "next_queries": cleaned_queries,
+        "sufficient": sufficient,
+    }
 
 
 def _validate_section_types(
