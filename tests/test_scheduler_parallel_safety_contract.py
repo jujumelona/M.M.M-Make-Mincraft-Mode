@@ -50,6 +50,7 @@ def test_safety_layer_owns_fairness_without_legacy_wrapper() -> None:
     claimant = work_graph_module.DurableWorkLedger.claim_ready
     assert getattr(claimant, "_mmm_parallel_lane_claim", False)
     assert getattr(claimant, "_mmm_exact_executor_fairness", False)
+    assert getattr(claimant, "_mmm_stage_lock_admission", False)
     assert getattr(claimant, "_mmm_max_efficiency_claim", False)
 
 
@@ -135,6 +136,48 @@ def test_orchestrator_claim_does_not_overqueue_a_saturated_lane(
     )
     assert third is not None
     assert third["node_id"] == "b-image"
+
+
+def test_serial_cpu_stage_does_not_occupy_multiple_workers(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(
+        _node("a-content", "generate:content", "cpu_io"),
+        _node("b-content", "generate:content", "cpu_io"),
+        _node("c-system", "generate:system", "cpu_io"),
+    )
+    ledger = DurableWorkLedger(
+        tmp_path / "serial-stage.sqlite",
+        proposal_hash=plan.proposal_hash,
+    )
+    ledger.sync_plan(plan)
+    stages = ("generate:content", "generate:system")
+
+    first = ledger.claim_ready(
+        "mmm-orchestrator",
+        stages=stages,
+        lease_seconds=60,
+    )
+    assert first is not None
+    assert first["node_id"] == "a-content"
+
+    second = ledger.claim_ready(
+        "mmm-orchestrator",
+        stages=stages,
+        lease_seconds=60,
+    )
+    assert second is not None
+    assert second["node_id"] == "c-system"
+    assert ledger.task("b-content")["state"] == "pending"
+
+    ledger.succeed("a-content", {"status": "PASS"})
+    third = ledger.claim_ready(
+        "mmm-orchestrator",
+        stages=stages,
+        lease_seconds=60,
+    )
+    assert third is not None
+    assert third["node_id"] == "b-content"
 
 
 def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(
