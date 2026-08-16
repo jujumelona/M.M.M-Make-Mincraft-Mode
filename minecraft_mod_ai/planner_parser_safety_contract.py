@@ -24,7 +24,14 @@ def _string_sequence(value: Any, field: str, error_type: type[Exception]) -> tup
 
 
 def install(module: Any) -> None:
-    """Replace permissive production decoders with typed, fail-closed parsers."""
+    """Replace permissive production decoders with typed, fail-closed parsers.
+
+    Planner pages are already page-locally repairable. Silently coercing malformed
+    fields therefore makes correctness worse: invalid dependencies disappear,
+    ``bool('false')`` becomes True, missing deliverables are fabricated, and fuzzy
+    dependency repair can connect the wrong production batch. Reject malformed output
+    at the parse boundary so the existing repair path can correct the exact field.
+    """
 
     current_batch = module._production_batch
     if not getattr(current_batch, "_mmm_fail_closed_parser", False):
@@ -100,32 +107,34 @@ def install(module: Any) -> None:
 
         @wraps(current_topological)
         def topological_production_batches(batches: tuple[Any, ...]):
-            by_id: dict[str, Any] = {}
-            unique_batches: list[Any] = []
-            for b in batches:
-                bid = b.batch_id
-                suffix = 2
-                while bid in by_id:
-                    bid = f"{b.batch_id}_{suffix}"
-                    suffix += 1
-                new_b = module._ProductionBatch(
-                    batch_id=bid,
-                    scope=b.scope,
-                    depends_on_batches=b.depends_on_batches,
-                    deliverables=b.deliverables,
-                    exports=b.exports,
-                ) if bid != b.batch_id else b
-                by_id[bid] = new_b
-                unique_batches.append(new_b)
+            ids = [batch.batch_id for batch in batches]
+            if len(ids) != len(set(ids)):
+                raise module.SpecValidationError(
+                    "Production outline contains duplicate batch ids."
+                )
+            by_id = {batch.batch_id: batch for batch in batches}
+            for batch in batches:
+                missing = [
+                    dependency
+                    for dependency in batch.depends_on_batches
+                    if dependency not in by_id
+                ]
+                if missing:
+                    raise module.SpecValidationError(
+                        f"Production batch {batch.batch_id} references unknown dependencies: "
+                        + ", ".join(missing[:4])
+                    )
+                if batch.batch_id in batch.depends_on_batches:
+                    raise module.SpecValidationError(
+                        f"Production batch {batch.batch_id} may not depend on itself."
+                    )
 
             outgoing: dict[str, list[str]] = {batch_id: [] for batch_id in by_id}
-            indegree: dict[str, int] = {batch_id: 0 for batch_id in by_id}
-            for batch in unique_batches:
-                valid_deps = [d for d in batch.depends_on_batches if d in by_id and d != batch.batch_id]
-                indegree[batch.batch_id] = len(valid_deps)
-                for dependency in valid_deps:
+            indegree: dict[str, int] = {}
+            for batch in batches:
+                indegree[batch.batch_id] = len(batch.depends_on_batches)
+                for dependency in batch.depends_on_batches:
                     outgoing[dependency].append(batch.batch_id)
-
             ready = [batch_id for batch_id, degree in indegree.items() if degree == 0]
             module.heapq.heapify(ready)
             ordered: list[Any] = []
@@ -136,12 +145,10 @@ def install(module: Any) -> None:
                     indegree[dependent] -= 1
                     if indegree[dependent] == 0:
                         module.heapq.heappush(ready, dependent)
-
-            if len(ordered) != len(unique_batches):
-                ordered_ids = {b.batch_id for b in ordered}
-                for b in unique_batches:
-                    if b.batch_id not in ordered_ids:
-                        ordered.append(b)
+            if len(ordered) != len(batches):
+                raise module.SpecValidationError(
+                    "Production batch dependency cycle detected."
+                )
             return tuple(ordered)
 
         topological_production_batches._mmm_fail_closed_graph = True  # type: ignore[attr-defined]
