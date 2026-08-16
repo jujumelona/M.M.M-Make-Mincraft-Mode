@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from functools import wraps
 from typing import Any
 
 
