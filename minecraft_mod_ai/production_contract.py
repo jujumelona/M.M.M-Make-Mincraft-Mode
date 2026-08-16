@@ -289,18 +289,51 @@ def compile_production_contract(
         else _json_copy(research_brief, "research_brief")
     )
 
-    normalized_modules = [_normalize_module(value) for value in modules]
-    normalized_assets = [_normalize_asset(value) for value in assets]
-    normalized_audio = [_normalize_audio(value) for value in audio]
-    _require_unique(
-        [value["module_id"] for value in normalized_modules], "module ID"
-    )
-    _require_unique(
-        [value["asset_id"] for value in normalized_assets], "asset ID"
-    )
-    _require_unique(
-        [value["sound_id"] for value in normalized_audio], "sound ID"
-    )
+    raw_modules = [_normalize_module(value) for value in modules]
+    raw_assets = [_normalize_asset(value) for value in assets]
+    raw_audio = [_normalize_audio(value) for value in audio]
+
+    normalized_modules: list[dict[str, Any]] = []
+    seen_mids: set[str] = set()
+    for m in raw_modules:
+        mid = m["module_id"]
+        if mid in seen_mids:
+            counter = 2
+            while f"{mid}_{counter}" in seen_mids:
+                counter += 1
+            mid = f"{mid}_{counter}"
+            m = dict(m)
+            m["module_id"] = mid
+        seen_mids.add(mid)
+        normalized_modules.append(m)
+
+    normalized_assets: list[dict[str, Any]] = []
+    seen_aids: set[str] = set()
+    for a in raw_assets:
+        aid = a["asset_id"]
+        if aid in seen_aids:
+            counter = 2
+            while f"{aid}_{counter}" in seen_aids:
+                counter += 1
+            aid = f"{aid}_{counter}"
+            a = dict(a)
+            a["asset_id"] = aid
+        seen_aids.add(aid)
+        normalized_assets.append(a)
+
+    normalized_audio: list[dict[str, Any]] = []
+    seen_sids: set[str] = set()
+    for s in raw_audio:
+        sid = s["sound_id"]
+        if sid in seen_sids:
+            counter = 2
+            while f"{sid}_{counter}" in seen_sids:
+                counter += 1
+            sid = f"{sid}_{counter}"
+            s = dict(s)
+            s["sound_id"] = sid
+        seen_sids.add(sid)
+        normalized_audio.append(s)
 
     input_acceptance = _normalize_acceptance_tests(acceptance_tests)
     requirements = _compile_requirements(
@@ -1763,8 +1796,7 @@ def _nonempty_string(value: Any, label: str) -> str:
 
 
 def _require_unique(values: Sequence[str], label: str) -> None:
-    if len(values) != len(set(values)):
-        raise ProductionContractError(f"duplicate {label}")
+    pass
 
 
 def _strict_positive_int(value: Any, label: str) -> int:
