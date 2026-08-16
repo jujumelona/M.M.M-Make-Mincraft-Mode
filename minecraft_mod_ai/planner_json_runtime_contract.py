@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Sequence
@@ -203,21 +202,11 @@ def _derive_completed_deliverables(
     acceptance_tests: Sequence[str],
 ) -> list[str]:
     target_set = set(targets)
-    raw_completed = _string_list(candidate.get("completed_deliverables", []))
     completed: set[str] = {
         value
-        for value in raw_completed
+        for value in _string_list(candidate.get("completed_deliverables", []))
         if value in target_set
     }
-
-    # Fuzzy match raw completed against targets
-    if not completed:
-        for val in raw_completed:
-            v_clean = re.sub(r"[^a-z0-9]+", "", val.lower())
-            for tgt in targets:
-                t_clean = re.sub(r"[^a-z0-9]+", "", tgt.lower())
-                if v_clean and t_clean and (v_clean in t_clean or t_clean in v_clean):
-                    completed.add(tgt)
 
     ids = _output_ids(modules, assets, audio)
     tests = set(acceptance_tests)
@@ -228,16 +217,11 @@ def _derive_completed_deliverables(
         if not isinstance(claims, (list, tuple)):
             claims = item.get("implements")
         if isinstance(claims, (list, tuple)):
-            for claim in claims:
-                c_str = str(claim).strip()
-                if c_str in target_set:
-                    completed.add(c_str)
-                else:
-                    c_clean = re.sub(r"[^a-z0-9]+", "", c_str.lower())
-                    for tgt in targets:
-                        t_clean = re.sub(r"[^a-z0-9]+", "", tgt.lower())
-                        if c_clean and t_clean and (c_clean in t_clean or t_clean in c_clean):
-                            completed.add(tgt)
+            completed.update(
+                str(value).strip()
+                for value in claims
+                if str(value).strip() in target_set
+            )
 
     evidence = candidate.get("deliverable_evidence")
     if isinstance(evidence, dict):
@@ -254,12 +238,12 @@ def _derive_completed_deliverables(
             if referenced & (ids | tests):
                 completed.add(target_name)
 
-    # When items or tests are produced, guarantee forward progress
-    if not completed and (modules or assets or audio or acceptance_tests):
-        if candidate.get("complete") is True or not candidate.get("next_cursor"):
-            completed.update(targets)
-        elif targets:
-            completed.add(targets[0])
+    if (
+        len(targets) == 1
+        and targets[0] not in completed
+        and (modules or assets or audio or acceptance_tests)
+    ):
+        completed.add(targets[0])
 
     return [target for target in targets if target in completed]
 
@@ -359,44 +343,53 @@ def _validate_production_progress(
         "completed_deliverables",
     ):
         if not isinstance(page.get(field), list):
-            page[field] = []
-    page["complete"] = bool(page.get("complete", False))
-    page["next_cursor"] = str(page.get("next_cursor") or "").strip()
+            raise module.SpecValidationError(
+                f"Production page field {field} must be a list."
+            )
+    if type(page.get("complete")) is not bool:
+        raise module.SpecValidationError("Production page complete must be boolean.")
+    if not isinstance(page.get("next_cursor"), str):
+        raise module.SpecValidationError("Production page next_cursor must be a string.")
 
     targets = _target_names(request)
+    completed = _string_list(page["completed_deliverables"])
     target_set = set(targets)
-    raw_completed = _string_list(page.get("completed_deliverables", []))
-    
-    completed = [v for v in raw_completed if v in target_set]
-    if not completed:
-        for val in raw_completed:
-            v_clean = re.sub(r"[^a-z0-9]+", "", val.lower())
-            for tgt in targets:
-                t_clean = re.sub(r"[^a-z0-9]+", "", tgt.lower())
-                if v_clean and t_clean and (v_clean in t_clean or t_clean in v_clean):
-                    if tgt not in completed:
-                        completed.append(tgt)
-
-    has_output = bool(page.get("modules") or page.get("assets") or page.get("audio") or page.get("acceptance_tests"))
-    if not has_output:
+    invalid = [value for value in completed if value not in target_set]
+    if invalid:
+        raise module.SpecValidationError(
+            "Production page completed_deliverables contains names outside the "
+            f"current host target: {invalid[:4]}"
+        )
+    if targets and not completed:
         raise module.SpecValidationError(
             "Production page made no host-verifiable deliverable progress."
         )
-
-    if not completed and targets:
-        completed = list(targets) if page.get("complete") else [targets[0]]
-
-    page["completed_deliverables"] = completed
+    if not (
+        page["modules"]
+        or page["assets"]
+        or page["audio"]
+        or page["acceptance_tests"]
+    ):
+        raise module.SpecValidationError(
+            "Production page declared completion without any implementation or test output."
+        )
 
     remaining = _remaining_names(request)
     expected_complete = not [
         value for value in remaining if value not in set(completed)
     ]
-    page["complete"] = expected_complete
-    if expected_complete:
-        page["next_cursor"] = ""
-    elif not page.get("next_cursor"):
-        page["next_cursor"] = f"host_remaining_{len(remaining) - len(completed)}"
+    if page["complete"] != expected_complete:
+        raise module.SpecValidationError(
+            "Production page host completion bookkeeping is inconsistent."
+        )
+    if page["complete"] and page["next_cursor"]:
+        raise module.SpecValidationError(
+            "Complete production page must not carry a continuation cursor."
+        )
+    if not page["complete"] and not page["next_cursor"]:
+        raise module.SpecValidationError(
+            "Incomplete production page requires a host continuation cursor."
+        )
 
 
 def _narrow_production_repair_request(
