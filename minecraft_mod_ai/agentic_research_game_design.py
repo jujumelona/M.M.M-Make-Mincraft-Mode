@@ -511,22 +511,11 @@ def _generate_section(
         try:
             payload = _extract_json_object(raw)
             section = payload.get("section")
-            if not isinstance(section, dict):
-                section = {k: v for k, v in payload.items() if k in fields}
-            for f in fields:
-                if f not in section:
-                    section[f] = [] if f in {"core_loop", "progression", "acceptance_tests", "modules", "assets"} else ({} if f in {"combat", "mod_context", "art_direction"} else f"Generated {f}")
-            section = {f: section[f] for f in fields}
+            if not isinstance(section, dict) or set(section) != set(fields):
+                raise SpecValidationError(
+                    f"{section_id} must contain exactly {', '.join(fields)}."
+                )
             _validate_section_types(section_id, section, fields)
-            trace.record_attempt(
-                raw_output=raw,
-                validation_error=None,
-                candidate=section,
-                accepted=section,
-                context={"section_id": section_id},
-            )
-            trace.record_success(section)
-            return section
         except SpecValidationError as exc:
             candidate = _candidate_section(raw)
             state = _json_sha256({"error": str(exc), "candidate": candidate})
@@ -681,34 +670,58 @@ def _domain_evidence_slice(
 
 
 def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
-    try:
-        payload = _extract_json_object(raw)
-    except Exception:
-        payload = {}
+    if len(raw) > _RESEARCH_MAX_RAW_CHARS:
+        raise SpecValidationError(
+            "research_note exceeded the bounded page response size."
+        )
+    payload = _extract_json_object(raw)
     note = payload.get("research_note")
     if not isinstance(note, dict):
-        note = payload if isinstance(payload, dict) else {}
-
-    cleaned_claims = []
-    for c in note.get("claims", []):
-        if isinstance(c, dict):
-            c_text = str(c.get("claim") or c.get("text") or "Verified domain pattern").strip()
-            c_refs = [str(r).strip() for r in c.get("evidence_refs", []) if str(r).strip()]
-            cleaned_claims.append({"claim": c_text, "evidence_refs": c_refs})
-        elif isinstance(c, str) and c.strip():
-            cleaned_claims.append({"claim": c.strip(), "evidence_refs": []})
-
-    cleaned_gaps = [str(g).strip() for g in note.get("gaps", []) if str(g).strip()]
-    cleaned_queries = [str(q).strip() for q in note.get("next_queries", []) if str(q).strip()]
-    sufficient = bool(note.get("sufficient", True))
-
-    return {
-        "domain_id": domain_id,
-        "claims": cleaned_claims,
-        "gaps": cleaned_gaps,
-        "next_queries": cleaned_queries,
-        "sufficient": sufficient,
-    }
+        raise SpecValidationError("research_note must be an object.")
+    if set(note) != {"domain_id", "claims", "gaps", "next_queries", "sufficient"}:
+        raise SpecValidationError("research_note fields do not match the contract.")
+    if str(note.get("domain_id", "")).strip() != domain_id:
+        raise SpecValidationError("research_note.domain_id changed the assigned domain.")
+    if type(note.get("sufficient")) is not bool:
+        raise SpecValidationError("research_note.sufficient must be boolean.")
+    for field in ("gaps", "next_queries"):
+        value = note.get(field)
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in value
+        ):
+            raise SpecValidationError(f"research_note.{field} must be list[str].")
+        if len(value) > _RESEARCH_MAX_LIST_ITEMS or any(
+            len(item) > _RESEARCH_MAX_TEXT_CHARS for item in value
+        ):
+            raise SpecValidationError(
+                f"research_note.{field} exceeded the bounded page contract."
+            )
+    claims = note.get("claims")
+    if not isinstance(claims, list):
+        raise SpecValidationError("research_note.claims must be a list.")
+    if len(claims) > _RESEARCH_MAX_CLAIMS:
+        raise SpecValidationError(
+            "research_note.claims exceeded the bounded page contract."
+        )
+    for claim in claims:
+        if not isinstance(claim, dict) or set(claim) != {"claim", "evidence_refs"}:
+            raise SpecValidationError("research_note claim shape is invalid.")
+        if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
+            raise SpecValidationError("research_note claim text is empty.")
+        if len(claim["claim"]) > _RESEARCH_MAX_CLAIM_CHARS:
+            raise SpecValidationError("research_note claim text is too long.")
+        refs = claim.get("evidence_refs")
+        if not isinstance(refs, list) or any(
+            not isinstance(item, str) or not item.strip() for item in refs
+        ):
+            raise SpecValidationError("research_note evidence_refs must be list[str].")
+        if len(refs) > _RESEARCH_MAX_LIST_ITEMS or any(
+            len(item) > _RESEARCH_MAX_REF_CHARS for item in refs
+        ):
+            raise SpecValidationError(
+                "research_note evidence_refs exceeded the bounded page contract."
+            )
+    return note
 
 
 def _validate_section_types(
@@ -717,42 +730,29 @@ def _validate_section_types(
     fields: Sequence[str],
 ) -> None:
     for field in fields:
-        value = section.get(field)
+        value = section[field]
         if field in {"title", "pitch"}:
             if not isinstance(value, str) or not value.strip():
-                section[field] = str(value or f"Generated {field}").strip()
+                raise SpecValidationError(f"{section_id}.{field} must be non-empty text.")
         elif field in {"core_loop", "progression", "acceptance_tests", "modules", "assets"}:
             if not isinstance(value, list):
-                if isinstance(value, (str, int, float, bool)):
-                    section[field] = [str(value).strip()] if str(value).strip() else []
-                elif isinstance(value, dict):
-                    section[field] = [str(v) for v in value.values()]
-                else:
-                    section[field] = []
+                raise SpecValidationError(f"{section_id}.{field} must be a list.")
         elif field in {"combat", "mod_context", "art_direction"}:
             if not isinstance(value, dict):
-                if isinstance(value, str) and value.strip():
-                    section[field] = {"summary": [value.strip()]}
-                elif isinstance(value, list):
-                    section[field] = {"items": [str(x) for x in value if str(x).strip()]}
-                else:
-                    section[field] = {}
+                raise SpecValidationError(f"{section_id}.{field} must be an object.")
     for field in ("combat", "mod_context"):
         value = section.get(field)
         if not isinstance(value, dict):
-            section[field] = {}
             continue
-        cleaned_map: dict[str, list[str]] = {}
-        for key, items in list(value.items()):
-            k_str = str(key).strip() or "general"
-            if isinstance(items, list):
-                c_items = [str(item).strip() for item in items if str(item).strip()]
-                cleaned_map[k_str] = c_items if c_items else [k_str]
-            elif isinstance(items, str) and items.strip():
-                cleaned_map[k_str] = [items.strip()]
-            else:
-                cleaned_map[k_str] = [str(items)]
-        section[field] = cleaned_map
+        for key, items in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise SpecValidationError(f"{section_id}.{field} keys must be text.")
+            if not isinstance(items, list) or any(
+                not isinstance(item, str) or not item.strip() for item in items
+            ):
+                raise SpecValidationError(
+                    f"{section_id}.{field} values must be lists of non-empty strings."
+                )
 
 
 def _candidate_section(raw: str) -> dict[str, Any] | None:

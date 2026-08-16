@@ -221,120 +221,6 @@ def _repair_messages(
     )
 
 
-def _coerce_value_to_schema(value: Any, schema: dict[str, Any], *, aggressive: bool = False) -> Any:
-    """Coerce a JSON value to conform to a schema fragment."""
-    if not isinstance(schema, dict):
-        return value
-
-    target_type = schema.get("type")
-    
-    # Handle array type
-    if target_type == "array":
-        item_schema = schema.get("items", {})
-        if isinstance(value, (list, tuple)):
-            coerced_items = [_coerce_value_to_schema(item, item_schema, aggressive=aggressive) for item in value]
-            min_items = schema.get("minItems", 0)
-            if len(coerced_items) < min_items and aggressive:
-                while len(coerced_items) < min_items:
-                    coerced_items.append(_coerce_value_to_schema("", item_schema, aggressive=aggressive))
-            return coerced_items
-        elif isinstance(value, str):
-            val_str = value.strip()
-            if val_str:
-                return [_coerce_value_to_schema(val_str, item_schema, aggressive=aggressive)]
-            return []
-        elif isinstance(value, (int, float, bool)):
-            return [_coerce_value_to_schema(str(value), item_schema, aggressive=aggressive)]
-        elif isinstance(value, dict):
-            # If an object was provided where an array is expected, wrap or extract values
-            return [_coerce_value_to_schema(value, item_schema, aggressive=aggressive)]
-        return []
-
-    # Handle object type
-    if target_type == "object":
-        if not isinstance(value, dict):
-            if isinstance(value, str) and value.strip():
-                value = {"summary": value.strip()}
-            else:
-                value = {}
-        result = dict(value)
-        properties = schema.get("properties", {})
-        for prop_name, prop_schema in properties.items():
-            if prop_name in result:
-                result[prop_name] = _coerce_value_to_schema(result[prop_name], prop_schema, aggressive=aggressive)
-            elif aggressive and prop_name in schema.get("required", []):
-                result[prop_name] = _coerce_value_to_schema(None, prop_schema, aggressive=aggressive)
-        
-        # Additional properties check
-        additional = schema.get("additionalProperties")
-        if isinstance(additional, dict):
-            for k in list(result):
-                if k not in properties:
-                    result[k] = _coerce_value_to_schema(result[k], additional, aggressive=aggressive)
-        elif additional is False:
-            for k in list(result):
-                if k not in properties:
-                    del result[k]
-        return result
-
-    # Handle string type
-    if target_type == "string":
-        if isinstance(value, str):
-            min_len = schema.get("minLength", 0)
-            if not value.strip() and min_len > 0:
-                return "default" if aggressive else value
-            return value
-        if isinstance(value, (int, float, bool)):
-            return str(value)
-        if isinstance(value, (list, tuple)):
-            return ", ".join(str(v) for v in value if v is not None)
-        if value is None:
-            return "default" if aggressive else ""
-        return str(value)
-
-    # Handle integer / number type
-    if target_type in ("integer", "number"):
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return int(value) if target_type == "integer" else float(value)
-        if isinstance(value, str):
-            try:
-                num = float(value.strip())
-                return int(num) if target_type == "integer" else num
-            except (ValueError, TypeError):
-                pass
-        return value
-
-    # Handle boolean type
-    if target_type == "boolean":
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            if value.strip().lower() in ("true", "1", "yes"):
-                return True
-            if value.strip().lower() in ("false", "0", "no"):
-                return False
-        return value
-
-    return value
-
-
-def _coerce_json_to_schema(json_text: str, schema: Mapping[str, Any], *, aggressive: bool = False) -> str | None:
-    """Safely parse JSON text, coerce structure to match schema, and re-encode."""
-    try:
-        data, _, exc = _parse_json_value(json_text)
-    except Exception:
-        return None
-
-    if exc is not None or not isinstance(data, (dict, list)):
-        return None
-
-    try:
-        coerced_data = _coerce_value_to_schema(data, dict(schema), aggressive=aggressive)
-        return json.dumps(coerced_data, ensure_ascii=False)
-    except Exception:
-        return None
-
-
 def _recover_invalid_json_document(exc: ModelBackendError) -> str | None:
     """Recover model JSON rejected at the host syntax boundary, never transport JSON.
 
@@ -450,13 +336,6 @@ def generate_with_host_schema_repair(
         errors = _validation_errors(current, validator)
         if not errors:
             return current
-
-    # Final deterministic host schema coercion fallback before raising error
-    coerced = _coerce_json_to_schema(current, effective_schema)
-    if coerced is not None:
-        coerced_errors = _validation_errors(coerced, validator)
-        if not coerced_errors:
-            return coerced
 
     raise StructuredOutputValidationError(
         output=current,

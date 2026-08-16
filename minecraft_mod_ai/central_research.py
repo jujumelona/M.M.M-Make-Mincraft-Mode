@@ -359,80 +359,53 @@ def _external_target_profile(
 def _research_domain(value: Any) -> ResearchDomain:
     required = {
         "domain_id",
-        "purpose",
+        "objective",
+        "requirements",
         "evidence_kinds",
         "queries",
         "providers",
         "depends_on",
     }
-    if not isinstance(value, dict):
-        value = {"domain_id": "mk_custom", "purpose": "Custom mod features"}
-    
-    raw_domain_id = str(value.get("domain_id") or "mk_custom").strip()
-    domain_id = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_domain_id).strip("_") or "mk_custom"
-    
-    raw_evidence = value.get("evidence_kinds")
-    if isinstance(raw_evidence, list):
-        unknown_kinds = sorted(set(raw_evidence) - _ALLOWED_EVIDENCE_KINDS)
-        if unknown_kinds:
-            raise SpecValidationError(
-                f"Research domain {domain_id} has unknown evidence kinds: {unknown_kinds}"
-            )
-        evidence_kinds = [str(k) for k in raw_evidence]
-    else:
-        evidence_kinds = ["official_docs"]
-    if not evidence_kinds:
-        evidence_kinds = ["official_docs"]
-
-    raw_providers = value.get("providers")
-    if isinstance(raw_providers, list):
-        unknown_providers = sorted(set(raw_providers) - _ALLOWED_PROVIDERS)
-        if unknown_providers:
-            raise SpecValidationError(
-                f"Research domain {domain_id} has unknown providers: {unknown_providers}"
-            )
-        providers = [str(p) for p in raw_providers]
-    else:
-        providers = ["official_docs"]
-    if not providers:
-        providers = ["official_docs"]
-
-    raw_queries = value.get("queries")
-    if isinstance(raw_queries, list):
-        source_queries = [str(q).strip() for q in raw_queries if str(q).strip()]
-    elif isinstance(raw_queries, str) and raw_queries.strip():
-        source_queries = [raw_queries.strip()]
-    else:
-        source_queries = [domain_id]
-
+    if not isinstance(value, dict) or set(value) != required:
+        raise SpecValidationError(
+            "Each research domain must contain exactly " + ", ".join(sorted(required)) + "."
+        )
+    domain_id = str(value["domain_id"])
+    if not _DOMAIN_ID.fullmatch(domain_id):
+        raise SpecValidationError(f"Invalid research domain id: {domain_id!r}")
+    evidence_kinds = _string_list(
+        value["evidence_kinds"], f"{domain_id}.evidence_kinds"
+    )
+    unknown_kinds = sorted(set(evidence_kinds) - _ALLOWED_EVIDENCE_KINDS)
+    if unknown_kinds:
+        raise SpecValidationError(
+            f"Research domain {domain_id} has unknown evidence kinds: {unknown_kinds}"
+        )
+    providers = _string_list(value["providers"], f"{domain_id}.providers")
+    unknown_providers = sorted(set(providers) - _ALLOWED_PROVIDERS)
+    if unknown_providers:
+        raise SpecValidationError(
+            f"Research domain {domain_id} has unknown providers: {unknown_providers}"
+        )
+    source_queries = _string_list(value["queries"], f"{domain_id}.queries")
     queries = tuple(
         page
         for query in source_queries
         for page in _lossless_query_pages(query, _MAX_QUERY_BYTES)
         if page.strip()
     )
-    raw_reqs = value.get("requirements", [])
-    if isinstance(raw_reqs, list):
-        reqs = tuple(str(r).strip() for r in raw_reqs if str(r).strip())
-    elif isinstance(raw_reqs, str) and raw_reqs.strip():
-        reqs = (raw_reqs.strip(),)
-    else:
-        reqs = ("Ensure correct domain APIs",)
-
-    raw_deps = value.get("depends_on", [])
-    if isinstance(raw_deps, list):
-        deps = tuple(str(d).strip() for d in raw_deps if str(d).strip())
-    else:
-        deps = ()
-
     return ResearchDomain(
         domain_id=domain_id,
-        objective=str(value.get("objective") or value.get("purpose") or f"Research {domain_id}").strip(),
-        requirements=reqs,
+        objective=_text(value["objective"], f"{domain_id}.objective"),
+        requirements=_string_list(
+            value["requirements"], f"{domain_id}.requirements"
+        ),
         evidence_kinds=evidence_kinds,
         queries=queries,
         providers=providers,
-        depends_on=deps,
+        depends_on=_string_list(
+            value["depends_on"], f"{domain_id}.depends_on", allow_empty=True
+        ),
     )
 
 
