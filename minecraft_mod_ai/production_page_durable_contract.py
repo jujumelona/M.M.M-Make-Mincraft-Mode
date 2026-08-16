@@ -521,8 +521,43 @@ def _patch_one_item(
     round_index = 0
     last_patch_sha256 = ""
 
+    _MAX_ITEM_REPAIR_ROUNDS = 3
     while True:
         round_index += 1
+        if round_index > _MAX_ITEM_REPAIR_ROUNDS:
+            # Exhausted model repair rounds. Attempt aggressive deterministic normalization
+            candidate, _ = _deterministic_normalize(
+                kind=kind,
+                index=index,
+                raw=current if isinstance(current, dict) else {},
+                catalog=catalog,
+            )
+            parsed, fallback_err = _parse_error(module, kind=kind, raw=candidate, catalog=catalog)
+            if not fallback_err and parsed is not None:
+                _write_resolved(
+                    state_path,
+                    kind=kind,
+                    index=index,
+                    original_fingerprint=original_fingerprint,
+                    round_index=round_index - 1,
+                    resolved=candidate,
+                    repair_method="deterministic_fallback",
+                    deterministic_changes=["exhausted_repair_fallback"],
+                )
+                return parsed, candidate
+            _raise_repair_failure(
+                module,
+                kind=kind,
+                index=index,
+                state_path=state_path,
+                original_fingerprint=original_fingerprint,
+                current=current,
+                error=error,
+                round_index=round_index - 1,
+                reason="exhausted_repair_rounds",
+                last_patch_sha256=last_patch_sha256,
+            )
+
         # Mapping-shaped items can always be repaired field-by-field. Whole-object
         # regeneration is reserved for non-object values that cannot be field patched.
         replacement_mode = not isinstance(current, dict)

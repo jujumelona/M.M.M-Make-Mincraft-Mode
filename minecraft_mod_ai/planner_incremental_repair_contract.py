@@ -239,8 +239,14 @@ def _patch_one_invalid_batch(
         current_error = validation_error
         patch_round = 0
 
+    _MAX_PATCH_ROUNDS = 3
     while True:
         patch_round += 1
+        if patch_round > _MAX_PATCH_ROUNDS:
+            error_type = getattr(module, "SpecValidationError", ValueError)
+            raise error_type(
+                f"Production batch repair exceeded {_MAX_PATCH_ROUNDS} patch rounds: {current_error}"
+            )
         field_patch = isinstance(current_value, dict)
         checkpoint_state["status"] = "patching"
         checkpoint_state["pending_patch"] = {
@@ -513,8 +519,14 @@ def install(runtime_module: Any) -> None:
         generation_round = int(checkpoint_state.get("generation_round", 0))
         first_generation = generation_round == 0
 
+        _MAX_OUTLINE_GENERATION_ROUNDS = 8
         while True:
             generation_round += 1
+            if generation_round > _MAX_OUTLINE_GENERATION_ROUNDS:
+                error_type = getattr(complete_planner_module, "SpecValidationError", ValueError)
+                raise error_type(
+                    f"Production outline generation exceeded {_MAX_OUTLINE_GENERATION_ROUNDS} rounds."
+                )
             accepted_ids = _accepted_batch_ids(saved_batches)
             attempt_request: dict[str, Any] | str = request
             if isinstance(request, dict):
