@@ -231,7 +231,6 @@ def _install_planner_contracts() -> None:
     from . import (
         agentic_optimization_contract,
         audio_generator,
-        complete_orchestrator,
         complete_orchestrator_services,
         complete_planner,
         planner_incremental_repair_contract,
@@ -264,7 +263,6 @@ def _install_planner_contracts() -> None:
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(complete_orchestrator_services)
     install_audio_resume_efficiency(audio_generator)
-    complete_orchestrator.synthesize_audio_files = audio_generator.synthesize_audio_files
     install_production_stream_efficiency(complete_planner)
     install_execution_efficiency(work_graph_module=work_graph)
     install_incremental_resume(planner_incremental_repair_contract)
@@ -390,12 +388,9 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_optimization_contract,
         agentic_pre_design_rag,
         agentic_research_game_design,
-        central_research,
-        ecosystem_discovery,
         model_router,
         production_tools,
         repair_engine,
-        research_coordinator,
         work_graph,
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
@@ -406,20 +401,13 @@ def _install_post_bootstrap_contracts() -> None:
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
-    from .small_model_compacting_adapter import CompactingAdapter
+    from .small_model_context_compaction_contract import install as install_context_compaction
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_relation_index_contract import install as install_small_model_relation_index
     from .small_model_research_contract import install as install_small_model_research
     from .small_model_tool_guard_contract import install as install_small_model_tool_guard
     from .temporary_skill_contract import install as install_temporary_skill
-
-    if not hasattr(central_research, "_bounded_text"):
-        def _full_research_text(value: str, *, field: str = "research text") -> str:
-            del field
-            return value
-
-        central_research._bounded_text = _full_research_text
 
     install_small_model_research()
     install_agent_security(
@@ -444,32 +432,7 @@ def _install_post_bootstrap_contracts() -> None:
         repair_module=repair_engine,
     )
     install_active_repair_verifier(agentic_optimization_contract)
-
-    current_tool_loop = model_router.ModelRouter._generate_with_tools
-    if not getattr(current_tool_loop, "_mmm_lossless_context_compaction", False):
-        def _generate_with_compaction(
-            self,
-            *,
-            adapter,
-            request,
-            runtime,
-            stage,
-            role,
-        ):
-            return current_tool_loop(
-                self,
-                adapter=CompactingAdapter(adapter),
-                request=request,
-                runtime=runtime,
-                stage=stage,
-                role=role,
-            )
-
-        _generate_with_compaction._mmm_lossless_context_compaction = True
-        _generate_with_compaction.__wrapped__ = current_tool_loop
-        model_router.ModelRouter._generate_with_tools = _generate_with_compaction
-
-    research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
+    install_context_compaction(model_router)
     install_minecraft_mcp_evidence()
     install_bottleneck_elimination()
     install_research_bottleneck_runtime()
