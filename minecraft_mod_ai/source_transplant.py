@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Pinned, capability-slice source transplantation for permissive OSS donors.
 
-A repository hit is never a reusable implementation by itself.  Reuse is admitted
+A repository hit is never a reusable implementation by itself. Reuse is admitted
 only after an immutable commit, SPDX license, exact target metadata (or an explicit
 adaptation classification), a bounded Java source slice, and hashes for every source
-blob have been recorded.  Execution refetches the pinned blobs and verifies the same
+blob have been recorded. Execution refetches the pinned blobs and verifies the same
 hashes before exposing them to the coder.
 """
 
@@ -15,9 +15,9 @@ import json
 import os
 import re
 from collections import deque
-from threading import Event, Lock
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
@@ -46,6 +46,7 @@ _SNAPSHOT_CACHE: dict[str, Mapping[str, Any] | None] = {}
 _SNAPSHOT_INFLIGHT: dict[str, Event] = {}
 _BLOB_LOCK = Lock()
 _BLOB_CACHE: dict[tuple[str, str], bytes] = {}
+_BLOB_INFLIGHT: dict[tuple[str, str], Event] = {}
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,10 @@ def inspect_repository_slice(
     try:
         metadata_text = _build_metadata_text(client, repository=repository, blobs=blobs)
         compatibility = _target_compatibility(metadata_text, adapter=adapter)
+        # A donor with no target evidence is not an adaptation plan; it is an
+        # unverified repository hit. Do not admit it into reuse scoring.
+        if compatibility not in {"exact", "adapt"}:
+            return None
         required_dependencies = _declared_dependencies(metadata_text)
         donor_tests = tuple(
             sorted(
@@ -179,7 +184,10 @@ def inspect_repository_slice(
 
         contents: dict[str, bytes] = {}
         declarations: dict[str, str] = {}
-        for path in java_paths[: min(len(java_paths), 512)]:
+        # Building this map is only O(file-count) string work. Truncating it made
+        # dependency closure depend on tree ordering and could silently miss a class
+        # beyond the first 512 paths.
+        for path in java_paths:
             stem = Path(path).stem
             if stem and stem not in declarations:
                 declarations[stem] = path
@@ -282,7 +290,7 @@ def materialize_source_slices(
                 raise SourceTransplantError("Reuse plan contains an unpinned donor.")
             if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
                 raise SourceTransplantError("Reuse plan donor has no source-slice manifest.")
-            donor_key = hashlib.sha256(f"{repository}\0{commit_sha}".encode()).hexdigest()[:16]
+            donor_key = _donor_materialization_key(decision, donor, files)
             donor_root = target_root / donor_key
             donor_root.mkdir(parents=True, exist_ok=True)
             written: list[dict[str, Any]] = []
@@ -326,6 +334,29 @@ def materialize_source_slices(
         "donors": receipts,
         "count": len(receipts),
     }
+
+
+def _donor_materialization_key(
+    decision: Mapping[str, Any],
+    donor: Mapping[str, Any],
+    files: Sequence[Any],
+) -> str:
+    identity = {
+        "repository": str(donor.get("repository") or ""),
+        "commit_sha": str(donor.get("commit_sha") or ""),
+        "capability": str(decision.get("capability") or ""),
+        "files": [
+            [
+                str(item.get("path") or ""),
+                str(item.get("blob_sha") or ""),
+                str(item.get("sha256") or ""),
+            ]
+            for item in files
+            if isinstance(item, Mapping)
+        ],
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:20]
 
 
 def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str, Any] | None:
@@ -411,24 +442,45 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
     if not re.fullmatch(r"[0-9a-f]{40,64}", blob_sha):
         raise SourceTransplantError("Donor blob is not immutable.")
     key = (repository, blob_sha)
+    owner = False
     with _BLOB_LOCK:
         cached = _BLOB_CACHE.get(key)
-    if cached is not None:
+        if cached is not None:
+            return cached
+        event = _BLOB_INFLIGHT.get(key)
+        if event is None:
+            event = Event()
+            _BLOB_INFLIGHT[key] = event
+            owner = True
+    if not owner:
+        if not event.wait(timeout=30.0):
+            raise SourceTransplantError("Timed out waiting for a concurrent donor blob download.")
+        with _BLOB_LOCK:
+            cached = _BLOB_CACHE.get(key)
+        if cached is None:
+            raise SourceTransplantError("Concurrent donor blob download failed.")
         return cached
-    value = _github_json(
-        client,
-        f"https://api.github.com/repos/{repository}/git/blobs/{quote(blob_sha, safe='')}",
-    )
-    if not isinstance(value, Mapping) or value.get("encoding") != "base64":
-        raise SourceTransplantError("GitHub donor blob is not base64 encoded.")
-    raw = base64.b64decode(str(value.get("content") or "").replace("\n", ""), validate=True)
-    if len(raw) > _MAX_SLICE_BYTES:
-        raise SourceTransplantError("Single donor blob exceeds source-transplant byte policy.")
-    with _BLOB_LOCK:
-        if len(_BLOB_CACHE) >= 512:
-            _BLOB_CACHE.clear()
-        _BLOB_CACHE[key] = raw
-    return raw
+
+    try:
+        value = _github_json(
+            client,
+            f"https://api.github.com/repos/{repository}/git/blobs/{quote(blob_sha, safe='')}",
+        )
+        if not isinstance(value, Mapping) or value.get("encoding") != "base64":
+            raise SourceTransplantError("GitHub donor blob is not base64 encoded.")
+        raw = base64.b64decode(str(value.get("content") or "").replace("\n", ""), validate=True)
+        if len(raw) > _MAX_SLICE_BYTES:
+            raise SourceTransplantError("Single donor blob exceeds source-transplant byte policy.")
+        with _BLOB_LOCK:
+            while len(_BLOB_CACHE) >= 512:
+                _BLOB_CACHE.pop(next(iter(_BLOB_CACHE)))
+            _BLOB_CACHE[key] = raw
+        return raw
+    finally:
+        with _BLOB_LOCK:
+            pending = _BLOB_INFLIGHT.pop(key, None)
+            if pending is not None:
+                pending.set()
 
 
 def _build_metadata_text(

@@ -24,6 +24,7 @@ from .resource_asset_production import (
 )
 from .reuse_planner import (
     decompose_capability_graph,
+    optimize_platform_and_reuse,
     plan_fixed_target,
 )
 from .source_transplant import materialize_source_slices
@@ -31,6 +32,16 @@ from .source_transplant import materialize_source_slices
 _MATERIALIZE_LOCK = threading.RLock()
 _MATERIALIZE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 _MATERIALIZE_KEY_LOCKS: dict[tuple[str, str], tuple[threading.Lock, int]] = {}
+_MODEL_CONTEXT_BYTES = 24 * 1024
+_MODEL_CONTEXT_FILE_BYTES = 8 * 1024
+_TRANSPORT_CONFIG_KEYS = frozenset(
+    {
+        "_approved_reuse_plan",
+        "_owned_reuse_plan",
+        "_reuse_materialization",
+        "_donor_source_excerpts",
+    }
+)
 
 
 def install_prebootstrap() -> None:
@@ -40,6 +51,7 @@ def install_prebootstrap() -> None:
     from . import custom_module_generator
     from . import platform_resolver
 
+    _install_joint_platform_optimizer(platform_resolver)
     _install_reuse_aware_resolver(platform_resolver)
     _install_complete_planning_handoff(complete_planner)
     _install_reuse_materialization(custom_module_generator)
@@ -52,6 +64,59 @@ def install_postbootstrap() -> None:
     from . import complete_orchestrator
 
     _install_verified_promotion(complete_orchestrator)
+
+
+def _install_joint_platform_optimizer(resolver: Any) -> None:
+    """Make automatic host target selection use the joint version/reuse objective.
+
+    The resolver remains the coordinate authority: this replaces only its private
+    optimizer hook. Explicit and preserved-existing targets bypass that hook exactly
+    as before. When ecosystem discovery is explicitly disabled, the original host
+    optimizer remains authoritative and the selected target receives an offline fixed
+    reuse plan in ``_install_reuse_aware_resolver``.
+    """
+
+    current = resolver._optimize
+    if getattr(current, "_mmm_joint_reuse_optimizer", False):
+        return
+
+    @wraps(current)
+    def optimize(
+        prompt: str,
+        *,
+        design: dict[str, Any] | None,
+        module_kinds: Sequence[str],
+        loader_constraint: str | None = None,
+        version_constraint: str | None = None,
+        target_research_fn: Any | None = None,
+    ):
+        discovery_mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
+        if discovery_mode == "off":
+            return current(
+                prompt,
+                design=design,
+                module_kinds=module_kinds,
+                loader_constraint=loader_constraint,
+                version_constraint=version_constraint,
+                target_research_fn=target_research_fn,
+            )
+        try:
+            joint = optimize_platform_and_reuse(
+                prompt,
+                design=design,
+                module_kinds=module_kinds,
+                loader_constraint=loader_constraint,
+                version_constraint=version_constraint,
+                target_research_fn=target_research_fn,
+            )
+        except ValueError as exc:
+            raise resolver.SpecValidationError(str(exc)) from exc
+        result = joint.base_optimization
+        object.__setattr__(result, "_mmm_reuse_plan", joint.selected_plan.to_dict())
+        return result
+
+    optimize._mmm_joint_reuse_optimizer = True
+    resolver._optimize = optimize
 
 
 def _install_reuse_aware_resolver(resolver: Any) -> None:
@@ -98,22 +163,42 @@ def _install_reuse_aware_resolver(resolver: Any) -> None:
             router=router,
             target_research_fn=target_research_fn,
         )
-        graph = decompose_capability_graph(text, design=design, module_kinds=kinds)
-        evidence = selection.optimization.evidence if selection.optimization is not None else None
-        allow_network = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower() != "off"
-        plan = plan_fixed_target(
-            selection.adapter,
-            capabilities=graph.nodes,
-            design=design,
-            platform_evidence=evidence,
-            allow_network=allow_network,
-            capability_graph=graph.to_dict(),
+        attached = (
+            getattr(selection.optimization, "_mmm_reuse_plan", None)
+            if selection.optimization is not None
+            else None
         )
-        object.__setattr__(selection, "_mmm_reuse_plan", plan.to_dict())
+        if _plan_matches_adapter(attached, selection.adapter):
+            plan_payload = dict(attached)
+        else:
+            graph = decompose_capability_graph(text, design=design, module_kinds=kinds)
+            evidence = selection.optimization.evidence if selection.optimization is not None else None
+            allow_network = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower() != "off"
+            plan_payload = plan_fixed_target(
+                selection.adapter,
+                capabilities=graph.nodes,
+                design=design,
+                platform_evidence=evidence,
+                allow_network=allow_network,
+                capability_graph=graph.to_dict(),
+            ).to_dict()
+        object.__setattr__(selection, "_mmm_reuse_plan", plan_payload)
         return selection
 
     resolve_platform._mmm_joint_reuse_platform = True
     resolver.resolve_platform = resolve_platform
+
+
+def _plan_matches_adapter(plan: Any, adapter: Any) -> bool:
+    if not isinstance(plan, Mapping):
+        return False
+    target = plan.get("target")
+    if not isinstance(target, Mapping):
+        return False
+    return (
+        str(target.get("minecraft_version") or "") == str(adapter.minecraft_version)
+        and str(target.get("loader") or "").casefold() == str(adapter.loader).casefold()
+    )
 
 
 def _install_complete_planning_handoff(complete_planner: Any) -> None:
@@ -150,32 +235,46 @@ def _install_reuse_materialization(custom_module_generator: Any) -> None:
             decisions = reuse_plan.get("capabilities")
             fresh: list[str] = []
             adapters: list[str] = []
+            compact_decisions: list[dict[str, str]] = []
             if isinstance(decisions, Sequence) and not isinstance(decisions, (str, bytes)):
                 for item in decisions:
                     if not isinstance(item, Mapping):
                         continue
                     capability = str(item.get("capability") or "").strip()
-                    mode = str(item.get("mode") or "")
+                    mode = str(item.get("mode") or "").strip()
+                    source_id = str(item.get("source_id") or "").strip()
+                    if capability:
+                        compact_decisions.append(
+                            {"capability": capability, "mode": mode, "source_id": source_id}
+                        )
                     if capability and mode == "fresh":
                         fresh.append(capability)
                     elif capability and mode == "adapt":
                         adapters.append(capability)
-            module = replace(
-                module,
-                config={
-                    **dict(config),
-                    "_reuse_materialization": receipt,
-                    "_donor_source_excerpts": donor_context,
+            # The immutable proposal keeps full provenance. The model-facing config
+            # deliberately drops transport manifests so RAG and coder prompts do not
+            # each serialize the same large reuse plan/source payload.
+            model_config = {
+                key: value
+                for key, value in dict(config).items()
+                if key not in _TRANSPORT_CONFIG_KEYS
+            }
+            model_config.update(
+                {
+                    "_reuse_decisions": compact_decisions,
+                    "_source_transplant_context": donor_context,
                     "_fresh_only_capabilities": fresh,
                     "_adapter_capabilities": adapters,
                     "_generation_rule": (
                         "Generate only the capabilities listed in _fresh_only_capabilities and "
                         "the minimal adapters listed in _adapter_capabilities. Reuse approved "
                         "same-project/MMM/library/source-transplant capabilities exactly as the "
-                        "pinned reuse plan specifies; do not reimplement them."
+                        "compact reuse decisions and pinned source context specify; do not "
+                        "reimplement them."
                     ),
-                },
+                }
             )
+            module = replace(module, config=model_config)
         return current(self, project_root, module=module, **kwargs)
 
     generate._mmm_source_transplant_materialization = True
@@ -223,7 +322,8 @@ def _materialize_once(project_root: str | Path, reuse_plan: Mapping[str, Any]) -
 def _materialized_donor_context(
     receipt: Mapping[str, Any],
     *,
-    byte_budget: int = 96 * 1024,
+    byte_budget: int = _MODEL_CONTEXT_BYTES,
+    per_file_budget: int = _MODEL_CONTEXT_FILE_BYTES,
 ) -> list[dict[str, Any]]:
     context: list[dict[str, Any]] = []
     used = 0
@@ -237,18 +337,18 @@ def _materialized_donor_context(
         if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
             continue
         for item in files:
-            if not isinstance(item, Mapping):
-                continue
+            if not isinstance(item, Mapping) or used >= byte_budget:
+                break
             path = Path(str(item.get("path") or ""))
             if not path.is_file() or path.is_symlink():
                 continue
-            size = path.stat().st_size
-            if used + size > byte_budget:
-                return context
+            remaining = byte_budget - used
+            take = min(per_file_budget, remaining)
+            if take <= 0:
+                break
             raw = path.read_bytes()
-            if used + len(raw) > byte_budget:
-                return context
-            used += len(raw)
+            excerpt = raw[:take]
+            used += len(excerpt)
             context.append(
                 {
                     "repository": donor.get("repository"),
@@ -257,7 +357,8 @@ def _materialized_donor_context(
                     "capability": donor.get("capability"),
                     "path": str(path),
                     "sha256": item.get("sha256"),
-                    "content": raw.decode("utf-8", errors="replace"),
+                    "content": excerpt.decode("utf-8", errors="replace"),
+                    "truncated": len(raw) > len(excerpt),
                 }
             )
     return context
