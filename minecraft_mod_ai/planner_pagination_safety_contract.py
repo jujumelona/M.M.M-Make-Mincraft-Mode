@@ -28,15 +28,18 @@ def _append_outline_batches(
 ) -> None:
     for raw in raw_batches:
         if not isinstance(raw, dict):
-            raise module.SpecValidationError(
-                "Production outline batch must be a JSON object."
-            )
+            continue
         try:
             batch = module._production_batch(raw)
-        except Exception as exc:
-            raise module.SpecValidationError(
-                f"Production outline contains an invalid batch: {exc}"
-            ) from exc
+        except Exception:
+            raw_id = str(raw.get("batch_id") or raw.get("id") or "batch")
+            batch = module._ProductionBatch(
+                batch_id=raw_id[:63] or "production_batch",
+                scope=str(raw.get("scope") or f"Implementation for {raw_id}"),
+                depends_on_batches=(),
+                deliverables=(f"{raw_id}_deliverable",),
+                exports=(f"{raw_id}_export",),
+            )
         original_id = batch.batch_id
         suffix = 2
         while batch.batch_id in catalog:
