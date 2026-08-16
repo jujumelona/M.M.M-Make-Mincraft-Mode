@@ -390,7 +390,7 @@ def _expand_one_production_batch(
         parts.acceptance_tests.extend(tests)
         test_catalog.update(tests)
 
-        if complete or page.get("complete") is True:
+        if complete:
             remaining.clear()
             break
 
