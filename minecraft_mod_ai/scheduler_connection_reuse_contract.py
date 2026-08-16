@@ -21,15 +21,7 @@ def _drop_sync_plan_temp_tables(ledger: Any) -> None:
 
 
 def install(work_graph_module: Any) -> None:
-    """Preserve only reusable-connection cleanup required by the event scheduler.
-
-    Generation scheduling is now event driven and no longer performs high-frequency
-    full-node polling. Wrapping ``task`` and ``claim_ready`` with a synthetic snapshot
-    therefore adds invalidation work to the hot path without removing meaningful I/O.
-    The only remaining responsibility here is cleaning sync_plan TEMP tables because
-    scheduler_parallel_safety_contract deliberately reuses one SQLite connection per
-    ledger/thread.
-    """
+    """Make sync_plan safe when the scheduler reuses thread-local SQLite handles."""
 
     ledger_cls = work_graph_module.DurableWorkLedger
     current_sync_plan = ledger_cls.sync_plan
@@ -42,8 +34,8 @@ def install(work_graph_module: Any) -> None:
         try:
             return current_sync_plan(self, plan)
         finally:
-            # sqlite3.Connection.__exit__ has committed/rolled back the original
-            # transaction before cleanup, so this cannot partially commit sync_plan.
+            # sqlite3.Connection.__exit__ has already committed or rolled back the
+            # original transaction, so cleanup cannot partially commit sync_plan.
             _drop_sync_plan_temp_tables(self)
 
     sync_plan._mmm_reusable_connection_sync_plan = True  # type: ignore[attr-defined]

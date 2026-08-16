@@ -349,19 +349,16 @@ def _install_late_safety_contracts() -> None:
     from .production_tool_parallel_contract import install as install_production_tool_parallel_safety
     from .runner_parallel_validation_contract import install as install_runner_parallel_validation
     from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
+    from .scheduler_connection_reuse_contract import install as install_scheduler_connection_reuse
     from .scheduler_parallel_safety_contract import install as install_scheduler_parallel_safety
-    from .scheduler_poll_efficiency_contract import install as install_scheduler_poll_efficiency
 
     install_scheduler_parallel_safety(
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,
     )
-    install_scheduler_poll_efficiency(work_graph)
+    install_scheduler_connection_reuse(work_graph)
     install_llama_parallel_runtime(model_router, scheduler_parallel_safety_contract)
-    enhance_max_efficiency_runtime(
-        work_graph_module=work_graph,
-        scheduler_module=scheduler_parallel_safety_contract,
-    )
+    enhance_max_efficiency_runtime(work_graph_module=work_graph)
     install_scheduler_claim_fencing(
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,

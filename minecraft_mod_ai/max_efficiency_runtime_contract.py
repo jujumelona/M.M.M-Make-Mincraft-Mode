@@ -557,12 +557,11 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
     cls.generate = generate
 
 
-def enhance_runtime(*, work_graph_module: Any, scheduler_module: Any) -> None:
+def enhance_runtime(*, work_graph_module: Any) -> None:
     """Install non-scheduler throughput features after runtime safety contracts."""
 
     from . import custom_module_generator
 
-    del scheduler_module
     _install_work_graph_compile_cache(work_graph_module)
     _install_work_ledger_read_batching(work_graph_module)
     _install_module_routing(work_graph_module)

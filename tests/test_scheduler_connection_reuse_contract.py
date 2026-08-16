@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import work_graph
+from minecraft_mod_ai.scheduler_connection_reuse_contract import (
+    install as install_connection_reuse,
+)
 from minecraft_mod_ai.scheduler_parallel_safety_contract import install as install_scheduler
-from minecraft_mod_ai.scheduler_poll_efficiency_contract import install as install_poll
 
 
 def _plan() -> work_graph.WorkGraphPlan:
@@ -37,14 +39,26 @@ def _install_runtime_owners() -> None:
         fromlist=["CompleteProductionOrchestrator"],
     )
     install_scheduler(work_graph_module=work_graph, orchestrator_module=orchestrator)
-    install_poll(work_graph)
+    install_connection_reuse(work_graph)
 
 
-def test_poll_contract_leaves_task_and_claim_hot_paths_unwrapped() -> None:
+def test_connection_reuse_contract_leaves_task_and_claim_hot_paths_unwrapped() -> None:
     _install_runtime_owners()
-    assert not getattr(work_graph.DurableWorkLedger.task, "_mmm_batched_generation_poll", False)
-    assert not getattr(work_graph.DurableWorkLedger.claim_ready, "_mmm_poll_snapshot_fence", False)
-    assert getattr(work_graph.DurableWorkLedger.sync_plan, "_mmm_reusable_connection_sync_plan", False)
+    assert not getattr(
+        work_graph.DurableWorkLedger.task,
+        "_mmm_batched_generation_poll",
+        False,
+    )
+    assert not getattr(
+        work_graph.DurableWorkLedger.claim_ready,
+        "_mmm_poll_snapshot_fence",
+        False,
+    )
+    assert getattr(
+        work_graph.DurableWorkLedger.sync_plan,
+        "_mmm_reusable_connection_sync_plan",
+        False,
+    )
 
 
 def test_generation_task_reads_are_exact_without_snapshot(tmp_path) -> None:
