@@ -129,8 +129,11 @@ def _atomic_commit(staged: Path, target: Path, project_root: Path) -> str:
         same_filesystem = False
 
     if same_filesystem:
-        with staged.open("rb") as source:
-            os.fsync(source.fileno())
+        try:
+            with staged.open("a+b") as source:
+                os.fsync(source.fileno())
+        except OSError:
+            pass
         try:
             os.replace(staged, target)
         except OSError as exc:

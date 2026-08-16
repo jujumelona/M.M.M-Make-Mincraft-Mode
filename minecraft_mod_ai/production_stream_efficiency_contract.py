@@ -665,9 +665,10 @@ def install(complete_planner_module: Any) -> None:
                 + "compatible value types: "
                 + contract_text
                 + ". The host imposes NO fixed item/deliverable width. Choose any coherent "
-                + "non-empty subset of remaining work that you can finish as valid JSON. "
-                + "Finish the current child before starting another; when budget is tight, stop "
-                + "after a complete child/page instead of starting one you cannot finish. Never "
+                + "non-empty subset of remaining work (recommended 1-2 deliverables at a time starting from "
+                + "current_target_deliverables[0]) that you can finish as valid JSON without token truncation. "
+                + "Finish the current child before starting another; when budget is tight or remaining work is large, stop "
+                + "after a complete child/page (1-2 deliverables) instead of starting one you cannot finish. Never "
                 + "repeat IDs already present in host catalogs."
             )
             if round_index:

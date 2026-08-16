@@ -74,6 +74,50 @@ def _clean_json_text(text: str) -> str:
     return cleaned.strip()
 
 
+def _repair_truncated_json(text: str) -> str:
+    """Structurally repair JSON truncated by max_tokens.
+
+    Walks the text tracking string/escape state and a delimiter stack.
+    If the text ends inside a string literal, the string is closed.
+    Any remaining open ``{`` / ``[`` delimiters are then closed in
+    correct nesting order so the result is syntactically valid JSON.
+
+    This is a HOST-SIDE structural repair — no model round-trip needed.
+    The upper pagination layer will see a partial-but-valid page and
+    generate the remaining content via continuation.
+    """
+    in_string = False
+    escaped = False
+    stack: list[str] = []  # expected closing delimiters in nesting order
+
+    for ch in text:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and in_string:
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+
+    suffix = ""
+    if in_string:
+        suffix += '"'
+    while stack:
+        suffix += stack.pop()
+    return text + suffix
+
+
 def _parse_json_value(text: str) -> tuple[Any, str, json.JSONDecodeError | None]:
     """Parse JSON with multi-layer sanitization for model-generated output."""
     raw = text.strip()
@@ -95,7 +139,7 @@ def _parse_json_value(text: str) -> tuple[Any, str, json.JSONDecodeError | None]
 
     # Sanitize unescaped control chars / newlines inside string literals
     repaired = re.sub(
-        r'(?<=: ")(.*?)(?=")',
+        r'(?<= ")(.*?)(?=")',
         lambda m: m.group(1).replace("\n", "\\n").replace("\r", "").replace("\t", "\\t"),
         cleaned,
         flags=re.DOTALL,
@@ -103,6 +147,20 @@ def _parse_json_value(text: str) -> tuple[Any, str, json.JSONDecodeError | None]
     try:
         return json.loads(repaired, strict=False), repaired, None
     except json.JSONDecodeError:
+        pass
+
+    # Layer 5: truncation repair — close unterminated strings & delimiters
+    truncation_repaired = _repair_truncated_json(cleaned)
+    try:
+        return json.loads(truncation_repaired, strict=False), truncation_repaired, None
+    except json.JSONDecodeError:
+        pass
+
+    # Layer 6: both control-char repair AND truncation repair combined
+    combined = _repair_truncated_json(repaired)
+    try:
+        return json.loads(combined, strict=False), combined, None
+    except json.JSONDecodeError as final_err:
         return None, raw, last_err
 
 
@@ -171,18 +229,32 @@ def _recover_invalid_json_document(exc: ModelBackendError) -> str | None:
     JSONDecodeError raised by json.loads(content), whose ``doc`` is the exact model
     output. SSE/protocol failures are wrapped in another RuntimeError, so they do not
     match this narrow recovery path and remain transport failures.
+
+    If the raw document is truncated (e.g. max_tokens reached), it is auto-repaired
+    so that the validation layer receives syntactically valid JSON and the upper
+    pagination layer can treat a partial page as a valid continuation point.
     """
 
     cause = exc.cause
     if not isinstance(cause, json.JSONDecodeError):
-        return None
+        # Also handle RuntimeError wrapping (e.g. from _parse_root_json_object)
+        if isinstance(cause, RuntimeError) and cause.__cause__:
+            cause = cause.__cause__
+        if not isinstance(cause, json.JSONDecodeError):
+            return None
     output = str(cause.doc).strip()
     cleaned = _clean_json_text(output)
     if not cleaned.startswith("{") and "{" in cleaned:
         cleaned = cleaned[cleaned.find("{"):]
     if not cleaned.startswith("{"):
         return None
-    return output
+    # Auto-repair truncated JSON so validation gets syntactically valid input
+    repaired = _repair_truncated_json(cleaned)
+    try:
+        json.loads(repaired, strict=False)
+        return repaired  # Return the repaired version, not the broken original
+    except json.JSONDecodeError:
+        return output  # Fallback: return raw and let _parse_json_value handle it
 
 
 def _generate_json_candidate(

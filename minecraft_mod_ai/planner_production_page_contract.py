@@ -10,9 +10,10 @@ _ADAPTIVE_PRODUCTION_PROMPT = """Return exactly one production-batch JSON page.
 
 The host supplies current_target_deliverables as the COMPLETE unresolved pool for this
 batch. There is NO fixed deliverable count per response and NO fixed page count.
-Choose the largest coherent subset you can FULLY implement within the available output
-budget without truncating JSON, code metadata, assets, audio, or tests. Do not pad or
-artificially split work merely to create another page.
+Choose the largest coherent subset (recommended 1-2 deliverables at a time starting with
+current_target_deliverables[0]) that you can FULLY implement within the available output
+budget without truncating JSON, code metadata, assets, audio, or tests. Emitting 1-2
+deliverables per page ensures the JSON stays compact and avoids output token truncation.
 
 A deliverable may require multiple modules/assets/tests and one output may satisfy
 multiple tightly coupled deliverables. Do NOT force one module per deliverable.
@@ -21,7 +22,8 @@ using exact names from current_target_deliverables. Put ONLY actually completed 
 names in completed_deliverables. Never claim a partially emitted deliverable.
 
 If every unresolved deliverable is fully completed, set complete=true and
-next_cursor="". Otherwise set complete=false and return a short non-empty next_cursor.
+next_cursor="". Otherwise set complete=false and return a short non-empty next_cursor
+so the host requests the next page for remaining items.
 Never repeat an already-known module, asset, audio ID, or file path. Return JSON only.
 """.strip()
 

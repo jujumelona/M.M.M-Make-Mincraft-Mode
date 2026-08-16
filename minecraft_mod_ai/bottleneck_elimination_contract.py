@@ -461,10 +461,28 @@ def _install_json_early_stop() -> None:
                     cleaned,
                     flags=re.DOTALL,
                 )
-                res = json.loads(repaired, strict=False)
-                if not isinstance(res, dict):
-                    raise RuntimeError("structured response root must be a JSON object")
-                return res
+                try:
+                    res = json.loads(repaired, strict=False)
+                    if isinstance(res, dict):
+                        return res
+                except Exception:
+                    pass
+                # Truncation repair: close unterminated strings and open delimiters
+                from .structured_output import _repair_truncated_json
+                for source in (cleaned, repaired):
+                    trunc_fixed = _repair_truncated_json(source)
+                    try:
+                        res = json.loads(trunc_fixed, strict=False)
+                        if isinstance(res, dict):
+                            return res
+                    except Exception:
+                        pass
+                # All repair strategies exhausted; raise with the original text
+                raise json.JSONDecodeError(
+                    "all repair strategies exhausted for truncated JSON",
+                    cleaned,
+                    0,
+                )
 
             if host_complete:
                 _parse_root_json_object(content)

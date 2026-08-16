@@ -1124,9 +1124,9 @@ class CompleteGameDesignPlanner:
                 system_prompt=(
                     "Return exactly one production-batch JSON page. "
                     "remaining_deliverables is the authoritative unfinished checklist. "
-                    "Implement as many WHOLE deliverables as safely fit in this response; "
-                    "there is no host-owned deliverable-count ceiling. Record only actually "
-                    "completed items in completed_deliverables and include concrete evidence. "
+                    "Focus on implementing ONLY 1 to 2 deliverables at a time (starting with current_target_deliverables[0]) "
+                    "so the JSON response easily fits within token limits without truncation. "
+                    "Record only actually completed items in completed_deliverables and include concrete evidence. "
                     "If unfinished work remains, set complete=false and provide next_cursor. "
                     "When everything is complete, set complete=true and next_cursor empty. "
                     "Never repeat an ID or file path."
