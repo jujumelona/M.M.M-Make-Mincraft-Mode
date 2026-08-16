@@ -823,7 +823,12 @@ class CompleteProductionOrchestrator:
         options: CompleteExecutionOptions,
         router: ModelRouter | None,
     ) -> dict[str, Any]:
-        """Execute each durable graph generation node as the real retry unit."""
+        """Execute durable generation nodes with capacity-owned, event-driven lanes."""
+
+        import threading
+        import time
+        from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+        from . import scheduler_parallel_safety_contract as scheduler_safety
 
         spec = approved.base_proposal.spec
         module_lookup = {module.module_id: module for module in ordered}
@@ -832,32 +837,29 @@ class CompleteProductionOrchestrator:
         )
         asset_lookup = {item.asset_id: item for item in approved.assets}
         audio_lookup = {item.sound_id: item for item in approved.audio}
+        generation_nodes = tuple(
+            node for node in work_plan.nodes if node.stage.startswith("generate:")
+        )
+        node_by_id = {node.node_id: node for node in generation_nodes}
+        generation_stages = tuple(sorted({node.stage for node in generation_nodes}))
         extended_kinds = {
-            "item",
-            "block",
-            "tool",
-            "weapon",
-            "armor",
-            "food",
-            "crop",
-            "machine",
-            "effect",
-            "enchantment",
-            "command",
-            "recipe",
-            "advancement",
-            "loot",
+            "item", "block", "tool", "weapon", "armor", "food", "crop",
+            "machine", "effect", "enchantment", "command", "recipe",
+            "advancement", "loot",
         }
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
         asset_shards: list[dict[str, Any]] = []
         audio_shards: list[dict[str, Any]] = []
-        audio_synth_results: list[dict[str, Any]] = []
+        runtime_init_lock = threading.RLock()
 
         def get_router() -> ModelRouter:
             nonlocal router
-            router = router or self.router_factory()
+            if router is None:
+                with runtime_init_lock:
+                    if router is None:
+                        router = self.router_factory()
             return router
 
         shared_project_index = ProjectIndex(project_root, policy=self.policy)
@@ -866,12 +868,14 @@ class CompleteProductionOrchestrator:
         def get_custom_generator() -> CustomModuleGenerator:
             nonlocal custom_generator
             if custom_generator is None:
-                custom_generator = CustomModuleGenerator(
-                    get_router(),
-                    policy=self.policy,
-                    fast_mode=getattr(self, "_fast_mode", False),
-                    project_index=shared_project_index,
-                )
+                with runtime_init_lock:
+                    if custom_generator is None:
+                        custom_generator = CustomModuleGenerator(
+                            get_router(),
+                            policy=self.policy,
+                            fast_mode=getattr(self, "_fast_mode", False),
+                            project_index=shared_project_index,
+                        )
             return custom_generator
 
         def generate_custom(module: ProductionModule) -> dict[str, Any]:
@@ -894,9 +898,6 @@ class CompleteProductionOrchestrator:
                 research_shards = [
                     module for module in members if is_research_shard(module)
                 ]
-                # Research pages are code-owned data. Materialize them before
-                # any model-backed module in this work node, and never ask a
-                # coder model to invent Java from an evidence ledger.
                 receipts.extend(
                     write_research_shard(project_root, module=module)
                     for module in research_shards
@@ -950,10 +951,7 @@ class CompleteProductionOrchestrator:
                             mod_id=spec.mod_id,
                             package_name=spec.package_name,
                             config={
-                                "modules": [
-                                    _module_dict(item)
-                                    for item in pack_modules
-                                ]
+                                "modules": [_module_dict(item) for item in pack_modules]
                             },
                             policy=self.policy,
                         )
@@ -961,63 +959,25 @@ class CompleteProductionOrchestrator:
             elif stage == "entity":
                 for module in members:
                     config = module.config
-                    behavior_default = (
-                        "npc"
-                        if module.kind == "npc"
-                        else "hostile_melee"
-                    )
+                    behavior_default = "npc" if module.kind == "npc" else "hostile_melee"
                     receipts.append(
                         generate_geckolib_entity_assets(
                             project_root=project_root,
                             mod_id=spec.mod_id,
                             package_name=spec.package_name,
                             entity_id=module.module_id,
-                            texture_width=int(
-                                config.get("texture_width", 64)
-                            ),
-                            texture_height=int(
-                                config.get("texture_height", 64)
-                            ),
-                            max_health=float(
-                                config.get("max_health", 80.0)
-                            ),
-                            attack_damage=float(
-                                config.get("attack_damage", 8.0)
-                            ),
-                            movement_speed=float(
-                                config.get("movement_speed", 0.27)
-                            ),
-                            follow_range=float(
-                                config.get("follow_range", 40.0)
-                            ),
-                            archetype=str(
-                                config.get("archetype", "biped")
-                            ),
-                            behavior=str(
-                                config.get(
-                                    "behavior",
-                                    behavior_default,
-                                )
-                            ),
-                            entity_width=float(
-                                config.get("entity_width", 0.8)
-                            ),
-                            entity_height=float(
-                                config.get("entity_height", 2.0)
-                            ),
-                            spawn_group=(
-                                str(config["spawn_group"])
-                                if config.get("spawn_group")
-                                else None
-                            ),
-                            custom_bones=(
-                                config.get("custom_bones")
-                                if isinstance(
-                                    config.get("custom_bones"),
-                                    list,
-                                )
-                                else None
-                            ),
+                            texture_width=int(config.get("texture_width", 64)),
+                            texture_height=int(config.get("texture_height", 64)),
+                            max_health=float(config.get("max_health", 80.0)),
+                            attack_damage=float(config.get("attack_damage", 8.0)),
+                            movement_speed=float(config.get("movement_speed", 0.27)),
+                            follow_range=float(config.get("follow_range", 40.0)),
+                            archetype=str(config.get("archetype", "biped")),
+                            behavior=str(config.get("behavior", behavior_default)),
+                            entity_width=float(config.get("entity_width", 0.8)),
+                            entity_height=float(config.get("entity_height", 2.0)),
+                            spawn_group=(str(config["spawn_group"]) if config.get("spawn_group") else None),
+                            custom_bones=(config.get("custom_bones") if isinstance(config.get("custom_bones"), list) else None),
                             policy=self.policy,
                         )
                     )
@@ -1026,14 +986,12 @@ class CompleteProductionOrchestrator:
             elif stage == "audio-binding":
                 for module in members:
                     if module.module_id in audio_lookup:
-                        receipts.append(
-                            {
-                                "schema_version": "mmm/audio-binding-v1",
-                                "status": "BOUND",
-                                "module_id": module.module_id,
-                                "sound_id": module.module_id,
-                            }
-                        )
+                        receipts.append({
+                            "schema_version": "mmm/audio-binding-v1",
+                            "status": "BOUND",
+                            "module_id": module.module_id,
+                            "sound_id": module.module_id,
+                        })
                     else:
                         receipts.append(generate_custom(module))
             else:
@@ -1048,6 +1006,26 @@ class CompleteProductionOrchestrator:
                 "module_ids": [module.module_id for module in members],
                 "receipts": receipts,
             }
+
+        def audio_dependency_receipts(node: WorkNode) -> list[dict[str, Any]]:
+            batches: list[dict[str, Any]] = []
+            for dependency_id in node.dependencies:
+                dependency = node_by_id.get(dependency_id)
+                if dependency is None:
+                    continue
+                if str(dependency.payload.get("kind", "")) != "audio-synth":
+                    continue
+                receipt = ledger.cached_receipt(
+                    dependency_id,
+                    input_hash=dependency.input_hash,
+                )
+                if receipt is None:
+                    raise CompleteProductionError(
+                        "Audio finalize dependency has no durable synth receipt: "
+                        f"{dependency_id}"
+                    )
+                batches.append(receipt)
+            return batches
 
         def process_node(node: WorkNode) -> None:
             if not node.stage.startswith("generate:"):
@@ -1082,9 +1060,7 @@ class CompleteProductionOrchestrator:
                         if item.get("entity_id")
                     }
                     for module in members:
-                        entity_receipt = entity_receipts.get(
-                            module.module_id
-                        )
+                        entity_receipt = entity_receipts.get(module.module_id)
                         if entity_receipt is None:
                             raise CompleteProductionError(
                                 "Entity generation node omitted its receipt: "
@@ -1100,24 +1076,15 @@ class CompleteProductionOrchestrator:
                                         "graph_hash": work_plan.graph_hash,
                                         "entity_receipt": entity_receipt,
                                     },
-                                    action=lambda receipt=entity_receipt: (
-                                        self._blockbench_review(
-                                            receipt,
-                                            run_root,
-                                        )
-                                    ),
+                                    action=lambda receipt=entity_receipt: self._blockbench_review(receipt, run_root),
                                     encode=lambda value: value,
                                     decode=lambda cached: cached,
-                                    validate_cached=lambda cached: Path(
-                                        str(cached.get("preview", ""))
-                                    ).is_file(),
+                                    validate_cached=lambda cached: Path(str(cached.get("preview", ""))).is_file(),
                                 )
                             )
                         elif options.run_blockbench:
                             unresolved.append(
-                                "blockbench:"
-                                f"{module.module_id}:"
-                                "not-run-in-source-only-mode"
+                                f"blockbench:{module.module_id}:not-run-in-source-only-mode"
                             )
             elif kind == "asset-shard":
                 ids = [
@@ -1138,13 +1105,8 @@ class CompleteProductionOrchestrator:
                     self._run_work_node(
                         ledger,
                         node,
-                        action=lambda proposal=shard_proposal: (
-                            self._generate_assets(
-                                get_router(),
-                                proposal,
-                                project_root,
-                                run_root,
-                            )
+                        action=lambda proposal=shard_proposal: self._generate_assets(
+                            get_router(), proposal, project_root, run_root
                         ),
                         validate_cached=lambda cached: all(
                             Path(str(item.get("target", ""))).is_file()
@@ -1163,44 +1125,34 @@ class CompleteProductionOrchestrator:
                     raise CompleteProductionError(
                         f"Work node {node.node_id} has invalid audio."
                     )
-                audio_synth_results.append(
-                    self._run_work_node(
-                        ledger,
-                        node,
-                        action=lambda ids=ids: synthesize_audio_files(
-                            project_root=project_root,
-                            mod_id=spec.mod_id,
-                            package_name=spec.package_name,
-                            requests=tuple(
-                                audio_lookup[item] for item in ids
-                            ),
-                            policy=self.policy,
-                        ),
-                        validate_cached=lambda cached: (
-                            self._receipt_outputs_exist(
-                                cached,
-                                project_root=project_root,
-                            )
-                        ),
-                        shared_index=shared_project_index,
-                    )
+                self._run_work_node(
+                    ledger,
+                    node,
+                    action=lambda ids=ids: synthesize_audio_files(
+                        project_root=project_root,
+                        mod_id=spec.mod_id,
+                        package_name=spec.package_name,
+                        requests=tuple(audio_lookup[item] for item in ids),
+                        policy=self.policy,
+                    ),
+                    validate_cached=lambda cached: self._receipt_outputs_exist(
+                        cached, project_root=project_root
+                    ),
+                    shared_index=shared_project_index,
                 )
             elif kind == "audio-finalize":
                 fin_receipt = self._run_work_node(
                     ledger,
                     node,
-                    action=lambda: finalize_audio_registry(
+                    action=lambda node=node: finalize_audio_registry(
                         project_root=project_root,
                         mod_id=spec.mod_id,
                         package_name=spec.package_name,
-                        synthesized_batches=audio_synth_results,
+                        synthesized_batches=audio_dependency_receipts(node),
                         policy=self.policy,
                     ),
-                    validate_cached=lambda cached: (
-                        self._receipt_outputs_exist(
-                            cached,
-                            project_root=project_root,
-                        )
+                    validate_cached=lambda cached: self._receipt_outputs_exist(
+                        cached, project_root=project_root
                     ),
                     shared_index=shared_project_index,
                 )
@@ -1223,16 +1175,11 @@ class CompleteProductionOrchestrator:
                             project_root=project_root,
                             mod_id=spec.mod_id,
                             package_name=spec.package_name,
-                            requests=tuple(
-                                audio_lookup[item] for item in ids
-                            ),
+                            requests=tuple(audio_lookup[item] for item in ids),
                             policy=self.policy,
                         ),
-                        validate_cached=lambda cached: (
-                            self._receipt_outputs_exist(
-                                cached,
-                                project_root=project_root,
-                            )
+                        validate_cached=lambda cached: self._receipt_outputs_exist(
+                            cached, project_root=project_root
                         ),
                         shared_index=shared_project_index,
                     )
@@ -1242,103 +1189,141 @@ class CompleteProductionOrchestrator:
                     f"Unsupported work node payload kind: {kind}"
                 )
 
-        # ── Pipeline DAG Scheduler ────────────────────────────────────
-        # Specialized multi-executor pools dispatch work nodes by resource_class:
-        # - cpu_pool: content, system, entity, audio-synth (N workers)
-        # - llm_pool: custom LLM modules (1 worker)
-        # - image_pool: asset generation (1 worker)
-        # - commit_pool: audio finalize / path commit (1 worker)
-        import os
-        from concurrent.futures import ThreadPoolExecutor, Future
+        capacities = scheduler_safety._capacities()
+        cpu_pool = ThreadPoolExecutor(
+            max_workers=max(1, int(capacities["cpu_io"])),
+            thread_name_prefix="cpu_io",
+        )
+        llm_pool = ThreadPoolExecutor(
+            max_workers=max(1, int(capacities["llm"])),
+            thread_name_prefix="llm",
+        )
+        image_pool = ThreadPoolExecutor(
+            max_workers=max(1, int(capacities["image_gpu"])),
+            thread_name_prefix="image_gpu",
+        )
+        commit_pool = ThreadPoolExecutor(
+            max_workers=max(1, int(capacities["commit"])),
+            thread_name_prefix="commit",
+        )
+        node_futures: dict[str, Future[Any]] = {}
+        idle_wait = threading.Event()
+        lease_seconds = 900
+        heartbeat_seconds = 60.0
 
-        max_io_workers = min(4, os.cpu_count() or 2)
-        cpu_pool = ThreadPoolExecutor(max_workers=max_io_workers, thread_name_prefix="cpu_io")
-        llm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm")
-        image_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image_gpu")
-        commit_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="commit")
-
-        import threading
-        _path_locks: dict[str, threading.Lock] = {}
-        _path_locks_guard = threading.Lock()
-
-        def _acquire_path_lock(path: str) -> threading.Lock:
-            """Return a per-path lock for shared file concurrency safety."""
-            with _path_locks_guard:
-                if path not in _path_locks:
-                    _path_locks[path] = threading.Lock()
-                return _path_locks[path]
-
-        _node_futures: dict[str, Future] = {}
-
-        def dispatch_node(node: WorkNode) -> Future:
-            res_class = getattr(node, "resource_class", "") or str(node.payload.get("resource_class", "cpu_io"))
-            if res_class == "llm":
+        def dispatch_node(node: WorkNode) -> Future[Any]:
+            resource_class = node.resource_class or str(
+                node.payload.get("resource_class", "cpu_io")
+            )
+            if resource_class == "llm":
                 return llm_pool.submit(process_node, node)
-            elif res_class == "image_gpu":
+            if resource_class == "image_gpu":
                 return image_pool.submit(process_node, node)
-            elif res_class == "commit":
+            if resource_class == "commit":
                 return commit_pool.submit(process_node, node)
-            else:
-                return cpu_pool.submit(process_node, node)
-
-        generation_stages = tuple(sorted({
-            n.stage
-            for n in work_plan.nodes
-            if n.stage.startswith("generate:")
-        }))
+            return cpu_pool.submit(process_node, node)
 
         try:
             while True:
                 ledger.raise_if_cancelled()
 
-                # Harvest finished futures
-                done_ids = [nid for nid, fut in _node_futures.items() if fut.done()]
-                for nid in done_ids:
-                    fut = _node_futures.pop(nid)
-                    exc = fut.exception()
-                    if exc is not None:
-                        print(f"⚠️ [Pipeline] Node {nid} raised: {exc}", flush=True)
+                done_ids = [
+                    node_id
+                    for node_id, future in node_futures.items()
+                    if future.done()
+                ]
+                for node_id in done_ids:
+                    future = node_futures.pop(node_id)
+                    try:
+                        future.result()
+                    except BaseException as exc:
+                        raise CompleteProductionError(
+                            f"Pipeline generation node failed: {node_id}: "
+                            f"{type(exc).__name__}: {exc}"
+                        ) from exc
 
-                gen_nodes = [n for n in work_plan.nodes if n.stage.startswith("generate:")]
-                states = {n.node_id: ledger.task(n.node_id)["state"] for n in gen_nodes}
-
-                if any(s in ("failed", "cancelled") for s in states.values()):
-                    failed_ids = [nid for nid, s in states.items() if s in ("failed", "cancelled")]
-                    raise CompleteProductionError(f"Pipeline generation failed on nodes: {failed_ids}")
-
-                if all(s in ("succeeded", "completed") for s in states.values()):
-                    break
-
-                claimed_batch: list[dict[str, Any]] = []
-                while len(claimed_batch) < 8:
+                while True:
                     claimed = ledger.claim_ready(
                         worker_id="mmm-orchestrator",
                         stages=generation_stages,
-                        lease_seconds=900,
+                        lease_seconds=lease_seconds,
                     )
                     if claimed is None:
                         break
-                    claimed_batch.append(claimed)
-
-                for claim in claimed_batch:
-                    node = next(
-                        (n for n in work_plan.nodes if n.node_id == str(claim["node_id"])),
-                        None,
-                    )
-                    if node is not None:
-                        _node_futures[node.node_id] = dispatch_node(node)
-
-                if not _node_futures and not claimed_batch:
-                    pending_ids = [nid for nid, s in states.items() if s not in ("succeeded", "completed")]
-                    if pending_ids:
+                    node_id = str(claimed["node_id"])
+                    node = node_by_id.get(node_id)
+                    if node is None:
                         raise CompleteProductionError(
-                            f"WorkGraph DAG deadlock: pending nodes remain but no ready nodes available: {pending_ids}"
+                            f"Ledger claimed an unknown generation node: {node_id}"
                         )
+                    if node_id in node_futures:
+                        raise CompleteProductionError(
+                            f"Generation node was claimed twice: {node_id}"
+                        )
+                    node_futures[node_id] = dispatch_node(node)
+
+                if node_futures:
+                    wait(
+                        tuple(node_futures.values()),
+                        timeout=heartbeat_seconds,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    continue
+
+                task_rows = {
+                    node.node_id: ledger.task(node.node_id)
+                    for node in generation_nodes
+                }
+                states = {
+                    node_id: str(task["state"])
+                    for node_id, task in task_rows.items()
+                }
+                failed_ids = [
+                    node_id
+                    for node_id, state in states.items()
+                    if state in {"failed", "cancelled", "input_required"}
+                ]
+                if failed_ids:
+                    raise CompleteProductionError(
+                        f"Pipeline generation failed on nodes: {failed_ids}"
+                    )
+                if all(
+                    state in {"succeeded", "completed"}
+                    for state in states.values()
+                ):
                     break
 
-                if not claimed_batch and _node_futures:
-                    import time
-                    time.sleep(0.05)
+                running = [
+                    task
+                    for task in task_rows.values()
+                    if str(task["state"]) == "running"
+                ]
+                if running:
+                    deadlines = [
+                        float(task["lease_until"])
+                        for task in running
+                        if task.get("lease_until") is not None
+                    ]
+                    delay = 1.0
+                    if deadlines:
+                        delay = min(
+                            heartbeat_seconds,
+                            max(0.05, min(deadlines) - time.time() + 0.01),
+                        )
+                    idle_wait.wait(delay)
+                    continue
+
+                pending_ids = [
+                    node_id
+                    for node_id, state in states.items()
+                    if state not in {"succeeded", "completed"}
+                ]
+                if pending_ids:
+                    raise CompleteProductionError(
+                        "WorkGraph DAG deadlock: pending nodes remain but no ready "
+                        f"nodes are available: {pending_ids}"
+                    )
+                break
         finally:
             cpu_pool.shutdown(wait=True, cancel_futures=True)
             llm_pool.shutdown(wait=True, cancel_futures=True)
