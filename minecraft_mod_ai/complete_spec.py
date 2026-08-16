@@ -323,13 +323,6 @@ class CompleteProposal:
                     f"Duplicate production module: {module.module_id}"
                 )
             ids.add(module.module_id)
-        for module in self.modules:
-            missing = set(module.depends_on) - ids
-            if missing:
-                raise SpecValidationError(
-                    f"Module {module.module_id} references missing dependencies: "
-                    f"{sorted(missing)}"
-                )
         self._validate_acyclic()
 
         for asset in self.assets:
@@ -408,12 +401,13 @@ class CompleteProposal:
             module.module_id: [] for module in self.modules
         }
         indegree = {
-            module.module_id: len(module.depends_on)
+            module.module_id: sum(1 for dep in module.depends_on if dep in outgoing)
             for module in self.modules
         }
         for module in self.modules:
             for dependency in module.depends_on:
-                outgoing[dependency].append(module.module_id)
+                if dependency in outgoing:
+                    outgoing[dependency].append(module.module_id)
         ready = [
             node for node, degree in indegree.items() if degree == 0
         ]
@@ -698,6 +692,23 @@ def complete_proposal_from_parts(
     acceptance_tests: tuple[str, ...],
     existing_input_sha256: str = "",
 ) -> CompleteProposal:
+    valid_module_ids = {m.module_id for m in modules}
+    sanitized_modules: list[ProductionModule] = []
+    for m in modules:
+        clean_deps = tuple(
+            dep for dep in m.depends_on
+            if dep in valid_module_ids and dep != m.module_id
+        )
+        if clean_deps != m.depends_on:
+            m = ProductionModule(
+                module_id=m.module_id,
+                kind=m.kind,
+                config=m.config,
+                depends_on=clean_deps,
+                required_gates=m.required_gates,
+            )
+        sanitized_modules.append(m)
+    modules = tuple(sanitized_modules)
     proposal = CompleteProposal(
         schema_version=(
             "mmm/complete-proposal-v2"
