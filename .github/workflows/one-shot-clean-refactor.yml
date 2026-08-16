@@ -13,11 +13,11 @@ jobs:
   refactor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Prepare refactor tooling
@@ -26,8 +26,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          run_refactor() {
+            set +e
+            output="$(python scripts/one_shot_clean_refactor.py 2>&1)"
+            status=$?
+            set -e
+            printf '%s\n' "$output"
+            if [ "$status" -ne 0 ]; then
+              diagnostic="$(printf '%s' "$output" | tail -c 6000 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+              echo "::error title=Clean refactor failed::$diagnostic"
+              return "$status"
+            fi
+          }
           apply_and_verify() {
-            python scripts/one_shot_clean_refactor.py
+            run_refactor
             python -m compileall -q minecraft_mod_ai
             python -m pytest -q tests/test_clean_production_contract.py
             git diff --check
