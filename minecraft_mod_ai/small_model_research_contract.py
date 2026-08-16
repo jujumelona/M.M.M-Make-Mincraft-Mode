@@ -388,44 +388,11 @@ def _lossless_utf8_pages(text: str, max_bytes: int) -> tuple[str, ...]:
     return tuple(pages)
 
 
-def _install_lossless_research_input(central_module: Any, ecosystem_module: Any) -> None:
-    """Preserve authoritative research text and shard only execution-sized queries."""
-    if not getattr(central_module._bounded_text, "_mmm_lossless_text", False):
-        def full_text(value: str, *, field: str = "research text") -> str:
-            del field
-            return value
-
-        full_text._mmm_lossless_text = True  # type: ignore[attr-defined]
-        central_module._bounded_text = full_text
-
-    current_domain = central_module._research_domain
-    if not getattr(current_domain, "_mmm_lossless_query_pages", False):
-        @wraps(current_domain)
-        def domain_with_query_pages(value: Any):
-            normalized = value
-            if isinstance(value, dict) and isinstance(value.get("queries"), list):
-                queries: list[Any] = []
-                for raw in value["queries"]:
-                    if (
-                        isinstance(raw, str)
-                        and raw.strip()
-                        and len(raw.encode("utf-8")) > central_module._MAX_QUERY_BYTES
-                    ):
-                        queries.extend(
-                            page
-                            for page in _lossless_utf8_pages(
-                                raw,
-                                central_module._MAX_QUERY_BYTES,
-                            )
-                            if page.strip()
-                        )
-                    else:
-                        queries.append(raw)
-                normalized = {**value, "queries": queries}
-            return current_domain(normalized)
-
-        domain_with_query_pages._mmm_lossless_query_pages = True  # type: ignore[attr-defined]
-        central_module._research_domain = domain_with_query_pages
+def _install_lossless_ecosystem_input(
+    central_module: Any,
+    ecosystem_module: Any,
+) -> None:
+    """Preserve the full ecosystem seed and shard only execution-sized queries."""
 
     def full_seed_query(prompt: str, game_design: dict[str, Any]) -> str:
         parts = [
@@ -536,6 +503,7 @@ def _install_nonblocking_planner_research(
     complete_planner_module: Any,
     research_coordinator_module: Any,
     central_module: Any,
+    ecosystem_module: Any,
 ) -> None:
     """Remove planner-level future joins; inner provider/RAG work may remain parallel."""
     complete_planner_module.collect_technology_radar = (
@@ -599,7 +567,7 @@ def _install_nonblocking_planner_research(
                 "download_performed": False,
                 "planning_critical_path": False,
             }
-        builder = page_builder or research_coordinator_module.discover_seed_bundle
+        builder = page_builder or ecosystem_module.discover_seed_bundle
         return research_coordinator_module.collect_ecosystem_seed_bundle(
             prompt,
             game_design,
@@ -628,11 +596,12 @@ def install() -> None:
     from .max_efficiency_runtime_contract import enhance_runtime
     from .small_model_agent_policy import enhance_planner
 
-    _install_lossless_research_input(central_research, ecosystem_discovery)
+    _install_lossless_ecosystem_input(central_research, ecosystem_discovery)
     _install_nonblocking_planner_research(
         complete_planner,
         research_coordinator,
         central_research,
+        ecosystem_discovery,
     )
     _install_evidence_aware_scoring(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
