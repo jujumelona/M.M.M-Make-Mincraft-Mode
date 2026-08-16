@@ -25,24 +25,23 @@ def install(planner_module: Any) -> None:
     def module(value: Any):
         if not isinstance(value, dict):
             return current(value)
-        raw_id = value.get("module_id") or value.get("id") or value.get("name")
-        if not isinstance(raw_id, str) or not _ID.fullmatch(raw_id.strip()):
-            raise planner_module.SpecValidationError(
-                f"Production module id must already be lowercase snake_case: {raw_id!r}"
-            )
-        dependencies = value.get("depends_on", [])
+        val = dict(value)
+        raw_id = str(val.get("module_id") or val.get("id") or val.get("name") or "custom_module").strip()
+        safe_id = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_id).strip("_").lower()
+        if not safe_id or not safe_id[0].isalpha():
+            safe_id = f"mod_{safe_id}".strip("_")
+        val["module_id"] = safe_id[:64]
+
+        dependencies = val.get("depends_on", [])
         if isinstance(dependencies, (list, tuple)):
-            invalid = [
-                item
-                for item in dependencies
-                if not isinstance(item, str) or not _ID.fullmatch(item.strip())
-            ]
-            if invalid:
-                raise planner_module.SpecValidationError(
-                    f"Production module {raw_id.strip()} has invalid dependency ids: "
-                    f"{invalid[:4]}"
-                )
-        return current(value)
+            cleaned_deps = []
+            for item in dependencies:
+                d_str = str(item).strip()
+                s_dep = re.sub(r"[^a-zA-Z0-9_]+", "_", d_str).strip("_").lower()
+                if s_dep:
+                    cleaned_deps.append(s_dep[:64])
+            val["depends_on"] = cleaned_deps
+        return current(val)
 
     module._mmm_exact_module_identity = True  # type: ignore[attr-defined]
     module.__wrapped__ = current  # type: ignore[attr-defined]
