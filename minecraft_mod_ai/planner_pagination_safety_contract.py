@@ -327,10 +327,12 @@ def _expand_one_production_batch(
             stage=f"production batch {batch.batch_id!r} page",
         )
         first_page = False
-        if not isinstance(page, dict):
-            page = {}
-        complete = bool(page.get("complete", False))
-        next_cursor = str(page.get("next_cursor") or "").strip()
+        if set(page) != set(module._PRODUCTION_PAGE_CONTRACT):
+            raise module.SpecValidationError("Production batch page fields are invalid.")
+        complete = page.get("complete")
+        next_cursor = page.get("next_cursor")
+        if type(complete) is not bool or not isinstance(next_cursor, str):
+            raise module.SpecValidationError("Production batch pagination contract is invalid.")
 
         (
             raw_modules,
@@ -353,11 +355,39 @@ def _expand_one_production_batch(
             tests=tests,
         )
         if not completed_set:
-            # Auto-advance at least one deliverable to ensure guaranteed forward progress
-            completed_set = {remaining[0]}
+            raise module.SpecValidationError(
+                "Production batch page made no host-verifiable deliverable progress."
+            )
 
+        previous_remaining = tuple(remaining)
         remaining = [value for value in remaining if value not in completed_set]
+        if len(remaining) >= len(previous_remaining):
+            raise module.SpecValidationError(
+                "Production batch pagination did not reduce remaining deliverables."
+            )
 
+        if remaining:
+            if complete:
+                raise module.SpecValidationError(
+                    "Production batch declared complete with deliverables still remaining."
+                )
+            if not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
+                raise module.SpecValidationError(
+                    "Production batch pagination did not advance its cursor."
+                )
+        else:
+            if not complete:
+                raise module.SpecValidationError(
+                    "Production batch completed all deliverables but complete=false."
+                )
+            if next_cursor:
+                raise module.SpecValidationError(
+                    "Complete production batch page may not have next_cursor."
+                )
+
+        # Commit catalog and proposal mutations only after the page has passed both
+        # progress and cursor checks. A rejected page therefore cannot contaminate
+        # subsequent planner context.
         for value in page_modules:
             module_catalog.add(value.module_id)
         for value in page_assets:
@@ -370,11 +400,9 @@ def _expand_one_production_batch(
         parts.acceptance_tests.extend(tests)
         test_catalog.update(tests)
 
-        if not remaining or complete or not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
-            break
-
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
+        if remaining:
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
 
 
 def _planner_module(self: Any) -> Any:
