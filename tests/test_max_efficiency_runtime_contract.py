@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.max_efficiency_runtime_contract as max_efficiency
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph
+from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
@@ -22,19 +24,31 @@ def _node(node_id: str, resource_class: str) -> WorkNode:
     )
 
 
-def test_exact_llm_executor_uses_selected_native_slots(monkeypatch) -> None:
+def test_stdlib_executor_is_not_globally_patched(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
-    assert getattr(concurrent.futures.ThreadPoolExecutor, "_mmm_exact_llm_executor", False)
+    assert not getattr(
+        concurrent.futures.ThreadPoolExecutor,
+        "_mmm_exact_llm_executor",
+        False,
+    )
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="llm",
     ) as pool:
-        assert pool._max_workers == 3
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=1,
-        thread_name_prefix="ordinary",
-    ) as pool:
         assert pool._max_workers == 1
+    assert safety._capacities()["llm"] == 3
+
+
+def test_generation_scheduler_uses_owner_capacities_and_event_wait() -> None:
+    source = inspect.getsource(
+        inspect.unwrap(CompleteProductionOrchestrator._execute_generation_work)
+    )
+    assert "scheduler_safety._capacities()" in source
+    assert "FIRST_COMPLETED" in source
+    assert "while len(claimed_batch) < 8" not in source
+    assert "time.sleep(0.05)" not in source
+    assert "node_by_id" in source
+    assert "_acquire_path_lock" not in source
 
 
 def test_max_efficiency_preserves_existing_dependency_wave_shards(monkeypatch) -> None:
