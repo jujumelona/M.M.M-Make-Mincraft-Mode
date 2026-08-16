@@ -232,6 +232,9 @@ def _host_tool_payload(
     payload = dict(payload_builder(adapter, request))
     for key in _NATIVE_GRAMMAR_CONTROL_KEYS:
         payload.pop(key, None)
+    payload["reasoning_effort"] = "none"
+    payload["chat_template_kwargs"] = {"enable_thinking": False}
+    payload.pop("thinking_budget_tokens", None)
     _assert_no_native_grammar_controls(payload)
     return payload
 
