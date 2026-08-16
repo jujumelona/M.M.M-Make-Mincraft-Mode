@@ -467,7 +467,7 @@ def _install_json_early_stop() -> None:
                 return res
 
             if host_complete:
-                parsed = _parse_root_json_object(content)
+                _parse_root_json_object(content)
                 print(
                     "llama server: structured JSON complete; decode cancelled",
                     f" content_chars={len(content)}",
@@ -477,7 +477,7 @@ def _install_json_early_stop() -> None:
                 return content
             if not saw_done:
                 raise RuntimeError("llama server stream ended before JSON completion")
-            parsed = _parse_root_json_object(content)
+            _parse_root_json_object(content)
             return content
         except Exception as exc:
             if isinstance(exc, ModelBackendError):
