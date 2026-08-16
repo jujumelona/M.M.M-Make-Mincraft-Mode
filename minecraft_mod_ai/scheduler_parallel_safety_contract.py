@@ -27,6 +27,7 @@ _STAGE_WRITE_LOCKS = {
     "system": threading.RLock(),
     "entity": threading.RLock(),
 }
+_SERIAL_CPU_STAGES = tuple(f"generate:{stage}" for stage in _STAGE_WRITE_LOCKS)
 _INDEX_COMMIT_LOCK = threading.RLock()
 _SHARED_LOCAL_GPU_LANE: ContextVar[bool] = ContextVar(
     "mmm_shared_local_gpu_lane",
@@ -331,6 +332,7 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
         owner = _orchestrator_owner(self)
         resource_expr = _resource_sql("")
         task_resource_expr = _resource_sql("task")
+        active_resource_expr = _resource_sql("active")
         stage_sql = ""
         stage_params: tuple[Any, ...] = ()
         if stages:
@@ -377,9 +379,12 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 )
             )
             lane_placeholders = ",".join("?" for _ in ordered_lanes)
+            serial_stage_placeholders = ",".join("?" for _ in _SERIAL_CPU_STAGES)
             params = (
                 work_graph_module.WorkState.PENDING.value,
                 work_graph_module.WorkState.SUCCEEDED.value,
+                *_SERIAL_CPU_STAGES,
+                work_graph_module.WorkState.RUNNING.value,
                 *stage_params,
                 *ordered_lanes,
             )
@@ -396,6 +401,17 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                           ON dependency.node_id = edges.dependency_id
                         WHERE edges.node_id = task.node_id
                           AND dependency.state != ?
+                      )
+                      AND NOT (
+                        {task_resource_expr} = 'cpu_io'
+                        AND task.stage IN ({serial_stage_placeholders})
+                        AND EXISTS (
+                            SELECT 1
+                            FROM tasks AS active
+                            WHERE active.state = ?
+                              AND active.stage = task.stage
+                              AND {active_resource_expr} = 'cpu_io'
+                        )
                       )
                       {stage_sql}
                       AND {task_resource_expr} IN ({lane_placeholders})
@@ -515,6 +531,7 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
 
     claim_ready._mmm_parallel_lane_claim = True  # type: ignore[attr-defined]
     claim_ready._mmm_exact_executor_fairness = True  # type: ignore[attr-defined]
+    claim_ready._mmm_stage_lock_admission = True  # type: ignore[attr-defined]
     # The consolidated safety claimant already owns the max-efficiency semantics.
     # Any late compatibility installer must not wrap it with another transaction.
     claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
