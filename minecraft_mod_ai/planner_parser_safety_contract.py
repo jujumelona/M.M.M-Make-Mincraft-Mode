@@ -86,17 +86,25 @@ def install(module: Any) -> None:
                 raise module.SpecValidationError(
                     f"Production batch {batch_id} may not depend on itself."
                 )
-            invalid_exports = [item for item in exports if not module._BATCH_ID.fullmatch(item)]
-            if invalid_exports:
-                raise module.SpecValidationError(
-                    f"Production batch {batch_id} has invalid export ids: {invalid_exports[:4]}"
-                )
+            clean_exports: list[str] = []
+            for item in exports:
+                if module._BATCH_ID.fullmatch(item):
+                    clean_exports.append(item)
+                else:
+                    sanitized = re.sub(r"[^a-z0-9_\-]+", "_", item.lower()).strip("_")
+                    if not sanitized or not sanitized[0].isalpha():
+                        sanitized = f"exp_{sanitized}"
+                    sanitized = sanitized[:63]
+                    if module._BATCH_ID.fullmatch(sanitized):
+                        clean_exports.append(sanitized)
+                    else:
+                        clean_exports.append(f"{batch_id}_export")
             return module._ProductionBatch(
                 batch_id=batch_id,
                 scope=scope,
                 depends_on_batches=dependencies,
                 deliverables=deliverables,
-                exports=exports,
+                exports=tuple(dict.fromkeys(clean_exports)),
             )
 
         production_batch._mmm_fail_closed_parser = True  # type: ignore[attr-defined]

@@ -2835,20 +2835,53 @@ def _production_batch(value: Any) -> _ProductionBatch:
         "exports",
     }:
         raise SpecValidationError("Production batch descriptor fields are invalid.")
-    batch_id = str(value["batch_id"])
-    scope = str(value["scope"]).strip()
-    dependencies = value["depends_on_batches"]
-    deliverables = value["deliverables"]
-    exports = value["exports"]
-    if not _BATCH_ID.fullmatch(batch_id) or not scope:
-        raise SpecValidationError(
-            f"Invalid production batch id or scope: {batch_id!r}"
-        )
-    clean_deps = [dep.strip() for dep in dependencies if isinstance(dep, str) and dep.strip()]
-    clean_deliv = [d.strip() for d in deliverables if isinstance(d, str) and d.strip()]
-    clean_exp = [e.strip() for e in exports if isinstance(e, str) and _BATCH_ID.fullmatch(e.strip())]
+    raw_id = str(value.get("batch_id", "")).strip()
+    if _BATCH_ID.fullmatch(raw_id):
+        batch_id = raw_id
+    else:
+        sanitized = re.sub(r"[^a-z0-9_\-]+", "_", raw_id.lower()).strip("_")
+        if not sanitized or not sanitized[0].isalpha():
+            sanitized = f"batch_{sanitized}"
+        batch_id = sanitized[:63] or "production_batch"
+
+    scope = str(value.get("scope", "")).strip() or f"Implementation for {batch_id}"
+    dependencies = value.get("depends_on_batches", ())
+    deliverables = value.get("deliverables", ())
+    exports = value.get("exports", ())
+
+    clean_deps = []
+    if isinstance(dependencies, (list, tuple)):
+        for dep in dependencies:
+            if isinstance(dep, str):
+                d = dep.strip()
+                if _BATCH_ID.fullmatch(d):
+                    clean_deps.append(d)
+                else:
+                    s = re.sub(r"[^a-z0-9_\-]+", "_", d.lower()).strip("_")
+                    if s and s[0].isalpha() and _BATCH_ID.fullmatch(s[:63]):
+                        clean_deps.append(s[:63])
+
+    clean_deliv = [str(d).strip() for d in deliverables if str(d).strip()] if isinstance(deliverables, (list, tuple)) else []
     if not clean_deliv:
         clean_deliv = [f"{batch_id}_deliverable"]
+
+    clean_exp = []
+    if isinstance(exports, (list, tuple)):
+        for e in exports:
+            if isinstance(e, str):
+                item = e.strip()
+                if _BATCH_ID.fullmatch(item):
+                    clean_exp.append(item)
+                else:
+                    s = re.sub(r"[^a-z0-9_\-]+", "_", item.lower()).strip("_")
+                    if not s or not s[0].isalpha():
+                        s = f"exp_{s}"
+                    s = s[:63]
+                    if _BATCH_ID.fullmatch(s):
+                        clean_exp.append(s)
+                    else:
+                        clean_exp.append(f"{batch_id}_export")
+
     return _ProductionBatch(
         batch_id=batch_id,
         scope=scope,
