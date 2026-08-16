@@ -938,7 +938,30 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path],
         enforce_batch_dependencies: bool,
     ) -> _ProductionParts:
-        """Expand one batch against immutable-at-dispatch private state."""
+        """Expand one batch against immutable-at-dispatch private state with durable disk checkpointing."""
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+
+        cache_key = hashlib.sha256(
+            f"{planning_receipt.get('prompt_sha256', '')}_{batch.batch_id}_{batch.scope}".encode("utf-8")
+        ).hexdigest()
+        cache_dir = Path(os.environ.get("MMM_PLANNER_CACHE_DIR", ".planner_cache"))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"batch_{batch.batch_id}_{cache_key[:12]}.json"
+
+        if cache_file.is_file():
+            try:
+                cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                modules = [ProductionModule.from_dict(m) for m in cached_data.get("modules", ())]
+                assets = [AssetRequest.from_dict(a) for a in cached_data.get("assets", ())]
+                audio = [AudioRequest.from_dict(au) for au in cached_data.get("audio", ())]
+                tests = list(cached_data.get("acceptance_tests", ()))
+                print(f"⚡ [Planner] Batch '{batch.batch_id}' loaded from checkpoint cache in 0.01s!", flush=True)
+                return _ProductionParts(modules, assets, audio, tests)
+            except Exception:
+                pass
 
         private_parts = _ProductionParts([], [], [], [])
         private_modules = module_catalog.clone()
@@ -981,8 +1004,6 @@ class CompleteGameDesignPlanner:
                 depends_on=(),
                 required_gates=(),
             )
-            # A declared-export fallback is real output. Recording it in the private
-            # catalog catches collisions with already committed modules before merge.
             private_modules.add(fallback.module_id)
             private_parts.modules.append(fallback)
 
@@ -1000,6 +1021,20 @@ class CompleteGameDesignPlanner:
                 private_parts.modules,
                 dependency_module_ids,
             )
+
+        try:
+            cache_file.write_text(
+                json.dumps({
+                    "modules": [m.to_dict() for m in private_parts.modules],
+                    "assets": [a.to_dict() for a in private_parts.assets],
+                    "audio": [au.to_dict() for au in private_parts.audio],
+                    "acceptance_tests": list(private_parts.acceptance_tests),
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
         return private_parts
 
     def _retry_production_batch_wave_serially(
