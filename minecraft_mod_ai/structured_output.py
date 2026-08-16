@@ -302,15 +302,18 @@ def _coerce_value_to_schema(value: Any, schema: dict[str, Any], *, aggressive: b
                 return int(num) if target_type == "integer" else num
             except (ValueError, TypeError):
                 pass
-        return 0 if target_type == "integer" else 0.0
+        return value
 
     # Handle boolean type
     if target_type == "boolean":
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            return value.strip().lower() in ("true", "1", "yes")
-        return bool(value)
+            if value.strip().lower() in ("true", "1", "yes"):
+                return True
+            if value.strip().lower() in ("false", "0", "no"):
+                return False
+        return value
 
     return value
 
@@ -428,13 +431,6 @@ def generate_with_host_schema_repair(
     if not errors:
         return current
 
-    # Attempt deterministic host schema coercion on candidate JSON
-    coerced = _coerce_json_to_schema(current, effective_schema)
-    if coerced is not None:
-        coerced_errors = _validation_errors(coerced, validator)
-        if not coerced_errors:
-            return coerced
-
     for _attempt in range(1, max_repair_attempts + 1):
         repair_request = replace(
             request,
@@ -454,18 +450,13 @@ def generate_with_host_schema_repair(
         errors = _validation_errors(current, validator)
         if not errors:
             return current
-        coerced = _coerce_json_to_schema(current, effective_schema)
-        if coerced is not None:
-            coerced_errors = _validation_errors(coerced, validator)
-            if not coerced_errors:
-                return coerced
 
-    # Final aggressive deterministic coercion fallback
-    final_coerced = _coerce_json_to_schema(current, effective_schema, aggressive=True)
-    if final_coerced is not None:
-        final_errors = _validation_errors(final_coerced, validator)
-        if not final_errors:
-            return final_coerced
+    # Final deterministic host schema coercion fallback before raising error
+    coerced = _coerce_json_to_schema(current, effective_schema)
+    if coerced is not None:
+        coerced_errors = _validation_errors(coerced, validator)
+        if not coerced_errors:
+            return coerced
 
     raise StructuredOutputValidationError(
         output=current,
