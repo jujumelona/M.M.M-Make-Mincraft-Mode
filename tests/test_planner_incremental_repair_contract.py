@@ -41,6 +41,33 @@ class _Router:
         return str(value)
 
 
+class _ToolAwareRouter(_Router):
+    def generate_text(
+        self,
+        role: str,
+        messages,
+        *,
+        media_paths=(),
+        response_format="text",
+        enable_tools=True,
+    ) -> str:
+        self.calls.append(
+            {
+                "role": role,
+                "messages": messages,
+                "media_paths": media_paths,
+                "response_format": response_format,
+                "enable_tools": enable_tools,
+            }
+        )
+        if not self.responses:
+            raise AssertionError("unexpected extra model call")
+        value = self.responses.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return str(value)
+
+
 def _request() -> dict[str, object]:
     return {
         "known_batch_catalog": {"count": 0, "sha256": "0" * 64, "recent_ids": []},
@@ -169,6 +196,48 @@ def test_invalid_field_patch_escalates_to_one_complete_batch_regeneration(
     )
     second_request = json.loads(str(router.calls[2]["messages"][1]["content"]))
     assert second_request["repair_mode"] == "replacement"
+
+
+def test_semantic_stall_gets_one_must_change_replacement_before_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    bad = _batch("broken_scope", scope="")
+    repaired = _batch("broken_scope", scope="Implement the corrected scope.")
+    router = _Router(
+        _outline(bad),
+        _field_patch(bad, scope=""),
+        _replacement_patch(bad, bad),
+        _replacement_patch(bad, repaired),
+    )
+
+    page = _run(router, stage="must change stalled batch")
+
+    assert page["production_batches"] == [repaired]
+    assert len(router.calls) == 4
+    escalation_system = str(router.calls[3]["messages"][0]["content"])
+    assert "MUST materially change" in escalation_system
+    escalation_request = json.loads(str(router.calls[3]["messages"][1]["content"]))
+    assert escalation_request["repair_mode"] == "replacement_must_change"
+    assert escalation_request["must_change_from_fingerprint"] == incremental._fingerprint(bad)
+
+
+def test_structured_production_outline_and_repair_disable_agent_tools(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_PLANNER_CHECKPOINT_DIR", str(tmp_path))
+    bad = _batch("tool_loop_scope", scope="")
+    repaired_scope = "Implement the repaired production scope."
+    router = _ToolAwareRouter(
+        _outline(bad),
+        _field_patch(bad, scope=repaired_scope),
+    )
+
+    page = _run(router, stage="tool-free structured batch repair")
+
+    assert page["production_batches"][0]["scope"] == repaired_scope
+    assert len(router.calls) == 2
+    assert all(call["enable_tools"] is False for call in router.calls)
 
 
 def test_backend_failure_resumes_pending_patch_without_regenerating_outline(
