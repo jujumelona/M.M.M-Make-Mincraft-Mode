@@ -54,10 +54,63 @@ def _validator_for(schema: Mapping[str, Any]):
     return validator_cls(schema_dict)
 
 
-def _validation_errors(text: str, validator: Any) -> tuple[str, ...]:
+import re
+
+
+def _clean_json_text(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    if "</think>" in cleaned:
+        cleaned = cleaned.split("</think>")[-1]
+    elif "<think>" in cleaned:
+        if "{" in cleaned:
+            cleaned = cleaned[cleaned.find("{"):]
+        else:
+            cleaned = ""
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
+    cleaned = cleaned.replace("```", "")
+    return cleaned.strip()
+
+
+def _parse_json_value(text: str) -> tuple[Any, str, json.JSONDecodeError | None]:
+    """Parse JSON with multi-layer sanitization for model-generated output."""
+    raw = text.strip()
     try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
+        return json.loads(raw), raw, None
+    except json.JSONDecodeError as direct_err:
+        last_err = direct_err
+
+    try:
+        return json.loads(raw, strict=False), raw, None
+    except json.JSONDecodeError:
+        pass
+
+    cleaned = _clean_json_text(raw)
+    try:
+        return json.loads(cleaned, strict=False), cleaned, None
+    except json.JSONDecodeError:
+        pass
+
+    # Sanitize unescaped control chars / newlines inside string literals
+    repaired = re.sub(
+        r'(?<=: ")(.*?)(?=")',
+        lambda m: m.group(1).replace("\n", "\\n").replace("\r", "").replace("\t", "\\t"),
+        cleaned,
+        flags=re.DOTALL,
+    )
+    try:
+        return json.loads(repaired, strict=False), repaired, None
+    except json.JSONDecodeError as final_err:
+        return None, raw, last_err
+
+
+def _validation_errors(text: str, validator: Any) -> tuple[str, ...]:
+    value, _, exc = _parse_json_value(text)
+    if exc is not None or value is None:
+        if exc is None:
+            return ("$: invalid JSON: unable to parse document",)
         return (
             f"$: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
         )
@@ -124,7 +177,10 @@ def _recover_invalid_json_document(exc: ModelBackendError) -> str | None:
     if not isinstance(cause, json.JSONDecodeError):
         return None
     output = str(cause.doc).strip()
-    if not output.startswith("{"):
+    cleaned = _clean_json_text(output)
+    if not cleaned.startswith("{") and "{" in cleaned:
+        cleaned = cleaned[cleaned.find("{"):]
+    if not cleaned.startswith("{"):
         return None
     return output
 

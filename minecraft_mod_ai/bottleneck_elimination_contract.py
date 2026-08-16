@@ -313,6 +313,8 @@ class _JsonObjectTracker:
             if not self.started:
                 if char.isspace():
                     continue
+                if char in ("`", "<", "\n", "\r", ">"):
+                    continue
                 if char != "{":
                     self.invalid = True
                     return False
@@ -427,10 +429,44 @@ def _install_json_early_stop() -> None:
                         "llama server produced reasoning deltas but no visible JSON content"
                     )
                 raise RuntimeError("llama server stream produced no JSON content")
-            if host_complete:
-                parsed = json.loads(content)
-                if not isinstance(parsed, dict):
+            def _parse_root_json_object(text: str) -> dict[str, Any]:
+                try:
+                    res = json.loads(text)
+                    if isinstance(res, dict):
+                        return res
+                except Exception:
+                    pass
+                try:
+                    res = json.loads(text, strict=False)
+                    if isinstance(res, dict):
+                        return res
+                except Exception:
+                    pass
+                cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                if "</think>" in cleaned:
+                    cleaned = cleaned.split("</think>")[-1]
+                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned.strip(), flags=re.MULTILINE)
+                cleaned = re.sub(r"```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
+                cleaned = cleaned.replace("```", "").strip()
+                try:
+                    res = json.loads(cleaned, strict=False)
+                    if isinstance(res, dict):
+                        return res
+                except Exception:
+                    pass
+                repaired = re.sub(
+                    r'(?<=: ")(.*?)(?=")',
+                    lambda m: m.group(1).replace("\n", "\\n").replace("\r", "").replace("\t", "\\t"),
+                    cleaned,
+                    flags=re.DOTALL,
+                )
+                res = json.loads(repaired, strict=False)
+                if not isinstance(res, dict):
                     raise RuntimeError("structured response root must be a JSON object")
+                return res
+
+            if host_complete:
+                parsed = _parse_root_json_object(content)
                 print(
                     "llama server: structured JSON complete; decode cancelled",
                     f" content_chars={len(content)}",
@@ -440,9 +476,7 @@ def _install_json_early_stop() -> None:
                 return content
             if not saw_done:
                 raise RuntimeError("llama server stream ended before JSON completion")
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise RuntimeError("structured response root must be a JSON object")
+            parsed = _parse_root_json_object(content)
             return content
         except Exception as exc:
             if isinstance(exc, ModelBackendError):
