@@ -368,143 +368,165 @@ def _install_json_early_stop() -> None:
         ):
             return current(adapter, request, server_url)
 
-        try:
-            payload = hardware._server_payload(adapter, request)
-            payload["stream"] = True
-            payload["stream_options"] = {"include_usage": True}
-            endpoint = f"{server_url.rstrip('/')}/chat/completions"
-            client = stream_contract._client(server_url)
-            tracker = _JsonObjectTracker()
-            pieces: list[str] = []
-            reasoning_chars = 0
-            saw_done = False
-            host_complete = False
-            started = time.monotonic()
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                payload = hardware._server_payload(adapter, request)
+                payload["stream"] = True
+                payload["stream_options"] = {"include_usage": True}
+                endpoint = f"{server_url.rstrip('/')}/chat/completions"
+                client = stream_contract._client(server_url)
+                tracker = _JsonObjectTracker()
+                pieces: list[str] = []
+                reasoning_chars = 0
+                saw_done = False
+                host_complete = False
+                started = time.monotonic()
 
-            with client.stream("POST", endpoint, json=payload) as response:
-                if response.status_code != 200:
-                    response.read()
-                    body = response.text.strip().replace("\n", " ")
-                    if len(body) > 1200:
-                        body = body[:1200] + "..."
-                    raise RuntimeError(
-                        f"llama server returned HTTP {response.status_code}"
-                        + (f": {body}" if body else "")
-                    )
-                stream_contract._report_server_connection(server_url)
-                for raw_line in response.iter_lines():
-                    line = raw_line.strip()
-                    if not line or line.startswith(":") or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data:
-                        continue
-                    if data == "[DONE]":
-                        saw_done = True
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError as exc:
-                        raise RuntimeError("llama server returned malformed SSE JSON") from exc
-                    if not isinstance(chunk, dict):
-                        continue
-                    choices = chunk.get("choices")
-                    if not isinstance(choices, list) or not choices:
-                        continue
-                    choice = choices[0]
-                    if not isinstance(choice, dict):
-                        continue
-                    reasoning, content = hardware._stream_delta_parts(choice)
-                    reasoning_chars += len(reasoning)
-                    if not content:
-                        continue
-                    pieces.append(content)
-                    if tracker.feed(content):
-                        host_complete = True
-                        break
+                with client.stream("POST", endpoint, json=payload) as response:
+                    if response.status_code != 200:
+                        response.read()
+                        body = response.text.strip().replace("\n", " ")
+                        if len(body) > 1200:
+                            body = body[:1200] + "..."
+                        raise RuntimeError(
+                            f"llama server returned HTTP {response.status_code}"
+                            + (f": {body}" if body else "")
+                        )
+                    stream_contract._report_server_connection(server_url)
+                    for raw_line in response.iter_lines():
+                        line = raw_line.strip()
+                        if not line or line.startswith(":") or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data:
+                            continue
+                        if data == "[DONE]":
+                            saw_done = True
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError as exc:
+                            raise RuntimeError("llama server returned malformed SSE JSON") from exc
+                        if not isinstance(chunk, dict):
+                            continue
+                        choices = chunk.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            continue
+                        choice = choices[0]
+                        if not isinstance(choice, dict):
+                            continue
+                        reasoning, content = hardware._stream_delta_parts(choice)
+                        reasoning_chars += len(reasoning)
+                        if not content:
+                            continue
+                        pieces.append(content)
+                        if tracker.feed(content):
+                            host_complete = True
+                            break
 
-            content = "".join(pieces).strip()
-            if not content:
-                if reasoning_chars:
-                    raise RuntimeError(
-                        "llama server produced reasoning deltas but no visible JSON content"
-                    )
-                raise RuntimeError("llama server stream produced no JSON content")
-            def _parse_root_json_object(text: str) -> dict[str, Any]:
-                try:
-                    res = json.loads(text)
-                    if isinstance(res, dict):
-                        return res
-                except Exception:
-                    pass
-                try:
-                    res = json.loads(text, strict=False)
-                    if isinstance(res, dict):
-                        return res
-                except Exception:
-                    pass
-                cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-                if "</think>" in cleaned:
-                    cleaned = cleaned.split("</think>")[-1]
-                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned.strip(), flags=re.MULTILINE)
-                cleaned = re.sub(r"```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
-                cleaned = cleaned.replace("```", "").strip()
-                try:
-                    res = json.loads(cleaned, strict=False)
-                    if isinstance(res, dict):
-                        return res
-                except Exception:
-                    pass
-                repaired = re.sub(
-                    r'(?<=: ")(.*?)(?=")',
-                    lambda m: m.group(1).replace("\n", "\\n").replace("\r", "").replace("\t", "\\t"),
-                    cleaned,
-                    flags=re.DOTALL,
-                )
-                try:
-                    res = json.loads(repaired, strict=False)
-                    if isinstance(res, dict):
-                        return res
-                except Exception:
-                    pass
-                # Truncation repair: close unterminated strings and open delimiters
-                from .structured_output import _repair_truncated_json
-                for source in (cleaned, repaired):
-                    trunc_fixed = _repair_truncated_json(source)
+                content = "".join(pieces).strip()
+                if not content:
+                    if reasoning_chars:
+                        raise RuntimeError(
+                            "llama server produced reasoning deltas but no visible JSON content"
+                        )
+                    raise RuntimeError("llama server stream produced no JSON content")
+                def _parse_root_json_object(text: str) -> dict[str, Any]:
                     try:
-                        res = json.loads(trunc_fixed, strict=False)
+                        res = json.loads(text)
                         if isinstance(res, dict):
                             return res
                     except Exception:
                         pass
-                # All repair strategies exhausted; raise with the original text
-                raise json.JSONDecodeError(
-                    "all repair strategies exhausted for truncated JSON",
-                    cleaned,
-                    0,
-                )
+                    try:
+                        res = json.loads(text, strict=False)
+                        if isinstance(res, dict):
+                            return res
+                    except Exception:
+                        pass
+                    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                    if "</think>" in cleaned:
+                        cleaned = cleaned.split("</think>")[-1]
+                    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned.strip(), flags=re.MULTILINE)
+                    cleaned = re.sub(r"```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
+                    cleaned = cleaned.replace("```", "").strip()
+                    try:
+                        res = json.loads(cleaned, strict=False)
+                        if isinstance(res, dict):
+                            return res
+                    except Exception:
+                        pass
+                    repaired = re.sub(
+                        r'(?<=: ")(.*?)(?=")',
+                        lambda m: m.group(1).replace("\n", "\\n").replace("\r", "").replace("\t", "\\t"),
+                        cleaned,
+                        flags=re.DOTALL,
+                    )
+                    try:
+                        res = json.loads(repaired, strict=False)
+                        if isinstance(res, dict):
+                            return res
+                    except Exception:
+                        pass
+                    from .structured_output import _repair_truncated_json
+                    for source in (cleaned, repaired):
+                        trunc_fixed = _repair_truncated_json(source)
+                        try:
+                            res = json.loads(trunc_fixed, strict=False)
+                            if isinstance(res, dict):
+                                return res
+                        except Exception:
+                            pass
+                    raise json.JSONDecodeError(
+                        "all repair strategies exhausted for truncated JSON",
+                        cleaned,
+                        0,
+                    )
 
-            if host_complete:
+                if host_complete or saw_done:
+                    _parse_root_json_object(content)
+                    print(
+                        "llama server: structured JSON complete; decode cancelled",
+                        f" content_chars={len(content)}",
+                        f" elapsed={time.monotonic() - started:.1f}s",
+                        flush=True,
+                    )
+                    return content
                 _parse_root_json_object(content)
-                print(
-                    "llama server: structured JSON complete; decode cancelled",
-                    f" content_chars={len(content)}",
-                    f" elapsed={time.monotonic() - started:.1f}s",
-                    flush=True,
-                )
                 return content
-            if not saw_done:
-                raise RuntimeError("llama server stream ended before JSON completion")
-            _parse_root_json_object(content)
-            return content
-        except Exception as exc:
-            if isinstance(exc, ModelBackendError):
-                raise
-            raise ModelBackendError(
-                role=adapter.config.role,
-                model_id=adapter.config.model_id,
-                cause=exc,
-            ) from exc
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc).lower()
+                is_transient = any(
+                    marker in err_str or type(exc).__name__ in {
+                        "RemoteProtocolError", "ReadTimeout", "ConnectError", "TransportError"
+                    }
+                    for marker in (
+                        "peer closed connection",
+                        "incomplete chunked read",
+                        "connection reset",
+                        "remote disconnected",
+                        "503",
+                    )
+                )
+                if is_transient and attempt < 2:
+                    print(
+                        f"[Llama Server] Concurrency memory pressure / transient disconnect; "
+                        f"yielding VRAM and retrying (attempt {attempt + 1}/3)...",
+                        flush=True,
+                    )
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                if isinstance(exc, ModelBackendError):
+                    raise
+                raise ModelBackendError(
+                    role=adapter.config.role,
+                    model_id=adapter.config.model_id,
+                    cause=exc,
+                ) from exc
+        if last_exc is not None:
+            raise last_exc
 
     generate._mmm_json_root_early_stop = True
     generate.__wrapped__ = current
