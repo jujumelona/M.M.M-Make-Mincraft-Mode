@@ -22,13 +22,43 @@ jobs:
           python-version: '3.11'
       - name: Prepare refactor tooling
         run: python -m pip install --disable-pip-version-check pyyaml pytest
+      - name: Prepare safe AST wrapper
+        shell: bash
+        run: |
+          cat > /tmp/run_clean_refactor.py <<'PY'
+          import ast
+          import scripts.one_shot_clean_refactor as refactor
+
+          def _visit_try(self, node):
+              node = self.generic_visit(node)
+              if not node.body:
+                  node.body = [ast.Pass()]
+              for handler in node.handlers:
+                  if not handler.body:
+                      handler.body = [ast.Pass()]
+              return node
+
+          def _visit_body(self, node):
+              node = self.generic_visit(node)
+              if not node.body:
+                  node.body = [ast.Pass()]
+              return node
+
+          refactor.CapabilityStripper.visit_Try = _visit_try
+          if hasattr(ast, "TryStar"):
+              refactor.CapabilityStripper.visit_TryStar = _visit_try
+          refactor.CapabilityStripper.visit_With = _visit_body
+          refactor.CapabilityStripper.visit_AsyncWith = _visit_body
+          refactor.CapabilityStripper.visit_While = _visit_body
+          refactor.main()
+          PY
       - name: Apply clean refactor to current main
         shell: bash
         run: |
           set -euo pipefail
           run_refactor() {
             set +e
-            output="$(python scripts/one_shot_clean_refactor.py 2>&1)"
+            output="$(python /tmp/run_clean_refactor.py 2>&1)"
             status=$?
             set -e
             printf '%s\n' "$output"
@@ -60,7 +90,7 @@ jobs:
             git fetch origin main
             if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
               git reset --hard origin/main
-              python scripts/one_shot_clean_refactor.py
+              python /tmp/run_clean_refactor.py
               python -m compileall -q minecraft_mod_ai
               python -m pytest -q tests/test_clean_production_contract.py
               git diff --check
