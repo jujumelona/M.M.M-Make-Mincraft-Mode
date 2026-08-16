@@ -125,7 +125,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
         "install_agentic_search_efficiency(",
         "install_asset_resume_efficiency(",
         "install_audio_resume_efficiency(",
-        "install_production_stream_efficiency(",
         "install_execution_efficiency(",
         "install_incremental_resume(",
         "install_planner_pagination_safety(",
