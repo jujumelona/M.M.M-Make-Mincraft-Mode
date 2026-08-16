@@ -623,7 +623,6 @@ def install() -> None:
         ecosystem_discovery,
         parallel_runtime_contract,
         research_coordinator,
-        scheduler_parallel_safety_contract,
         work_graph,
     )
     from .max_efficiency_runtime_contract import enhance_runtime
@@ -641,10 +640,7 @@ def install() -> None:
     _install_trace_adaptive_search(agentic_optimization_contract)
     enhance_planner(complete_planner)
 
-    enhance_runtime(
-        work_graph_module=work_graph,
-        scheduler_module=scheduler_parallel_safety_contract,
-    )
+    enhance_runtime(work_graph_module=work_graph)
 
 
 __all__ = ["install"]
