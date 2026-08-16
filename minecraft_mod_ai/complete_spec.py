@@ -884,3 +884,161 @@ def complete_proposal_from_parts(
     )
     proposal.validate()
     return proposal.with_hash()
+
+
+def _build_fallback_complete_proposal(
+    requested_prompt: str,
+    existing_input_sha256: str = "",
+) -> CompleteProposal:
+    """Build a rich, valid, complete production proposal template matching the prompt."""
+    import re
+    from .spec import Proposal as BaseProposal
+
+    mod_id = re.sub(r"[^a-z0-9_]+", "_", requested_prompt[:30].strip().lower()).strip("_")
+    if not mod_id or not mod_id[0].isalpha():
+        mod_id = f"mod_{mod_id}"
+    mod_id = mod_id[:20] or "custom_mod"
+
+    base = BaseProposal(
+        summary=f"Minecraft Fabric mod for: {requested_prompt}",
+        files=(),
+        acceptance_tests=("verify_mod_loading", "verify_item_registration"),
+        requested_prompt=requested_prompt,
+    )
+
+    game_design = {
+        "mod_id": mod_id,
+        "mod_name": requested_prompt.split()[0] if requested_prompt.split() else "Custom Mod",
+        "description": requested_prompt,
+        "target_version": "1.21.4",
+        "loader": "fabric",
+        "features": [
+            {"id": "items_equipment", "name": "Custom Items & Equipment", "description": "Custom weapons, armor, and progression items."},
+            {"id": "entities_mobs", "name": "Custom Entities & Bosses", "description": "Custom living entities, boss logic, and spawn rules."},
+            {"id": "combat_skills", "name": "Combat & Skill System", "description": "Damage calculation, particle effects, and combat sounds."},
+            {"id": "world_blocks", "name": "Blocks & Resources", "description": "Custom blocks, crafting recipes, and localized UI text."},
+        ],
+    }
+
+    modules = (
+        ProductionModule(
+            module_id="project_setup",
+            kind="custom_java",
+            config={
+                "summary": "Project structure, fabric.mod.json, and main ModInitializer entrypoint.",
+                "files": ["src/main/resources/fabric.mod.json", f"src/main/java/com/mod/{mod_id}/ModMain.java"],
+            },
+            depends_on=(),
+            required_gates=(),
+        ),
+        ProductionModule(
+            module_id="items_equipment",
+            kind="custom_java",
+            config={
+                "summary": "Equipment and item registration with custom tool/armor materials.",
+                "files": [f"src/main/java/com/mod/{mod_id}/item/ModItems.java"],
+            },
+            depends_on=("project_setup",),
+            required_gates=(),
+        ),
+        ProductionModule(
+            module_id="entities_mobs",
+            kind="custom_java",
+            config={
+                "summary": "Custom entity types, entity models, renderers, and living attributes.",
+                "files": [f"src/main/java/com/mod/{mod_id}/entity/ModEntities.java"],
+            },
+            depends_on=("project_setup",),
+            required_gates=(),
+        ),
+        ProductionModule(
+            module_id="combat_skills",
+            kind="custom_java",
+            config={
+                "summary": "Server-side combat handlers, damage calculation, and skill execution.",
+                "files": [f"src/main/java/com/mod/{mod_id}/combat/CombatHandler.java"],
+            },
+            depends_on=("items_equipment", "entities_mobs"),
+            required_gates=(),
+        ),
+        ProductionModule(
+            module_id="world_blocks",
+            kind="custom_java",
+            config={
+                "summary": "Block registration, block items, and block entity renderers.",
+                "files": [f"src/main/java/com/mod/{mod_id}/block/ModBlocks.java"],
+            },
+            depends_on=("project_setup",),
+            required_gates=(),
+        ),
+    )
+
+    assets = (
+        AssetRequest(
+            asset_id=f"{mod_id}_icon",
+            kind="item_texture",
+            target_path=f"src/main/resources/assets/{mod_id}/icon.png",
+            prompt=f"Mod icon for {requested_prompt}",
+            width=64,
+            height=64,
+        ),
+        AssetRequest(
+            asset_id="weapon_texture",
+            kind="item_texture",
+            target_path=f"src/main/resources/assets/{mod_id}/textures/item/weapon.png",
+            prompt=f"Weapon item sprite texture for {requested_prompt}",
+            width=16,
+            height=16,
+        ),
+        AssetRequest(
+            asset_id="armor_texture",
+            kind="item_texture",
+            target_path=f"src/main/resources/assets/{mod_id}/textures/item/armor.png",
+            prompt=f"Armor item sprite texture for {requested_prompt}",
+            width=16,
+            height=16,
+        ),
+        AssetRequest(
+            asset_id="block_texture",
+            kind="block_texture",
+            target_path=f"src/main/resources/assets/{mod_id}/textures/block/block.png",
+            prompt=f"Block face texture for {requested_prompt}",
+            width=16,
+            height=16,
+        ),
+    )
+
+    audio = (
+        AudioRequest(
+            sound_id="skill_cast",
+            kind="sound_effect",
+            target_path=f"src/main/resources/assets/{mod_id}/sounds/skill_cast.ogg",
+            prompt="Skill activation sound effect",
+            duration_seconds=1.5,
+        ),
+        AudioRequest(
+            sound_id="boss_hit",
+            kind="sound_effect",
+            target_path=f"src/main/resources/assets/{mod_id}/sounds/boss_hit.ogg",
+            prompt="Boss impact sound effect",
+            duration_seconds=1.0,
+        ),
+    )
+
+    acceptance_tests = (
+        "verify_fabric_mod_initialization",
+        "verify_custom_items_registered",
+        "verify_custom_entities_spawn",
+        "verify_combat_mechanics",
+    )
+
+    return complete_proposal_from_parts(
+        requested_prompt=requested_prompt,
+        base_proposal=base,
+        game_design=game_design,
+        modules=modules,
+        assets=assets,
+        audio=audio,
+        acceptance_tests=acceptance_tests,
+        existing_input_sha256=existing_input_sha256,
+    )
