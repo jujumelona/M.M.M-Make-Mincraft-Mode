@@ -250,6 +250,13 @@ def install(runtime_module: Any) -> None:
                 f"Structured planner did not return {expectation}: {exc}"
             ) from exc
 
+        fields = frozenset(str(key) for key in value)
+        if fields not in tuple(expected_contracts):
+            expected = [sorted(contract) for contract in expected_contracts]
+            raise module.SpecValidationError(
+                "Structured planner top-level fields do not match the host contract: "
+                f"received={sorted(fields)}, expected_one_of={expected}"
+            )
         return value
 
     extract_strict._mmm_strict_structured_json = True  # type: ignore[attr-defined]
