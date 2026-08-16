@@ -1082,12 +1082,12 @@ def install(autotune_module: Any) -> None:
             if explicit_parallel is None:
                 gpu_bytes = resources.gpu_total_bytes or resources.gpu_free_bytes
                 if gpu_bytes:
-                    if gpu_bytes >= 14 * _MIB * 1024:
-                        requested_slots = 4
-                    elif gpu_bytes >= 10 * _MIB * 1024:
-                        requested_slots = 3
-                    else:
-                        requested_slots = 1
+                    model_bytes = _model_size(model_path) or int(6.14 * _MIB * 1024)
+                    available_kv = max(0, int(gpu_bytes * 0.98) - int(model_bytes * 1.02) - 400 * _MIB)
+                    kv_per_slot = _per_request_context(config) * _kv_bytes_per_token()
+                    if kv_per_slot > 0:
+                        calc_slots = max(1, int(available_kv // kv_per_slot))
+                        requested_slots = max(requested_slots, calc_slots)
             exact_parallel = explicit_parallel is not None
             attempts: list[int] = []
             for s in range(requested_slots, 0, -1):
