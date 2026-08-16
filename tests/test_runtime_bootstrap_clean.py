@@ -102,11 +102,13 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
     assert "platform_ecosystem_contract" not in source
     assert "platform_prompt_contract" not in source
     assert "platform_api_contract" not in source
+    assert "scheduler_poll_efficiency_contract" not in source
 
     required_once = (
         "install_runner_lock(",
         "install_gpu_handoff(",
         "install_scheduler_parallel_safety(",
+        "install_scheduler_connection_reuse(",
         "install_llama_parallel_runtime(",
         "install_native_llama_tuning_pipeline(",
         "install_llama_stream_efficiency(",
@@ -123,7 +125,6 @@ def test_runtime_bootstrap_is_flat_with_one_owned_llama_pipeline() -> None:
         "install_agentic_search_efficiency(",
         "install_asset_resume_efficiency(",
         "install_audio_resume_efficiency(",
-        "install_scheduler_poll_efficiency(",
         "install_production_stream_efficiency(",
         "install_execution_efficiency(",
         "install_incremental_resume(",
@@ -255,6 +256,7 @@ def test_specialized_installers_are_single_responsibility() -> None:
         "final_architecture_contract.py",
         "llama_server_max_performance.py",
         "production_stream_resume_contract.py",
+        "scheduler_poll_efficiency_contract.py",
         "platform_selection_efficiency_contract.py",
         "parallel_platform_rag_contract.py",
         "colab_auto_platform_contract.py",
