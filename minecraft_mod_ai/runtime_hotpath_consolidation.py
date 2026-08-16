@@ -5,15 +5,16 @@ from __future__ import annotations
 The existing bottleneck contract owns MCP transport/session reuse, central research
 owns evidence semantics, and trajectory-memory performance owns its SQLite index.
 This module only adjusts admission around those owners: duplicate central retrievals
-are memoized, independent read-only MCP requests use bounded persistent lanes, and
-trajectory memory locks are scoped to the project instead of serializing unrelated
-projects in one process.
+use per-build single-flight, independent read-only MCP requests use bounded persistent
+lanes, and trajectory memory locks are scoped to active projects instead of serializing
+unrelated projects in one process.
 """
 
 import hashlib
 import json
 import os
 import threading
+from concurrent.futures import Future
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
@@ -32,38 +33,65 @@ _MAX_EXTERNAL_READ_LANES = 8
 _MAX_READ_CACHE_ENTRIES = 512
 
 
+class _ProjectLockEntry:
+    __slots__ = ("lock", "users")
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.users = 0
+
+
 class _ProjectScopedRLock:
     """One reentrant lock per active project, with a safe global fallback."""
 
     def __init__(self) -> None:
         self._guard = threading.RLock()
-        self._locks: dict[str, threading.RLock] = {}
+        self._locks: dict[str, _ProjectLockEntry] = {}
         self._local = threading.local()
 
-    def _lock(self) -> threading.RLock:
+    def _release_claim(self, key: str, entry: _ProjectLockEntry) -> None:
+        with self._guard:
+            entry.users -= 1
+            if entry.users < 0:
+                raise RuntimeError("Project-scoped trajectory lock claim underflow")
+            if entry.users == 0 and self._locks.get(key) is entry:
+                self._locks.pop(key, None)
+
+    def _claim(self) -> tuple[str, _ProjectLockEntry]:
         key = _MEMORY_BASE.get() or "__global__"
         with self._guard:
-            lock = self._locks.get(key)
-            if lock is None:
-                lock = threading.RLock()
-                self._locks[key] = lock
-            return lock
+            entry = self._locks.get(key)
+            if entry is None:
+                entry = _ProjectLockEntry()
+                self._locks[key] = entry
+            # Count waiters before blocking so the last holder cannot retire an entry
+            # while another thread is already waiting to acquire the same project lock.
+            entry.users += 1
+        try:
+            entry.lock.acquire()
+        except BaseException:
+            self._release_claim(key, entry)
+            raise
+        return key, entry
 
     def __enter__(self) -> "_ProjectScopedRLock":
-        lock = self._lock()
-        lock.acquire()
+        key, entry = self._claim()
         stack = getattr(self._local, "stack", None)
         if stack is None:
             stack = []
             self._local.stack = stack
-        stack.append(lock)
+        stack.append((key, entry))
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         stack = getattr(self._local, "stack", None)
         if not stack:
             raise RuntimeError("Project-scoped trajectory lock exit without enter")
-        stack.pop().release()
+        key, entry = stack.pop()
+        try:
+            entry.lock.release()
+        finally:
+            self._release_claim(key, entry)
 
 
 def _external_read_lanes() -> int:
@@ -187,6 +215,7 @@ def _install_central_research_dedup(central_research: Any) -> Any:
         retrieve: Any = default_retrieve,
     ) -> dict[str, Any]:
         receipts: dict[str, Any] = {}
+        inflight: dict[str, Future[Any]] = {}
         receipts_lock = threading.RLock()
 
         def retrieve_once(query: str, **kwargs: Any) -> Any:
@@ -202,12 +231,29 @@ def _install_central_research_dedup(central_research: Any) -> Any:
             )
             key = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
             with receipts_lock:
-                cached = receipts.get(key)
-            if cached is not None:
-                return cached
-            value = retrieve(query, **kwargs)
+                if key in receipts:
+                    return receipts[key]
+                pending = inflight.get(key)
+                leader = pending is None
+                if leader:
+                    pending = Future()
+                    inflight[key] = pending
+            assert pending is not None
+            if not leader:
+                return pending.result()
+
+            try:
+                value = retrieve(query, **kwargs)
+            except BaseException as exc:
+                with receipts_lock:
+                    inflight.pop(key, None)
+                    pending.set_exception(exc)
+                raise
             with receipts_lock:
-                return receipts.setdefault(key, value)
+                receipts[key] = value
+                inflight.pop(key, None)
+                pending.set_result(value)
+            return value
 
         return current(research_brief, retrieve=retrieve_once)
 

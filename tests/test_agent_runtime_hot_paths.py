@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import anyio
 import pytest
 
 import minecraft_mod_ai.agent_capability_context as capability_context
+import minecraft_mod_ai.runtime_hotpath_consolidation as hotpath
 from minecraft_mod_ai import agent_tool_runtime
 from minecraft_mod_ai.causal_frontier_adapter import FrontierExecutionGate
 from minecraft_mod_ai.causal_tool_frontier_contract import _FrontierRuntimeProxy
@@ -120,3 +122,67 @@ def test_causal_execution_gate_blocks_hidden_read_tool_inside_worker_thread() ->
             hidden.result()
 
     assert calls == ["search_code_rag"]
+
+
+def test_central_research_identical_inflight_reads_are_single_flight() -> None:
+    provider_calls = 0
+    provider_lock = threading.Lock()
+    first_provider_entered = threading.Event()
+    duplicate_provider_entered = threading.Event()
+    release_provider = threading.Event()
+    launch = threading.Barrier(2)
+
+    def provider(query: str, **kwargs):
+        nonlocal provider_calls
+        with provider_lock:
+            provider_calls += 1
+            if provider_calls > 1:
+                duplicate_provider_entered.set()
+        first_provider_entered.set()
+        if not release_provider.wait(timeout=2.0):
+            raise TimeoutError("test provider was not released")
+        return {"query": query, "kwargs": dict(kwargs)}
+
+    def retrieve_domain_evidence(_brief, *, retrieve=provider):
+        def fetch():
+            launch.wait(timeout=2.0)
+            return retrieve("same-query", source="official")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(fetch) for _ in range(2)]
+            return {"rows": [future.result(timeout=2.0) for future in futures]}
+
+    module = SimpleNamespace(
+        retrieve_domain_evidence=retrieve_domain_evidence,
+        retrieve_official_evidence=provider,
+    )
+    wrapped = hotpath._install_central_research_dedup(module)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result_future = executor.submit(wrapped, {"need": "evidence"})
+        assert first_provider_entered.wait(timeout=1.0)
+        try:
+            assert not duplicate_provider_entered.wait(timeout=0.2)
+            assert provider_calls == 1
+        finally:
+            release_provider.set()
+        result = result_future.result(timeout=2.0)
+
+    assert result["rows"][0] == result["rows"][1]
+    assert provider_calls == 1
+
+
+def test_project_scoped_lock_reclaims_inactive_project_entries() -> None:
+    lock = hotpath._ProjectScopedRLock()
+
+    for index in range(64):
+        token = hotpath._MEMORY_BASE.set(f"/tmp/mmm-project-{index}")
+        try:
+            with lock:
+                assert len(lock._locks) == 1
+                with lock:
+                    assert len(lock._locks) == 1
+                assert len(lock._locks) == 1
+        finally:
+            hotpath._MEMORY_BASE.reset(token)
+        assert lock._locks == {}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from collections import Counter
 from pathlib import Path
 
 import yaml
@@ -109,7 +110,7 @@ def audit_bootstrap_owner_modules() -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     errors: list[str] = []
     installer_aliases: set[str] = set()
-    called_installers: set[str] = set()
+    called_installers: Counter[str] = Counter()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
             target = ["minecraft_mod_ai", *node.module.split(".")]
@@ -122,10 +123,22 @@ def audit_bootstrap_owner_modules() -> list[str]:
                     installer_aliases.add(alias.asname or alias.name)
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id.startswith("install_"):
-                called_installers.add(node.func.id)
-    missing_calls = sorted(installer_aliases - called_installers)
+                called_installers[node.func.id] += 1
+    missing_calls = sorted(
+        name for name in installer_aliases if called_installers[name] == 0
+    )
     if missing_calls:
         errors.append("BOOTSTRAP_IMPORTED_NOT_CALLED " + ",".join(missing_calls))
+    duplicate_calls = sorted(
+        (name, called_installers[name])
+        for name in installer_aliases
+        if called_installers[name] > 1
+    )
+    if duplicate_calls:
+        errors.append(
+            "BOOTSTRAP_INSTALLER_CALLED_MULTIPLE_TIMES "
+            + ",".join(f"{name}={count}" for name, count in duplicate_calls)
+        )
     return errors
 
 
