@@ -30,7 +30,7 @@ from .source_transplant import materialize_source_slices
 
 _MATERIALIZE_LOCK = threading.RLock()
 _MATERIALIZE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
-_MATERIALIZE_KEY_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_MATERIALIZE_KEY_LOCKS: dict[tuple[str, str], tuple[threading.Lock, int]] = {}
 
 
 def install_prebootstrap() -> None:
@@ -188,20 +188,36 @@ def _materialize_once(project_root: str | Path, reuse_plan: Mapping[str, Any]) -
     key = (root, hashlib.sha256(encoded).hexdigest())
     with _MATERIALIZE_LOCK:
         cached = _MATERIALIZE_CACHE.get(key)
-        key_lock = _MATERIALIZE_KEY_LOCKS.setdefault(key, threading.Lock())
-    if cached is not None:
-        return dict(cached)
-    with key_lock:
-        with _MATERIALIZE_LOCK:
-            cached = _MATERIALIZE_CACHE.get(key)
         if cached is not None:
             return dict(cached)
-        receipt = materialize_source_slices(root, reuse_plan)
+        tracked = _MATERIALIZE_KEY_LOCKS.get(key)
+        if tracked is None:
+            key_lock = threading.Lock()
+            users = 0
+        else:
+            key_lock, users = tracked
+        _MATERIALIZE_KEY_LOCKS[key] = (key_lock, users + 1)
+    try:
+        with key_lock:
+            with _MATERIALIZE_LOCK:
+                cached = _MATERIALIZE_CACHE.get(key)
+            if cached is not None:
+                return dict(cached)
+            receipt = materialize_source_slices(root, reuse_plan)
+            with _MATERIALIZE_LOCK:
+                _MATERIALIZE_CACHE[key] = dict(receipt)
+                while len(_MATERIALIZE_CACHE) > 64:
+                    _MATERIALIZE_CACHE.pop(next(iter(_MATERIALIZE_CACHE)))
+            return dict(receipt)
+    finally:
         with _MATERIALIZE_LOCK:
-            _MATERIALIZE_CACHE[key] = dict(receipt)
-            while len(_MATERIALIZE_CACHE) > 64:
-                _MATERIALIZE_CACHE.pop(next(iter(_MATERIALIZE_CACHE)))
-        return dict(receipt)
+            tracked = _MATERIALIZE_KEY_LOCKS.get(key)
+            if tracked is not None:
+                tracked_lock, users = tracked
+                if users <= 1:
+                    _MATERIALIZE_KEY_LOCKS.pop(key, None)
+                else:
+                    _MATERIALIZE_KEY_LOCKS[key] = (tracked_lock, users - 1)
 
 
 def _materialized_donor_context(
