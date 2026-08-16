@@ -551,8 +551,8 @@ def _cache_reuse_candidates() -> tuple[int, ...]:
 def _parallel_target() -> int:
     explicit = os.environ.get("MMM_LLAMA_CONCURRENT_REQUESTS", "").strip()
     if explicit:
-        return _env_int("MMM_LLAMA_CONCURRENT_REQUESTS", 1, minimum=1, maximum=8)
-    return 1 if _performance_mode() == "latency" else 4
+        return _env_int("MMM_LLAMA_CONCURRENT_REQUESTS", 1, minimum=1, maximum=32)
+    return 1 if _performance_mode() == "latency" else 16
 
 
 def _explicit_parallel() -> int | None:
@@ -563,7 +563,7 @@ def _explicit_parallel() -> int | None:
         value = int(raw)
     except ValueError as exc:
         raise ValueError("MMM_LLAMA_PARALLEL must be an integer") from exc
-    return max(1, min(8, value))
+    return max(1, min(32, value))
 
 
 def _parallel_candidates(
@@ -1076,12 +1076,15 @@ def install(autotune_module: Any) -> None:
                 if explicit_parallel is not None
                 else max(1, int(getattr(selected, "parallel", 1) or 1))
             )
-            if explicit_parallel is None and requested_slots <= 2:
+            if explicit_parallel is None:
                 gpu_bytes = resources.gpu_total_bytes or resources.gpu_free_bytes
-                if gpu_bytes and gpu_bytes >= 14 * _MIB * 1024:
-                    requested_slots = 4
-                elif gpu_bytes and gpu_bytes >= 10 * _MIB * 1024:
-                    requested_slots = 2
+                if gpu_bytes:
+                    model_bytes = _model_size(model_path) or int(6.1 * _MIB * 1024)
+                    available_kv = max(0, int(gpu_bytes * 0.95) - int(model_bytes * 1.05) - 512 * _MIB)
+                    kv_per_slot = _per_request_context(config) * _kv_bytes_per_token()
+                    if kv_per_slot > 0:
+                        calc_slots = max(1, min(16, int(available_kv // kv_per_slot)))
+                        requested_slots = max(requested_slots, calc_slots)
             exact_parallel = explicit_parallel is not None
             attempts: list[int] = [requested_slots]
             if not exact_parallel:
@@ -1092,7 +1095,7 @@ def install(autotune_module: Any) -> None:
                 ]
                 attempts.extend(
                     value
-                    for value in (4, 2, 1)
+                    for value in (16, 12, 8, 6, 4, 2, 1)
                     if value < requested_slots
                     and value not in attempts
                     and _parallel_resource_feasible(value, config, model_path, resources)

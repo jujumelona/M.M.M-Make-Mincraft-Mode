@@ -2986,7 +2986,7 @@ def _production_batch_parallel_capacity(router: Any, width: int) -> int:
     env_cap = os.environ.get("MMM_LLAMA_PARALLEL", "") or os.environ.get("MMM_LLAMA_CONCURRENT_REQUESTS", "")
     if env_cap.isdigit() and int(env_cap) > 1:
         return min(width, int(env_cap))
-    return min(width, 4)
+    return min(width, 16)
 
 
 def _production_batch_waves(
