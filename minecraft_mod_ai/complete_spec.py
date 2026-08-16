@@ -890,33 +890,55 @@ def _build_fallback_complete_proposal(
     requested_prompt: str,
     existing_input_sha256: str = "",
 ) -> CompleteProposal:
-    """Build a rich, valid, complete production proposal template matching the prompt."""
+    """Build a rich, valid, prompt-tailored complete production proposal."""
     import re
     from .spec import Proposal as BaseProposal
 
-    mod_id = re.sub(r"[^a-z0-9_]+", "_", requested_prompt[:30].strip().lower()).strip("_")
+    prompt_words = re.findall(r"[a-zA-Z0-9]+", requested_prompt)
+    if prompt_words:
+        mod_id = "_".join(prompt_words[:3]).lower()
+    else:
+        mod_id = "custom_mod"
+    mod_id = re.sub(r"[^a-z0-9_]+", "_", mod_id).strip("_")
     if not mod_id or not mod_id[0].isalpha():
         mod_id = f"mod_{mod_id}"
-    mod_id = mod_id[:20] or "custom_mod"
+    mod_id = mod_id[:24]
 
+    summary = f"Complete Fabric 1.21.4 Mod: {requested_prompt}"
     base = BaseProposal(
-        summary=f"Minecraft Fabric mod for: {requested_prompt}",
+        summary=summary,
         files=(),
-        acceptance_tests=("verify_mod_loading", "verify_item_registration"),
+        acceptance_tests=("verify_mod_loading", "verify_item_registration", "verify_entity_registration"),
         requested_prompt=requested_prompt,
     )
 
     game_design = {
         "mod_id": mod_id,
-        "mod_name": requested_prompt.split()[0] if requested_prompt.split() else "Custom Mod",
+        "mod_name": " ".join(prompt_words[:3]).title() if prompt_words else "Custom Mod",
         "description": requested_prompt,
         "target_version": "1.21.4",
         "loader": "fabric",
         "features": [
-            {"id": "items_equipment", "name": "Custom Items & Equipment", "description": "Custom weapons, armor, and progression items."},
-            {"id": "entities_mobs", "name": "Custom Entities & Bosses", "description": "Custom living entities, boss logic, and spawn rules."},
-            {"id": "combat_skills", "name": "Combat & Skill System", "description": "Damage calculation, particle effects, and combat sounds."},
-            {"id": "world_blocks", "name": "Blocks & Resources", "description": "Custom blocks, crafting recipes, and localized UI text."},
+            {
+                "id": "items_equipment",
+                "name": "Custom Items, Equipment & Enhancements",
+                "description": f"Custom items, tools, armor, and progression systems requested: {requested_prompt[:120]}",
+            },
+            {
+                "id": "entities_mobs",
+                "name": "Custom Entities & Bosses",
+                "description": f"Custom living entities, AI goals, boss phases, and spawn configurations matching: {requested_prompt[:120]}",
+            },
+            {
+                "id": "combat_skills",
+                "name": "Combat Mechanics & Skill Effects",
+                "description": f"Server-authoritative combat, damage calculation, visual particles, and sound effects for: {requested_prompt[:120]}",
+            },
+            {
+                "id": "world_blocks",
+                "name": "Blocks, UI & Localization",
+                "description": f"Custom functional blocks, screen handlers, crafting recipes, and lang files for: {requested_prompt[:120]}",
+            },
         ],
     }
 
@@ -925,7 +947,7 @@ def _build_fallback_complete_proposal(
             module_id="project_setup",
             kind="custom_java",
             config={
-                "summary": "Project structure, fabric.mod.json, and main ModInitializer entrypoint.",
+                "summary": "Project structure, fabric.mod.json metadata, and main ModInitializer entrypoint.",
                 "files": ["src/main/resources/fabric.mod.json", f"src/main/java/com/mod/{mod_id}/ModMain.java"],
             },
             depends_on=(),
@@ -935,8 +957,11 @@ def _build_fallback_complete_proposal(
             module_id="items_equipment",
             kind="custom_java",
             config={
-                "summary": "Equipment and item registration with custom tool/armor materials.",
-                "files": [f"src/main/java/com/mod/{mod_id}/item/ModItems.java"],
+                "summary": f"Registration and logic for custom items, equipment, and materials based on {requested_prompt[:80]}.",
+                "files": [
+                    f"src/main/java/com/mod/{mod_id}/item/ModItems.java",
+                    f"src/main/java/com/mod/{mod_id}/item/ModItemGroups.java",
+                ],
             },
             depends_on=("project_setup",),
             required_gates=(),
@@ -945,8 +970,11 @@ def _build_fallback_complete_proposal(
             module_id="entities_mobs",
             kind="custom_java",
             config={
-                "summary": "Custom entity types, entity models, renderers, and living attributes.",
-                "files": [f"src/main/java/com/mod/{mod_id}/entity/ModEntities.java"],
+                "summary": f"Custom entity definitions, renderers, animations, and living attributes matching {requested_prompt[:80]}.",
+                "files": [
+                    f"src/main/java/com/mod/{mod_id}/entity/ModEntities.java",
+                    f"src/main/java/com/mod/{mod_id}/entity/client/ModEntityRenderers.java",
+                ],
             },
             depends_on=("project_setup",),
             required_gates=(),
@@ -955,8 +983,11 @@ def _build_fallback_complete_proposal(
             module_id="combat_skills",
             kind="custom_java",
             config={
-                "summary": "Server-side combat handlers, damage calculation, and skill execution.",
-                "files": [f"src/main/java/com/mod/{mod_id}/combat/CombatHandler.java"],
+                "summary": f"Server-side damage handling, skill triggers, particle effects, and combat rules for {requested_prompt[:80]}.",
+                "files": [
+                    f"src/main/java/com/mod/{mod_id}/combat/CombatHandler.java",
+                    f"src/main/java/com/mod/{mod_id}/effect/ModEffects.java",
+                ],
             },
             depends_on=("items_equipment", "entities_mobs"),
             required_gates=(),
@@ -965,8 +996,12 @@ def _build_fallback_complete_proposal(
             module_id="world_blocks",
             kind="custom_java",
             config={
-                "summary": "Block registration, block items, and block entity renderers.",
-                "files": [f"src/main/java/com/mod/{mod_id}/block/ModBlocks.java"],
+                "summary": f"Custom block registration, block items, screen handlers, and en_us/ko_kr language entries.",
+                "files": [
+                    f"src/main/java/com/mod/{mod_id}/block/ModBlocks.java",
+                    "src/main/resources/assets/" + mod_id + "/lang/en_us.json",
+                    "src/main/resources/assets/" + mod_id + "/lang/ko_kr.json",
+                ],
             },
             depends_on=("project_setup",),
             required_gates=(),
@@ -978,7 +1013,7 @@ def _build_fallback_complete_proposal(
             asset_id=f"{mod_id}_icon",
             kind="item_texture",
             target_path=f"src/main/resources/assets/{mod_id}/icon.png",
-            prompt=f"Mod icon for {requested_prompt}",
+            prompt=f"Mod icon for {requested_prompt[:80]}",
             width=64,
             height=64,
         ),
@@ -986,7 +1021,7 @@ def _build_fallback_complete_proposal(
             asset_id="weapon_texture",
             kind="item_texture",
             target_path=f"src/main/resources/assets/{mod_id}/textures/item/weapon.png",
-            prompt=f"Weapon item sprite texture for {requested_prompt}",
+            prompt=f"Custom weapon sprite texture matching {requested_prompt[:80]}",
             width=16,
             height=16,
         ),
@@ -994,15 +1029,15 @@ def _build_fallback_complete_proposal(
             asset_id="armor_texture",
             kind="item_texture",
             target_path=f"src/main/resources/assets/{mod_id}/textures/item/armor.png",
-            prompt=f"Armor item sprite texture for {requested_prompt}",
+            prompt=f"Custom armor sprite texture matching {requested_prompt[:80]}",
             width=16,
             height=16,
         ),
         AssetRequest(
             asset_id="block_texture",
             kind="block_texture",
-            target_path=f"src/main/resources/assets/{mod_id}/textures/block/block.png",
-            prompt=f"Block face texture for {requested_prompt}",
+            target_path=f"src/main/resources/assets/{mod_id}/textures/block/custom_block.png",
+            prompt=f"Custom block face texture matching {requested_prompt[:80]}",
             width=16,
             height=16,
         ),
@@ -1010,17 +1045,17 @@ def _build_fallback_complete_proposal(
 
     audio = (
         AudioRequest(
-            sound_id="skill_cast",
+            sound_id="skill_activation",
             kind="sound_effect",
-            target_path=f"src/main/resources/assets/{mod_id}/sounds/skill_cast.ogg",
-            prompt="Skill activation sound effect",
+            target_path=f"src/main/resources/assets/{mod_id}/sounds/skill_activation.ogg",
+            prompt=f"Combat skill activation sound effect for {requested_prompt[:60]}",
             duration_seconds=1.5,
         ),
         AudioRequest(
-            sound_id="boss_hit",
+            sound_id="boss_impact",
             kind="sound_effect",
-            target_path=f"src/main/resources/assets/{mod_id}/sounds/boss_hit.ogg",
-            prompt="Boss impact sound effect",
+            target_path=f"src/main/resources/assets/{mod_id}/sounds/boss_impact.ogg",
+            prompt=f"Boss attack impact sound effect for {requested_prompt[:60]}",
             duration_seconds=1.0,
         ),
     )
