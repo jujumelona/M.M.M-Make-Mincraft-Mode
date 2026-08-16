@@ -620,27 +620,35 @@ def _valid_plan(value: Any, assets: Sequence[AssetRequest]) -> bool:
     rows = value.get("assets")
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         return False
-    expected = {asset.asset_id for asset in assets}
+    expected = {asset.asset_id: asset for asset in assets}
     found: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
             return False
         asset_id = str(row.get("asset_id") or "")
+        asset = expected.get(asset_id)
         prompts = row.get("prompts")
-        if asset_id not in expected:
-            continue
-        if asset_id in found:
+        if asset is None or asset_id in found:
+            return False
+        if (
+            str(row.get("kind") or "") != asset.kind
+            or str(row.get("target_path") or "").replace("\\", "/")
+            != asset.target_path.replace("\\", "/")
+            or row.get("width") != asset.width
+            or row.get("height") != asset.height
+        ):
             return False
         if (
             not isinstance(prompts, Sequence)
             or isinstance(prompts, (str, bytes))
             or len(prompts) != _PROMPTS_PER_ASSET
+            or len(set(prompts)) != _PROMPTS_PER_ASSET
         ):
             return False
         if any(not isinstance(prompt, str) or not prompt.strip() for prompt in prompts):
             return False
         found.add(asset_id)
-    return found == expected
+    return found == set(expected)
 
 
 def _target_receipt(game_design: Mapping[str, Any]) -> dict[str, Any]:
@@ -751,8 +759,11 @@ def _safe_target(project_root: Path, raw_path: str) -> Path:
 def _validate_reference_closure(project_root: Path) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     missing: set[str] = set()
+    model_missing: set[str] = set()
     checked = 0
-    for assets_root in tuple(root.glob("assets/*")) + tuple(root.glob("src/main/resources/assets/*")):
+    model_checked = 0
+    assets_roots = tuple(root.glob("assets/*")) + tuple(root.glob("src/main/resources/assets/*"))
+    for assets_root in assets_roots:
         if not assets_root.is_dir():
             continue
         namespace = assets_root.name
@@ -769,17 +780,6 @@ def _validate_reference_closure(project_root: Path) -> dict[str, Any]:
                 candidate = assets_root.parent / loc_namespace / "textures" / f"{loc_path}.png"
                 if not candidate.is_file():
                     missing.add(f"{loc_namespace}:{loc_path}")
-    model_missing: set[str] = set()
-    model_checked = 0
-    for assets_root in tuple(root.glob("assets/*")) + tuple(root.glob("src/main/resources/assets/*")):
-        if not assets_root.is_dir():
-            continue
-        namespace = assets_root.name
-        for json_path in assets_root.rglob("*.json"):
-            try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
             for location in _model_locations(data):
                 model_checked += 1
                 loc_namespace, loc_path = _split_resource_location(location, namespace)
