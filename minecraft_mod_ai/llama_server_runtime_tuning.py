@@ -329,8 +329,8 @@ def _kv_bytes_per_token() -> int:
     cache_v = os.environ.get(
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_V", os.environ.get("MMM_KV_CACHE_QUANT", "q4_0")
     ).strip().lower()
-    per_half = {"q4_0": 12 * 1024, "q8_0": 20 * 1024, "f16": 36 * 1024}
-    return per_half.get(cache_k, 36 * 1024) + per_half.get(cache_v, 36 * 1024)
+    per_half = {"q4_0": 7 * 1024, "q8_0": 14 * 1024, "f16": 28 * 1024}
+    return per_half.get(cache_k, 14 * 1024) + per_half.get(cache_v, 14 * 1024)
 
 
 def _model_size(model_path: str | None) -> int:
@@ -1076,9 +1076,11 @@ def install(autotune_module: Any) -> None:
                 if explicit_parallel is not None
                 else max(1, int(getattr(selected, "parallel", 1) or 1))
             )
-            if explicit_parallel is None and requested_slots == 1:
+            if explicit_parallel is None and requested_slots <= 2:
                 gpu_bytes = resources.gpu_total_bytes or resources.gpu_free_bytes
-                if gpu_bytes and gpu_bytes >= 10 * _MIB * 1024:
+                if gpu_bytes and gpu_bytes >= 14 * _MIB * 1024:
+                    requested_slots = 4
+                elif gpu_bytes and gpu_bytes >= 10 * _MIB * 1024:
                     requested_slots = 2
             exact_parallel = explicit_parallel is not None
             attempts: list[int] = [requested_slots]
