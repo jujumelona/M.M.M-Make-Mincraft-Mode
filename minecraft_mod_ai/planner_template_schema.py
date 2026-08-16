@@ -35,13 +35,15 @@ def build_batch_skeleton(
     """Build a deterministic pre-filled template skeleton for a single batch."""
     deliv_list = [str(d).strip() for d in deliverables if str(d).strip()] or [f"{batch_id}_feature"]
     export_list = [str(e).strip() for e in exports if str(e).strip()] or [batch_id]
-    
+
     modules = [
         {
             "module_id": export_id,
             "kind": "custom_java",
             "config": {
-                "summary": f"{scope} - implementation for {export_id}",
+                # Scope is already carried by the enclosing batch request. Repeating it
+                # here can duplicate an entire authoritative request page on the hot path.
+                "summary": f"Implementation for {export_id}",
                 "batch_id": batch_id,
             },
             "depends_on": [dep for dep in depends_on_batches if dep in known_module_ids],
@@ -50,9 +52,9 @@ def build_batch_skeleton(
         }
         for export_id in export_list
     ]
-    
+
     tests = [f"test_{export_id}_registers" for export_id in export_list]
-    
+
     return {
         "modules": modules,
         "assets": [],
@@ -99,7 +101,7 @@ def merge_model_output_into_skeleton(
                 "required_gates": gates,
                 "implements_deliverables": claims or list(skeleton.get("completed_deliverables", [])),
             })
-    
+
     if not modules:
         modules = list(skeleton.get("modules", []))
 
