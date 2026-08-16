@@ -7,13 +7,34 @@ from functools import wraps
 from typing import Any, Sequence
 
 
-_ADAPTIVE_PRODUCTION_PROMPT = """Return exactly one concise production-batch JSON page.
+_ADAPTIVE_PRODUCTION_PROMPT = """Return exactly one concise production-batch JSON page matching the contract.
 
 There is NO fixed deliverable count per response and NO fixed page count.
 Do NOT force one module per deliverable. Define high-level architecture descriptors, asset requests, audio requests, and test names.
-Keep module configs concise and structured. Do NOT emit thousands of lines of full raw Java source code inside JSON strings (source code is created during code generation).
+Keep module configs concise: {"summary": "..."}. Do NOT emit thousands of lines of full raw Java source code inside JSON strings.
+Module depends_on must contain ONLY valid module_ids (never batch_ids or self-references).
 List all implemented items in completed_deliverables, set complete=true, and next_cursor="".
-Never repeat an already-known module, asset, audio ID, or file path. Return JSON only.
+Never repeat an already-known module, asset, audio ID, or file path. Return valid JSON only.
+
+Template format:
+{
+  "modules": [
+    {
+      "module_id": "feature_module_name",
+      "kind": "custom_java",
+      "config": {"summary": "Brief description"},
+      "depends_on": [],
+      "required_gates": [],
+      "implements_deliverables": ["target_deliverable"]
+    }
+  ],
+  "assets": [],
+  "audio": [],
+  "acceptance_tests": ["test_feature_works"],
+  "completed_deliverables": ["target_deliverable"],
+  "complete": true,
+  "next_cursor": ""
+}
 """.strip()
 
 _OUTPUT_ARRAYS = ("modules", "assets", "audio", "acceptance_tests")

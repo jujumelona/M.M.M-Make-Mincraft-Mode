@@ -1125,9 +1125,10 @@ class CompleteGameDesignPlanner:
             page = _generate_json_page_with_repair(
                 self.router,
                 system_prompt=(
-                    "Return exactly one concise production-batch JSON page for this batch. "
+                    "Return exactly one concise production-batch JSON page matching the contract. "
                     "Define high-level architecture descriptors, asset requests, audio requests, and test names. "
-                    "Keep module configs concise and structured; do NOT emit full raw Java code inside JSON strings. "
+                    "Keep module configs concise: {\"summary\": \"...\"}; do NOT emit raw Java source code inside JSON. "
+                    "Module depends_on must contain ONLY valid module_ids (never batch_ids). "
                     "List all implemented items in completed_deliverables, set complete=true, and next_cursor empty."
                 ),
                 request=request,
