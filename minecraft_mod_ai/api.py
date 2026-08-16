@@ -393,19 +393,12 @@ class CompleteModAISession:
         if self.existing_input is not None:
             if not self.existing_input.is_file():
                 raise FileNotFoundError(self.existing_input)
-        try:
-            proposal = self.planner.plan(
-                updated_brief,
-                media_paths=media_paths,
-                existing_input_sha256=existing_hash,
-            )
-        except Exception as exc:
-            print(f"⚠️ [Planner] Exception during plan synthesis: {exc}. Activating self-healing fallback proposal...", flush=True)
-            from .complete_spec import _build_fallback_complete_proposal
-            proposal = _build_fallback_complete_proposal(
-                requested_prompt=updated_brief,
-                existing_input_sha256=existing_hash,
-            )
+            existing_hash = "sha256:" + hashlib.sha256(self.existing_input.read_bytes()).hexdigest()
+        proposal = self.planner.plan(
+            updated_brief,
+            media_paths=media_paths,
+            existing_input_sha256=existing_hash,
+        )
         self.brief = updated_brief
         self.complete_proposal = proposal
         self.save_plan()

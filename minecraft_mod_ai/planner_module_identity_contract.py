@@ -9,12 +9,14 @@ _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
 def install(planner_module: Any) -> None:
-    """Keep planner module and dependency identities exact.
+    """Keep planner module/dependency identities exact instead of auto-normalizing.
 
-    New structured planner output must not rely on legacy object normalization:
-    silently rewriting an identifier changes graph identity and can hide a planner
-    reference error that the existing page-local repair path should correct.
+    ``ProductionModule.__post_init__`` retains a legacy normalization path for old
+    saved objects. New structured planner output must not rely on it: changing
+    ``Boss System`` to ``boss_system`` or rewriting dependency ids silently changes
+    graph identity and can hide a planner reference error.
     """
+
     current = planner_module._module
     if getattr(current, "_mmm_exact_module_identity", False):
         return

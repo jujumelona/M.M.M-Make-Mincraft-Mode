@@ -1,40 +1,30 @@
 from __future__ import annotations
 
 import math
-import re
 from copy import deepcopy
 from functools import wraps
 from typing import Any, Sequence
 
 
-_ADAPTIVE_PRODUCTION_PROMPT = """Return exactly one concise production-batch JSON page matching the contract.
+_ADAPTIVE_PRODUCTION_PROMPT = """Return exactly one production-batch JSON page.
 
-There is NO fixed deliverable count per response and NO fixed page count.
-Do NOT force one module per deliverable. Define high-level architecture descriptors, asset requests, audio requests, and test names.
-Keep module configs concise: {"summary": "..."}. Do NOT emit thousands of lines of full raw Java source code inside JSON strings.
-Module depends_on must contain ONLY valid module_ids (never batch_ids or self-references).
-List all implemented items in completed_deliverables, set complete=true, and next_cursor="".
-Never repeat an already-known module, asset, audio ID, or file path. Return valid JSON only.
+The host supplies current_target_deliverables as the COMPLETE unresolved pool for this
+batch. There is NO fixed deliverable count per response and NO fixed page count.
+Choose the largest coherent subset (recommended 1-2 deliverables at a time starting with
+current_target_deliverables[0]) that you can FULLY implement within the available output
+budget without truncating JSON, code metadata, assets, audio, or tests. Emitting 1-2
+deliverables per page ensures the JSON stays compact and avoids output token truncation.
 
-Template format:
-{
-  "modules": [
-    {
-      "module_id": "feature_module_name",
-      "kind": "custom_java",
-      "config": {"summary": "Brief description"},
-      "depends_on": [],
-      "required_gates": [],
-      "implements_deliverables": ["target_deliverable"]
-    }
-  ],
-  "assets": [],
-  "audio": [],
-  "acceptance_tests": ["test_feature_works"],
-  "completed_deliverables": ["target_deliverable"],
-  "complete": true,
-  "next_cursor": ""
-}
+A deliverable may require multiple modules/assets/tests and one output may satisfy
+multiple tightly coupled deliverables. Do NOT force one module per deliverable.
+Whenever practical, add implements_deliverables to produced module/asset/audio objects
+using exact names from current_target_deliverables. Put ONLY actually completed exact
+names in completed_deliverables. Never claim a partially emitted deliverable.
+
+If every unresolved deliverable is fully completed, set complete=true and
+next_cursor="". Otherwise set complete=false and return a short non-empty next_cursor
+so the host requests the next page for remaining items.
+Never repeat an already-known module, asset, audio ID, or file path. Return JSON only.
 """.strip()
 
 _OUTPUT_ARRAYS = ("modules", "assets", "audio", "acceptance_tests")
@@ -603,15 +593,16 @@ def install(complete_planner_module: Any) -> None:
         remaining = list(dict.fromkeys(str(value) for value in batch.deliverables))
         cursor = ""
         first_page = True
-        _page_hard_limit = max(3, len(remaining) + 1)
-        _page_count = 0
+        seen_states: set[tuple[tuple[str, ...], str]] = set()
         structured_router = structured_planner_router(self.router)
 
         while remaining:
-            _page_count += 1
-            if _page_count > _page_hard_limit:
-                remaining.clear()
-                break
+            state = (tuple(remaining), cursor)
+            if state in seen_states:
+                raise complete_planner_module.SpecValidationError(
+                    f"Production batch {batch.batch_id!r} pagination made no progress."
+                )
+            seen_states.add(state)
 
             # Never slice the unresolved pool to an arbitrary host width. The model
             # chooses how many coherent deliverables fit in this response; the host
@@ -637,23 +628,15 @@ def install(complete_planner_module: Any) -> None:
                 "cursor": cursor,
                 "contract": complete_planner_module._PRODUCTION_PAGE_CONTRACT,
             }
-            from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
-            known_ids = set(getattr(module_catalog, "_ids", ()))
-            skeleton = build_batch_skeleton(
-                batch_id=batch.batch_id,
-                scope=batch.scope,
-                deliverables=batch.deliverables,
-                exports=batch.exports,
-                depends_on_batches=batch.depends_on_batches,
-                known_module_ids=tuple(known_ids),
-            )
-            request["template_skeleton"] = skeleton
             if first_page:
                 request["planning_context"] = planning_context
 
             stage = f"production batch {batch.batch_id!r} page"
 
             def generate_page() -> dict[str, Any]:
+                # The host already supplied the exact evidence/context and a strict
+                # response schema. Tool use here only adds serial model-tool-model
+                # round-trips, so structured production decode is deliberately direct.
                 return complete_planner_module._generate_json_page_with_repair(
                     structured_router,
                     system_prompt=_ADAPTIVE_PRODUCTION_PROMPT,
@@ -665,6 +648,9 @@ def install(complete_planner_module: Any) -> None:
                     stage=stage,
                 )
 
+            # The page is durably keyed by the exact host request. A process/backend
+            # interruption after a successful decode therefore resumes from disk rather
+            # than spending another full GPU generation on already accepted output.
             page, page_path = load_or_generate_page(
                 stage=stage,
                 request=request,
@@ -672,55 +658,22 @@ def install(complete_planner_module: Any) -> None:
             )
             first_page = False
 
-            if not isinstance(page, dict):
-                page = skeleton
-            elif not page.get("modules"):
-                page = {**page, "modules": skeleton.get("modules", [])}
+            if set(page) != set(complete_planner_module._PRODUCTION_PAGE_CONTRACT):
+                raise complete_planner_module.SpecValidationError(
+                    "Production batch page fields are invalid."
+                )
 
-            # Robust host deliverable completion matching:
-            raw_completed = _string_list(page.get("completed_deliverables", []))
-            completed: set[str] = set()
-
-            # 1. Exact match
-            for value in raw_completed:
-                if value in remaining:
-                    completed.add(value)
-
-            # 2. Normalized / fuzzy alphanumeric match
+            # A page with no host target progress is rejected before any child parser or
+            # repair path can mutate proposal/catalog state.
+            completed = {
+                value
+                for value in _string_list(page.get("completed_deliverables", []))
+                if value in remaining
+            }
             if not completed:
-                for value in raw_completed:
-                    v_norm = re.sub(r"[^a-z0-9]+", "", value.lower())
-                    for rem in remaining:
-                        r_norm = re.sub(r"[^a-z0-9]+", "", rem.lower())
-                        if v_norm and r_norm and (v_norm in r_norm or r_norm in v_norm):
-                            completed.add(rem)
-
-            # 3. Item claims / IDs match
-            all_raw_items = [
-                item
-                for item in page.get("modules", []) + page.get("assets", []) + page.get("audio", [])
-                if isinstance(item, dict)
-            ]
-            if not completed:
-                for item in all_raw_items:
-                    claims = item.get("implements_deliverables") or item.get("implements") or []
-                    if isinstance(claims, (list, tuple)):
-                        for c in claims:
-                            if isinstance(c, str) and c in remaining:
-                                completed.add(c)
-                    item_id = str(item.get("module_id") or item.get("asset_id") or item.get("sound_id") or "").strip()
-                    if item_id and item_id in remaining:
-                        completed.add(item_id)
-
-            # 4. If valid items or tests were produced, consume progress so batch always progresses
-            if not completed and (all_raw_items or page.get("acceptance_tests")):
-                if page.get("complete") is True:
-                    completed.update(remaining)
-                elif remaining:
-                    completed.add(remaining[0])
-
-            if not completed and remaining:
-                completed.add(remaining[0])
+                raise complete_planner_module.SpecValidationError(
+                    f"Production batch {batch.batch_id!r} page made no verified progress."
+                )
 
             # Resolve children against staged catalog overlays. Semantic child repair
             # also uses the direct structured router: it operates only on the persisted
@@ -753,10 +706,7 @@ def install(complete_planner_module: Any) -> None:
             parts.acceptance_tests.extend(tests)
             test_catalog.update(tests)
 
-            if page.get("complete") is True:
-                remaining.clear()
-            else:
-                remaining = [value for value in remaining if value not in completed]
+            remaining = [value for value in remaining if value not in completed]
             if not remaining:
                 break
 

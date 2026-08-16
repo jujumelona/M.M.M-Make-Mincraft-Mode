@@ -5,12 +5,14 @@ from typing import Any
 
 
 def install(pagination_module: Any) -> None:
-    """Reject duplicate production-batch identities instead of renaming them.
+    """Do not silently rename duplicate production-batch identities.
 
-    Batch ids participate in dependency edges and exports. Auto-suffixing a duplicate
-    changes graph meaning while dependencies still refer to the original id, so the
-    planner must repair the invalid page instead of mutating the plan in host code.
+    Batch ids participate in dependency edges and exports. Renaming a duplicate with
+    ``_2`` changes graph meaning while dependencies still refer to the original id.
+    Duplicate identity is therefore invalid planner output and must be repaired, not
+    normalized into a different plan.
     """
+
     current = pagination_module._append_outline_batches
     if getattr(current, "_mmm_strict_batch_identity", False):
         return

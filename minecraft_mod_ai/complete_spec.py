@@ -315,128 +315,55 @@ class CompleteProposal:
                 "A complete proposal must contain at least one production module."
             )
 
-        # Auto-validate and auto-repair modules
-        unique_modules: list[ProductionModule] = []
-        seen_module_ids: set[str] = set()
+        ids: set[str] = set()
         for module in self.modules:
-            try:
-                module.validate(policy=policy)
-            except Exception:
-                pass
-            mod_id = module.module_id
-            if mod_id in seen_module_ids:
-                counter = 2
-                while f"{mod_id}_{counter}" in seen_module_ids:
-                    counter += 1
-                mod_id = f"{mod_id}_{counter}"
-                module = ProductionModule(
-                    module_id=mod_id,
-                    kind=module.kind,
-                    config=module.config,
-                    depends_on=module.depends_on,
-                    required_gates=module.required_gates,
+            module.validate(policy=policy)
+            if module.module_id in ids:
+                raise SpecValidationError(
+                    f"Duplicate production module: {module.module_id}"
                 )
-            seen_module_ids.add(mod_id)
-            unique_modules.append(module)
-        if unique_modules != list(self.modules):
-            object.__setattr__(self, "modules", tuple(unique_modules))
-
-        try:
-            self._validate_acyclic()
-        except Exception:
-            # Self-heal cycles by removing back-edges
-            valid_ids = {m.module_id for m in self.modules}
-            healed = []
-            for m in self.modules:
-                clean_deps = tuple(d for d in m.depends_on if d in valid_ids and d != m.module_id)
-                healed.append(
-                    ProductionModule(
-                        module_id=m.module_id,
-                        kind=m.kind,
-                        config=m.config,
-                        depends_on=clean_deps,
-                        required_gates=m.required_gates,
-                    )
+            ids.add(module.module_id)
+        for module in self.modules:
+            missing = set(module.depends_on) - ids
+            if missing:
+                raise SpecValidationError(
+                    f"Module {module.module_id} references missing dependencies: "
+                    f"{sorted(missing)}"
                 )
-            object.__setattr__(self, "modules", tuple(healed))
+        self._validate_acyclic()
 
-        # Auto-validate and deduplicate assets
-        unique_assets: list[AssetRequest] = []
-        seen_asset_ids: set[str] = set()
-        seen_asset_paths: set[str] = set()
         for asset in self.assets:
-            try:
-                asset.validate(policy=policy)
-            except Exception:
-                pass
-            aid = asset.asset_id
-            if aid in seen_asset_ids:
-                counter = 2
-                while f"{aid}_{counter}" in seen_asset_ids:
-                    counter += 1
-                aid = f"{aid}_{counter}"
-            seen_asset_ids.add(aid)
-
-            target_path = asset.target_path.replace("\\", "/")
-            if target_path in seen_asset_paths:
-                base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "png")
-                counter = 2
-                while f"{base_p}_{counter}.{ext}" in seen_asset_paths:
-                    counter += 1
-                target_path = f"{base_p}_{counter}.{ext}"
-            seen_asset_paths.add(target_path)
-
-            unique_assets.append(
-                AssetRequest(
-                    asset_id=aid,
-                    kind=asset.kind,
-                    target_path=target_path,
-                    prompt=asset.prompt,
-                    width=asset.width,
-                    height=asset.height,
-                    implements_deliverables=asset.implements_deliverables,
-                )
+            asset.validate(policy=policy)
+        if len({asset.asset_id for asset in self.assets}) != len(self.assets):
+            raise SpecValidationError("Asset IDs must be unique.")
+        if (
+            len(
+                {
+                    asset.target_path.replace("\\", "/")
+                    for asset in self.assets
+                }
             )
-        if unique_assets != list(self.assets):
-            object.__setattr__(self, "assets", tuple(unique_assets))
+            != len(self.assets)
+        ):
+            raise SpecValidationError("Asset target paths must be unique.")
 
-        # Auto-validate and deduplicate audio
-        unique_audio: list[AudioRequest] = []
-        seen_audio_ids: set[str] = set()
         for audio in self.audio:
-            try:
-                audio.validate(policy=policy)
-            except Exception:
-                pass
-            sid = audio.sound_id
-            if sid in seen_audio_ids:
-                counter = 2
-                while f"{sid}_{counter}" in seen_audio_ids:
-                    counter += 1
-                sid = f"{sid}_{counter}"
-            seen_audio_ids.add(sid)
-            unique_audio.append(
-                AudioRequest(
-                    sound_id=sid,
-                    kind=audio.kind,
-                    target_path=audio.target_path,
-                    prompt=audio.prompt,
-                    duration_seconds=audio.duration_seconds,
-                    implements_deliverables=audio.implements_deliverables,
-                )
+            audio.validate(policy=policy)
+        if len({audio.sound_id for audio in self.audio}) != len(self.audio):
+            raise SpecValidationError("Audio IDs must be unique.")
+
+        if (
+            not self.acceptance_tests
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in self.acceptance_tests
             )
-        if unique_audio != list(self.audio):
-            object.__setattr__(self, "audio", tuple(unique_audio))
-
-        # Auto-sanitize acceptance tests
-        clean_tests = list(dict.fromkeys(
-            str(v).strip() for v in self.acceptance_tests if isinstance(v, str) and str(v).strip()
-        ))
-        if not clean_tests:
-            clean_tests = ["verify_minecraft_mod_production_artifacts"]
-        if clean_tests != list(self.acceptance_tests):
-            object.__setattr__(self, "acceptance_tests", tuple(clean_tests))
-
+        ):
+            raise SpecValidationError(
+                "At least one non-empty complete-production acceptance test is required."
+            )
+        if len(set(self.acceptance_tests)) != len(self.acceptance_tests):
+            raise SpecValidationError("Acceptance tests must be unique.")
         if self.schema_version == "mmm/complete-proposal-v2":
             contract = self.game_design.get("_production_contract")
             if not isinstance(contract, dict):
@@ -481,13 +408,12 @@ class CompleteProposal:
             module.module_id: [] for module in self.modules
         }
         indegree = {
-            module.module_id: sum(1 for dep in module.depends_on if dep in outgoing)
+            module.module_id: len(module.depends_on)
             for module in self.modules
         }
         for module in self.modules:
             for dependency in module.depends_on:
-                if dependency in outgoing:
-                    outgoing[dependency].append(module.module_id)
+                outgoing[dependency].append(module.module_id)
         ready = [
             node for node, degree in indegree.items() if degree == 0
         ]
@@ -772,97 +698,6 @@ def complete_proposal_from_parts(
     acceptance_tests: tuple[str, ...],
     existing_input_sha256: str = "",
 ) -> CompleteProposal:
-    seen_module_ids: set[str] = set()
-    sanitized_modules: list[ProductionModule] = []
-    for m in modules:
-        mod_id = m.module_id
-        if mod_id in seen_module_ids:
-            counter = 2
-            while f"{mod_id}_{counter}" in seen_module_ids:
-                counter += 1
-            mod_id = f"{mod_id}_{counter}"
-        seen_module_ids.add(mod_id)
-        sanitized_modules.append(
-            ProductionModule(
-                module_id=mod_id,
-                kind=m.kind,
-                config=m.config,
-                depends_on=m.depends_on,
-                required_gates=m.required_gates,
-            )
-        )
-    valid_module_ids = set(seen_module_ids)
-    for idx, m in enumerate(sanitized_modules):
-        clean_deps = tuple(
-            dep for dep in m.depends_on
-            if dep in valid_module_ids and dep != m.module_id
-        )
-        if clean_deps != m.depends_on:
-            sanitized_modules[idx] = ProductionModule(
-                module_id=m.module_id,
-                kind=m.kind,
-                config=m.config,
-                depends_on=clean_deps,
-                required_gates=m.required_gates,
-            )
-    modules = tuple(sanitized_modules)
-
-    seen_asset_ids: set[str] = set()
-    seen_asset_paths: set[str] = set()
-    sanitized_assets: list[AssetRequest] = []
-    for a in assets:
-        asset_id = a.asset_id
-        if asset_id in seen_asset_ids:
-            counter = 2
-            while f"{asset_id}_{counter}" in seen_asset_ids:
-                counter += 1
-            asset_id = f"{asset_id}_{counter}"
-        seen_asset_ids.add(asset_id)
-
-        target_path = a.target_path.replace("\\", "/")
-        if target_path in seen_asset_paths:
-            base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "png")
-            counter = 2
-            while f"{base_p}_{counter}.{ext}" in seen_asset_paths:
-                counter += 1
-            target_path = f"{base_p}_{counter}.{ext}"
-        seen_asset_paths.add(target_path)
-
-        sanitized_assets.append(
-            AssetRequest(
-                asset_id=asset_id,
-                kind=a.kind,
-                target_path=target_path,
-                prompt=a.prompt,
-                width=a.width,
-                height=a.height,
-                implements_deliverables=a.implements_deliverables,
-            )
-        )
-    assets = tuple(sanitized_assets)
-
-    seen_audio_ids: set[str] = set()
-    sanitized_audio: list[AudioRequest] = []
-    for au in audio:
-        sound_id = au.sound_id
-        if sound_id in seen_audio_ids:
-            counter = 2
-            while f"{sound_id}_{counter}" in seen_audio_ids:
-                counter += 1
-            sound_id = f"{sound_id}_{counter}"
-        seen_audio_ids.add(sound_id)
-        sanitized_audio.append(
-            AudioRequest(
-                sound_id=sound_id,
-                kind=au.kind,
-                target_path=au.target_path,
-                prompt=au.prompt,
-                duration_seconds=au.duration_seconds,
-                implements_deliverables=au.implements_deliverables,
-            )
-        )
-    audio = tuple(sanitized_audio)
-
     proposal = CompleteProposal(
         schema_version=(
             "mmm/complete-proposal-v2"
@@ -884,196 +719,3 @@ def complete_proposal_from_parts(
     )
     proposal.validate()
     return proposal.with_hash()
-
-
-def _build_fallback_complete_proposal(
-    requested_prompt: str,
-    existing_input_sha256: str = "",
-) -> CompleteProposal:
-    """Build a rich, valid, prompt-tailored complete production proposal."""
-    import re
-    from .spec import Proposal as BaseProposal
-
-    prompt_words = re.findall(r"[a-zA-Z0-9]+", requested_prompt)
-    if prompt_words:
-        mod_id = "_".join(prompt_words[:3]).lower()
-    else:
-        mod_id = "custom_mod"
-    mod_id = re.sub(r"[^a-z0-9_]+", "_", mod_id).strip("_")
-    if not mod_id or not mod_id[0].isalpha():
-        mod_id = f"mod_{mod_id}"
-    mod_id = mod_id[:24]
-
-    summary = f"Complete Fabric 1.21.4 Mod: {requested_prompt}"
-    base = BaseProposal(
-        summary=summary,
-        files=(),
-        acceptance_tests=("verify_mod_loading", "verify_item_registration", "verify_entity_registration"),
-        requested_prompt=requested_prompt,
-    )
-
-    game_design = {
-        "mod_id": mod_id,
-        "mod_name": " ".join(prompt_words[:3]).title() if prompt_words else "Custom Mod",
-        "description": requested_prompt,
-        "target_version": "1.21.4",
-        "loader": "fabric",
-        "features": [
-            {
-                "id": "items_equipment",
-                "name": "Custom Items, Equipment & Enhancements",
-                "description": f"Custom items, tools, armor, and progression systems requested: {requested_prompt[:120]}",
-            },
-            {
-                "id": "entities_mobs",
-                "name": "Custom Entities & Bosses",
-                "description": f"Custom living entities, AI goals, boss phases, and spawn configurations matching: {requested_prompt[:120]}",
-            },
-            {
-                "id": "combat_skills",
-                "name": "Combat Mechanics & Skill Effects",
-                "description": f"Server-authoritative combat, damage calculation, visual particles, and sound effects for: {requested_prompt[:120]}",
-            },
-            {
-                "id": "world_blocks",
-                "name": "Blocks, UI & Localization",
-                "description": f"Custom functional blocks, screen handlers, crafting recipes, and lang files for: {requested_prompt[:120]}",
-            },
-        ],
-    }
-
-    modules = (
-        ProductionModule(
-            module_id="project_setup",
-            kind="custom_java",
-            config={
-                "summary": "Project structure, fabric.mod.json metadata, and main ModInitializer entrypoint.",
-                "files": ["src/main/resources/fabric.mod.json", f"src/main/java/com/mod/{mod_id}/ModMain.java"],
-            },
-            depends_on=(),
-            required_gates=(),
-        ),
-        ProductionModule(
-            module_id="items_equipment",
-            kind="custom_java",
-            config={
-                "summary": f"Registration and logic for custom items, equipment, and materials based on {requested_prompt[:80]}.",
-                "files": [
-                    f"src/main/java/com/mod/{mod_id}/item/ModItems.java",
-                    f"src/main/java/com/mod/{mod_id}/item/ModItemGroups.java",
-                ],
-            },
-            depends_on=("project_setup",),
-            required_gates=(),
-        ),
-        ProductionModule(
-            module_id="entities_mobs",
-            kind="custom_java",
-            config={
-                "summary": f"Custom entity definitions, renderers, animations, and living attributes matching {requested_prompt[:80]}.",
-                "files": [
-                    f"src/main/java/com/mod/{mod_id}/entity/ModEntities.java",
-                    f"src/main/java/com/mod/{mod_id}/entity/client/ModEntityRenderers.java",
-                ],
-            },
-            depends_on=("project_setup",),
-            required_gates=(),
-        ),
-        ProductionModule(
-            module_id="combat_skills",
-            kind="custom_java",
-            config={
-                "summary": f"Server-side damage handling, skill triggers, particle effects, and combat rules for {requested_prompt[:80]}.",
-                "files": [
-                    f"src/main/java/com/mod/{mod_id}/combat/CombatHandler.java",
-                    f"src/main/java/com/mod/{mod_id}/effect/ModEffects.java",
-                ],
-            },
-            depends_on=("items_equipment", "entities_mobs"),
-            required_gates=(),
-        ),
-        ProductionModule(
-            module_id="world_blocks",
-            kind="custom_java",
-            config={
-                "summary": f"Custom block registration, block items, screen handlers, and en_us/ko_kr language entries.",
-                "files": [
-                    f"src/main/java/com/mod/{mod_id}/block/ModBlocks.java",
-                    "src/main/resources/assets/" + mod_id + "/lang/en_us.json",
-                    "src/main/resources/assets/" + mod_id + "/lang/ko_kr.json",
-                ],
-            },
-            depends_on=("project_setup",),
-            required_gates=(),
-        ),
-    )
-
-    assets = (
-        AssetRequest(
-            asset_id=f"{mod_id}_icon",
-            kind="item_texture",
-            target_path=f"src/main/resources/assets/{mod_id}/icon.png",
-            prompt=f"Mod icon for {requested_prompt[:80]}",
-            width=64,
-            height=64,
-        ),
-        AssetRequest(
-            asset_id="weapon_texture",
-            kind="item_texture",
-            target_path=f"src/main/resources/assets/{mod_id}/textures/item/weapon.png",
-            prompt=f"Custom weapon sprite texture matching {requested_prompt[:80]}",
-            width=16,
-            height=16,
-        ),
-        AssetRequest(
-            asset_id="armor_texture",
-            kind="item_texture",
-            target_path=f"src/main/resources/assets/{mod_id}/textures/item/armor.png",
-            prompt=f"Custom armor sprite texture matching {requested_prompt[:80]}",
-            width=16,
-            height=16,
-        ),
-        AssetRequest(
-            asset_id="block_texture",
-            kind="block_texture",
-            target_path=f"src/main/resources/assets/{mod_id}/textures/block/custom_block.png",
-            prompt=f"Custom block face texture matching {requested_prompt[:80]}",
-            width=16,
-            height=16,
-        ),
-    )
-
-    audio = (
-        AudioRequest(
-            sound_id="skill_activation",
-            kind="sound_effect",
-            target_path=f"src/main/resources/assets/{mod_id}/sounds/skill_activation.ogg",
-            prompt=f"Combat skill activation sound effect for {requested_prompt[:60]}",
-            duration_seconds=1.5,
-        ),
-        AudioRequest(
-            sound_id="boss_impact",
-            kind="sound_effect",
-            target_path=f"src/main/resources/assets/{mod_id}/sounds/boss_impact.ogg",
-            prompt=f"Boss attack impact sound effect for {requested_prompt[:60]}",
-            duration_seconds=1.0,
-        ),
-    )
-
-    acceptance_tests = (
-        "verify_fabric_mod_initialization",
-        "verify_custom_items_registered",
-        "verify_custom_entities_spawn",
-        "verify_combat_mechanics",
-    )
-
-    return complete_proposal_from_parts(
-        requested_prompt=requested_prompt,
-        base_proposal=base,
-        game_design=game_design,
-        modules=modules,
-        assets=assets,
-        audio=audio,
-        acceptance_tests=acceptance_tests,
-        existing_input_sha256=existing_input_sha256,
-    )
