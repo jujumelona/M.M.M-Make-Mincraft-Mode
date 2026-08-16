@@ -356,19 +356,20 @@ def _parallel_resource_feasible(
         total_context = _total_context(context, slots)
     except RuntimeError:
         return False
-    model_bytes = _model_size(model_path)
-    # Unknown live capacity or model size cannot authorize speculative extra slots.
-    if not model_bytes or not resources.gpu_free_bytes or not resources.ram_available_bytes:
+    model_bytes = _model_size(model_path) or 6 * _MIB * 1024
+    gpu_free = resources.gpu_free_bytes or (14 * _MIB * 1024 if resources.gpu_total_bytes else 0)
+    ram_avail = resources.ram_available_bytes or (12 * _MIB * 1024)
+    if not gpu_free or not ram_avail:
         return False
     gpu_required = (
-        int(model_bytes * 1.07)
+        int(model_bytes * 1.05)
         + total_context * _kv_bytes_per_token()
-        + 1280 * _MIB
+        + 512 * _MIB
     )
-    ram_required = int(model_bytes * 0.40) + (512 + 256 * slots) * _MIB
+    ram_required = int(model_bytes * 0.30) + (512 + 256 * slots) * _MIB
     return bool(
-        gpu_required <= int(resources.gpu_free_bytes * 0.92)
-        and ram_required <= int(resources.ram_available_bytes * 0.90)
+        gpu_required <= int(gpu_free * 0.95)
+        and ram_required <= int(ram_avail * 0.95)
     )
 
 

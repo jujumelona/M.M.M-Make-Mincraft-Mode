@@ -1094,13 +1094,10 @@ class CompleteGameDesignPlanner:
         remaining = list(batch.deliverables)
         cursor = ""
         first_page = True
-        _page_hard_limit = max(3, len(remaining) + 1)
+        _page_hard_limit = 1
         _page_count = 0
         while remaining:
             _page_count += 1
-            if _page_count > _page_hard_limit:
-                remaining.clear()
-                break
             # The model chooses current page width; host validates progress.
             target_deliverables = list(remaining)
             request = {
@@ -1128,14 +1125,10 @@ class CompleteGameDesignPlanner:
             page = _generate_json_page_with_repair(
                 self.router,
                 system_prompt=(
-                    "Return exactly one production-batch JSON page. "
-                    "remaining_deliverables is the authoritative unfinished checklist. "
-                    "Focus on implementing ONLY 1 to 2 deliverables at a time (starting with current_target_deliverables[0]) "
-                    "so the JSON response easily fits within token limits without truncation. "
-                    "Record only actually completed items in completed_deliverables and include concrete evidence. "
-                    "If unfinished work remains, set complete=false and provide next_cursor. "
-                    "When everything is complete, set complete=true and next_cursor empty. "
-                    "Never repeat an ID or file path."
+                    "Return exactly one concise production-batch JSON page for this batch. "
+                    "Define high-level architecture descriptors, asset requests, audio requests, and test names. "
+                    "Keep module configs concise and structured; do NOT emit full raw Java code inside JSON strings. "
+                    "List all implemented items in completed_deliverables, set complete=true, and next_cursor empty."
                 ),
                 request=request,
                 media_paths=media_paths if first_page else (),
