@@ -107,23 +107,16 @@ class _ModuleCatalog:
     def __contains__(self, module_id: str) -> bool:
         return module_id in self._ids
 
-    def resolve_unique(self, module_id: str) -> str:
-        if module_id not in self._ids:
-            return module_id
-        counter = 2
-        while f"{module_id}_{counter}" in self._ids:
-            counter += 1
-        return f"{module_id}_{counter}"
-
-    def add(self, module_id: str) -> str:
+    def add(self, module_id: str) -> None:
         if module_id in self._ids:
-            module_id = self.resolve_unique(module_id)
+            raise SpecValidationError(
+                f"Paginated planner returned duplicate module ID: {module_id}"
+            )
         encoded = module_id.encode("utf-8")
         self._digest.update(len(encoded).to_bytes(8, "big"))
         self._digest.update(encoded)
         self._ids.add(module_id)
         self._recent.append(module_id)
-        return module_id
 
     def receipt(self) -> dict[str, Any]:
         return {
@@ -938,30 +931,7 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path],
         enforce_batch_dependencies: bool,
     ) -> _ProductionParts:
-        """Expand one batch against immutable-at-dispatch private state with durable disk checkpointing."""
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-
-        cache_key = hashlib.sha256(
-            f"{planning_receipt.get('prompt_sha256', '')}_{batch.batch_id}_{batch.scope}".encode("utf-8")
-        ).hexdigest()
-        cache_dir = Path(os.environ.get("MMM_PLANNER_CACHE_DIR", ".planner_cache"))
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f"batch_{batch.batch_id}_{cache_key[:12]}.json"
-
-        if cache_file.is_file():
-            try:
-                cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
-                modules = [ProductionModule.from_dict(m) for m in cached_data.get("modules", ())]
-                assets = [AssetRequest.from_dict(a) for a in cached_data.get("assets", ())]
-                audio = [AudioRequest.from_dict(au) for au in cached_data.get("audio", ())]
-                tests = list(cached_data.get("acceptance_tests", ()))
-                print(f"⚡ [Planner] Batch '{batch.batch_id}' loaded from checkpoint cache in 0.01s!", flush=True)
-                return _ProductionParts(modules, assets, audio, tests)
-            except Exception:
-                pass
+        """Expand one batch against immutable-at-dispatch private state."""
 
         private_parts = _ProductionParts([], [], [], [])
         private_modules = module_catalog.clone()
@@ -1004,6 +974,8 @@ class CompleteGameDesignPlanner:
                 depends_on=(),
                 required_gates=(),
             )
+            # A declared-export fallback is real output. Recording it in the private
+            # catalog catches collisions with already committed modules before merge.
             private_modules.add(fallback.module_id)
             private_parts.modules.append(fallback)
 
@@ -1021,20 +993,6 @@ class CompleteGameDesignPlanner:
                 private_parts.modules,
                 dependency_module_ids,
             )
-
-        try:
-            cache_file.write_text(
-                json.dumps({
-                    "modules": [m.to_dict() for m in private_parts.modules],
-                    "assets": [a.to_dict() for a in private_parts.assets],
-                    "audio": [au.to_dict() for au in private_parts.audio],
-                    "acceptance_tests": list(private_parts.acceptance_tests),
-                }, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-
         return private_parts
 
     def _retry_production_batch_wave_serially(
@@ -1136,10 +1094,7 @@ class CompleteGameDesignPlanner:
         remaining = list(batch.deliverables)
         cursor = ""
         first_page = True
-        _page_hard_limit = 1
-        _page_count = 0
         while remaining:
-            _page_count += 1
             # The model chooses current page width; host validates progress.
             target_deliverables = list(remaining)
             request = {
@@ -1162,27 +1117,19 @@ class CompleteGameDesignPlanner:
                 "cursor": cursor,
                 "contract": _PRODUCTION_PAGE_CONTRACT,
             }
-            from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
-            known_ids = set(getattr(module_catalog, "_ids", ()))
-            skeleton = build_batch_skeleton(
-                batch_id=batch.batch_id,
-                scope=batch.scope,
-                deliverables=batch.deliverables,
-                exports=batch.exports,
-                depends_on_batches=batch.depends_on_batches,
-                known_module_ids=tuple(known_ids),
-            )
-            request["template_skeleton"] = skeleton
             if first_page:
                 request["planning_context"] = planning_context
             page = _generate_json_page_with_repair(
                 self.router,
                 system_prompt=(
-                    "Fill the template_skeleton for this production batch. "
-                    "Define high-level architecture descriptors, asset requests, audio requests, and test names. "
-                    "Keep module configs concise: {\"summary\": \"...\"}; do NOT emit raw Java source code inside JSON. "
-                    "Module depends_on must contain ONLY valid module_ids (never batch_ids). "
-                    "List all implemented items in completed_deliverables, set complete=true, and next_cursor empty."
+                    "Return exactly one production-batch JSON page. "
+                    "remaining_deliverables is the authoritative unfinished checklist. "
+                    "Focus on implementing ONLY 1 to 2 deliverables at a time (starting with current_target_deliverables[0]) "
+                    "so the JSON response easily fits within token limits without truncation. "
+                    "Record only actually completed items in completed_deliverables and include concrete evidence. "
+                    "If unfinished work remains, set complete=false and provide next_cursor. "
+                    "When everything is complete, set complete=true and next_cursor empty. "
+                    "Never repeat an ID or file path."
                 ),
                 request=request,
                 media_paths=media_paths if first_page else (),
@@ -1192,13 +1139,9 @@ class CompleteGameDesignPlanner:
                 stage=f"production batch {batch.batch_id!r} page",
             )
             first_page = False
-            if not isinstance(page, dict):
-                page = skeleton
-            else:
-                page = merge_model_output_into_skeleton(
-                    skeleton=skeleton,
-                    model_output=page,
-                    valid_module_catalog=known_ids,
+            if set(page) != set(_PRODUCTION_PAGE_CONTRACT):
+                raise SpecValidationError(
+                    "Production batch page fields are invalid."
                 )
             raw_modules = _list(page, "modules")
             raw_assets = _list(page, "assets")
@@ -1262,17 +1205,14 @@ class CompleteGameDesignPlanner:
                     if item_id and item_id in target_deliverables:
                         completed_set.add(item_id)
 
-            # Guaranteed forward progress: if model produced anything or completed items, advance remaining list
+            # Direct output ID match or model completed_deliverables fallback
             if not completed_set:
                 completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]
                 for deliv in target_deliverables:
-                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids or deliv in page_tests or deliv in completed_list:
+                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_audio_ids or deliv in page_tests:
                         completed_set.add(deliv)
-                if not completed_set and remaining:
-                    if page.get("complete") is True:
-                        completed_set.update(remaining)
-                    else:
-                        completed_set.add(remaining[0])
+                    elif deliv in completed_list and (page_mod_ids or page_asset_ids or page_audio_ids or page_tests):
+                        completed_set.add(deliv)
 
             before_state = _canonical_json_sha256(
                 {
@@ -1283,10 +1223,7 @@ class CompleteGameDesignPlanner:
                     "test_count": len(test_catalog) - len(tests),
                 }
             )
-            if page.get("complete") is True:
-                remaining.clear()
-            else:
-                remaining = [v for v in remaining if v not in completed_set]
+            remaining = [v for v in remaining if v not in completed_set]
             next_cursor_value = page.get("next_cursor")
             if isinstance(next_cursor_value, str) and next_cursor_value:
                 cursor = next_cursor_value
@@ -1311,8 +1248,9 @@ class CompleteGameDesignPlanner:
                 }
             )
             if remaining and after_state == before_state:
-                remaining.clear()
-                break
+                raise SpecValidationError(
+                    "Production batch page reached an exact no-progress state."
+                )
 
     def _expand_batches(
         self,
@@ -2870,53 +2808,20 @@ def _production_batch(value: Any) -> _ProductionBatch:
         "exports",
     }:
         raise SpecValidationError("Production batch descriptor fields are invalid.")
-    raw_id = str(value.get("batch_id", "")).strip()
-    if _BATCH_ID.fullmatch(raw_id):
-        batch_id = raw_id
-    else:
-        sanitized = re.sub(r"[^a-z0-9_\-]+", "_", raw_id.lower()).strip("_")
-        if not sanitized or not sanitized[0].isalpha():
-            sanitized = f"batch_{sanitized}"
-        batch_id = sanitized[:63] or "production_batch"
-
-    scope = str(value.get("scope", "")).strip() or f"Implementation for {batch_id}"
-    dependencies = value.get("depends_on_batches", ())
-    deliverables = value.get("deliverables", ())
-    exports = value.get("exports", ())
-
-    clean_deps = []
-    if isinstance(dependencies, (list, tuple)):
-        for dep in dependencies:
-            if isinstance(dep, str):
-                d = dep.strip()
-                if _BATCH_ID.fullmatch(d):
-                    clean_deps.append(d)
-                else:
-                    s = re.sub(r"[^a-z0-9_\-]+", "_", d.lower()).strip("_")
-                    if s and s[0].isalpha() and _BATCH_ID.fullmatch(s[:63]):
-                        clean_deps.append(s[:63])
-
-    clean_deliv = [str(d).strip() for d in deliverables if str(d).strip()] if isinstance(deliverables, (list, tuple)) else []
+    batch_id = str(value["batch_id"])
+    scope = str(value["scope"]).strip()
+    dependencies = value["depends_on_batches"]
+    deliverables = value["deliverables"]
+    exports = value["exports"]
+    if not _BATCH_ID.fullmatch(batch_id) or not scope:
+        raise SpecValidationError(
+            f"Invalid production batch id or scope: {batch_id!r}"
+        )
+    clean_deps = [dep.strip() for dep in dependencies if isinstance(dep, str) and dep.strip()]
+    clean_deliv = [d.strip() for d in deliverables if isinstance(d, str) and d.strip()]
+    clean_exp = [e.strip() for e in exports if isinstance(e, str) and _BATCH_ID.fullmatch(e.strip())]
     if not clean_deliv:
         clean_deliv = [f"{batch_id}_deliverable"]
-
-    clean_exp = []
-    if isinstance(exports, (list, tuple)):
-        for e in exports:
-            if isinstance(e, str):
-                item = e.strip()
-                if _BATCH_ID.fullmatch(item):
-                    clean_exp.append(item)
-                else:
-                    s = re.sub(r"[^a-z0-9_\-]+", "_", item.lower()).strip("_")
-                    if not s or not s[0].isalpha():
-                        s = f"exp_{s}"
-                    s = s[:63]
-                    if _BATCH_ID.fullmatch(s):
-                        clean_exp.append(s)
-                    else:
-                        clean_exp.append(f"{batch_id}_export")
-
     return _ProductionBatch(
         batch_id=batch_id,
         scope=scope,
@@ -2926,70 +2831,9 @@ def _production_batch(value: Any) -> _ProductionBatch:
     )
 
 
-def _consolidate_batches_if_needed(
-    batches: Sequence[_ProductionBatch],
-    max_batches: int = 8,
-) -> tuple[_ProductionBatch, ...]:
-    if len(batches) <= max_batches:
-        return tuple(batches)
-
-    DOMAIN_MAP = [
-        ("core_platform", ("platform", "gradle", "setup", "build", "bootstrap", "core", "project")),
-        ("items_equipment", ("item", "weapon", "armor", "tool", "food", "recipe", "material", "crop", "fluid")),
-        ("entities_mobs", ("entity", "mob", "boss", "npc", "ai", "goal", "navigation", "model", "animation", "attribute")),
-        ("combat_skills", ("combat", "skill", "spell", "magic", "damage", "attack", "effect", "enchant", "mechanic")),
-        ("world_blocks", ("block", "world", "biome", "dimension", "structure", "ore", "generation", "tile")),
-        ("gui_sound_resources", ("gui", "screen", "hud", "sound", "audio", "music", "lang", "texture", "asset", "ui", "render")),
-        ("quality_packaging", ("quality", "test", "gametest", "smoke", "release", "package", "jar", "validation")),
-    ]
-
-    domain_buckets: dict[str, list[_ProductionBatch]] = {domain: [] for domain, _ in DOMAIN_MAP}
-    domain_buckets["custom_features"] = []
-
-    for batch in batches:
-        b_name = f"{batch.batch_id} {batch.scope}".lower()
-        matched = False
-        for domain, keywords in DOMAIN_MAP:
-            if any(kw in b_name for kw in keywords):
-                domain_buckets[domain].append(batch)
-                matched = True
-                break
-        if not matched:
-            domain_buckets["custom_features"].append(batch)
-
-    consolidated: list[_ProductionBatch] = []
-    prev_domain = ""
-    for domain, bucket in domain_buckets.items():
-        if not bucket:
-            continue
-        all_delivs: list[str] = []
-        all_exports: list[str] = []
-        scopes: list[str] = []
-        for b in bucket:
-            all_delivs.extend(b.deliverables)
-            all_exports.extend(b.exports)
-            if b.scope and b.scope not in scopes:
-                scopes.append(b.scope)
-        
-        deps = [prev_domain] if prev_domain else []
-        consolidated.append(
-            _ProductionBatch(
-                batch_id=domain,
-                scope="; ".join(scopes[:3]) or f"Implementation for {domain}",
-                depends_on_batches=tuple(deps),
-                deliverables=tuple(dict.fromkeys(all_delivs)) or (f"{domain}_deliverable",),
-                exports=tuple(dict.fromkeys(all_exports)) or (domain,),
-            )
-        )
-        prev_domain = domain
-
-    return tuple(consolidated)
-
-
 def _topological_production_batches(
     batches: tuple[_ProductionBatch, ...],
 ) -> tuple[_ProductionBatch, ...]:
-    batches = _consolidate_batches_if_needed(batches)
     by_id = {batch.batch_id: batch for batch in batches}
     sanitized: list[_ProductionBatch] = []
     for batch in batches:
@@ -3039,22 +2883,17 @@ def _topological_production_batches(
 
 
 def _production_batch_parallel_capacity(router: Any, width: int) -> int:
-    """Use only native shared-server slots; default to at least 2 when multiple batches exist in GPU/multithread mode."""
+    """Use only native shared-server slots; every other topology stays serial."""
+
     if width <= 1:
         return 1
     try:
         from .llama_parallel_runtime_contract import _planner_parallel_capacity
 
-        cap = _planner_parallel_capacity(router, width)
-        if cap > 1:
-            return cap
+        return _planner_parallel_capacity(router, width)
     except Exception:
-        pass
-    import os
-    env_cap = os.environ.get("MMM_LLAMA_PARALLEL", "") or os.environ.get("MMM_LLAMA_CONCURRENT_REQUESTS", "")
-    if env_cap.isdigit() and int(env_cap) > 1:
-        return min(width, int(env_cap))
-    return min(width, 16)
+        # Registry/configuration uncertainty must never create implicit model copies.
+        return 1
 
 
 def _production_batch_waves(
@@ -3133,70 +2972,50 @@ def _merge_production_batch_wave(
     asset_paths = {_asset_target_path(item) for item in staged_parts.assets}
     audio_paths = {_audio_target_path(item) for item in staged_parts.audio}
 
+    # Members of one wave have no dependency relation. Batch identity is therefore a
+    # canonical merge key independent of thread completion order.
     for batch, batch_parts in sorted(
         wave_results,
         key=lambda item: item[0].batch_id,
     ):
         for module in batch_parts.modules:
-            mod_id = module.module_id
-            if mod_id in staged_modules:
-                mod_id = staged_modules.resolve_unique(mod_id)
-                module = ProductionModule(
-                    module_id=mod_id,
-                    kind=module.kind,
-                    config=module.config,
-                    depends_on=module.depends_on,
-                    required_gates=module.required_gates,
+            if module.module_id in staged_modules:
+                raise _ProductionWaveConflict(
+                    "Parallel production wave returned duplicate module ID "
+                    f"{module.module_id!r} in batch {batch.batch_id!r}."
                 )
-            staged_modules.add(mod_id)
+            staged_modules.add(module.module_id)
             staged_parts.modules.append(module)
 
         for asset in batch_parts.assets:
-            asset_id = asset.asset_id
-            if asset_id in staged_assets:
-                asset_id = staged_assets.resolve_unique(asset_id)
             target_path = _asset_target_path(asset)
+            conflicts: list[str] = []
+            if asset.asset_id in staged_assets:
+                conflicts.append(f"asset ID {asset.asset_id!r}")
             if target_path in asset_paths:
-                base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "png")
-                counter = 2
-                while f"{base_p}_{counter}.{ext}" in asset_paths:
-                    counter += 1
-                target_path = f"{base_p}_{counter}.{ext}"
-            
-            asset = AssetRequest(
-                asset_id=asset_id,
-                kind=asset.kind,
-                target_path=target_path,
-                prompt=asset.prompt,
-                width=asset.width,
-                height=asset.height,
-                implements_deliverables=asset.implements_deliverables,
-            )
-            staged_assets.add(asset_id)
+                conflicts.append(f"asset target path {target_path!r}")
+            if conflicts:
+                raise _ProductionWaveConflict(
+                    "Parallel production wave conflict in batch "
+                    f"{batch.batch_id!r}: " + " and ".join(conflicts) + "."
+                )
+            staged_assets.add(asset.asset_id)
             asset_paths.add(target_path)
             staged_parts.assets.append(asset)
 
         for audio in batch_parts.audio:
-            sound_id = audio.sound_id
-            if sound_id in staged_audio:
-                sound_id = staged_audio.resolve_unique(sound_id)
             target_path = _audio_target_path(audio)
+            conflicts = []
+            if audio.sound_id in staged_audio:
+                conflicts.append(f"audio ID {audio.sound_id!r}")
             if target_path in audio_paths:
-                base_p, ext = target_path.rsplit(".", 1) if "." in target_path else (target_path, "ogg")
-                counter = 2
-                while f"{base_p}_{counter}.{ext}" in audio_paths:
-                    counter += 1
-                target_path = f"{base_p}_{counter}.{ext}"
-            
-            audio = AudioRequest(
-                sound_id=sound_id,
-                kind=audio.kind,
-                target_path=target_path,
-                prompt=audio.prompt,
-                duration_seconds=audio.duration_seconds,
-                implements_deliverables=audio.implements_deliverables,
-            )
-            staged_audio.add(sound_id)
+                conflicts.append(f"audio target path {target_path!r}")
+            if conflicts:
+                raise _ProductionWaveConflict(
+                    "Parallel production wave conflict in batch "
+                    f"{batch.batch_id!r}: " + " and ".join(conflicts) + "."
+                )
+            staged_audio.add(audio.sound_id)
             audio_paths.add(target_path)
             staged_parts.audio.append(audio)
 
