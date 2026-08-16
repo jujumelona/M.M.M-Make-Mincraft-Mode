@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from minecraft_mod_ai import work_graph
 from minecraft_mod_ai.scheduler_parallel_safety_contract import install as install_scheduler
+from minecraft_mod_ai.scheduler_poll_efficiency_contract import install as install_poll
 
 
 def _plan() -> work_graph.WorkGraphPlan:
@@ -30,54 +31,63 @@ def _plan() -> work_graph.WorkGraphPlan:
     )
 
 
-def test_generation_snapshot_expires_after_one_full_scan(tmp_path) -> None:
-    install_scheduler(work_graph_module=work_graph, orchestrator_module=__import__(
+def _install_runtime_owners() -> None:
+    orchestrator = __import__(
         "minecraft_mod_ai.complete_orchestrator",
         fromlist=["CompleteProductionOrchestrator"],
-    ))
+    )
+    install_scheduler(work_graph_module=work_graph, orchestrator_module=orchestrator)
+    install_poll(work_graph)
+
+
+def test_poll_contract_leaves_task_and_claim_hot_paths_unwrapped() -> None:
+    _install_runtime_owners()
+    assert not getattr(work_graph.DurableWorkLedger.task, "_mmm_batched_generation_poll", False)
+    assert not getattr(work_graph.DurableWorkLedger.claim_ready, "_mmm_poll_snapshot_fence", False)
+    assert getattr(work_graph.DurableWorkLedger.sync_plan, "_mmm_reusable_connection_sync_plan", False)
+
+
+def test_generation_task_reads_are_exact_without_snapshot(tmp_path) -> None:
+    _install_runtime_owners()
     ledger = work_graph.DurableWorkLedger(
         tmp_path / "work.sqlite",
         proposal_hash="proposal",
     )
     ledger.sync_plan(_plan())
 
-    first = [ledger.task(node_id)["state"] for node_id in ("generate-a", "generate-b")]
-    assert first == ["pending", "pending"]
-    assert getattr(ledger, "_mmm_generation_poll_snapshot", None) is None
-
+    assert ledger.task("generate-a")["state"] == "pending"
     with ledger._connect() as connection:
         connection.execute(
             "UPDATE tasks SET state = ? WHERE node_id = ?",
             (work_graph.WorkState.SUCCEEDED.value, "generate-a"),
         )
         connection.commit()
+    assert ledger.task("generate-a")["state"] == "succeeded"
+    assert not hasattr(ledger, "_mmm_generation_poll_snapshot")
 
-    second = [ledger.task(node_id)["state"] for node_id in ("generate-a", "generate-b")]
-    assert second == ["succeeded", "pending"]
 
-
-def test_lane_claim_fences_any_partial_poll_snapshot(tmp_path) -> None:
-    orchestrator = __import__(
-        "minecraft_mod_ai.complete_orchestrator",
-        fromlist=["CompleteProductionOrchestrator"],
-    )
-    install_scheduler(work_graph_module=work_graph, orchestrator_module=orchestrator)
+def test_sync_plan_temp_tables_are_cleaned_on_reused_connection(tmp_path) -> None:
+    _install_runtime_owners()
     ledger = work_graph.DurableWorkLedger(
         tmp_path / "work.sqlite",
         proposal_hash="proposal",
     )
     ledger.sync_plan(_plan())
 
-    # Leave a partially consumed read snapshot on purpose.
-    assert ledger.task("generate-a")["state"] == "pending"
-    assert getattr(ledger, "_mmm_generation_poll_snapshot", None) is not None
+    with ledger._connect() as connection:
+        temp_tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_temp_master WHERE type = 'table'"
+            )
+        }
+    assert not temp_tables & {
+        "affected_nodes",
+        "changed_nodes",
+        "desired_edges",
+        "desired_tasks",
+    }
 
-    claimed = ledger.claim_ready(
-        "mmm-orchestrator",
-        stages=("generate:content",),
-        lease_seconds=60,
-    )
-    assert claimed is not None
-    assert claimed["state"] == "running"
-    assert claimed["lease_owner"]
-    assert getattr(ledger, "_mmm_generation_poll_snapshot", None) is None
+    # Reusing the same thread-local connection must still allow another exact sync.
+    ledger.sync_plan(_plan())
+    assert ledger.task("generate-b")["state"] == "pending"
