@@ -251,11 +251,8 @@ def _install_architecture_contracts() -> None:
     )
     from .atomic_efficiency_contract import install as install_atomic_efficiency
     from .atomic_evidence_routing_contract import install as install_atomic_routes
-    from .atomic_execution_policy_contract import install as install_atomic_execution
-    from .atomic_planner_policy_contract import install as install_atomic_planner_policy
     from .atomic_playtest_evidence_contract import install as install_atomic_playtest
     from .atomic_quality_binding_contract import install as install_atomic_quality
-    from .atomic_requirement_contract import install as install_atomic_requirements
     from .build_input_scope_contract import install as install_build_input_scope
     from .clean_room_verification_contract import install as install_clean_room
     from .custom_generation_search_contract import install as install_custom_generation_search
@@ -273,9 +270,8 @@ def _install_architecture_contracts() -> None:
     install_atomic_efficiency(atomic_requirement_contract)
     install_atomic_routes(atomic_requirement_contract, production_contract)
     install_reviewer_role(atomic_requirement_contract)
-    install_atomic_requirements(complete_planner, complete_orchestrator)
-    install_atomic_planner_policy(atomic_requirement_contract, complete_planner)
-    install_atomic_execution(atomic_requirement_contract, complete_orchestrator)
+    # Planning structure and executable templates are code-owned. Do not make
+    # model-authored atomic JSON/coverage IR a mandatory gate on the default path.
     install_atomic_quality(
         atomic_requirement_contract,
         quality_evidence,
