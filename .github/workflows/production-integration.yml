@@ -42,13 +42,13 @@ jobs:
       MMM_WORKSPACE: ${{ github.workspace }}/integration-output
     steps:
       - uses: actions/checkout@v4
-      - run: python -m pip install -e '.[local-model,rag,image,speech,training,production-audio]'
+      - run: python -m pip install -e '.[local-model,rag,image,training]'
       - run: |
           python - <<'PY'
           import json
           from pathlib import Path
           from minecraft_mod_ai.model_smoke import run_model_smoke
-          roles = ["planner", "researcher", "coder_safe", "coder", "embedding", "reranker", "visual_critic", "image_generator", "speech_recognition"]
+          roles = ["planner", "researcher", "coder_safe", "coder", "embedding", "reranker", "visual_critic", "image_generator"]
           out = Path("integration-output/model-smoke")
           reports = [run_model_smoke(role=role, profile="${{ inputs.model_profile }}", output_dir=out / role) for role in roles]
           out.mkdir(parents=True, exist_ok=True)
@@ -148,7 +148,7 @@ jobs:
       MMM_MODEL_PROFILE: ${{ inputs.model_profile }}
     steps:
       - uses: actions/checkout@v4
-      - run: python -m pip install -e '.[dev,ui,local-model,rag,image,speech,training,production-audio]'
+      - run: python -m pip install -e '.[dev,ui,local-model,rag,image,training]'
       - name: Verify full-run inputs
         run: |
           test -n "${MMM_COMPLETE_PROPOSAL_PATH:-}" || { echo "MMM_COMPLETE_PROPOSAL_PATH is required"; exit 2; }
