@@ -1,0 +1,22 @@
+name: locate-final-two
+on:
+  push:
+    paths: ['.github/workflows/locate-final-two.yml']
+permissions:
+  contents: read
+jobs:
+  locate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          BASE=6615a9e16828475bb4b27be7d915f3f4b49e7a51
+          echo '=== augment_grounded_research ==='
+          git grep -n -C 16 '_augment_grounded_research' "$BASE" -- minecraft_mod_ai tests || true
+          echo '=== existing_candidates ==='
+          git grep -n -C 20 'existing_candidates' "$BASE" -- minecraft_mod_ai tests || true
