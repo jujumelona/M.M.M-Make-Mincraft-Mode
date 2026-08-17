@@ -103,6 +103,15 @@ def _shard_cache(index: Any) -> dict[int, tuple[bytes, str]]:
     return value
 
 
+def _rank_cache(index: Any) -> dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[Any, ...]]:
+    value = getattr(index, "_mmm_ranked_files_cache", None)
+    if isinstance(value, dict):
+        return value
+    value = {}
+    index._mmm_ranked_files_cache = value
+    return value
+
+
 def _copy_receipt(value: dict[str, Any]) -> dict[str, Any]:
     copied = dict(value)
     suffix_counts = value.get("suffix_counts")
@@ -129,6 +138,33 @@ def _install_receipt_cache(project_index_module: Any) -> None:
     manifest_receipt._mmm_cached_manifest_receipt = True  # type: ignore[attr-defined]
     manifest_receipt.__wrapped__ = current  # type: ignore[attr-defined]
     cls.manifest_receipt = manifest_receipt
+
+
+def _install_rank_cache(project_index_module: Any) -> None:
+    cls = project_index_module.ProjectIndex
+    current = cls._ranked_files
+    if getattr(current, "_mmm_cached_relevance_order", False):
+        return
+
+    @wraps(current)
+    def ranked_files(self: Any, *, query_tokens: set[str], explicit: set[str]) -> list[Any]:
+        key = (tuple(sorted(query_tokens)), tuple(sorted(explicit)))
+        cache = _rank_cache(self)
+        cached = cache.get(key)
+        if cached is None:
+            cached = tuple(
+                current(
+                    self,
+                    query_tokens=query_tokens,
+                    explicit=explicit,
+                )
+            )
+            cache[key] = cached
+        return list(cached)
+
+    ranked_files._mmm_cached_relevance_order = True  # type: ignore[attr-defined]
+    ranked_files.__wrapped__ = current  # type: ignore[attr-defined]
+    cls._ranked_files = ranked_files
 
 
 def _find_position(files: list[Any], path: str) -> tuple[int, bool]:
@@ -161,8 +197,6 @@ def _resolve_touched(index: Any, raw_path: str | Path) -> tuple[str, Path | None
         resolved = candidate.resolve(strict=False)
         resolved.relative_to(root)
     except (OSError, ValueError):
-        # A formerly valid indexed path that is replaced by an escaping symlink must
-        # disappear from the index instead of retaining stale trusted metadata.
         return normalized, None
     return normalized, candidate
 
@@ -207,10 +241,11 @@ def _invalidate_after_update(
     dirty_shards: set[int],
     structural_from: int | None,
 ) -> None:
-    try:
-        delattr(index, "_mmm_manifest_receipt_cache")
-    except AttributeError:
-        pass
+    for attribute in ("_mmm_manifest_receipt_cache", "_mmm_ranked_files_cache"):
+        try:
+            delattr(index, attribute)
+        except AttributeError:
+            pass
     cache = _shard_cache(index)
     if structural_from is not None:
         for shard in tuple(cache):
@@ -228,8 +263,6 @@ def _install_incremental_update_files(project_index_module: Any) -> None:
 
     @wraps(current)
     def update_files(self: Any, touched_paths: Any) -> None:
-        # Keep the public immutable tuple while replacing the historical full dict
-        # copy + full sort with binary-search edits over the already sorted index.
         files = list(self.files)
         by_path = self._by_path
         shard_size = project_index_module._MANIFEST_SHARD_SIZE
@@ -294,17 +327,10 @@ def _install_incremental_update_files(project_index_module: Any) -> None:
 
 
 def install(project_index_module: Any) -> None:
-    """Keep ProjectIndex incremental in CPU work, disk I/O and integrity checks.
-
-    ProjectIndex is committed after every successful generation node. The base
-    implementation copied and resorted the complete path catalog for every touched
-    file set, recalculated the complete receipt on every read, then rewrote every
-    256-file manifest shard and reread every new shard to hash it. This contract keeps
-    the exact public tuple ordering, receipt algorithm and v2 disk schema while caching
-    only values whose touched-path dependency set has not changed.
-    """
+    """Keep ProjectIndex incremental in CPU work, disk I/O and integrity checks."""
 
     _install_receipt_cache(project_index_module)
+    _install_rank_cache(project_index_module)
     _install_incremental_update_files(project_index_module)
 
     cls = project_index_module.ProjectIndex
