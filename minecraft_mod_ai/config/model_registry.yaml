@@ -165,3 +165,53 @@ profiles:
       embedding: *embedding
       reranker: *reranker
       image_generator: *image_gen
+
+  remote_quality:
+    description: Per-role OpenAI-compatible endpoints for large coding and vision models. Retrieval stays local.
+    roles:
+      planner:
+        provider: openai_compatible
+        adapter: openai_compatible
+        model_env: MMM_PLANNER_MODEL
+        base_url_env: MMM_PLANNER_BASE_URL
+        api_key_env: MMM_PLANNER_API_KEY
+        max_context: 65536
+        max_new_tokens: 4000
+      researcher:
+        provider: openai_compatible
+        adapter: openai_compatible
+        model_env: MMM_RESEARCH_MODEL
+        base_url_env: MMM_RESEARCH_BASE_URL
+        api_key_env: MMM_RESEARCH_API_KEY
+        max_context: 65536
+        max_new_tokens: 3500
+      coder:
+        provider: openai_compatible
+        adapter: openai_compatible
+        model_env: MMM_CODER_MODEL
+        base_url_env: MMM_CODER_BASE_URL
+        api_key_env: MMM_CODER_API_KEY
+        recommended_models:
+          - Qwen/Qwen3-Coder-30B-A3B-Instruct
+          - Qwen/Qwen3-Coder-Next
+        max_context: 131072
+        max_new_tokens: 8192
+      coder_safe:
+        provider: openai_compatible
+        adapter: openai_compatible
+        model_env: MMM_CODER_SAFE_MODEL
+        base_url_env: MMM_CODER_SAFE_BASE_URL
+        api_key_env: MMM_CODER_SAFE_API_KEY
+        max_context: 65536
+        max_new_tokens: 4096
+      visual_critic:
+        provider: openai_compatible
+        adapter: openai_compatible
+        model_env: MMM_VISION_MODEL
+        base_url_env: MMM_VISION_BASE_URL
+        api_key_env: MMM_VISION_API_KEY
+        max_context: 65536
+        max_new_tokens: 3000
+      embedding: *embedding
+      reranker: *reranker
+      image_generator: *image_gen
