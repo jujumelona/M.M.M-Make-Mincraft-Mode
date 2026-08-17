@@ -28,13 +28,10 @@ def install(hardware_policy_module: Any) -> None:
         prompt_tokens = int(result.get("prompt_tokens", 0) or 0)
         prompt_tps = prompt_tokens / prompt_seconds if prompt_seconds > 0 else 0.0
         with hardware_policy_module._TELEMETRY_LOCK:
-            hardware_policy_module._TELEMETRY_TOTALS["prompt_seconds"] += prompt_seconds
-            cumulative_prompt_seconds = float(
-                hardware_policy_module._TELEMETRY_TOTALS["prompt_seconds"]
-            )
-            cumulative_prompt_tokens = int(
-                hardware_policy_module._TELEMETRY_TOTALS["prompt_tokens"]
-            )
+            totals = hardware_policy_module._TELEMETRY_TOTALS
+            totals["prompt_seconds"] = float(totals.get("prompt_seconds", 0.0)) + prompt_seconds
+            cumulative_prompt_seconds = float(totals["prompt_seconds"])
+            cumulative_prompt_tokens = int(totals.get("prompt_tokens", 0) or 0)
         cumulative_prompt_tps = (
             cumulative_prompt_tokens / cumulative_prompt_seconds
             if cumulative_prompt_seconds > 0
