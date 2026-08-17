@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .central_research import normalize_research_brief, retrieve_domain_evidence
+from . import central_research
 from .complete_spec import (
     AssetRequest,
     CompleteProposal,
@@ -14,48 +14,14 @@ from .complete_spec import (
 )
 from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
-from .planner_template_schema import (
-    TOP_LEVEL_KEYS,
-    build_batch_skeleton,
-    merge_model_output_into_skeleton,
-)
+from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
 from .production_contract import compile_production_contract
 from .spec import SpecValidationError
 
-# The host owns every structured shape. The model supplies values only.
-_PRODUCTION_OUTLINE_CONTRACT: dict[str, Any] = {
-    "production_batches": [
-        {
-            "batch_id": "core_features",
-            "scope": "Implement the requested core features.",
-            "depends_on_batches": [],
-            "deliverables": ["core_features_complete"],
-            "exports": ["core_features"],
-        }
-    ],
-    "complete": True,
-    "next_cursor": "",
-}
-_PRODUCTION_PAGE_CONTRACT: dict[str, Any] = {
-    "modules": [],
-    "assets": [],
-    "acceptance_tests": [],
-    "completed_deliverables": [],
-    "complete": True,
-    "next_cursor": "",
-}
-
-# Kept empty only as a stable module attribute for callers that introspect it.
-# Alias translation itself is intentionally retired.
-_FIELD_ALIASES: dict[str, str] = {}
-
-# Prevent the retired runtime monkeypatch from wrapping this implementation while
-# runtime_bootstrap is being collapsed to direct ownership.
-_mmm_planner_json_runtime_contract = True
-
 _SYSTEM_PROMPT = (
-    "Return only the host-requested JSON shape. Do not invent fields. "
-    "The host owns identifiers, validation, dependencies and completion semantics."
+    "Fill values inside the supplied host template only. "
+    "The host owns identifiers, dependencies, completion semantics, and the final schema. "
+    "Do not invent top-level fields or identifiers."
 )
 
 
@@ -69,7 +35,13 @@ class _ProductionBatch:
 
 
 class CompleteGameDesignPlanner:
-    """Plan a complete mod through one closed host-owned template pipeline."""
+    """Plan production through deterministic host-owned batch templates.
+
+    The model never creates the batch graph or schema. Host code derives batches from
+    the validated game design, creates every module identity, and merges only allowed
+    values from one model response per batch. Invalid or missing model output falls
+    back to the unchanged host skeleton instead of triggering a repair/replan loop.
+    """
 
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
@@ -108,7 +80,7 @@ class CompleteGameDesignPlanner:
         )
         research_brief = game_design.get("_research_brief")
         if not isinstance(research_brief, dict):
-            research_brief = normalize_research_brief(prompt, game_design)
+            research_brief = central_research.normalize_research_brief(prompt, game_design)
 
         internal_design = {
             **game_design,
@@ -120,7 +92,7 @@ class CompleteGameDesignPlanner:
             ),
         }
 
-        batches = self._plan_batches(prompt, internal_design)
+        batches = _host_batches(prompt, internal_design)
         modules, assets, acceptance_tests = self._expand_batches(
             batches,
             prompt=prompt,
@@ -155,33 +127,6 @@ class CompleteGameDesignPlanner:
             existing_input_sha256=existing_input_sha256,
         )
 
-    def _plan_batches(
-        self,
-        prompt: str,
-        game_design: dict[str, Any],
-    ) -> tuple[_ProductionBatch, ...]:
-        request = {
-            "request": prompt,
-            "design": _implementation_research_outline(game_design),
-            "template": _PRODUCTION_OUTLINE_CONTRACT,
-        }
-        try:
-            page = _generate_json_page_with_repair(
-                self.router,
-                system_prompt=_SYSTEM_PROMPT,
-                request=request,
-                media_paths=(),
-                expected_contracts=(frozenset(_PRODUCTION_OUTLINE_CONTRACT),),
-                stage="production outline",
-            )
-        except (SpecValidationError, ValueError, TypeError, RuntimeError):
-            page = _fallback_outline(prompt)
-
-        batches = _validated_batches(page.get("production_batches"))
-        if not batches:
-            batches = _validated_batches(_fallback_outline(prompt)["production_batches"])
-        return _topological_batches(batches)
-
     def _expand_batches(
         self,
         batches: Sequence[_ProductionBatch],
@@ -214,28 +159,19 @@ class CompleteGameDesignPlanner:
                 "batch": _batch_dict(batch),
                 "design": _implementation_research_outline(game_design),
                 "template_skeleton": skeleton,
-                "contract": _PRODUCTION_PAGE_CONTRACT,
             }
-            try:
-                raw_page = _generate_json_page_with_repair(
-                    self.router,
-                    system_prompt=(
-                        "Fill values inside template_skeleton only. Keep every host-owned "
-                        "field name and identifier. Unknown fields are discarded."
-                    ),
-                    request=request,
-                    media_paths=(),
-                    expected_contracts=(frozenset(TOP_LEVEL_KEYS),),
-                    stage=f"production batch {batch.batch_id}",
-                )
-            except (SpecValidationError, ValueError, TypeError, RuntimeError):
-                raw_page = {}
-
+            raw_page = _generate_json_page(
+                self.router,
+                system_prompt=_SYSTEM_PROMPT,
+                request=request,
+                media_paths=(),
+            )
             page = merge_model_output_into_skeleton(
                 skeleton=skeleton,
                 model_output=raw_page,
                 valid_module_catalog=known_module_ids | set(batch.exports),
             )
+
             expected_ids = {
                 str(item["module_id"])
                 for item in skeleton["modules"]
@@ -255,14 +191,17 @@ class CompleteGameDesignPlanner:
                 modules.append(module)
                 known_module_ids.add(module.module_id)
 
+            known_asset_ids = {item.asset_id for item in assets}
+            known_asset_paths = {item.target_path for item in assets}
             for raw in page["assets"]:
                 if not isinstance(raw, dict):
                     continue
                 asset = _asset(raw)
-                if asset.asset_id not in {item.asset_id for item in assets} and asset.target_path not in {
-                    item.target_path for item in assets
-                }:
-                    assets.append(asset)
+                if asset.asset_id in known_asset_ids or asset.target_path in known_asset_paths:
+                    continue
+                assets.append(asset)
+                known_asset_ids.add(asset.asset_id)
+                known_asset_paths.add(asset.target_path)
 
             tests.extend(_unique_strings(page.get("acceptance_tests")))
             exports_by_batch[batch.batch_id] = tuple(
@@ -272,8 +211,8 @@ class CompleteGameDesignPlanner:
         if not modules:
             fallback = build_batch_skeleton(
                 batch_id="core_features",
-                scope="Implement the requested core features.",
-                deliverables=("core_features_complete",),
+                scope="Implement the complete requested mod behavior.",
+                deliverables=("requested_mod_behavior_complete",),
                 exports=("core_features",),
             )
             modules = [_module(raw) for raw in fallback["modules"]]
@@ -285,8 +224,47 @@ class CompleteGameDesignPlanner:
         return tuple(modules), tuple(assets), tuple(tests)
 
 
+def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
+    """Derive the production graph without asking the model to invent structure."""
+    raw_modules = game_design.get("modules")
+    batches: list[_ProductionBatch] = []
+    seen: set[str] = set()
+    if isinstance(raw_modules, list):
+        for index, raw in enumerate(raw_modules):
+            if not isinstance(raw, Mapping):
+                continue
+            batch_id = _identifier(raw.get("plugin_id"), f"feature_{index + 1}")
+            if batch_id in seen:
+                continue
+            seen.add(batch_id)
+            reason = " ".join(str(raw.get("reason") or "").split())
+            scope = reason or f"Implement requested capability {batch_id}."
+            batches.append(
+                _ProductionBatch(
+                    batch_id=batch_id,
+                    scope=scope,
+                    depends_on_batches=(),
+                    deliverables=(f"{batch_id}_complete",),
+                    exports=(batch_id,),
+                )
+            )
+
+    if batches:
+        return tuple(batches)
+
+    summary = " ".join(str(prompt).strip().split())[:240] or "requested mod features"
+    return (
+        _ProductionBatch(
+            batch_id="core_features",
+            scope=f"Implement the complete requested mod behavior: {summary}",
+            depends_on_batches=(),
+            deliverables=("requested_mod_behavior_complete",),
+            exports=("core_features",),
+        ),
+    )
+
+
 def _implementation_prompt(prompt: str, game_design: dict[str, Any]) -> str:
-    """Return the semantic implementation request; platform coordinates stay host-owned."""
     design = json.dumps(_implementation_research_outline(game_design), ensure_ascii=False)
     return (
         "Implement the requested Minecraft mod features through the host-owned production "
@@ -294,8 +272,7 @@ def _implementation_prompt(prompt: str, game_design: dict[str, Any]) -> str:
     )
 
 
-def _implementation_research_outline(game_design: dict[str, Any]) -> dict[str, Any]:
-    """Expose bounded planner context without copying runtime-only decoration."""
+def _implementation_research_outline(game_design: Mapping[str, Any]) -> dict[str, Any]:
     keys = (
         "mod_id",
         "mod_name",
@@ -304,6 +281,8 @@ def _implementation_research_outline(game_design: dict[str, Any]) -> dict[str, A
         "systems",
         "constraints",
         "acceptance_tests",
+        "modules",
+        "assets",
         "_platform_selection",
         "_platform_evidence",
         "_research_brief",
@@ -321,45 +300,40 @@ def _retrieve_implementation_evidence(
     existing = game_design.get("_platform_evidence")
     if isinstance(existing, Mapping):
         return dict(existing)
-    brief = research_brief or normalize_research_brief(prompt, game_design)
+    brief = research_brief or central_research.normalize_research_brief(prompt, game_design)
     try:
-        value = retrieve_domain_evidence(brief)
+        value = central_research.retrieve_domain_evidence(brief)
     except (SpecValidationError, ValueError, TypeError, RuntimeError):
         return {
             "schema_version": "mmm/research-unavailable-v1",
             "domains": [],
             "status": "unavailable",
         }
-    return dict(value) if isinstance(value, Mapping) else {
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {
         "schema_version": "mmm/research-unavailable-v1",
         "domains": [],
         "status": "unavailable",
     }
 
 
-def _generate_json_page_with_repair(
+def _generate_json_page(
     router: Any,
     *,
     system_prompt: str,
-    request: dict[str, Any] | str,
+    request: Mapping[str, Any] | str,
     media_paths: Sequence[str | Path],
-    expected_contracts: Sequence[frozenset[str]],
-    stage: str,
 ) -> dict[str, Any]:
-    """Generate one page once; callers own deterministic host fallback.
-
-    Previous page-local repair loops are intentionally removed. A malformed model
-    page never mutates the contract and never triggers unbounded model replanning.
-    """
-    request_text = request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)
+    """Generate once and return a mapping; malformed output becomes an empty fill."""
+    request_text = (
+        request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)
+    )
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": request_text},
     ]
-    kwargs = {
-        "media_paths": media_paths,
-        "response_format": "json",
-    }
+    kwargs = {"media_paths": media_paths, "response_format": "json"}
     try:
         text = router.generate_text(
             "planner",
@@ -368,11 +342,21 @@ def _generate_json_page_with_repair(
             **kwargs,
         )
     except TypeError:
-        text = router.generate_text("planner", messages, **kwargs)
-    try:
-        return _extract_json(str(text), expected_contracts=expected_contracts)
-    except SpecValidationError as exc:
-        raise SpecValidationError(f"{stage}: {exc}") from exc
+        try:
+            text = router.generate_text("planner", messages, **kwargs)
+        except (ValueError, RuntimeError):
+            return {}
+    except (ValueError, RuntimeError):
+        return {}
+    return _extract_json(str(text))
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    """Extract the last JSON object without treating model shape as authority."""
+    if not isinstance(text, str) or not text.strip():
+        return {}
+    objects = _json_objects(text)
+    return dict(objects[-1]) if objects else {}
 
 
 def _json_objects(text: str) -> list[dict[str, Any]]:
@@ -392,139 +376,6 @@ def _json_objects(text: str) -> list[dict[str, Any]]:
             objects.append(value)
         index = start + max(end, 1)
     return objects
-
-
-def _extract_json(
-    text: str,
-    *,
-    expected_contracts: Sequence[frozenset[str]],
-) -> dict[str, Any]:
-    if not isinstance(text, str) or not text.strip():
-        raise SpecValidationError("Structured planner returned empty JSON.")
-    objects = _json_objects(text)
-    matches = [
-        value
-        for value in objects
-        if frozenset(str(key) for key in value) in expected_contracts
-    ]
-    if not matches:
-        raise SpecValidationError("Structured planner did not return the host-owned JSON contract.")
-
-    outline_fields = frozenset(_PRODUCTION_OUTLINE_CONTRACT)
-    if len(expected_contracts) == 1 and expected_contracts[0] == outline_fields:
-        outline_matches = [value for value in matches if frozenset(value) == outline_fields]
-        if not outline_matches:
-            raise SpecValidationError("Production outline did not match the host contract.")
-        batches: list[Any] = []
-        for page in outline_matches:
-            raw_batches = page.get("production_batches")
-            if not isinstance(raw_batches, list):
-                raise SpecValidationError("production_batches must be a JSON list.")
-            batches.extend(raw_batches)
-        terminal = outline_matches[-1]
-        return {
-            "production_batches": batches,
-            "complete": bool(terminal.get("complete")),
-            "next_cursor": str(terminal.get("next_cursor") or ""),
-        }
-
-    if len(matches) != 1:
-        raise SpecValidationError("Structured planner returned ambiguous contract objects.")
-    return dict(matches[0])
-
-
-def _validated_batches(value: Any) -> tuple[_ProductionBatch, ...]:
-    if not isinstance(value, list):
-        return ()
-    result: list[_ProductionBatch] = []
-    seen: set[str] = set()
-    for raw in value:
-        try:
-            batch = _production_batch(raw)
-        except (SpecValidationError, ValueError, TypeError):
-            continue
-        if batch.batch_id in seen:
-            continue
-        seen.add(batch.batch_id)
-        result.append(batch)
-    return tuple(result)
-
-
-def _production_batch(value: Any) -> _ProductionBatch:
-    if not isinstance(value, Mapping):
-        raise SpecValidationError("Production batch must be an object.")
-    allowed = {
-        "batch_id",
-        "scope",
-        "depends_on_batches",
-        "deliverables",
-        "exports",
-    }
-    if set(value) != allowed:
-        raise SpecValidationError("Production batch fields do not match the host contract.")
-    batch_id = _identifier(value.get("batch_id"), "batch")
-    scope = str(value.get("scope") or "").strip()
-    if not scope:
-        raise SpecValidationError("Production batch scope is empty.")
-    deliverables = tuple(_unique_strings(value.get("deliverables")))
-    exports = tuple(_identifier(item, "module") for item in _unique_strings(value.get("exports")))
-    if not deliverables or not exports:
-        raise SpecValidationError("Production batch must declare deliverables and exports.")
-    dependencies = tuple(_identifier(item, "batch") for item in _unique_strings(value.get("depends_on_batches")))
-    if batch_id in dependencies:
-        raise SpecValidationError("Production batch may not depend on itself.")
-    return _ProductionBatch(
-        batch_id=batch_id,
-        scope=scope,
-        depends_on_batches=dependencies,
-        deliverables=deliverables,
-        exports=exports,
-    )
-
-
-def _topological_batches(batches: Sequence[_ProductionBatch]) -> tuple[_ProductionBatch, ...]:
-    by_id = {batch.batch_id: batch for batch in batches}
-    pending = list(batches)
-    emitted: list[_ProductionBatch] = []
-    emitted_ids: set[str] = set()
-    while pending:
-        progress = False
-        next_pending: list[_ProductionBatch] = []
-        for batch in pending:
-            known_dependencies = tuple(
-                dependency
-                for dependency in batch.depends_on_batches
-                if dependency in by_id
-            )
-            if set(known_dependencies) <= emitted_ids:
-                emitted.append(
-                    _ProductionBatch(
-                        batch_id=batch.batch_id,
-                        scope=batch.scope,
-                        depends_on_batches=known_dependencies,
-                        deliverables=batch.deliverables,
-                        exports=batch.exports,
-                    )
-                )
-                emitted_ids.add(batch.batch_id)
-                progress = True
-            else:
-                next_pending.append(batch)
-        if not progress:
-            # Cyclic model dependencies are discarded rather than patched at runtime.
-            for batch in next_pending:
-                emitted.append(
-                    _ProductionBatch(
-                        batch_id=batch.batch_id,
-                        scope=batch.scope,
-                        depends_on_batches=(),
-                        deliverables=batch.deliverables,
-                        exports=batch.exports,
-                    )
-                )
-            break
-        pending = next_pending
-    return tuple(emitted)
 
 
 def _module(value: Mapping[str, Any]) -> ProductionModule:
@@ -548,29 +399,14 @@ def _asset(value: Mapping[str, Any]) -> AssetRequest:
     )
 
 
-def _fallback_outline(prompt: str) -> dict[str, Any]:
-    summary = " ".join(str(prompt).strip().split())[:240] or "requested mod features"
-    return {
-        "production_batches": [
-            {
-                "batch_id": "core_features",
-                "scope": f"Implement the complete requested mod behavior: {summary}",
-                "depends_on_batches": [],
-                "deliverables": ["requested_mod_behavior_complete"],
-                "exports": ["core_features"],
-            }
-        ],
-        "complete": True,
-        "next_cursor": "",
-    }
-
-
 def _identifier(value: Any, fallback: str) -> str:
     import re
 
     text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
-    if not text or not text[0].isalpha():
-        text = f"{fallback}_{text}".rstrip("_")
+    if not text:
+        text = re.sub(r"[^a-z0-9_]+", "_", fallback.lower()).strip("_") or "feature"
+    if not text[0].isalpha():
+        text = f"feature_{text}"
     return text[:63]
 
 
