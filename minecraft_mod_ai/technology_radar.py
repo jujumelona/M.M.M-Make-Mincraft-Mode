@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import hmac
 import re
@@ -6,14 +7,17 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
+
 from .spec import PlatformLock, SpecValidationError, canonical_json
+
 _MAX_TEXT_BYTES = 16 * 1024
 _MAX_PAGE_SIZE = 100
-_CURSOR = re.compile('^technology:(\\d+):([0-9a-f]{16})$')
-_REVISION = re.compile('^(?:sha256:)?[0-9a-f]{40,64}$')
-_SHA256 = re.compile('^sha256:[0-9a-f]{64}$')
-_RECEIPT_MAC = re.compile('^hmac-sha256:[0-9a-f]{64}$')
-_REQUIREMENT_ID = re.compile('^[a-z][a-z0-9_]{1,127}$')
+_CURSOR = re.compile(r'^technology:(\d+):([0-9a-f]{16})$')
+_REVISION = re.compile(r'^(?:sha256:)?[0-9a-f]{40,64}$')
+_SHA256 = re.compile(r'^sha256:[0-9a-f]{64}$')
+_RECEIPT_MAC = re.compile(r'^hmac-sha256:[0-9a-f]{64}$')
+_REQUIREMENT_ID = re.compile(r'^[a-z][a-z0-9_]{1,127}$')
+
 TOPOLOGIES = ('in_process_java', 'local_sidecar', 'remote_api', 'offline_build_tool')
 _CAPABILITY_KINDS = frozenset({'ai_inference', 'agent_tool_use', 'translation'})
 _MODEL_CAPABILITIES = frozenset({'ai_inference', 'agent_tool_use', 'translation'})
@@ -22,12 +26,13 @@ _UNSAFE_MODEL_FORMATS = frozenset({'pickle', 'pkl', 'pt', 'pth', 'ckpt', 'bin_pi
 _UNKNOWN_LICENSES = frozenset({'', 'unknown', 'none', 'noassertion', 'unlicensed', 'other'})
 _OFFICIAL_TARGET_HOSTS = frozenset({'fabricmc.net', 'docs.fabricmc.net', 'maven.fabricmc.net', 'meta.fabricmc.net', 'minecraft.net', 'www.minecraft.net', 'help.minecraft.net', 'openjdk.org', 'www.oracle.com', 'docs.oracle.com'})
 _EVIDENCE_TO_CAPABILITY = {'ai_inference': 'ai_inference', 'agent_tool_use': 'agent_tool_use', 'translation': 'translation'}
-_AI_CUES = ('(?<![a-z0-9])ai(?![a-z0-9])', '(?<![a-z0-9])llm(?![a-z0-9])', 'artificial intelligence', 'language model', 'machine learning', 'generative', 'inference', '인공지능', '에이아이', '언어\\s*모델', '생성형', '추론\\s*모델')
-_AGENT_CUES = ('\\bagent(?:ic)?\\b', 'tool[ -]?use', 'function[ -]?call', '(?<![a-z0-9])mcp(?![a-z0-9])', '에이전트', '도구\\s*사용', '함수\\s*호출')
-_TRANSLATION_CUES = ('translat(?:e|ion)', 'interpret(?:er|ation)', '번역', '통역')
-_OFFLINE_CUES = ('\\boffline\\b', 'local[ -]?only', 'air[ -]?gapped', '오프라인', '로컬만', '인터넷\\s*(?:없이|차단)')
-_CPU_ONLY_CUES = ('cpu[ -]?only', 'cpu만', 'gpu\\s*(?:없이|없음)')
+_AI_CUES = (r'(?<![a-z0-9])ai(?![a-z0-9])', r'(?<![a-z0-9])llm(?![a-z0-9])', 'artificial intelligence', 'language model', 'machine learning', 'generative', 'inference', '인공지능', '에이아이', r'언어\s*모델', '생성형', r'추론\s*모델')
+_AGENT_CUES = (r'\bagent(?:ic)?\b', 'tool[ -]?use', 'function[ -]?call', r'(?<![a-z0-9])mcp(?![a-z0-9])', '에이전트', r'도구\s*사용', r'함수\s*호출')
+_TRANSLATION_CUES = (r'translat(?:e|ion)', r'interpret(?:er|ation)', '번역', '통역')
+_OFFLINE_CUES = (r'\boffline\b', 'local[ -]?only', 'air[ -]?gapped', '오프라인', '로컬만', r'인터넷\s*(?:없이|차단)')
+_CPU_ONLY_CUES = ('cpu[ -]?only', 'cpu만', r'gpu\s*(?:없이|없음)')
 _REALTIME_CUES = ('real[ -]?time', 'streaming', '실시간', '스트리밍')
+
 
 @dataclass(frozen=True)
 class TechnologyTarget:
@@ -41,12 +46,13 @@ class TechnologyTarget:
 
     def validate(self) -> None:
         required = (self.edition, self.minecraft_version, self.loader, self.mappings, self.java_version, self.fabric_loader, self.fabric_api)
-        if not all((str(value).strip() for value in required)):
+        if not all(str(value).strip() for value in required):
             raise SpecValidationError('Technology assessment requires an explicit executable platform target.')
 
     def to_dict(self) -> dict[str, str]:
         self.validate()
         return asdict(self)
+
 
 @dataclass(frozen=True)
 class TechniqueRequirement:
@@ -69,6 +75,7 @@ class TechniqueRequirement:
     def to_dict(self) -> dict[str, Any]:
         return {'schema_version': 'mmm/technique-requirement-v1', 'requirement_id': self.requirement_id, 'domain_id': self.domain_id, 'capability_kind': self.capability_kind, 'objective': self.objective, 'target': self.target.to_dict(), 'allowed_topologies': list(self.allowed_topologies), 'authority': dict(self.authority), 'hardware': dict(self.hardware), 'latency': dict(self.latency), 'privacy': dict(self.privacy), 'offline_required': self.offline_required, 'required_gates': list(self.required_gates), 'required_tests': list(self.required_tests), 'deterministic_fallback': self.deterministic_fallback, 'research_queries': list(self.research_queries)}
 
+
 @dataclass(frozen=True)
 class GateResult:
     gate_id: str
@@ -78,7 +85,8 @@ class GateResult:
     def to_dict(self) -> dict[str, str]:
         return asdict(self)
 
-def build_technology_radar(prompt: str, research_brief: Mapping[str, Any] | None=None, *, page_size: int=50, cursor: str='', target: TechnologyTarget | Mapping[str, Any] | PlatformLock | None=None) -> dict[str, Any]:
+
+def build_technology_radar(prompt: str, research_brief: Mapping[str, Any] | None = None, *, page_size: int = 50, cursor: str = '', target: TechnologyTarget | Mapping[str, Any] | PlatformLock | None = None) -> dict[str, Any]:
     prompt = _text(prompt, 'prompt')
     if type(page_size) is not int or not 1 <= page_size <= _MAX_PAGE_SIZE:
         raise SpecValidationError(f'page_size must be between 1 and {_MAX_PAGE_SIZE}.')
@@ -98,8 +106,8 @@ def build_technology_radar(prompt: str, research_brief: Mapping[str, Any] | None
     payload['radar_sha256'] = _sha256(canonical_json(payload))
     return payload
 
+
 def technology_research_routes(radar_page: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
-    """Return evidence routes for every requirement on one radar page."""
     if radar_page.get('schema_version') != 'mmm/technology-radar-page-v1':
         raise SpecValidationError('Unsupported technology radar schema.')
     raw_requirements = radar_page.get('requirements')
@@ -112,20 +120,20 @@ def technology_research_routes(radar_page: Mapping[str, Any]) -> tuple[dict[str,
         providers = ['official_docs', 'github', 'runtime']
         if requirement.capability_kind in _MODEL_CAPABILITIES:
             providers.insert(1, 'huggingface_models')
-        profile = 'ai_runtime'
         for provider in providers:
             for query in requirement.research_queries:
                 key = (requirement.requirement_id, provider, query)
                 if key in seen:
                     continue
                 seen.add(key)
-                routes.append({'requirement_id': requirement.requirement_id, 'domain_id': requirement.domain_id, 'capability_kind': requirement.capability_kind, 'provider': provider, 'target_profile': 'minecraft_mod' if provider == 'official_docs' else profile, 'query': query, 'query_sha256': _sha256(query), 'authorization': 'read_only_evidence'})
+                routes.append({'requirement_id': requirement.requirement_id, 'domain_id': requirement.domain_id, 'capability_kind': requirement.capability_kind, 'provider': provider, 'target_profile': 'minecraft_mod' if provider == 'official_docs' else 'ai_runtime', 'query': query, 'query_sha256': _sha256(query), 'authorization': 'read_only_evidence'})
     return tuple(routes)
+
 
 def normalize_technology_target(value: TechnologyTarget | Mapping[str, Any] | PlatformLock | None) -> TechnologyTarget:
     if value is None:
         raise SpecValidationError('Technology analysis requires an explicit host-selected platform target.')
-    elif isinstance(value, TechnologyTarget):
+    if isinstance(value, TechnologyTarget):
         target = value
     elif isinstance(value, PlatformLock):
         target = TechnologyTarget(edition=value.edition, minecraft_version=value.minecraft_version, loader=value.loader, mappings=value.yarn_mappings, java_version=value.java_version, fabric_loader=value.fabric_loader, fabric_api=value.fabric_api)
@@ -139,6 +147,7 @@ def normalize_technology_target(value: TechnologyTarget | Mapping[str, Any] | Pl
         raise SpecValidationError('Invalid technology target.')
     target.validate()
     return target
+
 
 def normalize_technology_requirement(value: Any) -> TechniqueRequirement:
     if isinstance(value, TechniqueRequirement):
@@ -159,8 +168,8 @@ def normalize_technology_requirement(value: Any) -> TechniqueRequirement:
         raise SpecValidationError('Technology requirement has an invalid topology.')
     return TechniqueRequirement(requirement_id=requirement_id, domain_id=_text(value.get('domain_id'), 'domain_id'), capability_kind=capability_kind, objective=_text(value.get('objective'), 'objective'), target=normalize_technology_target(value.get('target')), allowed_topologies=topologies, authority=_mapping(value.get('authority'), 'authority'), hardware=_mapping(value.get('hardware'), 'hardware'), latency=_mapping(value.get('latency'), 'latency'), privacy=_mapping(value.get('privacy'), 'privacy'), offline_required=_boolean(value.get('offline_required'), 'offline_required'), required_gates=_string_tuple(value.get('required_gates'), 'required_gates'), required_tests=_string_tuple(value.get('required_tests'), 'required_tests'), deterministic_fallback=_text(value.get('deterministic_fallback'), 'deterministic_fallback'), research_queries=_string_tuple(value.get('research_queries'), 'research_queries'))
 
-def normalize_technology_candidate(value: Any, *, expected_capability: str | None=None) -> dict[str, Any]:
-    """Normalize reviewed evidence without interpreting model-card text as commands."""
+
+def normalize_technology_candidate(value: Any, *, expected_capability: str | None = None) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise SpecValidationError('Technology candidate must be an object.')
     candidate_id = _text(value.get('candidate_id'), 'candidate_id')
@@ -173,18 +182,19 @@ def normalize_technology_candidate(value: Any, *, expected_capability: str | Non
     licenses = _mapping(value.get('licenses', {}), 'licenses')
     return {'schema_version': 'mmm/technology-candidate-v1', 'candidate_id': candidate_id, 'capability_kind': capability, 'topology': topology, 'revision': str(value.get('revision') or '').strip().lower(), 'artifact_sha256': str(value.get('artifact_sha256') or '').strip().lower(), 'evidence_sha256': str(value.get('evidence_sha256') or '').strip().lower(), 'formats': list(_optional_string_tuple(value.get('formats'), 'formats')), 'licenses': {'code': _normalize_license(licenses.get('code')), 'model': _normalize_license(licenses.get('model')), 'data': _normalize_license(licenses.get('data'))}, 'dataset_provenance': _mapping(value.get('dataset_provenance', {}), 'dataset_provenance'), 'official_target_evidence': _mapping(value.get('official_target_evidence', {}), 'official_target_evidence'), 'compatibility': _mapping(value.get('compatibility', {}), 'compatibility'), 'authority': _mapping(value.get('authority', {}), 'authority'), 'runtime': _mapping(value.get('runtime', {}), 'runtime'), 'benchmarks': _mapping(value.get('benchmarks', {}), 'benchmarks'), 'privacy': _mapping(value.get('privacy', {}), 'privacy'), 'tests': _mapping(value.get('tests', {}), 'tests'), 'fallback': _mapping(value.get('fallback', {}), 'fallback'), 'maintenance': _mapping(value.get('maintenance', {}), 'maintenance'), 'external_text_is_instructions': False}
 
+
 def assess_technology_candidate(requirement: TechniqueRequirement | Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, Any]:
-    """Public fail-closed assessment without caller-selected trust material."""
     return _assess_technology_candidate_with_receipt_key(requirement, candidate, receipt_key=None)
 
-def _assess_technology_candidate_with_receipt_key(requirement: TechniqueRequirement | Mapping[str, Any], candidate: Mapping[str, Any], *, receipt_key: bytes | None=None) -> dict[str, Any]:
-    """Fail closed on a candidate before it can be selected or installed."""
+
+def _assess_technology_candidate_with_receipt_key(requirement: TechniqueRequirement | Mapping[str, Any], candidate: Mapping[str, Any], *, receipt_key: bytes | None = None) -> dict[str, Any]:
     requirement = normalize_technology_requirement(requirement)
     normalized = normalize_technology_candidate(candidate, expected_capability=requirement.capability_kind)
     gates: list[GateResult] = []
 
     def add(gate_id: str, status: str, reason: str) -> None:
         gates.append(GateResult(gate_id, status, reason))
+
     if normalized['capability_kind'] == requirement.capability_kind:
         add('capability_match', 'pass', 'Candidate matches the routed capability.')
     else:
@@ -207,22 +217,15 @@ def _assess_technology_candidate_with_receipt_key(requirement: TechniqueRequirem
     else:
         add('exact_minecraft_bridge', 'pass', f'Bridge is verified for Minecraft {requirement.target.minecraft_version}, {requirement.target.loader}, mappings {requirement.target.mappings} and Java {requirement.target.java_version}.')
     revision = normalized['revision']
-    if _REVISION.fullmatch(revision):
-        add('immutable_revision', 'pass', 'An immutable revision is recorded.')
-    else:
-        add('immutable_revision', 'unresolved', 'A mutable tag or missing revision cannot bind this assessment.')
+    add('immutable_revision', 'pass', 'An immutable revision is recorded.') if _REVISION.fullmatch(revision) else add('immutable_revision', 'unresolved', 'A mutable tag or missing revision cannot bind this assessment.')
     evidence_sha = normalized['evidence_sha256']
-    if _SHA256.fullmatch(evidence_sha):
-        add('evidence_receipt', 'pass', 'Evidence is bound to a SHA-256 receipt.')
-    else:
-        add('evidence_receipt', 'unresolved', 'Evidence SHA-256 is missing.')
+    add('evidence_receipt', 'pass', 'Evidence is bound to a SHA-256 receipt.') if _SHA256.fullmatch(evidence_sha) else add('evidence_receipt', 'unresolved', 'Evidence SHA-256 is missing.')
     _assess_licenses(requirement, normalized, add)
     _assess_artifact_format(requirement, normalized, add)
     _assess_dataset_provenance(requirement, normalized, add)
     _assess_authority(requirement, normalized, add)
     _assess_runtime(requirement, normalized, add)
     _assess_privacy(requirement, normalized, add)
-    _assess_voice_rights(requirement, normalized, add)
     _assess_tests_and_fallback(requirement, normalized, add, receipt_key=receipt_key)
     failures = [gate.gate_id for gate in gates if gate.status == 'fail']
     unresolved = [gate.gate_id for gate in gates if gate.status == 'unresolved']
@@ -231,16 +234,12 @@ def _assess_technology_candidate_with_receipt_key(requirement: TechniqueRequirem
     payload['assessment_sha256'] = _sha256(canonical_json(payload))
     return payload
 
+
 def assess_technology_compatibility(requirement: TechniqueRequirement | Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, Any]:
-    """Public alias; authenticated verification is owned by the MCP service."""
     return assess_technology_candidate(requirement, candidate)
 
-def _build_signed_official_target_evidence(requirement: TechniqueRequirement | Mapping[str, Any], *, receipt_key: bytes) -> dict[str, Any]:
-    """Issue an authenticated receipt from the reviewed code-owned target corpus.
 
-    The MAC key remains owned by the calling service. Query text and candidate
-    metadata never control these sources or the exact facts attached to them.
-    """
+def _build_signed_official_target_evidence(requirement: TechniqueRequirement | Mapping[str, Any], *, receipt_key: bytes) -> dict[str, Any]:
     normalized = normalize_technology_requirement(requirement)
     expected = normalized.target.to_dict()
     source_facts = (('fabric-meta-target', 'https://meta.fabricmc.net/', 'Fabric official metadata API', {'edition': expected['edition'], 'minecraft_version': expected['minecraft_version'], 'loader': expected['loader'], 'mappings': expected['mappings']}), ('fabric-api-maven-target', 'https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/', 'Fabric official Maven repository', {'fabric_api': expected['fabric_api']}), ('fabric-loader-maven-target', 'https://maven.fabricmc.net/net/fabricmc/fabric-loader/', 'Fabric official Maven repository', {'fabric_loader': expected['fabric_loader']}), ('java-runtime-target', 'https://openjdk.org/', 'OpenJDK official project', {'java_version': expected['java_version']}))
@@ -251,6 +250,7 @@ def _build_signed_official_target_evidence(requirement: TechniqueRequirement | M
         sources.append({**evidence_record, 'observed_at': observed_at, 'content_sha256': _sha256(canonical_json(evidence_record)), 'retrieval_revision': normalized.target.minecraft_version, 'trust_tier': 'official_primary'})
     body: dict[str, Any] = {'schema_version': 'mmm/official-target-evidence-v1', 'retrieved_by': 'mmm_authoritative_retriever', 'authorization': 'read_only_evidence', 'target': expected, 'sources': sources}
     return _seal_technology_receipt(body, receipt_key)
+
 
 def _research_domains(prompt: str, research_brief: Mapping[str, Any] | None) -> tuple[dict[str, Any], ...]:
     if research_brief is None:
@@ -277,16 +277,17 @@ def _research_domains(prompt: str, research_brief: Mapping[str, Any] | None) -> 
         result.append({'domain_id': domain_id, 'objective': _bounded_text(statement), 'requirements': requirements, 'evidence_kinds': evidence_kinds, 'queries': queries or [statement]})
     return tuple(result)
 
+
 def _derive_requirements(prompt: str, domains: Sequence[Mapping[str, Any]], target: TechnologyTarget) -> tuple[TechniqueRequirement, ...]:
     global_flags = _request_flags(prompt, domains)
     result: list[TechniqueRequirement] = []
     seen: set[tuple[str, str]] = set()
-    specific_ai_domain = any(('ai_inference' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _AI_CUES) for domain in domains))
-    specific_agent_domain = any(('agent_tool_use' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _AGENT_CUES) for domain in domains))
-    specific_translation_domain = any(('translation' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _TRANSLATION_CUES) for domain in domains))
+    specific_ai_domain = any('ai_inference' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _AI_CUES) for domain in domains)
+    specific_agent_domain = any('agent_tool_use' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _AGENT_CUES) for domain in domains)
+    specific_translation_domain = any('translation' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _TRANSLATION_CUES) for domain in domains)
     for index, domain in enumerate(domains):
         domain_text = _domain_text(domain)
-        kinds = set((str(item) for item in domain.get('evidence_kinds', [])))
+        kinds = {str(item) for item in domain.get('evidence_kinds', [])}
         requested = {mapped for kind, mapped in _EVIDENCE_TO_CAPABILITY.items() if kind in kinds}
         if 'translation' in kinds or _matches(domain_text, _TRANSLATION_CUES):
             requested.add('translation')
@@ -295,14 +296,13 @@ def _derive_requirements(prompt: str, domains: Sequence[Mapping[str, Any]], targ
         if 'ai_inference' in kinds or _matches(domain_text, _AI_CUES):
             requested.add('ai_inference')
         if not requested and index == 0:
-            if global_flags['agent'] and (not specific_agent_domain):
+            if global_flags['agent'] and not specific_agent_domain:
                 requested.add('agent_tool_use')
-            if global_flags['ai'] and (not specific_ai_domain):
+            if global_flags['ai'] and not specific_ai_domain:
                 requested.add('ai_inference')
-            if global_flags['translation'] and (not specific_translation_domain):
+            if global_flags['translation'] and not specific_translation_domain:
                 requested.add('translation')
-        ordered = sorted(requested, key=_capability_order)
-        for capability in ordered:
+        for capability in sorted(requested, key=_capability_order):
             key = (str(domain['domain_id']), capability)
             if key in seen:
                 continue
@@ -310,17 +310,20 @@ def _derive_requirements(prompt: str, domains: Sequence[Mapping[str, Any]], targ
             result.append(_make_requirement(domain, capability, target=target, flags=global_flags))
     return tuple(result)
 
+
 def _make_requirement(domain: Mapping[str, Any], capability: str, *, target: TechnologyTarget, flags: Mapping[str, bool]) -> TechniqueRequirement:
     domain_id = str(domain['domain_id'])
     objective = _bounded_text(str(domain.get('objective') or capability))
     topologies = _topologies_for(capability, offline=flags['offline'])
     authority = {'capture': 'not_applicable', 'presentation': 'client', 'game_state_mutation': 'server_only', 'client_messages': 'schema_validated_and_rate_limited_by_server'}
     required_tests = ['unit', 'fabric_integration', 'performance']
-    research_parts = list(dict.fromkeys((item for item in [objective, *[str(value).strip() for value in domain.get('queries', [])]] if item)))
+    research_parts = list(dict.fromkeys(item for item in [objective, *[str(value).strip() for value in domain.get('queries', [])]] if item))
     research_basis = ' '.join(research_parts).strip()
     query_prefix = _bounded_text(research_basis, maximum=4096)
-    queries = (_bounded_text(f'{query_prefix} {capability.replace('_', ' ')} model card license provenance benchmark', maximum=4096), f'Minecraft {target.minecraft_version} {target.loader} mappings {target.mappings} Java {target.java_version} {capability.replace('_', ' ')} integration compatibility testing')
+    capability_label = capability.replace('_', ' ')
+    queries = (_bounded_text(f'{query_prefix} {capability_label} model card license provenance benchmark', maximum=4096), f'Minecraft {target.minecraft_version} {target.loader} mappings {target.mappings} Java {target.java_version} {capability_label} integration compatibility testing')
     return TechniqueRequirement(requirement_id=_requirement_id(domain_id, capability), domain_id=domain_id, capability_kind=capability, objective=objective, target=target, allowed_topologies=topologies, authority=authority, hardware={'benchmark_on_declared_target': True, 'requested_devices': ['cpu'] if flags['cpu_only'] else ['cpu', 'gpu'], 'record_cpu_gpu_ram_and_startup': True, 'no_unmeasured_hardware_claims': True}, latency={'real_time_required': flags['real_time'], 'p95_budget_ms': _latency_budget(' '.join([objective, query_prefix])), 'measure_p50_p95_and_concurrency': True, 'measure_real_time_factor': False}, privacy={'raw_input_sensitive': False, 'remote_transfer_requires_explicit_opt_in': True, 'record_retention_and_deletion': True, 'prefer_local_when_request_is_silent': True}, offline_required=flags['offline'], required_gates=('official_target_evidence', 'exact_minecraft_bridge', 'immutable_revision', 'evidence_receipt', 'licenses', 'dataset_provenance', 'safe_artifact_format', 'authority', 'target_hardware_benchmark', 'privacy', 'tests', 'deterministic_fallback'), required_tests=tuple(dict.fromkeys(required_tests)), deterministic_fallback=_fallback_for(capability), research_queries=queries)
+
 
 def _assess_official_target_evidence(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any, *, receipt_key: bytes | None) -> None:
     evidence = candidate['official_target_evidence']
@@ -381,6 +384,7 @@ def _assess_official_target_evidence(requirement: TechniqueRequirement, candidat
     else:
         add('official_target_evidence', 'pass', 'Official allowlisted sources cover every exact target coordinate and are receipt-bound.')
 
+
 def _valid_observed_at(value: Any) -> bool:
     if not isinstance(value, str) or not value.strip():
         return False
@@ -389,6 +393,7 @@ def _valid_observed_at(value: Any) -> bool:
     except ValueError:
         return False
     return parsed.tzinfo is not None
+
 
 def _assess_licenses(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
     licenses = candidate['licenses']
@@ -413,6 +418,7 @@ def _assess_licenses(requirement: TechniqueRequirement, candidate: Mapping[str, 
     else:
         add('licenses', 'pass', 'Required license identifiers and reviews are recorded.')
 
+
 def _assess_artifact_format(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
     if requirement.capability_kind not in _MODEL_CAPABILITIES:
         add('safe_artifact_format', 'not_applicable', 'No model artifact is used.')
@@ -435,6 +441,7 @@ def _assess_artifact_format(requirement: TechniqueRequirement, candidate: Mappin
     else:
         add('safe_artifact_format', 'pass', 'Safe format and artifact hash are bound.')
 
+
 def _assess_dataset_provenance(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
     if requirement.capability_kind not in _MODEL_CAPABILITIES:
         add('dataset_provenance', 'not_applicable', 'No trained model is selected.')
@@ -446,18 +453,17 @@ def _assess_dataset_provenance(requirement: TechniqueRequirement, candidate: Map
     else:
         add('dataset_provenance', 'pass', 'Dataset provenance is explicitly verified.')
 
+
 def _assess_authority(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
     authority = candidate['authority']
     if candidate['topology'] == 'offline_build_tool':
-        if authority.get('generated_output_reviewed') is True:
-            add('authority', 'pass', 'Offline generated output is reviewed before packaging.')
-        else:
-            add('authority', 'unresolved', 'Offline generated output review is not recorded.')
+        add('authority', 'pass', 'Offline generated output is reviewed before packaging.') if authority.get('generated_output_reviewed') is True else add('authority', 'unresolved', 'Offline generated output review is not recorded.')
         return
     if authority.get('game_state_mutation') == 'server_only' and authority.get('client_messages_validated') is True:
         add('authority', 'pass', 'Server authority and client-message validation are enforced.')
     else:
         add('authority', 'fail' if authority else 'unresolved', 'AI output must not directly grant client authority over game state.')
+
 
 def _assess_runtime(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
     if requirement.capability_kind not in _MODEL_CAPABILITIES:
@@ -470,19 +476,18 @@ def _assess_runtime(requirement: TechniqueRequirement, candidate: Mapping[str, A
     memory = _number_or_none(benchmark.get('peak_memory_mb'))
     startup = _number_or_none(benchmark.get('startup_ms'))
     concurrency = _number_or_none(benchmark.get('concurrency'))
-    if not measured_on or p50 is None or p95 is None or (memory is None) or (startup is None) or (concurrency is None) or (concurrency < 1):
+    if not measured_on or p50 is None or p95 is None or memory is None or startup is None or concurrency is None or concurrency < 1:
         add('target_hardware_benchmark', 'unresolved', 'Target hardware, startup, p50/p95 latency, concurrency and peak memory measurements are required.')
         return
     budget = requirement.latency.get('p95_budget_ms')
     if isinstance(budget, (int, float)) and p95 > float(budget):
         add('target_hardware_benchmark', 'fail', 'Measured p95 latency exceeds the request budget.')
         return
-    if requirement.hardware.get('requested_devices') == ['cpu']:
-        device = str(candidate['runtime'].get('device') or '').casefold()
-        if device != 'cpu':
-            add('target_hardware_benchmark', 'fail', 'CPU-only request lacks a CPU benchmark.')
-            return
+    if requirement.hardware.get('requested_devices') == ['cpu'] and str(candidate['runtime'].get('device') or '').casefold() != 'cpu':
+        add('target_hardware_benchmark', 'fail', 'CPU-only request lacks a CPU benchmark.')
+        return
     add('target_hardware_benchmark', 'pass', 'Candidate was benchmarked on a declared target.')
+
 
 def _assess_privacy(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
     privacy = candidate['privacy']
@@ -499,33 +504,20 @@ def _assess_privacy(requirement: TechniqueRequirement, candidate: Mapping[str, A
         return
     add('privacy', 'pass', 'Offline and raw-data transfer policy is satisfied.')
 
+
 def _assess_tests_and_fallback(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any, *, receipt_key: bytes | None) -> None:
     tests = candidate['tests']
     missing_tests = [name for name in requirement.required_tests if not _valid_technology_test_receipt(tests.get(name), test_id=name, requirement_id=requirement.requirement_id, candidate=candidate, receipt_key=receipt_key)]
-    if missing_tests:
-        add('tests', 'unresolved', 'Required executed test receipts are missing: ' + ', '.join(missing_tests))
-    else:
-        add('tests', 'pass', 'All request-derived test receipts passed.')
+    add('tests', 'unresolved', 'Required executed test receipts are missing: ' + ', '.join(missing_tests)) if missing_tests else add('tests', 'pass', 'All request-derived test receipts passed.')
     fallback = candidate['fallback']
     if fallback.get('deterministic') is True and str(fallback.get('description') or '').strip() and _valid_technology_test_receipt(fallback.get('test_receipt'), test_id='deterministic_fallback', requirement_id=requirement.requirement_id, candidate=candidate, receipt_key=receipt_key):
         add('deterministic_fallback', 'pass', 'A deterministic fallback has an executed test receipt.')
     else:
         add('deterministic_fallback', 'unresolved', 'Selection requires a tested deterministic fallback.')
 
+
 def _valid_technology_test_receipt(value: Any, *, test_id: str, requirement_id: str, candidate: Mapping[str, Any], receipt_key: bytes | None) -> bool:
-    if not isinstance(value, Mapping):
-        return False
-    if value.get('schema_version') != 'mmm/technology-test-receipt-v1':
-        return False
-    if value.get('executed_by') != 'mmm_quality_runner':
-        return False
-    if value.get('status') != 'pass':
-        return False
-    if value.get('test_id') != test_id:
-        return False
-    if value.get('requirement_id') != requirement_id:
-        return False
-    if not _valid_observed_at(value.get('observed_at')):
+    if not isinstance(value, Mapping) or value.get('schema_version') != 'mmm/technology-test-receipt-v1' or value.get('executed_by') != 'mmm_quality_runner' or value.get('status') != 'pass' or value.get('test_id') != test_id or value.get('requirement_id') != requirement_id or not _valid_observed_at(value.get('observed_at')):
         return False
     for field in ('environment_sha256', 'result_sha256'):
         if not _SHA256.fullmatch(str(value.get(field) or '').lower()):
@@ -537,8 +529,8 @@ def _valid_technology_test_receipt(value: Any, *, test_id: str, requirement_id: 
         return False
     return _verify_technology_receipt(value, receipt_key)
 
+
 def _technology_candidate_snapshot_sha256(candidate: Mapping[str, Any]) -> str:
-    """Bind test evidence to every assessed field without creating a receipt cycle."""
     normalized = normalize_technology_candidate(candidate)
     snapshot = {key: value for key, value in normalized.items() if key not in {'tests', 'fallback'}}
     fallback_policy = dict(normalized['fallback'])
@@ -546,8 +538,8 @@ def _technology_candidate_snapshot_sha256(candidate: Mapping[str, Any]) -> str:
     snapshot['fallback'] = fallback_policy
     return _sha256(canonical_json(snapshot))
 
+
 def _seal_technology_receipt(body: Mapping[str, Any], receipt_key: bytes) -> dict[str, Any]:
-    """Hash and authenticate a receipt with a process-owned secret."""
     if not isinstance(receipt_key, bytes) or len(receipt_key) < 32:
         raise SpecValidationError('Technology receipt key must contain at least 32 bytes.')
     if 'receipt_sha256' in body or 'receipt_mac' in body:
@@ -556,6 +548,7 @@ def _seal_technology_receipt(body: Mapping[str, Any], receipt_key: bytes) -> dic
     sealed['receipt_sha256'] = _sha256(canonical_json(sealed))
     sealed['receipt_mac'] = 'hmac-sha256:' + hmac.new(receipt_key, canonical_json(sealed).encode('utf-8'), hashlib.sha256).hexdigest()
     return sealed
+
 
 def _verify_technology_receipt(value: Mapping[str, Any], receipt_key: bytes | None) -> bool:
     if not isinstance(receipt_key, bytes) or len(receipt_key) < 32:
@@ -573,24 +566,26 @@ def _verify_technology_receipt(value: Mapping[str, Any], receipt_key: bytes | No
     hash_body.pop('receipt_sha256', None)
     return bool(_SHA256.fullmatch(receipt_sha256) and hmac.compare_digest(receipt_sha256, _sha256(canonical_json(hash_body))))
 
+
 def _request_flags(prompt: str, domains: Sequence[Mapping[str, Any]]) -> dict[str, bool]:
     text = ' '.join([prompt, *[_domain_text(domain) for domain in domains]])
     kinds = {str(kind) for domain in domains for kind in domain.get('evidence_kinds', [])}
     return {'ai': 'ai_inference' in kinds or _matches(text, _AI_CUES), 'agent': 'agent_tool_use' in kinds or _matches(text, _AGENT_CUES), 'translation': 'translation' in kinds or _matches(text, _TRANSLATION_CUES), 'offline': _matches(text, _OFFLINE_CUES), 'cpu_only': _matches(text, _CPU_ONLY_CUES), 'real_time': _matches(text, _REALTIME_CUES)}
 
+
 def _topologies_for(capability: str, *, offline: bool) -> tuple[str, ...]:
     by_capability = {'translation': TOPOLOGIES, 'ai_inference': TOPOLOGIES, 'agent_tool_use': ('in_process_java', 'local_sidecar', 'remote_api')}
     result = by_capability[capability]
-    if offline:
-        result = tuple((item for item in result if item != 'remote_api'))
-    return result
+    return tuple(item for item in result if item != 'remote_api') if offline else result
+
 
 def _fallback_for(capability: str) -> str:
     return {'translation': 'Keep original text and disable unsupported language paths.', 'agent_tool_use': 'Use the deterministic server-owned action state machine.', 'ai_inference': 'Use deterministic scripted gameplay behavior.'}[capability]
 
+
 def _capability_order(value: str) -> tuple[int, str]:
-    order = {'translation': 2, 'ai_inference': 8, 'agent_tool_use': 9}
-    return (order.get(value, 99), value)
+    return ({'translation': 2, 'ai_inference': 8, 'agent_tool_use': 9}.get(value, 99), value)
+
 
 def _normalize_license(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
@@ -598,6 +593,7 @@ def _normalize_license(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return {'id': str(value.get('id') or '').strip(), 'url': str(value.get('url') or '').strip(), 'reviewed': value.get('reviewed') is True, 'use_allowed': value.get('use_allowed') if type(value.get('use_allowed')) is bool else None}
     return {'id': '', 'url': '', 'reviewed': False, 'use_allowed': None}
+
 
 def _research_brief_sha(research_brief: Mapping[str, Any] | None) -> str:
     if research_brief is None:
@@ -607,9 +603,11 @@ def _research_brief_sha(research_brief: Mapping[str, Any] | None) -> str:
     except (TypeError, ValueError) as exc:
         raise SpecValidationError('research_brief must be JSON serializable.') from exc
 
+
 def _encode_cursor(offset: int, *, source_sha256: str, page_size: int) -> str:
     signature = hashlib.sha256(f'{source_sha256}\x00{page_size}\x00{offset}'.encode('utf-8')).hexdigest()[:16]
     return f'technology:{offset}:{signature}'
+
 
 def _decode_cursor(cursor: str, *, source_sha256: str, page_size: int) -> int:
     if not cursor:
@@ -624,25 +622,29 @@ def _decode_cursor(cursor: str, *, source_sha256: str, page_size: int) -> int:
         raise SpecValidationError('Technology cursor does not match this request, target and page size.')
     return offset
 
+
 def _latency_budget(value: str) -> float | None:
-    match = re.search('(?<!\\d)(\\d{1,7}(?:\\.\\d+)?)\\s*(?:ms|milliseconds?|밀리초)', value, re.I)
-    if not match:
-        return None
-    return float(match.group(1))
+    match = re.search(r'(?<!\d)(\d{1,7}(?:\.\d+)?)\s*(?:ms|milliseconds?|밀리초)', value, re.I)
+    return float(match.group(1)) if match else None
+
 
 def _domain_text(domain: Mapping[str, Any]) -> str:
     return ' '.join([str(domain.get('objective') or ''), *[str(item) for item in domain.get('requirements', [])], *[str(item) for item in domain.get('queries', [])]])
 
+
 def _matches(value: str, patterns: Iterable[str]) -> bool:
     folded = value.casefold()
-    return any((re.search(pattern, folded, re.I) is not None for pattern in patterns))
+    return any(re.search(pattern, folded, re.I) is not None for pattern in patterns)
+
 
 def _requirement_id(domain_id: str, capability: str) -> str:
     value = _slug(f'{domain_id}_{capability}', 0)
     if len(value) <= 127:
         return value
     suffix = hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]
-    return f'{value[:114].rstrip('_')}_{suffix}'
+    stem = value[:114].rstrip('_')
+    return f'{stem}_{suffix}'
+
 
 def _slug(value: str, index: int) -> str:
     slug = re.sub('[^a-z0-9]+', '_', value.casefold()).strip('_')
@@ -650,35 +652,23 @@ def _slug(value: str, index: int) -> str:
         slug = f'domain_{index + 1}_{slug}'.rstrip('_')
     if len(slug) > 63:
         suffix = hashlib.sha256(slug.encode('utf-8')).hexdigest()[:10]
-        slug = f'{slug[:52].rstrip('_')}_{suffix}'
+        stem = slug[:52].rstrip('_')
+        slug = f'{stem}_{suffix}'
     return slug
 
-def _language(value: Any, field: str) -> str:
-    text = _text(value, field).replace('_', '-').casefold()
-    if not re.fullmatch('[a-z]{2,8}(?:-[a-z0-9]{1,8})*', text):
-        raise SpecValidationError(f'{field} is not a normalized language tag.')
-    return text
-
-def _languages(values: Sequence[str], field: str) -> tuple[str, ...]:
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-        raise SpecValidationError(f'{field} must be a list.')
-    result: list[str] = []
-    for index, value in enumerate(values):
-        language = _language(value, f'{field}[{index}]')
-        if language not in result:
-            result.append(language)
-    return tuple(result)
 
 def _mapping(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise SpecValidationError(f'{field} must be an object.')
     return dict(value)
 
+
 def _string_tuple(value: Any, field: str) -> tuple[str, ...]:
     result = _optional_string_tuple(value, field)
     if not result:
         raise SpecValidationError(f'{field} must be a non-empty list.')
     return result
+
 
 def _optional_string_tuple(value: Any, field: str) -> tuple[str, ...]:
     if value is None:
@@ -692,15 +682,18 @@ def _optional_string_tuple(value: Any, field: str) -> tuple[str, ...]:
             result.append(text)
     return tuple(result)
 
+
 def _loose_strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [_bounded_text(str(item)) for item in value if str(item).strip()]
 
+
 def _boolean(value: Any, field: str) -> bool:
     if type(value) is not bool:
         raise SpecValidationError(f'{field} must be a JSON boolean.')
     return value
+
 
 def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -710,7 +703,8 @@ def _text(value: Any, field: str) -> str:
         raise SpecValidationError(f'{field} exceeds the text byte policy.')
     return text
 
-def _bounded_text(value: str, *, maximum: int=_MAX_TEXT_BYTES) -> str:
+
+def _bounded_text(value: str, *, maximum: int = _MAX_TEXT_BYTES) -> str:
     value = value.strip()
     encoded = value.encode('utf-8')
     if len(encoded) <= maximum:
@@ -722,11 +716,13 @@ def _bounded_text(value: str, *, maximum: int=_MAX_TEXT_BYTES) -> str:
         except UnicodeDecodeError:
             clipped = clipped[:-1]
 
+
 def _number_or_none(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     number = float(value)
     return number if number >= 0 else None
+
 
 def _sha256(value: str) -> str:
     return 'sha256:' + hashlib.sha256(value.encode('utf-8')).hexdigest()
