@@ -67,18 +67,21 @@ def _quality(result: Mapping[str, Any]) -> tuple[bool, float, float, int]:
 def _modes(route: str, caller_semantic: bool, caller_rerank: bool):
     if route in {"exact_version", "exact_symbol"}:
         return (
+            (False, False, "lexical"),
             (False, True, "lexical+rerank"),
             (True, True, "semantic+rerank"),
             (caller_semantic, caller_rerank, "caller-fallback"),
         )
     if route == "dependency":
         return (
-            (True, True, "semantic+rerank+relations"),
+            (False, False, "lexical+relations"),
             (False, True, "lexical+rerank+relations"),
+            (True, True, "semantic+rerank+relations"),
             (caller_semantic, caller_rerank, "caller-fallback"),
         )
     if route == "global":
         return (
+            (False, False, "lexical+global-relations"),
             (False, True, "lexical+rerank+global-relations"),
             (True, True, "semantic+rerank+global-relations"),
             (caller_semantic, caller_rerank, "caller-fallback"),
