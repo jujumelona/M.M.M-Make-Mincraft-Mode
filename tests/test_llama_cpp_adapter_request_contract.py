@@ -82,11 +82,14 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert payload["parallel_tool_calls"] is True
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["temperature"] == 0.7
-    assert payload["top_p"] == 0.8
+    assert "reasoning_effort" not in payload
+    assert "chat_template_kwargs" not in payload
+    assert payload["temperature"] == 1.0
+    assert payload["top_p"] == 0.95
     assert payload["top_k"] == 20
+    assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
+    assert payload["repeat_penalty"] == 1.0
 
 
 def test_generate_turn_parses_native_openai_tool_calls(monkeypatch) -> None:
