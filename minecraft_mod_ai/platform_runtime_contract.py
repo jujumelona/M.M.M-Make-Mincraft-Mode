@@ -255,7 +255,13 @@ def _install_orchestrator_runtime(module: Any) -> None:
         expected = adapter_for_lock_values(approved.base_proposal.spec.platform)
         imported_report = None
         if existing_input is not None:
-            imported_report = module.inspect_existing_project_archive(existing_input)
+            try:
+                imported_report = module.inspect_existing_project_archive(
+                    existing_input,
+                    expected_archive_sha256=approved.existing_input_sha256,
+                )
+            except module.ExistingProjectImportError as exc:
+                raise module.CompleteProductionError(str(exc)) from exc
             # Repair admission is intentionally narrower than ordinary import.  We
             # must know both target facts from the source archive before allowing an
             # incomplete Gradle/Yarn/Fabric toolchain to be repaired.
