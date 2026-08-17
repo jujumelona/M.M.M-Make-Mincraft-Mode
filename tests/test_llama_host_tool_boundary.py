@@ -1,10 +1,8 @@
 from __future__ import annotations
 
+from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
-    LlamaCppAdapter,
-    _native_server_payload,
-)
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
 def _tool_schema() -> dict[str, object]:
@@ -37,13 +35,17 @@ def test_native_tool_payload_uses_llama_openai_fields_without_grammar() -> None:
         parallel_tool_calls=True,
     )
 
-    payload = _native_server_payload(adapter, request)
+    payload = _server_payload(adapter, request)
 
     assert payload["tools"] == [_tool_schema()]
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
+    assert payload["top_k"] == 20
+    assert payload["presence_penalty"] == 1.5
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
     rendered = "\n".join(
@@ -73,8 +75,8 @@ def test_qwen35_tool_profile_is_model_scoped() -> None:
         )
     )
 
-    qwen_payload = _native_server_payload(qwen, request)
-    generic_payload = _native_server_payload(generic, request)
+    qwen_payload = _server_payload(qwen, request)
+    generic_payload = _server_payload(generic, request)
 
     assert qwen_payload["temperature"] == 0.7
     assert qwen_payload["top_p"] == 0.8

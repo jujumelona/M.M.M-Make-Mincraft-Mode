@@ -61,13 +61,11 @@ def _bootstrap_native_server() -> str | None:
 
 
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-    """Build the one authoritative native llama-server chat payload.
+    """Build the authoritative OpenAI-compatible llama-server chat payload.
 
-    Native tool/JSON sampler controls are never sent to llama.cpp. They can compile
-    through server-side GBNF and fail before the model runs. Tool-capable turns must
-    first be translated by LlamaCppAdapter into the host-owned JSON envelope; direct
-    tool metadata here is therefore a programming error. JSON syntax/schema validation
-    and isolated repair are host-owned. We only disable model-internal thinking here.
+    Tool-capable turns use the model's native Jinja template through llama.cpp's
+    ``tools``/``tool_calls`` transport. JSON syntax/schema validation for ordinary
+    structured output stays host-owned, so no JSON grammar or schema sampler is sent.
     """
 
     payload: dict[str, Any] = {
@@ -78,12 +76,24 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     tools = getattr(request, "tools", ()) or ()
     if tools:
-        raise RuntimeError(
-            "Native llama-server tool transport is disabled; translate tools through "
-            "the host-owned tool envelope before building the server payload"
+        payload["tools"] = [dict(tool) for tool in tools]
+        tool_choice = getattr(request, "tool_choice", None)
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        payload["parallel_tool_calls"] = bool(
+            getattr(request, "parallel_tool_calls", False)
         )
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
-    if getattr(request, "response_format", None) == "json":
+        model_id = str(getattr(adapter.config, "model_id", ""))
+        normalized = "".join(ch for ch in model_id.lower() if ch.isalnum())
+        if "qwen35" in normalized:
+            payload["temperature"] = 0.7
+            payload["top_p"] = 0.8
+            payload["top_k"] = 20
+            payload["presence_penalty"] = 1.5
+    elif getattr(request, "response_format", None) == "json":
         # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
         # JSON decoding, schema validation, and isolated repair are host-owned.
         payload["reasoning_effort"] = "none"

@@ -9,8 +9,10 @@ from minecraft_mod_ai.llama_server_hardware_policy import (
 )
 
 
-def _adapter(max_new_tokens: int = 8192):
-    return SimpleNamespace(config=SimpleNamespace(max_new_tokens=max_new_tokens))
+def _adapter(max_new_tokens: int = 8192, model_id: str = "generic/model"):
+    return SimpleNamespace(
+        config=SimpleNamespace(max_new_tokens=max_new_tokens, model_id=model_id)
+    )
 
 
 def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
@@ -40,7 +42,15 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     assert payload["max_tokens"] == 8192
 
 
-def test_native_tool_request_is_rejected_before_llama_transport() -> None:
+def test_native_tool_request_is_forwarded_to_llama_template() -> None:
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "lookup evidence",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
     request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then plan"},),
         response_format="json",
@@ -48,25 +58,23 @@ def test_native_tool_request_is_rejected_before_llama_transport() -> None:
             "type": "object",
             "properties": {"value": {"type": "string"}},
         },
-        tools=(
-            {
-                "type": "function",
-                "function": {
-                    "name": "lookup",
-                    "description": "lookup evidence",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-        ),
+        tools=(tool,),
         tool_choice="auto",
         parallel_tool_calls=True,
     )
-    try:
-        _server_payload(_adapter(), request)
-    except RuntimeError as exc:
-        assert "Native llama-server tool transport is disabled" in str(exc)
-    else:
-        raise AssertionError("native llama tool metadata must fail closed")
+
+    payload = _server_payload(
+        _adapter(model_id="unsloth/Qwen3.5-9B-MTP-GGUF"), request
+    )
+
+    assert payload["tools"] == [tool]
+    assert payload["tool_choice"] == "auto"
+    assert payload["parallel_tool_calls"] is True
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
