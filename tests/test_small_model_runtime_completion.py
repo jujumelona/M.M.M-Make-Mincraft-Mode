@@ -74,6 +74,7 @@ def test_runtime_rag_index_contains_dependency_graph(tmp_path: Path) -> None:
         rerank=False,
     )
     assert result["retrieval_mode"] in {
+        "lexical+relations",
         "semantic+rerank+relations",
         "lexical+rerank+relations",
         "caller-fallback",
