@@ -34,6 +34,46 @@ _ANCHOR_TERMS = {
 }
 
 
+def _coder_project_context_budget(
+    router: ModelRouter,
+    policy: ScalePolicy,
+    *,
+    fast_mode: bool,
+) -> int:
+    """Size exact-source grounding from the active coder model's input window.
+
+    Fast mode deliberately keeps the original 4 KiB ceiling. Normal production uses
+    the coder role's declared token window, reserves output plus prompt/research
+    headroom, and converts only the remaining input allowance at a conservative two
+    UTF-8 bytes per token. Unknown/custom routers retain the historical 12 KiB fallback.
+    """
+    hard_cap = max(1024, int(policy.model_context_bytes))
+    if fast_mode:
+        return min(hard_cap, 4 * 1024)
+
+    fallback = min(hard_cap, 12 * 1024)
+    registry = getattr(router, "registry", None)
+    resolve_role = getattr(registry, "role", None)
+    profile = str(getattr(router, "profile", "") or "").strip()
+    if not callable(resolve_role) or not profile:
+        return fallback
+    try:
+        config = resolve_role(profile, "coder")
+    except Exception:
+        return fallback
+
+    max_context = int(getattr(config, "max_context", 0) or 0)
+    max_input = int(getattr(config, "max_input_tokens", 0) or 0)
+    max_new = int(getattr(config, "max_new_tokens", 0) or 0)
+    input_tokens = max_input if max_input > 0 else max(0, max_context - max_new)
+    if input_tokens <= 0:
+        return fallback
+
+    reserve_tokens = max(2048, min(8192, max_new // 2 if max_new > 0 else 4096))
+    evidence_tokens = max(512, input_tokens - reserve_tokens)
+    return min(hard_cap, max(1024, evidence_tokens * 2))
+
+
 class CustomModuleGenerator:
     """Generate unusual Minecraft modules from a whole-project relevance index.
 
@@ -126,9 +166,10 @@ class CustomModuleGenerator:
             ensure_ascii=False,
             sort_keys=True,
         )
-        project_context_budget = min(
-            self.policy.model_context_bytes,
-            (4 if self.fast_mode else 12) * 1024,
+        project_context_budget = _coder_project_context_budget(
+            self.router,
+            self.policy,
+            fast_mode=self.fast_mode,
         )
         if self.fast_mode:
             print(
