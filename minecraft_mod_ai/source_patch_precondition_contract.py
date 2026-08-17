@@ -102,7 +102,7 @@ def preflight_source_patch_operations(
     generator: Any,
     operations: Iterable[dict[str, Any]],
 ) -> None:
-    """Run the patcher's deterministic checks without mutating the staging tree."""
+    """Run every deterministic patcher check without mutating the staging tree."""
     from .source_patch import (
         SourcePatchError,
         TransactionalSourcePatcher,
@@ -117,8 +117,14 @@ def preflight_source_patch_operations(
     root = Path(root_value).expanduser().resolve()
     try:
         patcher = TransactionalSourcePatcher(root)
-        for raw in operations:
-            item = patcher._normalize(raw)
+        normalized = [patcher._normalize(raw) for raw in operations]
+        if not normalized:
+            raise SourcePatchError("At least one patch operation is required.")
+        paths = [item["path"] for item in normalized]
+        if len(paths) != len(set(paths)):
+            raise SourcePatchError("A patch transaction may touch each path only once.")
+
+        for item in normalized:
             target = patcher._path(
                 item["path"],
                 allow_missing=item["operation"] == "create",
