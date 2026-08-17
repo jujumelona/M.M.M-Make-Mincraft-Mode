@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-"""Retired late-bootstrap research monkeypatch composition.
+"""Late-bootstrap bridge for the validation fingerprint performance contract.
 
-Research, retrieval, memory, validation and MCP behavior are owned by their source
-modules. Runtime bootstrap may still import this transition entry point while older
-live environments upgrade, but it intentionally mutates nothing.
+Broad cross-module research hotpath monkeypatch composition is retired.  The validation
+fingerprint cache remains a supported exact-input optimization and is installed here
+until that implementation is folded directly into validation_execution_contract.
 """
 
 
 def install() -> None:
-    """No-op: cross-module research hotpath patching has been retired."""
+    from . import validation_execution_contract
+    from .research_validation_fingerprint_performance import harden
+
+    harden(validation_execution_contract)
 
 
 __all__ = ["install"]
