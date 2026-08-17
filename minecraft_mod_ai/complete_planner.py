@@ -37,10 +37,11 @@ class _ProductionBatch:
 class CompleteGameDesignPlanner:
     """Plan production through deterministic host-owned batch templates.
 
-    The model never creates the batch graph or schema. Host code derives batches from
-    the validated game design, creates every module identity, and merges only allowed
-    values from one model response per batch. Invalid or missing model output falls
-    back to the unchanged host skeleton instead of triggering a repair/replan loop.
+    The model never creates the batch graph or schema. Host code derives the complete
+    production template from the validated game design, creates every module identity,
+    and merges only allowed values from one model response. Invalid, partial, or missing
+    model output falls back to the unchanged host skeleton instead of triggering a
+    repair/replan loop.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -225,32 +226,34 @@ class CompleteGameDesignPlanner:
 
 
 def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
-    """Derive the production graph without asking the model to invent structure."""
+    """Build one complete production template without model-owned batch structure."""
     raw_modules = game_design.get("modules")
-    batches: list[_ProductionBatch] = []
+    exports: list[str] = []
     seen: set[str] = set()
     if isinstance(raw_modules, list):
         for index, raw in enumerate(raw_modules):
             if not isinstance(raw, Mapping):
                 continue
-            batch_id = _identifier(raw.get("plugin_id"), f"feature_{index + 1}")
-            if batch_id in seen:
+            module_id = _identifier(raw.get("plugin_id"), f"feature_{index + 1}")
+            if module_id in seen:
                 continue
-            seen.add(batch_id)
-            reason = " ".join(str(raw.get("reason") or "").split())
-            scope = reason or f"Implement requested capability {batch_id}."
-            batches.append(
-                _ProductionBatch(
-                    batch_id=batch_id,
-                    scope=scope,
-                    depends_on_batches=(),
-                    deliverables=(f"{batch_id}_complete",),
-                    exports=(batch_id,),
-                )
-            )
+            seen.add(module_id)
+            exports.append(module_id)
 
-    if batches:
-        return tuple(batches)
+    if exports:
+        catalog = ", ".join(exports)
+        return (
+            _ProductionBatch(
+                batch_id="requested_features",
+                scope=(
+                    "Implement every requested capability in this host-owned production "
+                    f"template: {catalog}."
+                ),
+                depends_on_batches=(),
+                deliverables=tuple(f"{module_id}_complete" for module_id in exports),
+                exports=tuple(exports),
+            ),
+        )
 
     summary = " ".join(str(prompt).strip().split())[:240] or "requested mod features"
     return (
