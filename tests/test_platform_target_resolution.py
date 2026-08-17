@@ -158,7 +158,7 @@ def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
 
     assert router.calls == 0
     assert selected.adapter.adapter_id == selected_adapter.adapter_id
-    assert selected.source == "host_evidence_optimizer"
+    assert selected.source == "host_reuse_optimizer"
 
 
 def test_model_cannot_invent_platform_coordinate(monkeypatch) -> None:
@@ -177,11 +177,20 @@ def test_model_cannot_invent_platform_coordinate(monkeypatch) -> None:
     assert selected.adapter.minecraft_version != router.selected
 
 
-def test_explicit_future_target_is_hard_constraint_when_officially_discovered(monkeypatch) -> None:
-    monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
+def test_explicit_future_version_is_nonbinding_optimizer_hint(monkeypatch) -> None:
+    selected_adapter = _fabric_1201()
+    monkeypatch.setattr(
+        resolver,
+        "_optimize",
+        lambda *_args, **_kwargs: _optimization(selected_adapter),
+    )
+
     selected = resolve_platform("Minecraft 27.0 Fabric에 아이템 하나 추가")
-    assert selected.adapter.minecraft_version == "27.0"
+
+    assert selected.adapter.adapter_id == selected_adapter.adapter_id
+    assert selected.adapter.minecraft_version != "27.0"
     assert selected.explicit_version is True
+    assert selected.source == "host_reuse_optimizer_with_version_hint"
 
     with pytest.raises(SpecValidationError):
         resolve_platform("Minecraft 27.0 NeoForge에 아이템 하나 추가")
