@@ -210,9 +210,5 @@ def install(production_tools_module: Any) -> None:
     indexed.__wrapped__ = current  # type: ignore[attr-defined]
     cls.index_project_rag = indexed
 
-    from .small_model_retrieval_efficiency_contract import install as install_retrieval_efficiency
-
-    install_retrieval_efficiency()
-
 
 __all__ = ["install"]
