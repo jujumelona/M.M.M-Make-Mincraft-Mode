@@ -110,12 +110,13 @@ def resolve_platform(
     router: Any | None = None,
     target_research_fn: TargetResearchFn | None = None,
 ) -> PlatformSelection:
-    """Resolve one executable target using hard constraints then host evidence ranking.
+    """Resolve a target after reuse/capability evaluation, never by version preselection.
 
-    The model may contribute semantic capability labels through ``design`` but never
-    chooses exact coordinates. Target-scoped deep research is an evidence callback,
-    not another selector: the host optimiser invokes it only for executable target
-    hypotheses and ranks its receipt with ecosystem/dependency evidence.
+    A version mentioned in a new-build or migration prompt is non-binding evidence.
+    The host optimizer still evaluates executable candidates and chooses the target
+    after reuse, dependency and verification costs are known. The one intentional
+    exception is an existing project without a migration request: its current target
+    is preserved because changing it would itself be a migration.
     """
 
     del router
@@ -130,53 +131,6 @@ def resolve_platform(
             provider_for_loader(explicit_loader)
         except ValueError as exc:
             raise SpecValidationError(str(exc)) from exc
-
-    if explicit_version and explicit_loader:
-        adapter = _exact_adapter(explicit_version, explicit_loader)
-        _require_supported_kinds(adapter, kinds, explicit=True)
-        return PlatformSelection(
-            adapter=adapter,
-            source="user_explicit_migration_target" if migration_requested else "user_explicit_target",
-            reason=_explicit_reason(adapter, migration_requested),
-            explicit_version=True,
-            explicit_loader=True,
-            migration_requested=migration_requested,
-        )
-
-    if explicit_version and not explicit_loader:
-        exact = adapters_for_version(explicit_version)
-        if not exact:
-            raise SpecValidationError(
-                f"Minecraft {explicit_version}을 실행할 수 있는 provider가 없습니다."
-            )
-        if len(exact) == 1:
-            adapter = exact[0]
-            _require_supported_kinds(adapter, kinds, explicit=True)
-            return PlatformSelection(
-                adapter=adapter,
-                source="user_explicit_version_unique_provider",
-                reason=(
-                    f"사용자가 Minecraft {adapter.minecraft_version}을 명시했고, "
-                    f"실행 가능한 provider가 {adapter.loader} 하나뿐입니다."
-                ),
-                explicit_version=True,
-                explicit_loader=False,
-                migration_requested=migration_requested,
-            )
-        optimization = _optimize(
-            text,
-            design=design,
-            module_kinds=kinds,
-            version_constraint=explicit_version,
-            target_research_fn=target_research_fn,
-        )
-        return _optimized_selection(
-            optimization,
-            source="host_optimizer_explicit_version",
-            explicit_version=True,
-            explicit_loader=False,
-            migration_requested=migration_requested,
-        )
 
     if existing_version and not migration_requested:
         adapter = _existing_adapter(existing_version, existing_loader)
@@ -198,12 +152,17 @@ def resolve_platform(
         design=design,
         module_kinds=kinds,
         loader_constraint=explicit_loader,
+        version_constraint=None,
         target_research_fn=target_research_fn,
     )
     return _optimized_selection(
         optimization,
-        source="host_evidence_optimizer",
-        explicit_version=False,
+        source=(
+            "host_reuse_optimizer_with_version_hint"
+            if explicit_version
+            else "host_reuse_optimizer"
+        ),
+        explicit_version=bool(explicit_version),
         explicit_loader=bool(explicit_loader),
         migration_requested=migration_requested,
     )
@@ -218,13 +177,15 @@ def _optimize(
     version_constraint: str | None = None,
     target_research_fn: TargetResearchFn | None = None,
 ) -> PlatformOptimization:
+    """Run host optimization without using a Minecraft version as a candidate gate."""
+    del version_constraint
     try:
         return optimize_platform(
             prompt,
             design=design,
             module_kinds=module_kinds,
             loader_constraint=loader_constraint,
-            version_constraint=version_constraint,
+            version_constraint=None,
             target_research_fn=target_research_fn,
         )
     except ValueError as exc:
@@ -241,6 +202,11 @@ def _optimized_selection(
 ) -> PlatformSelection:
     adapter = optimization.selected
     evidence = optimization.evidence
+    version_note = (
+        " 프롬프트의 버전 표기는 후보 고정에 사용하지 않았습니다."
+        if explicit_version
+        else ""
+    )
     return PlatformSelection(
         adapter=adapter,
         source=source,
@@ -251,6 +217,7 @@ def _optimized_selection(
             f"검증 reuse {evidence.reuse_coverage}, residual {evidence.residual_cost}, "
             f"dependency closure {'complete' if evidence.dependency_closure_complete else 'incomplete'}. "
             "최신성은 마지막 tie-breaker로만 사용됩니다."
+            f"{version_note}"
         ),
         explicit_version=explicit_version,
         explicit_loader=explicit_loader,
@@ -280,15 +247,6 @@ def _existing_adapter(version: str, loader: str | None) -> PlatformAdapter:
         "기존 프로젝트 loader를 식별할 수 없고 같은 Minecraft 버전에 여러 실행 "
         "provider가 존재합니다. 기존 target을 추측하지 않습니다."
     )
-
-
-def _explicit_reason(adapter: PlatformAdapter, migration_requested: bool) -> str:
-    if migration_requested:
-        return (
-            f"기존 프로젝트를 사용자가 명시한 Minecraft {adapter.minecraft_version} "
-            f"{adapter.loader} target으로 migration합니다."
-        )
-    return f"사용자가 Minecraft {adapter.minecraft_version} {adapter.loader}을 명시했습니다."
 
 
 def retarget_proposal(proposal: Proposal, selection: PlatformSelection) -> Proposal:
