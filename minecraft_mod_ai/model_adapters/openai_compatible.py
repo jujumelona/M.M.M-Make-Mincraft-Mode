@@ -89,7 +89,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 payload["tool_choice"] = request.tool_choice or "auto"
                 payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
 
-            with httpx.Client(follow_redirects=False) as client:
+            with httpx.Client(timeout=120.0, follow_redirects=False) as client:
                 response = client.post(
                     f"{cfg.base_url.rstrip('/')}/chat/completions",
                     headers={
