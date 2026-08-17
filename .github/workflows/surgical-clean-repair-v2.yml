@@ -17,110 +17,219 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install --disable-pip-version-check -e '.[dev]'
-      - name: Reuse surgical restore then finish exact remnants
+      - name: Restore healthy source and apply AST-safe cleanup
         shell: bash
         run: |
           set -euo pipefail
+          START="$(git rev-parse HEAD)"
           python - <<'PY'
           from pathlib import Path
           import yaml
-          data=yaml.safe_load(Path('.github/workflows/surgical-clean-repair.yml').read_text(encoding='utf-8'))
-          steps=data['jobs']['repair']['steps']
-          script=next(step['run'] for step in steps if step.get('name')=='Restore healthy source and apply surgical cleanup')
-          marker='python -m compileall -q minecraft_mod_ai tests tools download_resources.py'
-          script=script[:script.index(marker)]
-          Path('/tmp/base_transform.sh').write_text(script,encoding='utf-8')
+          data = yaml.safe_load(Path('.github/workflows/surgical-clean-repair.yml').read_text(encoding='utf-8'))
+          steps = data['jobs']['repair']['steps']
+          script = next(step['run'] for step in steps if step.get('name') == 'Restore healthy source and apply surgical cleanup')
+          marker = 'python -m compileall -q minecraft_mod_ai tests tools download_resources.py'
+          Path('/tmp/base_transform.sh').write_text(script[:script.index(marker)], encoding='utf-8')
           PY
           bash /tmp/base_transform.sh
           cat > /tmp/postfix.py <<'PY'
           from __future__ import annotations
-          import ast,re
+          import ast
           from pathlib import Path
-          ROOT=Path.cwd(); PKG=ROOT/'minecraft_mod_ai'; tests=ROOT/'tests'
 
-          # Remove one unused legacy shape declaration from restored central research.
-          p=PKG/'central_research.py'; tree=ast.parse(p.read_text(encoding='utf-8'))
+          ROOT = Path.cwd()
+          PKG = ROOT / 'minecraft_mod_ai'
+          TESTS = ROOT / 'tests'
+          MEDIA_NAMES = {
+              'page_audio', 'raw_audio', 'audio_ids', 'page_audio_ids',
+              'staged_audio', 'audio_catalog', 'private_audio', 'audio_receipt',
+          }
+
+          def write_tree(path: Path, tree: ast.AST) -> None:
+              ast.fix_missing_locations(tree)
+              text = ast.unparse(tree) + '\n'
+              compile(text, str(path), 'exec')
+              path.write_text(text, encoding='utf-8')
+
+          def name_target(stmt: ast.AST, target_name: str) -> bool:
+              if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                  targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                  return any(isinstance(t, ast.Name) and t.id == target_name for t in targets)
+              return False
+
+          # central_research: preserve visual/image/3D routing; remove only dead restored declaration.
+          p = PKG / 'central_research.py'
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
           class Central(ast.NodeTransformer):
-              def visit_FunctionDef(self,node):
-                  node=self.generic_visit(node)
-                  if node.name=='_research_domain':
-                      node.body=[s for s in node.body if not (isinstance(s,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='required' for t in s.targets))]
+              def visit_FunctionDef(self, node):
+                  node = self.generic_visit(node)
+                  if node.name == '_research_domain':
+                      node.body = [s for s in node.body if not name_target(s, 'required')]
                   return node
-          tree=Central().visit(tree); ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
+          write_tree(p, Central().visit(tree))
 
-          # Exact remnants in planner after removing the third media lane.
-          p=PKG/'complete_planner.py'; text=p.read_text(encoding='utf-8')
-          text=text.replace('parts.audio.extend(page_audio)\n','')
-          text=text.replace(' or audio_ids','').replace('raw_modules + raw_assets + raw_audio','raw_modules + raw_assets')
-          text=text.replace(" or raw_item.get('sound_id')",'').replace(' or deliv in page_audio_ids','')
-          text=text.replace('staged_audio, ','').replace(', staged_audio,', ',').replace(', staged_audio)', ')')
-          # Restore forward-progress body that the media-condition removal had collapsed.
-          text=re.sub(
-              r"if not completed_set:\n\s+completed_list = \[str\(item\).*?\n\s+for deliv in target_deliverables:\n\s+pass",
-              "if not completed_set:\n                completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]\n                for deliv in target_deliverables:\n                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_tests or deliv in completed_list:\n                        completed_set.add(deliv)",
-              text, flags=re.S,
-          )
-          # Tuple assignment/return annotations still carried the removed catalog position.
-          tree=ast.parse(text)
+          # complete_planner: remove the retired third media lane while preserving control flow.
+          p = PKG / 'complete_planner.py'
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
           class Planner(ast.NodeTransformer):
-              def visit_Assign(self,node):
-                  node=self.generic_visit(node)
-                  for target in node.targets:
-                      if isinstance(target,(ast.Tuple,ast.List)):
-                          target.elts=[e for e in target.elts if not (isinstance(e,ast.Name) and ('audio' in e.id.lower() or 'voice' in e.id.lower()))]
+              def visit_Expr(self, node):
+                  text = ast.unparse(node)
+                  if any(token in text for token in ('parts.audio', 'page_audio', 'raw_audio', 'staged_audio')):
+                      return None
+                  return self.generic_visit(node)
+
+              def visit_Name(self, node):
+                  if isinstance(node.ctx, ast.Load) and node.id in {'raw_audio', 'audio_ids', 'page_audio_ids'}:
+                      return ast.copy_location(ast.List(elts=[], ctx=ast.Load()), node)
                   return node
-              def visit_Return(self,node):
-                  node=self.generic_visit(node)
-                  if isinstance(node.value,(ast.Tuple,ast.List)):
-                      node.value.elts=[e for e in node.value.elts if not (isinstance(e,ast.Name) and ('audio' in e.id.lower() or 'voice' in e.id.lower()))]
+
+              def visit_Tuple(self, node):
+                  node = self.generic_visit(node)
+                  node.elts = [
+                      e for e in node.elts
+                      if not (isinstance(e, ast.Name) and e.id in MEDIA_NAMES)
+                  ]
                   return node
-              def visit_FunctionDef(self,node):
-                  node=self.generic_visit(node)
-                  if node.name=='_retry_production_batch_wave_serially':
-                      node.returns=ast.parse('tuple[_ProductionParts, _ModuleCatalog, _ModuleCatalog, set[str]]',mode='eval').body
+
+              def visit_List(self, node):
+                  node = self.generic_visit(node)
+                  node.elts = [
+                      e for e in node.elts
+                      if not (isinstance(e, ast.Name) and e.id in MEDIA_NAMES)
+                  ]
                   return node
-          tree=Planner().visit(tree); ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
 
-          p=PKG/'production_contract.py'; text=p.read_text(encoding='utf-8').replace('    seen_sids: set[str] = set()\n',''); p.write_text(text,encoding='utf-8')
+              def visit_For(self, node):
+                  node = self.generic_visit(node)
+                  if (
+                      isinstance(node.target, ast.Name)
+                      and node.target.id == 'deliv'
+                      and ast.unparse(node.iter) == 'target_deliverables'
+                      and len(node.body) == 1
+                      and isinstance(node.body[0], ast.Pass)
+                  ):
+                      node.body = ast.parse(
+                          "if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_tests or deliv in completed_list:\n"
+                          "    completed_set.add(deliv)"
+                      ).body
+                  return node
 
-          # Quality evidence: only keep currently supported visual/runtime quality routes.
-          p=PKG/'quality_evidence.py'; text=p.read_text(encoding='utf-8')
-          text=re.sub(r"\n\s*if 'audio' in routes:\n\s*candidates\['audio'\].*",'',text)
-          text=text.replace(" or dimension_id == 'audio'",'')
-          text=re.sub(r",?\s*'ai_voice':\s*_valid_ai_voice_validation",'',text)
-          p.write_text(text,encoding='utf-8')
+              def visit_FunctionDef(self, node):
+                  node = self.generic_visit(node)
+                  if node.name == '_retry_production_batch_wave_serially':
+                      node.returns = ast.parse(
+                          'tuple[_ProductionParts, _ModuleCatalog, _ModuleCatalog, set[str]]',
+                          mode='eval',
+                      ).body
+                  return node
 
-          # Technology radar keeps AI/translation; remove calls/contracts owned by retired voice subsystem.
-          p=PKG/'technology_radar.py'; text=p.read_text(encoding='utf-8')
-          text=re.sub(r",?\s*'voice_contract':\s*_voice_contract\([^}]*?\)(?=,?\s*['}])",'',text,flags=re.S)
-          text=re.sub(r"(?m)^\s*_assess_voice_rights\([^\n]*\)\n",'',text)
-          text=text.replace('compute_voice_language_intersection,','').replace('compute_voice_language_intersection','')
-          p.write_text(text,encoding='utf-8')
+          write_tree(p, Planner().visit(tree))
 
-          # Mixed tests: delete only retired sound/voice assertions, keep all other catalog/radar tests.
-          p=tests/'test_content_catalog_scaling.py'
+          # production contract: remove the dead sound-id catalog left by the retired lane.
+          p = PKG / 'production_contract.py'
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+          class Production(ast.NodeTransformer):
+              def visit_Assign(self, node):
+                  if name_target(node, 'seen_sids'):
+                      return None
+                  return self.generic_visit(node)
+              def visit_AnnAssign(self, node):
+                  if name_target(node, 'seen_sids'):
+                      return None
+                  return self.generic_visit(node)
+          write_tree(p, Production().visit(tree))
+
+          # quality evidence: no audio/voice quality dimensions after subsystem removal.
+          p = PKG / 'quality_evidence.py'
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+          class Quality(ast.NodeTransformer):
+              def visit_If(self, node):
+                  test = ast.unparse(node.test)
+                  if "'audio' in routes" in test or '"audio" in routes' in test:
+                      return None
+                  return self.generic_visit(node)
+              def visit_Dict(self, node):
+                  kept = []
+                  for key, value in zip(node.keys, node.values):
+                      if isinstance(key, ast.Constant) and str(key.value) in {'audio', 'ai_voice'}:
+                          continue
+                      kept.append((key, value))
+                  node.keys = [k for k, _ in kept]
+                  node.values = [v for _, v in kept]
+                  return self.generic_visit(node)
+          write_tree(p, Quality().visit(tree))
+
+          # technology radar: retain AI/runtime/translation, remove retired voice-owned hooks only.
+          p = PKG / 'technology_radar.py'
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+          class Radar(ast.NodeTransformer):
+              def visit_Expr(self, node):
+                  text = ast.unparse(node)
+                  if '_assess_voice_rights' in text:
+                      return None
+                  return self.generic_visit(node)
+              def visit_Dict(self, node):
+                  kept = []
+                  for key, value in zip(node.keys, node.values):
+                      if isinstance(key, ast.Constant) and str(key.value) == 'voice_contract':
+                          continue
+                      kept.append((key, value))
+                  node.keys = [k for k, _ in kept]
+                  node.values = [v for _, v in kept]
+                  return self.generic_visit(node)
+          write_tree(p, Radar().visit(tree))
+
+          # Mixed tests: remove only assertions for the retired media subsystem.
+          for filename, needles in {
+              'test_content_catalog_scaling.py': ('_sound_java_files',),
+              'test_technology_radar.py': ('compute_voice_language_intersection', 'voice_', 'speech_'),
+          }.items():
+              p = TESTS / filename
+              if not p.exists():
+                  continue
+              tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+              new_body = []
+              for node in tree.body:
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
+                      source = ast.unparse(node).lower()
+                      if any(needle.lower() in source for needle in needles):
+                          continue
+                  new_body.append(node)
+              tree.body = new_body
+              write_tree(p, tree)
+
+          p = TESTS / 'test_parallel_result_determinism_contract.py'
           if p.exists():
-              tree=ast.parse(p.read_text(encoding='utf-8'))
-              tree.body=[n for n in tree.body if not (isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and ('sound' in n.name.lower() or 'audio' in n.name.lower() or 'voice' in n.name.lower()))]
-              ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
-          p=tests/'test_technology_radar.py'
-          if p.exists():
-              tree=ast.parse(p.read_text(encoding='utf-8'))
-              tree.body=[n for n in tree.body if not (isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and ('compute_voice_language_intersection' in ast.unparse(n) or 'voice_' in ast.unparse(n).lower() or 'speech_' in ast.unparse(n).lower()))]
-              ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
-          p=tests/'test_parallel_result_determinism_contract.py'
-          if p.exists():
-              text=p.read_text(encoding='utf-8')
-              if '_canonicalize_generation_result' in text and 'from minecraft_mod_ai.parallel_result_determinism_contract import _canonicalize_generation_result' not in text:
-                  text='from minecraft_mod_ai.parallel_result_determinism_contract import _canonicalize_generation_result\n\n'+text
-              p.write_text(text,encoding='utf-8')
+              tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+              used = any(
+                  isinstance(n, ast.Name) and n.id == '_canonicalize_generation_result'
+                  for n in ast.walk(tree)
+              )
+              imported = any(
+                  isinstance(n, ast.ImportFrom)
+                  and n.module == 'minecraft_mod_ai.parallel_result_determinism_contract'
+                  and any(a.name == '_canonicalize_generation_result' for a in n.names)
+                  for n in tree.body
+              )
+              if used and not imported:
+                  tree.body.insert(0, ast.ImportFrom(
+                      module='minecraft_mod_ai.parallel_result_determinism_contract',
+                      names=[ast.alias(name='_canonicalize_generation_result')],
+                      level=0,
+                  ))
+              write_tree(p, tree)
           PY
           python /tmp/postfix.py
           python -m compileall -q minecraft_mod_ai tests tools download_resources.py
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9 --fix
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
           python -m vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
-          python -m pytest -q tests/test_clean_production_contract.py tests/test_research_coordinator.py tests/test_agentic_search_efficiency_contract.py tests/test_parallel_result_determinism_contract.py tests/test_technology_radar.py
+          python -m pytest -q \
+            tests/test_clean_production_contract.py \
+            tests/test_research_coordinator.py \
+            tests/test_agentic_search_efficiency_contract.py \
+            tests/test_parallel_result_determinism_contract.py \
+            tests/test_technology_radar.py
           git diff --check
           test -f minecraft_mod_ai/model_adapters/image_diffusion.py
           test -f minecraft_mod_ai/blockbench_client.py
@@ -131,15 +240,16 @@ jobs:
           ! grep -q 'def _expand_one_batch' minecraft_mod_ai/complete_planner.py
           ! grep -q 'module_batches' minecraft_mod_ai/complete_planner.py
           ! git grep -n -E 'AudioRequest|audio_generator|audio_resume_efficiency_contract|planner_production_page_contract|production_page_durable_contract|SpeechAdapter|speech_recognition|generate-audio|production-audio|ai_voice' -- minecraft_mod_ai config pyproject.toml tests
+          test "$(git rev-parse HEAD)" = "$START"
       - name: Commit verified repair
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin main
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then echo 'main moved; refusing stale repair' >&2; exit 1; fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          rm -f .github/workflows/surgical-clean-repair.yml .github/workflows/surgical-clean-repair-v2.yml
-          git add -A
+          git add minecraft_mod_ai tests config pyproject.toml skills plugins
+          git diff --cached --check
           git commit -m 'refactor: restore clean non-media production paths'
           git push origin HEAD:main
