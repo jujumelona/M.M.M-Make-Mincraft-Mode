@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from functools import wraps
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
@@ -51,9 +51,10 @@ def bind_source_snapshot_preconditions(
     normalized to replace. A model-supplied SHA that disagrees with the host snapshot
     is rejected before the transaction reaches the patcher.
 
-    We deliberately never derive a missing precondition from the *current* live file:
-    if source changed after the model observed it, TransactionalSourcePatcher must still
-    detect that stale snapshot and refuse the write.
+    We deliberately never derive a missing precondition from the current file. If a
+    path was not in the exact-source ProjectIndex, the model is not allowed to invent a
+    replace/edit identity for it. If source changes after the model observed it, the
+    patcher still detects the stale snapshot and refuses the write.
     """
     for raw in operations:
         if not isinstance(raw, dict):
@@ -78,19 +79,78 @@ def bind_source_snapshot_preconditions(
         if operation not in {"replace", "edit"}:
             continue
 
-        supplied = str(raw.get("expected_sha256", "")).strip().lower()
-        if snapshot_sha:
-            if supplied and _valid_sha256(supplied) and supplied != snapshot_sha:
-                raise SourcePatchPreconditionError(
-                    f"Model patch precondition disagrees with the observed source snapshot for {path}."
-                )
-            raw["expected_sha256"] = snapshot_sha
-            continue
-
-        if not _valid_sha256(supplied):
+        if not snapshot_sha:
             raise SourcePatchPreconditionError(
                 f"No observed source SHA is available to authorize {operation} for {path}."
             )
+        supplied = str(raw.get("expected_sha256", "")).strip().lower()
+        if supplied and _valid_sha256(supplied) and supplied != snapshot_sha:
+            raise SourcePatchPreconditionError(
+                f"Model patch precondition disagrees with the observed source snapshot for {path}."
+            )
+        raw["expected_sha256"] = snapshot_sha
+
+
+def preflight_source_patch_operations(
+    generator: Any,
+    operations: Iterable[dict[str, Any]],
+) -> None:
+    """Run the patcher's deterministic checks without mutating the staging tree."""
+    from .source_patch import (
+        SourcePatchError,
+        TransactionalSourcePatcher,
+        sha256_bytes,
+    )
+
+    root_value = getattr(generator, "_cached_root", None)
+    if root_value is None:
+        raise SourcePatchPreconditionError(
+            "Custom patch validation has no bound project snapshot root."
+        )
+    root = Path(root_value).expanduser().resolve()
+    try:
+        patcher = TransactionalSourcePatcher(root)
+        for raw in operations:
+            item = patcher._normalize(raw)
+            target = patcher._path(
+                item["path"],
+                allow_missing=item["operation"] == "create",
+            )
+            exists = target.exists()
+            if exists and (not target.is_file() or target.is_symlink()):
+                raise SourcePatchError(
+                    f"Patch target is not a regular file: {item['path']}"
+                )
+            before = target.read_bytes() if exists else None
+            if item["operation"] == "create":
+                if exists:
+                    raise SourcePatchError(
+                        f"Create target already exists: {item['path']}"
+                    )
+                continue
+
+            if not exists:
+                raise SourcePatchError(
+                    f"Patch target does not exist: {item['path']}"
+                )
+            actual = sha256_bytes(before or b"")
+            if item["expected_sha256"] != actual:
+                raise SourcePatchError(
+                    f"SHA-256 precondition failed for {item['path']}: "
+                    f"{actual} != {item['expected_sha256']}"
+                )
+            if item["operation"] == "replace":
+                after = item["content"].encode("utf-8")
+            elif item["operation"] == "edit":
+                after = patcher._edit(before or b"", item).encode("utf-8")
+            else:
+                continue
+            if before == after:
+                raise SourcePatchError(
+                    f"Patch operation makes no change: {item['path']}"
+                )
+    except SourcePatchError as exc:
+        raise SourcePatchPreconditionError(str(exc)) from exc
 
 
 def install(custom_module_generator_module: Any) -> None:
@@ -102,7 +162,8 @@ def install(custom_module_generator_module: Any) -> None:
     @wraps(current)
     def validate(self: Any, operations: list[dict[str, Any]]) -> None:
         bind_source_snapshot_preconditions(self, operations)
-        return current(self, operations)
+        current(self, operations)
+        preflight_source_patch_operations(self, operations)
 
     setattr(validate, _MARKER, True)
     cls._validate_operations = validate
@@ -112,4 +173,5 @@ __all__ = [
     "SourcePatchPreconditionError",
     "bind_source_snapshot_preconditions",
     "install",
+    "preflight_source_patch_operations",
 ]
