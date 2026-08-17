@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner, _host_batches
+from minecraft_mod_ai.complete_planner import (
+    CompleteGameDesignPlanner,
+    _host_batches,
+    _implementation_research_outline,
+)
 from minecraft_mod_ai.planner_template_schema import (
     ASSET_KEYS,
     MODULE_KEYS,
@@ -144,3 +148,33 @@ def test_multiple_design_modules_use_one_host_template_fill() -> None:
         "economy",
         "quests",
     )
+
+
+def test_identical_platform_and_technical_evidence_is_sent_once() -> None:
+    evidence = {
+        "schema_version": "mmm/platform-evidence-v1",
+        "domains": [{"provider": "fabric", "version": "1.20.1"}],
+    }
+    outline = _implementation_research_outline(
+        {
+            "mod_id": "demo",
+            "_platform_evidence": evidence,
+            "_technical_evidence": dict(evidence),
+        }
+    )
+
+    assert outline["_platform_evidence"] == evidence
+    assert "_technical_evidence" not in outline
+
+
+def test_distinct_technical_evidence_is_preserved() -> None:
+    outline = _implementation_research_outline(
+        {
+            "mod_id": "demo",
+            "_platform_evidence": {"kind": "platform"},
+            "_technical_evidence": {"kind": "implementation"},
+        }
+    )
+
+    assert outline["_platform_evidence"] == {"kind": "platform"}
+    assert outline["_technical_evidence"] == {"kind": "implementation"}
