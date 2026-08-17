@@ -43,7 +43,11 @@ transformers-bnb = [
 qwen-fastpath = [
   "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6; sys_platform == 'linux'",
 ]
-rag = ["sentence-transformers>=3.0,<6"]
+rag = [
+  "numpy>=1.26,<3",
+  "sentence-transformers>=3.0,<6",
+]
+ui = ["gradio>=5.0,<6"]
 image = [
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
   "diffusers>=0.39,<1",
@@ -56,6 +60,7 @@ image = [
 training = []
 dev = [
   "nbformat>=5.10,<6",
+  "numpy>=1.26,<3",
   "Pillow>=10.4,<13",
   "pytest>=8,<10",
   "ruff>=0.16,<1",
