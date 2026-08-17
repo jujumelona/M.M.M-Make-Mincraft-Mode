@@ -56,7 +56,6 @@ def _install_core_contracts() -> None:
 def _install_model_runtime_contracts() -> None:
     from . import (
         complete_orchestrator_services,
-        complete_planner,
         llama_server_autotune,
         llama_server_hardware_policy,
         llama_server_runtime_tuning,
@@ -85,7 +84,6 @@ def _install_model_runtime_contracts() -> None:
     )
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_parallel_runtime(
-        complete_planner_module=complete_planner,
         model_registry_module=model_registry,
         llama_server_autotune_module=llama_server_autotune,
     )
