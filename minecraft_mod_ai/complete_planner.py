@@ -150,7 +150,7 @@ class CompleteGameDesignPlanner:
         production_page_receipts: list[dict[str, Any]] = []
         previous_dependency_batches: tuple[str, ...] = ()
         previous_exports: tuple[str, ...] = ()
-        chain = hashlib.sha256(f'{_REQUEST_PRODUCTION_SCHEMA}:{ingestion['chain_sha256']}'.encode('utf-8'))
+        chain = hashlib.sha256(f"{_REQUEST_PRODUCTION_SCHEMA}:{ingestion['chain_sha256']}".encode('utf-8'))
         for page_index, (page_text, source_receipt) in enumerate(request_pages):
             previous_interface = {'dependency_batch_ids': list(previous_dependency_batches), 'exports': list(previous_exports), 'sha256': _value_receipt({'dependency_batch_ids': previous_dependency_batches, 'exports': previous_exports}, schema_version='mmm/previous-request-page-interface-v1')['sha256']}
             request = {'schema_version': _REQUEST_OUTLINE_PAGE_SCHEMA, 'full_request_receipt': {'prompt_sha256': ingestion['prompt_sha256'], 'prompt_byte_length': ingestion['prompt_byte_length'], 'page_count': ingestion['page_count'], 'ingestion_chain_sha256': ingestion['chain_sha256']}, 'request_ingestion_page': {**{key: value for key, value in source_receipt.items() if key != 'game_design'}, 'authoritative_request_text': page_text}, 'previous_page_interface': previous_interface, 'namespace': f'rp{page_index + 1:06d}', 'known_local_batch_catalog': _ModuleCatalog().receipt(), 'cursor': '', 'contract': _PRODUCTION_OUTLINE_CONTRACT}
