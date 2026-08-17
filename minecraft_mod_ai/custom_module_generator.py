@@ -780,75 +780,6 @@ def _observation_page_payload(
     }
 
 
-def _verified_model_observation(
-    value: Any,
-    *,
-    source_page: dict[str, Any],
-) -> dict[str, Any]:
-    required = {"path", "sha256", "content_start_bytes", "content_end_bytes", "text"}
-    if not isinstance(value, dict) or set(value) != required:
-        raise CustomModuleGenerationError("Source observation fields are invalid.")
-    path = value["path"]
-    sha256 = value["sha256"]
-    start = value["content_start_bytes"]
-    end = value["content_end_bytes"]
-    text = value["text"]
-    if (
-        not isinstance(path, str)
-        or not isinstance(sha256, str)
-        or type(start) is not int
-        or type(end) is not int
-        or not isinstance(text, str)
-        or start < 0
-        or end <= start
-        or not text
-    ):
-        raise CustomModuleGenerationError("Source observation values are invalid.")
-    quoted = text.encode("utf-8")
-    for fragment in source_page["files"]:
-        if fragment["path"] != path or fragment["sha256"] != sha256:
-            continue
-        frag_text = fragment["content"]
-        raw = frag_text.encode("utf-8")
-        fragment_start = fragment["content_start_bytes"]
-        if text in frag_text:
-            text_char_idx = frag_text.find(text)
-            actual_start_byte = len(frag_text[:text_char_idx].encode("utf-8")) + fragment_start
-            return _exact_observation(
-                path=path,
-                sha256=sha256,
-                start=actual_start_byte,
-                content=quoted,
-                source_page=source_page["page_index"],
-            )
-        relative_start = max(0, start - fragment_start)
-        relative_end = relative_start + len(quoted)
-        if relative_end <= len(raw) and raw[relative_start:relative_end] == quoted:
-            return _exact_observation(
-                path=path,
-                sha256=sha256,
-                start=fragment_start + relative_start,
-                content=quoted,
-                source_page=source_page["page_index"],
-            )
-        byte_pos = raw.find(quoted)
-        if byte_pos != -1:
-            return _exact_observation(
-                path=path,
-                sha256=sha256,
-                start=fragment_start + byte_pos,
-                content=quoted,
-                source_page=source_page["page_index"],
-            )
-    return _exact_observation(
-        path=path,
-        sha256=sha256,
-        start=start,
-        content=quoted,
-        source_page=source_page["page_index"],
-    )
-
-
 def _exact_observation(
     *,
     path: str,
@@ -878,15 +809,6 @@ def _append_observation(
     if key not in keys:
         keys.add(key)
         records.append(record)
-
-
-def _utf8_prefix(raw: bytes, byte_budget: int) -> bytes:
-    candidate = raw[:byte_budget]
-    text = candidate.decode("utf-8", errors="ignore")
-    encoded = text.encode("utf-8")
-    if encoded:
-        return encoded
-    return raw.decode("utf-8", errors="strict")[0].encode("utf-8")
 
 
 def _observation_score(record: dict[str, Any], query_tokens: set[str]) -> int:
