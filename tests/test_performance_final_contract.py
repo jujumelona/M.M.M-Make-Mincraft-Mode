@@ -5,7 +5,7 @@ import pytest
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.performance_final_contract import StagedCommitConflict, _acquire_wave_source_snapshot, _clone_source_snapshot, _clone_wave_workspace, _release_wave_source_snapshot, _three_way_merge
-from minecraft_mod_ai.work_graph import _module_stage, _node
+from minecraft_mod_ai.work_graph import _module_stage
 
 def test_generic_integration_is_not_hidden_in_content_commit_lane() -> None:
     generic = ProductionModule('custom_bridge', 'integration', {'integration_type': 'third_party_bridge'})

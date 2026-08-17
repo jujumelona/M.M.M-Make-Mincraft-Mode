@@ -1,6 +1,5 @@
 import json
 import os
-import hashlib
 import zipfile
 from pathlib import Path
 import pytest
@@ -8,7 +7,7 @@ from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_f
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.json_stream import CanonicalJsonError, StreamingJsonDecodeError, iter_canonical_json, parse_json_byte_chunks
-from minecraft_mod_ai.proposal_store import complete_proposal_from_index, load_sharded_complete_proposal, load_sharded_complete_proposal_from_zip, read_sharded_complete_proposal_section, write_sharded_complete_proposal
+from minecraft_mod_ai.proposal_store import load_sharded_complete_proposal, load_sharded_complete_proposal_from_zip, read_sharded_complete_proposal_section, write_sharded_complete_proposal
 from minecraft_mod_ai.spec import SpecValidationError, canonical_json
 
 def _large_proposal(module_count: int=103, *, game_design: dict | None=None):

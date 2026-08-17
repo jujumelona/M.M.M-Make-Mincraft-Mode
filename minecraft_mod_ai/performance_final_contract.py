@@ -8,7 +8,7 @@ import threading
 from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 from .project_write_lock import project_write_lock
 _SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
 _SNAPSHOT_WAVE_LOCK = threading.RLock()

@@ -2,9 +2,8 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 import pytest
-from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.spec import SpecValidationError, canonical_json
-from minecraft_mod_ai.technology_radar import _assess_technology_candidate_with_receipt_key, _seal_technology_receipt, _technology_candidate_snapshot_sha256, assess_technology_candidate, assess_technology_compatibility, build_technology_radar, technology_research_routes
+from minecraft_mod_ai.technology_radar import _assess_technology_candidate_with_receipt_key, _seal_technology_receipt, assess_technology_candidate, assess_technology_compatibility, build_technology_radar
 _RECEIPT_KEY = b'mmm-test-receipt-key-32-bytes-minimum'
 
 def _requirement(radar: dict[str, object], kind: str) -> dict[str, object]:

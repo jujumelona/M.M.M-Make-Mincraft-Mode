@@ -1,6 +1,5 @@
 from __future__ import annotations
 from pathlib import Path
-from types import SimpleNamespace
 import minecraft_mod_ai.atomic_requirement_contract as atomic_requirement_contract
 import minecraft_mod_ai.validation_execution_contract as validation_execution_contract
 from minecraft_mod_ai.atomic_requirement_contract import compile_ir

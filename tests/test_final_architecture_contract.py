@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 import zipfile
-from types import SimpleNamespace
 import pytest
 from minecraft_mod_ai.atomic_requirement_contract import AtomicRequirementError, compile_ir, semantic_review, validate_ir
 from minecraft_mod_ai.clean_room_verification_contract import SCHEMA as CLEAN_ROOM_SCHEMA, jar_content_sha256

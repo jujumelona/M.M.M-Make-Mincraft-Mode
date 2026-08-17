@@ -34,84 +34,6 @@ def _sha(value: Any) -> str:
     rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return 'sha256:' + hashlib.sha256(rendered.encode('utf-8')).hexdigest()
 
-def _planner_candidate_count(request: Any, stage: str) -> int:
-    mode = _mode()
-    if mode == 'off':
-        return 1
-    width = _env_int('MMM_PLAN_SEARCH_WIDTH', 2, maximum=3)
-    if mode == 'on':
-        return width
-    risk = 0
-    rendered = request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)
-    if len(rendered.encode('utf-8')) >= 12 * 1024:
-        risk += 1
-    lowered = (stage + '\n' + rendered[:24000]).casefold()
-    if isinstance(request, Mapping):
-        targets = request.get('current_target_deliverables', ())
-        if isinstance(targets, Sequence) and (not isinstance(targets, (str, bytes))):
-            if len(targets) >= 3:
-                risk += 1
-    return width if risk >= 2 else 1
-
-def _score_plan_page(page: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
-    modules = page.get('modules', [])
-    tests = page.get('acceptance_tests', [])
-    completed = page.get('completed_deliverables', [])
-    modules = modules if isinstance(modules, list) else []
-    tests = tests if isinstance(tests, list) else []
-    completed = completed if isinstance(completed, list) else []
-    ids = [str(item.get('module_id', '')) for item in modules if isinstance(item, Mapping)]
-    duplicate_ids = len(ids) - len(set(ids))
-    requirement_bound = 0
-    dependency_edges = 0
-    for item in modules:
-        if not isinstance(item, Mapping):
-            continue
-        config = item.get('config')
-        if isinstance(config, Mapping):
-            refs = config.get('requirement_refs', ())
-            if isinstance(refs, list) and refs:
-                requirement_bound += 1
-        dependencies = item.get('depends_on', ())
-        if isinstance(dependencies, list):
-            dependency_edges += len(dependencies)
-    payload_bytes = _json_size(page)
-    score = 12.0 * len(completed) + 4.0 * requirement_bound + 2.0 * len(tests) + min(6.0, float(dependency_edges)) + min(8.0, float(len(modules))) - 100.0 * duplicate_ids - payload_bytes / (256 * 1024)
-    verifier = {'completed_deliverables': len(completed), 'module_count': len(modules), 'acceptance_test_count': len(tests), 'requirement_bound_modules': requirement_bound, 'dependency_edges': dependency_edges, 'duplicate_module_ids': duplicate_ids, 'payload_bytes': payload_bytes}
-    return (score, verifier)
-
-def _install_planner_search(complete_planner_module: Any) -> None:
-    current = complete_planner_module._generate_json_page_with_repair
-    if getattr(current, '_mmm_verifier_plan_search', False):
-        return
-
-    @wraps(current)
-    def generate_with_search(router: Any, *, system_prompt: str, request: dict[str, Any] | str, media_paths: Sequence[Any], expected_contracts: Sequence[frozenset[str]], stage: str) -> dict[str, Any]:
-        width = _planner_candidate_count(request, stage)
-        if width <= 1:
-            return current(router, system_prompt=system_prompt, request=request, media_paths=media_paths, expected_contracts=expected_contracts, stage=stage)
-        candidates: list[tuple[float, int, dict[str, Any], dict[str, Any]]] = []
-        errors: list[BaseException] = []
-        for candidate_index in range(width):
-            candidate_system = system_prompt + '\n\nHOST SEARCH CANDIDATE: independently solve this page. Candidate ' + str(candidate_index + 1) + ' of ' + str(width) + '. Preserve the exact contract; do not mention candidate search.'
-            try:
-                page = current(router, system_prompt=candidate_system, request=request, media_paths=media_paths, expected_contracts=expected_contracts, stage=stage)
-            except BaseException as exc:
-                errors.append(exc)
-                continue
-            score, verifier = _score_plan_page(page)
-            candidates.append((score, candidate_index, page, verifier))
-        if not candidates:
-            if errors:
-                raise errors[-1]
-            raise complete_planner_module.SpecValidationError(f'{stage} produced no verified planning candidate.')
-        candidates.sort(key=lambda item: (-item[0], item[1]))
-        winner = candidates[0]
-        print('planner search:', f'stage={stage}', f'candidates={len(candidates)}', f'winner={winner[1] + 1}', f'score={winner[0]:.3f}', flush=True)
-        return winner[2]
-    generate_with_search._mmm_verifier_plan_search = True
-    complete_planner_module._generate_json_page_with_repair = generate_with_search
-
 def _tokens(value: str) -> set[str]:
     return {token.casefold() for token in _TOKEN.findall(value)}
 
@@ -455,9 +377,8 @@ def _install_balanced_work_claims(work_graph_module: Any) -> None:
     cls.claim_ready = claim_ready_balanced
 
 def install(*, complete_planner_module: Any, repair_module: Any, work_graph_module: Any) -> None:
-    """Install medium/high-yield agentic search without duplicating existing MMM paths.
+    """Install repair search and balanced execution without planner mutation.
 
-    * planning: adaptive Best-of-N with deterministic page scoring;
     * repair: verifier-guided candidates, parallel JDT checks and verified memory;
     * learning: rejected candidates are retained for later DPO/ranker training;
     * execution: ready work is claimed across resource lanes instead of pre-claiming
@@ -466,7 +387,6 @@ def install(*, complete_planner_module: Any, repair_module: Any, work_graph_modu
     Existing MTP, conditional semantic review, staged commits and fail-closed quality
     evidence remain authoritative and are intentionally not replaced here.
     """
-    _install_planner_search(complete_planner_module)
     _install_repair_search_and_memory(repair_module)
     _install_balanced_work_claims(work_graph_module)
 __all__ = ['install']

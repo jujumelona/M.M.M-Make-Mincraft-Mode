@@ -398,7 +398,7 @@ class EcosystemDiscoveryClient:
             source_url = _safe_https_url(item.get('foreign_landing_url') or item.get('detail_url'))
             if not source_url:
                 continue
-            stable = {'id': identifier, 'title': str(item.get('title') or 'Untitled'), 'creator': str(item.get('creator') or ''), 'source_url': source_url, 'license_id': license_id, 'provider': str(item.get('provider') or ''), 'source': str(item.get('source') or '')}
+            {'id': identifier, 'title': str(item.get('title') or 'Untitled'), 'creator': str(item.get('creator') or ''), 'source_url': source_url, 'license_id': license_id, 'provider': str(item.get('provider') or ''), 'source': str(item.get('source') or '')}
         page_count = _nonnegative_int(raw.get('page_count'))
         return (candidates, total, page + 1 if page_count and page < page_count else None)
 

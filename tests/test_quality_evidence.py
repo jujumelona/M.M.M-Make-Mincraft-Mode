@@ -1,10 +1,8 @@
 from __future__ import annotations
 import copy
-import hashlib
 from pathlib import Path
 import pytest
-from minecraft_mod_ai.production_contract import ProductionContractError, compile_production_contract, evaluate_quality_contract
-from minecraft_mod_ai.quality_evidence import compile_quality_evidence
+from minecraft_mod_ai.production_contract import ProductionContractError, evaluate_quality_contract
 PROPOSAL_HASH = 'sha256:' + 'a' * 64
 
 def _digest(character: str) -> str:

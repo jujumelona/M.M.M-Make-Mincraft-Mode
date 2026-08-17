@@ -1,7 +1,6 @@
 from __future__ import annotations
 import threading
 from types import SimpleNamespace
-from minecraft_mod_ai import ecosystem_discovery
 from minecraft_mod_ai import parallel_runtime_contract as parallel
 
 def test_ordered_parallel_map_runs_independent_work_concurrently() -> None:

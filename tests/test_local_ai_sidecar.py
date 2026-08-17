@@ -1,14 +1,12 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-import pytest
 from minecraft_mod_ai.complete_orchestrator import CompleteExecutionOptions, CompleteProductionOrchestrator
-from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
+from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.generator import FabricProjectGenerator
-from minecraft_mod_ai.local_ai_sidecar_generator import LocalAiSidecarGenerationError, generate_local_ai_sidecar, local_ai_sidecar_manifest_path, local_ai_sidecar_source_path, normalize_local_ai_sidecar_config
+from minecraft_mod_ai.local_ai_sidecar_generator import generate_local_ai_sidecar, local_ai_sidecar_manifest_path, local_ai_sidecar_source_path
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
-from minecraft_mod_ai.spec import SpecValidationError
 from minecraft_mod_ai.validator import ProjectValidator
 
 def _base_proposal():

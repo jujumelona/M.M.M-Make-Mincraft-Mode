@@ -1,7 +1,7 @@
 from __future__ import annotations
 import inspect
 from types import SimpleNamespace
-from minecraft_mod_ai import complete_planner, execution_efficiency_contract, work_graph
+from minecraft_mod_ai import execution_efficiency_contract, work_graph
 from minecraft_mod_ai.complete_spec import ProductionModule
 
 def _raw_module(deliverable: str) -> dict[str, object]:

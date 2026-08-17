@@ -37,7 +37,7 @@ def _routes_for_atom(proposal: Any, atom: Mapping[str, Any], production_contract
     if any((term in lowered for term in _BUILD_TERMS)):
         routes.add('build')
     infrastructure_only = bool(routes) and routes <= {'research', 'build'}
-    media_only = bool(routes) and routes <= {'visual_3d'} and (not has_module)
+    bool(routes) and routes <= {'visual_3d'} and (not has_module)
     if has_module and (not infrastructure_only):
         routes.add('runtime')
     elif not routes:

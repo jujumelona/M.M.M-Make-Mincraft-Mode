@@ -1,6 +1,4 @@
-from pathlib import Path
 import pytest
-from minecraft_mod_ai.model_adapters import ModelConfigurationError
 from minecraft_mod_ai.model_registry import ModelRegistry
 T4_QUANTIZED_QWEN_ROLES = {'planner', 'researcher', 'coder', 'coder_safe', 'visual_critic'}
 

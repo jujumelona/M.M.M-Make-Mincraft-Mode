@@ -1,4 +1,3 @@
-import json
 import runpy
 from pathlib import Path
 from types import SimpleNamespace

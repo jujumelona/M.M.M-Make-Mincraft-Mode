@@ -1,8 +1,7 @@
 from __future__ import annotations
 from copy import deepcopy
 import pytest
-from minecraft_mod_ai.central_research import external_discovery_routes, normalize_research_brief, retrieve_domain_evidence
-from minecraft_mod_ai.production_contract import compile_production_contract
+from minecraft_mod_ai.central_research import normalize_research_brief, retrieve_domain_evidence
 from minecraft_mod_ai.retrieval import RetrievalHit, RetrievalReceipt
 from minecraft_mod_ai.spec import SpecValidationError
 

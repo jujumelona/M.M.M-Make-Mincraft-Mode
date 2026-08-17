@@ -5,12 +5,8 @@ import time
 from pathlib import Path
 import pytest
 import minecraft_mod_ai.source_patch as source_patch_module
-import minecraft_mod_ai.work_graph as work_graph_module
-from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.project_edit import FabricProjectInfo, ensure_main_initializer_call
-from minecraft_mod_ai.project_write_lock import project_write_lock
 from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourcePatcher
-from minecraft_mod_ai.work_graph import WorkNode
 
 class _LedgerCursor:
 

@@ -68,9 +68,9 @@ def _sanitize_production_page(page: Mapping[str, Any], request: dict[str, Any] |
     result['deliverable_evidence'] = evidence
     current_modules = _produced_ids(result, 'modules', 'module_id')
     current_assets = _produced_ids(result, 'assets', 'asset_id')
-    current_tests = _string_set(result.get('acceptance_tests', ()))
-    valid_modules = current_modules | _recent_catalog_ids(request, 'known_module_catalog') | _dependency_export_ids(request)
-    valid_assets = current_assets | _recent_catalog_ids(request, 'known_asset_catalog')
+    _string_set(result.get('acceptance_tests', ()))
+    current_modules | _recent_catalog_ids(request, 'known_module_catalog') | _dependency_export_ids(request)
+    current_assets | _recent_catalog_ids(request, 'known_asset_catalog')
     supported: list[str] = []
     for raw in completed:
         deliverable = str(raw).strip()
@@ -116,9 +116,9 @@ def _install_evidence_aware_scoring(agentic_module: Any) -> None:
         completed_values = [str(item).strip() for item in completed if str(item).strip()] if isinstance(completed, list) else []
         evidence = page.get('deliverable_evidence')
         evidence = evidence if isinstance(evidence, Mapping) else {}
-        current_modules = _produced_ids(page, 'modules', 'module_id')
-        current_assets = _produced_ids(page, 'assets', 'asset_id')
-        current_tests = _string_set(page.get('acceptance_tests', ()))
+        _produced_ids(page, 'modules', 'module_id')
+        _produced_ids(page, 'assets', 'asset_id')
+        _string_set(page.get('acceptance_tests', ()))
         declared = 0
         grounded = 0
         unsupported = 0

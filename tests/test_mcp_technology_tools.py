@@ -1,6 +1,5 @@
 from __future__ import annotations
 from typing import Any
-from minecraft_mod_ai.mcp_tools import MMMToolService
 
 class _DiscoveryStub:
 
