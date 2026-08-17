@@ -131,29 +131,17 @@ def _install_platform_contracts() -> None:
 
 def _install_planner_contracts() -> None:
     """Compose planner parsing, pagination, resume and efficiency policies explicitly."""
-    from . import agentic_optimization_contract, complete_orchestrator, complete_orchestrator_services, complete_planner, planner_incremental_repair_contract, planner_json_runtime_contract, planner_pagination_safety_contract, work_graph
+    from . import agentic_optimization_contract, complete_orchestrator, complete_orchestrator_services, complete_planner, planner_json_runtime_contract, work_graph
     from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
     from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
     from .execution_efficiency_contract import install as install_execution_efficiency
-    from .planner_checkpoint_journal_contract import install as install_checkpoint_journal
-    from .planner_incremental_repair_contract import install as install_incremental_repair
-    from .planner_incremental_resume_contract import install as install_incremental_resume
     from .planner_json_runtime_contract import install as install_planner_json_runtime
-    from .planner_outline_prompt_contract import install as install_planner_outline_prompt
-    from .planner_pagination_safety_contract import install as install_planner_pagination_safety
-    from .planner_parser_safety_contract import install as install_planner_parser_safety
     from .planner_strict_json_contract import install as install_planner_strict_json
     install_planner_json_runtime(complete_planner)
     install_planner_strict_json(planner_json_runtime_contract)
-    install_planner_outline_prompt(planner_json_runtime_contract)
-    install_incremental_repair(planner_json_runtime_contract)
-    install_checkpoint_journal(planner_incremental_repair_contract)
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(complete_orchestrator_services)
     install_execution_efficiency(work_graph_module=work_graph)
-    install_incremental_resume(planner_incremental_repair_contract)
-    install_planner_parser_safety(complete_planner)
-    install_planner_pagination_safety(complete_planner)
 
 def _install_architecture_contracts() -> None:
     """Install deterministic-control and narrow-agent architecture policies once."""
