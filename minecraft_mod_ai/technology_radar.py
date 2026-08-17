@@ -15,9 +15,8 @@ _SHA256 = re.compile('^sha256:[0-9a-f]{64}$')
 _RECEIPT_MAC = re.compile('^hmac-sha256:[0-9a-f]{64}$')
 _REQUIREMENT_ID = re.compile('^[a-z][a-z0-9_]{1,127}$')
 TOPOLOGIES = ('in_process_java', 'local_sidecar', 'remote_api', 'offline_build_tool')
-_CAPABILITY_KINDS = frozenset({'ai_inference', 'agent_tool_use', 'language_intersection', 'translation'})
+_CAPABILITY_KINDS = frozenset({'ai_inference', 'agent_tool_use', 'translation'})
 _MODEL_CAPABILITIES = frozenset({'ai_inference', 'agent_tool_use', 'translation'})
-_VOICE_MODEL_CAPABILITIES = frozenset({*()})
 _SAFE_MODEL_FORMATS = frozenset({'safetensors', 'gguf', 'onnx', 'tflite', 'openvino_ir'})
 _UNSAFE_MODEL_FORMATS = frozenset({'pickle', 'pkl', 'pt', 'pth', 'ckpt', 'bin_pickle'})
 _UNKNOWN_LICENSES = frozenset({'', 'unknown', 'none', 'noassertion', 'unlicensed', 'other'})
@@ -25,8 +24,6 @@ _OFFICIAL_TARGET_HOSTS = frozenset({'fabricmc.net', 'docs.fabricmc.net', 'maven.
 _EVIDENCE_TO_CAPABILITY = {'ai_inference': 'ai_inference', 'agent_tool_use': 'agent_tool_use', 'translation': 'translation'}
 _AI_CUES = ('(?<![a-z0-9])ai(?![a-z0-9])', '(?<![a-z0-9])llm(?![a-z0-9])', 'artificial intelligence', 'language model', 'machine learning', 'generative', 'inference', '인공지능', '에이아이', '언어\\s*모델', '생성형', '추론\\s*모델')
 _AGENT_CUES = ('\\bagent(?:ic)?\\b', 'tool[ -]?use', 'function[ -]?call', '(?<![a-z0-9])mcp(?![a-z0-9])', '에이전트', '도구\\s*사용', '함수\\s*호출')
-_VOICE_CUES = ('\\bmicrophone\\b', '(?<![a-z0-9])stt(?![a-z0-9])', '(?<![a-z0-9])vad(?![a-z0-9])', '음성', '목소리', '마이크', '발화', '말로\\s*(?:조작|대화|명령)')
-_ADAPTATION_CUES = ('speaker[ -]?adaptation', '(?<![a-z0-9])lora(?![a-z0-9])', 'fine[ -]?tun(?:e|ing)', '목소리(?:를|은|는|이|가|의)?[^\\n.!?]{0,32}(?:복제|클론|따|학습|적응|변환)', '화자(?:를|은|는|이|가|의)?\\s*(?:적응|학습|변환)', '보이스(?:를|는|의)?\\s*(?:복제|클론|적응|변환)', '로라')
 _TRANSLATION_CUES = ('translat(?:e|ion)', 'interpret(?:er|ation)', '번역', '통역')
 _OFFLINE_CUES = ('\\boffline\\b', 'local[ -]?only', 'air[ -]?gapped', '오프라인', '로컬만', '인터넷\\s*(?:없이|차단)')
 _CPU_ONLY_CUES = ('cpu[ -]?only', 'cpu만', 'gpu\\s*(?:없이|없음)')
@@ -115,7 +112,7 @@ def technology_research_routes(radar_page: Mapping[str, Any]) -> tuple[dict[str,
         providers = ['official_docs', 'github', 'runtime']
         if requirement.capability_kind in _MODEL_CAPABILITIES:
             providers.insert(1, 'huggingface_models')
-        profile = 'speech_ai' if requirement.capability_kind in {*_VOICE_MODEL_CAPABILITIES, 'language_intersection'} else 'ai_runtime'
+        profile = 'ai_runtime'
         for provider in providers:
             for query in requirement.research_queries:
                 key = (requirement.requirement_id, provider, query)
@@ -255,23 +252,6 @@ def _build_signed_official_target_evidence(requirement: TechniqueRequirement | M
     body: dict[str, Any] = {'schema_version': 'mmm/official-target-evidence-v1', 'retrieved_by': 'mmm_authoritative_retriever', 'authorization': 'read_only_evidence', 'target': expected, 'sources': sources}
     return _seal_technology_receipt(body, receipt_key)
 
-def compute_voice_language_intersection(translation_pairs: Sequence[Sequence[str]] | None=None) -> dict[str, Any]:
-    if translation_pairs:
-        paths: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        for index, pair in enumerate(translation_pairs):
-            if not isinstance(pair, Sequence) or isinstance(pair, (str, bytes)) or len(pair) != 2:
-                raise SpecValidationError(f'translation_pairs[{index}] must contain source and target.')
-            source = _language(pair[0], f'translation_pairs[{index}].source')
-            target = _language(pair[1], f'translation_pairs[{index}].target')
-        direct: list[str] = []
-    else:
-        direct = sorted(set(None) & set(None))
-        paths = [{'input': language, 'output': language} for language in direct]
-    payload: dict[str, Any] = {'schema_version': 'mmm/voice-language-intersection-v1', 'direct_languages': direct, 'full_pipeline_paths': paths, 'advertise_component_union': False}
-    payload['intersection_sha256'] = _sha256(canonical_json(payload))
-    return payload
-
 def _research_domains(prompt: str, research_brief: Mapping[str, Any] | None) -> tuple[dict[str, Any], ...]:
     if research_brief is None:
         return ({'domain_id': 'request', 'objective': prompt, 'requirements': [prompt], 'evidence_kinds': [], 'queries': [prompt]},)
@@ -301,7 +281,6 @@ def _derive_requirements(prompt: str, domains: Sequence[Mapping[str, Any]], targ
     global_flags = _request_flags(prompt, domains)
     result: list[TechniqueRequirement] = []
     seen: set[tuple[str, str]] = set()
-    specific_voice_domain = any((bool(set((str(item) for item in domain.get('evidence_kinds', []))) & {*()}) or _matches(_domain_text(domain), _VOICE_CUES) or _matches(_domain_text(domain), _ADAPTATION_CUES) for domain in domains))
     specific_ai_domain = any(('ai_inference' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _AI_CUES) for domain in domains))
     specific_agent_domain = any(('agent_tool_use' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _AGENT_CUES) for domain in domains))
     specific_translation_domain = any(('translation' in domain.get('evidence_kinds', []) or _matches(_domain_text(domain), _TRANSLATION_CUES) for domain in domains))
@@ -335,17 +314,13 @@ def _make_requirement(domain: Mapping[str, Any], capability: str, *, target: Tec
     domain_id = str(domain['domain_id'])
     objective = _bounded_text(str(domain.get('objective') or capability))
     topologies = _topologies_for(capability, offline=flags['offline'])
-    authority = {'capture': 'client' if capability in _VOICE_MODEL_CAPABILITIES else 'not_applicable', 'presentation': 'client', 'game_state_mutation': 'server_only', 'client_messages': 'schema_validated_and_rate_limited_by_server'}
+    authority = {'capture': 'not_applicable', 'presentation': 'client', 'game_state_mutation': 'server_only', 'client_messages': 'schema_validated_and_rate_limited_by_server'}
     required_tests = ['unit', 'fabric_integration', 'performance']
-    if capability in _VOICE_MODEL_CAPABILITIES:
-        pass
-    if capability == 'language_intersection':
-        required_tests.append('full_pipeline_language_matrix')
     research_parts = list(dict.fromkeys((item for item in [objective, *[str(value).strip() for value in domain.get('queries', [])]] if item)))
     research_basis = ' '.join(research_parts).strip()
     query_prefix = _bounded_text(research_basis, maximum=4096)
-    queries = (_bounded_text(f"{query_prefix} {capability.replace('_', ' ')} model card license provenance benchmark", maximum=4096), f"Minecraft {target.minecraft_version} {target.loader} mappings {target.mappings} Java {target.java_version} {capability.replace('_', ' ')} integration compatibility testing")
-    return TechniqueRequirement(requirement_id=_requirement_id(domain_id, capability), domain_id=domain_id, capability_kind=capability, objective=objective, target=target, allowed_topologies=topologies, authority=authority, hardware={'benchmark_on_declared_target': True, 'requested_devices': ['cpu'] if flags['cpu_only'] else ['cpu', 'gpu'], 'record_cpu_gpu_ram_and_startup': True, 'no_unmeasured_hardware_claims': True}, latency={'real_time_required': flags['real_time'], 'p95_budget_ms': _latency_budget(' '.join([objective, query_prefix])), 'measure_p50_p95_and_concurrency': True, 'measure_real_time_factor': capability in _VOICE_MODEL_CAPABILITIES}, privacy={'raw_input_sensitive': capability in _VOICE_MODEL_CAPABILITIES, 'remote_transfer_requires_explicit_opt_in': True, 'record_retention_and_deletion': True, 'prefer_local_when_request_is_silent': True}, offline_required=flags['offline'], required_gates=('official_target_evidence', 'exact_minecraft_bridge', 'immutable_revision', 'evidence_receipt', 'licenses', 'dataset_provenance', 'safe_artifact_format', 'authority', 'target_hardware_benchmark', 'privacy', 'tests', 'deterministic_fallback'), required_tests=tuple(dict.fromkeys(required_tests)), deterministic_fallback=_fallback_for(capability), research_queries=queries)
+    queries = (_bounded_text(f'{query_prefix} {capability.replace('_', ' ')} model card license provenance benchmark', maximum=4096), f'Minecraft {target.minecraft_version} {target.loader} mappings {target.mappings} Java {target.java_version} {capability.replace('_', ' ')} integration compatibility testing')
+    return TechniqueRequirement(requirement_id=_requirement_id(domain_id, capability), domain_id=domain_id, capability_kind=capability, objective=objective, target=target, allowed_topologies=topologies, authority=authority, hardware={'benchmark_on_declared_target': True, 'requested_devices': ['cpu'] if flags['cpu_only'] else ['cpu', 'gpu'], 'record_cpu_gpu_ram_and_startup': True, 'no_unmeasured_hardware_claims': True}, latency={'real_time_required': flags['real_time'], 'p95_budget_ms': _latency_budget(' '.join([objective, query_prefix])), 'measure_p50_p95_and_concurrency': True, 'measure_real_time_factor': False}, privacy={'raw_input_sensitive': False, 'remote_transfer_requires_explicit_opt_in': True, 'record_retention_and_deletion': True, 'prefer_local_when_request_is_silent': True}, offline_required=flags['offline'], required_gates=('official_target_evidence', 'exact_minecraft_bridge', 'immutable_revision', 'evidence_receipt', 'licenses', 'dataset_provenance', 'safe_artifact_format', 'authority', 'target_hardware_benchmark', 'privacy', 'tests', 'deterministic_fallback'), required_tests=tuple(dict.fromkeys(required_tests)), deterministic_fallback=_fallback_for(capability), research_queries=queries)
 
 def _assess_official_target_evidence(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any, *, receipt_key: bytes | None) -> None:
     evidence = candidate['official_target_evidence']
@@ -502,14 +477,6 @@ def _assess_runtime(requirement: TechniqueRequirement, candidate: Mapping[str, A
     if isinstance(budget, (int, float)) and p95 > float(budget):
         add('target_hardware_benchmark', 'fail', 'Measured p95 latency exceeds the request budget.')
         return
-    if requirement.latency.get('real_time_required') and requirement.capability_kind in _VOICE_MODEL_CAPABILITIES:
-        rtf = _number_or_none(benchmark.get('real_time_factor'))
-        if rtf is None:
-            add('target_hardware_benchmark', 'unresolved', 'Real-time factor was not measured.')
-            return
-        if rtf > 1.0:
-            add('target_hardware_benchmark', 'fail', 'Real-time factor is above 1.0.')
-            return
     if requirement.hardware.get('requested_devices') == ['cpu']:
         device = str(candidate['runtime'].get('device') or '').casefold()
         if device != 'cpu':
@@ -531,14 +498,6 @@ def _assess_privacy(requirement: TechniqueRequirement, candidate: Mapping[str, A
     elif leaves_device is None and requirement.privacy.get('raw_input_sensitive'):
         return
     add('privacy', 'pass', 'Offline and raw-data transfer policy is satisfied.')
-
-def _assess_voice_rights(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any) -> None:
-    rights = candidate['voice_rights']
-    missing = [field for field in ('explicit_consent', 'authorized_speaker', 'provenance_verified', 'revocation_supported', 'deletion_supported') if rights.get(field) is not True]
-    if not str(rights.get('provenance') or '').strip():
-        missing.append('provenance')
-    if missing:
-        pass
 
 def _assess_tests_and_fallback(requirement: TechniqueRequirement, candidate: Mapping[str, Any], add: Any, *, receipt_key: bytes | None) -> None:
     tests = candidate['tests']
@@ -614,27 +573,23 @@ def _verify_technology_receipt(value: Mapping[str, Any], receipt_key: bytes | No
     hash_body.pop('receipt_sha256', None)
     return bool(_SHA256.fullmatch(receipt_sha256) and hmac.compare_digest(receipt_sha256, _sha256(canonical_json(hash_body))))
 
-def _voice_contract(*, activated: bool, adaptation_requested: bool, components: Sequence[str]) -> dict[str, Any]:
-    return {'activated': activated, 'components': list(dict.fromkeys(components)) if activated else [], 'speaker_identity': 'speech_synthesis_or_voice_model', 'expression': {'owner': 'utterance_local_pattern_trace', 'representation': 'time_series', 'fields': ['time', 'energy', 'entropy', 'f0', 'attack', 'pause'], 'prohibited': ['single_embedding', 'conversation_average']}, 'language_support': 'full_asr_translation_tts_intersection_only', 'adaptation': {'requested': adaptation_requested, 'default': 'disabled', 'status': 'blocked_until_consent_provenance_revocation_and_deletion_pass' if adaptation_requested else 'not_requested'}}
-
 def _request_flags(prompt: str, domains: Sequence[Mapping[str, Any]]) -> dict[str, bool]:
     text = ' '.join([prompt, *[_domain_text(domain) for domain in domains]])
     kinds = {str(kind) for domain in domains for kind in domain.get('evidence_kinds', [])}
-    adaptation = bool(kinds & {*()}) or _matches(text, _ADAPTATION_CUES)
-    return {'ai': 'ai_inference' in kinds or _matches(text, _AI_CUES), 'agent': 'agent_tool_use' in kinds or _matches(text, _AGENT_CUES), 'adaptation': adaptation, 'translation': 'translation' in kinds or _matches(text, _TRANSLATION_CUES), 'offline': _matches(text, _OFFLINE_CUES), 'cpu_only': _matches(text, _CPU_ONLY_CUES), 'real_time': _matches(text, _REALTIME_CUES)}
+    return {'ai': 'ai_inference' in kinds or _matches(text, _AI_CUES), 'agent': 'agent_tool_use' in kinds or _matches(text, _AGENT_CUES), 'translation': 'translation' in kinds or _matches(text, _TRANSLATION_CUES), 'offline': _matches(text, _OFFLINE_CUES), 'cpu_only': _matches(text, _CPU_ONLY_CUES), 'real_time': _matches(text, _REALTIME_CUES)}
 
 def _topologies_for(capability: str, *, offline: bool) -> tuple[str, ...]:
-    by_capability = {'language_intersection': ('offline_build_tool',), 'translation': TOPOLOGIES, 'ai_inference': TOPOLOGIES, 'agent_tool_use': ('in_process_java', 'local_sidecar', 'remote_api')}
+    by_capability = {'translation': TOPOLOGIES, 'ai_inference': TOPOLOGIES, 'agent_tool_use': ('in_process_java', 'local_sidecar', 'remote_api')}
     result = by_capability[capability]
     if offline:
         result = tuple((item for item in result if item != 'remote_api'))
     return result
 
 def _fallback_for(capability: str) -> str:
-    return {'language_intersection': 'Advertise only the verified direct-language path.', 'translation': 'Keep original text and disable unsupported language paths.', 'agent_tool_use': 'Use the deterministic server-owned action state machine.', 'ai_inference': 'Use deterministic scripted gameplay behavior.'}[capability]
+    return {'translation': 'Keep original text and disable unsupported language paths.', 'agent_tool_use': 'Use the deterministic server-owned action state machine.', 'ai_inference': 'Use deterministic scripted gameplay behavior.'}[capability]
 
 def _capability_order(value: str) -> tuple[int, str]:
-    order = {'translation': 2, 'language_intersection': 7, 'ai_inference': 8, 'agent_tool_use': 9}
+    order = {'translation': 2, 'ai_inference': 8, 'agent_tool_use': 9}
     return (order.get(value, 99), value)
 
 def _normalize_license(value: Any) -> dict[str, Any]:
@@ -687,7 +642,7 @@ def _requirement_id(domain_id: str, capability: str) -> str:
     if len(value) <= 127:
         return value
     suffix = hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]
-    return f"{value[:114].rstrip('_')}_{suffix}"
+    return f'{value[:114].rstrip('_')}_{suffix}'
 
 def _slug(value: str, index: int) -> str:
     slug = re.sub('[^a-z0-9]+', '_', value.casefold()).strip('_')
@@ -695,7 +650,7 @@ def _slug(value: str, index: int) -> str:
         slug = f'domain_{index + 1}_{slug}'.rstrip('_')
     if len(slug) > 63:
         suffix = hashlib.sha256(slug.encode('utf-8')).hexdigest()[:10]
-        slug = f"{slug[:52].rstrip('_')}_{suffix}"
+        slug = f'{slug[:52].rstrip('_')}_{suffix}'
     return slug
 
 def _language(value: Any, field: str) -> str:
