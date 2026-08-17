@@ -66,6 +66,7 @@ def _install_model_runtime_contracts() -> None:
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
     from .image_runtime_residency import install as install_image_runtime_residency
+    from .llama_prefill_telemetry_contract import install as install_llama_prefill_telemetry
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_runtime_performance import install as install_model_runtime_performance
@@ -83,6 +84,7 @@ def _install_model_runtime_contracts() -> None:
         runtime_tuning=llama_server_runtime_tuning,
     )
     install_llama_stream_efficiency(llama_server_hardware_policy)
+    install_llama_prefill_telemetry(llama_server_hardware_policy)
     install_parallel_runtime(
         model_registry_module=model_registry,
         llama_server_autotune_module=llama_server_autotune,
@@ -168,7 +170,7 @@ def _install_platform_contracts() -> None:
     from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
-    from .platform_live_rag_contract import install as install_live_rag
+    from .platform_live_rag_contract import install as install_platform_live_rag
     from .platform_planning_contract import install as install_platform_planning
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
@@ -196,7 +198,7 @@ def _install_platform_contracts() -> None:
         complete_planner_module=complete_planner,
         central_research_module=central_research,
     )
-    install_live_rag(retrieval_module=retrieval)
+    install_platform_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
     central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
