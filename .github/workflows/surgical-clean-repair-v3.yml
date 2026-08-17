@@ -97,6 +97,19 @@ jobs:
                   return self.generic_visit(node)
           write_tree(p, Bootstrap().visit(tree))
 
+          p = Path('minecraft_mod_ai/planner_parser_safety_contract.py')
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+          class ParserSafety(ast.NodeTransformer):
+              def visit_FunctionDef(self, node):
+                  node = self.generic_visit(node)
+                  if node.name == 'install':
+                      node.body = [
+                          stmt for stmt in node.body
+                          if '_audio' not in ast.unparse(stmt) and 'AudioRequest' not in ast.unparse(stmt)
+                      ]
+                  return node
+          write_tree(p, ParserSafety().visit(tree))
+
           for path in (
               Path('minecraft_mod_ai/planner_module_identity_contract.py'),
               Path('minecraft_mod_ai/planner_outline_identity_contract.py'),
