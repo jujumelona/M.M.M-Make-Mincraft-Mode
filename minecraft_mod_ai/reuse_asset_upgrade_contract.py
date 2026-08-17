@@ -67,13 +67,13 @@ def install_postbootstrap() -> None:
 
 
 def _install_joint_platform_optimizer(resolver: Any) -> None:
-    """Make automatic host target selection use the joint version/reuse objective.
+    """Select versions after reuse evaluation without making reuse a fatal gate.
 
-    The resolver remains the coordinate authority: this replaces only its private
-    optimizer hook. Explicit and preserved-existing targets bypass that hook exactly
-    as before. When ecosystem discovery is explicitly disabled, the original host
-    optimizer remains authoritative and the selected target receives an offline fixed
-    reuse plan in ``_install_reuse_aware_resolver``.
+    Existing-project preservation remains owned by ``platform_resolver``. Every
+    automatic/new target flows through this hook without a Minecraft-version filter.
+    Joint reuse optimization is an enhancement: if live ecosystem evidence is
+    temporarily unavailable, the canonical host optimizer still chooses from the
+    unfixed executable candidate set and planning continues.
     """
 
     current = resolver._optimize
@@ -90,27 +90,32 @@ def _install_joint_platform_optimizer(resolver: Any) -> None:
         version_constraint: str | None = None,
         target_research_fn: Any | None = None,
     ):
-        discovery_mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
-        if discovery_mode == "off":
+        del version_constraint
+
+        def base_optimizer():
             return current(
                 prompt,
                 design=design,
                 module_kinds=module_kinds,
                 loader_constraint=loader_constraint,
-                version_constraint=version_constraint,
+                version_constraint=None,
                 target_research_fn=target_research_fn,
             )
+
+        discovery_mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
+        if discovery_mode == "off":
+            return base_optimizer()
         try:
             joint = optimize_platform_and_reuse(
                 prompt,
                 design=design,
                 module_kinds=module_kinds,
                 loader_constraint=loader_constraint,
-                version_constraint=version_constraint,
+                version_constraint=None,
                 target_research_fn=target_research_fn,
             )
-        except ValueError as exc:
-            raise resolver.SpecValidationError(str(exc)) from exc
+        except ValueError:
+            return base_optimizer()
         result = joint.base_optimization
         object.__setattr__(result, "_mmm_reuse_plan", joint.selected_plan.to_dict())
         return result
@@ -211,8 +216,6 @@ def _install_complete_planning_handoff(complete_planner: Any) -> None:
     def plan_in_session(self: Any, *args: Any, **kwargs: Any):
         proposal = current(self, *args, **kwargs)
         proposal = bind_reuse_plan(proposal)
-        # Actual prompt strings are generated while Qwen is still resident. They are
-        # persisted in the immutable proposal and executed later after GPU handoff.
         return attach_generation_plan(self.router, proposal)
 
     plan_in_session._mmm_reuse_asset_planning = True
@@ -251,9 +254,6 @@ def _install_reuse_materialization(custom_module_generator: Any) -> None:
                         fresh.append(capability)
                     elif capability and mode == "adapt":
                         adapters.append(capability)
-            # The immutable proposal keeps full provenance. The model-facing config
-            # deliberately drops transport manifests so RAG and coder prompts do not
-            # each serialize the same large reuse plan/source payload.
             model_config = {
                 key: value
                 for key, value in dict(config).items()
