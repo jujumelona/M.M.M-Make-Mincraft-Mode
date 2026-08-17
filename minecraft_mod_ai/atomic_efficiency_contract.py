@@ -13,14 +13,7 @@ def _preview(text: str) -> str:
     return encoded[:_PREVIEW_BYTES].decode('utf-8', errors='ignore') + '…'
 
 def _sentence_ranges(prompt: str) -> Iterator[tuple[int, int]]:
-    """Yield the legacy sentence spans in one linear pass.
-
-    ``atomic_requirement_contract._SENTENCE`` is compact, but a long line without
-    punctuation that ends at a newline can make CPython's regex engine retry the
-    greedy match from every subsequent character. Large authoritative requests then
-    degrade toward O(n²). This scanner preserves the useful semantics—newlines split
-    records and terminal punctuation stays attached—without backtracking.
-    """
+    """Yield the legacy sentence spans in one linear pass."""
     start = 0
     index = 0
     length = len(prompt)
@@ -52,14 +45,35 @@ def install(atomic_module: Any) -> None:
 
     def implementations(proposal: Any) -> dict[str, str]:
         result: dict[str, str] = {}
+        for item in getattr(proposal, 'modules', ()):
+            record = atomic_module._object(item)
+            module_id = str(record.get('module_id') or '').strip()
+            if not module_id:
+                continue
+            raw = atomic_module._canonical(record)
+            result[f'implementation:module:{module_id}'] = atomic_module._canonical(
+                {'content_sha256': atomic_module._sha(raw), 'preview': _preview(raw)}
+            )
+        for item in getattr(proposal, 'assets', ()):
+            record = atomic_module._object(item)
+            asset_id = str(record.get('asset_id') or record.get('id') or '').strip()
+            if not asset_id:
+                continue
+            raw = atomic_module._canonical(record)
+            result[f'implementation:asset:{asset_id}'] = atomic_module._canonical(
+                {'content_sha256': atomic_module._sha(raw), 'preview': _preview(raw)}
+            )
         return result
 
     def acceptances(proposal: Any) -> dict[str, str]:
         result: dict[str, str] = {}
         for index, value in enumerate(getattr(proposal, 'acceptance_tests', ())):
             raw = str(value)
-            result[f'acceptance:{index:08d}'] = atomic_module._canonical({'content_sha256': atomic_module._sha(raw), 'preview': _preview(raw)})
+            result[f'acceptance:{index:08d}'] = atomic_module._canonical(
+                {'content_sha256': atomic_module._sha(raw), 'preview': _preview(raw)}
+            )
         return result
+
     original_features = atomic_module._features
     cached_features = lru_cache(maxsize=2048)(original_features)
     cached_features._mmm_bounded_feature_cache = True
@@ -70,7 +84,7 @@ def install(atomic_module: Any) -> None:
             if prompt[index] in {',', '，', '、'}:
                 boundaries.append((index, index + 1))
         for match in _CONJUNCTION.finditer(prompt, start, end):
-            boundaries.append((match.start(), match.start()))
+            boundaries.append((match.start(), match.end()))
         boundaries.sort()
         result: list[tuple[int, int]] = []
         cursor = start
@@ -115,6 +129,7 @@ def install(atomic_module: Any) -> None:
             end = len(prompt.rstrip())
             result.extend(atomic_module._split_range(prompt, start, end))
         return result
+
     atom_ranges._mmm_enumeration_atomizer = True
     atom_ranges._mmm_conjunction_atomizer = True
     atom_ranges._mmm_linear_sentence_scanner = True

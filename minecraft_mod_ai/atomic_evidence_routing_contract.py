@@ -1,16 +1,19 @@
 from __future__ import annotations
 from functools import wraps
 from typing import Any, Mapping
+
 _ALLOWED = frozenset({'runtime', 'visual_3d', 'state_save_migration', 'multiplayer', 'performance', 'accessibility', 'research', 'build'})
 _MULTIPLAYER_KINDS = frozenset({'networking', 'party', 'guild'})
 _VISUAL_KINDS = frozenset({'entity_model', 'animation', 'model', 'texture'})
 _RESEARCH_TERMS = ('license', 'licence', 'compatible', 'compatibility', 'fabric', 'yarn', 'dependency', 'version', '라이선스', '호환', '의존성', '버전')
 _BUILD_TERMS = ('compile', 'build', 'gradle', 'java 17', '컴파일', '빌드')
+_PERFORMANCE_TERMS = ('performance', 'latency', 'throughput', 'tps', 'fps', 'benchmark', '성능', '지연', '처리량', '벤치마크')
 
 def _module_kinds(proposal: Any) -> dict[str, str]:
     return {f'implementation:module:{item.module_id}': str(item.kind).casefold() for item in getattr(proposal, 'modules', ())}
 
 def _routes_for_atom(proposal: Any, atom: Mapping[str, Any], production_contract_module: Any) -> list[str]:
+    del production_contract_module
     text = str(atom.get('text', ''))
     lowered = ' ' + text.casefold() + ' '
     refs = [str(value) for value in atom.get('implementation_refs', [])]
@@ -27,21 +30,23 @@ def _routes_for_atom(proposal: Any, atom: Mapping[str, Any], production_contract
                 routes.add('multiplayer')
             if kind in _VISUAL_KINDS:
                 routes.add('visual_3d')
-            if kind == 'integration':
-                module_id = ref.rsplit(':', 1)[-1]
-                module = next((value for value in getattr(proposal, 'modules', ()) if str(value.module_id) == module_id), None)
-                if module is not None and str(getattr(module, 'config', {}).get('integration_type', '')) == 'mmm_local_ai_sidecar':
-                    pass
-    if any((term in lowered for term in _RESEARCH_TERMS)):
+
+    if any(term in lowered for term in _PERFORMANCE_TERMS):
+        routes.add('performance')
+    if any(term in lowered for term in _RESEARCH_TERMS):
         routes.add('research')
-    if any((term in lowered for term in _BUILD_TERMS)):
+    if any(term in lowered for term in _BUILD_TERMS):
         routes.add('build')
+
     infrastructure_only = bool(routes) and routes <= {'research', 'build'}
-    bool(routes) and routes <= {'visual_3d'} and (not has_module)
-    if has_module and (not infrastructure_only):
+    visual_asset_only = bool(routes) and routes <= {'visual_3d'} and not has_module
+    if has_module and not infrastructure_only:
         routes.add('runtime')
     elif not routes:
         routes.add('runtime')
+    elif visual_asset_only:
+        routes.discard('runtime')
+
     return [value for value in ('runtime', 'visual_3d', 'state_save_migration', 'multiplayer', 'performance', 'accessibility', 'research', 'build') if value in routes]
 
 def _route_ir(proposal: Any, ir: dict[str, Any], atomic_module: Any, production_contract_module: Any) -> dict[str, Any]:
@@ -64,6 +69,7 @@ def install(atomic_module: Any, production_contract_module: Any) -> None:
             return _route_ir(proposal, current_compile(proposal), atomic_module, production_contract_module)
         compile_ir._mmm_atomic_evidence_routes = True
         atomic_module.compile_ir = compile_ir
+
     current_review = atomic_module.semantic_review
     if not getattr(current_review, '_mmm_atomic_evidence_routes', False):
 
@@ -73,6 +79,7 @@ def install(atomic_module: Any, production_contract_module: Any) -> None:
             return _route_ir(proposal, reviewed, atomic_module, production_contract_module)
         semantic_review._mmm_atomic_evidence_routes = True
         atomic_module.semantic_review = semantic_review
+
     current_validate = atomic_module.validate_ir
     if not getattr(current_validate, '_mmm_atomic_evidence_routes', False):
 
@@ -81,7 +88,7 @@ def install(atomic_module: Any, production_contract_module: Any) -> None:
             ir = current_validate(proposal)
             for atom in ir.get('atoms', []):
                 routes = atom.get('evidence_dimensions')
-                if not isinstance(routes, list) or not routes or len(routes) != len(set(routes)) or any((value not in _ALLOWED for value in routes)):
+                if not isinstance(routes, list) or not routes or len(routes) != len(set(routes)) or any(value not in _ALLOWED for value in routes):
                     raise atomic_module.AtomicRequirementError('Atomic requirement has an invalid evidence route.')
             return ir
         validate_ir._mmm_atomic_evidence_routes = True

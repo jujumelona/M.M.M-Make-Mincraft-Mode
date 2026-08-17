@@ -4,6 +4,11 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
+from .runtime_regression_fixes import install as _install_runtime_regression_fixes
+
+_install_runtime_regression_fixes()
+del _install_runtime_regression_fixes
+
 from .api import (
     ChatReply,
     CompleteChatReply,
