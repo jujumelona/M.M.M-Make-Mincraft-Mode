@@ -370,6 +370,7 @@ def _install_post_bootstrap_contracts() -> None:
         model_router,
         production_tools,
         repair_engine,
+        runtime_regression_fixes,
         work_graph,
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
@@ -430,5 +431,6 @@ def _install_post_bootstrap_contracts() -> None:
     install_minecraft_mcp_evidence()
     install_bottleneck_elimination()
     install_research_bottleneck_runtime()
+    runtime_regression_fixes.install()
     install_long_run_resilience()
     install_planning_stall_guard()

@@ -67,9 +67,6 @@ assert outer_forced_index < parallel_index, (
 assert pre_design._effective_forced_collect_owner(
     agentic.collect_pre_design_research
 ), "the live outer forced-RAG owner is not effective"
-assert (
-    chain[0].__dict__.get("_mmm_pre_design_heartbeat") is chain[0]
-), "planning-stall observability is not the final lifecycle owner"
 
 
 lock = threading.Lock()

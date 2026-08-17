@@ -133,7 +133,7 @@ def test_qwen35_hotpath_delegates_to_composed_measured_tuner(monkeypatch) -> Non
     assert not hasattr(autotune, "_launch_selected")
 
 
-def test_single_stream_auto_planner_search_collapses_to_one(monkeypatch) -> None:
+def test_single_stream_contract_leaves_host_owned_planner_branching_unchanged(monkeypatch) -> None:
     state = {"mode": "auto"}
     agentic = SimpleNamespace(
         _mode=lambda: state["mode"],
@@ -142,7 +142,7 @@ def test_single_stream_auto_planner_search_collapses_to_one(monkeypatch) -> None
     install_single_stream_plan_search(agentic)
 
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
-    assert agentic._planner_candidate_count({}, "outline") == 1
+    assert agentic._planner_candidate_count({}, "outline") == 2
 
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     assert agentic._planner_candidate_count({}, "outline") == 2

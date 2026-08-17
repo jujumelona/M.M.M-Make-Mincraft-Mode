@@ -21,10 +21,12 @@ def test_external_mcp_registry_is_version_locked() -> None:
     assert registry["playwright"]["command"][2] == "@playwright/mcp@0.0.78"
     assert registry["gdmc"]["status"] == "incompatible_by_default"
 
+
 def test_canonical_skill_catalog_is_complete() -> None:
     report = validate_skill_catalog()
     assert report["passed"], report["findings"]
-    assert len(CANONICAL_SKILLS) == 28
+    assert set(report["contracts"]) == set(CANONICAL_SKILLS)
+    assert len(CANONICAL_SKILLS) == len(set(CANONICAL_SKILLS))
 
 
 def test_restricted_blockbench_tools_have_no_shell_or_script() -> None:

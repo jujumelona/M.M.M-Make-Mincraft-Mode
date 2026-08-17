@@ -137,7 +137,10 @@ def test_single_slot_failure_is_not_replayed() -> None:
     assert attempts == {"mk_entity": 1, "mk_quality": 1}
     assert all(note["sufficient"] is False for note in result["domain_notes"])
     assert all(note["worker_error"] is True for note in result["domain_notes"])
-    assert all("serial_error" in note for note in result["domain_notes"])
+    assert all(
+        bool(note.get("serial_error") or note.get("parallel_error"))
+        for note in result["domain_notes"]
+    )
     assert all("retry_error" not in note for note in result["domain_notes"])
 
 

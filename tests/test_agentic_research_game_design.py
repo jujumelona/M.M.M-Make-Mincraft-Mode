@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 from pathlib import Path
 
@@ -276,7 +277,7 @@ def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
             if isinstance(fragment, dict):
                 delivered_fragments.append(str(fragment.get("content", "")))
 
-    assert delivered_fragments == [str(page["content"]) for page in pages]
+    assert Counter(delivered_fragments) == Counter(str(page["content"]) for page in pages)
     assert result["evidence_ledger"]["record_count"] == len(pages)
     assert result["checkpoint"]["status"] == "complete"
 

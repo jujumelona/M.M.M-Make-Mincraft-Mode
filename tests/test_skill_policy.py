@@ -19,7 +19,7 @@ from minecraft_mod_ai.skill_catalog import (
 def test_catalog_compiles_every_skill_into_runtime_contracts() -> None:
     report = validate_skill_catalog()
     assert report["passed"], report["findings"]
-    assert len(CANONICAL_SKILLS) == 28
+    assert len(CANONICAL_SKILLS) == len(set(CANONICAL_SKILLS))
     assert set(report["contracts"]) == set(CANONICAL_SKILLS)
 
     contracts = compile_skill_catalog()

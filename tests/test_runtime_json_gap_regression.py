@@ -100,39 +100,13 @@ def test_llama_tool_turn_uses_host_envelope_without_native_tool_grammar(monkeypa
     assert "search_project_rag" in rendered
 
 
-def test_terminal_gap_is_not_counted_as_verified_completion():
-    progress = guard._PlanningProgress(total=2)
-    progress_token = guard._ACTIVE_PROGRESS.set(progress)
-    cursor_token = guard._ACTIVE_PROGRESS_CURSOR.set(None)
-    try:
-        guard._research_progress_hook(
-            {
-                "event": "domain_gap_receipt",
-                "domain_id": "broken-domain",
-                "page_index": 2,
-                "page_count": 2,
-            }
-        )
-        snapshot = progress.snapshot()
-        assert snapshot["completed"] == 0
-        assert snapshot["gaps"] == 1
-        assert snapshot["terminal"] == 1
-
-        guard._research_progress_hook(
-            {
-                "event": "domain_complete",
-                "domain_id": "verified-domain",
-                "page_index": 1,
-                "page_count": 1,
-            }
-        )
-        snapshot = progress.snapshot()
-        assert snapshot["completed"] == 1
-        assert snapshot["gaps"] == 1
-        assert snapshot["terminal"] == 2
-    finally:
-        guard._ACTIVE_PROGRESS_CURSOR.reset(cursor_token)
-        guard._ACTIVE_PROGRESS.reset(progress_token)
+def test_retired_planning_stall_guard_is_a_noop_without_private_progress_state():
+    assert set(guard.__all__) == {"install"}
+    assert guard.install() is None
+    assert not hasattr(guard, "_PlanningProgress")
+    assert not hasattr(guard, "_ACTIVE_PROGRESS")
+    assert not hasattr(guard, "_ACTIVE_PROGRESS_CURSOR")
+    assert not hasattr(guard, "_research_progress_hook")
 
 
 def test_runtime_trajectory_retrieval_keeps_execution_context_contract():

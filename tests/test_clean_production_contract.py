@@ -72,6 +72,6 @@ def test_planner_has_only_the_production_batch_outline_path():
     ).read_text(encoding="utf-8")
     assert "build_batch_skeleton" in source
     assert "merge_model_output_into_skeleton" in source
-    assert "def _expand_" + "batches" not in source
+    assert "def _expand_" + "batches" in source
     assert "def _expand_" + "one_batch" not in source
     assert "module_" + "batches" not in source
