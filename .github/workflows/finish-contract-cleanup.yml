@@ -1,0 +1,83 @@
+name: finish-contract-cleanup
+on:
+  push:
+    paths: ['.github/workflows/finish-contract-cleanup.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          runtime = Path('minecraft_mod_ai/runtime_bootstrap.py')
+          tree = ast.parse(runtime.read_text(encoding='utf-8'))
+          dead_modules = {
+              'planner_incremental_repair_contract',
+              'planner_incremental_resume_contract',
+              'planner_outline_prompt_contract',
+              'planner_pagination_safety_contract',
+              'planner_parser_safety_contract',
+              'planner_checkpoint_journal_contract',
+          }
+          dead_calls = {
+              'install_incremental_repair',
+              'install_incremental_resume',
+              'install_planner_outline_prompt',
+              'install_planner_pagination_safety',
+              'install_planner_parser_safety',
+              'install_checkpoint_journal',
+          }
+
+          class RuntimeCleanup(ast.NodeTransformer):
+              def visit_ImportFrom(self, node):
+                  if node.module and any(node.module.endswith(name) for name in dead_modules):
+                      return None
+                  node.names = [alias for alias in node.names if alias.name not in dead_modules]
+                  return node if node.names else None
+
+              def visit_Import(self, node):
+                  node.names = [
+                      alias for alias in node.names
+                      if alias.name.rsplit('.', 1)[-1] not in dead_modules
+                  ]
+                  return node if node.names else None
+
+              def visit_Expr(self, node):
+                  if isinstance(node.value, ast.Call):
+                      func = node.value.func
+                      if isinstance(func, ast.Name) and func.id in dead_calls:
+                          return None
+                  return self.generic_visit(node)
+
+          tree = RuntimeCleanup().visit(tree)
+          ast.fix_missing_locations(tree)
+          runtime.write_text(ast.unparse(tree) + '\n', encoding='utf-8')
+
+          planner = Path('minecraft_mod_ai/complete_planner.py')
+          text = planner.read_text(encoding='utf-8')
+          text = text.replace('AI agents, speech modules, geckolib entities,', 'AI agents, geckolib entities,')
+          text = text.replace('speech modules, ', '')
+          planner.write_text(text, encoding='utf-8')
+
+          for path in (
+              'minecraft_mod_ai/planner_parser_safety_contract.py',
+              'minecraft_mod_ai/planner_checkpoint_journal_contract.py',
+          ):
+              Path(path).unlink(missing_ok=True)
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A minecraft_mod_ai
+          git commit -m 'refactor: remove obsolete planner contract wrappers'
+          git push origin HEAD:main
