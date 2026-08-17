@@ -1,0 +1,145 @@
+name: surgical-clean-repair-v2
+on:
+  push:
+    paths: ['.github/workflows/surgical-clean-repair-v2.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Reuse surgical restore then finish exact remnants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          data=yaml.safe_load(Path('.github/workflows/surgical-clean-repair.yml').read_text(encoding='utf-8'))
+          steps=data['jobs']['repair']['steps']
+          script=next(step['run'] for step in steps if step.get('name')=='Restore healthy source and apply surgical cleanup')
+          marker='python -m compileall -q minecraft_mod_ai tests tools download_resources.py'
+          script=script[:script.index(marker)]
+          Path('/tmp/base_transform.sh').write_text(script,encoding='utf-8')
+          PY
+          bash /tmp/base_transform.sh
+          cat > /tmp/postfix.py <<'PY'
+          from __future__ import annotations
+          import ast,re
+          from pathlib import Path
+          ROOT=Path.cwd(); PKG=ROOT/'minecraft_mod_ai'; tests=ROOT/'tests'
+
+          # Remove one unused legacy shape declaration from restored central research.
+          p=PKG/'central_research.py'; tree=ast.parse(p.read_text(encoding='utf-8'))
+          class Central(ast.NodeTransformer):
+              def visit_FunctionDef(self,node):
+                  node=self.generic_visit(node)
+                  if node.name=='_research_domain':
+                      node.body=[s for s in node.body if not (isinstance(s,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='required' for t in s.targets))]
+                  return node
+          tree=Central().visit(tree); ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
+
+          # Exact remnants in planner after removing the third media lane.
+          p=PKG/'complete_planner.py'; text=p.read_text(encoding='utf-8')
+          text=text.replace('parts.audio.extend(page_audio)\n','')
+          text=text.replace(' or audio_ids','').replace('raw_modules + raw_assets + raw_audio','raw_modules + raw_assets')
+          text=text.replace(" or raw_item.get('sound_id')",'').replace(' or deliv in page_audio_ids','')
+          text=text.replace('staged_audio, ','').replace(', staged_audio,', ',').replace(', staged_audio)', ')')
+          # Restore forward-progress body that the media-condition removal had collapsed.
+          text=re.sub(
+              r"if not completed_set:\n\s+completed_list = \[str\(item\).*?\n\s+for deliv in target_deliverables:\n\s+pass",
+              "if not completed_set:\n                completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]\n                for deliv in target_deliverables:\n                    if deliv in page_mod_ids or deliv in page_asset_ids or deliv in page_tests or deliv in completed_list:\n                        completed_set.add(deliv)",
+              text, flags=re.S,
+          )
+          # Tuple assignment/return annotations still carried the removed catalog position.
+          tree=ast.parse(text)
+          class Planner(ast.NodeTransformer):
+              def visit_Assign(self,node):
+                  node=self.generic_visit(node)
+                  for target in node.targets:
+                      if isinstance(target,(ast.Tuple,ast.List)):
+                          target.elts=[e for e in target.elts if not (isinstance(e,ast.Name) and ('audio' in e.id.lower() or 'voice' in e.id.lower()))]
+                  return node
+              def visit_Return(self,node):
+                  node=self.generic_visit(node)
+                  if isinstance(node.value,(ast.Tuple,ast.List)):
+                      node.value.elts=[e for e in node.value.elts if not (isinstance(e,ast.Name) and ('audio' in e.id.lower() or 'voice' in e.id.lower()))]
+                  return node
+              def visit_FunctionDef(self,node):
+                  node=self.generic_visit(node)
+                  if node.name=='_retry_production_batch_wave_serially':
+                      node.returns=ast.parse('tuple[_ProductionParts, _ModuleCatalog, _ModuleCatalog, set[str]]',mode='eval').body
+                  return node
+          tree=Planner().visit(tree); ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
+
+          p=PKG/'production_contract.py'; text=p.read_text(encoding='utf-8').replace('    seen_sids: set[str] = set()\n',''); p.write_text(text,encoding='utf-8')
+
+          # Quality evidence: only keep currently supported visual/runtime quality routes.
+          p=PKG/'quality_evidence.py'; text=p.read_text(encoding='utf-8')
+          text=re.sub(r"\n\s*if 'audio' in routes:\n\s*candidates\['audio'\].*",'',text)
+          text=text.replace(" or dimension_id == 'audio'",'')
+          text=re.sub(r",?\s*'ai_voice':\s*_valid_ai_voice_validation",'',text)
+          p.write_text(text,encoding='utf-8')
+
+          # Technology radar keeps AI/translation; remove calls/contracts owned by retired voice subsystem.
+          p=PKG/'technology_radar.py'; text=p.read_text(encoding='utf-8')
+          text=re.sub(r",?\s*'voice_contract':\s*_voice_contract\([^}]*?\)(?=,?\s*['}])",'',text,flags=re.S)
+          text=re.sub(r"(?m)^\s*_assess_voice_rights\([^\n]*\)\n",'',text)
+          text=text.replace('compute_voice_language_intersection,','').replace('compute_voice_language_intersection','')
+          p.write_text(text,encoding='utf-8')
+
+          # Mixed tests: delete only retired sound/voice assertions, keep all other catalog/radar tests.
+          p=tests/'test_content_catalog_scaling.py'
+          if p.exists():
+              tree=ast.parse(p.read_text(encoding='utf-8'))
+              tree.body=[n for n in tree.body if not (isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and ('sound' in n.name.lower() or 'audio' in n.name.lower() or 'voice' in n.name.lower()))]
+              ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
+          p=tests/'test_technology_radar.py'
+          if p.exists():
+              tree=ast.parse(p.read_text(encoding='utf-8'))
+              tree.body=[n for n in tree.body if not (isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and ('compute_voice_language_intersection' in ast.unparse(n) or 'voice_' in ast.unparse(n).lower() or 'speech_' in ast.unparse(n).lower()))]
+              ast.fix_missing_locations(tree); p.write_text(ast.unparse(tree)+'\n',encoding='utf-8')
+          p=tests/'test_parallel_result_determinism_contract.py'
+          if p.exists():
+              text=p.read_text(encoding='utf-8')
+              if '_canonicalize_generation_result' in text and 'from minecraft_mod_ai.parallel_result_determinism_contract import _canonicalize_generation_result' not in text:
+                  text='from minecraft_mod_ai.parallel_result_determinism_contract import _canonicalize_generation_result\n\n'+text
+              p.write_text(text,encoding='utf-8')
+          PY
+          python /tmp/postfix.py
+          python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9 --fix
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          python -m vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python -m pytest -q tests/test_clean_production_contract.py tests/test_research_coordinator.py tests/test_agentic_search_efficiency_contract.py tests/test_parallel_result_determinism_contract.py tests/test_technology_radar.py
+          git diff --check
+          test -f minecraft_mod_ai/model_adapters/image_diffusion.py
+          test -f minecraft_mod_ai/blockbench_client.py
+          grep -q 'FLUX.2-klein-4B' config/model_registry.yaml
+          grep -q 'build_batch_skeleton' minecraft_mod_ai/complete_planner.py
+          grep -q 'merge_model_output_into_skeleton' minecraft_mod_ai/complete_planner.py
+          ! grep -q 'def _expand_batches' minecraft_mod_ai/complete_planner.py
+          ! grep -q 'def _expand_one_batch' minecraft_mod_ai/complete_planner.py
+          ! grep -q 'module_batches' minecraft_mod_ai/complete_planner.py
+          ! git grep -n -E 'AudioRequest|audio_generator|audio_resume_efficiency_contract|planner_production_page_contract|production_page_durable_contract|SpeechAdapter|speech_recognition|generate-audio|production-audio|ai_voice' -- minecraft_mod_ai config pyproject.toml tests
+      - name: Commit verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then echo 'main moved; refusing stale repair' >&2; exit 1; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm -f .github/workflows/surgical-clean-repair.yml .github/workflows/surgical-clean-repair-v2.yml
+          git add -A
+          git commit -m 'refactor: restore clean non-media production paths'
+          git push origin HEAD:main
