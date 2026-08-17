@@ -11,14 +11,16 @@ reasoning-free speculative-decode benchmarking.
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 
-_PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v1"
-_BASE_ARGS_MARKER = "_mmm_qwen35_benchmark_reasoning_off_v1"
-_BENCHMARK_MARKER = "_mmm_qwen35_decode_benchmark_scope_v1"
-_FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v1"
+_PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v2"
+_BASE_ARGS_MARKER = "_mmm_qwen35_benchmark_reasoning_off_v2"
+_BENCHMARK_MARKER = "_mmm_qwen35_decode_benchmark_scope_v2"
+_VARIANT_MARKER = "_mmm_qwen35_tuning_variant_scope_v1"
+_FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v2"
 _BENCHMARK_ENV = "MMM_QWEN35_DECODE_BENCHMARK"
 
 _GENERAL_THINKING = {
@@ -135,6 +137,19 @@ def _restore_env(name: str, previous: str | None) -> None:
         os.environ[name] = previous
 
 
+@contextmanager
+def _benchmark_scope(config: Any) -> Iterator[None]:
+    if not _is_qwen35(config):
+        yield
+        return
+    previous = os.environ.get(_BENCHMARK_ENV)
+    os.environ[_BENCHMARK_ENV] = "1"
+    try:
+        yield
+    finally:
+        _restore_env(_BENCHMARK_ENV, previous)
+
+
 def _install_benchmark_scope(autotune: Any) -> None:
     current = autotune._benchmark
     if getattr(current, _BENCHMARK_MARKER, False):
@@ -148,17 +163,41 @@ def _install_benchmark_scope(autotune: Any) -> None:
         request: Any,
         fingerprint: str,
     ) -> Any:
-        if not _is_qwen35(config):
+        with _benchmark_scope(config):
             return current(binary, model_path, config, request, fingerprint)
-        previous = os.environ.get(_BENCHMARK_ENV)
-        os.environ[_BENCHMARK_ENV] = "1"
-        try:
-            return current(binary, model_path, config, request, fingerprint)
-        finally:
-            _restore_env(_BENCHMARK_ENV, previous)
 
     setattr(benchmark, _BENCHMARK_MARKER, True)
     autotune._benchmark = benchmark
+
+
+def _install_tuning_variant_scope(autotune: Any) -> None:
+    current = getattr(autotune, "_mmm_run_tuning_variant", None)
+    if not callable(current) or getattr(current, _VARIANT_MARKER, False):
+        return
+
+    @wraps(current)
+    def run_variant(
+        binary: str,
+        model_path: str,
+        config: Any,
+        request: Any,
+        variant: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        with _benchmark_scope(config):
+            return current(
+                binary,
+                model_path,
+                config,
+                request,
+                variant,
+                *args,
+                **kwargs,
+            )
+
+    setattr(run_variant, _VARIANT_MARKER, True)
+    autotune._mmm_run_tuning_variant = run_variant
 
 
 def _install_fingerprint(autotune: Any) -> None:
@@ -173,7 +212,7 @@ def _install_fingerprint(autotune: Any) -> None:
             return base
         payload = {
             "base": base,
-            "qwen35_request_policy": "v1",
+            "qwen35_request_policy": "v2",
             "benchmark_reasoning": "off",
         }
         return hashlib.sha256(
@@ -190,6 +229,7 @@ def install(autotune: Any, hardware_policy: Any) -> None:
     _install_payload_policy(hardware_policy)
     _install_benchmark_base_args(autotune)
     _install_benchmark_scope(autotune)
+    _install_tuning_variant_scope(autotune)
     _install_fingerprint(autotune)
 
 
