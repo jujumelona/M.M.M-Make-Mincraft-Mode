@@ -17,13 +17,6 @@ from pathlib import Path
 from typing import Any
 
 
-def _restore_validation_fingerprints() -> None:
-    from . import validation_execution_contract
-    from .research_validation_fingerprint_performance import harden
-
-    harden(validation_execution_contract)
-
-
 def _restore_rag_initial_incremental_state() -> None:
     """Seed content state on the canonical first build, not the next unchanged build."""
     from . import rag_index
@@ -354,7 +347,6 @@ def _restore_research_code_context_contracts() -> None:
 
 
 def install() -> None:
-    _restore_validation_fingerprints()
     _restore_rag_initial_incremental_state()
     _restore_managed_research_capacity()
     _restore_complete_plan_collection_pages()
