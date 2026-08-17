@@ -141,10 +141,20 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
         while True:
             attempt += 1
             if attempt > 3:
-                checkpoint_state["pending_patch"] = None
-                checkpoint_state["status"] = "collecting"
-                incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
-                return dict(current_value) if isinstance(current_value, dict) else current_value
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=original_fingerprint,
+                    round_index=attempt - 1,
+                    current_value=current_value,
+                    validation_error=current_error,
+                    reason="repair attempts exhausted without semantic progress",
+                    last_output_sha256=last_output_sha256,
+                )
+                raise module.SpecValidationError(
+                    "Production batch repair exhausted without semantic progress."
+                )
             if not isinstance(current_value, dict):
                 repair_mode = "replacement"
             elif attempt == 1:
@@ -163,10 +173,20 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
                 }
             )
             if state_sha256 in seen_states:
-                checkpoint_state["pending_patch"] = None
-                checkpoint_state["status"] = "collecting"
-                incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
-                return dict(current_value) if isinstance(current_value, dict) else current_value
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=original_fingerprint,
+                    round_index=attempt,
+                    current_value=current_value,
+                    validation_error=current_error,
+                    reason="repeated identical repair state",
+                    last_output_sha256=last_output_sha256,
+                )
+                raise module.SpecValidationError(
+                    "Production batch repair reached a repeated identical repair state."
+                )
             seen_states.add(state_sha256)
 
             checkpoint_state.update(
@@ -271,10 +291,20 @@ def _install_bounded_batch_repair(incremental_module: Any) -> None:
 
             last_output_sha256 = incremental_module._fingerprint(text)
             if last_output_sha256 in seen_outputs:
-                checkpoint_state["pending_patch"] = None
-                checkpoint_state["status"] = "collecting"
-                incremental_module._save_checkpoint(checkpoint_path, checkpoint_state)
-                return dict(current_value) if isinstance(current_value, dict) else current_value
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=original_fingerprint,
+                    round_index=attempt,
+                    current_value=current_value,
+                    validation_error=current_error,
+                    reason="repeated identical model output",
+                    last_output_sha256=last_output_sha256,
+                )
+                raise module.SpecValidationError(
+                    "Production batch repair received repeated identical model output."
+                )
             seen_outputs.add(last_output_sha256)
 
             candidate: Any = current_value
@@ -385,7 +415,7 @@ def _install_pending_queue(incremental_module: Any) -> None:
             elif isinstance(candidate, dict):
                 resolved = dict(candidate)
             else:
-                resolved = {"batch_id": "custom_batch", "scope": "Scope for custom batch", "deliverables": ["Implement custom batch"]}
+                raise module.SpecValidationError("Production batch must be a JSON object.")
 
             post_error = _contextual_batch_error(
                 incremental_module,
@@ -394,17 +424,17 @@ def _install_pending_queue(incremental_module: Any) -> None:
                 accepted_ids,
             )
             if post_error:
-                # Normalize the batch in-place to resolve post_error safely
-                resolved_id = str(resolved.get("batch_id") or "batch").strip()
-                suffix = 2
-                while resolved_id in accepted_ids:
-                    resolved_id = f"{resolved.get('batch_id', 'batch')}_{suffix}"
-                    suffix += 1
-                resolved["batch_id"] = resolved_id
-                if not resolved.get("scope"):
-                    resolved["scope"] = f"Implement {resolved_id}"
-                if not resolved.get("deliverables"):
-                    resolved["deliverables"] = [f"Deliverable for {resolved_id}"]
+                _save_failed_patch(
+                    incremental_module,
+                    checkpoint_path,
+                    checkpoint_state,
+                    target_fingerprint=incremental_module._fingerprint(candidate),
+                    round_index=0,
+                    current_value=resolved,
+                    validation_error=post_error,
+                    reason="repaired batch still failed validation",
+                )
+                raise module.SpecValidationError(post_error)
 
             incremental_module._merge_saved_batches(saved_batches, [resolved])
             pending.pop(0)
