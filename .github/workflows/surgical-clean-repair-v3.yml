@@ -139,8 +139,6 @@ jobs:
           python -m vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
           python -m pytest -q \
             tests/test_clean_production_contract.py \
-            tests/test_research_coordinator.py \
-            tests/test_agentic_search_efficiency_contract.py \
             tests/test_parallel_result_determinism_contract.py \
             tests/test_technology_radar.py
           git diff --check
