@@ -20,7 +20,7 @@ def test_json_requests_never_enable_native_llama_grammar():
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_llama_tool_turn_uses_host_envelope_without_native_tool_grammar(monkeypatch):
+def test_llama_tool_turn_uses_native_qwen_tool_metadata(monkeypatch):
     from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
 
@@ -62,11 +62,19 @@ def test_llama_tool_turn_uses_host_envelope_without_native_tool_grammar(monkeypa
                 "choices": [
                     {
                         "message": {
-                            "content": (
-                                '{"kind":"tool_calls","calls":[{"id":"call_0",'
-                                '"name":"search_project_rag","arguments":{"query":"x"}}]}'
-                            )
-                        }
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_0",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "search_project_rag",
+                                        "arguments": '{"query":"x"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
                     }
                 ]
             }
@@ -83,20 +91,16 @@ def test_llama_tool_turn_uses_host_envelope_without_native_tool_grammar(monkeypa
     assert turn.tool_calls[0].arguments == {"query": "x"}
     assert len(sent_payloads) == 1
     payload = sent_payloads[0]
-    for forbidden in (
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-        "response_format",
-        "json_schema",
-        "grammar",
-    ):
-        assert forbidden not in payload
+    assert payload["tools"] == [tool]
+    assert payload["tool_choice"] == "auto"
+    assert payload["parallel_tool_calls"] is True
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     rendered = "\n".join(str(message.get("content", "")) for message in payload["messages"])
-    assert "mmm/host-tool-envelope-v1" in rendered
-    assert "search_project_rag" in rendered
+    assert "mmm/host-tool-envelope" not in rendered
 
 
 def test_runtime_trajectory_retrieval_keeps_execution_context_contract():
