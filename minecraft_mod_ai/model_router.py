@@ -88,6 +88,66 @@ class ModelRouter:
                     return self._generate_with_tools(adapter=adapter, request=request, runtime=runtime, stage=stage, role=role)
                 return adapter.generate(request)
 
+    def generate_tool_decision(self, role: str, messages: Sequence[Mapping[str, Any]], *, tool_name: str, parameters: Mapping[str, Any], description: str='') -> dict[str, Any]:
+        """Return one host-validated native function call instead of free-form JSON.
+
+        This is the small-model structured-decision path. It deliberately bypasses
+        the general agent tool runtime: the function is a return channel, not an
+        executable side effect. Qwen/llama.cpp receive one forced native tool and
+        the host accepts only that tool's decoded argument object. Assistant text is
+        never reparsed as JSON.
+        """
+        name = str(tool_name or '').strip()
+        if not name:
+            raise ModelConfigurationError('Tool-decision name must not be empty.')
+        schema = {
+            'type': 'function',
+            'function': {
+                'name': name,
+                'description': str(description or '').strip(),
+                'parameters': dict(parameters),
+            },
+        }
+        with self._generation_lock:
+            config = self.registry.role(self.profile, role)
+            if config.adapter not in _NATIVE_TOOL_ADAPTERS:
+                raise ModelConfigurationError(
+                    f'Role {role!r} adapter {config.adapter!r} does not support native tool decisions.'
+                )
+            if self._active_generation_adapter is not None:
+                if role != self._active_generation_role:
+                    raise ModelConfigurationError(
+                        f'Generation session for role {self._active_generation_role!r} cannot serve role {role!r}.'
+                    )
+                adapter = self._active_generation_adapter
+            else:
+                adapter = self._new_text_adapter(config, role=role)
+            base_messages = tuple(dict(message) for message in messages)
+            with self._gpu_scope(config.exclusive_gpu):
+                for attempt in range(2):
+                    request_messages = base_messages
+                    if attempt:
+                        request_messages = (*base_messages, {
+                            'role': 'system',
+                            'content': f'Call the required function {name} exactly once. Do not answer in prose.',
+                        })
+                    request = GenerationRequest(
+                        messages=request_messages,
+                        media_paths=(),
+                        response_format='text',
+                        response_schema=None,
+                        tools=(schema,),
+                        tool_choice={'type': 'function', 'function': {'name': name}},
+                        parallel_tool_calls=False,
+                    )
+                    turn = adapter.generate_turn(request)
+                    matches = tuple(call for call in turn.tool_calls if call.name == name)
+                    if len(matches) == 1 and len(turn.tool_calls) == 1:
+                        return dict(matches[0].arguments)
+        raise ModelConfigurationError(
+            f'Native structured decision did not return exactly one {name!r} tool call after bounded retry.'
+        )
+
     def _prepare_generation_request(self, role: str, messages: Sequence[Mapping[str, Any]], *, config: Any, media_paths: Sequence[str | Path]=(), response_format: str='text', response_schema: Mapping[str, Any] | None=None, tool_stage: str | None=None, enable_tools: bool=True) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
         """Build the canonical model request used by every text execution policy.
 
