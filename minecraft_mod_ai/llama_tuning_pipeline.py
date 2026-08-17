@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 24
+_TUNING_PIPELINE_VERSION = 25
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -102,6 +102,7 @@ class NativeLlamaTuningPipeline:
             install as install_single_stream_agentic_policy,
         )
         from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
+        from .qwen35_request_policy import install as install_qwen35_request_policy
         from .qwen35_runtime_efficiency_contract import (
             install as install_qwen35_runtime_efficiency,
         )
@@ -122,6 +123,9 @@ class NativeLlamaTuningPipeline:
                 self.hardware_policy,
                 self.runtime_tuning,
             )
+            # Install last among Qwen wrappers so role/task semantics remain the
+            # authoritative request policy and the full tuning benchmark is scoped.
+            install_qwen35_request_policy(self.autotune, self.hardware_policy)
             self._install_profile_context_authority()
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
