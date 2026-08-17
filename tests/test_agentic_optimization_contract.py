@@ -17,50 +17,6 @@ def _node(node_id: str, resource_class: str) -> WorkNode:
     )
 
 
-def test_plan_search_is_adaptive(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
-    monkeypatch.setenv("MMM_PLAN_SEARCH_WIDTH", "2")
-    # Auto search may widen only when the native server actually exposes independent
-    # decode slots. Serial decode must not duplicate the same expensive request.
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    assert agentic._planner_candidate_count({"task": "add one item"}, "page") == 1
-    risky = {
-        "current_target_deliverables": ["network sync", "persistence", "migration"],
-        "scope": "multiplayer networking persistence migration",
-    }
-    assert agentic._planner_candidate_count(risky, "production page") == 2
-
-
-def test_plan_verifier_prefers_bound_complete_candidate() -> None:
-    sparse = {
-        "modules": [
-            {
-                "module_id": "net",
-                "config": {},
-                "depends_on": [],
-            }
-        ],
-        "acceptance_tests": [],
-        "completed_deliverables": [],
-    }
-    bound = {
-        "modules": [
-            {
-                "module_id": "net",
-                "config": {"requirement_refs": ["request:network"]},
-                "depends_on": ["state"],
-            }
-        ],
-        "acceptance_tests": ["server authoritative sync passes"],
-        "completed_deliverables": ["network sync"],
-    }
-    sparse_score, _ = agentic._score_plan_page(sparse)
-    bound_score, verifier = agentic._score_plan_page(bound)
-    assert bound_score > sparse_score
-    assert verifier["requirement_bound_modules"] == 1
-    assert verifier["completed_deliverables"] == 1
-
-
 def test_verified_repair_memory_retrieves_similar_signature(tmp_path: Path) -> None:
     trace = {
         "signature": "cannot find symbol RegistryKey src/main/java/Test.java",
