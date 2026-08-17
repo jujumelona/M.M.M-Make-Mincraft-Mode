@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from functools import wraps
 from types import SimpleNamespace
 
 import pytest
@@ -130,3 +131,35 @@ def test_fast_cold_policy_is_temporary_and_respects_explicit_values(monkeypatch)
     assert os.environ["MMM_LLAMA_MTP_WIDTHS"] == "1,8"
     assert "MMM_LLAMA_MTP_P_MIN_CANDIDATES" not in os.environ
     assert "MMM_QWEN35_MTP_DRAFT_KV" not in os.environ
+
+
+def test_fast_probe_skips_only_secondary_correctness_sentinel(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def primary(base_url, request, *, max_tokens, variant):
+        del base_url, request, max_tokens, variant
+        calls.append("primary")
+        return "primary-result"
+
+    @wraps(primary)
+    def sentinel(base_url, request, *, max_tokens, variant):
+        calls.append("sentinel")
+        return primary(
+            base_url,
+            request,
+            max_tokens=max_tokens,
+            variant=variant,
+        )
+
+    sentinel._mmm_correctness_sentinel = True
+    autotune = SimpleNamespace(_probe_server=sentinel)
+    contract._install_fast_probe_policy(autotune)
+
+    monkeypatch.setenv("MMM_QWEN35_FAST_TUNING_ACTIVE", "1")
+    assert autotune._probe_server("url", object(), max_tokens=96, variant=object()) == "primary-result"
+    assert calls == ["primary"]
+
+    calls.clear()
+    monkeypatch.delenv("MMM_QWEN35_FAST_TUNING_ACTIVE", raising=False)
+    assert autotune._probe_server("url", object(), max_tokens=96, variant=object()) == "primary-result"
+    assert calls == ["sentinel", "primary"]
