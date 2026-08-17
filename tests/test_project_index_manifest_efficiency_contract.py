@@ -65,6 +65,30 @@ def test_incremental_path_updates_preserve_sorted_tuple_and_exact_membership(
     )
 
 
+def test_relevance_order_is_cached_until_index_changes(tmp_path: Path) -> None:
+    index = _indexed_project(tmp_path, count=16)
+    assert getattr(ProjectIndex._ranked_files, "_mmm_cached_relevance_order", False)
+
+    first = index._ranked_files(query_tokens={"generated"}, explicit=set())
+    cache = getattr(index, "_mmm_ranked_files_cache")
+    assert len(cache) == 1
+    second = index._ranked_files(query_tokens={"generated"}, explicit=set())
+    assert second == first
+    assert len(cache) == 1
+
+    changed = tmp_path / "src/main/java/example/Generated0008.java"
+    changed.write_text(
+        "package example; final class Generated0008 { int value = 8; }\n",
+        encoding="utf-8",
+    )
+    index.update_files((changed,))
+    assert not hasattr(index, "_mmm_ranked_files_cache")
+
+    refreshed = index._ranked_files(query_tokens={"generated"}, explicit=set())
+    assert refreshed
+    assert len(getattr(index, "_mmm_ranked_files_cache")) == 1
+
+
 def test_same_process_exact_snapshot_is_zero_write_fast_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
