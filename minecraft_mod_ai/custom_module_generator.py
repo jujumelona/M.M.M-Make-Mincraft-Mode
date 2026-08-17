@@ -275,7 +275,6 @@ class CustomModuleGenerator:
         seen_cursors: set[tuple[int, str]] = set()
         cursor = ""
         observation_page_index = 0
-        repair_rag_ready = False
         while True:
             observation_context = observation_pages[observation_page_index]
             request = {
@@ -361,36 +360,8 @@ class CustomModuleGenerator:
                     )
                 repair_signatures.add(signature)
                 repair_attempts += 1
-                if not repair_rag_ready:
-                    from .production_tools import ProductionToolService
-
-                    try:
-                        live_manifest = index.manifest_receipt()
-                    except ValueError as exc:
-                        if not _is_stale_project_index_error(exc):
-                            raise
-                        index = ProjectIndex(root, policy=self.policy)
-                        self._cached_index = index
-                        self._cached_root = root
-                        live_manifest = index.manifest_receipt()
-                    ProductionToolService(
-                        workspace_root=root.parent,
-                        profile=getattr(self.router, "profile", "t4_local"),
-                    ).index_project_rag(
-                        [root.name],
-                        metadata={
-                            "minecraft_version": minecraft_version,
-                            "loader": loader,
-                            "mapping_namespace": _mapping_namespace(mappings),
-                            "java_version": java_version,
-                            "license": "project-local",
-                            "source_commit": str(live_manifest["sha256"]),
-                        },
-                        semantic=False,
-                    )
-                    repair_rag_ready = True
                 print(
-                    "🔄 [CustomModule Auto-Repair] 검증 피드백 기반 재시도 "
+                    "🔄 [CustomModule Auto-Repair] 구조 검증 피드백 기반 재시도 "
                     f"({repair_attempts}) - 원인: {error_reason}",
                     flush=True,
                 )
@@ -400,10 +371,13 @@ class CustomModuleGenerator:
                         {
                             "role": "system",
                             "content": (
-                                "You are an evidence-grounded Minecraft Java repair agent for "
-                                f"the host-selected {minecraft_version}/{loader} target. Use live "
-                                "RAG/MCP evidence while correcting this response. Return exactly "
-                                "one valid JSON object."
+                                "You are repairing only the JSON/patch/precondition shape for the "
+                                f"host-selected {minecraft_version}/{loader} target. The host has "
+                                "already supplied the exact source, SHA-256 bindings, research, "
+                                "and target contract needed for this repair. Do not retrieve new "
+                                "RAG/MCP evidence and do not change the approved feature scope. "
+                                "Correct the exact validation failure and return exactly one valid "
+                                "JSON object."
                             ),
                         },
                         {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
@@ -412,12 +386,13 @@ class CustomModuleGenerator:
                             "role": "user",
                             "content": (
                                 "Execution & Validation Failure: the previous response failed "
-                                f"with reason: {error_reason}. Correct that exact failure while "
-                                "preserving the approved module and evidence."
+                                f"with reason: {error_reason}. Correct that exact structural "
+                                "failure using only the supplied host evidence."
                             ),
                         },
                     ],
                     response_format="json",
+                    enable_tools=False,
                 )
 
             payload.setdefault("operations", [])
