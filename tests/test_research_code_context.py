@@ -135,7 +135,7 @@ def test_dynamic_partial_call_graph_reaches_calls_without_global_unrelated_nodes
     assert max(hop for _symbol, hop in graph) <= 2
 
 
-def test_adaptive_retrieval_computes_eight_complementary_metrics(tmp_path) -> None:
+def test_adaptive_retrieval_computes_complementary_metrics(tmp_path) -> None:
     context = _context(tmp_path)
     compute = context.symbols_by_name["compute"][0]
     evidence = context._symbol_evidence(
@@ -152,6 +152,7 @@ def test_adaptive_retrieval_computes_eight_complementary_metrics(tmp_path) -> No
         "dependency",
         "structure",
         "call_graph",
+        "plan_alignment",
         "quality",
     }
     weights = research._adaptive_weights("Service.compute dependency API")
