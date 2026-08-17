@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import copy
+import json
 import re
 from functools import wraps
+from threading import RLock
 from typing import Any, Mapping
 
 from .centroid_vector_rag import direct_centroid_vector_search
@@ -10,6 +13,9 @@ from .retrieval_adaptation import adapt_query_vector, extract_hit_texts
 
 _SYMBOL = re.compile(r"\b(?:[A-Z][A-Za-z0-9_]{2,}|[a-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]+\.(?:java|json|gradle|kts))\b")
 _MC_VERSION = re.compile(r"(?<![0-9])(?:1\.)?[0-9]{1,2}(?:\.[0-9]{1,3}){1,2}(?![0-9])")
+_SEARCH_CACHE_LOCK = RLock()
+_SEARCH_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_SEARCH_CACHE_LIMIT = 256
 
 
 def _route(query: str) -> str:
@@ -113,6 +119,57 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
             break
     candidates.sort(key=lambda item: (-item[0], item[1].casefold()))
     return " ".join(token for _score, token in candidates[:8])
+
+
+def _search_cache_key(
+    service: Any,
+    *,
+    query: str,
+    index_path: str,
+    limit: int,
+    semantic: bool,
+    rerank: bool,
+    required_metadata: dict[str, Any] | None,
+) -> tuple[Any, ...]:
+    target = service._existing_file(index_path)
+    stat = target.stat()
+    metadata_key = json.dumps(
+        required_metadata or {},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return (
+        str(target),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(getattr(stat, "st_ino", 0) or 0),
+        str(getattr(service, "profile", "")),
+        query,
+        int(limit),
+        bool(semantic),
+        bool(rerank),
+        metadata_key,
+    )
+
+
+def _search_cache_get(key: tuple[Any, ...]) -> dict[str, Any] | None:
+    with _SEARCH_CACHE_LOCK:
+        result = _SEARCH_CACHE.get(key)
+        if result is None:
+            return None
+        copied = copy.deepcopy(result)
+    copied["search_reused"] = True
+    copied["search_reuse_reason"] = "exact_index_snapshot_and_query"
+    return copied
+
+
+def _search_cache_put(key: tuple[Any, ...], result: Mapping[str, Any]) -> None:
+    with _SEARCH_CACHE_LOCK:
+        if len(_SEARCH_CACHE) >= _SEARCH_CACHE_LIMIT and key not in _SEARCH_CACHE:
+            _SEARCH_CACHE.pop(next(iter(_SEARCH_CACHE)))
+        _SEARCH_CACHE[key] = copy.deepcopy(dict(result))
 
 
 def install(production_tools_module: Any) -> None:
@@ -256,9 +313,45 @@ def install(production_tools_module: Any) -> None:
             return best
         raise RuntimeError("Code RAG failed all routed modes: " + " | ".join(errors))
 
-    searched._mmm_task_routed_code_search = True  # type: ignore[attr-defined]
-    searched.__wrapped__ = current  # type: ignore[attr-defined]
-    cls.search_code_rag = searched
+    @wraps(searched)
+    def cached_search(
+        self: Any,
+        query: str,
+        *,
+        index_path: str = "rag/project-index.json",
+        limit: int = 8,
+        semantic: bool = False,
+        rerank: bool = False,
+        required_metadata: dict[str, Any] | None = None,
+    ):
+        key = _search_cache_key(
+            self,
+            query=query,
+            index_path=index_path,
+            limit=limit,
+            semantic=semantic,
+            rerank=rerank,
+            required_metadata=required_metadata,
+        )
+        cached = _search_cache_get(key)
+        if cached is not None:
+            return cached
+        result = searched(
+            self,
+            query,
+            index_path=index_path,
+            limit=limit,
+            semantic=semantic,
+            rerank=rerank,
+            required_metadata=required_metadata,
+        )
+        _search_cache_put(key, result)
+        return result
+
+    cached_search._mmm_task_routed_code_search = True  # type: ignore[attr-defined]
+    cached_search._mmm_snapshot_search_reuse = True  # type: ignore[attr-defined]
+    cached_search.__wrapped__ = searched  # type: ignore[attr-defined]
+    cls.search_code_rag = cached_search
 
 
 __all__ = ["install"]
