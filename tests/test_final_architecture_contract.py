@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import zipfile
 from types import SimpleNamespace
 
@@ -91,28 +90,19 @@ def test_enumerated_request_items_become_separate_atoms() -> None:
     assert len(ir["unresolved_atom_ids"]) >= 1
 
 
-def test_semantic_reviewer_cannot_invent_implementation_ids() -> None:
+def test_semantic_reviewer_rejects_out_of_range_candidate_indexes() -> None:
     proposal = _proposal("Add a lunar portal.", related=False)
     ir = compile_ir(proposal)
 
     class Router:
-        def generate_text(self, *_args, **_kwargs):
-            return json.dumps(
-                {
-                    "mappings": [
-                        {
-                            "atom_id": ir["atoms"][0]["atom_id"],
-                            "supported": True,
-                            "implementation_refs": [
-                                "implementation:module:invented_portal"
-                            ],
-                            "acceptance_refs": ["acceptance:00000000"],
-                        }
-                    ]
-                }
-            )
+        def generate_tool_decision(self, *_args, **_kwargs):
+            return {
+                "supported": True,
+                "implementation_indexes": [999],
+                "acceptance_indexes": [0],
+            }
 
-    with pytest.raises(AtomicRequirementError, match="invented"):
+    with pytest.raises(AtomicRequirementError, match="invalid index"):
         semantic_review(Router(), proposal, ir)
 
 
