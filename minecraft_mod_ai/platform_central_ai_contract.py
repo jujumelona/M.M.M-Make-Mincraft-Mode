@@ -111,7 +111,7 @@ def _carrier_index(modules: list[ProductionModule]) -> int | None:
     custom = next((index for index, item in enumerate(modules) if item.kind == 'custom_java'), None)
     if custom is not None:
         return custom
-    return next(None)
+    return None
 
 def _as_custom_carrier(item: ProductionModule, *, extra_config: dict[str, Any]) -> ProductionModule:
     config = {**item.config, 'implementation': 'custom', 'requested_kind': item.config.get('requested_kind', item.kind), 'platform_generation': 'central_ai_live_target', **extra_config}

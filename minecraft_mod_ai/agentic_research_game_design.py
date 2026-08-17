@@ -545,15 +545,6 @@ def _generate_section(
             prior_candidate = candidate
             continue
 
-        trace.record_attempt(
-            raw_output=raw,
-            validation_error=None,
-            candidate=section,
-            accepted=section,
-            context={"section_id": section_id},
-        )
-        trace.record_success(section)
-        return section
 
 
 def _research_messages(
