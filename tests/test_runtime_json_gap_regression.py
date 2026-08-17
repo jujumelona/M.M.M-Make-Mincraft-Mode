@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
-from minecraft_mod_ai import planning_stall_guard_contract as guard
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
@@ -98,15 +97,6 @@ def test_llama_tool_turn_uses_host_envelope_without_native_tool_grammar(monkeypa
     rendered = "\n".join(str(message.get("content", "")) for message in payload["messages"])
     assert "mmm/host-tool-envelope-v1" in rendered
     assert "search_project_rag" in rendered
-
-
-def test_retired_planning_stall_guard_is_a_noop_without_private_progress_state():
-    assert set(guard.__all__) == {"install"}
-    assert guard.install() is None
-    assert not hasattr(guard, "_PlanningProgress")
-    assert not hasattr(guard, "_ACTIVE_PROGRESS")
-    assert not hasattr(guard, "_ACTIVE_PROGRESS_CURSOR")
-    assert not hasattr(guard, "_research_progress_hook")
 
 
 def test_runtime_trajectory_retrieval_keeps_execution_context_contract():

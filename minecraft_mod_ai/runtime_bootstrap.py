@@ -375,11 +375,9 @@ def _install_post_bootstrap_contracts() -> None:
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .agent_security_contract import install as install_agent_security
-    from .bottleneck_elimination_contract import install as install_bottleneck_elimination
     from .causal_tool_frontier_contract import install as install_causal_tool_frontier
     from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
-    from .planning_stall_guard_contract import install as install_planning_stall_guard
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
     from .small_model_compacting_adapter import CompactingAdapter
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
@@ -429,8 +427,6 @@ def _install_post_bootstrap_contracts() -> None:
         model_router.ModelRouter._generate_with_tools = _generate_with_compaction
 
     install_minecraft_mcp_evidence()
-    install_bottleneck_elimination()
     install_research_bottleneck_runtime()
     runtime_regression_fixes.install()
     install_long_run_resilience()
-    install_planning_stall_guard()
