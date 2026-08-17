@@ -174,7 +174,15 @@ def observed_worker(
     context_receipt = pre_design._FORCED_RAG_CONTEXT.get()
     with lock:
         worker_contexts[domain_id] = context_receipt
-        worker_threads.setdefault(domain_id, []).append(threading.current_thread().name)
+        names = worker_threads.setdefault(domain_id, [])
+        names.append(threading.current_thread().name)
+        attempt = len(names)
+    if (
+        domain_id == "mk_item_block"
+        and attempt == 1
+        and threading.current_thread().name.startswith("mmm_research_domain")
+    ):
+        raise RuntimeError("shared local router rejected concurrent request")
     return installed_worker(
         router,
         prompt=prompt,
@@ -211,8 +219,6 @@ class ProbeRouter:
         with lock:
             call = model_calls.get(domain_id, 0) + 1
             model_calls[domain_id] = call
-        if domain_id == "mk_item_block" and call == 1:
-            raise RuntimeError("shared local router rejected concurrent request")
         return json.dumps(
             {
                 "research_note": {
@@ -266,7 +272,7 @@ assert coverage["status"] == "PASS"
 assert len(coverage_by_domain) == 7
 assert all(status != "MISSING_FORCED_RAG_RECEIPT" for status in coverage_by_domain.values())
 assert all(status == "ROUTES_EXECUTED" for status in coverage_by_domain.values())
-assert model_calls["mk_item_block"] == 2
+assert model_calls["mk_item_block"] == 1
 recovered_note = notes["mk_item_block"]
 assert recovered_note["sufficient"] is True
 assert recovered_note.get("worker_error") is not True
@@ -282,7 +288,7 @@ print(
             "worker_domains": sorted(worker_contexts),
             "worker_threads": worker_threads,
             "coverage": coverage_by_domain,
-            "recovery_calls": model_calls["mk_item_block"],
+            "recovery_calls": len(worker_threads["mk_item_block"]),
             "recovered_sufficient": recovered_note["sufficient"],
         },
         sort_keys=True,
