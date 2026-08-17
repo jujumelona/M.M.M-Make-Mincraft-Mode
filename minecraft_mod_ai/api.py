@@ -383,8 +383,6 @@ class CompleteModAISession:
         *,
         media_paths: tuple[str | Path, ...] = (),
     ) -> CompleteChatReply:
-        import hashlib
-
         try:
             updated_brief = merge_design_brief(self.brief, message)
         except ValueError as exc:
