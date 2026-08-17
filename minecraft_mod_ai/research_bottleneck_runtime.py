@@ -152,10 +152,76 @@ def _restore_complete_plan_collection_pages() -> None:
         mcp_tools.read_sharded_complete_proposal_section = read_section
 
 
+def _restore_research_code_context_contracts() -> None:
+    from . import research_code_context as research
+
+    cls = research.ResearchCodeContext
+
+    current_entry_points = cls._entry_points
+    if not getattr(current_entry_points, "_mmm_semantic_entry_filter_v1", False):
+        @wraps(current_entry_points)
+        def entry_points(self, query: str):
+            candidates = current_entry_points(self, query)
+            if not candidates:
+                return candidates
+            query_tokens = research._tokens(query)
+            relevant = [
+                symbol
+                for symbol in candidates
+                if research._overlap(
+                    query_tokens,
+                    research._tokens(symbol.name)
+                    | research._tokens(symbol.signature)
+                    | research._tokens(symbol.path),
+                )
+                > 0.0
+            ]
+            return relevant or candidates
+
+        entry_points._mmm_semantic_entry_filter_v1 = True
+        entry_points.__wrapped__ = current_entry_points
+        cls._entry_points = entry_points
+
+    current_expand = cls._expand_partial_graph
+    if not getattr(current_expand, "_mmm_two_hop_graph_v1", False):
+        @wraps(current_expand)
+        def expand_partial_graph(self, entries, *, query=""):
+            return [
+                (symbol, hop)
+                for symbol, hop in current_expand(self, entries, query=query)
+                if hop <= 2
+            ]
+
+        expand_partial_graph._mmm_two_hop_graph_v1 = True
+        expand_partial_graph.__wrapped__ = current_expand
+        cls._expand_partial_graph = expand_partial_graph
+
+    current_evolve = cls.evolve_from_generation
+    if not getattr(current_evolve, "_mmm_generation_fixed_point_v1", False):
+        @wraps(current_evolve)
+        def evolve_from_generation(self, text: str):
+            digest = research._sha(text)
+            seen = getattr(self, "_mmm_generation_evolution_seen", None)
+            if not isinstance(seen, set):
+                seen = set()
+                self._mmm_generation_evolution_seen = seen
+            if digest in seen:
+                violations = self.monitor.validate_model_output(text)
+                return (self.bundle(), violations) if violations else (None, ())
+            result = current_evolve(self, text)
+            seen.add(digest)
+            return result
+
+        evolve_from_generation._mmm_generation_fixed_point_v1 = True
+        evolve_from_generation.__wrapped__ = current_evolve
+        cls.evolve_from_generation = evolve_from_generation
+
+
 def install() -> None:
     _restore_validation_fingerprints()
     _restore_managed_research_capacity()
     _restore_complete_plan_collection_pages()
+    _restore_research_code_context_contracts()
 
 
 __all__ = ["install"]
