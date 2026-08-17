@@ -168,7 +168,7 @@ def _install_platform_contracts() -> None:
     from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
-    from .platform_live_rag_contract import install as install_platform_live_rag
+    from .platform_live_rag_contract import install as install_live_rag
     from .platform_planning_contract import install as install_platform_planning
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
@@ -196,7 +196,7 @@ def _install_platform_contracts() -> None:
         complete_planner_module=complete_planner,
         central_research_module=central_research,
     )
-    install_platform_live_rag(retrieval_module=retrieval)
+    install_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
     central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
@@ -386,6 +386,9 @@ def _install_post_bootstrap_contracts() -> None:
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_relation_index_contract import install as install_small_model_relation_index
+    from .small_model_retrieval_efficiency_contract import (
+        install as install_small_model_retrieval_efficiency,
+    )
     from .small_model_tool_guard_contract import install as install_small_model_tool_guard
     from .temporary_skill_contract import install as install_temporary_skill
 
@@ -405,6 +408,7 @@ def _install_post_bootstrap_contracts() -> None:
     install_causal_tool_frontier(install_small_model_max_agent)
     install_small_model_relation_index(production_tools)
     install_small_model_hybrid_search(production_tools)
+    install_small_model_retrieval_efficiency()
     install_temporary_skill(
         model_router_module=model_router,
         work_graph_module=work_graph,
