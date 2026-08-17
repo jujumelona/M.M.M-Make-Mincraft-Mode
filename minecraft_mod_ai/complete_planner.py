@@ -292,7 +292,14 @@ def _implementation_research_outline(game_design: Mapping[str, Any]) -> dict[str
         "_technical_evidence",
         "_pre_design_research",
     )
-    return {key: game_design[key] for key in keys if key in game_design}
+    outline = {key: game_design[key] for key in keys if key in game_design}
+    if (
+        "_technical_evidence" in outline
+        and "_platform_evidence" in outline
+        and outline["_technical_evidence"] == outline["_platform_evidence"]
+    ):
+        outline.pop("_technical_evidence")
+    return outline
 
 
 def _retrieve_implementation_evidence(
