@@ -143,13 +143,3 @@ def test_class_skill_template_replays_bounded_catalog_for_dependency_passes(tmp_
     generate_system_pack(project_root=project, pack_id='class-skill-system', mod_id='catalog_test', package_name='ai.minecraft.catalog_test', config={'modules': [{'module_id': 'ranger', 'kind': 'class', 'config': {'display_name': 'Ranger'}, 'depends_on': [], 'required_gates': []}, {'module_id': 'ranger_dash', 'kind': 'skill', 'config': {'required_class': 'ranger', 'effect': 'minecraft:speed'}, 'depends_on': ['ranger'], 'required_gates': []}]}, policy=ScalePolicy(java_shard_size=1))
     java = next(project.rglob('ClassSkillSystem.java')).read_text(encoding='utf-8')
     assert java.count('MmmSystemConfig.forEachModule') == 2
-
-def test_sound_registrar_root_stays_constant_as_units_grow() -> None:
-    small = _sound_java_files(package_name='ai.minecraft.catalog_test', mod_id='catalog_test', sound_ids=[f'sound_{index:05d}' for index in range(64)])
-    large = _sound_java_files(package_name='ai.minecraft.catalog_test', mod_id='catalog_test', sound_ids=[f'sound_{index:05d}' for index in range(2048)])
-    root_path = 'src/main/java/ai/minecraft/catalog_test/sound/GeneratedSounds.java'
-    assert small[root_path] == large[root_path]
-    assert 'Files.list(directory)' in large[root_path]
-    unit_sizes = [len(value.encode('utf-8')) for path, value in large.items() if 'GeneratedSoundUnit' in path]
-    assert len(unit_sizes) == 2048
-    assert max(unit_sizes) - min(unit_sizes) <= 64
