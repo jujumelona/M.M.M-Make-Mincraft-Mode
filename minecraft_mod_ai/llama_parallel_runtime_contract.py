@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Callable, Mapping
 
-
 _ROUTER_CONTRACT_VERSION = 3
-_PLANNER_SEARCH_CONTRACT_VERSION = 2
 _RESEARCH_DESIGN_CAPACITY_VERSION = 1
 
 
@@ -146,65 +143,6 @@ def _active_parallelism() -> int:
         return 1
 
 
-def _planner_parallel_capacity(router: Any, width: int) -> int:
-    capacity = min(max(1, int(width)), _active_parallelism())
-    if capacity <= 1:
-        return 1
-    try:
-        config = router.registry.role(router.profile, "planner")
-    except Exception:
-        return 1
-    if not bool(getattr(config, "exclusive_gpu", False)):
-        return 1
-    if str(getattr(config, "provider", "")) != "local":
-        return 1
-    if str(getattr(config, "adapter", "")) not in {"llama_cpp", "vllm"}:
-        return 1
-    return capacity
-
-
-def _env_enabled(name: str, default: bool = True) -> bool:
-    raw = os.environ.get(name, "").strip().lower()
-    if not raw:
-        return default
-    return raw not in {"0", "false", "no", "off"}
-
-
-def _latency_objective() -> bool:
-    raw = os.environ.get("MMM_PERFORMANCE_MODE", "").strip().lower()
-    if not raw:
-        raw = os.environ.get("MMM_LLAMA_TUNING_OBJECTIVE", "auto").strip().lower()
-    return raw in {"latency", "single_stream", "single-stream"}
-
-
-def _planner_search_width(router: Any, base_width: int, agentic_module: Any) -> int:
-    """Fill only real, validated managed llama slots with independent candidates."""
-    width = max(1, int(base_width))
-    if not _env_enabled("MMM_PLAN_FILL_ACTIVE_LLAMA_SLOTS", True):
-        return width
-    if os.environ.get("MMM_PLAN_SEARCH_WIDTH", "").strip():
-        return width
-    try:
-        if agentic_module._mode() == "off":
-            return width
-    except Exception:
-        pass
-    if _latency_objective():
-        return width
-
-    from .llama_vram_parallel_policy import validated_active_parallelism
-
-    live_slots = validated_active_parallelism()
-    if live_slots <= width:
-        return width
-    # Promotion happens only after the router itself proves this is the local,
-    # exclusive llama path. Fake/test routers and external providers remain on
-    # the original planner width even if stale slot environment exists.
-    if _planner_parallel_capacity(router, live_slots) <= 1:
-        return width
-    return live_slots
-
-
 def _install_router(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
     installed_version = int(
@@ -330,14 +268,7 @@ def _install_scheduler(scheduler_module: Any) -> None:
 
 
 def _install_research_design_capacity_policy(model_router_module: Any) -> None:
-    """Apply managed-runtime receipt limits only to the router that owns that receipt.
-
-    Central research also accepts injected lightweight routers in tests and recovery probes.
-    Those routers do not own the managed llama process or its receipt, so interpreting a
-    missing/stale managed-runtime environment as their capacity would silently change their
-    established parallel-failure and serial-recovery semantics.
-    """
-
+    """Apply managed-runtime limits only to routers that own the llama process."""
     from . import central_intelligence_amplifier as central_module
 
     current = central_module._research_domain_worker_count
@@ -352,10 +283,6 @@ def _install_research_design_capacity_policy(model_router_module: Any) -> None:
         requested = min(max(1, int(width)), central_module._worker_count())
         if isinstance(router, model_router_module.ModelRouter):
             return current(router, width)
-
-        # Non-managed/injected local routers retain the central core's explicit fan-out.
-        # External/non-exclusive adapters still stay serial because their concurrency
-        # contract is unknown to this runtime.
         try:
             config = router.registry.role(router.profile, "planner")
         except Exception:
@@ -375,119 +302,16 @@ def _install_research_design_capacity_policy(model_router_module: Any) -> None:
     central_module._research_domain_worker_count = research_design_capacity
 
 
-def _install_planner_search_parallelism() -> None:
-    from . import agentic_optimization_contract as agentic_module
-    from . import complete_planner as complete_planner_module
-
-    current = complete_planner_module._generate_json_page_with_repair
-    installed_version = int(
-        getattr(current, "_mmm_parallel_plan_search_version", 0) or 0
-    )
-    if installed_version >= _PLANNER_SEARCH_CONTRACT_VERSION:
-        return
-    if getattr(current, "_mmm_parallel_plan_search", False):
-        previous = getattr(current, "__wrapped__", None)
-        if callable(previous):
-            current = previous
-    if not getattr(current, "_mmm_verifier_plan_search", False):
-        return
-    base = getattr(current, "__wrapped__", None)
-    if not callable(base):
-        return
-
-    @wraps(current)
-    def generate_with_parallel_search(
-        router: Any,
-        *,
-        system_prompt: str,
-        request: dict[str, Any] | str,
-        media_paths: Any,
-        expected_contracts: Any,
-        stage: str,
-    ) -> dict[str, Any]:
-        base_width = agentic_module._planner_candidate_count(request, stage)
-        width = _planner_search_width(router, base_width, agentic_module)
-        parallel = _planner_parallel_capacity(router, width)
-        if width <= 1 or parallel <= 1:
-            return current(
-                router,
-                system_prompt=system_prompt,
-                request=request,
-                media_paths=media_paths,
-                expected_contracts=expected_contracts,
-                stage=stage,
-            )
-
-        def run_candidate(candidate_index: int):
-            candidate_system = (
-                system_prompt
-                + "\n\nHOST SEARCH CANDIDATE: independently solve this page. Candidate "
-                + str(candidate_index + 1)
-                + " of "
-                + str(width)
-                + ". Preserve the exact contract; do not mention candidate search."
-            )
-            page = base(
-                router,
-                system_prompt=candidate_system,
-                request=request,
-                media_paths=media_paths,
-                expected_contracts=expected_contracts,
-                stage=stage,
-            )
-            score, verifier = agentic_module._score_plan_page(page)
-            return score, candidate_index, page, verifier
-
-        candidates: list[tuple[float, int, dict[str, Any], dict[str, Any]]] = []
-        errors: dict[int, Exception] = {}
-        with ThreadPoolExecutor(
-            max_workers=parallel,
-            thread_name_prefix="mmm_plan_search",
-        ) as pool:
-            futures = [pool.submit(run_candidate, index) for index in range(width)]
-            for candidate_index, future in enumerate(futures):
-                try:
-                    candidates.append(future.result())
-                except Exception as exc:
-                    errors[candidate_index] = exc
-
-        if not candidates:
-            if errors:
-                raise errors[max(errors)]
-            raise complete_planner_module.SpecValidationError(
-                f"{stage} produced no verified planning candidate."
-            )
-        candidates.sort(key=lambda item: (-item[0], item[1]))
-        winner = candidates[0]
-        print(
-            "planner search:",
-            f"stage={stage}",
-            f"candidates={len(candidates)}",
-            f"parallel={parallel}",
-            f"winner={winner[1] + 1}",
-            f"score={winner[0]:.3f}",
-            flush=True,
-        )
-        return winner[2]
-
-    generate_with_parallel_search._mmm_parallel_plan_search = True  # type: ignore[attr-defined]
-    generate_with_parallel_search._mmm_verifier_plan_search = True  # type: ignore[attr-defined]
-    generate_with_parallel_search._mmm_parallel_plan_search_version = _PLANNER_SEARCH_CONTRACT_VERSION  # type: ignore[attr-defined]
-    complete_planner_module._generate_json_page_with_repair = generate_with_parallel_search
-
-
 def install(model_router_module: Any, scheduler_module: Any) -> None:
+    """Install runtime slot sharing; Planner search is not a runtime concern."""
     _install_router(model_router_module)
     _install_scheduler(scheduler_module)
     _install_research_design_capacity_policy(model_router_module)
-    _install_planner_search_parallelism()
 
 
 __all__ = [
     "ReentrantCapacityGate",
     "ReentrantReadWriteLock",
     "_active_parallelism",
-    "_planner_parallel_capacity",
-    "_planner_search_width",
     "install",
 ]
