@@ -379,7 +379,7 @@ def _install_post_bootstrap_contracts() -> None:
     from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
-    from .small_model_compacting_adapter import CompactingAdapter
+    from .small_model_compacting_adapter import install as install_small_model_compaction
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_relation_index_contract import install as install_small_model_relation_index
@@ -408,24 +408,7 @@ def _install_post_bootstrap_contracts() -> None:
         repair_module=repair_engine,
     )
     install_active_repair_verifier(agentic_optimization_contract)
-
-    current_tool_loop = model_router.ModelRouter._generate_with_tools
-    if not getattr(current_tool_loop, "_mmm_lossless_context_compaction", False):
-
-        def _generate_with_compaction(self, *, adapter, request, runtime, stage, role):
-            return current_tool_loop(
-                self,
-                adapter=CompactingAdapter(adapter),
-                request=request,
-                runtime=runtime,
-                stage=stage,
-                role=role,
-            )
-
-        _generate_with_compaction._mmm_lossless_context_compaction = True
-        _generate_with_compaction.__wrapped__ = current_tool_loop
-        model_router.ModelRouter._generate_with_tools = _generate_with_compaction
-
+    install_small_model_compaction(model_router)
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
     runtime_regression_fixes.install()
