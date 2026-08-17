@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
@@ -95,6 +93,79 @@ def test_unobserved_replace_without_sha_fails_before_transaction(tmp_path) -> No
 
     with pytest.raises(SourcePatchPreconditionError, match="No observed source SHA"):
         bind_source_snapshot_preconditions(generator, operations)
+
+
+def test_unobserved_replace_cannot_authorize_itself_with_fabricated_sha(tmp_path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    generator = _generator_with_index(ProjectIndex(root))
+    operations = [
+        {
+            "operation": "replace",
+            "path": "src/main/resources/missing.json",
+            "expected_sha256": "sha256:" + "1" * 64,
+            "content": "{}\n",
+        }
+    ]
+
+    with pytest.raises(SourcePatchPreconditionError, match="No observed source SHA"):
+        bind_source_snapshot_preconditions(generator, operations)
+
+
+def test_replace_shape_failure_is_reported_before_apply(tmp_path) -> None:
+    root = tmp_path / "project"
+    target = root / "src/main/resources/fabric.mod.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"id":"demo"}\n', encoding="utf-8")
+    generator = _generator_with_index(ProjectIndex(root))
+    operations = [
+        {
+            "operation": "replace",
+            "path": "src/main/resources/fabric.mod.json",
+        }
+    ]
+
+    with pytest.raises(SourcePatchPreconditionError, match="Replace content must be text"):
+        generator._validate_operations(operations)
+
+
+def test_edit_replacement_precondition_is_reported_before_apply(tmp_path) -> None:
+    root = tmp_path / "project"
+    target = root / "src/main/java/Demo.java"
+    target.parent.mkdir(parents=True)
+    target.write_text("public class Demo {}\n", encoding="utf-8")
+    generator = _generator_with_index(ProjectIndex(root))
+    operations = [
+        {
+            "operation": "edit",
+            "path": "src/main/java/Demo.java",
+            "replacements": [
+                {"old": "class Missing", "new": "class Present", "count": 1}
+            ],
+        }
+    ]
+
+    with pytest.raises(SourcePatchPreconditionError, match="Replacement precondition failed"):
+        generator._validate_operations(operations)
+
+
+def test_noop_replace_is_reported_before_apply(tmp_path) -> None:
+    root = tmp_path / "project"
+    target = root / "src/main/resources/fabric.mod.json"
+    target.parent.mkdir(parents=True)
+    original = '{"id":"demo"}\n'
+    target.write_text(original, encoding="utf-8")
+    generator = _generator_with_index(ProjectIndex(root))
+    operations = [
+        {
+            "operation": "replace",
+            "path": "src/main/resources/fabric.mod.json",
+            "content": original,
+        }
+    ]
+
+    with pytest.raises(SourcePatchPreconditionError, match="makes no change"):
+        generator._validate_operations(operations)
 
 
 def test_source_change_after_snapshot_still_fails_transaction(tmp_path) -> None:
