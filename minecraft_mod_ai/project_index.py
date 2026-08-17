@@ -16,6 +16,7 @@ _TEXT_SUFFIXES = {
     ".java",
     ".json",
     ".mcmeta",
+    ".mcfunction",
     ".gradle",
     ".properties",
     ".accesswidener",
