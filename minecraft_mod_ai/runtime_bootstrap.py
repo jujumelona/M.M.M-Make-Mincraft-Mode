@@ -125,12 +125,16 @@ def _install_generation_contracts() -> None:
     from .project_manifest_hash_efficiency_contract import (
         install as install_manifest_hash_efficiency,
     )
+    from .source_patch_precondition_contract import (
+        install as install_source_patch_preconditions,
+    )
 
     install_extended_registration(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
     install_project_index_execution_reuse(complete_orchestrator)
     install_performance_tuning(performance_final_contract)
     install_manifest_hash_efficiency(complete_orchestrator, project_index)
+    install_source_patch_preconditions(custom_module_generator)
     install_performance_contract(
         complete_orchestrator,
         custom_module_generator,
