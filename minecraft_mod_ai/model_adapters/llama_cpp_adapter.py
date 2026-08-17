@@ -113,40 +113,50 @@ class LlamaCppAdapter(ModelAdapter):
         return None
 
 
+def _is_qwen35(model_id: str) -> bool:
+    normalized = "".join(ch for ch in model_id.lower() if ch.isalnum())
+    return "qwen35" in normalized
+
+
 def _native_server_payload(
     adapter: LlamaCppAdapter,
     request: GenerationRequest,
 ) -> dict[str, Any]:
-    """Build one native llama.cpp request without a second tool-call language.
-
-    ``llama_server_hardware_policy._server_payload`` remains the common text payload
-    owner. Its legacy tool guard is bypassed only while that module is being cleaned up;
-    the actual tool metadata is then attached exactly in OpenAI/llama.cpp form.
-    """
+    """Build one llama.cpp request using the model's native tool template."""
 
     from ..llama_server_hardware_policy import _server_payload
 
-    if request.tools:
-        base_request = GenerationRequest(
-            messages=request.messages,
-            media_paths=request.media_paths,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
-            tools=(),
-            tool_choice=None,
-            parallel_tool_calls=False,
-        )
-        payload = dict(_server_payload(adapter, base_request))
-        payload["tools"] = [dict(tool) for tool in request.tools]
-        if request.tool_choice is not None:
-            payload["tool_choice"] = request.tool_choice
-        payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
-        # Qwen's official tool template is easiest to follow without a separate
-        # reasoning stream competing with the function-call syntax.
-        payload["reasoning_effort"] = "none"
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
-        return payload
-    return dict(_server_payload(adapter, request))
+    if not request.tools:
+        return dict(_server_payload(adapter, request))
+
+    # The shared text payload still rejects tool metadata. Build its neutral text
+    # portion first, then attach llama.cpp's standard OpenAI-compatible tool fields.
+    base_request = GenerationRequest(
+        messages=request.messages,
+        media_paths=request.media_paths,
+        response_format=request.response_format,
+        response_schema=request.response_schema,
+        tools=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+    payload = dict(_server_payload(adapter, base_request))
+    payload["tools"] = [dict(tool) for tool in request.tools]
+    if request.tool_choice is not None:
+        payload["tool_choice"] = request.tool_choice
+    payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
+
+    # Qwen3.5's native tool template is most reliable in non-thinking mode. Use the
+    # vendor's non-thinking sampling profile only for Qwen3.5; other GGUF families
+    # keep their existing runtime sampling policy.
+    payload["reasoning_effort"] = "none"
+    payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if _is_qwen35(adapter.config.model_id):
+        payload["temperature"] = 0.7
+        payload["top_p"] = 0.8
+        payload["top_k"] = 20
+        payload["presence_penalty"] = 1.5
+    return payload
 
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import minecraft_mod_ai.model_adapters.llama_cpp_adapter as llama_adapter
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+    LlamaCppAdapter,
+    _native_server_payload,
+)
 
 
 def _tool_schema() -> dict[str, object]:
@@ -19,85 +22,65 @@ def _tool_schema() -> dict[str, object]:
     }
 
 
-def test_host_tool_request_never_requests_native_grammar() -> None:
-    request = llama_adapter._host_tool_request(
-        [{"role": "user", "content": "find evidence"}],
-    )
-
-    assert request.response_format == "text"
-    assert request.response_schema is None
-    assert request.tools == ()
-    assert request.tool_choice is None
-    assert request.parallel_tool_calls is False
-
-
-def test_host_tool_payload_strips_native_controls_from_wrapped_builder() -> None:
-    request = llama_adapter._host_tool_request(
-        [{"role": "user", "content": "find evidence"}],
-    )
-
-    def polluted_builder(adapter, wire_request):
-        del adapter
-        assert wire_request.response_format == "text"
-        return {
-            "model": "local",
-            "messages": list(wire_request.messages),
-            "response_format": {"type": "json_object"},
-            "json_schema": {"type": "object"},
-            "grammar": "root ::= object",
-            "tools": [_tool_schema()],
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
-            "reasoning_effort": "none",
-        }
-
-    payload = llama_adapter._host_tool_payload(object(), request, polluted_builder)
-
-    assert payload["model"] == "local"
-    assert payload["reasoning_effort"] == "none"
-    assert not llama_adapter._NATIVE_GRAMMAR_CONTROL_KEYS.intersection(payload)
-
-
-def test_host_tool_turn_survives_polluted_payload_builder(monkeypatch) -> None:
-    adapter = llama_adapter.LlamaCppAdapter(
-        AdapterConfig(role="planner", adapter="llama_cpp", model_id="test-model")
+def test_native_tool_payload_uses_llama_openai_fields_without_grammar() -> None:
+    adapter = LlamaCppAdapter(
+        AdapterConfig(
+            role="coder_safe",
+            adapter="llama_cpp",
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+        )
     )
     request = GenerationRequest(
-        messages=[{"role": "user", "content": "inspect project"}],
-        response_format="json",
-        response_schema={"type": "object"},
+        messages=({"role": "user", "content": "find evidence"},),
         tools=(_tool_schema(),),
         tool_choice="auto",
         parallel_tool_calls=True,
     )
-    captured: dict[str, object] = {}
 
-    def polluted_builder(_adapter, wire_request):
-        assert wire_request.response_format == "text"
-        assert wire_request.response_schema is None
-        assert wire_request.tools == ()
-        return {
-            "model": "local",
-            "messages": list(wire_request.messages),
-            "response_format": {"type": "json_object"},
-            "json_schema": {"type": "object"},
-            "grammar": "root ::= object",
-            "tools": [_tool_schema()],
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
-        }
+    payload = _native_server_payload(adapter, request)
 
-    def completion(_server_url, payload):
-        captured.update(payload)
-        return {"content": '{"kind":"final","content":"done"}'}
+    assert payload["tools"] == [_tool_schema()]
+    assert payload["tool_choice"] == "auto"
+    assert payload["parallel_tool_calls"] is True
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    for forbidden in ("response_format", "json_schema", "grammar"):
+        assert forbidden not in payload
+    rendered = "\n".join(
+        str(message.get("content", "")) for message in payload["messages"]
+    )
+    assert "host-tool-envelope" not in rendered
+    assert "REVIEWED_TOOL_CATALOG" not in rendered
 
-    monkeypatch.setattr(llama_adapter, "_completion_message", completion)
 
-    result = adapter._generate_host_tool_turn(
-        "http://127.0.0.1:8910/v1",
-        request,
-        payload_builder=polluted_builder,
+def test_qwen35_tool_profile_is_model_scoped() -> None:
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "find evidence"},),
+        tools=(_tool_schema(),),
+    )
+    qwen = LlamaCppAdapter(
+        AdapterConfig(
+            role="coder_safe",
+            adapter="llama_cpp",
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+        )
+    )
+    generic = LlamaCppAdapter(
+        AdapterConfig(
+            role="coder_safe",
+            adapter="llama_cpp",
+            model_id="generic/model",
+        )
     )
 
-    assert result.content == "done"
-    assert not llama_adapter._NATIVE_GRAMMAR_CONTROL_KEYS.intersection(captured)
+    qwen_payload = _native_server_payload(qwen, request)
+    generic_payload = _native_server_payload(generic, request)
+
+    assert qwen_payload["temperature"] == 0.7
+    assert qwen_payload["top_p"] == 0.8
+    assert qwen_payload["top_k"] == 20
+    assert qwen_payload["presence_penalty"] == 1.5
+    assert generic_payload["temperature"] == 0.0
+    assert "top_p" not in generic_payload
+    assert "top_k" not in generic_payload
+    assert "presence_penalty" not in generic_payload

@@ -34,13 +34,24 @@ def _adapter() -> LlamaCppAdapter:
         AdapterConfig(
             role="planner",
             adapter="llama_cpp",
-            model_id="test/qwen35",
+            model_id="test/qwen3.5-9b",
             max_new_tokens=512,
         )
     )
 
 
-def test_generate_turn_accepts_direct_final_json_without_native_tool_transport(monkeypatch) -> None:
+def _tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "lookup",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+def test_generate_turn_accepts_final_content_while_native_tools_are_available(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
@@ -57,16 +68,7 @@ def test_generate_turn_accepts_direct_final_json_without_native_tool_transport(m
     request = GenerationRequest(
         messages=({"role": "user", "content": "plan"},),
         response_format="json",
-        tools=(
-            {
-                "type": "function",
-                "function": {
-                    "name": "lookup",
-                    "description": "lookup",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-        ),
+        tools=(_tool(),),
         tool_choice="auto",
         parallel_tool_calls=True,
     )
@@ -75,17 +77,19 @@ def test_generate_turn_accepts_direct_final_json_without_native_tool_transport(m
 
     assert turn.content == '{"game_design":{}}'
     payload = captured["payload"]
-    for forbidden in (
-        "tools", "tool_choice", "parallel_tool_calls",
-        "response_format", "json_schema", "grammar",
-    ):
+    assert payload["tools"] == [_tool()]
+    assert payload["tool_choice"] == "auto"
+    assert payload["parallel_tool_calls"] is True
+    for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
-    rendered = "\n".join(str(message.get("content", "")) for message in payload["messages"])
-    assert "REVIEWED_TOOL_CATALOG" in rendered
-    assert "lookup" in rendered
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
+    assert payload["top_k"] == 20
+    assert payload["presence_penalty"] == 1.5
 
 
-def test_generate_turn_parses_host_tool_envelope_without_native_tool_fields(monkeypatch) -> None:
+def test_generate_turn_parses_native_openai_tool_calls(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
@@ -95,10 +99,20 @@ def test_generate_turn_parses_host_tool_envelope_without_native_tool_fields(monk
         return _CompletionResponse(
             status_code=200,
             payload={
-                "choices": [{"message": {"content": (
-                    '{"kind":"tool_calls","calls":['
-                    '{"id":"call_7","name":"lookup","arguments":{"q":"x"}}]}'
-                )}}]
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_7",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"q":"x"}',
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }]
             },
         )
 
@@ -106,16 +120,7 @@ def test_generate_turn_parses_host_tool_envelope_without_native_tool_fields(monk
     request = GenerationRequest(
         messages=({"role": "user", "content": "look it up"},),
         response_format="json",
-        tools=(
-            {
-                "type": "function",
-                "function": {
-                    "name": "lookup",
-                    "description": "lookup",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-        ),
+        tools=(_tool(),),
         tool_choice="auto",
         parallel_tool_calls=True,
     )
@@ -126,11 +131,12 @@ def test_generate_turn_parses_host_tool_envelope_without_native_tool_fields(monk
     assert turn.tool_calls[0].id == "call_7"
     assert turn.tool_calls[0].name == "lookup"
     assert turn.tool_calls[0].arguments == {"q": "x"}
-    for forbidden in (
-        "tools", "tool_choice", "parallel_tool_calls",
-        "response_format", "json_schema", "grammar",
-    ):
-        assert forbidden not in captured["payload"]
+    assert captured["payload"]["tools"] == [_tool()]
+    rendered = "\n".join(
+        str(message.get("content", ""))
+        for message in captured["payload"]["messages"]
+    )
+    assert "mmm/host-tool-envelope" not in rendered
 
 
 def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatch) -> None:
