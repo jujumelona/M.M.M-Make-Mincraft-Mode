@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerationError,
     CustomModuleGenerator,
 )
+from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
 from minecraft_mod_ai.platform_resolver import resolve_platform
@@ -94,13 +96,36 @@ def test_repair_scope_supports_kotlin_gradle_metadata() -> None:
     assert ".kts" in repair_engine._ALLOWED_SUFFIXES
 
 
-def test_revise_explicit_version_port_is_bound_as_migration() -> None:
+def test_revise_explicit_version_is_hint_and_migration_uses_optimizer(monkeypatch) -> None:
+    winner = _future_adapter()
+    evidence = SimpleNamespace(
+        covered_capabilities=(),
+        requested_capabilities=(),
+        reuse_coverage=1.0,
+        residual_cost=0,
+        dependency_closure_complete=True,
+    )
+    optimization = SimpleNamespace(
+        selected=winner,
+        evidence=evidence,
+        to_dict=lambda: {},
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_optimize",
+        lambda *_args, **_kwargs: optimization,
+    )
+
     selection = resolve_platform(
         "Minecraft 1.21.1로 버전 업데이트해서 포팅해줘",
         existing_version="1.20.1",
         existing_loader="fabric",
     )
-    assert selection.adapter.adapter_id == adapter_for_target("1.21.1", "fabric").adapter_id
+
+    assert selection.adapter.adapter_id == winner.adapter_id
+    assert selection.adapter.minecraft_version == "27.0"
+    assert selection.adapter.minecraft_version != "1.21.1"
+    assert selection.explicit_version is True
     assert selection.migration_requested is True
     assert selection.preserved_existing_target is False
     assert selection.to_dict()["migration_requested"] is True
