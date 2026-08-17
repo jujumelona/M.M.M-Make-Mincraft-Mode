@@ -13,7 +13,7 @@ from .model_adapters import AdapterConfig, ModelConfigurationError
 
 
 LEGACY_REQUIRED_ROLES = frozenset(
-    {"planner", "researcher", "coder", "visual_critic", "image_generator", "speech_recognition"}
+    {"planner", "researcher", "coder", "visual_critic", "image_generator"}
 )
 REQUIRED_ROLES = frozenset(
     {
@@ -25,8 +25,7 @@ REQUIRED_ROLES = frozenset(
         "embedding",
         "reranker",
         "image_generator",
-        "speech_recognition",
-    }
+            }
 )
 ALLOWED_ADAPTERS = frozenset(
     {
@@ -37,7 +36,6 @@ ALLOWED_ADAPTERS = frozenset(
         "vllm",
         "openai_compatible",
         "image_diffusion",
-        "speech",
         "embedding",
         "reranker",
     }

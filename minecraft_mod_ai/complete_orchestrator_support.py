@@ -1,28 +1,18 @@
 from __future__ import annotations
-
 import heapq
 import json
 from pathlib import Path
 from typing import Any
-
 from .complete_spec import CompleteProposal, ProductionModule
-
 
 class CompleteProductionError(RuntimeError):
     pass
 
-
 def _locate_existing_fabric_root(extracted_root: Path) -> Path:
-    direct = extracted_root / "src/main/resources/fabric.mod.json"
-    if direct.is_file() and not direct.is_symlink():
+    direct = extracted_root / 'src/main/resources/fabric.mod.json'
+    if direct.is_file() and (not direct.is_symlink()):
         return extracted_root
-    candidates = sorted(
-        path.parent.parent.parent.parent
-        for path in extracted_root.rglob("fabric.mod.json")
-        if path.as_posix().endswith("src/main/resources/fabric.mod.json")
-        and path.is_file()
-        and not path.is_symlink()
-    )
+    candidates = sorted((path.parent.parent.parent.parent for path in extracted_root.rglob('fabric.mod.json') if path.as_posix().endswith('src/main/resources/fabric.mod.json') and path.is_file() and (not path.is_symlink())))
     unique: list[Path] = []
     seen: set[Path] = set()
     for candidate in candidates:
@@ -35,27 +25,19 @@ def _locate_existing_fabric_root(extracted_root: Path) -> Path:
             seen.add(resolved)
             unique.append(resolved)
     if len(unique) != 1:
-        raise CompleteProductionError(
-            "Existing source ZIP must contain exactly one Fabric project root; "
-            f"found {len(unique)}."
-        )
+        raise CompleteProductionError(f'Existing source ZIP must contain exactly one Fabric project root; found {len(unique)}.')
     return unique[0]
 
-
-def _topological_modules(
-    modules: tuple[ProductionModule, ...] | list[ProductionModule],
-) -> list[ProductionModule]:
+def _topological_modules(modules: tuple[ProductionModule, ...] | list[ProductionModule]) -> list[ProductionModule]:
     lookup = {module.module_id: module for module in modules}
     if len(lookup) != len(modules):
-        raise CompleteProductionError("Production module IDs must be unique.")
+        raise CompleteProductionError('Production module IDs must be unique.')
     indegree = {module.module_id: len(module.depends_on) for module in modules}
     outgoing: dict[str, list[str]] = {module.module_id: [] for module in modules}
     for module in modules:
         for dependency in module.depends_on:
             if dependency not in lookup:
-                raise CompleteProductionError(
-                    f"Production module {module.module_id} references missing {dependency}."
-                )
+                raise CompleteProductionError(f'Production module {module.module_id} references missing {dependency}.')
             outgoing[dependency].append(module.module_id)
     ready = [node for node, degree in indegree.items() if degree == 0]
     heapq.heapify(ready)
@@ -68,19 +50,13 @@ def _topological_modules(
             if indegree[dependent] == 0:
                 heapq.heappush(ready, dependent)
     if len(ordered) != len(lookup):
-        raise CompleteProductionError(
-            "Production module graph contains an unresolved cycle."
-        )
+        raise CompleteProductionError('Production module graph contains an unresolved cycle.')
     return ordered
 
-
 def _is_custom(module: ProductionModule) -> bool:
-    return module.kind == "custom_java" or module.config.get("implementation") == "custom"
+    return module.kind == 'custom_java' or module.config.get('implementation') == 'custom'
 
-
-def _normalize_modules(
-    modules: tuple[ProductionModule, ...], spec
-) -> tuple[list[ProductionModule], list[dict[str, Any]]]:
+def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[list[ProductionModule], list[dict[str, Any]]]:
     """Deduplicate bootstrap content and route custom semantics exactly once.
 
     An explicit ``implementation=custom`` module is converted to ``custom_java`` before
@@ -88,89 +64,35 @@ def _normalize_modules(
     in config so the indexed coder receives the original semantic target. This prevents
     built-in generation followed by a second custom patch for the same module.
     """
-
     base = {content.content_id: content.kind.value for content in spec.contents}
     if spec.boss is not None:
-        base[spec.boss.entity_id] = "boss"
-        base[f"{spec.boss.entity_id}_spawn_egg"] = "item"
-
+        base[spec.boss.entity_id] = 'boss'
+        base[f'{spec.boss.entity_id}_spawn_egg'] = 'item'
     reused: set[str] = set()
     staged: list[ProductionModule] = []
     receipts: list[dict[str, Any]] = []
     for module in modules:
         if _is_custom(module):
-            requested_kind = (
-                str(module.config.get("requested_kind", module.kind))
-                if module.kind == "custom_java"
-                else module.kind
-            )
+            requested_kind = str(module.config.get('requested_kind', module.kind)) if module.kind == 'custom_java' else module.kind
             custom_config = dict(module.config)
-            custom_config.pop("implementation", None)
-            custom_config["requested_kind"] = requested_kind
-            staged.append(
-                ProductionModule(
-                    module_id=module.module_id,
-                    kind="custom_java",
-                    config=custom_config,
-                    depends_on=module.depends_on,
-                    required_gates=module.required_gates,
-                )
-            )
-            receipts.append(
-                {
-                    "schema_version": "mmm/custom-routing-v1",
-                    "status": "ROUTED_CUSTOM",
-                    "module_id": module.module_id,
-                    "requested_kind": requested_kind,
-                }
-            )
+            custom_config.pop('implementation', None)
+            custom_config['requested_kind'] = requested_kind
+            staged.append(ProductionModule(module_id=module.module_id, kind='custom_java', config=custom_config, depends_on=module.depends_on, required_gates=module.required_gates))
+            receipts.append({'schema_version': 'mmm/custom-routing-v1', 'status': 'ROUTED_CUSTOM', 'module_id': module.module_id, 'requested_kind': requested_kind})
             continue
-
         existing = base.get(module.module_id)
         if existing is None:
             staged.append(module)
-        elif existing == module.kind or {existing, module.kind} <= {"entity", "boss"}:
+        elif existing == module.kind or {existing, module.kind} <= {'entity', 'boss'}:
             reused.add(module.module_id)
-            receipts.append(
-                {
-                    "schema_version": "mmm/bootstrap-dedup-v1",
-                    "status": "REUSED",
-                    "module_id": module.module_id,
-                    "kind": module.kind,
-                }
-            )
+            receipts.append({'schema_version': 'mmm/bootstrap-dedup-v1', 'status': 'REUSED', 'module_id': module.module_id, 'kind': module.kind})
         else:
-            raise CompleteProductionError(
-                f"Module {module.module_id}/{module.kind} collides with bootstrap {existing}."
-            )
+            raise CompleteProductionError(f'Module {module.module_id}/{module.kind} collides with bootstrap {existing}.')
+    kept = [ProductionModule(module_id=module.module_id, kind=module.kind, config=module.config, depends_on=tuple((dep for dep in module.depends_on if dep not in reused)), required_gates=module.required_gates) for module in staged]
+    return (_topological_modules(kept), receipts)
 
-    kept = [
-        ProductionModule(
-            module_id=module.module_id,
-            kind=module.kind,
-            config=module.config,
-            depends_on=tuple(dep for dep in module.depends_on if dep not in reused),
-            required_gates=module.required_gates,
-        )
-        for module in staged
-    ]
-    return _topological_modules(kept), receipts
-
-
-def _system_groups(
-    modules: list[ProductionModule],
-) -> dict[str, list[ProductionModule]]:
-    mapping = {
-        "quest": "quest-system",
-        "class": "class-skill-system",
-        "skill": "class-skill-system",
-        "economy": "economy-shop",
-        "shop": "economy-shop",
-        "gui": "gui-networking",
-        "networking": "gui-networking",
-        "party": "party-guild",
-        "guild": "party-guild",
-    }
+def _system_groups(modules: list[ProductionModule]) -> dict[str, list[ProductionModule]]:
+    mapping = {'quest': 'quest-system', 'class': 'class-skill-system', 'skill': 'class-skill-system', 'economy': 'economy-shop', 'shop': 'economy-shop', 'gui': 'gui-networking', 'networking': 'gui-networking', 'party': 'party-guild', 'guild': 'party-guild'}
     result: dict[str, list[ProductionModule]] = {}
     for module in modules:
         pack = mapping.get(module.kind)
@@ -178,83 +100,34 @@ def _system_groups(
             result.setdefault(pack, []).append(module)
     return result
 
-
 def _handled_module_ids(modules: list[ProductionModule]) -> set[str]:
-    built_in = {
-        "item",
-        "block",
-        "tool",
-        "weapon",
-        "armor",
-        "food",
-        "crop",
-        "machine",
-        "effect",
-        "enchantment",
-        "command",
-        "recipe",
-        "advancement",
-        "loot",
-        "quest",
-        "class",
-        "skill",
-        "economy",
-        "shop",
-        "gui",
-        "networking",
-        "party",
-        "guild",
-        "entity",
-        "boss",
-        "npc",
-        "structure",
-        "audio",
-    }
+    built_in = {'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild', 'entity', 'boss', 'npc', 'structure'}
     return {module.module_id for module in modules if module.kind in built_in}
 
-
 def _module_dict(module: ProductionModule) -> dict[str, Any]:
-    return {
-        "module_id": module.module_id,
-        "kind": module.kind,
-        "config": module.config,
-        "depends_on": list(module.depends_on),
-        "required_gates": list(module.required_gates),
-    }
-
+    return {'module_id': module.module_id, 'kind': module.kind, 'config': module.config, 'depends_on': list(module.depends_on), 'required_gates': list(module.required_gates)}
 
 def _jar_path(build: dict[str, Any]) -> Path:
-    value = build.get("jar_path")
+    value = build.get('jar_path')
     if not isinstance(value, str):
-        raise CompleteProductionError("Gradle report did not contain a JAR path.")
+        raise CompleteProductionError('Gradle report did not contain a JAR path.')
     path = Path(value).expanduser().resolve()
     if not path.is_file() or path.is_symlink():
-        raise CompleteProductionError("Gradle JAR path is missing or unsafe.")
+        raise CompleteProductionError('Gradle JAR path is missing or unsafe.')
     return path
 
-
 def _external_gates(proposal: CompleteProposal, options: Any) -> list[str]:
-    gates = ["Gradle", "GameTest", "JAR validation"]
+    gates = ['Gradle', 'GameTest', 'JAR validation']
     if proposal.external_runtime_required:
-        gates.extend(
-            [
-                "Minecraft server/client runtime",
-                "Mineflayer playtest",
-                "visual review",
-            ]
-        )
-    if any(
-        module.kind in {"entity", "boss", "npc"}
-        for module in proposal.modules
-    ):
-        gates.append("Blockbench UV/render review")
+        gates.extend(['Minecraft server/client runtime', 'Mineflayer playtest', 'visual review'])
+    if any((module.kind in {'entity', 'boss', 'npc'} for module in proposal.modules)):
+        gates.append('Blockbench UV/render review')
     return gates
-
 
 def _extract_json(text: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     for index, character in enumerate(text):
-        if character != "{":
+        if character != '{':
             continue
         try:
             value, _ = decoder.raw_decode(text[index:])
@@ -262,4 +135,4 @@ def _extract_json(text: str) -> dict[str, Any]:
             continue
         if isinstance(value, dict):
             return value
-    raise CompleteProductionError("Model response did not contain a JSON object.")
+    raise CompleteProductionError('Model response did not contain a JSON object.')

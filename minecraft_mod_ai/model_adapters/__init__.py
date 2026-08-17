@@ -12,7 +12,6 @@ from .image_diffusion import ImageDiffusionAdapter
 from .llama_cpp_adapter import LlamaCppAdapter
 from .openai_compatible import OpenAICompatibleAdapter
 from .reranker import RerankerAdapter
-from .speech import SpeechAdapter
 from .transformers_multimodal import TransformersMultimodalAdapter
 from .transformers_text import TransformersTextAdapter
 
@@ -28,7 +27,6 @@ __all__ = [
     "ModelConfigurationError",
     "OpenAICompatibleAdapter",
     "RerankerAdapter",
-    "SpeechAdapter",
     "ToolCall",
     "TransformersMultimodalAdapter",
     "TransformersTextAdapter",

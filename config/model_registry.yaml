@@ -1,22 +1,18 @@
 schema_version: mmm/model-registry-v2
-
-# ─── YAML anchors for shared non-LLM roles ───
-_shared_embedding: &shared_embedding
+_shared_embedding:
   model_id: Qwen/Qwen3-Embedding-0.6B
   adapter: embedding
   device: cpu
   dimensions: 512
   max_context: 8192
   max_new_tokens: 1
-
-_shared_reranker: &shared_reranker
+_shared_reranker:
   model_id: Qwen/Qwen3-Reranker-0.6B
   adapter: reranker
   device: cpu
   max_context: 8192
   max_new_tokens: 1
-
-_shared_image_gen: &shared_image_gen
+_shared_image_gen:
   model_id: black-forest-labs/FLUX.2-klein-9B
   adapter: image_diffusion
   quantization: bnb_4bit_nf4
@@ -25,23 +21,15 @@ _shared_image_gen: &shared_image_gen
   cpu_offload: true
   min_free_vram_mb: 9000
   lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
-  lora_weight_name: "[FLUX.2.Klein]PixelArt_Redmond.safetensors"
+  lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
   lora_adapter_name: mmm_pixelart_redmond
   lora_scale: 1.0
-  lora_trigger: "Pixel Art, PixArFK"
-
-_shared_speech: &shared_speech
-  model_id: openai/whisper-small
-  adapter: speech
-  torch_dtype: float16
-  exclusive_gpu: true
-  min_free_vram_mb: 3000
-
+  lora_trigger: Pixel Art, PixArFK
 profiles:
   mini_mod:
-    description: "⚡ Mini Mod Test — 실제 Gemma4 LLM으로 초소형 간이 모드를 1분 만에 완벽 검증 및 생성"
+    description: ⚡ Mini Mod Test — 실제 Gemma4 LLM으로 초소형 간이 모드를 1분 만에 완벽 검증 및 생성
     roles:
-      planner: &mini_mod_gemma
+      planner:
         model_id: google/gemma-4-12B-it-qat-q4_0-gguf
         adapter: llama_cpp
         gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
@@ -51,38 +39,141 @@ profiles:
         max_new_tokens: 1024
         min_free_vram_mb: 1000
         exclusive_gpu: true
-      researcher: *mini_mod_gemma
-      coder: *mini_mod_gemma
-      coder_safe: *mini_mod_gemma
-      visual_critic: *mini_mod_gemma
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 8192
+        max_input_tokens: 0
+        max_new_tokens: 1024
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 8192
+        max_input_tokens: 0
+        max_new_tokens: 1024
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 8192
+        max_input_tokens: 0
+        max_new_tokens: 1024
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 8192
+        max_input_tokens: 0
+        max_new_tokens: 1024
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   fast_test:
-    description: "⚡ Fast Test Mode — 10초 만에 1번~8번 셀 전체 파이프라인 무결성을 검증하고 모드 ZIP을 생성"
+    description: ⚡ Fast Test Mode — 10초 만에 1번~8번 셀 전체 파이프라인 무결성을 검증하고 모드 ZIP을 생성
     roles:
-      planner: &fast_test_mock
+      planner:
         model_id: mock/fast-test-engine
         adapter: mock
         max_context: 32768
         max_input_tokens: 0
         max_new_tokens: 2048
         min_free_vram_mb: 0
-      researcher: *fast_test_mock
-      coder: *fast_test_mock
-      coder_safe: *fast_test_mock
-      visual_critic: *fast_test_mock
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: mock/fast-test-engine
+        adapter: mock
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 2048
+        min_free_vram_mb: 0
+      coder:
+        model_id: mock/fast-test-engine
+        adapter: mock
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 2048
+        min_free_vram_mb: 0
+      coder_safe:
+        model_id: mock/fast-test-engine
+        adapter: mock
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 2048
+        min_free_vram_mb: 0
+      visual_critic:
+        model_id: mock/fast-test-engine
+        adapter: mock
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 2048
+        min_free_vram_mb: 0
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   Qwen3.6-35B_23GB:
-    description: "unsloth/Qwen3.6-35B-A3B-MTP-GGUF UD-Q4_K_XL (22.9GB) — Native 32k Context"
+    description: unsloth/Qwen3.6-35B-A3B-MTP-GGUF UD-Q4_K_XL (22.9GB) — Native 32k
+      Context
     roles:
-      planner: &qwen36_35b
+      planner:
         model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
@@ -92,19 +183,76 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
         exclusive_gpu: true
-      researcher: *qwen36_35b
-      coder: *qwen36_35b
-      coder_safe: *qwen36_35b
-      visual_critic: *qwen36_35b
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   Qwen3.6-27B_18GB:
-    description: "unsloth/Qwen3.6-27B-MTP-GGUF UD-Q4_K_XL (17.9GB) — Native 32k Context"
+    description: unsloth/Qwen3.6-27B-MTP-GGUF UD-Q4_K_XL (17.9GB) — Native 32k Context
     roles:
-      planner: &qwen36_27b_q4
+      planner:
         model_id: unsloth/Qwen3.6-27B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
@@ -114,19 +262,76 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
         exclusive_gpu: true
-      researcher: *qwen36_27b_q4
-      coder: *qwen36_27b_q4
-      coder_safe: *qwen36_27b_q4
-      visual_critic: *qwen36_27b_q4
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   Qwen3.6-27B_14GB:
-    description: "unsloth/Qwen3.6-27B-MTP-GGUF Q3_K_M (13.8GB) — Native 32k Context"
+    description: unsloth/Qwen3.6-27B-MTP-GGUF Q3_K_M (13.8GB) — Native 32k Context
     roles:
-      planner: &qwen36_27b_q3
+      planner:
         model_id: unsloth/Qwen3.6-27B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
@@ -136,19 +341,77 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
         exclusive_gpu: true
-      researcher: *qwen36_27b_q3
-      coder: *qwen36_27b_q3
-      coder_safe: *qwen36_27b_q3
-      visual_critic: *qwen36_27b_q3
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   Gemma4-26B_14GB:
-    description: "google/gemma-4-26B-A4B-it-qat-q4_0-gguf — Official Google QAT (64k High Context)"
+    description: google/gemma-4-26B-A4B-it-qat-q4_0-gguf — Official Google QAT (64k
+      High Context)
     roles:
-      planner: &gemma4_26b
+      planner:
         model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
         adapter: llama_cpp
         gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
@@ -158,19 +421,77 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 2000
         exclusive_gpu: true
-      researcher: *gemma4_26b
-      coder: *gemma4_26b
-      coder_safe: *gemma4_26b
-      visual_critic: *gemma4_26b
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 65536
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder:
+        model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 65536
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 65536
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: google/gemma-4-26B-A4B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-26B-A4B-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 65536
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 2000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   Gemma4-12B_7GB:
-    description: "google/gemma-4-12B-it-qat-q4_0-gguf — Official Google QAT (128k High Context)"
+    description: google/gemma-4-12B-it-qat-q4_0-gguf — Official Google QAT (128k High
+      Context)
     roles:
-      planner: &gemma4_12b
+      planner:
         model_id: google/gemma-4-12B-it-qat-q4_0-gguf
         adapter: llama_cpp
         gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
@@ -180,19 +501,76 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 1000
         exclusive_gpu: true
-      researcher: *gemma4_12b
-      coder: *gemma4_12b
-      coder_safe: *gemma4_12b
-      visual_critic: *gemma4_12b
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      researcher:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 131072
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 131072
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 131072
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: google/gemma-4-12B-it-qat-q4_0-gguf
+        adapter: llama_cpp
+        gguf_filename: gemma-4-12b-it-qat-q4_0.gguf
+        torch_dtype: float16
+        max_context: 131072
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   Qwen3.5-9B_6GB:
-    description: "unsloth/Qwen3.5-9B-MTP-GGUF UD-Q4_K_XL (6.14GB) — Native 32k Context"
+    description: unsloth/Qwen3.5-9B-MTP-GGUF UD-Q4_K_XL (6.14GB) — Native 32k Context
     roles:
-      planner: &qwen35_9b
+      planner:
         model_id: unsloth/Qwen3.5-9B-MTP-GGUF
         adapter: llama_cpp
         gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
@@ -202,47 +580,233 @@ profiles:
         max_new_tokens: 8192
         min_free_vram_mb: 1000
         exclusive_gpu: true
-      researcher: *qwen35_9b
-      coder: *qwen35_9b
-      coder_safe: *qwen35_9b
-      visual_critic: *qwen35_9b
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  # Legacy aliases
-  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+      researcher:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   t4_local:
-    description: "Default T4 alias → Qwen3.5-9B_6GB"
+    description: Default T4 alias → Qwen3.5-9B_6GB
     roles:
-      planner: *qwen35_9b
-      researcher: *qwen35_9b
-      coder: *qwen35_9b
-      coder_safe: *qwen35_9b
-      visual_critic: *qwen35_9b
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      planner:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      researcher:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   t4_quality:
-    description: "T4 quality alias → Qwen3.5-9B_6GB"
+    description: T4 quality alias → Qwen3.5-9B_6GB
     roles:
-      planner: *qwen35_9b
-      researcher: *qwen35_9b
-      coder: *qwen35_9b
-      coder_safe: *qwen35_9b
-      visual_critic: *qwen35_9b
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition: *shared_speech
-
+      planner:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      researcher:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      coder_safe:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      visual_critic:
+        model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+        adapter: llama_cpp
+        gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+        torch_dtype: float16
+        max_context: 32768
+        max_input_tokens: 0
+        max_new_tokens: 8192
+        min_free_vram_mb: 1000
+        exclusive_gpu: true
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
   remote_quality:
-    description: Per-role OpenAI-compatible endpoints for large coding and vision models. Retrieval stays local.
+    description: Per-role OpenAI-compatible endpoints for large coding and vision
+      models. Retrieval stays local.
     roles:
       planner:
         provider: openai_compatible
@@ -267,8 +831,8 @@ profiles:
         base_url_env: MMM_CODER_BASE_URL
         api_key_env: MMM_CODER_API_KEY
         recommended_models:
-          - Qwen/Qwen3-Coder-30B-A3B-Instruct
-          - Qwen/Qwen3-Coder-Next
+        - Qwen/Qwen3-Coder-30B-A3B-Instruct
+        - Qwen/Qwen3-Coder-Next
         max_context: 131072
         max_new_tokens: 8192
       coder_safe:
@@ -287,12 +851,29 @@ profiles:
         api_key_env: MMM_VISION_API_KEY
         max_context: 65536
         max_new_tokens: 3000
-      embedding: *shared_embedding
-      reranker: *shared_reranker
-      image_generator: *shared_image_gen
-      speech_recognition:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_SPEECH_MODEL
-        base_url_env: MMM_SPEECH_BASE_URL
-        api_key_env: MMM_SPEECH_API_KEY
+      embedding:
+        model_id: Qwen/Qwen3-Embedding-0.6B
+        adapter: embedding
+        device: cpu
+        dimensions: 512
+        max_context: 8192
+        max_new_tokens: 1
+      reranker:
+        model_id: Qwen/Qwen3-Reranker-0.6B
+        adapter: reranker
+        device: cpu
+        max_context: 8192
+        max_new_tokens: 1
+      image_generator:
+        model_id: black-forest-labs/FLUX.2-klein-9B
+        adapter: image_diffusion
+        quantization: bnb_4bit_nf4
+        torch_dtype: float16
+        exclusive_gpu: true
+        cpu_offload: true
+        min_free_vram_mb: 9000
+        lora_model_id: artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B
+        lora_weight_name: '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
+        lora_adapter_name: mmm_pixelart_redmond
+        lora_scale: 1.0
+        lora_trigger: Pixel Art, PixArFK
