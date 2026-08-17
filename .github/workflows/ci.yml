@@ -11,11 +11,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-audit-v7-${{ github.workflow }}-${{ github.ref }}
+  group: ci-audit-v8-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Independent regression gates intentionally fan out in parallel; the remaining
-# suite is deterministically sharded so a slow group cannot serialize validation.
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -89,10 +87,7 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: >-
-          python -m pytest -q
-          tests/test_planner_template_schema.py
-          tests/test_planner_strict_json_contract.py
+      - run: python -m pytest -q tests/test_planner_template_schema.py
 
   parallel-repair:
     runs-on: ubuntu-latest
@@ -142,7 +137,6 @@ jobs:
               "test_external_mcp_role_scope.py",
               "test_research_coordinator.py",
               "test_planner_template_schema.py",
-              "test_planner_strict_json_contract.py",
               "test_agentic_search_efficiency_contract.py",
               "test_repair_candidate_purity_contract.py",
               "test_llama_parallel_runtime_contract.py",
