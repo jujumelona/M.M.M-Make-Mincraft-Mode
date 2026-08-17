@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from functools import wraps
 from typing import Any
 
 from .small_model_context_compaction import compact_messages
+
+
+_MARKER = "_mmm_lossless_context_compaction"
 
 
 class CompactingAdapter:
@@ -31,4 +35,25 @@ class CompactingAdapter:
         )
 
 
-__all__ = ["CompactingAdapter"]
+def install(model_router_module: Any) -> None:
+    """Bind lossless tool-context compaction at the model-router owner boundary."""
+    current = model_router_module.ModelRouter._generate_with_tools
+    if getattr(current, _MARKER, False):
+        return
+
+    @wraps(current)
+    def generate_with_compaction(self, *, adapter, request, runtime, stage, role):
+        return current(
+            self,
+            adapter=CompactingAdapter(adapter),
+            request=request,
+            runtime=runtime,
+            stage=stage,
+            role=role,
+        )
+
+    setattr(generate_with_compaction, _MARKER, True)
+    model_router_module.ModelRouter._generate_with_tools = generate_with_compaction
+
+
+__all__ = ["CompactingAdapter", "install"]
