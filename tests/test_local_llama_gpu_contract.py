@@ -7,8 +7,11 @@ def test_all_registered_local_llama_roles_are_explicit_exclusive_gpu_consumers()
     registry = ModelRegistry()
     profiles = [
         profile
-        for profile in registry.profile_names()
-        if registry.role(profile, "planner").adapter == "llama_cpp"
+        for profile, raw_profile in registry._raw_profiles.items()
+        if isinstance(raw_profile, dict)
+        and isinstance(raw_profile.get("roles"), dict)
+        and isinstance(raw_profile["roles"].get("planner"), dict)
+        and raw_profile["roles"]["planner"].get("adapter") == "llama_cpp"
     ]
     assert profiles
 
