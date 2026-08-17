@@ -8,14 +8,57 @@ _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:/-]{1,127}")
 _ANCHOR_WORDS = frozenset(
     {"api", "contract", "dependency", "implements", "interface", "register", "required", "schema"}
 )
+_FAILURE_MARKERS = (
+    "validation failure",
+    "execution & validation failure",
+    "failed with reason",
+    "compile error",
+    "compilation error",
+    "diagnostic",
+)
+_RETRIEVAL_REPAIR_MARKERS = (
+    "compile error",
+    "compilation error",
+    "javac",
+    "jdt",
+    "cannot find symbol",
+    "cannot resolve symbol",
+    "unresolved symbol",
+    "package does not exist",
+    "package ",
+    "no suitable method",
+    "cannot be applied to given types",
+    "incompatible types",
+    "has private access",
+    "missing method",
+    "missing field",
+    "unknown method",
+    "unknown class",
+    "api mismatch",
+    "mapping mismatch",
+    "yarn mapping",
+    "dependency",
+    "gradle",
+    "maven",
+    "version catalog",
+    "classpath",
+    "mixin target",
+    "registry id",
+    "registry entry",
+    "resource id",
+)
 
 
-def _is_structural_patch_repair(messages: Sequence[Mapping[str, Any]]) -> bool:
-    tail = " ".join(
+def _message_tail(messages: Sequence[Mapping[str, Any]]) -> str:
+    return " ".join(
         str(message.get("content", ""))
         for message in messages[-4:]
         if isinstance(message.get("content"), str)
     ).casefold()
+
+
+def _is_structural_patch_repair(messages: Sequence[Mapping[str, Any]]) -> bool:
+    tail = _message_tail(messages)
     return any(
         marker in tail
         for marker in (
@@ -24,6 +67,16 @@ def _is_structural_patch_repair(messages: Sequence[Mapping[str, Any]]) -> bool:
             "구조 검증 피드백 기반",
         )
     )
+
+
+def _is_repair_failure(messages: Sequence[Mapping[str, Any]]) -> bool:
+    tail = _message_tail(messages)
+    return any(marker in tail for marker in _FAILURE_MARKERS)
+
+
+def _needs_retrieval_repair(messages: Sequence[Mapping[str, Any]]) -> bool:
+    tail = _message_tail(messages)
+    return any(marker in tail for marker in _RETRIEVAL_REPAIR_MARKERS)
 
 
 def _compact_anchor(record: Mapping[str, Any], query_tokens: set[str]) -> dict[str, Any]:
@@ -109,7 +162,12 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
         messages: Sequence[Mapping[str, Any]],
         **kwargs: Any,
     ) -> str:
-        if role == "coder" and _is_structural_patch_repair(messages):
+        repair_failure = role == "coder" and _is_repair_failure(messages)
+        use_current_evidence_only = repair_failure and (
+            _is_structural_patch_repair(messages)
+            or not _needs_retrieval_repair(messages)
+        )
+        if use_current_evidence_only:
             sanitized = custom_generation_search_module._sanitized_messages(
                 messages,
                 minecraft_version=self._minecraft_version,
@@ -120,6 +178,7 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
         return current(self, role, messages, **kwargs)
 
     generate_text._mmm_structural_no_rag = True  # type: ignore[attr-defined]
+    generate_text._mmm_selective_repair_rag = True  # type: ignore[attr-defined]
     generate_text.__wrapped__ = current  # type: ignore[attr-defined]
     cls.generate_text = generate_text
 
