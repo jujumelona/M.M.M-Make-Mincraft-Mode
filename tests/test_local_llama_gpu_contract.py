@@ -1,31 +1,23 @@
 from __future__ import annotations
 
-import pytest
-
 from minecraft_mod_ai.model_registry import ModelRegistry
 
 
-_LOCAL_LLAMA_PROFILES = (
-    "mini_mod",
-    "Qwen3.6-35B_23GB",
-    "Qwen3.6-27B_18GB",
-    "Qwen3.6-27B_14GB",
-    "Gemma4-26B_14GB",
-    "Gemma4-12B_7GB",
-    "Qwen3.5-9B_6GB",
-    "t4_local",
-    "t4_quality",
-)
-
-
-@pytest.mark.parametrize("profile", _LOCAL_LLAMA_PROFILES)
-def test_local_llama_roles_are_explicit_exclusive_gpu_consumers(profile: str) -> None:
+def test_all_registered_local_llama_roles_are_explicit_exclusive_gpu_consumers() -> None:
     registry = ModelRegistry()
-    for role in ("planner", "researcher", "coder", "coder_safe", "visual_critic"):
-        config = registry.role(profile, role)
-        assert config.provider == "local"
-        assert config.adapter == "llama_cpp"
-        assert config.exclusive_gpu is True
+    profiles = [
+        profile
+        for profile in registry.profile_names()
+        if registry.role(profile, "planner").adapter == "llama_cpp"
+    ]
+    assert profiles
+
+    for profile in profiles:
+        for role in ("planner", "researcher", "coder", "coder_safe", "visual_critic"):
+            config = registry.role(profile, role)
+            assert config.provider == "local"
+            assert config.adapter == "llama_cpp"
+            assert config.exclusive_gpu is True
 
 
 def test_fast_mock_does_not_gain_gpu_ownership() -> None:
