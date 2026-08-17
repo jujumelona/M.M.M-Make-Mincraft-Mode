@@ -250,6 +250,7 @@ def _invalidate_after_update(
             delattr(index, attribute)
         except AttributeError:
             pass
+    _fast_receipts(index).clear()
     cache = _shard_cache(index)
     if structural_from is not None:
         for shard in tuple(cache):
