@@ -20,7 +20,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["gradio>=5.0,<6"]
 local-model = [
   "accelerate>=1.0,<2",
   "fastapi>=0.100.0",
@@ -56,7 +55,6 @@ image = [
 # PEFT. Keep the named extra for compatibility without resolving an unused stack.
 training = []
 dev = [
-  "gradio>=5.0,<6",
   "nbformat>=5.10,<6",
   "Pillow>=10.4,<13",
   "pytest>=8,<10",
@@ -87,6 +85,3 @@ minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/minef
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-filterwarnings = [
-  "ignore:The default value of 'allow_tags' in gr.Chatbot will be changed from False to True:DeprecationWarning",
-]
