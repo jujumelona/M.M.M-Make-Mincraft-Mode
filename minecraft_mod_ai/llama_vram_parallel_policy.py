@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """VRAM-first admission for the managed llama-server.
 
-The native runtime already validates p1/p2/p4 variants with real concurrent
-requests and falls back after launch failures. This policy removes a duplicated
-host-RAM model reserve from automatic extra-slot admission and exposes the
-validated managed slot count to the planner parallel runtime.
+The native runtime validates concurrent slot variants with live requests and falls
+back after launch failures. This policy only refines runtime resource admission;
+it does not own Planner or repair search width.
 """
 
 import json
@@ -24,10 +23,6 @@ _LEGACY_RESOURCE_MARKERS = (
 _LEGACY_SELECTION_MARKERS = (
     "_mmm_vram_parallel_selection_policy_v1",
     "_mmm_vram_parallel_selection_policy_v2",
-)
-_LEGACY_PLANNER_MARKERS = (
-    "_mmm_fill_active_llama_slots_v1",
-    "_mmm_fill_active_llama_slots_v2",
 )
 _RUNTIME_RECEIPT_SCHEMA = "mmm/llama-runtime-receipt-v1"
 
@@ -99,12 +94,6 @@ def _install_resource_admission(runtime_tuning: Any) -> None:
         if slots <= 1 or not _env_enabled("MMM_LLAMA_VRAM_PARALLEL", True):
             return False
 
-        # Extra llama-server slots share one mmap/offloaded model. Recharging
-        # 40% of the model against MemAvailable for p2/p4 can reject all extra
-        # slots on Colab while several GiB of VRAM remain idle. Keep the full
-        # model+KV GPU budget and only incremental server/slot host overhead;
-        # the existing live concurrent probe plus p4->p2->p1 launch fallback is
-        # still the final safety authority.
         try:
             context = runtime_tuning._per_request_context(config)
             total_context = runtime_tuning._total_context(context, slots)
@@ -148,19 +137,10 @@ def _install_selection_version(runtime_tuning: Any) -> None:
     runtime_tuning._selection_inputs = selection_inputs
 
 
-def _remove_legacy_global_planner_fanout(agentic_module: Any) -> None:
-    """Undo v1/v2 global width wrappers when a live Colab upgrades in place."""
-    current = agentic_module._planner_candidate_count
-    restored = _unwrap_marked(current, _LEGACY_PLANNER_MARKERS)
-    if restored is not current:
-        agentic_module._planner_candidate_count = restored
-
-
-def install(runtime_tuning: Any, agentic_module: Any) -> None:
-    """Install the VRAM-first policy idempotently."""
+def install(runtime_tuning: Any) -> None:
+    """Install only the VRAM-first runtime policy, idempotently."""
     _install_resource_admission(runtime_tuning)
     _install_selection_version(runtime_tuning)
-    _remove_legacy_global_planner_fanout(agentic_module)
 
 
 __all__ = ["install", "validated_active_parallelism"]
