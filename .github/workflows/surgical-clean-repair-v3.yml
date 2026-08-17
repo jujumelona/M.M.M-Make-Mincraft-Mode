@@ -110,6 +110,23 @@ jobs:
                   return node
           write_tree(p, ParserSafety().visit(tree))
 
+          p = Path('minecraft_mod_ai/__init__.py')
+          tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+          class PackageSurface(ast.NodeTransformer):
+              def visit_ImportFrom(self, node):
+                  node.names = [alias for alias in node.names if alias.name != 'AudioRequest']
+                  return node if node.names else None
+              def visit_Assign(self, node):
+                  node = self.generic_visit(node)
+                  if any(isinstance(target, ast.Name) and target.id == '__all__' for target in node.targets):
+                      if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                          node.value.elts = [
+                              elt for elt in node.value.elts
+                              if not (isinstance(elt, ast.Constant) and elt.value == 'AudioRequest')
+                          ]
+                  return node
+          write_tree(p, PackageSurface().visit(tree))
+
           for path in (
               Path('minecraft_mod_ai/planner_module_identity_contract.py'),
               Path('minecraft_mod_ai/planner_outline_identity_contract.py'),
