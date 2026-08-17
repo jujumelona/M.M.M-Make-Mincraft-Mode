@@ -220,9 +220,9 @@ def test_incremental_inner_build_alias_does_not_replace_clean_room_quality() -> 
     assert CompleteProductionOrchestrator._command_receipt_passed(build, "clean_build")
 
 
-def test_final_architecture_contracts_are_installed() -> None:
-    assert getattr(CompleteGameDesignPlanner.plan, "_mmm_atomic_requirement_ir", False)
-    assert getattr(
+def test_final_architecture_contracts_are_installed_without_atomic_plan_gate() -> None:
+    assert not getattr(CompleteGameDesignPlanner.plan, "_mmm_atomic_requirement_ir", False)
+    assert not getattr(
         CompleteProductionOrchestrator.execute,
         "_mmm_atomic_release_guard",
         False,
