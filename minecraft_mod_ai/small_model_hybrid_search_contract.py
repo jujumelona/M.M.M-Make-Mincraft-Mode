@@ -199,7 +199,12 @@ def install(production_tools_module: Any) -> None:
 
         for retry in (False, True):
             routed_query = _expanded(query, route, retry=retry)
+            seen_modes: set[tuple[bool, bool]] = set()
             for use_semantic, use_rerank, mode in _modes(route, semantic, rerank):
+                mode_key = (bool(use_semantic), bool(use_rerank))
+                if mode_key in seen_modes:
+                    continue
+                seen_modes.add(mode_key)
                 try:
                     result = dict(
                         current(
