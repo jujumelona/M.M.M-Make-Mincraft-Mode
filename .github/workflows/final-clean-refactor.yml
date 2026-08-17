@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install refactor test deps
-        run: python -m pip install --disable-pip-version-check pyyaml pytest
+        run: python -m pip install --disable-pip-version-check -e . pytest
       - name: Prepare strict clean refactor wrapper
         shell: bash
         run: |
