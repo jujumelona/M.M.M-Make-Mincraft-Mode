@@ -162,10 +162,10 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
         messages: Sequence[Mapping[str, Any]],
         **kwargs: Any,
     ) -> str:
+        structural_repair = role == "coder" and _is_structural_patch_repair(messages)
         repair_failure = role == "coder" and _is_repair_failure(messages)
-        use_current_evidence_only = repair_failure and (
-            _is_structural_patch_repair(messages)
-            or not _needs_retrieval_repair(messages)
+        use_current_evidence_only = structural_repair or (
+            repair_failure and not _needs_retrieval_repair(messages)
         )
         if use_current_evidence_only:
             sanitized = custom_generation_search_module._sanitized_messages(
