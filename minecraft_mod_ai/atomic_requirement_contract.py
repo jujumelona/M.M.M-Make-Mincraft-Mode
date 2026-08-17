@@ -141,19 +141,6 @@ def compile_ir(proposal: Any) -> dict[str, Any]:
     result['ir_sha256'] = _hash_without(result, 'ir_sha256')
     return result
 
-def _extract_json(text: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    for index, character in enumerate(text):
-        if character != '{':
-            continue
-        try:
-            value, _ = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    raise AtomicRequirementError('Coverage reviewer did not return JSON.')
-
 def _root_hints(proposal: Any, implementations: Mapping[str, str]) -> list[str]:
     contract = getattr(proposal, 'game_design', {}).get('_production_contract')
     if not isinstance(contract, dict):
@@ -166,54 +153,108 @@ def _root_hints(proposal: Any, implementations: Mapping[str, str]) -> list[str]:
         root_refs.update((str(ref) for ref in group.get('implementation_refs', []) if str(ref) in implementations))
     return sorted(root_refs)
 
+def _candidate_refs(atom: Mapping[str, Any], implementations: Mapping[str, str], acceptances: Mapping[str, str], hints: list[str]) -> tuple[list[str], list[str]]:
+    impl_refs = list(dict.fromkeys([*hints, *(ref for _score_value, ref in _rank(str(atom['text']), implementations, _MAX_IMPL_CANDIDATES))]))[:_MAX_IMPL_CANDIDATES]
+    if not impl_refs:
+        impl_refs = list(implementations)[:_MAX_IMPL_CANDIDATES]
+    acceptance_refs = [ref for _score_value, ref in _rank(str(atom['text']), acceptances, _MAX_ACCEPTANCE_CANDIDATES)]
+    if not acceptance_refs:
+        acceptance_refs = list(acceptances)[:_MAX_ACCEPTANCE_CANDIDATES]
+    return (impl_refs, acceptance_refs)
+
+def _decision_schema(impl_count: int, acceptance_count: int) -> dict[str, Any]:
+    return {
+        'type': 'object',
+        'properties': {
+            'supported': {'type': 'boolean'},
+            'implementation_indexes': {
+                'type': 'array',
+                'items': {'type': 'integer', 'minimum': 0, 'maximum': max(0, impl_count - 1)},
+                'uniqueItems': True,
+                'maxItems': min(8, impl_count),
+            },
+            'acceptance_indexes': {
+                'type': 'array',
+                'items': {'type': 'integer', 'minimum': 0, 'maximum': max(0, acceptance_count - 1)},
+                'uniqueItems': True,
+                'maxItems': min(4, acceptance_count),
+            },
+        },
+        'required': ['supported', 'implementation_indexes', 'acceptance_indexes'],
+        'additionalProperties': False,
+    }
+
+def _validated_indexes(value: Any, *, field: str, upper_bound: int) -> list[int]:
+    if not isinstance(value, list):
+        raise AtomicRequirementError(f'Coverage reviewer {field} must be a list.')
+    result: list[int] = []
+    seen: set[int] = set()
+    for raw in value:
+        if type(raw) is not int or raw < 0 or raw >= upper_bound:
+            raise AtomicRequirementError(f'Coverage reviewer {field} contains an invalid index.')
+        if raw not in seen:
+            seen.add(raw)
+            result.append(raw)
+    return result
+
 def semantic_review(router: Any, proposal: Any, ir: dict[str, Any]) -> dict[str, Any]:
     unresolved = set(ir['unresolved_atom_ids'])
     if not unresolved:
         return ir
     implementations, acceptances = (_implementations(proposal), _acceptances(proposal))
     hints = _root_hints(proposal, implementations)
-    review_atoms: list[dict[str, Any]] = []
-    for atom in ir['atoms']:
-        if atom['atom_id'] not in unresolved:
-            continue
-        impl_refs = list(dict.fromkeys([*hints, *(ref for _score_value, ref in _rank(atom['text'], implementations, _MAX_IMPL_CANDIDATES))]))[:_MAX_IMPL_CANDIDATES]
-        if not impl_refs:
-            impl_refs = list(implementations)[:_MAX_IMPL_CANDIDATES]
-        acceptance_refs = [ref for _score_value, ref in _rank(atom['text'], acceptances, _MAX_ACCEPTANCE_CANDIDATES)]
-        if not acceptance_refs:
-            acceptance_refs = list(acceptances)[:_MAX_ACCEPTANCE_CANDIDATES]
-        review_atoms.append({'atom_id': atom['atom_id'], 'text': atom['text'], 'implementation_candidates': {ref: implementations[ref] for ref in impl_refs}, 'acceptance_candidates': {ref: acceptances[ref] for ref in acceptance_refs}})
-    request = {'schema_version': 'mmm/atomic-coverage-review-request-v1', 'rule': 'Map each atom only to existing IDs that genuinely satisfy it. Never invent IDs or features. If the current plan does not implement the atom, supported=false.', 'atoms': review_atoms, 'response_contract': {'mappings': [{'atom_id': 'existing atom id', 'supported': True, 'implementation_refs': ['existing implementation ref'], 'acceptance_refs': ['existing acceptance ref']}]}}
-    response = router.generate_text('planner', [{'role': 'system', 'content': 'You are a narrow coverage verifier. You cannot create features, files, IDs, or evidence. Unsupported requirements must remain unsupported.'}, {'role': 'user', 'content': _canonical(request)}], response_format='json')
-    value = _extract_json(response)
-    if set(value) != {'mappings'} or not isinstance(value['mappings'], list):
-        raise AtomicRequirementError('Coverage reviewer contract is invalid.')
     atoms = {item['atom_id']: dict(item) for item in ir['atoms']}
-    seen: set[str] = set()
-    for mapping in value['mappings']:
-        if not isinstance(mapping, dict) or set(mapping) != {'atom_id', 'supported', 'implementation_refs', 'acceptance_refs'}:
-            raise AtomicRequirementError('Coverage reviewer mapping fields are invalid.')
-        atom_id = str(mapping['atom_id'])
-        if atom_id not in unresolved or atom_id in seen:
-            raise AtomicRequirementError('Coverage reviewer returned unknown/duplicate atom.')
-        seen.add(atom_id)
-        if type(mapping['supported']) is not bool:
+    for original in ir['atoms']:
+        atom_id = original['atom_id']
+        if atom_id not in unresolved:
+            continue
+        impl_refs, acceptance_refs = _candidate_refs(original, implementations, acceptances, hints)
+        request = {
+            'requirement': original['text'],
+            'implementation_candidates': [
+                {'index': index, 'ref': ref, 'descriptor': implementations[ref]}
+                for index, ref in enumerate(impl_refs)
+            ],
+            'acceptance_candidates': [
+                {'index': index, 'ref': ref, 'descriptor': acceptances[ref]}
+                for index, ref in enumerate(acceptance_refs)
+            ],
+            'rule': (
+                'Select only candidates that genuinely satisfy this requirement. '
+                'If the current plan does not implement it, set supported=false and return empty indexes.'
+            ),
+        }
+        try:
+            decision = router.generate_tool_decision(
+                'planner',
+                [
+                    {'role': 'system', 'content': 'You are a narrow coverage verifier. Do not invent features, files, IDs, or evidence. Use the required function only.'},
+                    {'role': 'user', 'content': _canonical(request)},
+                ],
+                tool_name='submit_atomic_coverage',
+                description='Return whether one requirement is already covered, using candidate indexes only.',
+                parameters=_decision_schema(len(impl_refs), len(acceptance_refs)),
+            )
+        except Exception as exc:
+            raise AtomicRequirementError(
+                f'Coverage reviewer native tool decision failed: {type(exc).__name__}: {exc}'
+            ) from exc
+        if set(decision) != {'supported', 'implementation_indexes', 'acceptance_indexes'}:
+            raise AtomicRequirementError('Coverage reviewer native tool fields are invalid.')
+        if type(decision['supported']) is not bool:
             raise AtomicRequirementError('Coverage reviewer supported must be boolean.')
-        impl_refs, test_refs = (mapping['implementation_refs'], mapping['acceptance_refs'])
-        if not isinstance(impl_refs, list) or not isinstance(test_refs, list):
-            raise AtomicRequirementError('Coverage reviewer refs must be lists.')
-        if any((ref not in implementations for ref in impl_refs)):
-            raise AtomicRequirementError('Coverage reviewer invented an implementation ref.')
-        if any((ref not in acceptances for ref in test_refs)):
-            raise AtomicRequirementError('Coverage reviewer invented an acceptance ref.')
+        impl_indexes = _validated_indexes(decision['implementation_indexes'], field='implementation_indexes', upper_bound=len(impl_refs))
+        acceptance_indexes = _validated_indexes(decision['acceptance_indexes'], field='acceptance_indexes', upper_bound=len(acceptance_refs))
         atom = atoms[atom_id]
-        if mapping['supported'] and impl_refs and test_refs:
-            atom['implementation_refs'] = list(dict.fromkeys((str(ref) for ref in impl_refs)))
-            atom['acceptance_refs'] = list(dict.fromkeys((str(ref) for ref in test_refs)))
+        if decision['supported'] and impl_indexes and acceptance_indexes:
+            atom['implementation_refs'] = [impl_refs[index] for index in impl_indexes]
+            atom['acceptance_refs'] = [acceptance_refs[index] for index in acceptance_indexes]
             atom['status'] = 'COVERED'
         else:
+            atom['implementation_refs'] = []
+            atom['acceptance_refs'] = []
             atom['status'] = 'UNSUPPORTED'
-        atom['coverage_origin'] = 'semantic_reviewer'
+        atom['coverage_origin'] = 'semantic_reviewer_native_tool'
     ordered = [atoms[item['atom_id']] for item in ir['atoms']]
     missing = [item['atom_id'] for item in ordered if item['status'] != 'COVERED']
     updated = {**ir, 'atoms': ordered, 'unresolved_atom_ids': missing, 'ir_sha256': ''}
