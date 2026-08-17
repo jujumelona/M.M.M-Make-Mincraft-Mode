@@ -125,16 +125,12 @@ def _install_generation_contracts() -> None:
     from .project_manifest_hash_efficiency_contract import (
         install as install_manifest_hash_efficiency,
     )
-    from .source_patch_precondition_contract import (
-        install as install_source_patch_preconditions,
-    )
 
     install_extended_registration(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
     install_project_index_execution_reuse(complete_orchestrator)
     install_performance_tuning(performance_final_contract)
     install_manifest_hash_efficiency(complete_orchestrator, project_index)
-    install_source_patch_preconditions(custom_module_generator)
     install_performance_contract(
         complete_orchestrator,
         custom_module_generator,
@@ -182,6 +178,9 @@ def _install_platform_contracts() -> None:
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
     from .proposal_deserialization_contract import install as install_proposal_deserialization
+    from .source_patch_precondition_contract import (
+        install as install_source_patch_preconditions,
+    )
     from .system_quality_contract import install as install_system_quality
 
     install_platform_runtime(
@@ -210,6 +209,7 @@ def _install_platform_contracts() -> None:
     )
     install_mod_scope(complete_spec, complete_planner)
     install_platform_custom_coder(custom_module_generator)
+    install_source_patch_preconditions(custom_module_generator)
     install_platform_repair(repair_engine)
     install_live_execution(complete_orchestrator)
     install_specialized_generator_guards(
