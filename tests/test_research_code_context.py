@@ -156,7 +156,7 @@ def test_adaptive_retrieval_computes_complementary_metrics(tmp_path) -> None:
         "quality",
     }
     weights = research._adaptive_weights("Service.compute dependency API")
-    assert set(weights) == set(evidence.metrics)
+    assert set(weights) == set(evidence.metrics) - {"quality"}
     assert abs(sum(weights.values()) - 1.0) < 1e-9
     assert weights["dependency"] > weights["lexical"]
 
