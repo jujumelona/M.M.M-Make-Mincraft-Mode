@@ -28,12 +28,7 @@ class ProductionContractError(ValueError):
     """Raised when a code-owned production or quality contract is invalid."""
 
 def bound_game_design(game_design: Mapping[str, Any]) -> dict[str, Any]:
-    """Return user/design content that is stable across execution decoration.
-
-    Proposal construction may attach method routing and product-scope metadata
-    after a production contract has been compiled. Those internal records guide
-    execution but must not invalidate the user-design binding.
-    """
+    """Return user/design content that is stable across execution decoration."""
     return {str(key): value for key, value in game_design.items() if not str(key).startswith('_')}
 
 @dataclass(frozen=True)
@@ -42,13 +37,7 @@ class ProductionContractCompilation:
     acceptance_tests: tuple[str, ...]
 
 def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence['ProductionModule | Mapping[str, Any]']=(), assets: Sequence['AssetRequest | Mapping[str, Any]']=(), acceptance_tests: Sequence[str]=()) -> ProductionContractCompilation:
-    """Compile prompt-derived scope into a deterministic evidence contract.
-
-    The compiler adds traceability and quality gates, never game content.  Every
-    source item remains in the requirement catalog; only the number of direct
-    links stored beside each item is bounded.  Full catalogs remain addressable
-    through stable catalog references.
-    """
+    """Compile prompt-derived scope into a deterministic evidence contract."""
     if not isinstance(requested_prompt, str) or not requested_prompt.strip():
         raise ProductionContractError('requested_prompt must be a non-empty string')
     if not isinstance(game_design, Mapping):
@@ -59,36 +48,36 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     raw_assets = [_normalize_asset(value) for value in assets]
     normalized_modules: list[dict[str, Any]] = []
     seen_mids: set[str] = set()
-    for m in raw_modules:
-        mid = m['module_id']
-        if mid in seen_mids:
+    for module in raw_modules:
+        module_id = module['module_id']
+        if module_id in seen_mids:
             counter = 2
-            while f'{mid}_{counter}' in seen_mids:
+            while f'{module_id}_{counter}' in seen_mids:
                 counter += 1
-            mid = f'{mid}_{counter}'
-            m = dict(m)
-            m['module_id'] = mid
-        seen_mids.add(mid)
-        normalized_modules.append(m)
+            module_id = f'{module_id}_{counter}'
+            module = dict(module)
+            module['module_id'] = module_id
+        seen_mids.add(module_id)
+        normalized_modules.append(module)
     normalized_assets: list[dict[str, Any]] = []
     seen_aids: set[str] = set()
-    for a in raw_assets:
-        aid = a['asset_id']
-        if aid in seen_aids:
+    for asset in raw_assets:
+        asset_id = asset['asset_id']
+        if asset_id in seen_aids:
             counter = 2
-            while f'{aid}_{counter}' in seen_aids:
+            while f'{asset_id}_{counter}' in seen_aids:
                 counter += 1
-            aid = f'{aid}_{counter}'
-            a = dict(a)
-            a['asset_id'] = aid
-        seen_aids.add(aid)
-        normalized_assets.append(a)
+            asset_id = f'{asset_id}_{counter}'
+            asset = dict(asset)
+            asset['asset_id'] = asset_id
+        seen_aids.add(asset_id)
+        normalized_assets.append(asset)
     input_acceptance = _normalize_acceptance_tests(acceptance_tests)
     requirements = _compile_requirements(requested_prompt, design_snapshot, research_snapshot)
-    implementation_catalog, implementation_search = _implementation_catalog(normalized_modules, normalized_assets, None)
+    implementation_catalog, implementation_search = _implementation_catalog(normalized_modules, normalized_assets)
     if not implementation_catalog:
-        raise ProductionContractError()
-    active_dimensions, activation_reasons = _infer_dimensions(requested_prompt=requested_prompt, game_design=design_snapshot, research_brief=research_snapshot, modules=[item for item in normalized_modules if not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and (item['config'].get('integration_type') == 'mmm_research_shard'))], assets=normalized_assets)
+        raise ProductionContractError('production contract requires at least one implementation')
+    active_dimensions, activation_reasons = _infer_dimensions(requested_prompt=requested_prompt, game_design=design_snapshot, research_brief=research_snapshot, modules=[item for item in normalized_modules if not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and item['config'].get('integration_type') == 'mmm_research_shard')], assets=normalized_assets)
     acceptance_catalog: list[dict[str, str]] = []
     used_acceptance_statements: set[str] = set()
     for index, statement in enumerate(input_acceptance):
@@ -104,15 +93,16 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         dimension_acceptance[dimension_id] = ref
     requirement_acceptance: dict[str, str] = {}
     for requirement in requirements:
-        ref = 'acceptance:' + requirement['requirement_ref']
+        requirement_ref = requirement['requirement_ref']
+        ref = 'acceptance:' + requirement_ref
         if requirement['source'] == 'research_brief':
-            statement = f'[{requirement['requirement_ref']}] Verify the scoped research item is current, compatible, licensed, and used only within its evidence scope: {requirement['statement']}'
+            statement = f"[{requirement_ref}] Verify the scoped research item is current, compatible, licensed, and used only within its evidence scope: {requirement['statement']}"
         else:
-            statement = f'[{requirement['requirement_ref']}] Demonstrate observable behavior or output satisfying: {requirement['statement']}'
+            statement = f"[{requirement_ref}] Demonstrate observable behavior or output satisfying: {requirement['statement']}"
         statement = _unique_acceptance_statement(statement, used_acceptance_statements)
         acceptance_catalog.append({'acceptance_ref': ref, 'origin': 'requirement', 'statement': statement})
         used_acceptance_statements.add(statement)
-        requirement_acceptance[requirement['requirement_ref']] = ref
+        requirement_acceptance[requirement_ref] = ref
     quality_catalog: list[dict[str, Any]] = []
     evidence_routes: list[dict[str, Any]] = []
     for dimension_id in active_dimensions:
@@ -132,7 +122,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         matched_input_tests = _bounded_matches(requirement_ref, requirement['statement'], input_test_search, input_test_index, 2, fallback=False)
         relevant_dimensions = list(_BASELINE_DIMENSIONS)
         if requirement['source'] == 'requested_prompt':
-            relevant_dimensions.extend((item for item in _CONDITIONAL_ORDER if item in active_set))
+            relevant_dimensions.extend(item for item in _CONDITIONAL_ORDER if item in active_set)
         else:
             source_text = requirement['source_ref'] + ' ' + requirement['statement']
             for dimension_id in _CONDITIONAL_ORDER:
@@ -142,7 +132,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         group_ref = 'coverage:' + requirement_ref
         requirement['coverage_group_ref'] = group_ref
         coverage_groups.append({'group_ref': group_ref, 'requirement_ref': requirement_ref, 'implementation_catalog_ref': 'catalog:implementations', 'implementation_refs': direct_implementations, 'acceptance_catalog_ref': 'catalog:acceptance', 'acceptance_refs': [requirement_acceptance[requirement_ref], *matched_input_tests], 'quality_dimension_refs': quality_refs, 'evidence_route_refs': ['evidence:' + value.removeprefix('quality:') for value in quality_refs]})
-    acceptance_tuple = tuple((entry['statement'] for entry in acceptance_catalog))
+    acceptance_tuple = tuple(entry['statement'] for entry in acceptance_catalog)
     source_bindings = {'game_design_sha256': _canonical_sha256(design_snapshot), 'research_brief_sha256': '' if research_snapshot is None else _canonical_sha256(research_snapshot), 'module_input_sha256': _canonical_sha256(normalized_modules), 'asset_input_sha256': _canonical_sha256(normalized_assets)}
     contract: dict[str, Any] = {'schema_version': CONTRACT_SCHEMA, 'requested_prompt': requested_prompt, 'source_bindings': source_bindings, 'requirement_catalog': requirements, 'implementation_catalog': implementation_catalog, 'acceptance_catalog': acceptance_catalog, 'quality_dimension_catalog': quality_catalog, 'evidence_route_catalog': evidence_routes, 'coverage_groups': coverage_groups, 'completion_policy': _json_copy(_COMPLETION_POLICY, 'completion_policy'), 'catalog_stats': {'requirements': len(requirements), 'implementations': len(implementation_catalog), 'acceptance_tests': len(acceptance_catalog), 'quality_dimensions': len(quality_catalog), 'coverage_groups': len(coverage_groups), 'max_direct_implementation_refs_per_group': _MAX_DIRECT_IMPLEMENTATION_REFS}, 'contract_sha256': ''}
     contract['contract_sha256'] = _hash_without_field(contract, 'contract_sha256')
@@ -168,7 +158,7 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         raise ProductionContractError('contract_sha256 does not match the contract')
     source_bindings = contract['source_bindings']
     for key, value in source_bindings.items():
-        if value != '' and (not _SHA256.fullmatch(str(value))):
+        if value != '' and not _SHA256.fullmatch(str(value)):
             raise ProductionContractError(f'invalid source binding: {key}')
     if not source_bindings['game_design_sha256']:
         raise ProductionContractError('game design source binding is required')
@@ -178,7 +168,7 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
     dimensions = _require_list(contract['quality_dimension_catalog'], 'quality dimensions')
     routes = _require_list(contract['evidence_route_catalog'], 'evidence routes')
     groups = _require_list(contract['coverage_groups'], 'coverage groups')
-    if not requirements or not implementations or (not acceptances):
+    if not requirements or not implementations or not acceptances:
         raise ProductionContractError('requirements, implementations, and acceptance catalogs must be non-empty')
     requirement_refs: set[str] = set()
     group_by_requirement: dict[str, str] = {}
@@ -216,7 +206,7 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         if item['source_kind'] == 'module':
             catalog_module_ids.append(item['implementation_id'])
     expected_module_ids = list(module_ids)
-    if any((not isinstance(value, str) or not value for value in expected_module_ids)):
+    if any(not isinstance(value, str) or not value for value in expected_module_ids):
         raise ProductionContractError('module_ids must contain non-empty strings')
     _require_unique(expected_module_ids, 'external module ID')
     if set(catalog_module_ids) != set(expected_module_ids):
@@ -231,9 +221,9 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         acceptance_refs.add(ref)
         if item['origin'] not in {'input', 'quality', 'requirement'}:
             raise ProductionContractError(f'invalid acceptance origin: {ref}')
-        if item['origin'] == 'quality' and (not ref.startswith('acceptance:quality:')):
+        if item['origin'] == 'quality' and not ref.startswith('acceptance:quality:'):
             raise ProductionContractError(f'invalid quality acceptance ref: {ref}')
-        if item['origin'] == 'requirement' and (not ref.startswith('acceptance:requirement:')):
+        if item['origin'] == 'requirement' and not ref.startswith('acceptance:requirement:'):
             raise ProductionContractError(f'invalid requirement acceptance ref: {ref}')
         catalog_acceptance.append(_nonempty_string(item['statement'], 'acceptance statement'))
     external_acceptance = list(acceptance_tests)
@@ -344,16 +334,14 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         raise ProductionContractError('catalog stats do not match contract catalogs')
 
 def quality_contract_summary(contract: Mapping[str, Any]) -> str:
-    """Return a human-readable summary without exposing approval hashes."""
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
     tests = [item['statement'] for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and isinstance(item.get('statement'), str)]
     validate_production_contract(contract, module_ids, tests)
     stats = contract['catalog_stats']
-    dimensions = ', '.join((item['title'] for item in contract['quality_dimension_catalog']))
-    return f'Tracks {stats['requirements']} request-derived requirements across {stats['implementations']} implementation entries and {stats['acceptance_tests']} observable checks. Required quality: {dimensions}. Completion requires fresh proposal-bound evidence from an independent verifier for every dimension.'
+    dimensions = ', '.join(item['title'] for item in contract['quality_dimension_catalog'])
+    return f"Tracks {stats['requirements']} request-derived requirements across {stats['implementations']} implementation entries and {stats['acceptance_tests']} observable checks. Required quality: {dimensions}. Completion requires fresh proposal-bound evidence from an independent verifier for every dimension."
 
 def evaluate_quality_contract(contract: Mapping[str, Any], evidence: Mapping[str, Any] | Sequence[Mapping[str, Any]], proposal_hash: str, previous: Mapping[str, Any] | None=None) -> dict[str, Any]:
-    """Evaluate raw receipts; evidence cannot directly declare completion."""
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
     acceptance = [item['statement'] for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and isinstance(item.get('statement'), str)]
     validate_production_contract(contract, module_ids, acceptance)
@@ -385,14 +373,13 @@ def evaluate_quality_contract(contract: Mapping[str, Any], evidence: Mapping[str
             plateau_dimensions.append(dimension_id)
         dimension_results.append(result)
     unresolved = [item['dimension_id'] for item in dimension_results if item['status'] != 'PASS']
-    overall_status = 'PASS' if not unresolved else 'FAIL' if any((item['status'] == 'FAIL' for item in dimension_results)) else 'MISSING'
+    overall_status = 'PASS' if not unresolved else 'FAIL' if any(item['status'] == 'FAIL' for item in dimension_results) else 'MISSING'
     report: dict[str, Any] = {'schema_version': REPORT_SCHEMA, 'proposal_hash': proposal_hash, 'contract_sha256': contract['contract_sha256'], 'iteration': iteration, 'overall_status': overall_status, 'dimensions': dimension_results, 'unresolved_dimension_ids': unresolved, 'plateau': {'detected': bool(plateau_dimensions), 'dimension_ids': plateau_dimensions, 'identical_failure_threshold': _PLATEAU_THRESHOLD}, 'report_sha256': ''}
     report['report_sha256'] = _hash_without_field(report, 'report_sha256')
     _validate_quality_report(report)
     return report
 
 def persist_quality_report(path: str | os.PathLike[str], report: Mapping[str, Any]) -> Path:
-    """Atomically persist one validated canonical quality report."""
     _validate_quality_report(report)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -414,7 +401,6 @@ def persist_quality_report(path: str | os.PathLike[str], report: Mapping[str, An
     return target
 
 def quality_unresolved(report: Mapping[str, Any]) -> tuple[str, ...]:
-    """Return every quality dimension that still lacks passing evidence."""
     _validate_quality_report(report)
     return tuple(report['unresolved_dimension_ids'])
 
@@ -446,17 +432,16 @@ def _source_items(source: str, value: Any) -> list[tuple[str, str, str]]:
                     raise ProductionContractError(f'{source} object keys must be strings')
                 if raw_key.startswith('_') or _skip_source_key(raw_key):
                     continue
-                child_path = f'{path}.{raw_key}'
-                children.append((child_path, current[raw_key]))
+                children.append((f'{path}.{raw_key}', current[raw_key]))
             stack.extend(reversed(children))
             continue
         if isinstance(current, (list, tuple)):
-            stack.extend(((f'{path}[{index}]', current[index]) for index in range(len(current) - 1, -1, -1)))
+            stack.extend((f'{path}[{index}]', current[index]) for index in range(len(current) - 1, -1, -1))
             continue
         if current is None:
             continue
         if isinstance(current, bool):
-            statement = f'{path}: {('true' if current else 'false')}'
+            statement = f"{path}: {'true' if current else 'false'}"
         elif isinstance(current, (int, float)):
             statement = f'{path}: {_canonical_json(current)}'
         elif isinstance(current, str):
@@ -492,7 +477,7 @@ def _normalize_asset(value: Any) -> dict[str, Any]:
 def _object_mapping(value: Any, label: str) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
-    if is_dataclass(value) and (not isinstance(value, type)):
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     fields = getattr(value, '__dict__', None)
     if isinstance(fields, dict):
@@ -502,16 +487,17 @@ def _object_mapping(value: Any, label: str) -> dict[str, Any]:
 def _implementation_catalog(modules: Sequence[Mapping[str, Any]], assets: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, str]], dict[str, set[str]]]:
     catalog: list[dict[str, str]] = []
     search: dict[str, set[str]] = {}
-
     def add(ref: str, source_kind: str, identity: str, kind: str, value: Any, *, searchable: bool=True) -> None:
         catalog.append({'implementation_ref': ref, 'source_kind': source_kind, 'implementation_id': identity, 'kind': kind, 'content_sha256': _canonical_sha256(value)})
         if searchable:
             search[ref] = _tokens(f'{source_kind} {identity} {kind} ' + ' '.join(_scalar_text(value)))
     for item in modules:
-        add(f'implementation:module:{item['module_id']}', 'module', item['module_id'], item['kind'], item, searchable=not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and (item['config'].get('integration_type') == 'mmm_research_shard')))
+        module_id = item['module_id']
+        add(f'implementation:module:{module_id}', 'module', module_id, item['kind'], item, searchable=not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and item['config'].get('integration_type') == 'mmm_research_shard'))
     for item in assets:
-        add(f'implementation:asset:{item['asset_id']}', 'asset', item['asset_id'], item['kind'], item)
-    return (catalog, search)
+        asset_id = item['asset_id']
+        add(f'implementation:asset:{asset_id}', 'asset', asset_id, item['kind'], item)
+    return catalog, search
 
 def _scalar_text(value: Any) -> Iterable[str]:
     stack = [value]
@@ -536,7 +522,7 @@ def _infer_dimensions(*, requested_prompt: str, game_design: Any, research_brief
     for dimension_id in _CONDITIONAL_ORDER:
         definition = _DIMENSIONS[dimension_id]
         dimension_reasons: list[str] = []
-        trigger_text = primary_text if dimension_id in {'performance'} else text
+        trigger_text = primary_text if dimension_id == 'performance' else text
         if _text_triggers_dimension(trigger_text, dimension_id):
             dimension_reasons.append('request/design/research text')
         matching_module_kinds = sorted(module_kinds & set(definition.get('module_kinds', ())))
@@ -548,7 +534,7 @@ def _infer_dimensions(*, requested_prompt: str, game_design: Any, research_brief
         if dimension_reasons:
             active.append(dimension_id)
             reasons[dimension_id] = dimension_reasons[:8]
-    return (active, reasons)
+    return active, reasons
 
 def _text_triggers_dimension(text: str, dimension_id: str) -> bool:
     lowered = ' ' + text.casefold() + ' '
@@ -667,7 +653,7 @@ def _evaluate_dimension_receipt(*, dimension_id: str, route_ref: str, receipts: 
             signature = _canonical_sha256({'dimension_id': dimension_id, 'failure': receipt.get('failure', receipt.get('reason', 'failed')), 'evidence_refs': receipt['evidence_refs']})
         signature = signature.strip()
         streak = 1
-        if previous is not None and previous.get('status') == 'FAIL' and (previous.get('failure_signature') == signature):
+        if previous is not None and previous.get('status') == 'FAIL' and previous.get('failure_signature') == signature:
             streak = _strict_nonnegative_int(previous.get('failure_streak', 0), 'previous failure streak') + 1
         base['failure_signature'] = signature
         base['failure_streak'] = streak
@@ -699,7 +685,7 @@ def _receipt_problem(receipt: Mapping[str, Any], route_ref: str, proposal_hash: 
     if producer.strip().casefold() == verifier.strip().casefold():
         return 'producer may not self-verify'
     refs = receipt.get('evidence_refs')
-    if not isinstance(refs, (list, tuple)) or not refs or any((not isinstance(value, str) or not value.strip() for value in refs)):
+    if not isinstance(refs, (list, tuple)) or not refs or any(not isinstance(value, str) or not value.strip() for value in refs):
         return 'objective evidence_refs are missing'
     return ''
 
@@ -743,7 +729,7 @@ def _validate_quality_report(report: Mapping[str, Any]) -> None:
         _nonempty_string(item['reason'], 'result reason')
         if not isinstance(item['receipt_id'], str):
             raise ProductionContractError(f'invalid receipt ID: {dimension_id}')
-        if item['receipt_sha256'] and (not _SHA256.fullmatch(item['receipt_sha256'])):
+        if item['receipt_sha256'] and not _SHA256.fullmatch(item['receipt_sha256']):
             raise ProductionContractError(f'invalid receipt hash: {dimension_id}')
         streak = _strict_nonnegative_int(item['failure_streak'], 'failure_streak')
         if type(item['plateau']) is not bool:
@@ -764,7 +750,7 @@ def _validate_quality_report(report: Mapping[str, Any]) -> None:
         raise ProductionContractError('quality report dimensions must be unique')
     if report['unresolved_dimension_ids'] != unresolved:
         raise ProductionContractError('quality report unresolved list mismatch')
-    expected_overall = 'PASS' if not unresolved else 'FAIL' if any((item['status'] == 'FAIL' for item in dimensions)) else 'MISSING'
+    expected_overall = 'PASS' if not unresolved else 'FAIL' if any(item['status'] == 'FAIL' for item in dimensions) else 'MISSING'
     if report['overall_status'] != expected_overall:
         raise ProductionContractError('quality report overall status mismatch')
     plateau = report['plateau']
@@ -824,9 +810,9 @@ def _require_list(value: Any, label: str) -> list[Any]:
 
 def _require_string_list(value: Any, label: str, *, nonempty: bool) -> list[str]:
     values = _require_list(value, label)
-    if nonempty and (not values):
+    if nonempty and not values:
         raise ProductionContractError(f'{label} must not be empty')
-    if any((not isinstance(item, str) or not item for item in values)):
+    if any(not isinstance(item, str) or not item for item in values):
         raise ProductionContractError(f'{label} must contain non-empty strings')
     return values
 
@@ -836,7 +822,14 @@ def _nonempty_string(value: Any, label: str) -> str:
     return value
 
 def _require_unique(values: Sequence[str], label: str) -> None:
-    pass
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
+    if duplicates:
+        raise ProductionContractError(f'duplicate {label}: {duplicates}')
 
 def _strict_positive_int(value: Any, label: str) -> int:
     if type(value) is not int or value < 1:
