@@ -27,8 +27,6 @@ if TYPE_CHECKING:
     from .complete_orchestrator import CompleteExecutionOptions, CompletePipelineResult
     from .complete_spec import CompleteProposal
 
-# Compatibility symbol only. Runtime support is provider-discovered and therefore
-# must not be frozen into a source-level version allowlist.
 SUPPORTED_MINECRAFT_VERSIONS: tuple[str, ...] = ()
 
 
@@ -51,7 +49,7 @@ def _validate_requested_target(
     minecraft_version: str | None,
     loader: str | None,
 ) -> tuple[str | None, str | None]:
-    from .platform_catalog import adapters_for_version, provider_for_loader, adapter_for_target
+    from .platform_catalog import adapter_for_target, adapters_for_version, provider_for_loader
 
     version = _normalize_target_value(minecraft_version)
     normalized_loader = _normalize_target_value(loader)
@@ -179,7 +177,6 @@ class ModAISession:
         minecraft_version: str | None = None,
         loader: str | None = None,
         existing_input: str | Path | None = None,
-        timeout_seconds: int = 90,
     ) -> "ModAISession":
         return cls(
             output_root=output_root,
@@ -190,7 +187,6 @@ class ModAISession:
                 base_url=base_url,
                 model=model,
                 api_key=api_key,
-                timeout_seconds=timeout_seconds,
             ),
         )
 
@@ -205,11 +201,12 @@ class ModAISession:
         minecraft_version: str | None = None,
         loader: str | None = None,
         existing_input: str | Path | None = None,
-        timeout_seconds: int = 90,
     ) -> "ModAISession":
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
-            raise SpecValidationError(f"환경 변수 {api_key_env}에 외부 AI API 키가 없습니다.")
+            raise SpecValidationError(
+                f"환경 변수 {api_key_env}에 외부 AI API 키가 없습니다."
+            )
         return cls.with_openai_compatible_api(
             base_url=base_url,
             model=model,
@@ -218,7 +215,6 @@ class ModAISession:
             minecraft_version=minecraft_version,
             loader=loader,
             existing_input=existing_input,
-            timeout_seconds=timeout_seconds,
         )
 
     def plan(self, prompt: str) -> ChatReply:
@@ -235,7 +231,10 @@ class ModAISession:
         if _is_approval_message(message) and self.proposal is not None:
             return self._reply(self.proposal)
         updated_brief = _merge_brief(self.brief, message)
-        proposal = self.pipeline.plan(updated_brief, existing_input=self.existing_input)
+        proposal = self.pipeline.plan(
+            updated_brief,
+            existing_input=self.existing_input,
+        )
         self.brief = updated_brief
         self.proposal = proposal
         return self._reply(proposal)
@@ -337,18 +336,24 @@ class CompleteModAISession:
         _attach_existing_target(self.router, self.existing_input)
         if fast_mode:
             print(
-                "⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다 (1~2분 완주).",
+                "⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다.",
                 flush=True,
             )
-            for role_name in ("planner", "coder", "researcher", "coder_safe", "visual_critic"):
+            for role_name in (
+                "planner",
+                "coder",
+                "researcher",
+                "coder_safe",
+                "visual_critic",
+            ):
                 try:
                     cfg = self.router.registry.role(model_profile, role_name)
-                    if hasattr(cfg, "max_context"):
-                        cfg.max_context = min(cfg.max_context, 8192)
-                    if hasattr(cfg, "max_new_tokens"):
-                        cfg.max_new_tokens = min(cfg.max_new_tokens, 1024)
-                except Exception:
-                    pass
+                except (KeyError, ValueError, SpecValidationError):
+                    continue
+                if hasattr(cfg, "max_context"):
+                    cfg.max_context = min(cfg.max_context, 8192)
+                if hasattr(cfg, "max_new_tokens"):
+                    cfg.max_new_tokens = min(cfg.max_new_tokens, 1024)
 
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
@@ -388,22 +393,14 @@ class CompleteModAISession:
         except ValueError as exc:
             raise SpecValidationError("대화 내용을 입력해 주세요.") from exc
         existing_hash = ""
-        if self.existing_input is not None:
-            if not self.existing_input.is_file():
-                raise FileNotFoundError(self.existing_input)
-        try:
-            proposal = self.planner.plan(
-                updated_brief,
-                media_paths=media_paths,
-                existing_input_sha256=existing_hash,
-            )
-        except Exception as exc:
-            print(f"⚠️ [Planner] Exception during plan synthesis: {exc}. Activating self-healing fallback proposal...", flush=True)
-            from .complete_spec import _build_fallback_complete_proposal
-            proposal = _build_fallback_complete_proposal(
-                requested_prompt=updated_brief,
-                existing_input_sha256=existing_hash,
-            )
+        if self.existing_input is not None and not self.existing_input.is_file():
+            raise FileNotFoundError(self.existing_input)
+
+        proposal = self.planner.plan(
+            updated_brief,
+            media_paths=media_paths,
+            existing_input_sha256=existing_hash,
+        )
         self.brief = updated_brief
         self.complete_proposal = proposal
         self.save_plan()
@@ -423,27 +420,38 @@ class CompleteModAISession:
     def save_plan(self, target_path: str | Path | None = None) -> Path:
         if self.complete_proposal is None:
             raise SpecValidationError("No complete proposal to save.")
-        path = Path(target_path) if target_path is not None else self.output_root / "proposal.json"
+        path = (
+            Path(target_path)
+            if target_path is not None
+            else self.output_root / "proposal.json"
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps(self.complete_proposal.to_dict(), ensure_ascii=False, indent=2),
+            json.dumps(
+                self.complete_proposal.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
-        print(f"💾 [Session] Plan saved to: {path}", flush=True)
         return path
 
     def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:
         from .complete_spec import CompleteProposal
         from .plan_render import render_complete_plan
 
-        path = Path(source_path) if source_path is not None else self.output_root / "proposal.json"
+        path = (
+            Path(source_path)
+            if source_path is not None
+            else self.output_root / "proposal.json"
+        )
         if not path.is_file():
             raise FileNotFoundError(f"No saved proposal JSON found at {path}")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        proposal = CompleteProposal.from_dict(data)
+        proposal = CompleteProposal.from_dict(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
         self.complete_proposal = proposal
         self.brief = proposal.requested_prompt
-        print(f"📂 [Session] Existing plan successfully loaded from: {path}", flush=True)
         return CompleteChatReply(
             message=render_complete_plan(
                 requested_prompt=proposal.requested_prompt,
@@ -477,12 +485,16 @@ class CompleteModAISession:
         elif candidate is None:
             proposal = self.complete_proposal
         else:
-            raise TypeError("candidate must be CompleteChatReply, CompleteProposal or None.")
+            raise TypeError(
+                "candidate must be CompleteChatReply, CompleteProposal or None."
+            )
         if proposal is None:
             raise SpecValidationError("Create a complete plan before building.")
         selected = options or CompleteExecutionOptions(source_only=source_only)
         if source_only and not selected.source_only:
-            selected = CompleteExecutionOptions(**{**selected.__dict__, "source_only": True})
+            selected = CompleteExecutionOptions(
+                **{**selected.__dict__, "source_only": True}
+            )
         return self.orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),
