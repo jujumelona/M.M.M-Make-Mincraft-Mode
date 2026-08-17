@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 23
+_TUNING_PIPELINE_VERSION = 24
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
 
 
@@ -34,14 +34,7 @@ class NativeLlamaTuningPipeline:
 
     @staticmethod
     def _context_value(config: Any) -> int:
-        """Resolve the one final llama context value without inventing a host cap.
-
-        Precedence is model-specific explicit override, generic explicit override,
-        then the model profile. Zero is meaningful and means llama.cpp/model-native
-        context selection; it must never be rewritten to one token or a historical
-        fixed window.
-        """
-
+        """Resolve the one final llama context value without inventing a host cap."""
         model_id = str(getattr(config, "model_id", "")).casefold()
         extra = getattr(config, "extra", {})
         filename = (
@@ -67,7 +60,6 @@ class NativeLlamaTuningPipeline:
                 continue
             if value >= 0:
                 return value
-
         try:
             return max(0, int(getattr(config, "max_context", 0) or 0))
         except (TypeError, ValueError):
@@ -125,17 +117,11 @@ class NativeLlamaTuningPipeline:
                 self.hardware_policy,
             )
             install_qwen35_hotpath(self.autotune)
-            # Qwen efficiency is outermost over the generic decode/KV tuner so its
-            # request-local cold-start defaults are visible before any inner probe
-            # decides whether to reload the model. The central pipeline owns this
-            # composition; no policy contract installs another policy contract.
             install_qwen35_runtime_efficiency(
                 self.autotune,
                 self.hardware_policy,
                 self.runtime_tuning,
             )
-            # This is intentionally last: the profile/native context is the default
-            # authority and explicit operator overrides retain their exact value.
             self._install_profile_context_authority()
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
@@ -143,10 +129,6 @@ class NativeLlamaTuningPipeline:
             )
 
         def install_kernel_stage() -> None:
-            # The expanded 128/256 ubatch sweep is a T4-specific search-space
-            # extension. Keep the generic runtime module's historical bounded
-            # candidate contract untouched on CPU/unknown/other GPUs so importing
-            # the package never mutates platform-independent defaults.
             original_ubatch_candidates = self.runtime_tuning._ubatch_candidates
             install_kernel_autotune(self.autotune, self.runtime_tuning)
             try:
@@ -155,13 +137,7 @@ class NativeLlamaTuningPipeline:
                 hardware = ""
             if "t4" not in hardware:
                 self.runtime_tuning._ubatch_candidates = original_ubatch_candidates
-            # Keep the public six-stage composition stable. VRAM-first admission is
-            # a final kernel/runtime policy refinement, not a seventh ownership
-            # layer, and is installed only after all planner/decode wrappers exist.
-            install_vram_parallel(
-                self.runtime_tuning,
-                agentic_optimization_contract,
-            )
+            install_vram_parallel(self.runtime_tuning)
 
         return (
             TuningStage("hardware", install_hardware_stage),
@@ -179,9 +155,6 @@ class NativeLlamaTuningPipeline:
                 ),
             ),
             TuningStage("decode-speed", install_decode_speed_stage),
-            # Outermost cold-start search: select Flash Attention, logical batch and
-            # independent K/V cache types first, then let the already-installed
-            # MTP/ubatch/cache-reuse stages refine that measured winner.
             TuningStage("kernel-autotune", install_kernel_stage),
         )
 
@@ -193,8 +166,6 @@ class NativeLlamaTuningPipeline:
             return
         installed: list[str] = []
         for stage in self.stages():
-            # Individual stage installers are idempotent, so an older live Colab
-            # process can safely receive newly-added policy without a full restart.
             stage.install()
             installed.append(stage.name)
         self.autotune._mmm_tuning_pipeline_stages = tuple(installed)
