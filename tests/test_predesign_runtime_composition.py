@@ -23,6 +23,10 @@ from types import SimpleNamespace
 
 os.environ["MMM_CENTRAL_AI_WORKERS"] = "4"
 os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = "4"
+os.environ["MMM_LLAMA_RUNTIME_RECEIPT"] = json.dumps(
+    {"schema_version": "mmm/llama-runtime-receipt-v1", "slots": 4},
+    separators=(",", ":"),
+)
 probe_root = Path(os.environ["MMM_TEST_PROBE_ROOT"]).resolve()
 os.environ["MMM_RESEARCH_CHECKPOINT_ROOT"] = str(probe_root / "checkpoints")
 os.environ["MMM_RESEARCH_DOCUMENT_DIR"] = str(probe_root / "documents")
