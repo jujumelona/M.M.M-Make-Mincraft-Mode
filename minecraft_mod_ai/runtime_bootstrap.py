@@ -94,12 +94,14 @@ def _install_model_runtime_contracts() -> None:
 def _install_validation_contracts() -> None:
     from . import java_lsp, repair_engine, runner, validation_execution_contract
     from .java_lsp_process_safety_contract import install as install_java_lsp_process_safety
+    from .research_validation_fingerprint_performance import harden as harden_validation_fingerprints
     from .validation_diagnostic_contract import install as install_validation_diagnostics
     from .validation_execution_contract import install as install_validation_execution
 
     install_validation_execution(runner, java_lsp, repair_engine)
     install_validation_diagnostics(validation_execution_contract)
     install_java_lsp_process_safety(java_lsp)
+    harden_validation_fingerprints(validation_execution_contract)
 
 
 def _install_generation_contracts() -> None:
