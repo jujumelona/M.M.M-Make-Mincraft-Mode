@@ -70,25 +70,26 @@ def test_freeform_text_keeps_model_default_reasoning() -> None:
     assert "chat_template_kwargs" not in payload
 
 
-def test_native_tool_transport_is_rejected_by_canonical_payload_builder() -> None:
-    try:
-        llama_server_hardware_policy._server_payload(
-            _adapter(),
-            _request(
-                response_format="json",
-                tools=(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "lookup",
-                            "description": "lookup",
-                            "parameters": {"type": "object", "properties": {}},
-                        },
-                    },
-                ),
-            ),
-        )
-    except RuntimeError as exc:
-        assert "Native llama-server tool transport is disabled" in str(exc)
-    else:
-        raise AssertionError("native llama tool metadata must fail closed")
+def test_native_tool_transport_is_forwarded_by_canonical_payload_builder() -> None:
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "lookup",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    request = _request(response_format="json", tools=(tool,))
+    request.tool_choice = "auto"
+    request.parallel_tool_calls = True
+
+    payload = llama_server_hardware_policy._server_payload(_adapter(), request)
+
+    assert payload["tools"] == [tool]
+    assert payload["tool_choice"] == "auto"
+    assert payload["parallel_tool_calls"] is True
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload

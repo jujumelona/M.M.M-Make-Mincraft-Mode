@@ -172,7 +172,7 @@ def test_kv_autotune_can_be_explicitly_disabled(monkeypatch) -> None:
     assert _kv_autotune_enabled(autotune) is False
 
 
-def test_structured_local_payload_keeps_json_validation_host_side_without_tools() -> None:
+def test_structured_local_payload_keeps_json_validation_host_side_and_native_tools() -> None:
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
     schema = {
         "type": "object",
@@ -192,28 +192,32 @@ def test_structured_local_payload_keeps_json_validation_host_side_without_tools(
     assert "json_schema" not in payload
     assert "grammar" not in payload
 
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "lookup",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
     tool_request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then return json"},),
         response_format="json",
         response_schema=schema,
-        tools=(
-            {
-                "type": "function",
-                "function": {
-                    "name": "lookup",
-                    "description": "lookup",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-        ),
+        tools=(tool,),
         tool_choice="auto",
+        parallel_tool_calls=True,
     )
-    try:
-        hardware_policy._server_payload(adapter, tool_request)
-    except RuntimeError as exc:
-        assert "Native llama-server tool transport is disabled" in str(exc)
-    else:
-        raise AssertionError("native llama tool metadata must fail closed")
+    tool_payload = hardware_policy._server_payload(adapter, tool_request)
+    assert tool_payload["tools"] == [tool]
+    assert tool_payload["tool_choice"] == "auto"
+    assert tool_payload["parallel_tool_calls"] is True
+    assert tool_payload["reasoning_effort"] == "none"
+    assert tool_payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "response_format" not in tool_payload
+    assert "json_schema" not in tool_payload
+    assert "grammar" not in tool_payload
+    assert tool_request.response_schema == schema
 
 
 def test_default_policy_searches_for_decode_speed_without_overfitting_exact_grid(monkeypatch) -> None:
