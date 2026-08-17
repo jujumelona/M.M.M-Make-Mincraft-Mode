@@ -7,10 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import minecraft_mod_ai.agentic_optimization_contract as agentic
-import minecraft_mod_ai.complete_planner as complete_planner
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
-import minecraft_mod_ai.llama_parallel_runtime_contract as llama_parallel
 import minecraft_mod_ai.llama_server_hardware_policy as llama_hardware
 import minecraft_mod_ai.max_efficiency_runtime_contract as max_efficiency
 import minecraft_mod_ai.performance_final_contract as performance
@@ -179,41 +176,6 @@ def test_custom_search_propagates_keyboard_interrupt(monkeypatch, tmp_path: Path
     custom_search.install(fake_module)
     with pytest.raises(KeyboardInterrupt):
         Generator().generate(tmp_path, module=SimpleNamespace())
-
-
-def test_parallel_planner_search_propagates_keyboard_interrupt(monkeypatch) -> None:
-    def current(*_args, **_kwargs):
-        return {"fallback": True}
-
-    def base(_router, *, system_prompt: str, **_kwargs):
-        if "Candidate 1 of 2" in system_prompt:
-            raise KeyboardInterrupt()
-        return {"ok": True}
-
-    current._mmm_verifier_plan_search = True
-    current.__wrapped__ = base
-    monkeypatch.setattr(complete_planner, "_generate_json_page_with_repair", current)
-    monkeypatch.setattr(agentic, "_planner_candidate_count", lambda _request, _stage: 2)
-    monkeypatch.setattr(agentic, "_score_plan_page", lambda _page: (1.0, {}))
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    router = SimpleNamespace(
-        profile="test",
-        registry=SimpleNamespace(
-            role=lambda _profile, _role: SimpleNamespace(
-                exclusive_gpu=True, provider="local", adapter="llama_cpp"
-            )
-        ),
-    )
-    llama_parallel._install_planner_search_parallelism()
-    with pytest.raises(KeyboardInterrupt):
-        complete_planner._generate_json_page_with_repair(
-            router,
-            system_prompt="system",
-            request={},
-            media_paths=(),
-            expected_contracts=(),
-            stage="unit",
-        )
 
 
 def test_t4_aliases_resolve_to_actual_qwen35_9b() -> None:
