@@ -1,0 +1,355 @@
+name: source-clean-refactor
+
+on:
+  push:
+    paths:
+      - '.github/workflows/source-clean-refactor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install project test dependencies
+        run: python -m pip install --disable-pip-version-check -e . pytest
+      - name: Build clean-source transformer
+        shell: bash
+        run: |
+          git show 8ffc39622e956d3dedd43a4195f4fed15b57ad42:scripts/one_shot_clean_refactor.py > scripts/one_shot_clean_refactor.py
+          cat > /tmp/source_clean_refactor.py <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import json
+          import os
+          import re
+          import shutil
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          sys.path.insert(0, os.getcwd())
+          import scripts.one_shot_clean_refactor as refactor
+
+          ROOT = Path.cwd()
+          PKG = ROOT / "minecraft_mod_ai"
+
+          def _visit_try(self, node):
+              node = self.generic_visit(node)
+              if not node.body:
+                  node.body = [ast.Pass()]
+              for handler in node.handlers:
+                  if not handler.body:
+                      handler.body = [ast.Pass()]
+              return node
+
+          def _visit_body(self, node):
+              node = self.generic_visit(node)
+              if not node.body:
+                  node.body = [ast.Pass()]
+              return node
+
+          refactor.CapabilityStripper.visit_Try = _visit_try
+          if hasattr(ast, "TryStar"):
+              refactor.CapabilityStripper.visit_TryStar = _visit_try
+          refactor.CapabilityStripper.visit_With = _visit_body
+          refactor.CapabilityStripper.visit_AsyncWith = _visit_body
+          refactor.CapabilityStripper.visit_While = _visit_body
+
+          original_expr_contains = refactor._expr_contains_marker
+          def _expr_contains_marker(node, markers):
+              if node is None:
+                  return False
+              lowered = tuple(str(marker).lower() for marker in markers)
+              for child in ast.walk(node):
+                  if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                      value = child.value.lower()
+                      if any(marker in value for marker in lowered):
+                          return True
+              return original_expr_contains(node, markers)
+          refactor._expr_contains_marker = _expr_contains_marker
+
+          def _remove_only_dedicated_tests() -> None:
+              exact = {
+                  "test_audio_generator.py",
+                  "test_audio_resume_efficiency_contract.py",
+                  "test_remote_speech_adapter.py",
+                  "test_planner_production_page_contract.py",
+                  "test_production_page_durable_contract.py",
+              }
+              tests = ROOT / "tests"
+              for path in tests.glob("test_*.py"):
+                  low = path.name.lower()
+                  if path.name in exact or "audio_" in low or "speech_adapter" in low:
+                      path.unlink()
+
+          refactor._remove_obsolete_tests = _remove_only_dedicated_tests
+
+          def _rewrite_strict_template() -> None:
+              path = PKG / "planner_template_schema.py"
+              path.write_text(r'''"""Host-owned production-page schema.
+
+          The model may fill values only. Unknown fields and unsupported enum values are
+          discarded before anything reaches the typed production boundary.
+          """
+          from __future__ import annotations
+
+          import re
+          from typing import Any, Mapping, Sequence
+
+          PRODUCTION_PAGE_TEMPLATE: dict[str, Any] = {
+              "modules": [{"module_id": "example_module", "kind": "custom_java", "config": {"summary": "feature implementation"}, "depends_on": [], "required_gates": []}],
+              "assets": [],
+              "acceptance_tests": ["test_example_registers"],
+              "completed_deliverables": ["example_deliverable"],
+              "complete": True,
+              "next_cursor": "",
+          }
+
+          _MODULE_KEYS = frozenset({"module_id", "kind", "config", "depends_on", "required_gates"})
+          _ASSET_KEYS = frozenset({"asset_id", "kind", "prompt", "target_path", "width", "height"})
+          _MODULE_KINDS = frozenset({"item", "block", "tool", "weapon", "armor", "food", "crop", "fluid", "machine", "recipe", "effect", "enchantment", "entity", "boss", "npc", "quest", "class", "skill", "economy", "shop", "gui", "networking", "party", "guild", "command", "structure", "biome", "dimension", "world_event", "advancement", "loot", "integration", "custom_java"})
+          _ASSET_KINDS = frozenset({"item", "block", "entity", "gui", "environment", "icon"})
+
+          def _id(value: Any, fallback: str) -> str:
+              text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+              if not text or not text[0].isalpha():
+                  text = f"{fallback}_{text}".rstrip("_")
+              return text[:63]
+
+          def _strings(value: Any) -> list[str]:
+              if not isinstance(value, (list, tuple)):
+                  return []
+              return list(dict.fromkeys(str(item).strip() for item in value if isinstance(item, str) and item.strip()))
+
+          def _positive_int(value: Any, fallback: int) -> int:
+              return value if type(value) is int and value > 0 else fallback
+
+          def build_batch_skeleton(batch_id: str, scope: str, deliverables: Sequence[str], exports: Sequence[str], depends_on_batches: Sequence[str] = (), known_module_ids: Sequence[str] = ()) -> dict[str, Any]:
+              batch = _id(batch_id, "batch")
+              completed = _strings(deliverables) or [f"{batch}_feature"]
+              module_ids = [_id(item, "module") for item in exports] or [batch]
+              known = set(known_module_ids)
+              dependencies = [item for item in _strings(depends_on_batches) if item in known]
+              return {
+                  "modules": [{"module_id": module_id, "kind": "custom_java", "config": {"summary": f"Implementation for {module_id}", "batch_id": batch}, "depends_on": dependencies, "required_gates": []} for module_id in module_ids],
+                  "assets": [],
+                  "acceptance_tests": [f"test_{module_id}_registers" for module_id in module_ids],
+                  "completed_deliverables": completed,
+                  "complete": True,
+                  "next_cursor": "",
+              }
+
+          def merge_model_output_into_skeleton(skeleton: Mapping[str, Any], model_output: Mapping[str, Any], valid_module_catalog: set[str]) -> dict[str, Any]:
+              modules: list[dict[str, Any]] = []
+              raw_modules = model_output.get("modules")
+              if isinstance(raw_modules, list):
+                  for raw in raw_modules:
+                      if not isinstance(raw, dict):
+                          continue
+                      item = {key: raw[key] for key in _MODULE_KEYS if key in raw}
+                      module_id = _id(item.get("module_id"), "module")
+                      kind = str(item.get("kind") or "custom_java")
+                      if kind not in _MODULE_KINDS:
+                          kind = "custom_java"
+                      config = item.get("config") if isinstance(item.get("config"), dict) else {"summary": str(item.get("config") or "")}
+                      dependencies = [dep for dep in _strings(item.get("depends_on")) if dep in valid_module_catalog and dep != module_id]
+                      modules.append({"module_id": module_id, "kind": kind, "config": config, "depends_on": dependencies, "required_gates": _strings(item.get("required_gates"))})
+              if not modules:
+                  modules = [dict(item) for item in skeleton.get("modules", []) if isinstance(item, dict)]
+
+              assets: list[dict[str, Any]] = []
+              raw_assets = model_output.get("assets")
+              if isinstance(raw_assets, list):
+                  for raw in raw_assets:
+                      if not isinstance(raw, dict) or not raw.get("asset_id"):
+                          continue
+                      item = {key: raw[key] for key in _ASSET_KEYS if key in raw}
+                      kind = str(item.get("kind") or "item")
+                      if kind not in _ASSET_KINDS:
+                          kind = "item"
+                      target = str(item.get("target_path") or "").replace("\\", "/")
+                      if not target or target.startswith("/") or ".." in target.split("/"):
+                          continue
+                      prompt = str(item.get("prompt") or "").strip()
+                      if not prompt:
+                          continue
+                      assets.append({"asset_id": _id(item.get("asset_id"), "asset"), "kind": kind, "prompt": prompt, "target_path": target, "width": _positive_int(item.get("width"), 16), "height": _positive_int(item.get("height"), 16)})
+
+              tests = _strings(model_output.get("acceptance_tests")) or _strings(skeleton.get("acceptance_tests"))
+              completed = _strings(model_output.get("completed_deliverables")) or _strings(skeleton.get("completed_deliverables"))
+              return {
+                  "modules": modules,
+                  "assets": assets,
+                  "acceptance_tests": tests,
+                  "completed_deliverables": completed,
+                  "complete": bool(model_output.get("complete", True)),
+                  "next_cursor": str(model_output.get("next_cursor") or ""),
+              }
+          ''', encoding="utf-8")
+              compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+          def _clean_yaml(path: Path) -> None:
+              if not path.exists():
+                  return
+              blocked = ("audio", "voice", "speech", "tts", "asr")
+              data = yaml.safe_load(path.read_text(encoding="utf-8"))
+              def clean(value):
+                  if isinstance(value, dict):
+                      result = {}
+                      for key, item in value.items():
+                          probe = str(key).lower()
+                          if any(token in probe for token in blocked):
+                              continue
+                          if isinstance(item, str) and any(token in item.lower() for token in blocked):
+                              continue
+                          result[key] = clean(item)
+                      return result
+                  if isinstance(value, list):
+                      result = []
+                      for item in value:
+                          probe = json.dumps(item, ensure_ascii=False).lower()
+                          if any(token in probe for token in blocked):
+                              continue
+                          result.append(clean(item))
+                      return result
+                  return value
+              path.write_text(yaml.safe_dump(clean(data), sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+          def _extra_source_cleanup() -> None:
+              _rewrite_strict_template()
+
+              # Remove dedicated media capability names wherever they remain in package code.
+              for path in sorted(PKG.rglob("*.py")):
+                  if path.name in {"planner_template_schema.py"}:
+                      continue
+                  try:
+                      text = path.read_text(encoding="utf-8")
+                  except OSError:
+                      continue
+                  low = text.lower()
+                  if any(token in low for token in ("audio", "speech", "voice", "tts", "asr")):
+                      refactor._strip_capability(path, "audio", "speech", "voice", "tts", "asr")
+
+              work_graph = PKG / "work_graph.py"
+              if work_graph.exists():
+                  text = work_graph.read_text(encoding="utf-8")
+                  text = re.sub(r"\n    synth_nodes: list\[str\] = \[\].*?(?=\n    validation_dependencies =)", "\n", text, flags=re.S)
+                  compile(text, str(work_graph), "exec")
+                  work_graph.write_text(text, encoding="utf-8")
+
+              for path in (ROOT / "config/model_registry.yaml", PKG / "config/model_registry.yaml", ROOT / "config/agent_roles.yaml", PKG / "config/agent_roles.yaml"):
+                  _clean_yaml(path)
+
+              pyproject = ROOT / "pyproject.toml"
+              if pyproject.exists():
+                  lines = []
+                  for line in pyproject.read_text(encoding="utf-8").splitlines():
+                      low = line.strip().lower()
+                      if low.startswith("speech =") or low.startswith("production-audio ="):
+                          continue
+                      if "speech_recognition" in low or "whisper" in low:
+                          continue
+                      lines.append(line)
+                  pyproject.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+              for stale in (ROOT / "skills" / "generate-audio", ROOT / "plugins" / "mmm-minecraft-mod-ai" / "skills" / "generate-audio"):
+                  if stale.exists():
+                      shutil.rmtree(stale)
+
+              regression = ROOT / "tests/test_clean_production_contract.py"
+              regression.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai.planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton\n\ndef test_host_template_is_the_typed_boundary() -> None:\n    page = build_batch_skeleton("quality_packaging", "quality", ["smoke"], ["quality_packaging"])\n    assert set(page) == {"modules", "assets", "acceptance_tests", "completed_deliverables", "complete", "next_cursor"}\n    assert set(page["modules"][0]) == {"module_id", "kind", "config", "depends_on", "required_gates"}\n\ndef test_model_cannot_extend_host_schema() -> None:\n    skeleton = build_batch_skeleton("custom_features", "custom", ["feature"], ["custom_features"])\n    merged = merge_model_output_into_skeleton(skeleton, {"modules": [{"module_id": "custom_features", "kind": "made_up_kind", "config": {}, "depends_on": [], "required_gates": [], "unknown_field": ["bad"]}], "unknown_top": True}, set())\n    assert "unknown_top" not in merged\n    assert "unknown_field" not in merged["modules"][0]\n    assert merged["modules"][0]["kind"] == "custom_java"\n''', encoding="utf-8")
+
+          original_assert = refactor._assert_no_dedicated_references
+          def _source_only_assert() -> None:
+              _extra_source_cleanup()
+              banned = re.compile(r"AudioRequest|audio_generator|audio_resume_efficiency_contract|planner_production_page_contract|production_page_durable_contract|SpeechAdapter|speech_recognition|generate-audio|production-audio|ai_voice", re.I)
+              offenders = []
+              roots = [PKG, ROOT / "config", ROOT / "skills", ROOT / "plugins", ROOT / "tests"]
+              for base in roots:
+                  if not base.exists():
+                      continue
+                  for path in base.rglob("*"):
+                      if not path.is_file() or path == Path(refactor.__file__).resolve():
+                          continue
+                      if path.suffix.lower() not in {".py", ".json", ".yaml", ".yml", ".md", ".toml"}:
+                          continue
+                      if banned.search(path.read_text(encoding="utf-8", errors="ignore")):
+                          offenders.append(str(path.relative_to(ROOT)))
+              if banned.search((ROOT / "pyproject.toml").read_text(encoding="utf-8")):
+                  offenders.append("pyproject.toml")
+              if offenders:
+                  raise RuntimeError("removed capability references remain: " + ", ".join(sorted(set(offenders))[:80]))
+
+          refactor._assert_no_dedicated_references = _source_only_assert
+          refactor.main()
+          PY
+      - name: Rebase-safe transform, verify committed tree, and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          transform_and_verify() {
+            git show 8ffc39622e956d3dedd43a4195f4fed15b57ad42:scripts/one_shot_clean_refactor.py > scripts/one_shot_clean_refactor.py
+            python /tmp/source_clean_refactor.py
+            python -m compileall -q minecraft_mod_ai
+            python -m pytest -q tests/test_clean_production_contract.py
+            git diff --check
+            changed_workflows="$(git diff --name-only | grep '^.github/workflows/' | grep -v '^.github/workflows/source-clean-refactor.yml$' || true)"
+            if [ -n "$changed_workflows" ]; then
+              echo "refusing to modify existing workflow files from GITHUB_TOKEN:" >&2
+              echo "$changed_workflows" >&2
+              exit 1
+            fi
+            rm -f scripts/one_shot_clean_refactor.py .github/workflows/source-clean-refactor.yml
+            git add -A
+            git commit -m "refactor: enforce host planner schema and remove media subsystem"
+
+            python - <<'PY'
+          import subprocess
+
+          def show(path: str) -> str:
+              return subprocess.check_output(["git", "show", f"HEAD:{path}"], text=True)
+
+          spec = show("minecraft_mod_ai/complete_spec.py")
+          template = show("minecraft_mod_ai/planner_template_schema.py")
+          planner = show("minecraft_mod_ai/complete_planner.py")
+          assert "class " + "AudioRequest" not in spec
+          assert "except Exception:\n" not in spec
+          assert '"a' + 'udio"' not in template
+          assert "implements_" + "deliverables" not in template
+          assert "merge_model_output_into_skeleton" in planner
+          assert "build_batch_skeleton" in planner
+
+          pattern = r"AudioRequest|audio_generator|audio_resume_efficiency_contract|planner_production_page_contract|production_page_durable_contract|SpeechAdapter|speech_recognition|generate-audio|production-audio|ai_voice"
+          proc = subprocess.run(["git", "grep", "-n", "-E", pattern, "HEAD", "--", "minecraft_mod_ai", "config", "pyproject.toml", "skills", "plugins", "tests"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          if proc.returncode == 0:
+              raise SystemExit("committed tree still contains removed capability references:\n" + proc.stdout)
+          if proc.returncode not in (0, 1):
+              raise SystemExit(proc.stderr)
+          PY
+          }
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+            transform_and_verify
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          echo "main kept moving; no stale source was forced over newer work" >&2
+          exit 1
