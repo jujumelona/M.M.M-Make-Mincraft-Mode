@@ -5,13 +5,20 @@ from typing import Any
 
 
 class _SafeReviewerRouter:
+    """Pin atomic semantic review to the independent safe model role."""
+
     def __init__(self, router: Any) -> None:
         self._router = router
 
-    def generate_text(self, _ignored_role: str, *args: Any, **kwargs: Any) -> str:
-        # model-registry-v2 requires coder_safe. If the profile is malformed or
-        # unavailable, fail closed rather than silently falling back to the planner.
-        return self._router.generate_text(
+    def generate_tool_decision(
+        self,
+        _ignored_role: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        # Atomic review is a structured decision, not free-form JSON text. Keep the
+        # independent coder_safe role while preserving the native tool-call path.
+        return self._router.generate_tool_decision(
             "coder_safe",
             *args,
             **kwargs,
