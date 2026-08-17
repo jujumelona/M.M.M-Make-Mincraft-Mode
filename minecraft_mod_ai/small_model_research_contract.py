@@ -316,15 +316,13 @@ def _install_nonblocking_planner_research(complete_planner_module: Any, research
 
 def install() -> None:
     """Bind research-derived small-model amplification to the fully composed runtime."""
-    from . import agentic_optimization_contract, central_research, complete_planner, ecosystem_discovery, parallel_runtime_contract, research_coordinator, work_graph
+    from . import central_research, complete_planner, ecosystem_discovery, parallel_runtime_contract, research_coordinator, work_graph
     from .max_efficiency_runtime_contract import enhance_runtime
     from .small_model_agent_policy import enhance_planner
     _install_lossless_research_input(central_research, ecosystem_discovery)
     _install_nonblocking_planner_research(complete_planner, research_coordinator, central_research)
-    _install_evidence_aware_scoring(agentic_optimization_contract)
     _install_evidence_contract(complete_planner)
     _install_semantic_keys(parallel_runtime_contract)
-    _install_trace_adaptive_search(agentic_optimization_contract)
     enhance_planner(complete_planner)
     enhance_runtime(work_graph_module=work_graph)
 __all__ = ['install']
