@@ -73,7 +73,7 @@ def register_platform_provider(provider: PlatformProvider, *, replace: bool = Fa
 
 
 def executable_loaders() -> tuple[str, ...]:
-    with _PROVIDER_LOCK:
+    with _PROVIDERS_LOCK if False else _PROVIDER_LOCK:
         return tuple(sorted(_PROVIDERS))
 
 
@@ -108,24 +108,26 @@ def discover_target_keys(
     minecraft_version: str | None = None,
     limit_per_loader: int = 12,
 ) -> tuple[tuple[str, str], ...]:
-    """Enumerate only targets backed by an executable provider."""
+    """Enumerate provider-advertised targets without eagerly resolving toolchains.
+
+    Enumeration is intentionally cheap. Full loader/API/Loom/Gradle/checksum
+    resolution belongs to the optimizer when a candidate is actually evaluated.
+    This avoids the previous double-resolution network fan-out and prevents one
+    downstream metadata failure from silently deleting otherwise valid candidates.
+
+    ``minecraft_version`` remains only as an exact-query compatibility filter for
+    callers that deliberately inspect a known target. Automatic planning does not
+    pass it and therefore never fixes the version before reuse evaluation.
+    """
     loaders = (provider_for_loader(loader).loader,) if loader else executable_loaders()
+    limit = max(1, int(limit_per_loader))
+    requested_version = str(minecraft_version or "").strip()
     result: list[tuple[str, str]] = []
     for loader_id in loaders:
         provider = provider_for_loader(loader_id)
-        versions = provider.discover_versions(max(1, int(limit_per_loader)))
-        if minecraft_version:
-            versions = tuple(value for value in versions if value == minecraft_version)
-            if not versions:
-                try:
-                    provider.resolve(str(minecraft_version))
-                except ValueError:
-                    continue
-                versions = (str(minecraft_version),)
-        for version in versions[: max(1, int(limit_per_loader))]:
-            try:
-                provider.resolve(version)
-            except ValueError:
+        versions = provider.discover_versions(limit)
+        for version in versions[:limit]:
+            if requested_version and version != requested_version:
                 continue
             result.append((loader_id, version))
     return tuple(result)
@@ -216,7 +218,6 @@ def adapter_from_project(project_root: str | Path) -> PlatformAdapter:
     minecraft_version = properties.get("minecraft_version", "").strip()
     loader = properties.get("loader", "").strip().casefold()
     if not loader:
-        # Detection is evidence-based only; no loader is assumed.
         if properties.get("loader_version") and properties.get("fabric_version"):
             loader = "fabric"
         else:
@@ -260,7 +261,6 @@ def _fabric_versions(limit: int) -> tuple[str, ...]:
     try:
         return latest_stable_versions(limit=max(1, int(limit)))
     except PlatformDiscoveryError:
-        # Discovery failure must not silently revive an old target.
         return ()
 
 
