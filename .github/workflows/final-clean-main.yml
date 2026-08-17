@@ -1,0 +1,251 @@
+name: final-clean-main
+on:
+  push:
+    paths: ['.github/workflows/final-clean-main.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Clean planner and legacy contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          import textwrap
+          from pathlib import Path
+
+          planner = Path('minecraft_mod_ai/complete_planner.py')
+          tree = ast.parse(planner.read_text(encoding='utf-8'))
+
+          def method(src: str) -> ast.FunctionDef:
+              wrapper = ast.parse('class X:\n' + textwrap.indent(textwrap.dedent(src), '    '))
+              return wrapper.body[0].body[0]
+
+          expand = method('''
+          def _expand_production_batches(self, *, batches: tuple[_ProductionBatch, ...], prompt: str, game_design: dict[str, Any], media_paths: Sequence[str | Path], enforce_batch_dependencies: bool=False) -> _ProductionParts:
+              return self._expand_production_batches_serial(
+                  batches=batches,
+                  prompt=prompt,
+                  game_design=game_design,
+                  media_paths=media_paths,
+                  enforce_batch_dependencies=enforce_batch_dependencies,
+              )
+          ''')
+
+          serial = method('''
+          def _expand_production_batches_serial(self, *, batches: tuple[_ProductionBatch, ...], prompt: str, game_design: dict[str, Any], media_paths: Sequence[str | Path], enforce_batch_dependencies: bool=False) -> _ProductionParts:
+              parts = _ProductionParts([], [], [])
+              module_catalog = _ModuleCatalog()
+              asset_catalog = _ModuleCatalog()
+              test_catalog: set[str] = set()
+              dependency_exports: dict[str, list[str]] = {}
+              planning_context, planning_receipt = _pagination_planning_context(prompt, game_design)
+              total_batches = len(batches)
+              for idx, batch in enumerate(batches):
+                  print(f"📋 [Planner] Expanding batch {idx + 1}/{total_batches}: '{batch.batch_id}' ({batch.scope})...", flush=True)
+                  before = len(parts.modules)
+                  self._expand_one_production_batch(
+                      batch=batch,
+                      parts=parts,
+                      module_catalog=module_catalog,
+                      asset_catalog=asset_catalog,
+                      test_catalog=test_catalog,
+                      dependency_exports=dependency_exports,
+                      planning_context=planning_context,
+                      planning_receipt=planning_receipt,
+                      media_paths=media_paths,
+                  )
+                  generated_ids = {item.module_id for item in parts.modules[before:]}
+                  for missing_id in sorted(set(batch.exports) - generated_ids):
+                      fallback = ProductionModule(
+                          module_id=missing_id,
+                          kind='custom_java',
+                          config={'summary': f'Implementation for declared export {missing_id}'},
+                          depends_on=(),
+                          required_gates=(),
+                      )
+                      if fallback.module_id not in module_catalog:
+                          module_catalog.add(fallback.module_id)
+                          parts.modules.append(fallback)
+                  if enforce_batch_dependencies and batch.depends_on_batches:
+                      dependency_module_ids = tuple(
+                          exported
+                          for dependency in batch.depends_on_batches
+                          for exported in dependency_exports.get(dependency, ())
+                      )
+                      parts.modules[before:] = _bind_batch_dependency_exports(parts.modules[before:], dependency_module_ids)
+                  dependency_exports[batch.batch_id] = list(batch.exports)
+              return parts
+          ''')
+
+          one = method('''
+          def _expand_one_production_batch(self, *, batch: _ProductionBatch, parts: _ProductionParts, module_catalog: _ModuleCatalog, asset_catalog: _ModuleCatalog, test_catalog: set[str], dependency_exports: dict[str, list[str]], planning_context: dict[str, Any], planning_receipt: dict[str, Any], media_paths: Sequence[str | Path]) -> None:
+              from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
+
+              known_ids = set(module_catalog._ids)
+              dependency_module_ids = [
+                  exported
+                  for dependency in batch.depends_on_batches
+                  for exported in dependency_exports.get(dependency, ())
+              ]
+              skeleton = build_batch_skeleton(
+                  batch_id=batch.batch_id,
+                  scope=batch.scope,
+                  deliverables=batch.deliverables,
+                  exports=batch.exports,
+                  depends_on_batches=dependency_module_ids,
+                  known_module_ids=tuple(known_ids),
+              )
+              request = {
+                  'batch': {
+                      'batch_id': batch.batch_id,
+                      'scope': batch.scope,
+                      'depends_on_batches': list(batch.depends_on_batches),
+                      'deliverables': list(batch.deliverables),
+                      'exports': list(batch.exports),
+                  },
+                  'dependency_exports': dependency_exports,
+                  'planning_context_receipt': planning_receipt,
+                  'planning_context': planning_context,
+                  'known_module_catalog': module_catalog.receipt(),
+                  'known_asset_catalog': asset_catalog.receipt(),
+                  'template_skeleton': skeleton,
+                  'contract': _PRODUCTION_PAGE_CONTRACT,
+              }
+              try:
+                  raw_page = _generate_json_page_with_repair(
+                      self.router,
+                      system_prompt='Fill only the provided template_skeleton values. Do not invent fields. Keep module config concise and declarative. Module depends_on values must be existing module IDs. Return complete=true and next_cursor empty.',
+                      request=request,
+                      media_paths=media_paths,
+                      expected_contracts=(frozenset(_PRODUCTION_PAGE_CONTRACT),),
+                      stage=f'production batch {batch.batch_id!r}',
+                  )
+              except (SpecValidationError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+                  print(f"[Planner] Batch '{batch.batch_id}' rejected model page; using host template: {exc}", flush=True)
+                  raw_page = {}
+              if not isinstance(raw_page, dict):
+                  raw_page = {}
+              page = merge_model_output_into_skeleton(
+                  skeleton=skeleton,
+                  model_output=raw_page,
+                  valid_module_catalog=known_ids | set(batch.exports),
+              )
+
+              for raw in _list(page, 'modules'):
+                  if not isinstance(raw, dict):
+                      continue
+                  module = _module(raw)
+                  if module.module_id in module_catalog:
+                      continue
+                  module_catalog.add(module.module_id)
+                  parts.modules.append(module)
+
+              for raw in _list(page, 'assets'):
+                  if not isinstance(raw, dict):
+                      continue
+                  asset = _asset(raw)
+                  if asset.asset_id in asset_catalog:
+                      continue
+                  asset_catalog.add(asset.asset_id)
+                  parts.assets.append(asset)
+
+              for value in _list(page, 'acceptance_tests'):
+                  test_name = str(value).strip()
+                  if not test_name or test_name in test_catalog:
+                      continue
+                  test_catalog.add(test_name)
+                  parts.acceptance_tests.append(test_name)
+          ''')
+
+          replacements = {
+              '_expand_production_batches': expand,
+              '_expand_production_batches_serial': serial,
+              '_expand_one_production_batch': one,
+          }
+          dead_methods = {'_expand_one_production_batch_isolated', '_retry_production_batch_wave_serially'}
+          dead_top_level = {'_production_batch_parallel_capacity', '_production_batch_waves'}
+
+          class Clean(ast.NodeTransformer):
+              def visit_ImportFrom(self, node):
+                  if node.module == 'concurrent.futures':
+                      return None
+                  if node.module == 'contextvars':
+                      return None
+                  return node
+              def visit_ClassDef(self, node):
+                  if node.name == '_ProductionWaveConflict':
+                      return None
+                  if node.name == 'CompleteGameDesignPlanner':
+                      new_body = []
+                      for item in node.body:
+                          if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                              if item.name in dead_methods:
+                                  continue
+                              if item.name in replacements:
+                                  new_body.append(replacements[item.name])
+                                  continue
+                          new_body.append(item)
+                      node.body = new_body
+                      return node
+                  return self.generic_visit(node)
+              def visit_FunctionDef(self, node):
+                  if node.name in dead_top_level:
+                      return None
+                  return self.generic_visit(node)
+
+          tree = Clean().visit(tree)
+          ast.fix_missing_locations(tree)
+          planner.write_text(ast.unparse(tree) + '\n', encoding='utf-8')
+
+          runtime = Path('minecraft_mod_ai/runtime_bootstrap.py')
+          rtree = ast.parse(runtime.read_text(encoding='utf-8'))
+          dead_imports = {'planner_module_identity_contract', 'planner_outline_identity_contract'}
+          dead_calls = {'install_planner_module_identity', 'install_planner_outline_identity'}
+          class RuntimeClean(ast.NodeTransformer):
+              def visit_ImportFrom(self, node):
+                  if node.module and any(node.module.endswith(name) for name in dead_imports):
+                      return None
+                  return self.generic_visit(node)
+              def visit_Expr(self, node):
+                  if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id in dead_calls:
+                      return None
+                  return self.generic_visit(node)
+          rtree = RuntimeClean().visit(rtree)
+          ast.fix_missing_locations(rtree)
+          runtime.write_text(ast.unparse(rtree) + '\n', encoding='utf-8')
+
+          contract = Path('minecraft_mod_ai/production_contract.py')
+          ctree = ast.parse(contract.read_text(encoding='utf-8'))
+          class ContractClean(ast.NodeTransformer):
+              def visit_Assign(self, node):
+                  if any(isinstance(t, ast.Name) and t.id == 'seen_sids' for t in node.targets):
+                      return None
+                  return self.generic_visit(node)
+              def visit_AnnAssign(self, node):
+                  if isinstance(node.target, ast.Name) and node.target.id == 'seen_sids':
+                      return None
+                  return self.generic_visit(node)
+          ctree = ContractClean().visit(ctree)
+          ast.fix_missing_locations(ctree)
+          contract.write_text(ast.unparse(ctree) + '\n', encoding='utf-8')
+
+          for dead in (
+              'minecraft_mod_ai/planner_module_identity_contract.py',
+              'minecraft_mod_ai/planner_outline_identity_contract.py',
+          ):
+              Path(dead).unlink(missing_ok=True)
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai
+          git commit -m 'refactor: collapse planner contracts into host-owned template path'
+          git push origin HEAD:main
