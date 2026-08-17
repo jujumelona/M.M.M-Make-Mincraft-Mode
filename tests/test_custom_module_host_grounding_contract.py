@@ -30,7 +30,7 @@ def test_generator_resolves_grounding_before_first_coder_decode() -> None:
     assert grounding_index < first_decode_index
     assert '"host_grounding": host_grounding' in source
     assert 'enable_tools=False' in source
-    fast_guard = source.index('project_context_budget = min(')
+    budget_guard = source.index('project_context_budget = _coder_project_context_budget(')
     exact_observation = source.index('_collect_initial_observations(')
-    assert fast_guard < exact_observation < grounding_index
+    assert budget_guard < exact_observation < grounding_index
     assert 'fast_path_express' not in source
