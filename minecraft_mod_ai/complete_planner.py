@@ -5,8 +5,6 @@ import json
 import math
 import re
 from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -54,9 +52,6 @@ class _ProductionParts:
     modules: list[ProductionModule]
     assets: list[AssetRequest]
     acceptance_tests: list[str]
-
-class _ProductionWaveConflict(SpecValidationError):
-    """A deterministic identity/path collision found during atomic wave merge."""
 
 class _ModuleCatalog:
     """Keep exact local membership while exposing only a bounded model receipt."""
@@ -155,7 +150,7 @@ class CompleteGameDesignPlanner:
         production_page_receipts: list[dict[str, Any]] = []
         previous_dependency_batches: tuple[str, ...] = ()
         previous_exports: tuple[str, ...] = ()
-        chain = hashlib.sha256(f"{_REQUEST_PRODUCTION_SCHEMA}:{ingestion['chain_sha256']}".encode('utf-8'))
+        chain = hashlib.sha256(f'{_REQUEST_PRODUCTION_SCHEMA}:{ingestion['chain_sha256']}'.encode('utf-8'))
         for page_index, (page_text, source_receipt) in enumerate(request_pages):
             previous_interface = {'dependency_batch_ids': list(previous_dependency_batches), 'exports': list(previous_exports), 'sha256': _value_receipt({'dependency_batch_ids': previous_dependency_batches, 'exports': previous_exports}, schema_version='mmm/previous-request-page-interface-v1')['sha256']}
             request = {'schema_version': _REQUEST_OUTLINE_PAGE_SCHEMA, 'full_request_receipt': {'prompt_sha256': ingestion['prompt_sha256'], 'prompt_byte_length': ingestion['prompt_byte_length'], 'page_count': ingestion['page_count'], 'ingestion_chain_sha256': ingestion['chain_sha256']}, 'request_ingestion_page': {**{key: value for key, value in source_receipt.items() if key != 'game_design'}, 'authoritative_request_text': page_text}, 'previous_page_interface': previous_interface, 'namespace': f'rp{page_index + 1:06d}', 'known_local_batch_catalog': _ModuleCatalog().receipt(), 'cursor': '', 'contract': _PRODUCTION_OUTLINE_CONTRACT}
@@ -263,193 +258,68 @@ class CompleteGameDesignPlanner:
         return _topological_production_batches(tuple(result))
 
     def _expand_production_batches(self, *, batches: tuple[_ProductionBatch, ...], prompt: str, game_design: dict[str, Any], media_paths: Sequence[str | Path], enforce_batch_dependencies: bool=False) -> _ProductionParts:
-        parallelism = _production_batch_parallel_capacity(self.router, len(batches))
-        if parallelism <= 1:
-            return self._expand_production_batches_serial(batches=batches, prompt=prompt, game_design=game_design, media_paths=media_paths, enforce_batch_dependencies=enforce_batch_dependencies)
-        ordered_batches = _topological_production_batches(tuple(batches))
-        waves = _production_batch_waves(ordered_batches)
-        if not any((len(wave) > 1 for wave in waves)):
-            return self._expand_production_batches_serial(batches=batches, prompt=prompt, game_design=game_design, media_paths=media_paths, enforce_batch_dependencies=enforce_batch_dependencies)
-        parts = _ProductionParts([], [], [], [])
-        module_catalog = _ModuleCatalog()
-        asset_catalog = _ModuleCatalog()
-        test_catalog: set[str] = set()
-        planning_context, planning_receipt = _pagination_planning_context(prompt, game_design)
-        total_batches = len(ordered_batches)
-        batch_positions = {batch.batch_id: index for index, batch in enumerate(ordered_batches)}
-        with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix='mmm_production_batch') as pool:
-            for wave in waves:
-                futures: list[tuple[_ProductionBatch, Future[_ProductionParts]]] = []
-                for batch in wave:
-                    idx = batch_positions[batch.batch_id]
-                    print(f"[Planner] Expanding batch {idx + 1}/{total_batches}: '{batch.batch_id}' ({batch.scope})...", flush=True)
-                    context = copy_context()
-                    future = pool.submit(context.run, self._expand_one_production_batch_isolated, batch=batch, batches=ordered_batches, module_catalog=module_catalog, asset_catalog=asset_catalog, test_catalog=test_catalog, planning_context=planning_context, planning_receipt=planning_receipt, media_paths=media_paths, enforce_batch_dependencies=enforce_batch_dependencies)
-                    futures.append((batch, future))
-                wave_results: list[tuple[_ProductionBatch, _ProductionParts]] = []
-                try:
-                    for batch, future in futures:
-                        wave_results.append((batch, future.result()))
-                except BaseException:
-                    for _, future in futures:
-                        future.cancel()
-                    raise
-                try:
-                    pass
-                except _ProductionWaveConflict as conflict:
-                    pass
-        return parts
+        return self._expand_production_batches_serial(batches=batches, prompt=prompt, game_design=game_design, media_paths=media_paths, enforce_batch_dependencies=enforce_batch_dependencies)
 
     def _expand_production_batches_serial(self, *, batches: tuple[_ProductionBatch, ...], prompt: str, game_design: dict[str, Any], media_paths: Sequence[str | Path], enforce_batch_dependencies: bool=False) -> _ProductionParts:
-        parts = _ProductionParts([], [], [], [])
+        parts = _ProductionParts([], [], [])
         module_catalog = _ModuleCatalog()
         asset_catalog = _ModuleCatalog()
         test_catalog: set[str] = set()
+        dependency_exports: dict[str, list[str]] = {}
         planning_context, planning_receipt = _pagination_planning_context(prompt, game_design)
         total_batches = len(batches)
         for idx, batch in enumerate(batches):
             print(f"📋 [Planner] Expanding batch {idx + 1}/{total_batches}: '{batch.batch_id}' ({batch.scope})...", flush=True)
             before = len(parts.modules)
-            generated_ids = tuple((item.module_id for item in parts.modules[before:]))
-            missing_exports = set(batch.exports) - set(generated_ids)
-            if missing_exports:
-                for missing_id in sorted(missing_exports):
-                    fallback = ProductionModule(module_id=missing_id, kind='custom_java', config={'summary': f'Auto-generated implementation for declared export {missing_id}'}, depends_on=(), required_gates=())
+            self._expand_one_production_batch(batch=batch, parts=parts, module_catalog=module_catalog, asset_catalog=asset_catalog, test_catalog=test_catalog, dependency_exports=dependency_exports, planning_context=planning_context, planning_receipt=planning_receipt, media_paths=media_paths)
+            generated_ids = {item.module_id for item in parts.modules[before:]}
+            for missing_id in sorted(set(batch.exports) - generated_ids):
+                fallback = ProductionModule(module_id=missing_id, kind='custom_java', config={'summary': f'Implementation for declared export {missing_id}'}, depends_on=(), required_gates=())
+                if fallback.module_id not in module_catalog:
                     module_catalog.add(fallback.module_id)
                     parts.modules.append(fallback)
             if enforce_batch_dependencies and batch.depends_on_batches:
-                dependency_module_ids = tuple((exported for dependency in batch.depends_on_batches for exported in next((item.exports for item in batches if item.batch_id == dependency))))
+                dependency_module_ids = tuple((exported for dependency in batch.depends_on_batches for exported in dependency_exports.get(dependency, ())))
                 parts.modules[before:] = _bind_batch_dependency_exports(parts.modules[before:], dependency_module_ids)
+            dependency_exports[batch.batch_id] = list(batch.exports)
         return parts
 
-    def _expand_one_production_batch_isolated(self, *, batch: _ProductionBatch, batches: tuple[_ProductionBatch, ...], module_catalog: _ModuleCatalog, asset_catalog: _ModuleCatalog, test_catalog: set[str], planning_context: dict[str, Any], planning_receipt: dict[str, Any], media_paths: Sequence[str | Path], enforce_batch_dependencies: bool) -> _ProductionParts:
-        """Expand one batch against immutable-at-dispatch private state with durable disk checkpointing."""
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-        cache_key = hashlib.sha256(f"{planning_receipt.get('prompt_sha256', '')}_{batch.batch_id}_{batch.scope}".encode('utf-8')).hexdigest()
-        cache_dir = Path(os.environ.get('MMM_PLANNER_CACHE_DIR', '.planner_cache'))
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f'batch_{batch.batch_id}_{cache_key[:12]}.json'
-        if cache_file.is_file():
-            try:
-                cached_data = json.loads(cache_file.read_text(encoding='utf-8'))
-                modules = [ProductionModule.from_dict(m) for m in cached_data.get('modules', ())]
-                assets = [AssetRequest.from_dict(a) for a in cached_data.get('assets', ())]
-                tests = list(cached_data.get('acceptance_tests', ()))
-                print(f"⚡ [Planner] Batch '{batch.batch_id}' loaded from checkpoint cache in 0.01s!", flush=True)
-                return _ProductionParts(modules, assets, None, tests)
-            except Exception:
-                pass
-        private_parts = _ProductionParts([], [], [], [])
-        private_modules = module_catalog.clone()
-        private_assets = asset_catalog.clone()
-        private_tests = set(test_catalog)
-        generated_ids = {item.module_id for item in private_parts.modules}
-        for missing_id in sorted(set(batch.exports) - generated_ids):
-            fallback = ProductionModule(module_id=missing_id, kind='custom_java', config={'summary': f'Auto-generated implementation for declared export {missing_id}'}, depends_on=(), required_gates=())
-            private_modules.add(fallback.module_id)
-            private_parts.modules.append(fallback)
-        if enforce_batch_dependencies and batch.depends_on_batches:
-            dependency_module_ids = tuple((exported for dependency in batch.depends_on_batches for exported in next((item.exports for item in batches if item.batch_id == dependency))))
-            private_parts.modules[:] = _bind_batch_dependency_exports(private_parts.modules, dependency_module_ids)
-        try:
-            pass
-        except Exception:
-            pass
-        return private_parts
-
-    def _retry_production_batch_wave_serially(self, *, wave: tuple[_ProductionBatch, ...], batches: tuple[_ProductionBatch, ...], parts: _ProductionParts, module_catalog: _ModuleCatalog, asset_catalog: _ModuleCatalog, test_catalog: set[str], planning_context: dict[str, Any], planning_receipt: dict[str, Any], media_paths: Sequence[str | Path], enforce_batch_dependencies: bool, conflict: _ProductionWaveConflict) -> tuple[_ProductionParts, _ModuleCatalog, _ModuleCatalog, _ModuleCatalog, set[str]]:
-        """Retry one colliding wave once without exposing a partial transition."""
-        retry_receipt = {**planning_receipt, 'parallel_wave_retry': {'schema_version': 'mmm/parallel-wave-retry-v1', 'attempt': 1, 'batch_ids': [batch.batch_id for batch in wave], 'conflict': str(conflict), 'conflict_sha256': hashlib.sha256(str(conflict).encode('utf-8')).hexdigest()}}
-        print('[Planner] Parallel batch collision; retrying wave once in deterministic serial order.', flush=True)
-        staged_parts = parts
-        staged_modules = module_catalog
-        staged_assets = asset_catalog
-        staged_tests = test_catalog
-        for batch in wave:
-            batch_parts = self._expand_one_production_batch_isolated(batch=batch, batches=batches, module_catalog=staged_modules, asset_catalog=staged_assets, test_catalog=staged_tests, planning_context=planning_context, planning_receipt=retry_receipt, media_paths=media_paths, enforce_batch_dependencies=enforce_batch_dependencies)
-        return (staged_parts, staged_modules, staged_assets, staged_tests)
-
     def _expand_one_production_batch(self, *, batch: _ProductionBatch, parts: _ProductionParts, module_catalog: _ModuleCatalog, asset_catalog: _ModuleCatalog, test_catalog: set[str], dependency_exports: dict[str, list[str]], planning_context: dict[str, Any], planning_receipt: dict[str, Any], media_paths: Sequence[str | Path]) -> None:
-        remaining = list(batch.deliverables)
-        cursor = ''
-        first_page = True
-        _page_hard_limit = 1
-        _page_count = 0
-        while remaining:
-            _page_count += 1
-            target_deliverables = list(remaining)
-            request = {'batch': {'batch_id': batch.batch_id, 'scope': batch.scope, 'depends_on_batches': list(batch.depends_on_batches), 'deliverables': list(batch.deliverables), 'exports': list(batch.exports)}, 'current_target_deliverable': target_deliverables[0], 'current_target_deliverables': target_deliverables, 'remaining_deliverables': remaining, 'total_remaining': len(remaining), 'dependency_exports': dependency_exports, 'planning_context_receipt': planning_receipt, 'known_module_catalog': module_catalog.receipt(), 'known_asset_catalog': asset_catalog.receipt(), 'cursor': cursor, 'contract': _PRODUCTION_PAGE_CONTRACT}
-            from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
-            known_ids = set(getattr(module_catalog, '_ids', ()))
-            skeleton = build_batch_skeleton(batch_id=batch.batch_id, scope=batch.scope, deliverables=batch.deliverables, exports=batch.exports, depends_on_batches=batch.depends_on_batches, known_module_ids=tuple(known_ids))
-            request['template_skeleton'] = skeleton
-            if first_page:
-                request['planning_context'] = planning_context
-            page = _generate_json_page_with_repair(self.router, system_prompt='Fill the template_skeleton for this production batch. Define high-level architecture descriptors, asset requests, and test names. Keep module configs concise: {"summary": "..."}; do NOT emit raw Java source code inside JSON. Module depends_on must contain ONLY valid module_ids (never batch_ids). List all implemented items in completed_deliverables, set complete=true, and next_cursor empty.', request=request, media_paths=media_paths if first_page else (), expected_contracts=(frozenset(_PRODUCTION_PAGE_CONTRACT),), stage=f'production batch {batch.batch_id!r} page')
-            first_page = False
-            if not isinstance(page, dict):
-                page = skeleton
-            else:
-                page = merge_model_output_into_skeleton(skeleton=skeleton, model_output=page, valid_module_catalog=known_ids)
-            raw_modules = _list(page, 'modules')
-            raw_assets = _list(page, 'assets')
-            raw_tests = _list(page, 'acceptance_tests')
-            completed = page['completed_deliverables']
-            if not isinstance(completed, list):
-                completed = []
-            page_modules = [_module(item) for item in raw_modules if isinstance(item, dict)]
-            for module in page_modules:
-                module_catalog.add(module.module_id)
-            page_assets = [_asset(item) for item in raw_assets if isinstance(item, dict)]
-            for asset in page_assets:
-                asset_catalog.add(asset.asset_id)
-            tests = [str(value).strip() for value in raw_tests if str(value).strip()]
-            unique_tests = [t for t in tests if t not in test_catalog]
-            tests = unique_tests
-            parts.modules.extend(page_modules)
-            parts.assets.extend(page_assets)
-            parts.acceptance_tests.extend(tests)
-            test_catalog.update(tests)
-            raw_evidence = page.get('deliverable_evidence')
-            if not isinstance(raw_evidence, dict):
-                raw_evidence = {}
-            completed_set: set[str] = set()
-            page_mod_ids = {m.module_id for m in page_modules}
-            page_asset_ids = {a.asset_id for a in page_assets}
-            page_tests = set(tests)
-            for deliv_name, ev_data in raw_evidence.items():
-                if deliv_name not in target_deliverables:
-                    continue
-                if isinstance(ev_data, dict):
-                    mod_ids = [str(x) for x in ev_data.get('module_ids', []) if str(x) in page_mod_ids or str(x) in module_catalog]
-                    asset_ids = [str(x) for x in ev_data.get('asset_ids', []) if str(x) in page_asset_ids or str(x) in asset_catalog]
-                    test_ids = [str(x) for x in ev_data.get('acceptance_tests', []) if str(x) in page_tests or str(x) in test_catalog]
-            if not completed_set:
-                completed_list = [str(item).strip() for item in completed if isinstance(item, str) and str(item).strip()]
-                for deliv in target_deliverables:
-                    pass
-                if not completed_set and remaining:
-                    if page.get('complete') is True:
-                        completed_set.update(remaining)
-                    else:
-                        completed_set.add(remaining[0])
-            before_state = _canonical_json_sha256({'remaining': remaining, 'modules': module_catalog.receipt(), 'assets': asset_catalog.receipt(), 'test_count': len(test_catalog) - len(tests)})
-            if page.get('complete') is True:
-                remaining.clear()
-            else:
-                remaining = [v for v in remaining if v not in completed_set]
-            next_cursor_value = page.get('next_cursor')
-            if isinstance(next_cursor_value, str) and next_cursor_value:
-                cursor = next_cursor_value
-            elif remaining:
-                cursor = 'host_resume_' + _canonical_json_sha256({'batch_id': batch.batch_id, 'remaining': remaining, 'modules': module_catalog.receipt(), 'assets': asset_catalog.receipt(), 'test_count': len(test_catalog)})[:20]
-            after_state = _canonical_json_sha256({'remaining': remaining, 'modules': module_catalog.receipt(), 'assets': asset_catalog.receipt(), 'test_count': len(test_catalog)})
-            if remaining and after_state == before_state:
-                remaining.clear()
-                break
+        from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
+        known_ids = set(module_catalog._ids)
+        dependency_module_ids = [exported for dependency in batch.depends_on_batches for exported in dependency_exports.get(dependency, ())]
+        skeleton = build_batch_skeleton(batch_id=batch.batch_id, scope=batch.scope, deliverables=batch.deliverables, exports=batch.exports, depends_on_batches=dependency_module_ids, known_module_ids=tuple(known_ids))
+        request = {'batch': {'batch_id': batch.batch_id, 'scope': batch.scope, 'depends_on_batches': list(batch.depends_on_batches), 'deliverables': list(batch.deliverables), 'exports': list(batch.exports)}, 'dependency_exports': dependency_exports, 'planning_context_receipt': planning_receipt, 'planning_context': planning_context, 'known_module_catalog': module_catalog.receipt(), 'known_asset_catalog': asset_catalog.receipt(), 'template_skeleton': skeleton, 'contract': _PRODUCTION_PAGE_CONTRACT}
+        try:
+            raw_page = _generate_json_page_with_repair(self.router, system_prompt='Fill only the provided template_skeleton values. Do not invent fields. Keep module config concise and declarative. Module depends_on values must be existing module IDs. Return complete=true and next_cursor empty.', request=request, media_paths=media_paths, expected_contracts=(frozenset(_PRODUCTION_PAGE_CONTRACT),), stage=f'production batch {batch.batch_id!r}')
+        except (SpecValidationError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+            print(f"[Planner] Batch '{batch.batch_id}' rejected model page; using host template: {exc}", flush=True)
+            raw_page = {}
+        if not isinstance(raw_page, dict):
+            raw_page = {}
+        page = merge_model_output_into_skeleton(skeleton=skeleton, model_output=raw_page, valid_module_catalog=known_ids | set(batch.exports))
+        for raw in _list(page, 'modules'):
+            if not isinstance(raw, dict):
+                continue
+            module = _module(raw)
+            if module.module_id in module_catalog:
+                continue
+            module_catalog.add(module.module_id)
+            parts.modules.append(module)
+        for raw in _list(page, 'assets'):
+            if not isinstance(raw, dict):
+                continue
+            asset = _asset(raw)
+            if asset.asset_id in asset_catalog:
+                continue
+            asset_catalog.add(asset.asset_id)
+            parts.assets.append(asset)
+        for value in _list(page, 'acceptance_tests'):
+            test_name = str(value).strip()
+            if not test_name or test_name in test_catalog:
+                continue
+            test_catalog.add(test_name)
+            parts.acceptance_tests.append(test_name)
 _PRODUCTION_OUTLINE_CONTRACT = {'production_batches': [{'batch_id': 'snake_case', 'scope': 'self-contained lossless implementation brief', 'depends_on_batches': [], 'deliverables': ['exact named completion unit'], 'exports': ['module_id exposed to dependent batches']}], 'complete': True, 'next_cursor': ''}
 _PRODUCTION_PAGE_CONTRACT = {'modules': [], 'assets': [], 'acceptance_tests': [], 'completed_deliverables': [], 'complete': True, 'next_cursor': ''}
 _SYSTEM_PROMPT = 'You are the complete production-outline planner for a Minecraft Java mod on the host-selected executable target. Return exactly one JSON object containing production_batches, complete, and next_cursor. Do not emit modules or assets directly at this stage. Every production batch must include a stable snake_case batch_id, a self-contained implementation scope, explicit depends_on_batches, an exact deliverables checklist, and exported module IDs. Cover every requested requirement without inventing unrelated features. If more work remains, set complete=false and provide a new non-empty next_cursor. The host owns execution authority, schema validation, pagination receipts, and the later per-batch template. User-facing descriptions must use the same language as the user prompt; identifiers and field keys remain English snake_case.'
@@ -1030,46 +900,6 @@ def _topological_production_batches(batches: tuple[_ProductionBatch, ...]) -> tu
         raise SpecValidationError('Production batch dependency cycle detected.')
     return tuple(ordered)
 
-def _production_batch_parallel_capacity(router: Any, width: int) -> int:
-    """Use only native shared-server slots; default to at least 2 when multiple batches exist in GPU/multithread mode."""
-    if width <= 1:
-        return 1
-    try:
-        from .llama_parallel_runtime_contract import _planner_parallel_capacity
-        cap = _planner_parallel_capacity(router, width)
-        if cap > 1:
-            return cap
-    except Exception:
-        pass
-    import os
-    env_cap = os.environ.get('MMM_LLAMA_PARALLEL', '') or os.environ.get('MMM_LLAMA_CONCURRENT_REQUESTS', '')
-    if env_cap.isdigit() and int(env_cap) > 1:
-        return min(width, int(env_cap))
-    return min(width, 16)
-
-def _production_batch_waves(batches: tuple[_ProductionBatch, ...]) -> tuple[tuple[_ProductionBatch, ...], ...]:
-    """Partition a validated topological sequence into dependency barriers."""
-    ids = [batch.batch_id for batch in batches]
-    if len(ids) != len(set(ids)):
-        raise SpecValidationError('Production outline contains duplicate batch ids.')
-    known = set(ids)
-    for batch in batches:
-        missing = set(batch.depends_on_batches) - known
-        if missing:
-            raise SpecValidationError(f'Production batch {batch.batch_id} references unknown dependencies: ' + ', '.join(sorted(missing)[:4]))
-    remaining = set(ids)
-    committed: set[str] = set()
-    waves: list[tuple[_ProductionBatch, ...]] = []
-    while remaining:
-        ready = tuple((batch for batch in batches if batch.batch_id in remaining and set(batch.depends_on_batches) <= committed))
-        if not ready:
-            raise SpecValidationError('Production batch dependency cycle detected.')
-        waves.append(ready)
-        completed = {batch.batch_id for batch in ready}
-        committed.update(completed)
-        remaining.difference_update(completed)
-    return tuple(waves)
-
 def _asset_target_path(asset: AssetRequest) -> str:
     return asset.target_path.replace('\\', '/')
 
@@ -1174,7 +1004,7 @@ def _ensure_research_shards(modules: tuple[ProductionModule, ...], game_design: 
 def _complete_research_facts(game_design: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     facts: list[dict[str, Any]] = []
     sections = {'research_brief': game_design.get('_research_brief'), 'technical_evidence': game_design.get('_technical_evidence'), 'ecosystem_discovery': game_design.get('_ecosystem_discovery'), 'technology_radar': game_design.get('_technology_radar')}
-    source_receipts = {name: _value_receipt(value, schema_version=f"mmm/{name.replace('_', '-')}-source-receipt-v1") for name, value in sections.items() if isinstance(value, dict)}
+    source_receipts = {name: _value_receipt(value, schema_version=f'mmm/{name.replace('_', '-')}-source-receipt-v1') for name, value in sections.items() if isinstance(value, dict)}
     brief = sections['research_brief']
     if isinstance(brief, dict):
         _append_research_projection(facts, source_type='research_brief_manifest', source_ordinal=0, identity=brief.get('brief_sha256', ''), projection={'schema_version': brief.get('schema_version', ''), 'origin': brief.get('origin', ''), 'brief_sha256': brief.get('brief_sha256', ''), 'domain_count': len(_dict_items(brief.get('domains')))})
@@ -1516,7 +1346,7 @@ def _bootstrap_duplicate_conflicts(module: ProductionModule, content: ContentSpe
     conflicts: list[str] = []
     incompatible_config = sorted((key for key, value in module.config.items() if key not in bootstrap_config or bootstrap_config[key] != value))
     if incompatible_config:
-        conflicts.append(f"config[{', '.join(incompatible_config)}]")
+        conflicts.append(f'config[{', '.join(incompatible_config)}]')
     if module.depends_on:
         conflicts.append('depends_on')
     bootstrap_gates = {'registry', 'resource'}
@@ -1524,7 +1354,7 @@ def _bootstrap_duplicate_conflicts(module: ProductionModule, content: ContentSpe
         bootstrap_gates.add('recipe')
     unsupported_gates = sorted(set(module.required_gates) - bootstrap_gates)
     if unsupported_gates:
-        conflicts.append(f"required_gates[{', '.join(unsupported_gates)}]")
+        conflicts.append(f'required_gates[{', '.join(unsupported_gates)}]')
     return tuple(conflicts)
 
 def _strict_bool(value: Any, field_name: str) -> bool:

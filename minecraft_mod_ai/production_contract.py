@@ -83,7 +83,6 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
             a['asset_id'] = aid
         seen_aids.add(aid)
         normalized_assets.append(a)
-    seen_sids: set[str] = set()
     input_acceptance = _normalize_acceptance_tests(acceptance_tests)
     requirements = _compile_requirements(requested_prompt, design_snapshot, research_snapshot)
     implementation_catalog, implementation_search = _implementation_catalog(normalized_modules, normalized_assets, None)
@@ -107,9 +106,9 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     for requirement in requirements:
         ref = 'acceptance:' + requirement['requirement_ref']
         if requirement['source'] == 'research_brief':
-            statement = f"[{requirement['requirement_ref']}] Verify the scoped research item is current, compatible, licensed, and used only within its evidence scope: {requirement['statement']}"
+            statement = f'[{requirement['requirement_ref']}] Verify the scoped research item is current, compatible, licensed, and used only within its evidence scope: {requirement['statement']}'
         else:
-            statement = f"[{requirement['requirement_ref']}] Demonstrate observable behavior or output satisfying: {requirement['statement']}"
+            statement = f'[{requirement['requirement_ref']}] Demonstrate observable behavior or output satisfying: {requirement['statement']}'
         statement = _unique_acceptance_statement(statement, used_acceptance_statements)
         acceptance_catalog.append({'acceptance_ref': ref, 'origin': 'requirement', 'statement': statement})
         used_acceptance_statements.add(statement)
@@ -351,7 +350,7 @@ def quality_contract_summary(contract: Mapping[str, Any]) -> str:
     validate_production_contract(contract, module_ids, tests)
     stats = contract['catalog_stats']
     dimensions = ', '.join((item['title'] for item in contract['quality_dimension_catalog']))
-    return f"Tracks {stats['requirements']} request-derived requirements across {stats['implementations']} implementation entries and {stats['acceptance_tests']} observable checks. Required quality: {dimensions}. Completion requires fresh proposal-bound evidence from an independent verifier for every dimension."
+    return f'Tracks {stats['requirements']} request-derived requirements across {stats['implementations']} implementation entries and {stats['acceptance_tests']} observable checks. Required quality: {dimensions}. Completion requires fresh proposal-bound evidence from an independent verifier for every dimension.'
 
 def evaluate_quality_contract(contract: Mapping[str, Any], evidence: Mapping[str, Any] | Sequence[Mapping[str, Any]], proposal_hash: str, previous: Mapping[str, Any] | None=None) -> dict[str, Any]:
     """Evaluate raw receipts; evidence cannot directly declare completion."""
@@ -457,7 +456,7 @@ def _source_items(source: str, value: Any) -> list[tuple[str, str, str]]:
         if current is None:
             continue
         if isinstance(current, bool):
-            statement = f"{path}: {('true' if current else 'false')}"
+            statement = f'{path}: {('true' if current else 'false')}'
         elif isinstance(current, (int, float)):
             statement = f'{path}: {_canonical_json(current)}'
         elif isinstance(current, str):
@@ -509,9 +508,9 @@ def _implementation_catalog(modules: Sequence[Mapping[str, Any]], assets: Sequen
         if searchable:
             search[ref] = _tokens(f'{source_kind} {identity} {kind} ' + ' '.join(_scalar_text(value)))
     for item in modules:
-        add(f"implementation:module:{item['module_id']}", 'module', item['module_id'], item['kind'], item, searchable=not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and (item['config'].get('integration_type') == 'mmm_research_shard')))
+        add(f'implementation:module:{item['module_id']}', 'module', item['module_id'], item['kind'], item, searchable=not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and (item['config'].get('integration_type') == 'mmm_research_shard')))
     for item in assets:
-        add(f"implementation:asset:{item['asset_id']}", 'asset', item['asset_id'], item['kind'], item)
+        add(f'implementation:asset:{item['asset_id']}', 'asset', item['asset_id'], item['kind'], item)
     return (catalog, search)
 
 def _scalar_text(value: Any) -> Iterable[str]:
