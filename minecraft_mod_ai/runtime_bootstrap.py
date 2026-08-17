@@ -270,8 +270,7 @@ def _install_architecture_contracts() -> None:
     install_atomic_efficiency(atomic_requirement_contract)
     install_atomic_routes(atomic_requirement_contract, production_contract)
     install_reviewer_role(atomic_requirement_contract)
-    # Planning structure and executable templates are code-owned. Do not make
-    # model-authored atomic JSON/coverage IR a mandatory gate on the default path.
+    atomic_requirement_contract.install(complete_planner, complete_orchestrator)
     install_atomic_quality(
         atomic_requirement_contract,
         quality_evidence,
