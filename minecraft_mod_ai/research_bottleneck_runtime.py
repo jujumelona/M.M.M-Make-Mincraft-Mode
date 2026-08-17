@@ -10,42 +10,10 @@ once the owning source module absorbs it directly.
 
 import json
 import os
-import sqlite3
 import sys
 from functools import wraps
 from pathlib import Path
 from typing import Any
-
-
-def _restore_rag_initial_incremental_state() -> None:
-    """Seed content state on the canonical first build, not the next unchanged build."""
-    from . import rag_index
-    from . import research_rag_performance as performance
-
-    current = rag_index.ProjectRAGIndex.build
-    if getattr(current, "_mmm_rag_initial_state_bridge_v1", False):
-        return
-
-    @wraps(current)
-    def build(self, *args, **kwargs):
-        result = current(self, *args, **kwargs)
-        target = Path(self.index_path).expanduser().resolve()
-        if not target.is_file() or not rag_index._is_sqlite(target):
-            return result
-        try:
-            with sqlite3.connect(str(target)) as connection:
-                performance._initialize_incremental_state(connection)
-                performance._bootstrap_incremental_state(connection)
-                connection.commit()
-        except Exception:
-            # Incremental state is an optimization sidecar. The canonical index result
-            # remains authoritative if sidecar seeding cannot be completed safely.
-            pass
-        return result
-
-    build._mmm_rag_initial_state_bridge_v1 = True
-    build.__wrapped__ = current
-    rag_index.ProjectRAGIndex.build = build
 
 
 def _restore_managed_research_capacity() -> None:
@@ -347,7 +315,6 @@ def _restore_research_code_context_contracts() -> None:
 
 
 def install() -> None:
-    _restore_rag_initial_incremental_state()
     _restore_managed_research_capacity()
     _restore_complete_plan_collection_pages()
     _restore_discovery_http_pool()
