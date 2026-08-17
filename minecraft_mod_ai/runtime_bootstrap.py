@@ -270,7 +270,9 @@ def _install_architecture_contracts() -> None:
     install_atomic_efficiency(atomic_requirement_contract)
     install_atomic_routes(atomic_requirement_contract, production_contract)
     install_reviewer_role(atomic_requirement_contract)
-    atomic_requirement_contract.install(complete_planner, complete_orchestrator)
+    # Keep atomic analysis utilities available, but do not wrap the default planner
+    # or executor with a second model-review/IR gate. Host templates already own the
+    # production structure and merge model-provided values fail-open.
     install_atomic_quality(
         atomic_requirement_contract,
         quality_evidence,
