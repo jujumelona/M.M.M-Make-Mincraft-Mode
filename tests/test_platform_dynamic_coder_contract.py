@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +11,7 @@ from minecraft_mod_ai.custom_module_generator import (
 from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
+from minecraft_mod_ai.platform_optimizer import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_resolver import resolve_platform
 from minecraft_mod_ai import repair_engine
 
@@ -33,6 +33,44 @@ def _future_adapter() -> PlatformAdapter:
         source_api_family="fabric_live_ai",
         deterministic_module_kinds=frozenset(),
     )
+
+
+def _optimization(adapter: PlatformAdapter) -> PlatformOptimization:
+    evidence = TargetEvidence(
+        adapter=adapter,
+        requested_capabilities=(),
+        covered_capabilities=(),
+        exact_projects=(),
+        exact_versions=1,
+        verified_hash_files=1,
+        dependency_edges=0,
+        maintenance_signals=1,
+        adoption=0,
+        freshness=0.0,
+        evidence_quality=1.0,
+        integration_risk=0.0,
+        residual_cost=0,
+        dependency_complexity=0,
+    )
+    optimization = PlatformOptimization(
+        selected=adapter,
+        evidence=evidence,
+        candidates=(evidence,),
+        capability_queries=("migration capability",),
+        discovery_mode="test-host-reuse",
+    )
+    object.__setattr__(
+        optimization,
+        "_mmm_reuse_plan",
+        {
+            "target": {
+                "minecraft_version": adapter.minecraft_version,
+                "loader": adapter.loader,
+            },
+            "capabilities": [],
+        },
+    )
+    return optimization
 
 
 def test_custom_coder_structured_request_uses_exact_live_target() -> None:
@@ -98,22 +136,10 @@ def test_repair_scope_supports_kotlin_gradle_metadata() -> None:
 
 def test_revise_explicit_version_is_hint_and_migration_uses_optimizer(monkeypatch) -> None:
     winner = _future_adapter()
-    evidence = SimpleNamespace(
-        covered_capabilities=(),
-        requested_capabilities=(),
-        reuse_coverage=1.0,
-        residual_cost=0,
-        dependency_closure_complete=True,
-    )
-    optimization = SimpleNamespace(
-        selected=winner,
-        evidence=evidence,
-        to_dict=lambda: {},
-    )
     monkeypatch.setattr(
         resolver,
         "_optimize",
-        lambda *_args, **_kwargs: optimization,
+        lambda *_args, **_kwargs: _optimization(winner),
     )
 
     selection = resolve_platform(
