@@ -1,0 +1,43 @@
+name: One-shot cleanup patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-cleanup-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply exact cleanup patches
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          agentic = Path('minecraft_mod_ai/agentic_research_game_design.py')
+          text = agentic.read_text(encoding='utf-8')
+          dead = '''        trace.record_attempt(\n            raw_output=raw,\n            validation_error=None,\n            candidate=section,\n            accepted=section,\n            context={"section_id": section_id},\n        )\n        trace.record_success(section)\n        return section\n'''
+          if text.count(dead) != 1:
+              raise SystemExit(f'expected exactly one unreachable block, found {text.count(dead)}')
+          agentic.write_text(text.replace(dead, '', 1), encoding='utf-8')
+
+          platform = Path('minecraft_mod_ai/platform_central_ai_contract.py')
+          text = platform.read_text(encoding='utf-8')
+          broken = '    return next(None)\n'
+          if text.count(broken) != 1:
+              raise SystemExit(f'expected exactly one broken carrier fallback, found {text.count(broken)}')
+          platform.write_text(text.replace(broken, '    return None\n', 1), encoding='utf-8')
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/platform_central_ai_contract.py
+          git commit -m 'refactor: remove unreachable planner repair tail and broken carrier fallback'
+          git push origin HEAD:main
