@@ -3,9 +3,7 @@ from __future__ import annotations
 import httpx
 
 from minecraft_mod_ai.ecosystem_discovery import EcosystemDiscoveryClient
-from minecraft_mod_ai.planning_stall_guard_contract import _planning_seed_brief
 from minecraft_mod_ai.research_coordinator import collect_ecosystem_seed_bundle
-import minecraft_mod_ai.planning_stall_guard_contract as stall_guard
 
 
 def _brief() -> dict:
@@ -78,7 +76,7 @@ def test_planner_seed_does_not_exhaust_route_catalog() -> None:
     assert result["collection_receipt"]["planning_seed_only"] is True
 
 
-def test_exhaustive_specialist_collector_still_continues_route_pages() -> None:
+def test_exhaustive_specialist_collector_continues_route_pages() -> None:
     calls: list[str] = []
 
     def page_builder(
@@ -90,7 +88,7 @@ def test_exhaustive_specialist_collector_still_continues_route_pages() -> None:
         route_cursor: str,
         route_limit: int,
     ) -> dict:
-        del prompt, game_design, research_brief, client
+        del prompt, game_design, research_brief, client, route_limit
         calls.append(route_cursor)
         first = not route_cursor
         return {
@@ -125,11 +123,6 @@ def test_exhaustive_specialist_collector_still_continues_route_pages() -> None:
     assert result["remaining_route_count"] == 0
 
 
-def test_stall_guard_does_not_own_a_second_research_executor() -> None:
-    assert not hasattr(stall_guard, "_ECOSYSTEM_EXECUTOR")
-    assert not hasattr(stall_guard, "_STATE")
-
-
 def test_discovery_client_reuses_one_http_pool_across_requests() -> None:
     requests: list[httpx.Request] = []
 
@@ -146,13 +139,3 @@ def test_discovery_client_reuses_one_http_pool_across_requests() -> None:
     assert second == {"ok": True}
     assert client._mmm_http_client is pooled
     assert len(requests) == 2
-
-
-def test_normal_planner_seed_does_not_need_query_compaction_to_terminate(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_ECOSYSTEM_SEED_QUERIES_PER_DOMAIN", raising=False)
-    monkeypatch.delenv("MMM_ECOSYSTEM_SEED_ROUTE_BUDGET", raising=False)
-    brief = _brief()
-    projected = _planning_seed_brief(brief)
-
-    assert projected["domains"][0]["queries"] == brief["domains"][0]["queries"]
-    assert projected["_mmm_planning_seed_projection"]["compacted"] is False

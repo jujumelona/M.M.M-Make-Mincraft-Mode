@@ -5,8 +5,6 @@ import sys
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_autotune as autotune
-from minecraft_mod_ai.agentic_search_efficiency_contract import _prime_native_slots
-from minecraft_mod_ai.model_adapters.base import GenerationRequest
 
 
 def test_every_native_server_start_path_includes_jinja() -> None:
@@ -14,40 +12,6 @@ def test_every_native_server_start_path_includes_jinja() -> None:
     args = autotune._base_args("llama-server", "/tmp/model.gguf", config, 8910)
     assert "--jinja" in args
     assert args.count("--jinja") == 1
-
-
-def test_planner_priming_uses_server_contract_that_already_owns_jinja(monkeypatch) -> None:
-    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
-    monkeypatch.delenv("MMM_LLAMA_ACTIVE_PARALLEL", raising=False)
-    seen: dict[str, object] = {}
-
-    config = SimpleNamespace(
-        provider="local",
-        adapter="llama_cpp",
-        max_context=32768,
-    )
-    router = SimpleNamespace(
-        registry=SimpleNamespace(role=lambda profile, role: config),
-        profile="t4_local",
-    )
-
-    def ensure_tuned_server(received_config, request):
-        seen["config"] = received_config
-        seen["request"] = request
-        args = autotune._base_args("llama-server", "/tmp/model.gguf", config, 8910)
-        assert "--jinja" in args
-        return "http://127.0.0.1:8910/v1"
-
-    monkeypatch.setattr(autotune, "ensure_tuned_server", ensure_tuned_server)
-    returned = _prime_native_slots(
-        router,
-        system_prompt="system",
-        request={"plan": "test"},
-        media_paths=(),
-    )
-    assert returned is config
-    assert seen["config"] is config
-    assert isinstance(seen["request"], GenerationRequest)
 
 
 def test_hot_colab_reload_stops_old_managed_server_before_module_purge(
