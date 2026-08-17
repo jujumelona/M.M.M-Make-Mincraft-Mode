@@ -5,6 +5,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+_RANK_CACHE_MAX_ENTRIES = 32
+
 
 def _part_bytes(module: Any, *, index: int, members: Any) -> bytes:
     payload = {
@@ -159,6 +161,8 @@ def _install_rank_cache(project_index_module: Any) -> None:
                     explicit=explicit,
                 )
             )
+            if len(cache) >= _RANK_CACHE_MAX_ENTRIES:
+                cache.pop(next(iter(cache)))
             cache[key] = cached
         return list(cached)
 
