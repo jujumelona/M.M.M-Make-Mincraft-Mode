@@ -47,6 +47,11 @@ _RETRIEVAL_REPAIR_MARKERS = (
     "registry entry",
     "resource id",
 )
+_HOST_GROUNDED_FIRST_PASS_MARKERS = (
+    "host has already supplied fresh exact source observations",
+    "baseline grounding is not an optional model decision",
+    "use supplied evidence directly; repeat retrieval only after host validation rejects",
+)
 
 
 def _message_tail(messages: Sequence[Mapping[str, Any]]) -> str:
@@ -77,6 +82,11 @@ def _is_repair_failure(messages: Sequence[Mapping[str, Any]]) -> bool:
 def _needs_retrieval_repair(messages: Sequence[Mapping[str, Any]]) -> bool:
     tail = _message_tail(messages)
     return any(marker in tail for marker in _RETRIEVAL_REPAIR_MARKERS)
+
+
+def _is_host_grounded_first_pass(messages: Sequence[Mapping[str, Any]]) -> bool:
+    tail = _message_tail(messages)
+    return any(marker in tail for marker in _HOST_GROUNDED_FIRST_PASS_MARKERS)
 
 
 def _compact_anchor(record: Mapping[str, Any], query_tokens: set[str]) -> dict[str, Any]:
@@ -162,9 +172,10 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
         messages: Sequence[Mapping[str, Any]],
         **kwargs: Any,
     ) -> str:
+        host_grounded_first_pass = role == "coder" and _is_host_grounded_first_pass(messages)
         structural_repair = role == "coder" and _is_structural_patch_repair(messages)
         repair_failure = role == "coder" and _is_repair_failure(messages)
-        use_current_evidence_only = structural_repair or (
+        use_current_evidence_only = host_grounded_first_pass or structural_repair or (
             repair_failure and not _needs_retrieval_repair(messages)
         )
         if use_current_evidence_only:
@@ -179,6 +190,7 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
 
     generate_text._mmm_structural_no_rag = True  # type: ignore[attr-defined]
     generate_text._mmm_selective_repair_rag = True  # type: ignore[attr-defined]
+    generate_text._mmm_host_grounded_first_pass_no_rag = True  # type: ignore[attr-defined]
     generate_text.__wrapped__ = current  # type: ignore[attr-defined]
     cls.generate_text = generate_text
 
