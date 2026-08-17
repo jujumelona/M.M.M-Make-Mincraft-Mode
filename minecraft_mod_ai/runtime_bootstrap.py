@@ -116,9 +116,15 @@ def _install_generation_contracts() -> None:
     from .extended_registration_contract import install as install_extended_registration
     from .performance_final_contract import install as install_performance_contract
     from .performance_final_tuning import install as install_performance_tuning
-    from .project_index_execution_reuse_contract import install as install_project_index_execution_reuse
-    from .project_index_manifest_efficiency_contract import install as install_project_index_manifest_efficiency
-    from .project_manifest_hash_efficiency_contract import install as install_manifest_hash_efficiency
+    from .project_index_execution_reuse_contract import (
+        install as install_project_index_execution_reuse,
+    )
+    from .project_index_manifest_efficiency_contract import (
+        install as install_project_index_manifest_efficiency,
+    )
+    from .project_manifest_hash_efficiency_contract import (
+        install as install_manifest_hash_efficiency,
+    )
 
     install_extended_registration(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
@@ -166,7 +172,9 @@ def _install_platform_contracts() -> None:
     from .platform_planning_contract import install as install_platform_planning
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
-    from .platform_specialized_generator_contract import install as install_specialized_generator_guards
+    from .platform_specialized_generator_contract import (
+        install as install_specialized_generator_guards,
+    )
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
     from .proposal_deserialization_contract import install as install_proposal_deserialization
@@ -215,13 +223,11 @@ def _install_platform_contracts() -> None:
 
 
 def _install_planner_contracts() -> None:
-    """Install non-parser planner efficiency policies only.
-
-    JSON shape, parsing, repair termination and fallback are owned directly by
-    complete_planner; no runtime monkeypatch is allowed to replace them.
-    """
+    """Install planner-independent efficiency policies only."""
     from . import agentic_optimization_contract, complete_orchestrator_services, work_graph
-    from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
+    from .agentic_search_efficiency_contract import (
+        install as install_agentic_search_efficiency,
+    )
     from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
     from .execution_efficiency_contract import install as install_execution_efficiency
 
@@ -259,7 +265,9 @@ def _install_architecture_contracts() -> None:
     from .required_gate_compatibility_contract import install as install_gate_compatibility
     from .semantic_reviewer_role_contract import install as install_reviewer_role
     from .visual_acceptance_scope_contract import install as install_visual_scope
-    from .work_graph_state_transition_contract import install as install_work_graph_state_transitions
+    from .work_graph_state_transition_contract import (
+        install as install_work_graph_state_transitions,
+    )
 
     install_build_input_scope(validation_execution_contract)
     install_atomic_efficiency(atomic_requirement_contract)
@@ -308,13 +316,25 @@ def _install_late_safety_contracts() -> None:
         work_graph,
     )
     from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
-    from .max_efficiency_runtime_contract import enhance_runtime as enhance_max_efficiency_runtime
-    from .parallel_result_determinism_contract import install as install_parallel_result_determinism
-    from .production_tool_parallel_contract import install as install_production_tool_parallel_safety
-    from .runner_parallel_validation_contract import install as install_runner_parallel_validation
+    from .max_efficiency_runtime_contract import (
+        enhance_runtime as enhance_max_efficiency_runtime,
+    )
+    from .parallel_result_determinism_contract import (
+        install as install_parallel_result_determinism,
+    )
+    from .production_tool_parallel_contract import (
+        install as install_production_tool_parallel_safety,
+    )
+    from .runner_parallel_validation_contract import (
+        install as install_runner_parallel_validation,
+    )
     from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
-    from .scheduler_connection_reuse_contract import install as install_scheduler_connection_reuse
-    from .scheduler_parallel_safety_contract import install as install_scheduler_parallel_safety
+    from .scheduler_connection_reuse_contract import (
+        install as install_scheduler_connection_reuse,
+    )
+    from .scheduler_parallel_safety_contract import (
+        install as install_scheduler_parallel_safety,
+    )
 
     install_scheduler_parallel_safety(
         work_graph_module=work_graph,
@@ -349,12 +369,9 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_optimization_contract,
         agentic_pre_design_rag,
         agentic_research_game_design,
-        central_research,
-        ecosystem_discovery,
         model_router,
         production_tools,
         repair_engine,
-        research_coordinator,
         work_graph,
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
@@ -369,18 +386,9 @@ def _install_post_bootstrap_contracts() -> None:
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_relation_index_contract import install as install_small_model_relation_index
-    from .small_model_research_contract import install as install_small_model_research
     from .small_model_tool_guard_contract import install as install_small_model_tool_guard
     from .temporary_skill_contract import install as install_temporary_skill
 
-    if not hasattr(central_research, "_bounded_text"):
-        def _full_research_text(value: str, *, field: str = "research text") -> str:
-            del field
-            return value
-
-        central_research._bounded_text = _full_research_text
-
-    install_small_model_research()
     install_agent_security(
         pre_design_rag_module=agentic_pre_design_rag,
         agentic_research_module=agentic_research_game_design,
@@ -406,6 +414,7 @@ def _install_post_bootstrap_contracts() -> None:
 
     current_tool_loop = model_router.ModelRouter._generate_with_tools
     if not getattr(current_tool_loop, "_mmm_lossless_context_compaction", False):
+
         def _generate_with_compaction(self, *, adapter, request, runtime, stage, role):
             return current_tool_loop(
                 self,
@@ -420,7 +429,6 @@ def _install_post_bootstrap_contracts() -> None:
         _generate_with_compaction.__wrapped__ = current_tool_loop
         model_router.ModelRouter._generate_with_tools = _generate_with_compaction
 
-    research_coordinator.discover_seed_bundle = ecosystem_discovery.discover_seed_bundle
     install_minecraft_mcp_evidence()
     install_bottleneck_elimination()
     install_research_bottleneck_runtime()
