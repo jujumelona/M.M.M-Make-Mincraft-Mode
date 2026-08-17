@@ -9,6 +9,7 @@ _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
 _PAYLOAD_MARKER = "_mmm_qwen35_profile_output_default_v4"
 _CACHE_MARKER = "_mmm_qwen35_skip_cold_cache_reuse_probe_v1"
 _KV_MARKER = "_mmm_qwen35_skip_main_kv_probe_v1"
+_PROBE_MARKER = "_mmm_qwen35_fast_primary_probe_v1"
 _FAST_TUNING_ENV = "MMM_QWEN35_FAST_TUNING_ACTIVE"
 _QWEN_ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _FAST_MTP_WIDTHS = "2,4,8"
@@ -165,6 +166,55 @@ def _install_cache_probe_policy(runtime_tuning: Any) -> None:
     runtime_tuning._cache_reuse_candidates = cache_reuse_candidates
 
 
+def _install_fast_probe_policy(autotune: Any) -> None:
+    """Avoid a second correctness generation for deterministic fast Qwen probes.
+
+    The generic hardware probe wrapper appends a Java sentinel generation to every
+    measured candidate. Fast Qwen tuning already admits a speculative candidate only
+    when its deterministic primary output hash is byte-identical to the baseline, so
+    repeating a second generated sentinel for each width adds decode cost without
+    changing the fast-mode selection rule. Exhaustive tuning and non-Qwen probes keep
+    the full generic sentinel path.
+    """
+
+    current = autotune._probe_server
+    if getattr(current, _PROBE_MARKER, False):
+        return
+    primary = (
+        getattr(current, "__wrapped__", None)
+        if getattr(current, "_mmm_correctness_sentinel", False)
+        else None
+    )
+
+    @wraps(current)
+    def probe(
+        base_url: str,
+        request: Any,
+        *,
+        max_tokens: int,
+        variant: Any,
+    ) -> Any:
+        if (
+            os.environ.get(_FAST_TUNING_ENV, "").strip() == "1"
+            and callable(primary)
+        ):
+            return primary(
+                base_url,
+                request,
+                max_tokens=max_tokens,
+                variant=variant,
+            )
+        return current(
+            base_url,
+            request,
+            max_tokens=max_tokens,
+            variant=variant,
+        )
+
+    setattr(probe, _PROBE_MARKER, True)
+    autotune._probe_server = probe
+
+
 def _install_cold_tuning_policy(autotune: Any) -> None:
     current = autotune.ensure_tuned_server
     if getattr(current, _ENSURE_MARKER, False):
@@ -206,11 +256,13 @@ def install(autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
     _install_output_policy(hardware_policy)
     _install_main_kv_probe_policy()
     _install_cache_probe_policy(runtime_tuning)
+    _install_fast_probe_policy(autotune)
     _install_cold_tuning_policy(autotune)
 
 
 __all__ = [
     "_fast_tuning_defaults",
+    "_install_fast_probe_policy",
     "_output_token_limit",
     "_research_note_output_limit",
     "_research_note_request",
