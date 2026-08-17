@@ -40,12 +40,14 @@ def test_native_tool_payload_uses_llama_openai_fields_without_grammar() -> None:
     assert payload["tools"] == [_tool_schema()]
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
-    assert payload["reasoning_effort"] == "none"
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["temperature"] == 0.7
-    assert payload["top_p"] == 0.8
+    assert "reasoning_effort" not in payload
+    assert "chat_template_kwargs" not in payload
+    assert payload["temperature"] == 0.6
+    assert payload["top_p"] == 0.95
     assert payload["top_k"] == 20
-    assert payload["presence_penalty"] == 1.5
+    assert payload["min_p"] == 0.0
+    assert payload["presence_penalty"] == 0.0
+    assert payload["repeat_penalty"] == 1.0
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
     rendered = "\n".join(
@@ -78,10 +80,12 @@ def test_qwen35_tool_profile_is_model_scoped() -> None:
     qwen_payload = _server_payload(qwen, request)
     generic_payload = _server_payload(generic, request)
 
-    assert qwen_payload["temperature"] == 0.7
-    assert qwen_payload["top_p"] == 0.8
+    assert qwen_payload["temperature"] == 0.6
+    assert qwen_payload["top_p"] == 0.95
     assert qwen_payload["top_k"] == 20
-    assert qwen_payload["presence_penalty"] == 1.5
+    assert qwen_payload["min_p"] == 0.0
+    assert qwen_payload["presence_penalty"] == 0.0
+    assert qwen_payload["repeat_penalty"] == 1.0
     assert generic_payload["temperature"] == 0.0
     assert "top_p" not in generic_payload
     assert "top_k" not in generic_payload
