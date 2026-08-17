@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import json
 import threading
 import time
 from types import SimpleNamespace
 
-import minecraft_mod_ai.complete_planner as complete_planner_module
 import minecraft_mod_ai.model_router as router_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as scheduler_module
 from minecraft_mod_ai.causal_frontier_adapter import authorized_tools
-from minecraft_mod_ai.llama_parallel_runtime_contract import (
-    ReentrantReadWriteLock,
-    _planner_parallel_capacity,
-)
+from minecraft_mod_ai.llama_parallel_runtime_contract import ReentrantReadWriteLock
 from minecraft_mod_ai.model_router import ModelRouter
 
 
@@ -78,53 +73,6 @@ class _ToolAwareAdapter:
         return "plain"
 
 
-class _PlannerProbeRouter:
-    profile = "test"
-
-    def __init__(self) -> None:
-        self.registry = _Registry()
-        self.barrier = threading.Barrier(2)
-        self.lock = threading.Lock()
-        self.active = 0
-        self.max_active = 0
-        self.calls = 0
-
-    def generate_text(
-        self,
-        role,
-        messages,
-        *,
-        media_paths=(),
-        response_format="text",
-    ):
-        assert role == "planner"
-        with self.lock:
-            self.calls += 1
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-        try:
-            self.barrier.wait(timeout=2)
-            system = str(messages[0]["content"])
-            candidate_two = "Candidate 2 of 2" in system
-            payload = {
-                "modules": [
-                    {
-                        "module_id": "candidate_two" if candidate_two else "candidate_one",
-                        "config": {
-                            "requirement_refs": ["request:test"] if candidate_two else [],
-                        },
-                        "depends_on": ["core"] if candidate_two else [],
-                    }
-                ],
-                "acceptance_tests": ["verified"] if candidate_two else [],
-                "completed_deliverables": ["feature"] if candidate_two else [],
-            }
-            return json.dumps(payload)
-        finally:
-            with self.lock:
-                self.active -= 1
-
-
 def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_llama_shared_slots", False)
     assert getattr(ModelRouter.generate_text, "_mmm_preserves_agent_tools", False)
@@ -137,11 +85,6 @@ def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_parallel_router_contract_version", 0) >= 3
     assert getattr(ModelRouter.generation_session, "_mmm_llama_shared_slots", False)
     assert getattr(scheduler_module._capacities, "_mmm_dynamic_llama_slots", False)
-    assert getattr(
-        complete_planner_module._generate_json_page_with_repair,
-        "_mmm_parallel_plan_search",
-        False,
-    )
     assert hasattr(router_module, "_LLAMA_INFERENCE_SLOTS")
 
 
@@ -150,21 +93,6 @@ def test_scheduler_llm_capacity_follows_selected_native_slots(monkeypatch) -> No
     assert scheduler_module._capacities()["llm"] == 4
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
     assert scheduler_module._capacities()["llm"] == 1
-
-
-def test_planner_parallel_capacity_is_native_local_only(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
-    router = SimpleNamespace(profile="test", registry=_Registry())
-    assert _planner_parallel_capacity(router, 2) == 2
-
-    class _RemoteRegistry(_Registry):
-        def role(self, profile, role):
-            value = super().role(profile, role)
-            value.provider = "remote"
-            return value
-
-    remote = SimpleNamespace(profile="test", registry=_RemoteRegistry())
-    assert _planner_parallel_capacity(remote, 2) == 1
 
 
 def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier(
@@ -188,18 +116,12 @@ def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier
     assert tool_result == "tool-aware"
     assert len(adapter.turn_requests) == 1
     request = adapter.turn_requests[0]
-    exposed_names = {
-        str(tool["function"]["name"])
-        for tool in request.tools
-    }
+    exposed_names = {str(tool["function"]["name"]) for tool in request.tools}
     authorized_names = {
         str(tool["function"]["name"])
         for tool in authorized_tools(())
     }
 
-    # Security/role filtering retains the real generation-stage surface. Causal
-    # planning is allowed only to reduce what the model sees on this particular
-    # turn; it may never widen the authorization boundary.
     assert {
         "inspect_existing_mod",
         "search_project_rag",
@@ -210,9 +132,6 @@ def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier
     } <= authorized_names
     assert 1 <= len(exposed_names) <= 3
     assert exposed_names <= authorized_names
-
-    # Unrelated/host-owned stages remain absent from the complete authorized surface,
-    # not merely hidden by the causal selector.
     assert "plan_complete_game" not in authorized_names
     assert "runtime_start_server" not in authorized_names
     assert "package_release" not in authorized_names
@@ -247,28 +166,6 @@ def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier
     assert plain_result == "plain"
     assert len(adapter.generate_requests) == 1
     assert adapter.generate_requests[0].response_schema == schema
-
-
-def test_verified_planner_candidates_use_native_slots(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
-    monkeypatch.setenv("MMM_PLAN_SEARCH_WIDTH", "2")
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    router = _PlannerProbeRouter()
-
-    result = complete_planner_module._generate_json_page_with_repair(
-        router,
-        system_prompt="plan",
-        request={"scope": "multiplayer networking persistence migration"},
-        media_paths=(),
-        expected_contracts=(
-            frozenset({"modules", "acceptance_tests", "completed_deliverables"}),
-        ),
-        stage="production page",
-    )
-
-    assert router.calls == 2
-    assert router.max_active == 2
-    assert result["modules"][0]["module_id"] == "candidate_two"
 
 
 def test_shared_gpu_lock_allows_readers_but_blocks_writer() -> None:
@@ -308,11 +205,7 @@ def test_same_router_llama_requests_overlap_when_parallel_selected(monkeypatch) 
     barrier = threading.Barrier(2)
     events: list[tuple[str, float]] = []
     adapter = _BlockingAdapter(barrier, events)
-    monkeypatch.setattr(
-        router,
-        "_new_text_adapter",
-        lambda config, role: adapter,
-    )
+    monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
 
     results: list[str] = []
 
@@ -342,11 +235,7 @@ def test_direct_router_calls_never_exceed_native_llama_slots(monkeypatch) -> Non
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     router = ModelRouter(profile="test", registry=_Registry())
     adapter = _SlotProbeAdapter()
-    monkeypatch.setattr(
-        router,
-        "_new_text_adapter",
-        lambda config, role: adapter,
-    )
+    monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
 
     results: list[str] = []
 
