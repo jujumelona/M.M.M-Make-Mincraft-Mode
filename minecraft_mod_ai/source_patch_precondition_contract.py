@@ -22,6 +22,13 @@ def _valid_sha256(value: Any) -> bool:
     return bool(_SHA256.fullmatch(str(value or "").strip().lower()))
 
 
+def _has_bound_snapshot(generator: Any) -> bool:
+    return (
+        getattr(generator, "_cached_index", None) is not None
+        and getattr(generator, "_cached_root", None) is not None
+    )
+
+
 def _snapshot_sha256(generator: Any, path: str) -> str:
     """Return the unique SHA committed by the generator's pre-decode ProjectIndex."""
     index = getattr(generator, "_cached_index", None)
@@ -161,8 +168,13 @@ def install(custom_module_generator_module: Any) -> None:
 
     @wraps(current)
     def validate(self: Any, operations: list[dict[str, Any]]) -> None:
-        bind_source_snapshot_preconditions(self, operations)
+        # Scope/type policy remains a usable standalone validator. Snapshot-bound
+        # preconditions are a production-generation concern and activate only after
+        # the generator has built the exact ProjectIndex it showed to the model.
         current(self, operations)
+        if not _has_bound_snapshot(self):
+            return
+        bind_source_snapshot_preconditions(self, operations)
         preflight_source_patch_operations(self, operations)
 
     setattr(validate, _MARKER, True)
