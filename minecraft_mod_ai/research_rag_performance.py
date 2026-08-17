@@ -23,6 +23,7 @@ _MARKER = "_mmm_research_rag_performance_v1"
 _RAG_LOCKS_GUARD = threading.RLock()
 _RAG_LOCKS: dict[str, threading.RLock] = {}
 
+
 def _path_lock(path: Path) -> threading.RLock:
     key = str(path.expanduser().resolve())
     with _RAG_LOCKS_GUARD:
@@ -128,12 +129,18 @@ def _incremental_rag_build_factory(rag: Any, original: Callable[..., dict[str, A
                 semantic=semantic,
                 max_files=max_files,
             )
-            if semantic:
-                try:
+            try:
+                if target.is_file() and rag._is_sqlite(target):
                     with sqlite3.connect(str(target)) as connection:
-                        _ensure_semantic_lsh(connection)
-                except Exception:
-                    pass
+                        _initialize_incremental_state(connection)
+                        _bootstrap_incremental_state(connection)
+                        if semantic:
+                            _ensure_semantic_lsh(connection)
+                        connection.commit()
+            except Exception:
+                # Sidecar indexes are performance-only; the canonical build remains
+                # authoritative if their initialization cannot complete safely.
+                pass
             return result
 
         with _path_lock(target):
@@ -277,8 +284,9 @@ def _incremental_rag_build_factory(rag: Any, original: Callable[..., dict[str, A
                                 flush_batch()
                     flush_batch()
 
-                    connection.execute("DELETE FROM relations")
-                    rag._insert_relations(connection, metadata)
+                    if previous_metadata.get("relations") != metadata.get("relations"):
+                        connection.execute("DELETE FROM relations")
+                        rag._insert_relations(connection, metadata)
                     rag._set_index_meta(connection, "metadata", rag._canonical_json(metadata))
                     rag._set_index_meta(connection, "files_indexed", str(len(current_stats)))
                     chunks_indexed = int(connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
