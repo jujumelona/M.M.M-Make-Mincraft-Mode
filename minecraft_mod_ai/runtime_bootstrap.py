@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from threading import RLock
 
+from . import runtime_contract_composer as _contract_composer
+
 _BOOTSTRAP_LOCK = RLock()
+_RUNTIME_COMPOSITION_VERSION = 1
 _INITIALIZED = False
 
 
@@ -26,18 +29,37 @@ def runtime_initialized() -> bool:
 def _install_runtime_contracts() -> None:
     from .reuse_asset_upgrade_contract import install_postbootstrap, install_prebootstrap
 
-    install_prebootstrap()
-    _install_core_contracts()
-    _install_model_runtime_contracts()
-    _install_validation_contracts()
-    _install_generation_contracts()
-    _install_platform_contracts()
-    _install_planner_contracts()
-    _install_architecture_contracts()
-    _install_late_safety_contracts()
-    _install_public_boundary_contracts()
-    _install_post_bootstrap_contracts()
-    install_postbootstrap()
+    _contract_composer.compose_contract_stages(
+        owner_name="package-runtime-bootstrap",
+        version=_RUNTIME_COMPOSITION_VERSION,
+        # Keep poison/receipt state on the dedicated composer module. If package
+        # initialization aborts and runtime_bootstrap itself is re-imported, the
+        # already-loaded composer can still prevent replay of a partially applied
+        # contract phase in this process.
+        state_owner=_contract_composer,
+        stages=(
+            _contract_composer.ContractStage("prebootstrap", install_prebootstrap),
+            _contract_composer.ContractStage("core", _install_core_contracts),
+            _contract_composer.ContractStage(
+                "model-runtime", _install_model_runtime_contracts
+            ),
+            _contract_composer.ContractStage("validation", _install_validation_contracts),
+            _contract_composer.ContractStage("generation", _install_generation_contracts),
+            _contract_composer.ContractStage("platform", _install_platform_contracts),
+            _contract_composer.ContractStage("planner", _install_planner_contracts),
+            _contract_composer.ContractStage(
+                "architecture", _install_architecture_contracts
+            ),
+            _contract_composer.ContractStage("late-safety", _install_late_safety_contracts),
+            _contract_composer.ContractStage(
+                "public-boundary", _install_public_boundary_contracts
+            ),
+            _contract_composer.ContractStage(
+                "post-bootstrap", _install_post_bootstrap_contracts
+            ),
+            _contract_composer.ContractStage("postbootstrap", install_postbootstrap),
+        ),
+    )
 
 
 def _install_core_contracts() -> None:
