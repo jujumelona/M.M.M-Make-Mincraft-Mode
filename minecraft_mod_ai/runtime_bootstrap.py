@@ -374,6 +374,7 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_research_game_design,
         model_router,
         production_tools,
+        qwen_agent_family_contract,
         repair_engine,
         runtime_regression_fixes,
         work_graph,
@@ -422,3 +423,4 @@ def _install_post_bootstrap_contracts() -> None:
     install_research_bottleneck_runtime()
     runtime_regression_fixes.install()
     install_long_run_resilience()
+    qwen_agent_family_contract.install()
