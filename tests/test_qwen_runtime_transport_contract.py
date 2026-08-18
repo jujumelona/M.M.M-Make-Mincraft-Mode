@@ -193,6 +193,7 @@ def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
 class _FakeAutotune:
     def __init__(self) -> None:
         self.tool_calls = 0
+        self.benchmark_variant: object = runtime_tuning.ServerVariant("baseline")
 
         def probe_server(
             _base_url: str,
@@ -227,6 +228,50 @@ class _FakeAutotune:
             )
 
         self._mmm_run_tuning_variant = run_variant
+
+        def benchmark(
+            _binary: str,
+            _model_path: str,
+            _config: object,
+            request: object,
+            _fingerprint: str,
+        ) -> SimpleNamespace:
+            variant = self.benchmark_variant
+            self._probe_server(
+                "http://127.0.0.1:8910/v1",
+                request,
+                max_tokens=1,
+                variant=variant,
+            )
+            return self._probe_server(
+                "http://127.0.0.1:8910/v1",
+                request,
+                max_tokens=64,
+                variant=variant,
+            )
+
+        self._benchmark = benchmark
+
+
+def test_main_staged_benchmark_requires_tool_probe(monkeypatch) -> None:
+    fake = _FakeAutotune()
+    fake.benchmark_variant = runtime_tuning.ServerVariant("mtp-2", "draft-mtp", 2)
+
+    def passing_probe(_base_url: str, _autotune: object) -> tuple[bool, str]:
+        fake.tool_calls += 1
+        return True, ""
+
+    monkeypatch.setattr(contract, "_tool_probe", passing_probe)
+    contract._install_tool_equivalence_policy(fake)
+    result = fake._benchmark(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config("unsloth/Qwen3.6-27B-MTP-GGUF"),
+        object(),
+        "fingerprint",
+    )
+    assert result.max_tokens == 64
+    assert fake.tool_calls == 1
 
 
 def test_initial_qwen_variant_requires_tool_probe(monkeypatch) -> None:
@@ -301,6 +346,11 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
 
 def test_runtime_installs_zero_reload_tool_calibration_and_single_slot_mtp() -> None:
     assert autotune.ServerVariant is runtime_tuning.ServerVariant
+    assert getattr(
+        autotune._benchmark,
+        "_mmm_qwen_tool_calibration_benchmark_v1",
+        False,
+    )
     assert getattr(
         autotune._mmm_run_tuning_variant,
         "_mmm_qwen_tool_calibration_context_v2",
