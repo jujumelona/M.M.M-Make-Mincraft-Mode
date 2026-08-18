@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import qwen35_runtime_efficiency_contract as contract
+from minecraft_mod_ai.custom_module_generator import _coder_project_context_budget
+from minecraft_mod_ai.model_registry import ModelRegistry
+from minecraft_mod_ai.scale_policy import ScalePolicy
 
 
 def _config():
@@ -163,3 +166,19 @@ def test_fast_probe_skips_only_secondary_correctness_sentinel(monkeypatch) -> No
     monkeypatch.delenv("MMM_QWEN35_FAST_TUNING_ACTIVE", raising=False)
     assert autotune._probe_server("url", object(), max_tokens=96, variant=object()) == "primary-result"
     assert calls == ["sentinel", "primary"]
+
+
+def test_qwen_context_override_is_shared_by_registry_and_host_budget(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
+    registry = ModelRegistry()
+    config = registry.role("t4_local", "coder")
+    router = SimpleNamespace(registry=registry, profile="t4_local")
+    policy = ScalePolicy(model_context_bytes=48 * 1024)
+
+    assert config.max_context == 16384
+    assert _coder_project_context_budget(router, policy, fast_mode=False) == 8192
+
+    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "131072")
+    config = registry.role("t4_local", "coder")
+    assert config.max_context == 131072
+    assert _coder_project_context_budget(router, policy, fast_mode=False) == 48 * 1024
