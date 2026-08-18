@@ -155,8 +155,11 @@ def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
                 )
                 return "http://127.0.0.1:8910/v1"
 
+            def fingerprint(*_args: object) -> str:
+                return "base"
+
             self._launch_selected = launch_selected
-            self._fingerprint = lambda *_args: "base"
+            self._fingerprint = fingerprint
 
     fake = FakeAutotune()
     contract._install_mtp_single_slot_policy(fake)
