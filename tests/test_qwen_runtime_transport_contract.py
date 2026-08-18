@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from types import SimpleNamespace
 
 import pytest
 
 from minecraft_mod_ai import llama_server_autotune as autotune
+from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import qwen_runtime_transport_contract as contract
 
 
@@ -94,6 +96,95 @@ def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
     assert not contract._initial_calibration_variant(
         _tuning_variant("mtp-2|cr64", "draft-mtp", 2, cache_reuse=64)
     )
+
+
+def test_qwen_mtp_skips_unsupported_parallel_refinement() -> None:
+    selected = runtime_tuning.ServerVariant(
+        "mtp-2|ub512",
+        "draft-mtp",
+        2,
+        ubatch=512,
+    )
+    calls: list[object] = []
+
+    def run_variant(*args: object, **kwargs: object) -> object:
+        calls.append((args, kwargs))
+        raise AssertionError("Qwen MTP parallel refinement must not launch")
+
+    result = runtime_tuning._run_parallel_stage(
+        run_variant,
+        binary="llama-server",
+        model_path="/tmp/model.gguf",
+        config=_config("unsloth/Qwen3.6-27B-MTP-GGUF"),
+        benchmark_request=object(),
+        selected=selected,
+        probe_tokens=64,
+        parallel_values=(1, 2, 4),
+        minimum_gain=1.01,
+        forced_parallel=4,
+    )
+
+    winner, parallel_winner, p1_probe, probes = result
+    assert winner.spec_type == "draft-mtp"
+    assert winner.parallel == 1
+    assert parallel_winner is None
+    assert p1_probe is None
+    assert probes == ()
+    assert calls == []
+
+
+def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
+    monkeypatch,
+) -> None:
+    seen: list[tuple[str, int, str]] = []
+
+    class FakeAutotune:
+        def __init__(self) -> None:
+            def launch_selected(
+                _binary: str,
+                _model_path: str,
+                _config: object,
+                selected: object,
+            ) -> str:
+                seen.append(
+                    (
+                        os.environ.get("MMM_LLAMA_PARALLEL", ""),
+                        int(getattr(selected, "parallel", 1)),
+                        str(getattr(selected, "spec_type", "none")),
+                    )
+                )
+                return "http://127.0.0.1:8910/v1"
+
+            self._launch_selected = launch_selected
+            self._fingerprint = lambda *_args: "base"
+
+    fake = FakeAutotune()
+    contract._install_mtp_single_slot_policy(fake)
+    monkeypatch.setenv("MMM_LLAMA_PARALLEL", "4")
+
+    mtp = runtime_tuning.ServerVariant(
+        "mtp-2|p4",
+        "draft-mtp",
+        2,
+        parallel=4,
+    )
+    fake._launch_selected(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF"),
+        mtp,
+    )
+    assert seen[-1] == ("1", 1, "draft-mtp")
+    assert os.environ["MMM_LLAMA_PARALLEL"] == "4"
+
+    baseline = runtime_tuning.ServerVariant("baseline|p4", parallel=4)
+    fake._launch_selected(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF"),
+        baseline,
+    )
+    assert seen[-1] == ("4", 4, "none")
 
 
 class _FakeAutotune:
@@ -203,7 +294,7 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
     assert calls == 0
 
 
-def test_runtime_installs_zero_reload_tool_calibration() -> None:
+def test_runtime_installs_zero_reload_tool_calibration_and_single_slot_mtp() -> None:
     assert getattr(
         autotune._mmm_run_tuning_variant,
         "_mmm_qwen_tool_calibration_context_v2",
@@ -212,5 +303,15 @@ def test_runtime_installs_zero_reload_tool_calibration() -> None:
     assert getattr(
         autotune._probe_server,
         "_mmm_qwen_tool_calibration_probe_v2",
+        False,
+    )
+    assert getattr(
+        runtime_tuning._run_parallel_stage,
+        "_mmm_qwen_mtp_single_slot_stage_v1",
+        False,
+    )
+    assert getattr(
+        autotune._launch_selected,
+        "_mmm_qwen_mtp_single_slot_launch_v1",
         False,
     )
