@@ -49,6 +49,8 @@ def test_successful_composition_is_receipted_and_not_replayed() -> None:
         stages=stages,
     )
 
+    # The mutable calls list changed during installation, but mutable execution state
+    # is not part of graph identity, so the second call safely reuses the receipt.
     assert calls == ["first", "second"]
     assert tuple(receipt.name for receipt in receipts) == ("first", "second")
     assert repeated == receipts
@@ -314,6 +316,43 @@ def test_same_stage_name_with_changed_installer_code_is_rejected() -> None:
     state = composition_state(state_owner, "unit-graph-code")
     assert state is not None
     assert _stage_names(state) == ("phase",)
+
+
+def test_same_stage_code_with_changed_callable_closure_is_rejected() -> None:
+    state_owner = SimpleNamespace()
+    calls: list[str] = []
+
+    def target_a() -> None:
+        calls.append("a")
+
+    def target_b() -> None:
+        calls.append("b")
+
+    def make_installer(target):
+        def install() -> None:
+            target()
+
+        return install
+
+    first = make_installer(target_a)
+    second = make_installer(target_b)
+    assert first.__code__.co_code == second.__code__.co_code
+
+    compose_contract_stages(
+        owner_name="unit-graph-closure",
+        version=11,
+        state_owner=state_owner,
+        stages=(ContractStage("phase", first),),
+    )
+    with pytest.raises(ContractCompositionError, match="graph changed"):
+        compose_contract_stages(
+            owner_name="unit-graph-closure",
+            version=11,
+            state_owner=state_owner,
+            stages=(ContractStage("phase", second),),
+        )
+
+    assert calls == ["a"]
 
 
 def test_duplicate_stage_names_are_rejected_before_install() -> None:
