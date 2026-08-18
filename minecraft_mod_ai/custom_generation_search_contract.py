@@ -126,6 +126,8 @@ class _ResearchEvidenceRouter:
             bundle = failure_bundle
         request_messages = _inject_research_context(sanitized, bundle, reason='validation_failure_research' if failure_bundle is not None else 'initial_plan_docs_examples')
         text = self._router.generate_text(role, request_messages, **kwargs)
+        if kwargs.get('enable_tools') is True:
+            return text
         seen_states: set[str] = set()
         while True:
             evolved, violations = engine.evolve_from_generation(text)
@@ -139,7 +141,7 @@ class _ResearchEvidenceRouter:
             if len(seen_states) > _evolution_state_budget():
                 raise RuntimeError('Research/generation evolution exceeded the explicit host state budget without reaching evidence/dependency convergence.')
             context = evolved if evolved is not None else engine.bundle()
-            request_messages = [*_inject_research_context(sanitized, context, reason='draft_evidence_evolution', dependency_violations=violation_payload), {'role': 'assistant', 'content': text}, {'role': 'user', 'content': 'Regenerate the complete JSON patch. Preserve approved functionality, incorporate the newly retrieved repository/docs evidence, and remove every dependency-monitor violation. Do not invent dependency names or coordinates from memory.'}]
+            request_messages = [*_inject_research_context(sanitized, context, reason='draft_evidence_evolution', dependency_violations=violation_payload), {'role': 'assistant', 'content': text}, {'role': 'user', 'content': 'Continue implementing the approved functionality using the current workspace and available evidence. Correct dependency-monitor violations in the actual source/resource files, preserve approved behavior, and do not invent dependency names or coordinates from memory. Return only a concise work summary after the edits are complete.'}]
             text = self._router.generate_text(role, request_messages, **kwargs)
 
     def receipt(self) -> dict[str, Any]:
@@ -160,7 +162,7 @@ class _StrategyRouter:
         if role != 'coder':
             return self._router.generate_text(role, messages, **kwargs)
         augmented = [dict(message) for message in messages]
-        augmented.insert(1 if augmented and augmented[0].get('role') == 'system' else 0, {'role': 'system', 'content': f'Host candidate-search directive: solve independently using strategy={self._strategy}. This is candidate {self._candidate_index + 1}/{self._count}. Keep the exact JSON/patch contract and requested functionality; do not mention candidate search in generated files.'})
+        augmented.insert(1 if augmented and augmented[0].get('role') == 'system' else 0, {'role': 'system', 'content': f'Host candidate-search directive: solve independently using strategy={self._strategy}. This is candidate {self._candidate_index + 1}/{self._count}. Implement the requested functionality directly in the current workspace with the available RAG/MCP tools. Do not invent a file-plan or JSON-patch response protocol, and do not mention candidate search in generated files.'})
         return self._router.generate_text(role, augmented, **kwargs)
 
 def _strip_research_router(router: Any) -> Any:
