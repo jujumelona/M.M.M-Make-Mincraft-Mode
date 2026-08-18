@@ -20,6 +20,24 @@ def _project(workspace, name: str = "demo"):
     return project
 
 
+def _capture_first_party_payload(runtime, monkeypatch):
+    captured = {}
+    runtime._schema_cache["generation"] = ()
+    runtime._allowed_tool_cache["generation"] = frozenset({"apply_source_patch"})
+
+    def fake_run_async(_function, *args):
+        captured["args"] = args
+        return {
+            "structured_content": {"ok": True},
+            "text": [],
+            "parsed_text": None,
+            "resources": [],
+        }
+
+    monkeypatch.setattr(runtime, "_run_async", fake_run_async)
+    return captured
+
+
 def test_model_source_patch_schema_exposes_only_files_and_content() -> None:
     assert _MODEL_SOURCE_PATCH_SCHEMA["required"] == ["files"]
     assert set(_MODEL_SOURCE_PATCH_SCHEMA["properties"]) == {"files"}
@@ -55,6 +73,58 @@ def test_generation_tool_schema_hides_raw_patch_protocol(monkeypatch, tmp_path) 
     )
     assert patch_tool["function"]["parameters"] == _MODEL_SOURCE_PATCH_SCHEMA
     assert set(patch_tool["function"]["parameters"]["properties"]) == {"files"}
+
+
+def test_host_stage_call_preserves_raw_strict_patch_contract(monkeypatch, tmp_path) -> None:
+    runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
+    captured = _capture_first_party_payload(runtime, monkeypatch)
+    raw = {
+        "project_root": "demo",
+        "operations": [
+            {
+                "operation": "create",
+                "path": "src/main/java/example/Example.java",
+                "content": "package example;\nfinal class Example {}\n",
+            }
+        ],
+    }
+
+    runtime.call("generation", "apply_source_patch", raw)
+
+    assert captured["args"] == ("generation", "apply_source_patch", raw)
+
+
+def test_model_scoped_call_materializes_host_patch_metadata(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    _project(workspace)
+    runtime = AgentToolRuntime(profile="test", workspace_root=workspace)
+    captured = _capture_first_party_payload(runtime, monkeypatch)
+
+    runtime.call_scoped(
+        "generation",
+        "apply_source_patch",
+        {
+            "files": [
+                {
+                    "path": "src/main/java/example/Example.java",
+                    "content": "package example;\nfinal class Example {}\n",
+                }
+            ]
+        },
+        external_server_ids=(),
+    )
+
+    stage, name, payload = captured["args"]
+    assert stage == "generation"
+    assert name == "apply_source_patch"
+    assert payload["project_root"] == "demo"
+    assert payload["operations"] == [
+        {
+            "operation": "create",
+            "path": "src/main/java/example/Example.java",
+            "content": "package example;\nfinal class Example {}\n",
+        }
+    ]
 
 
 def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> None:
