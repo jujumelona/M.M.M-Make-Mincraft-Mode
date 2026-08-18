@@ -16,7 +16,7 @@ native llama tuning pipeline) one shared execution contract:
 * one owner may use only one composition version and one declared stage/boundary graph
   for the process lifetime;
 * stage graph identity includes installer code plus immutable/callable dependencies,
-  while deliberately excluding mutable runtime contents from the fingerprint;
+  while deliberately excluding mutable execution state and runtime-installed markers;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
@@ -92,7 +92,9 @@ def call_shape(positional: int = 0, *keywords: str) -> CallShape:
     return CallShape(positional=int(positional), keywords=normalized)
 
 
-def _callable_identity(value: Any) -> str:
+def _static_callable_identity(value: Any) -> str:
+    """Implementation identity that never includes mutable runtime marker state."""
+
     if not callable(value):
         return "<non-callable>"
     module = str(getattr(value, "__module__", ""))
@@ -101,13 +103,22 @@ def _callable_identity(value: Any) -> str:
         or getattr(value, "__name__", "")
         or type(value).__qualname__
     )
+    return f"{module}:{qualname}"
+
+
+def _callable_identity(value: Any) -> str:
+    """Diagnostic identity; unlike graph identity this intentionally includes markers."""
+
+    base = _static_callable_identity(value)
+    if not callable(value):
+        return base
     marker_names = sorted(
         name
         for name in dir(value)
         if name.startswith("_mmm_") and bool(getattr(value, name, False))
     )
     marker_suffix = ",".join(marker_names)
-    return f"{module}:{qualname}" + (f"[{marker_suffix}]" if marker_suffix else "")
+    return base + (f"[{marker_suffix}]" if marker_suffix else "")
 
 
 def _code_digest(value: Any) -> str:
@@ -143,14 +154,14 @@ def _dependency_identity(value: Any) -> Any:
         owner = getattr(value, "__self__", None)
         return (
             "method",
-            _callable_identity(value.__func__),
+            _static_callable_identity(value.__func__),
             _code_digest(value.__func__),
             (type(owner).__module__, type(owner).__qualname__)
             if owner is not None
             else None,
         )
     if inspect.isfunction(value) or inspect.isbuiltin(value):
-        return ("callable", _callable_identity(value), _code_digest(value))
+        return ("callable", _static_callable_identity(value), _code_digest(value))
     if isinstance(value, type):
         return ("type", value.__module__, value.__qualname__)
     if value is None or isinstance(value, (bool, int, float, str, bytes)):
@@ -185,7 +196,7 @@ def _installer_identity(value: Callable[[], None]) -> tuple[Any, ...]:
         captured.append((name, _dependency_identity(item)))
 
     return (
-        _callable_identity(target),
+        _static_callable_identity(target),
         _code_digest(target),
         tuple(captured),
         _dependency_identity(bound_owner) if bound_owner is not None else None,
