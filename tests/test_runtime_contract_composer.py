@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import wraps
 from types import SimpleNamespace
 
 import pytest
@@ -125,6 +126,10 @@ def test_callable_boundary_rejects_signature_drift_without_executing_wrapper() -
     runtime = SimpleNamespace(handler=handler)
 
     def narrow_wrapper() -> None:
+        # functools.wraps normally makes inspect.signature() report the original
+        # signature through __wrapped__. The real outer callable still accepts only
+        # one argument, so the composer must validate follow_wrapped=False.
+        @wraps(handler)
         def replacement(left: object) -> None:
             del left
 
