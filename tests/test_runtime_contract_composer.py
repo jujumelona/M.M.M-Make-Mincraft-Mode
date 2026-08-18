@@ -45,14 +45,15 @@ def test_successful_composition_is_receipted_and_not_replayed() -> None:
     assert calls == ["first", "second"]
     assert tuple(receipt.name for receipt in receipts) == ("first", "second")
     assert repeated == receipts
-    assert composition_state(state_owner, "unit-success") == {
-        "version": 1,
-        "completed": ("first", "second"),
-        "receipts": receipts,
-        "active": None,
-        "failed": None,
-        "installed": True,
-    }
+    state = composition_state(state_owner, "unit-success")
+    assert state is not None
+    assert state["version"] == 1
+    assert state["graph_signature"][0] == ("first", "second")
+    assert state["completed"] == ("first", "second")
+    assert state["receipts"] == receipts
+    assert state["active"] is None
+    assert state["failed"] is None
+    assert state["installed"] is True
 
 
 def test_failed_stage_poison_prevents_partial_replay() -> None:
@@ -248,6 +249,40 @@ def test_version_bump_cannot_bypass_poisoned_process_state() -> None:
     assert state is not None
     assert state["version"] == 1
     assert state["failed"]["stage"] == "failing"
+
+
+def test_same_version_graph_change_is_rejected() -> None:
+    state_owner = SimpleNamespace()
+    calls: list[str] = []
+
+    def first() -> None:
+        calls.append("first")
+
+    def second() -> None:
+        calls.append("second")
+
+    compose_contract_stages(
+        owner_name="unit-graph",
+        version=7,
+        state_owner=state_owner,
+        stages=(ContractStage("first", first),),
+    )
+    with pytest.raises(ContractCompositionError, match="graph changed"):
+        compose_contract_stages(
+            owner_name="unit-graph",
+            version=7,
+            state_owner=state_owner,
+            stages=(
+                ContractStage("first", first),
+                ContractStage("second", second),
+            ),
+        )
+
+    assert calls == ["first"]
+    state = composition_state(state_owner, "unit-graph")
+    assert state is not None
+    assert state["version"] == 7
+    assert state["graph_signature"][0] == ("first",)
 
 
 def test_duplicate_stage_names_are_rejected_before_install() -> None:
