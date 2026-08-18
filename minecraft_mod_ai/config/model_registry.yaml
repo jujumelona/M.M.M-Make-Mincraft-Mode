@@ -76,7 +76,7 @@ _qwen35_9b: &qwen35_9b
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   torch_dtype: float16
-  max_context: 32768
+  max_context: 262144
   max_input_tokens: 0
   max_new_tokens: 8192
   min_free_vram_mb: 1000
