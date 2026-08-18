@@ -50,7 +50,7 @@ def _fast_tuning_defaults() -> dict[str, str]:
         "MMM_LLAMA_UBATCH_CANDIDATES": "512",
         "MMM_LLAMA_NGRAM_SPEC_TYPES": "",
         "MMM_LLAMA_AUTOTUNE_TOKENS": "96",
-        "MMM_QWEN35_MTP_DRAFT_KV": "q4_0",
+        "MMM_QWEN35_MTP_DRAFT_KV": "f16",
         _FAST_TUNING_ENV: "1",
     }
 
