@@ -70,14 +70,14 @@ def _experience_summary(root: Path | None, prompt: str) -> dict[str, Any]:
 
     unique: dict[str, Mapping[str, Any]] = {}
     try:
+        rows_by_class = trajectory_memory.relevant_trajectories_many(
+            root,
+            prompt,
+            task_classes=_EXPERIENCE_CLASSES,
+            limit=6,
+        )
         for task_class in _EXPERIENCE_CLASSES:
-            rows = trajectory_memory.relevant_trajectories(
-                root,
-                prompt,
-                task_class=task_class,
-                limit=6,
-            )
-            for row in rows:
+            for row in rows_by_class.get(task_class, ()):
                 identity = str(row.get('trajectory_id', '')).strip()
                 if identity:
                     unique.setdefault(identity, row)
