@@ -142,6 +142,126 @@ def test_generate_turn_parses_native_openai_tool_calls(monkeypatch) -> None:
     assert "mmm/host-tool-envelope" not in rendered
 
 
+def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatch) -> None:
+    payloads: list[dict[str, object]] = []
+    responses = [
+        _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "I need exact evidence before answering.",
+                    }
+                }]
+            },
+        ),
+        _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_evidence",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"q":"exact api"}',
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            },
+        ),
+    ]
+    monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
+
+    def post(url, *, json, timeout):
+        payloads.append(json)
+        return responses.pop(0)
+
+    monkeypatch.setattr(httpx, "post", post)
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "inspect then act"},),
+            tools=(_tool(),),
+            tool_choice="auto",
+        )
+    )
+
+    assert len(payloads) == 2
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].name == "lookup"
+    assert turn.reasoning_content == "I need exact evidence before answering."
+    continuation_messages = payloads[1]["messages"]
+    assert continuation_messages[-2]["role"] == "assistant"
+    assert continuation_messages[-2]["reasoning_content"] == "I need exact evidence before answering."
+    assert continuation_messages[-1]["role"] == "user"
+    assert "Do not return another reasoning-only response" in continuation_messages[-1]["content"]
+    assert payloads[1]["tools"] == [_tool()]
+
+
+def test_repeated_reasoning_only_turn_fails_closed_after_one_continuation(monkeypatch) -> None:
+    calls = 0
+    monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
+
+    def post(url, *, json, timeout):
+        nonlocal calls
+        calls += 1
+        return _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "reasoning_content": f"reasoning pass {calls}",
+                    }
+                }]
+            },
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    with pytest.raises(ModelBackendError) as caught:
+        _adapter().generate_turn(
+            GenerationRequest(
+                messages=({"role": "user", "content": "inspect then act"},),
+                tools=(_tool(),),
+                tool_choice="auto",
+            )
+        )
+
+    assert calls == 2
+    assert "reasoning-only continuation without a semantic action" in str(caught.value)
+
+
+def test_fully_empty_native_turn_still_fails_immediately(monkeypatch) -> None:
+    calls = 0
+    monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
+
+    def post(url, *, json, timeout):
+        nonlocal calls
+        calls += 1
+        return _CompletionResponse(
+            status_code=200,
+            payload={"choices": [{"message": {"content": ""}}]},
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    with pytest.raises(ModelBackendError) as caught:
+        _adapter().generate_turn(
+            GenerationRequest(
+                messages=({"role": "user", "content": "inspect then act"},),
+                tools=(_tool(),),
+                tool_choice="auto",
+            )
+        )
+
+    assert calls == 1
+    assert "neither visible content, reasoning, nor tool calls" in str(caught.value)
+
+
 def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatch) -> None:
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
