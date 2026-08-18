@@ -107,3 +107,19 @@ def test_llama_pipeline_uses_same_fail_closed_kernel() -> None:
     assert "compose_contract_stages(" in source
     assert "boundaries=self._callable_boundaries()" in source
     assert "_mmm_tuning_pipeline_receipts" in source
+
+
+def test_llama_runtime_types_are_owned_before_any_tuning_wrapper() -> None:
+    source = (PACKAGE / "llama_tuning_pipeline.py").read_text(encoding="utf-8")
+    runtime_types = source.index('TuningStage("runtime-types"')
+    hardware = source.index('TuningStage("hardware"')
+    runtime = source.index('TuningStage("runtime"')
+
+    assert runtime_types < hardware < runtime
+    assert "_install_runtime_type_ownership" in source
+    assert "_mmm_runtime_tuning_type_owner" in source
+    assert '"autotune.server_variant"' in source
+    assert '"ubatch"' in source
+    assert '"parallel"' in source
+    assert '"cache_reuse"' in source
+    assert '"draft_p_min"' in source
