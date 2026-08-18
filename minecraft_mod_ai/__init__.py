@@ -4,6 +4,10 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
+from .qwen_agent_family_contract import install as _install_qwen_agent_family_contract
+
+_install_qwen_agent_family_contract()
+
 from .api import (
     ChatReply,
     CompleteChatReply,
