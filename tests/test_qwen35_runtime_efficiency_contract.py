@@ -97,7 +97,7 @@ def test_fast_tuning_defaults_remove_duplicate_reload_stages(monkeypatch) -> Non
     assert defaults["MMM_LLAMA_MTP_P_MIN_CANDIDATES"] == "0"
     assert defaults["MMM_LLAMA_UBATCH_CANDIDATES"] == "512"
     assert defaults["MMM_LLAMA_NGRAM_SPEC_TYPES"] == ""
-    assert defaults["MMM_QWEN35_MTP_DRAFT_KV"] == "q4_0"
+    assert defaults["MMM_QWEN35_MTP_DRAFT_KV"] == "f16"
     assert defaults["MMM_LLAMA_AUTOTUNE_TOKENS"] == "96"
 
 
@@ -127,7 +127,7 @@ def test_fast_cold_policy_is_temporary_and_respects_explicit_values(monkeypatch)
     contract._install_cold_tuning_policy(autotune)
 
     assert autotune.ensure_tuned_server(_config(), object()).endswith("/v1")
-    assert seen == {"widths": "1,8", "p_min": "0", "draft_kv": "q4_0"}
+    assert seen == {"widths": "1,8", "p_min": "0", "draft_kv": "f16"}
     assert os.environ["MMM_LLAMA_MTP_WIDTHS"] == "1,8"
     assert "MMM_LLAMA_MTP_P_MIN_CANDIDATES" not in os.environ
     assert "MMM_QWEN35_MTP_DRAFT_KV" not in os.environ
