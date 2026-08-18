@@ -52,11 +52,12 @@ def test_projector_is_loaded_only_when_media_upgrades_managed_server(
         "_resolve_mmproj_path",
         lambda _config: str(projector),
     )
+    monkeypatch.delenv(multimodal._ACTIVE_MEDIA_ENV, raising=False)
 
     autotune = SimpleNamespace()
     autotune._MANAGED_PROCESS = _RunningProcess()
     autotune._MANAGED_URL = "http://127.0.0.1:8910/v1"
-    os.environ["LLAMA_SERVER_URL"] = autotune._MANAGED_URL
+    monkeypatch.setenv("LLAMA_SERVER_URL", autotune._MANAGED_URL)
     launched_args: list[str] = []
     shutdown_urls: list[str] = []
 
