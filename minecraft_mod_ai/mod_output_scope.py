@@ -16,7 +16,6 @@ _STANDALONE_SUFFIXES = frozenset(
         ".mcworld",
         ".mca",
         ".mcr",
-        ".npz",
     }
 )
 _STANDALONE_ROOT_FILES = frozenset(
@@ -46,6 +45,25 @@ _BUILDER_OUTPUT_NAMES = frozenset(
         "buildspec.yml",
         "block_delta.json",
         "block-delta.json",
+    }
+)
+_BUILDER_NPZ_NAMES = frozenset(
+    {
+        "blocks.npz",
+        "block_delta.npz",
+        "block-delta.npz",
+        "block_deltas.npz",
+        "block-deltas.npz",
+        "world_delta.npz",
+        "world-delta.npz",
+    }
+)
+_BUILDER_NPZ_DIRS = frozenset(
+    {
+        "builder",
+        "buildspec",
+        "block_delta",
+        "block-delta",
     }
 )
 
@@ -78,6 +96,15 @@ def mod_output_scope_violation(path: Any) -> str | None:
         return f"standalone world/builder artifact suffix {suffix}"
     if name in _BUILDER_OUTPUT_NAMES or name.endswith(".buildspec"):
         return "Builder/BuildSpec output"
+    if suffix == ".npz" and (
+        name in _BUILDER_NPZ_NAMES
+        or any(
+            marker in name
+            for marker in ("block_delta", "block-delta", "blockdelta", "world_delta", "world-delta")
+        )
+        or any(part in _BUILDER_NPZ_DIRS for part in parts[:-1])
+    ):
+        return "Builder NPZ block-delta output"
 
     # A normal mod source tree can legitimately contain packages named ``world`` or
     # resource paths named ``advancements``. Only recognize save-layout directories
