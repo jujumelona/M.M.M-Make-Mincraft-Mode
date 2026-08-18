@@ -12,13 +12,13 @@ with an upstream MTP+mmproj incompatibility launch media requests non-speculativ
 import base64
 import mimetypes
 import os
-from dataclasses import replace
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Mapping
 
 
 _BASE_ARGS_MARKER = "_mmm_llama_multimodal_base_args_v2"
+_BENCHMARK_MARKER = "_mmm_llama_multimodal_text_benchmark_v1"
 _ENSURE_MARKER = "_mmm_llama_multimodal_ensure_v2"
 _LAUNCH_MARKER = "_mmm_llama_multimodal_safe_launch_v1"
 _PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
@@ -143,18 +143,6 @@ def _messages_with_media(request: Any) -> list[dict[str, Any]]:
     return messages
 
 
-def _without_media(request: Any) -> Any:
-    """Create the exact same request without media for cold text-only autotuning."""
-
-    try:
-        return replace(request, media_paths=())
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(
-            "Multimodal llama.cpp requests must use a dataclass request so cold "
-            "text-only autotuning cannot silently alter request semantics."
-        ) from exc
-
-
 def _install_base_args(autotune: Any) -> None:
     current = autotune._base_args
     if getattr(current, _BASE_ARGS_MARKER, False):
@@ -183,6 +171,45 @@ def _install_base_args(autotune: Any) -> None:
     autotune._base_args = base_args
 
 
+def _restore_env(name: str, previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
+
+
+def _install_benchmark_policy(autotune: Any) -> None:
+    """Keep media cold-start autotuning text-only while final launch stays multimodal."""
+
+    current = autotune._benchmark
+    if getattr(current, _BENCHMARK_MARKER, False):
+        return
+
+    @wraps(current)
+    def benchmark(
+        binary: str,
+        model_path: str,
+        config: Any,
+        request: Any,
+        fingerprint: str,
+    ) -> Any:
+        if (
+            os.environ.get(_ACTIVE_MEDIA_ENV, "").strip() != "1"
+            or not _requires_media_baseline(config)
+        ):
+            return current(binary, model_path, config, request, fingerprint)
+
+        previous = os.environ.get(_ACTIVE_MEDIA_ENV)
+        os.environ.pop(_ACTIVE_MEDIA_ENV, None)
+        try:
+            return current(binary, model_path, config, request, fingerprint)
+        finally:
+            _restore_env(_ACTIVE_MEDIA_ENV, previous)
+
+    setattr(benchmark, _BENCHMARK_MARKER, True)
+    autotune._benchmark = benchmark
+
+
 def _install_launch_policy(autotune: Any) -> None:
     """Keep text MTP, but use baseline vision where upstream MTP+mmproj is unsafe."""
 
@@ -202,13 +229,6 @@ def _install_launch_policy(autotune: Any) -> None:
 
     setattr(launch_selected, _LAUNCH_MARKER, True)
     autotune._launch_selected = launch_selected
-
-
-def _restore_env(name: str, previous: str | None) -> None:
-    if previous is None:
-        os.environ.pop(name, None)
-    else:
-        os.environ[name] = previous
 
 
 def _managed_server_ready(autotune: Any) -> tuple[Any | None, str]:
@@ -269,13 +289,6 @@ def _install_ensure(autotune: Any) -> None:
         if _is_managed_media_server(autotune, process, managed_url):
             return current(config, request)
 
-        # If the first request is media, never benchmark unsupported MTP+mmproj.
-        # Prime the ordinary text-only autotune/cache first, then retire only the
-        # MMM-owned text process before starting the projector-backed media server.
-        if process is None and _requires_media_baseline(config):
-            current(config, _without_media(request))
-            process, managed_url = _managed_server_ready(autotune)
-
         # An MMM-owned text-only process cannot consume image_url parts. Retire it
         # before launch. External LLAMA_SERVER_URL endpoints remain user-owned and are
         # not killed; they are expected to provide their own multimodal capability.
@@ -324,15 +337,16 @@ def _install_payload(hardware_policy: Any) -> None:
 
 def install(autotune: Any, hardware_policy: Any) -> None:
     _install_base_args(autotune)
+    _install_benchmark_policy(autotune)
     _install_launch_policy(autotune)
     _install_ensure(autotune)
     _install_payload(hardware_policy)
 
 
 __all__ = [
+    "_install_benchmark_policy",
     "_messages_with_media",
     "_requires_media_baseline",
     "_resolve_mmproj_path",
-    "_without_media",
     "install",
 ]
