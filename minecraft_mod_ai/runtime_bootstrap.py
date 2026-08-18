@@ -7,7 +7,7 @@ from threading import RLock
 from . import runtime_contract_composer as _contract_composer
 
 _BOOTSTRAP_LOCK = RLock()
-_RUNTIME_COMPOSITION_VERSION = 1
+_RUNTIME_COMPOSITION_VERSION = 2
 _INITIALIZED = False
 
 
@@ -28,14 +28,11 @@ def runtime_initialized() -> bool:
 
 def _install_runtime_contracts() -> None:
     from .reuse_asset_upgrade_contract import install_postbootstrap, install_prebootstrap
+    from .runtime_wrapper_integrity import verify_installed_wrappers
 
     _contract_composer.compose_contract_stages(
         owner_name="package-runtime-bootstrap",
         version=_RUNTIME_COMPOSITION_VERSION,
-        # Keep poison/receipt state on the dedicated composer module. If package
-        # initialization aborts and runtime_bootstrap itself is re-imported, the
-        # already-loaded composer can still prevent replay of a partially applied
-        # contract phase in this process.
         state_owner=_contract_composer,
         stages=(
             _contract_composer.ContractStage("prebootstrap", install_prebootstrap),
@@ -58,6 +55,7 @@ def _install_runtime_contracts() -> None:
                 "post-bootstrap", _install_post_bootstrap_contracts
             ),
             _contract_composer.ContractStage("postbootstrap", install_postbootstrap),
+            _contract_composer.ContractStage("integrity", verify_installed_wrappers),
         ),
     )
 
@@ -298,9 +296,6 @@ def _install_architecture_contracts() -> None:
     install_atomic_efficiency(atomic_requirement_contract)
     install_atomic_routes(atomic_requirement_contract, production_contract)
     install_reviewer_role(atomic_requirement_contract)
-    # Keep atomic analysis utilities available, but do not wrap the default planner
-    # or executor with a second model-review/IR gate. Host templates already own the
-    # production structure and merge model-provided values fail-open.
     install_atomic_quality(
         atomic_requirement_contract,
         quality_evidence,
