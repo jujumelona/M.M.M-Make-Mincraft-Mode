@@ -196,8 +196,8 @@ def _inject_reasoning_history(
     if request.tools and request.tool_choice == "auto" and not any(
         signature in store for signature in signatures
     ):
-        # A fresh auto-tool conversation must not inherit traces from a prior job.
-        store.clear()
+        # Exact signatures already prevent a fresh conversation from inheriting
+        # another request's trace; keep the bounded store intact for concurrent loops.
         return request
 
     changed = False
@@ -265,10 +265,6 @@ def install() -> None:
             family = _model_family(str(getattr(self.config, "model_id", "")))
             qwen36_agent = family == "qwen3.6" and _qwen36_agent_request(request)
             prepared = _inject_reasoning_history(self, request) if qwen36_agent else request
-            if family != "qwen3.6" or _forced_tool_choice(request.tool_choice):
-                store = getattr(self, "_mmm_qwen36_reasoning_traces", None)
-                if isinstance(store, OrderedDict):
-                    store.clear()
             response = current_generate_turn(self, prepared)
             if qwen36_agent:
                 _remember_reasoning(self, response)
