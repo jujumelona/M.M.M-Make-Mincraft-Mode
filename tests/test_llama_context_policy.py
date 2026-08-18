@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
+from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai.llama_tuning_pipeline import NativeLlamaTuningPipeline
 from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
+    _context_size,
     _install_measured_fast_base_args,
 )
 
@@ -31,6 +33,28 @@ def _install_context_authority(holder: SimpleNamespace) -> None:
     pipeline._install_profile_context_authority()
 
 
+def test_base_args_default_to_model_native_context(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
+    args = autotune._base_args(
+        "llama-server",
+        "/tmp/model.gguf",
+        _generic_config(),
+        8910,
+    )
+    assert args[args.index("--ctx-size") + 1] == "0"
+
+
+def test_base_args_honor_explicit_context_override(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "24576")
+    args = autotune._base_args(
+        "llama-server",
+        "/tmp/model.gguf",
+        _generic_config(),
+        8910,
+    )
+    assert args[args.index("--ctx-size") + 1] == "24576"
+
+
 def test_profile_authority_defaults_generic_server_to_model_native_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
 
@@ -55,6 +79,18 @@ def test_profile_authority_honors_explicit_generic_context_override(monkeypatch)
     assert args[args.index("--ctx-size") + 1] == "24576"
 
 
+def test_qwen_hotpath_alone_defaults_to_model_native_context(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+
+    def base(binary, model, config, port):
+        return [binary, "-m", model, "--port", str(port), "--ctx-size", "4096"]
+
+    holder = SimpleNamespace(_base_args=base)
+    _install_measured_fast_base_args(holder)
+    args = holder._base_args("server", "model", _qwen_config(), 8910)
+    assert args[args.index("--ctx-size") + 1] == "0"
+
+
 def test_qwen_hotpath_cannot_shrink_model_native_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
@@ -67,6 +103,13 @@ def test_qwen_hotpath_cannot_shrink_model_native_context(monkeypatch) -> None:
     _install_context_authority(holder)
     args = holder._base_args("server", "model", _qwen_config(), 8910)
     assert args[args.index("--ctx-size") + 1] == "0"
+
+
+def test_qwen_context_helper_uses_only_explicit_override(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+    assert _context_size(_qwen_config()) == 0
+    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
+    assert _context_size(_qwen_config()) == 16384
 
 
 def test_profile_authority_preserves_explicit_qwen_context(monkeypatch) -> None:
