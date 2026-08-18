@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -8,7 +9,7 @@ import sys
 import tempfile
 import threading
 from contextlib import AsyncExitStack
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Collection, Mapping
 
 import anyio
@@ -50,6 +51,48 @@ _VALID_STAGES = frozenset(
         "training",
     }
 )
+_MODEL_SOURCE_PREFIXES = (
+    "src/main/java/",
+    "src/main/resources/",
+    "src/test/java/",
+    "src/gametest/",
+)
+_MODEL_SOURCE_PATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["project_root", "files"],
+    "properties": {
+        "project_root": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Existing project directory inside the bound MMM workspace.",
+        },
+        "files": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["path", "content"],
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": (
+                            "Project-relative semantic source/resource path. Only src/main/java, "
+                            "src/main/resources, src/test/java and src/gametest are writable."
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Complete UTF-8 text for the file.",
+                    },
+                },
+            },
+        },
+    },
+}
 _DEFAULT_MAX_TOOL_RESULT_BYTES = 48 * 1024
 _MIN_TOOL_RESULT_BYTES = 8 * 1024
 _MAX_TOOL_RESULT_BYTES = 128 * 1024
@@ -159,6 +202,23 @@ class AgentToolRuntime:
                 name = str(item.get("name", "")).strip()
                 if not name or name in _BLOCKED_MODEL_TOOLS:
                     continue
+                if selected == "generation" and name == "apply_source_patch":
+                    schemas.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "description": (
+                                    "Write complete semantic source/resource file text. The host "
+                                    "derives create-vs-replace, exact SHA-256 preconditions and the "
+                                    "transactional patch. Build infrastructure and Gradle files are "
+                                    "not writable through this model-facing contract."
+                                ),
+                                "parameters": _MODEL_SOURCE_PATCH_SCHEMA,
+                            },
+                        }
+                    )
+                    continue
                 parameters = item.get("input_schema")
                 if not isinstance(parameters, Mapping):
                     parameters = {"type": "object", "properties": {}}
@@ -239,6 +299,8 @@ class AgentToolRuntime:
                 f"Tool {tool_name!r} is not exposed in stage {selected!r}."
             )
         payload = dict(arguments or {})
+        if selected == "generation" and tool_name == "apply_source_patch":
+            payload = _materialize_model_source_patch(self.workspace_root, payload)
         try:
             if tool_name in EXTERNAL_TOOL_NAMES:
                 result = self._external_bridge.call(
@@ -417,6 +479,116 @@ class _MCPStdioSession:
         if stack is None:
             return None
         return await stack.__aexit__(exc_type, exc, tb)
+
+
+def _materialize_model_source_patch(
+    workspace_root: str | Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Convert model file text into the strict patch protocol owned by the host.
+
+    The model chooses semantic source/resource paths and complete text only. The host
+    enforces the writable namespace, observes current file existence and computes the
+    exact create/replace operation plus SHA-256 precondition immediately before the MCP
+    transaction. Build infrastructure therefore cannot be represented by this contract.
+    """
+
+    extra = set(payload) - {"project_root", "files"}
+    if extra:
+        raise AgentToolRuntimeError(
+            "Model-facing source writes accept only project_root and files; "
+            f"host-owned patch fields are forbidden: {sorted(extra)}"
+        )
+    raw_project_root = payload.get("project_root")
+    if not isinstance(raw_project_root, str) or not raw_project_root.strip():
+        raise AgentToolRuntimeError("project_root must be a non-empty string")
+
+    workspace = Path(workspace_root).expanduser().resolve()
+    candidate_root = Path(raw_project_root).expanduser()
+    if not candidate_root.is_absolute():
+        candidate_root = workspace / candidate_root
+    if candidate_root.is_symlink():
+        raise AgentToolRuntimeError("project_root may not be a symlink")
+    root = candidate_root.resolve()
+    try:
+        root.relative_to(workspace)
+    except ValueError as exc:
+        raise AgentToolRuntimeError("project_root escaped the bound workspace") from exc
+    if not root.is_dir():
+        raise AgentToolRuntimeError("project_root must be an existing directory")
+
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        raise AgentToolRuntimeError("files must be a non-empty list")
+    if len(raw_files) > 64:
+        raise AgentToolRuntimeError("files exceeds the model-facing 64-file batch limit")
+
+    operations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_files:
+        if not isinstance(item, Mapping):
+            raise AgentToolRuntimeError("Each model source write must be an object")
+        item_extra = set(item) - {"path", "content"}
+        if item_extra:
+            raise AgentToolRuntimeError(
+                "Model source files accept only path and content; "
+                f"host-owned patch fields are forbidden: {sorted(item_extra)}"
+            )
+        raw_path = item.get("path")
+        content = item.get("content")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise AgentToolRuntimeError("Model source path must be a non-empty string")
+        if not isinstance(content, str):
+            raise AgentToolRuntimeError("Model source content must be text")
+
+        normalized = PurePosixPath(raw_path.strip().replace("\\", "/")).as_posix()
+        path = PurePosixPath(normalized)
+        if path.is_absolute() or normalized in {"", "."} or ".." in path.parts:
+            raise AgentToolRuntimeError(f"Unsafe model source path: {raw_path!r}")
+        if not any(normalized.startswith(prefix) for prefix in _MODEL_SOURCE_PREFIXES):
+            raise AgentToolRuntimeError(
+                "Model source writes are limited to src/main/java, src/main/resources, "
+                f"src/test/java and src/gametest: {normalized}"
+            )
+        if normalized in seen:
+            raise AgentToolRuntimeError(f"Duplicate model source path: {normalized}")
+        seen.add(normalized)
+
+        cursor = root
+        for part in path.parts[:-1]:
+            cursor = cursor / part
+            if cursor.exists() and cursor.is_symlink():
+                raise AgentToolRuntimeError(
+                    f"Model source path traverses a symlink: {normalized}"
+                )
+        target = root.joinpath(*path.parts)
+        if target.exists():
+            if target.is_symlink() or not target.is_file():
+                raise AgentToolRuntimeError(
+                    f"Model source target must be a regular file: {normalized}"
+                )
+            expected_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+            operations.append(
+                {
+                    "operation": "replace",
+                    "path": normalized,
+                    "expected_sha256": expected_sha256,
+                    "content": content,
+                }
+            )
+        else:
+            operations.append(
+                {
+                    "operation": "create",
+                    "path": normalized,
+                    "content": content,
+                }
+            )
+
+    return {
+        "project_root": raw_project_root,
+        "operations": operations,
+    }
 
 
 def _jsonable(value: Any) -> Any:
