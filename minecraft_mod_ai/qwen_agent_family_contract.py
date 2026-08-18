@@ -2,16 +2,18 @@ from __future__ import annotations
 
 """Qwen-family agent policy for native llama.cpp tool loops.
 
-The MCP/tool surface is intentionally shared across model families.  This module only
-adapts model-native reasoning behavior: Qwen3.5 keeps the proven non-thinking tool
-path, while Qwen3.6 uses thinking preservation and restores historical
-``reasoning_content`` before each continuation turn.
+The MCP/tool surface is intentionally shared across model families. This module is a
+late, transparent decorator over the already-composed llama payload stack: every
+non-Qwen3.6 request is returned exactly as produced by the existing runtime policy.
+Only Qwen3.6 autonomous agent continuations opt into thinking preservation and
+historical ``reasoning_content`` restoration.
 """
 
 import hashlib
 import json
 from collections import OrderedDict
 from dataclasses import replace
+from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .model_adapters.base import GenerationRequest, GenerationResponse
@@ -34,7 +36,12 @@ def _model_family(model_id: str) -> str:
 
 
 def _forced_tool_choice(tool_choice: Any) -> bool:
-    return isinstance(tool_choice, Mapping)
+    return isinstance(tool_choice, Mapping) or str(tool_choice or "").casefold() == "required"
+
+
+def _request_messages(request: Any) -> Sequence[Mapping[str, Any]]:
+    raw = getattr(request, "messages", ()) or ()
+    return tuple(message for message in raw if isinstance(message, Mapping))
 
 
 def _assistant_has_agent_history(messages: Sequence[Mapping[str, Any]]) -> bool:
@@ -48,50 +55,38 @@ def _assistant_has_agent_history(messages: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
-def _qwen36_agent_request(request: GenerationRequest) -> bool:
-    if _forced_tool_choice(request.tool_choice):
+def _qwen36_agent_request(request: Any) -> bool:
+    tool_choice = getattr(request, "tool_choice", None)
+    if _forced_tool_choice(tool_choice):
         return False
-    if request.tools and request.tool_choice == "auto":
+    tools = getattr(request, "tools", ()) or ()
+    if tools and tool_choice in (None, "auto"):
         return True
-    return _assistant_has_agent_history(request.messages)
+    return _assistant_has_agent_history(_request_messages(request))
 
 
 def _apply_family_payload_policy(
     payload: dict[str, Any],
     *,
     model_id: str,
-    request: GenerationRequest,
+    request: Any,
 ) -> dict[str, Any]:
-    """Apply only model-family-specific sampling/thinking behavior."""
+    """Mutate only autonomous Qwen3.6 agent turns; all other payloads pass through."""
 
-    family = _model_family(model_id)
-    tools = bool(request.tools)
-
-    if family == "qwen3.6" and _qwen36_agent_request(request):
-        payload.pop("reasoning_effort", None)
-        payload["chat_template_kwargs"] = {
-            "enable_thinking": True,
-            "preserve_thinking": True,
-        }
-        payload["temperature"] = 0.6
-        payload["top_p"] = 0.95
-        payload["top_k"] = 20
-        payload["min_p"] = 0.0
-        payload["presence_penalty"] = 0.0
-        payload["repetition_penalty"] = 1.0
+    if _model_family(model_id) != "qwen3.6" or not _qwen36_agent_request(request):
         return payload
 
-    if family == "qwen3.5" and tools:
-        # Preserve the established Qwen3.5 non-thinking tool path.  Explicitly
-        # include the remaining Qwen-recommended neutral sampler controls.
-        payload["reasoning_effort"] = "none"
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
-        payload["temperature"] = 0.7
-        payload["top_p"] = 0.8
-        payload["top_k"] = 20
-        payload["min_p"] = 0.0
-        payload["presence_penalty"] = 1.5
-        payload["repetition_penalty"] = 1.0
+    payload.pop("reasoning_effort", None)
+    payload["chat_template_kwargs"] = {
+        "enable_thinking": True,
+        "preserve_thinking": True,
+    }
+    payload["temperature"] = 0.6
+    payload["top_p"] = 0.95
+    payload["top_k"] = 20
+    payload["min_p"] = 0.0
+    payload["presence_penalty"] = 0.0
+    payload["repetition_penalty"] = 1.0
     return payload
 
 
@@ -188,21 +183,23 @@ def _inject_reasoning_history(
     """Restore only traces whose exact assistant exchange is present in history."""
 
     store = _trace_store(adapter)
+    messages = _request_messages(request)
     signatures = [
         signature
-        for message in request.messages
+        for message in messages
         if (signature := _message_signature(message))
     ]
-    if request.tools and request.tool_choice == "auto" and not any(
+    tools = getattr(request, "tools", ()) or ()
+    if tools and getattr(request, "tool_choice", None) in (None, "auto") and not any(
         signature in store for signature in signatures
     ):
-        # Exact signatures already prevent a fresh conversation from inheriting
-        # another request's trace; keep the bounded store intact for concurrent loops.
+        # A fresh request cannot inherit an unrelated trace. Keep the bounded store
+        # intact because the same adapter may serve concurrent independent loops.
         return request
 
     changed = False
     rewritten: list[Mapping[str, Any]] = []
-    for raw in request.messages:
+    for raw in messages:
         message = dict(raw)
         signature = _message_signature(message)
         reasoning = store.get(signature) if signature else None
@@ -232,7 +229,7 @@ def _remember_reasoning(adapter: Any, response: GenerationResponse) -> None:
 
 
 def install() -> None:
-    """Install the Qwen3.5/Qwen3.6 backend split exactly once."""
+    """Install the Qwen3.6 incremental backend policy exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -244,25 +241,30 @@ def install() -> None:
     current_payload = llama_server_hardware_policy._server_payload
     if not getattr(current_payload, "_mmm_qwen_family_agent_policy", False):
 
-        def server_payload(adapter: Any, request: GenerationRequest) -> dict[str, Any]:
+        @wraps(current_payload)
+        def server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             payload = current_payload(adapter, request)
+            config = getattr(adapter, "config", None)
+            model_id = str(getattr(config, "model_id", ""))
             return _apply_family_payload_policy(
                 payload,
-                model_id=str(getattr(adapter.config, "model_id", "")),
+                model_id=model_id,
                 request=request,
             )
 
-        server_payload._mmm_qwen_family_agent_policy = True
+        server_payload._mmm_qwen_family_agent_policy = True  # type: ignore[attr-defined]
         llama_server_hardware_policy._server_payload = server_payload
 
     current_generate_turn = LlamaCppAdapter.generate_turn
     if not getattr(current_generate_turn, "_mmm_qwen36_reasoning_history", False):
 
+        @wraps(current_generate_turn)
         def generate_turn(
             self: Any,
             request: GenerationRequest,
         ) -> GenerationResponse:
-            family = _model_family(str(getattr(self.config, "model_id", "")))
+            config = getattr(self, "config", None)
+            family = _model_family(str(getattr(config, "model_id", "")))
             qwen36_agent = family == "qwen3.6" and _qwen36_agent_request(request)
             prepared = _inject_reasoning_history(self, request) if qwen36_agent else request
             response = current_generate_turn(self, prepared)
@@ -270,7 +272,7 @@ def install() -> None:
                 _remember_reasoning(self, response)
             return response
 
-        generate_turn._mmm_qwen36_reasoning_history = True
+        generate_turn._mmm_qwen36_reasoning_history = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate_turn = generate_turn
 
     _INSTALLED = True
