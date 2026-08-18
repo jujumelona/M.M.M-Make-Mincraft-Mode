@@ -6,6 +6,21 @@ import { Vec3 } from "vec3";
 let bot = null;
 let targetVersion = null;
 
+const WAIT_FOR_CONDITIONS = new Set([
+  "inventory_contains",
+  "held_item",
+  "health",
+  "food",
+  "position_near",
+  "block_at",
+  "entity_present",
+  "window_open",
+  "window_closed",
+  "spawned",
+  "healthy"
+]);
+const WAIT_POLL_MS = 100;
+
 function resolveTargetVersion(params = {}) {
   const requested = String(params.minecraft_version ?? params.version ?? "").trim();
   const discovered = String(process.env.MMM_MINEFLAYER_MC_VERSION || "").trim();
@@ -44,6 +59,17 @@ function safeRegistryName(value, label = "registry name") {
     throw new Error(`Invalid ${label}`);
   }
   return name;
+}
+
+function localRegistryName(name) {
+  return name.includes(":") ? name.split(":", 2)[1] : name;
+}
+
+function numericRangeMatches(actual, conditionSpec, label) {
+  if (conditionSpec.value != null && actual !== finiteNumber(conditionSpec.value, `${label} value`)) return false;
+  if (conditionSpec.min != null && actual < finiteNumber(conditionSpec.min, `${label} min`)) return false;
+  if (conditionSpec.max != null && actual > finiteNumber(conditionSpec.max, `${label} max`)) return false;
+  return conditionSpec.value != null || conditionSpec.min != null || conditionSpec.max != null;
 }
 
 function blockAtParams(current, params) {
@@ -239,7 +265,7 @@ async function craft(params) {
   const current = requireBot();
   const count = boundedInteger(params.count ?? 1, "craft count", 1, 64);
   const rawName = safeRegistryName(params.item, "craft item");
-  const shortName = rawName.includes(":") ? rawName.split(":", 2)[1] : rawName;
+  const shortName = localRegistryName(rawName);
   const item = current.registry?.itemsByName?.[shortName];
   if (!item) throw new Error(`Unknown craft item: ${rawName}`);
   let craftingTable = null;
@@ -285,36 +311,16 @@ async function waitFor(params) {
     ? params.condition
     : { type: String(params.condition || "") };
   const type = String(spec.type || "");
-  const supported = new Set([
-    "inventory_contains",
-    "held_item",
-    "health",
-    "food",
-    "position_near",
-    "block_at",
-    "entity_present",
-    "window_open",
-    "window_closed",
-    "spawned",
-    "healthy"
-  ]);
-  if (!supported.has(type)) {
+  if (!WAIT_FOR_CONDITIONS.has(type)) {
     throw new Error(`Unsupported wait_for condition: ${type || "<empty>"}`);
   }
   const timeoutMs = boundedInteger(params.timeout_ms ?? 30000, "wait timeout", 1, 60000);
   const started = Date.now();
 
-  const numericRangeMatches = (actual, conditionSpec) => {
-    if (conditionSpec.value != null && actual !== finiteNumber(conditionSpec.value, `${type} value`)) return false;
-    if (conditionSpec.min != null && actual < finiteNumber(conditionSpec.min, `${type} min`)) return false;
-    if (conditionSpec.max != null && actual > finiteNumber(conditionSpec.max, `${type} max`)) return false;
-    return conditionSpec.value != null || conditionSpec.min != null || conditionSpec.max != null;
-  };
-
   while (Date.now() - started < timeoutMs) {
     if (type === "inventory_contains") {
       const raw = safeRegistryName(spec.item ?? spec.name, "inventory item");
-      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      const shortName = localRegistryName(raw);
       const minimum = boundedInteger(spec.count ?? spec.min_count ?? 1, "inventory count", 1, 2304);
       const total = current.inventory.items()
         .filter(item => item.name === shortName)
@@ -322,16 +328,16 @@ async function waitFor(params) {
       if (total >= minimum) return { matched: true, type, item: raw, count: total };
     } else if (type === "held_item") {
       const raw = safeRegistryName(spec.item ?? spec.name, "held item");
-      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      const shortName = localRegistryName(raw);
       if (current.heldItem?.name === shortName) {
         return { matched: true, type, item: raw };
       }
     } else if (type === "health") {
-      if (numericRangeMatches(Number(current.health), spec)) {
+      if (numericRangeMatches(Number(current.health), spec, type)) {
         return { matched: true, type, health: current.health };
       }
     } else if (type === "food") {
-      if (numericRangeMatches(Number(current.food), spec)) {
+      if (numericRangeMatches(Number(current.food), spec, type)) {
         return { matched: true, type, food: current.food };
       }
     } else if (type === "position_near") {
@@ -348,13 +354,13 @@ async function waitFor(params) {
         return { matched: true, type, name: block.name, position: { x, y, z } };
       }
       const raw = safeRegistryName(expectedRaw, "block name");
-      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      const shortName = localRegistryName(raw);
       if (block.name === shortName) {
         return { matched: true, type, name: block.name, position: { x, y, z } };
       }
     } else if (type === "entity_present") {
       const raw = safeRegistryName(spec.name ?? spec.entity, "entity name");
-      const shortName = raw.includes(":") ? raw.split(":", 2)[1] : raw;
+      const shortName = localRegistryName(raw);
       const maxDistance = Math.max(1, Math.min(64, finiteNumber(spec.max_distance ?? spec.range ?? 16, "entity distance")));
       const entity = current.nearestEntity(candidate => {
         const candidateName = String(candidate.name || candidate.mobType || "").toLowerCase();
@@ -370,7 +376,7 @@ async function waitFor(params) {
     } else if (type === "healthy") {
       if (current.health > 0) return { matched: true, type, health: current.health };
     }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, WAIT_POLL_MS));
   }
   return { matched: false, type };
 }
