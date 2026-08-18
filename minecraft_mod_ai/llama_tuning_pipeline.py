@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 26
+_TUNING_PIPELINE_VERSION = 27
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v4"
 
 
@@ -86,6 +86,7 @@ class NativeLlamaTuningPipeline:
         from . import agentic_optimization_contract, repair_engine
         from .llama_cache_reuse_efficiency_contract import install as install_cache_reuse
         from .llama_decode_speed_contract import install as install_decode_speed
+        from .llama_multimodal_contract import install as install_multimodal
         from .llama_server_efficiency_contract import install as install_efficiency
         from .llama_server_hardware_policy import install as install_hardware
         from .llama_server_kernel_autotune import install as install_kernel_autotune
@@ -104,6 +105,7 @@ class NativeLlamaTuningPipeline:
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)
             bind_structured_decode_policy(self.hardware_policy)
+            install_multimodal(self.autotune, self.hardware_policy)
 
         def install_decode_speed_stage() -> None:
             install_decode_speed(
