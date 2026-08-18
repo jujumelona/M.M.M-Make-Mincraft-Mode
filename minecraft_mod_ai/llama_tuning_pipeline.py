@@ -14,8 +14,8 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 29
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v5"
+_TUNING_PIPELINE_VERSION = 30
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,13 @@ class NativeLlamaTuningPipeline:
 
     @staticmethod
     def _context_value(config: Any) -> int:
-        """Resolve the final llama context without creating a second Qwen authority."""
+        """Resolve llama context at the final launch boundary.
+
+        Zero is intentional: llama.cpp defines ``--ctx-size 0`` as loading the
+        native context size from the model metadata. MMM must not silently shrink
+        a model's context window. Only an explicit operator override may replace
+        that model-native value.
+        """
         model_id = str(getattr(config, "model_id", "")).casefold()
         extra = getattr(config, "extra", {})
         filename = (
@@ -46,9 +52,12 @@ class NativeLlamaTuningPipeline:
             "mtp" in model_id or "mtp" in filename
         )
         if qwen35_mtp:
-            from .qwen35_mtp_hotpath_contract import _context_size
+            raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
+            if raw:
+                from .qwen35_mtp_hotpath_contract import _context_size
 
-            return _context_size(config)
+                return _context_size(config)
+            return 0
 
         raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
         if raw:
@@ -58,10 +67,7 @@ class NativeLlamaTuningPipeline:
                 value = -1
             if value >= 0:
                 return value
-        try:
-            return max(0, int(getattr(config, "max_context", 0) or 0))
-        except (TypeError, ValueError):
-            return 0
+        return 0
 
     def _install_profile_context_authority(self) -> None:
         """Install the final context owner after every lower-level tuning wrapper."""
