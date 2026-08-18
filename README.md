@@ -38,8 +38,6 @@ The notebook does not require an engine ZIP. The setup cell clones or fast-forwa
 The checked-in notebook currently exposes these model profiles:
 
 - `Qwen3.5-9B_6GB`
-- `Gemma4-12B_7GB`
-- `Gemma4-26B_14GB`
 - `Qwen3.6-35B_23GB`
 - `Qwen3.6-27B_18GB`
 - `Qwen3.6-27B_14GB`

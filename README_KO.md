@@ -38,8 +38,6 @@ M.M.M은 자연어 요구를 Minecraft Java on the host-selected executable targ
 현재 체크인된 노트북에서 선택할 수 있는 모델 프로필은 다음과 같습니다.
 
 - `Qwen3.5-9B_6GB`
-- `Gemma4-12B_7GB`
-- `Gemma4-26B_14GB`
 - `Qwen3.6-35B_23GB`
 - `Qwen3.6-27B_18GB`
 - `Qwen3.6-27B_14GB`
