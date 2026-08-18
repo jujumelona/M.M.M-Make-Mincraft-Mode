@@ -82,6 +82,14 @@ class TransactionalSourcePatcher:
     one transaction cannot overwrite another transaction's commit.
     """
 
+    _OPERATION_FIELDS = {
+        "create": frozenset({"operation", "path", "content"}),
+        "replace": frozenset({"operation", "path", "expected_sha256", "content"}),
+        "edit": frozenset({"operation", "path", "expected_sha256", "replacements"}),
+        "delete": frozenset({"operation", "path", "expected_sha256"}),
+    }
+    _CONDITIONAL_FIELDS = frozenset({"content", "expected_sha256", "replacements"})
+
     def __init__(self, project_root: str | Path) -> None:
         self.project_root = Path(project_root).expanduser().resolve()
         if not self.project_root.is_dir() or self.project_root.is_symlink():
@@ -236,18 +244,42 @@ class TransactionalSourcePatcher:
             "files": files,
         }
 
+    @classmethod
+    def _canonicalize_known_sibling_fields(
+        cls,
+        operation: str,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Drop only fields that are valid for a different source operation.
+
+        Small models can copy conditional sibling fields from a mixed JSON contract
+        (for example ``expected_sha256`` on ``create``). The operation discriminator
+        is authoritative, so those known siblings are harmless transport noise and
+        can be removed deterministically. Arbitrary unknown fields are deliberately
+        preserved so strict validation still rejects schema drift and unsafe output.
+        """
+
+        allowed = cls._OPERATION_FIELDS.get(operation)
+        canonical = dict(value)
+        if allowed is None:
+            return canonical
+        for field in cls._CONDITIONAL_FIELDS - allowed:
+            canonical.pop(field, None)
+        return canonical
+
     def _normalize(self, value: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise SourcePatchError("Every patch operation must be an object.")
         operation = value.get("operation")
-        if operation not in {"create", "replace", "edit", "delete"}:
+        if operation not in self._OPERATION_FIELDS:
             raise SourcePatchError(f"Unsupported patch operation: {operation!r}")
+        value = self._canonicalize_known_sibling_fields(operation, value)
         relative = value.get("path")
         if not isinstance(relative, str) or not relative.strip():
             raise SourcePatchError("Patch path must be a non-empty string.")
         normalized: dict[str, Any] = {"operation": operation, "path": relative.strip()}
         if operation == "create":
-            if set(value) - {"operation", "path", "content"}:
+            if set(value) - self._OPERATION_FIELDS["create"]:
                 raise SourcePatchError(f"Unknown create fields for {relative}")
             if not isinstance(value.get("content"), str):
                 raise SourcePatchError(f"Create content must be text: {relative}")
@@ -258,13 +290,13 @@ class TransactionalSourcePatcher:
             raise SourcePatchError(f"A valid expected_sha256 is required for {relative}")
         normalized["expected_sha256"] = expected
         if operation == "replace":
-            if set(value) - {"operation", "path", "expected_sha256", "content"}:
+            if set(value) - self._OPERATION_FIELDS["replace"]:
                 raise SourcePatchError(f"Unknown replace fields for {relative}")
             if not isinstance(value.get("content"), str):
                 raise SourcePatchError(f"Replace content must be text: {relative}")
             normalized["content"] = value["content"]
         elif operation == "edit":
-            if set(value) - {"operation", "path", "expected_sha256", "replacements"}:
+            if set(value) - self._OPERATION_FIELDS["edit"]:
                 raise SourcePatchError(f"Unknown edit fields for {relative}")
             replacements = value.get("replacements")
             if not isinstance(replacements, list) or not replacements:
@@ -282,7 +314,7 @@ class TransactionalSourcePatcher:
                 clean.append({"old": old, "new": new, "count": count})
             normalized["replacements"] = clean
         else:
-            if set(value) - {"operation", "path", "expected_sha256"}:
+            if set(value) - self._OPERATION_FIELDS["delete"]:
                 raise SourcePatchError(f"Unknown delete fields for {relative}")
         return normalized
 
