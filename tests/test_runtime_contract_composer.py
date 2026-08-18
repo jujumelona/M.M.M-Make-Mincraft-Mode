@@ -182,7 +182,7 @@ def test_recursive_composition_is_rejected_and_poisoned() -> None:
     assert state["failed"]["stage"] == "recursive"
 
 
-def test_new_composition_version_is_an_explicit_recomposition_boundary() -> None:
+def test_successful_version_change_requires_clean_process() -> None:
     state_owner = SimpleNamespace()
     calls: list[int] = []
 
@@ -196,18 +196,23 @@ def test_new_composition_version_is_an_explicit_recomposition_boundary() -> None
         state_owner=state_owner,
         stages=stages,
     )
-    compose_contract_stages(
-        owner_name="unit-version",
-        version=2,
-        state_owner=state_owner,
-        stages=stages,
-    )
+    with pytest.raises(
+        ContractCompositionError,
+        match="process restart is required before requesting version 2",
+    ):
+        compose_contract_stages(
+            owner_name="unit-version",
+            version=2,
+            state_owner=state_owner,
+            stages=stages,
+        )
 
-    assert calls == [1, 2]
+    assert calls == [1]
     state = composition_state(state_owner, "unit-version")
     assert state is not None
-    assert state["version"] == 2
+    assert state["version"] == 1
     assert state["completed"] == ("only",)
+    assert state["installed"] is True
 
 
 def test_version_bump_cannot_bypass_poisoned_process_state() -> None:
