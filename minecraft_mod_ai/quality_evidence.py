@@ -12,7 +12,32 @@ from .production_contract import ProductionContractError, bound_game_design, val
 _SHA256 = re.compile('^(?:sha256:)?[0-9a-f]{64}$')
 _FORBIDDEN_COMPLETION_FIELDS = {'all_passed', 'complete', 'completion', 'overall_status'}
 _CONDITIONAL_KEYS = {'state_save_migration': 'state_validation', 'multiplayer': 'multiplayer_validation', 'performance': 'performance_validation', 'accessibility': 'accessibility_validation'}
+_HOST_GAME_DESIGN_DECORATION_KEYS = frozenset({'production_outline'})
 EvidenceResult = tuple[list[str], list[Mapping[str, Any]]]
+
+def _contract_bound_game_design(contract: Mapping[str, Any], game_design: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve the design snapshot bound when the production contract was compiled.
+
+    ``production_outline`` is a host-owned execution outline appended by the complete
+    planner *after* the contract is compiled.  Older proposals therefore legitimately
+    carry it even though their source binding does not.  Prefer the full current
+    snapshot, and only fall back to removing that explicit host decoration when doing
+    so exactly reproduces the contract hash.  Any other design mutation remains a
+    hard binding failure.
+    """
+    snapshot = bound_game_design(game_design)
+    expected = str(contract.get('source_bindings', {}).get('game_design_sha256', ''))
+    if _canonical_sha256(snapshot) == expected:
+        return snapshot
+    undecorated = dict(snapshot)
+    changed = False
+    for key in _HOST_GAME_DESIGN_DECORATION_KEYS:
+        if key in undecorated:
+            undecorated.pop(key)
+            changed = True
+    if changed and _canonical_sha256(undecorated) == expected:
+        return undecorated
+    return snapshot
 
 def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *, game_design: Mapping[str, Any], source_validation: Mapping[str, Any] | None, build_report: Mapping[str, Any] | None, jar_validation: Mapping[str, Any] | None, module_receipts: Iterable[Mapping[str, Any]]=(), asset_receipt: Mapping[str, Any] | None=None, blockbench_receipts: Iterable[Mapping[str, Any]]=(), runtime_receipt: Mapping[str, Any] | None=None, playtest_receipt: Mapping[str, Any] | None=None, visual_receipt: Mapping[str, Any] | None=None) -> dict[str, dict[str, Any]]:
     """Return independently checked ``PASS`` receipts keyed by dimension.
@@ -28,7 +53,7 @@ def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *,
         raise ProductionContractError('proposal_hash must be a canonical SHA-256')
     if not isinstance(game_design, Mapping):
         raise ProductionContractError('game_design must be an object')
-    design_snapshot = bound_game_design(game_design)
+    design_snapshot = _contract_bound_game_design(contract, game_design)
     if _canonical_sha256(design_snapshot) != contract['source_bindings']['game_design_sha256']:
         raise ProductionContractError('game_design does not match the production contract binding')
     modules = tuple(_mapping_items(module_receipts))
