@@ -63,6 +63,7 @@ jobs:
           tests/test_runtime_bootstrap_clean.py
           tests/test_runtime_contract_composer.py
           tests/test_runtime_contract_composer_ownership.py
+          tests/test_runtime_wrapper_signature_integrity.py
 
   mcp-evidence:
     runs-on: ubuntu-latest
@@ -141,6 +142,7 @@ jobs:
               "test_runtime_bootstrap_clean.py",
               "test_runtime_contract_composer.py",
               "test_runtime_contract_composer_ownership.py",
+              "test_runtime_wrapper_signature_integrity.py",
               "test_minecraft_mcp_evidence_contract.py",
               "test_external_mcp_role_scope.py",
               "test_research_coordinator.py",
