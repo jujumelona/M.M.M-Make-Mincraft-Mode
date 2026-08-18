@@ -8,12 +8,6 @@ from minecraft_mod_ai import llama_multimodal_contract as multimodal
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 
 
-class _RunningProcess:
-    @staticmethod
-    def poll():
-        return None
-
-
 def _config() -> SimpleNamespace:
     return SimpleNamespace(
         model_id="unsloth/Qwen3.6-27B-MTP-GGUF",
@@ -24,56 +18,56 @@ def _config() -> SimpleNamespace:
     )
 
 
-def test_cold_media_primes_text_autotune_before_media_scope(monkeypatch) -> None:
-    image = Path("frame.png")
-    request = GenerationRequest(
-        messages=({"role": "user", "content": "Inspect."},),
-        media_paths=(image,),
+def test_cold_media_benchmark_runs_without_media_scope(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def benchmark(_binary, _model_path, _config, _request, _fingerprint):
+        seen.append(os.environ.get(multimodal._ACTIVE_MEDIA_ENV, ""))
+        return "decision"
+
+    fake = SimpleNamespace(_benchmark=benchmark)
+    multimodal._install_benchmark_policy(fake)
+    monkeypatch.setenv(multimodal._ACTIVE_MEDIA_ENV, "1")
+
+    result = fake._benchmark(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config(),
+        object(),
+        "fingerprint",
     )
-    events: list[tuple[tuple[Path, ...], str]] = []
-    shutdowns: list[str] = []
-    fake = SimpleNamespace(_MANAGED_PROCESS=None, _MANAGED_URL=None)
 
-    def current(_config, current_request):
-        active = os.environ.get(multimodal._ACTIVE_MEDIA_ENV, "")
-        events.append((tuple(current_request.media_paths), active))
-        fake._MANAGED_PROCESS = _RunningProcess()
-        port = 8920 if current_request.media_paths else 8910
-        fake._MANAGED_URL = f"http://127.0.0.1:{port}/v1"
-        os.environ["LLAMA_SERVER_URL"] = fake._MANAGED_URL
-        return fake._MANAGED_URL
-
-    def shutdown() -> None:
-        shutdowns.append(str(fake._MANAGED_URL))
-        fake._MANAGED_PROCESS = None
-        fake._MANAGED_URL = None
-
-    fake.ensure_tuned_server = current
-    fake._shutdown_managed_server = shutdown
-    multimodal._install_ensure(fake)
-    monkeypatch.delenv(multimodal._ACTIVE_MEDIA_ENV, raising=False)
-    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
-
-    result = fake.ensure_tuned_server(_config(), request)
-
-    assert events == [
-        ((), ""),
-        ((image,), "1"),
-    ]
-    assert shutdowns == ["http://127.0.0.1:8910/v1"]
-    assert result == "http://127.0.0.1:8920/v1"
-    assert os.environ.get(multimodal._ACTIVE_MEDIA_ENV) is None
-    assert getattr(fake, multimodal._MANAGED_MEDIA_PROCESS_ATTR) is fake._MANAGED_PROCESS
+    assert result == "decision"
+    assert seen == [""]
+    assert os.environ[multimodal._ACTIVE_MEDIA_ENV] == "1"
 
 
-def test_cold_media_does_not_kill_user_owned_external_server(monkeypatch) -> None:
+def test_non_qwen_media_benchmark_keeps_media_scope(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def benchmark(_binary, _model_path, _config, _request, _fingerprint):
+        seen.append(os.environ.get(multimodal._ACTIVE_MEDIA_ENV, ""))
+        return "decision"
+
+    fake = SimpleNamespace(_benchmark=benchmark)
+    multimodal._install_benchmark_policy(fake)
+    monkeypatch.setenv(multimodal._ACTIVE_MEDIA_ENV, "1")
+    generic = SimpleNamespace(model_id="other/model", extra={"mmproj_filename": "x.gguf"})
+
+    fake._benchmark("llama-server", "/tmp/model.gguf", generic, object(), "fingerprint")
+
+    assert seen == ["1"]
+
+
+def test_cold_media_final_ensure_keeps_media_scope_and_does_not_prime_twice(
+    monkeypatch,
+) -> None:
     image = Path("frame.png")
     request = GenerationRequest(
         messages=({"role": "user", "content": "Inspect."},),
         media_paths=(image,),
     )
     calls: list[tuple[tuple[Path, ...], str]] = []
-    shutdowns: list[bool] = []
     fake = SimpleNamespace(_MANAGED_PROCESS=None, _MANAGED_URL=None)
 
     def current(_config, current_request):
@@ -86,7 +80,7 @@ def test_cold_media_does_not_kill_user_owned_external_server(monkeypatch) -> Non
         return "https://external.example/v1"
 
     def shutdown() -> None:
-        shutdowns.append(True)
+        raise AssertionError("cold external media must not retire a user-owned server")
 
     fake.ensure_tuned_server = current
     fake._shutdown_managed_server = shutdown
@@ -94,8 +88,5 @@ def test_cold_media_does_not_kill_user_owned_external_server(monkeypatch) -> Non
     monkeypatch.delenv(multimodal._ACTIVE_MEDIA_ENV, raising=False)
 
     assert fake.ensure_tuned_server(_config(), request) == "https://external.example/v1"
-    assert calls == [
-        ((), ""),
-        ((image,), "1"),
-    ]
-    assert shutdowns == []
+    assert calls == [((image,), "1")]
+    assert os.environ.get(multimodal._ACTIVE_MEDIA_ENV) is None
