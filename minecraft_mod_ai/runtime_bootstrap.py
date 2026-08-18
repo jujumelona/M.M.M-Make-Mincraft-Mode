@@ -135,6 +135,9 @@ def _install_generation_contracts() -> None:
         project_index,
         source_patch,
     )
+    from .deterministic_minecraft_content_contract import (
+        install as install_deterministic_minecraft_content,
+    )
     from .extended_registration_contract import install as install_extended_registration
     from .performance_final_contract import install as install_performance_contract
     from .performance_final_tuning import install as install_performance_tuning
@@ -149,6 +152,7 @@ def _install_generation_contracts() -> None:
     )
 
     install_extended_registration(extended_content_generator)
+    install_deterministic_minecraft_content(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
     install_project_index_execution_reuse(complete_orchestrator)
     install_performance_tuning(performance_final_contract)
