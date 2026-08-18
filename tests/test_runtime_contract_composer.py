@@ -7,6 +7,7 @@ import pytest
 from minecraft_mod_ai.runtime_contract_composer import (
     ContractCompositionError,
     ContractStage,
+    call_shape,
     callable_boundary,
     compose_contract_stages,
     composition_state,
@@ -113,6 +114,41 @@ def test_callable_boundary_cannot_be_destroyed_by_contract_stage() -> None:
     state = composition_state(state_owner, "unit-boundary")
     assert state is not None
     assert state["failed"]["stage"] == "bad-wrapper"
+
+
+def test_callable_boundary_rejects_signature_drift_without_executing_wrapper() -> None:
+    state_owner = SimpleNamespace()
+
+    def handler(left: object, right: object, *, mode: object) -> None:
+        del left, right, mode
+
+    runtime = SimpleNamespace(handler=handler)
+
+    def narrow_wrapper() -> None:
+        def replacement(left: object) -> None:
+            del left
+
+        runtime.handler = replacement
+
+    with pytest.raises(ContractCompositionError, match="changed call signature"):
+        compose_contract_stages(
+            owner_name="unit-signature",
+            version=1,
+            state_owner=state_owner,
+            stages=(ContractStage("narrow-wrapper", narrow_wrapper),),
+            boundaries=(
+                callable_boundary(
+                    "runtime.handler",
+                    runtime,
+                    "handler",
+                    call_shapes=(call_shape(2, "mode"),),
+                ),
+            ),
+        )
+
+    state = composition_state(state_owner, "unit-signature")
+    assert state is not None
+    assert state["failed"]["stage"] == "narrow-wrapper"
 
 
 def test_recursive_composition_is_rejected_and_poisoned() -> None:
