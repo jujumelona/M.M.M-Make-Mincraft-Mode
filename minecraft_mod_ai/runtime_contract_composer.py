@@ -15,8 +15,9 @@ native llama tuning pipeline) one shared execution contract:
 * a stage that raises poisons the composition owner for the rest of the process;
 * one owner may use only one composition version and one declared stage/boundary graph
   for the process lifetime;
-* stage graph identity includes installer code, so changing a phase body without a
-  version bump cannot silently reuse stale receipts;
+* stage graph identity includes installer code plus captured callable dependencies, so
+  changing a phase body or swapping the installer behind an unchanged closure cannot
+  silently reuse stale receipts;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
@@ -110,19 +111,107 @@ def _callable_identity(value: Any) -> str:
     return f"{module}:{qualname}" + (f"[{marker_suffix}]" if marker_suffix else "")
 
 
-def _installer_identity(value: Callable[[], None]) -> tuple[str, str]:
-    target: Any = value
-    while isinstance(target, partial):
-        target = target.func
-    target = getattr(target, "__func__", target)
+def _code_digest(value: Any) -> str:
+    target = getattr(value, "__func__", value)
     code = getattr(target, "__code__", None)
     if code is None:
-        return _callable_identity(target), "<no-code>"
+        return "<no-code>"
     try:
         encoded = marshal.dumps(code)
     except (TypeError, ValueError):
         encoded = code.co_code
-    return _callable_identity(target), hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _dependency_identity(value: Any) -> Any:
+    """Return a deterministic shallow identity for installer closure/partial inputs."""
+
+    if inspect.ismodule(value):
+        return ("module", str(getattr(value, "__name__", "")))
+    if isinstance(value, partial):
+        return (
+            "partial",
+            _dependency_identity(value.func),
+            tuple(_dependency_identity(item) for item in value.args),
+            tuple(
+                sorted(
+                    (str(key), _dependency_identity(item))
+                    for key, item in (value.keywords or {}).items()
+                )
+            ),
+        )
+    if inspect.ismethod(value):
+        owner = getattr(value, "__self__", None)
+        return (
+            "method",
+            _callable_identity(value.__func__),
+            _code_digest(value.__func__),
+            (
+                type(owner).__module__,
+                type(owner).__qualname__,
+            )
+            if owner is not None
+            else None,
+        )
+    if inspect.isfunction(value) or inspect.isbuiltin(value):
+        return (
+            "callable",
+            _callable_identity(value),
+            _code_digest(value),
+        )
+    if isinstance(value, type):
+        return ("type", value.__module__, value.__qualname__)
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return ("literal", repr(value))
+    if isinstance(value, (tuple, list)) and len(value) <= 32:
+        return (
+            type(value).__name__,
+            tuple(_dependency_identity(item) for item in value),
+        )
+    if isinstance(value, (set, frozenset)) and len(value) <= 32:
+        return (
+            type(value).__name__,
+            tuple(sorted(repr(_dependency_identity(item)) for item in value)),
+        )
+    if isinstance(value, dict) and len(value) <= 32:
+        return (
+            "dict",
+            tuple(
+                sorted(
+                    (
+                        repr(_dependency_identity(key)),
+                        repr(_dependency_identity(item)),
+                    )
+                    for key, item in value.items()
+                )
+            ),
+        )
+    return ("object-type", type(value).__module__, type(value).__qualname__)
+
+
+def _installer_identity(value: Callable[[], None]) -> tuple[Any, ...]:
+    partial_identity = _dependency_identity(value) if isinstance(value, partial) else None
+    target: Any = value.func if isinstance(value, partial) else value
+    bound_owner = getattr(target, "__self__", None)
+    target = getattr(target, "__func__", target)
+    closure = getattr(target, "__closure__", None) or ()
+    freevars = tuple(getattr(getattr(target, "__code__", None), "co_freevars", ()))
+    captured: list[tuple[str, Any]] = []
+    for name, cell in zip(freevars, closure):
+        try:
+            item = cell.cell_contents
+        except ValueError:
+            captured.append((name, "<empty-cell>"))
+            continue
+        captured.append((name, _dependency_identity(item)))
+
+    return (
+        _callable_identity(target),
+        _code_digest(target),
+        tuple(captured),
+        _dependency_identity(bound_owner) if bound_owner is not None else None,
+        partial_identity,
+    )
 
 
 def _state_map(state_owner: Any) -> dict[str, dict[str, Any]]:
@@ -139,10 +228,7 @@ def _graph_signature(
     boundaries: tuple[CallableBoundary, ...],
 ) -> tuple[Any, ...]:
     return (
-        tuple(
-            (stage.name, _installer_identity(stage.install))
-            for stage in stages
-        ),
+        tuple((stage.name, _installer_identity(stage.install)) for stage in stages),
         tuple(
             (
                 boundary.label,
