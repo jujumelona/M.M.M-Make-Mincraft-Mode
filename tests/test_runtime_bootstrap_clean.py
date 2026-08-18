@@ -69,7 +69,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     installers, modules = _policy_imports(_LLAMA_PIPELINE)
     direct_calls, module_calls = _composition_calls(_LLAMA_PIPELINE)
     actual = {module for local_name, module in installers.items() if local_name in direct_calls} | {module for local_name, module in modules.items() if local_name in module_calls}
-    assert actual == {'llama_server_efficiency_contract', 'llama_server_runtime_tuning', 'llama_cache_reuse_efficiency_contract', 'llama_decode_speed_contract', 'qwen35_mtp_hotpath_contract', 'qwen35_runtime_efficiency_contract', 'planner_single_stream_search_contract', 'runtime_stability_contract'}
+    assert actual == {'llama_server_efficiency_contract', 'llama_server_runtime_tuning', 'llama_cache_reuse_efficiency_contract', 'llama_decode_speed_contract', 'llama_multimodal_contract', 'qwen35_mtp_hotpath_contract', 'qwen35_runtime_efficiency_contract', 'planner_single_stream_search_contract', 'runtime_stability_contract'}
     source = _LLAMA_PIPELINE.read_text(encoding='utf-8')
     assert 'from .llama_server_hardware_policy import install as install_hardware' in source
     assert 'install_hardware(self.autotune)' in source
