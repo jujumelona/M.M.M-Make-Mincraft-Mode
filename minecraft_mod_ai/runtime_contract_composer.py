@@ -13,8 +13,8 @@ native llama tuning pipeline) one shared execution contract:
 
 * completed stages are receipted immediately and are not replayed;
 * a stage that raises poisons the composition owner for the rest of the process;
-* one owner may use only one composition version for the process lifetime, because
-  mixing a newer installer graph with already-mutated callables is not reversible;
+* one owner may use only one composition version and one declared stage/boundary graph
+  for the process lifetime;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
@@ -24,7 +24,7 @@ native llama tuning pipeline) one shared execution contract:
 There is deliberately no rollback or in-process upgrade. Python monkey-patching is
 not transactionally reversible once an installer has performed arbitrary side
 effects. A clean process restart is the only safe boundary for another composition
-version.
+version or graph.
 """
 
 import inspect
@@ -115,9 +115,30 @@ def _state_map(state_owner: Any) -> dict[str, dict[str, Any]]:
     return current
 
 
-def _fresh_state(version: int) -> dict[str, Any]:
+def _graph_signature(
+    stages: tuple[ContractStage, ...],
+    boundaries: tuple[CallableBoundary, ...],
+) -> tuple[Any, ...]:
+    return (
+        tuple(stage.name for stage in stages),
+        tuple(
+            (
+                boundary.label,
+                boundary.attribute,
+                tuple(
+                    (shape.positional, tuple(shape.keywords))
+                    for shape in boundary.call_shapes
+                ),
+            )
+            for boundary in boundaries
+        ),
+    )
+
+
+def _fresh_state(version: int, graph_signature: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "version": int(version),
+        "graph_signature": graph_signature,
         "completed": [],
         "receipts": [],
         "active": None,
@@ -137,6 +158,7 @@ def composition_state(state_owner: Any, owner_name: str) -> dict[str, Any] | Non
         return None
     return {
         "version": value.get("version"),
+        "graph_signature": value.get("graph_signature"),
         "completed": tuple(value.get("completed", ())),
         "receipts": tuple(value.get("receipts", ())),
         "active": value.get("active"),
@@ -242,12 +264,7 @@ def compose_contract_stages(
     stages: Iterable[ContractStage],
     boundaries: Iterable[CallableBoundary] = (),
 ) -> tuple[StageReceipt, ...]:
-    """Install ordered contract stages once behind a process-lifetime version pin.
-
-    A different composition version, whether the previous run succeeded or failed,
-    requires a clean process. Arbitrary installer side effects make in-process graph
-    upgrades unsafe and non-transactional.
-    """
+    """Install ordered contract stages once behind a process-lifetime graph pin."""
 
     if not owner_name.strip():
         raise ValueError("owner_name must be non-empty")
@@ -263,6 +280,7 @@ def compose_contract_stages(
         )
 
     boundary_values = tuple(boundaries)
+    requested_graph = _graph_signature(stage_values, boundary_values)
     with _COMPOSITION_LOCK:
         states = _state_map(state_owner)
         prior_state = states.get(owner_name)
@@ -274,6 +292,12 @@ def compose_contract_stages(
                     f"{prior_version}; process restart is required before requesting "
                     f"version {int(version)}"
                 )
+            if prior_state.get("graph_signature") != requested_graph:
+                raise ContractCompositionError(
+                    f"contract composition {owner_name!r} graph changed while still "
+                    f"declaring version {int(version)}; bump the composition version "
+                    "and restart the process before installing the new graph"
+                )
             if prior_state.get("failed"):
                 failure = prior_state["failed"]
                 raise ContractCompositionError(
@@ -283,7 +307,7 @@ def compose_contract_stages(
                 )
             state = prior_state
         else:
-            state = _fresh_state(int(version))
+            state = _fresh_state(int(version), requested_graph)
             states[owner_name] = state
 
         if state.get("active"):
