@@ -42,7 +42,7 @@ _qwen36_35b: &qwen36_35b
   adapter: llama_cpp
   gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
   torch_dtype: float16
-  max_context: 32768
+  max_context: 262144
   max_input_tokens: 0
   max_new_tokens: 8192
   min_free_vram_mb: 2000
@@ -53,7 +53,7 @@ _qwen36_27b_q4: &qwen36_27b_q4
   adapter: llama_cpp
   gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
   torch_dtype: float16
-  max_context: 32768
+  max_context: 262144
   max_input_tokens: 0
   max_new_tokens: 8192
   min_free_vram_mb: 2000
@@ -64,7 +64,7 @@ _qwen36_27b_q3: &qwen36_27b_q3
   adapter: llama_cpp
   gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
   torch_dtype: float16
-  max_context: 32768
+  max_context: 262144
   max_input_tokens: 0
   max_new_tokens: 8192
   min_free_vram_mb: 2000
