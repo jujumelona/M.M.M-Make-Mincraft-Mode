@@ -5,6 +5,7 @@ import hashlib
 import pytest
 
 from minecraft_mod_ai.agent_tool_runtime import (
+    AgentToolRuntime,
     AgentToolRuntimeError,
     _MODEL_SOURCE_PATCH_SCHEMA,
     _materialize_model_source_patch,
@@ -28,6 +29,32 @@ def test_model_source_patch_schema_exposes_only_files_and_content() -> None:
     assert "operation" not in file_schema["properties"]
     assert "expected_sha256" not in file_schema["properties"]
     assert "project_root" not in _MODEL_SOURCE_PATCH_SCHEMA["properties"]
+
+
+def test_generation_tool_schema_hides_raw_patch_protocol(monkeypatch, tmp_path) -> None:
+    runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
+    raw_schema = {
+        "name": "apply_source_patch",
+        "description": "raw strict patch",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_root": {"type": "string"},
+                "operations": {"type": "array"},
+            },
+            "required": ["project_root", "operations"],
+        },
+    }
+    monkeypatch.setattr(runtime, "_run_async", lambda *_args: [raw_schema])
+    monkeypatch.setattr(runtime._external_bridge, "tool_schemas", lambda _stage: ())
+
+    exposed = runtime.tool_schemas("generation")
+
+    patch_tool = next(
+        item for item in exposed if item["function"]["name"] == "apply_source_patch"
+    )
+    assert patch_tool["function"]["parameters"] == _MODEL_SOURCE_PATCH_SCHEMA
+    assert set(patch_tool["function"]["parameters"]["properties"]) == {"files"}
 
 
 def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> None:
