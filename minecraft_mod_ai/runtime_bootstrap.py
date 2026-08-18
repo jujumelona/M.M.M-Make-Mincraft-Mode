@@ -382,6 +382,9 @@ def _install_post_bootstrap_contracts() -> None:
     from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .agent_security_contract import install as install_agent_security
     from .causal_tool_frontier_contract import install as install_causal_tool_frontier
+    from .external_procedural_skill_contract import (
+        install as install_external_procedural_skill,
+    )
     from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
@@ -397,6 +400,9 @@ def _install_post_bootstrap_contracts() -> None:
     )
     from .small_model_tool_guard_contract import install as install_small_model_tool_guard
     from .temporary_skill_contract import install as install_temporary_skill
+    from .unified_trajectory_memory_contract import (
+        install as install_unified_trajectory_memory,
+    )
 
     install_agent_security(
         pre_design_rag_module=agentic_pre_design_rag,
@@ -428,3 +434,5 @@ def _install_post_bootstrap_contracts() -> None:
     install_long_run_resilience()
     qwen_agent_family_contract.install()
     install_small_model_research_extensions()
+    install_unified_trajectory_memory()
+    install_external_procedural_skill()
