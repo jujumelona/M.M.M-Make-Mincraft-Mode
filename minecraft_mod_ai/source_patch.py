@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .mod_output_scope import ModOutputScopeError, validate_mod_output_path
 from .project_write_lock import project_write_lock
 
 
@@ -277,7 +278,12 @@ class TransactionalSourcePatcher:
         relative = value.get("path")
         if not isinstance(relative, str) or not relative.strip():
             raise SourcePatchError("Patch path must be a non-empty string.")
-        normalized: dict[str, Any] = {"operation": operation, "path": relative.strip()}
+        relative = relative.strip()
+        try:
+            validate_mod_output_path(relative)
+        except ModOutputScopeError as exc:
+            raise SourcePatchError(str(exc)) from exc
+        normalized: dict[str, Any] = {"operation": operation, "path": relative}
         if operation == "create":
             if set(value) - self._OPERATION_FIELDS["create"]:
                 raise SourcePatchError(f"Unknown create fields for {relative}")
