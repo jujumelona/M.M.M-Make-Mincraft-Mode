@@ -182,8 +182,6 @@ def _collect_execution_context(value: Any, output: dict[str, Any], *, depth: int
                     if prior is None:
                         output[key] = normalized
                     elif prior != normalized:
-                        # Ambiguous host state must never accidentally match reusable
-                        # experience from one of the conflicting environments.
                         digest = hashlib.sha256(
                             json.dumps(
                                 [prior, normalized],
@@ -382,19 +380,19 @@ def _verification_weight(row: Mapping[str, Any]) -> float:
     return 0.08 * min(level, 5) + 0.25 * max(0.0, min(1.0, confidence)) + (0.08 if reproduced else 0.0)
 
 
-def relevant_trajectories(
-    base: str | Path,
+def _rank_relevant_rows(
+    rows: Sequence[Mapping[str, Any]],
     query: str,
     *,
     task_class: str,
-    router: Any | None = None,
-    limit: int = 6,
-    current_context: Mapping[str, Any] | None = None,
+    router: Any | None,
+    limit: int,
+    current_context: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    rows = _load_rows(memory_path(base)) + _load_rows(remote_cache_path(base, task_class))
     target = _tokens(query + " " + task_class)
     scored: list[tuple[float, str, dict[str, Any]]] = []
-    for row in rows:
+    for raw_row in rows:
+        row = dict(raw_row)
         if str(row.get("task_class", "")) not in {task_class, "general"}:
             continue
         if not _execution_context_compatible(row, current_context):
@@ -420,6 +418,55 @@ def relevant_trajectories(
         except Exception:
             pass
     return [row for score, _identity, row in shortlist[:limit] if score > 0.0]
+
+
+def relevant_trajectories(
+    base: str | Path,
+    query: str,
+    *,
+    task_class: str,
+    router: Any | None = None,
+    limit: int = 6,
+    current_context: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    rows = _load_rows(memory_path(base)) + _load_rows(remote_cache_path(base, task_class))
+    return _rank_relevant_rows(
+        rows,
+        query,
+        task_class=task_class,
+        router=router,
+        limit=limit,
+        current_context=current_context,
+    )
+
+
+def relevant_trajectories_many(
+    base: str | Path,
+    query: str,
+    *,
+    task_classes: Sequence[str],
+    router: Any | None = None,
+    limit: int = 6,
+    current_context: Mapping[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Rank several trajectory classes while loading shared local memory only once."""
+
+    local_rows = _load_rows(memory_path(base))
+    result: dict[str, list[dict[str, Any]]] = {}
+    for raw_task_class in task_classes:
+        task_class = str(raw_task_class).strip()
+        if not task_class or task_class in result:
+            continue
+        rows = [*local_rows, *_load_rows(remote_cache_path(base, task_class))]
+        result[task_class] = _rank_relevant_rows(
+            rows,
+            query,
+            task_class=task_class,
+            router=router,
+            limit=limit,
+            current_context=current_context,
+        )
+    return result
 
 
 def _verified_failure(row: Mapping[str, Any]) -> bool:
@@ -497,6 +544,7 @@ __all__ = [
     "execution_context_from_values",
     "memory_path",
     "relevant_trajectories",
+    "relevant_trajectories_many",
     "remote_cache_path",
     "synthesize_temporary_skill",
     "task_class_for_stage",
