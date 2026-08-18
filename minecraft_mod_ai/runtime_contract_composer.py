@@ -3,8 +3,8 @@ from __future__ import annotations
 """Fail-closed composition kernel for runtime monkey-patch contracts.
 
 MMM intentionally keeps individual runtime policies small, but many of those policies
-wrap the same production callables.  The dangerous case is not a clean first install;
-it is a *partial* install followed by re-entry after a later stage failed.  Replaying
+wrap the same production callables. The dangerous case is not a clean first install;
+it is a *partial* install followed by re-entry after a later stage failed. Replaying
 already-mutated functions can duplicate wrappers, change ownership order, and surface
 as an unrelated TypeError/AttributeError much later.
 
@@ -16,8 +16,8 @@ native llama tuning pipeline) one shared execution contract:
 * a stage that raises poisons that composition version, so partially-applied code is
   never invoked a second time in the same process;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
-* callables that existed at a watched boundary may be wrapped, but may not disappear
-  or become non-callable;
+* watched callables may be wrapped, but may not disappear, become non-callable, or
+  stop accepting explicitly declared production call shapes;
 * state is stored on the composition owner, making failures inspectable without a
   second global registry.
 
@@ -26,6 +26,7 @@ reversible once an installer has performed arbitrary side effects. Fail-closed s
 is therefore safer than pretending a failed stage can be retried in-place.
 """
 
+import inspect
 from dataclasses import dataclass
 from functools import partial
 from threading import RLock
@@ -41,12 +42,21 @@ class ContractCompositionError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CallShape:
+    """A signature-only production call that a wrapped callable must still accept."""
+
+    positional: int = 0
+    keywords: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CallableBoundary:
-    """A production binding that must remain callable once it is callable."""
+    """A production binding whose callable/API shape must survive composition."""
 
     label: str
     owner: Any
     attribute: str
+    call_shapes: tuple[CallShape, ...] = ()
 
     def value(self) -> Any:
         return getattr(self.owner, self.attribute, None)
@@ -64,6 +74,17 @@ class ContractStage:
 class StageReceipt:
     name: str
     callable_lineage: tuple[tuple[str, str], ...]
+
+
+def call_shape(positional: int = 0, *keywords: str) -> CallShape:
+    if int(positional) < 0:
+        raise ValueError("positional call-shape count must be non-negative")
+    normalized = tuple(str(name).strip() for name in keywords)
+    if any(not name for name in normalized):
+        raise ValueError("call-shape keyword names must be non-empty")
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("call-shape keyword names must be unique")
+    return CallShape(positional=int(positional), keywords=normalized)
 
 
 def _callable_identity(value: Any) -> str:
@@ -123,8 +144,19 @@ def composition_state(state_owner: Any, owner_name: str) -> dict[str, Any] | Non
     }
 
 
-def callable_boundary(label: str, owner: Any, attribute: str) -> CallableBoundary:
-    return CallableBoundary(label=label, owner=owner, attribute=attribute)
+def callable_boundary(
+    label: str,
+    owner: Any,
+    attribute: str,
+    *,
+    call_shapes: Iterable[CallShape] = (),
+) -> CallableBoundary:
+    return CallableBoundary(
+        label=label,
+        owner=owner,
+        attribute=attribute,
+        call_shapes=tuple(call_shapes),
+    )
 
 
 def _snapshot_boundaries(
@@ -135,6 +167,40 @@ def _snapshot_boundaries(
         value = boundary.value()
         rows.append((boundary, callable(value), _callable_identity(value)))
     return tuple(rows)
+
+
+def _verify_call_shapes(
+    *,
+    owner_name: str,
+    stage_name: str,
+    boundary: CallableBoundary,
+    value: Any,
+) -> None:
+    if not boundary.call_shapes:
+        return
+    try:
+        signature = inspect.signature(value)
+    except (TypeError, ValueError) as exc:
+        raise ContractCompositionError(
+            f"contract composition {owner_name!r} stage {stage_name!r} made "
+            f"boundary {boundary.label!r} uninspectable: {exc}"
+        ) from exc
+
+    token = object()
+    for shape in boundary.call_shapes:
+        args = (token,) * shape.positional
+        kwargs = {name: token for name in shape.keywords}
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError as exc:
+            rendered = f"{shape.positional} positional"
+            if shape.keywords:
+                rendered += f" + keywords {shape.keywords!r}"
+            raise ContractCompositionError(
+                f"contract composition {owner_name!r} stage {stage_name!r} changed "
+                f"call signature for boundary {boundary.label!r}; it no longer "
+                f"accepts {rendered}: {exc}"
+            ) from exc
 
 
 def _verify_boundaries(
@@ -154,6 +220,12 @@ def _verify_boundaries(
                 f"({boundary.attribute!r})"
             )
         if is_callable:
+            _verify_call_shapes(
+                owner_name=owner_name,
+                stage_name=stage_name,
+                boundary=boundary,
+                value=value,
+            )
             lineage.append((boundary.label, _callable_identity(value)))
     return tuple(lineage)
 
@@ -252,10 +324,12 @@ def stage(name: str, install: Callable[..., None], /, *args: Any, **kwargs: Any)
 
 
 __all__ = [
+    "CallShape",
     "CallableBoundary",
     "ContractCompositionError",
     "ContractStage",
     "StageReceipt",
+    "call_shape",
     "callable_boundary",
     "compose_contract_stages",
     "composition_state",
