@@ -3,54 +3,19 @@ from __future__ import annotations
 import hashlib
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import qwen_runtime_transport_contract as contract
 
 
-def _config(model_id: str, *, max_context: int = 32768) -> SimpleNamespace:
+def _config(model_id: str) -> SimpleNamespace:
     return SimpleNamespace(
         model_id=model_id,
-        max_context=max_context,
+        max_context=262144,
         max_new_tokens=8192,
         extra={"gguf_filename": f"{model_id.split('/')[-1]}.gguf"},
     )
-
-
-def test_qwen36_uses_registry_context_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
-    config = _config("unsloth/Qwen3.6-27B-MTP-GGUF")
-    args = autotune._base_args("llama-server", "/tmp/model.gguf", config, 8910)
-    assert args[args.index("--ctx-size") + 1] == "32768"
-    assert getattr(autotune._base_args, "_mmm_qwen_context_contract_v1", False)
-
-
-def test_qwen36_explicit_native_context_override_is_preserved(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "0")
-    config = _config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF")
-    args = autotune._base_args("llama-server", "/tmp/model.gguf", config, 8910)
-    assert args[args.index("--ctx-size") + 1] == "0"
-
-
-def test_qwen35_keeps_its_existing_mtp_context_policy(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-    config = _config("unsloth/Qwen3.5-9B-MTP-GGUF", max_context=262144)
-    assert contract._actual_qwen_context(config) == 0
-
-
-def test_qwen_context_fingerprint_tracks_effective_context(monkeypatch, tmp_path) -> None:
-    model = tmp_path / "model.gguf"
-    model.write_bytes(b"qwen" * 2048)
-    monkeypatch.setattr(autotune, "_server_version", lambda _binary: "server-v1")
-    monkeypatch.setattr(autotune, "_hardware_identity", lambda: "gpu-v1")
-    config = _config("unsloth/Qwen3.6-27B-MTP-GGUF")
-
-    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "8192")
-    small = autotune._fingerprint(config, "llama-server", str(model))
-    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "16384")
-    large = autotune._fingerprint(config, "llama-server", str(model))
-
-    assert small != large
-    assert getattr(autotune._fingerprint, "_mmm_qwen_context_fingerprint_v1", False)
 
 
 def _tool_response(*, call_id: str, arguments: str) -> dict:
@@ -94,61 +59,137 @@ def test_tool_signature_rejects_wrong_tool_arguments() -> None:
     )
 
 
-def test_speculative_benchmark_falls_back_when_tool_equivalence_fails(monkeypatch) -> None:
+def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
     baseline = autotune.ServerVariant("baseline")
-    speculative = autotune.ServerVariant("mtp-2", "draft-mtp", 2)
-    probes = (
-        autotune.ProbeResult(
-            variant=baseline,
-            ok=True,
-            output_sha256="same",
-            predicted_tokens=96,
-            predicted_tps=20.0,
-            prompt_tps=100.0,
-            elapsed_seconds=1.0,
-        ),
-        autotune.ProbeResult(
-            variant=speculative,
-            ok=True,
-            output_sha256="same",
-            predicted_tokens=96,
-            predicted_tps=30.0,
-            prompt_tps=100.0,
-            elapsed_seconds=1.0,
-        ),
+    mtp = autotune.ServerVariant("mtp-2", "draft-mtp", 2)
+    assert contract._initial_calibration_variant(baseline)
+    assert contract._initial_calibration_variant(mtp)
+    assert not contract._initial_calibration_variant(
+        autotune.ServerVariant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024)
     )
-    original = autotune.AutotuneDecision(
-        fingerprint="fingerprint",
-        selected=speculative,
-        baseline_tps=20.0,
-        selected_tps=30.0,
-        speedup=1.5,
-        probes=probes,
+    assert not contract._initial_calibration_variant(
+        autotune.ServerVariant("mtp-2|p2", "draft-mtp", 2, parallel=2)
     )
-    monkeypatch.setattr(
-        contract,
-        "_verify_speculative_tool_equivalence",
-        lambda *_args, **_kwargs: (False, "probe mismatch"),
+    assert not contract._initial_calibration_variant(
+        autotune.ServerVariant("mtp-2|cr64", "draft-mtp", 2, cache_reuse=64)
     )
 
-    class FakeAutotune:
-        ServerVariant = autotune.ServerVariant
-        ProbeResult = autotune.ProbeResult
-        AutotuneDecision = autotune.AutotuneDecision
 
-        @staticmethod
-        def _benchmark(*_args, **_kwargs):
-            return original
+class _FakeAutotune:
+    def __init__(self) -> None:
+        self.tool_calls = 0
 
-    fake = FakeAutotune()
+        def probe_server(
+            _base_url: str,
+            _request: object,
+            *,
+            max_tokens: int,
+            variant: object,
+        ) -> SimpleNamespace:
+            return SimpleNamespace(ok=True, max_tokens=max_tokens, variant=variant)
+
+        self._probe_server = probe_server
+
+        def run_variant(
+            _binary: str,
+            _model_path: str,
+            _config: object,
+            request: object,
+            variant: object,
+            **_kwargs: object,
+        ) -> SimpleNamespace:
+            self._probe_server(
+                "http://127.0.0.1:8910/v1",
+                request,
+                max_tokens=1,
+                variant=variant,
+            )
+            return self._probe_server(
+                "http://127.0.0.1:8910/v1",
+                request,
+                max_tokens=64,
+                variant=variant,
+            )
+
+        self._mmm_run_tuning_variant = run_variant
+
+
+def test_initial_qwen_variant_requires_tool_probe(monkeypatch) -> None:
+    fake = _FakeAutotune()
+
+    def passing_probe(_base_url: str, _autotune: object) -> tuple[bool, str]:
+        fake.tool_calls += 1
+        return True, ""
+
+    monkeypatch.setattr(contract, "_tool_probe", passing_probe)
     contract._install_tool_equivalence_policy(fake)
-    result = fake._benchmark(
+    variant = autotune.ServerVariant("mtp-2", "draft-mtp", 2)
+    result = fake._mmm_run_tuning_variant(
         "llama-server",
         "/tmp/model.gguf",
-        _config("unsloth/Qwen3.5-9B-MTP-GGUF", max_context=262144),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
         object(),
-        "fingerprint",
+        variant,
     )
-    assert result.selected.name == "baseline"
-    assert result.speedup == 1.0
-    assert getattr(fake._benchmark, "_mmm_qwen_speculative_tool_equivalence_v1", False)
+    assert result.max_tokens == 64
+    assert fake.tool_calls == 1
+
+
+def test_bad_mtp_tool_transport_fails_variant_before_decode(monkeypatch) -> None:
+    fake = _FakeAutotune()
+    monkeypatch.setattr(
+        contract,
+        "_tool_probe",
+        lambda _base_url, _autotune: (False, "canonical call mismatch"),
+    )
+    contract._install_tool_equivalence_policy(fake)
+    variant = autotune.ServerVariant("mtp-4", "draft-mtp", 4)
+    with pytest.raises(RuntimeError, match="native tool transport calibration failed"):
+        fake._mmm_run_tuning_variant(
+            "llama-server",
+            "/tmp/model.gguf",
+            _config("unsloth/Qwen3.6-27B-MTP-GGUF"),
+            object(),
+            variant,
+        )
+
+
+def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> None:
+    fake = _FakeAutotune()
+    calls = 0
+
+    def counted_probe(_base_url: str, _autotune: object) -> tuple[bool, str]:
+        nonlocal calls
+        calls += 1
+        return True, ""
+
+    monkeypatch.setattr(contract, "_tool_probe", counted_probe)
+    contract._install_tool_equivalence_policy(fake)
+    fake._mmm_run_tuning_variant(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config("other/model"),
+        object(),
+        autotune.ServerVariant("baseline"),
+    )
+    fake._mmm_run_tuning_variant(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF"),
+        object(),
+        autotune.ServerVariant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024),
+    )
+    assert calls == 0
+
+
+def test_runtime_installs_zero_reload_tool_calibration() -> None:
+    assert getattr(
+        autotune._mmm_run_tuning_variant,
+        "_mmm_qwen_tool_calibration_context_v2",
+        False,
+    )
+    assert getattr(
+        autotune._probe_server,
+        "_mmm_qwen_tool_calibration_probe_v2",
+        False,
+    )
