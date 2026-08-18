@@ -18,7 +18,7 @@ def _qwen_config():
     return SimpleNamespace(
         model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
         extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
-        max_context=32768,
+        max_context=262144,
     )
 
 
@@ -70,7 +70,7 @@ def test_measured_fast_args_preserve_kv_tuner_controls(monkeypatch) -> None:
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
     assert args[args.index("--parallel") + 1] == "1"
-    assert args[args.index("--ctx-size") + 1] == "32768"
+    assert args[args.index("--ctx-size") + 1] == "0"
     assert args[args.index("--cache-type-k") + 1] == "q8_0"
     assert args[args.index("--cache-type-v") + 1] == "q8_0"
     assert "--load-mode" not in args
@@ -78,10 +78,10 @@ def test_measured_fast_args_preserve_kv_tuner_controls(monkeypatch) -> None:
     assert "--metrics" in args
 
 
-def test_qwen_context_defaults_to_profile_and_is_explicitly_overridable(monkeypatch) -> None:
+def test_qwen_context_defaults_to_model_native_and_is_explicitly_overridable(monkeypatch) -> None:
     config = _qwen_config()
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-    assert _context_size(config) == 32768
+    assert _context_size(config) == 0
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
     assert _context_size(config) == 16384
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "999999")
