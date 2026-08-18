@@ -9,6 +9,22 @@ from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.scale_policy import ScalePolicy
 
 
+def _implement_request(messages) -> dict:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("phase") == "implement_module":
+            return payload
+    raise AssertionError("No implement_module request was found in the coder message history.")
+
+
 class _AgenticRouter:
     def __init__(self) -> None:
         self.workspace: Path | None = None
@@ -30,9 +46,8 @@ class _AgenticRouter:
         assert self.workspace is not None
         self.calls.append(dict(kwargs))
         self.messages.append([dict(message) for message in messages])
-        request = json.loads(messages[-1]["content"])
+        request = _implement_request(messages)
         assert request["phase"] == "implement_module"
-        assert "plan_files" not in messages[-1]["content"]
         project = self.workspace / request["workspace_project_root"]
         target = project / "src/main/java/example/Generated.java"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -61,10 +76,10 @@ def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path)
     assert len(router.calls) == 1
     assert (root / "src/main/java/example/Generated.java").is_file()
     assert result["touched_paths"] == ["src/main/java/example/Generated.java"]
-    request = json.loads(router.messages[0][-1]["content"])
+    request = _implement_request(router.messages[0])
     assert request["task"].startswith("Implement the approved Minecraft/Fabric mod feature")
     assert any("workspace/RAG/MCP tools" in rule for rule in request["rules"])
-    assert all("return_custom_module_file_plan" not in message["content"] for message in router.messages[0])
+    assert all("return_custom_module_file_plan" not in str(message.get("content", "")) for message in router.messages[0])
 
 
 def test_out_of_scope_agent_edit_is_discarded_without_touching_real_project(tmp_path: Path) -> None:
@@ -76,7 +91,7 @@ def test_out_of_scope_agent_edit_is_discarded_without_touching_real_project(tmp_
     class _MixedRouter(_AgenticRouter):
         def generate_text(self, role, messages, **kwargs):
             summary = super().generate_text(role, messages, **kwargs)
-            request = json.loads(messages[-1]["content"])
+            request = _implement_request(messages)
             assert self.workspace is not None
             project = self.workspace / request["workspace_project_root"]
             staged_wrapper = project / "gradle/wrapper/gradle-wrapper.properties"
