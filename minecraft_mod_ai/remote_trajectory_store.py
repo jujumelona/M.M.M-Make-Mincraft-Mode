@@ -152,8 +152,34 @@ def _remote_record_valid(row: Mapping[str, Any]) -> bool:
     return _remote_hash_valid(row) and record_remote_eligible(row)
 
 
+def _github_token() -> str:
+    return os.environ.get("MMM_TRAJECTORY_GITHUB_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
+
+
+def _hf_token() -> str:
+    return os.environ.get("MMM_TRAJECTORY_HF_TOKEN", "").strip() or os.environ.get("HF_TOKEN", "").strip()
+
+
+def _backend_auth_available() -> bool:
+    """Return whether the selected backend can actually make authenticated calls."""
+
+    backend = _backend()
+    if backend == "github":
+        return bool(_github_token())
+    if backend == "huggingface":
+        return bool(_hf_token())
+    return False
+
+
 def remote_configured() -> bool:
-    return remote_write_allowed() and _backend() != "none" and bool(_repo())
+    """Return True only when consent, destination and backend credentials are ready."""
+
+    return (
+        remote_write_allowed()
+        and _backend() != "none"
+        and bool(_repo())
+        and _backend_auth_available()
+    )
 
 
 def _iter_outbox_lines_reverse(path: Path, *, block_size: int = 64 * 1024):
@@ -244,7 +270,7 @@ def _merge_rows(existing: Sequence[Mapping[str, Any]], pending: Sequence[Mapping
 
 
 def _github_request(method: str, path: str, *, body: Mapping[str, Any] | None = None) -> Any:
-    token = os.environ.get("MMM_TRAJECTORY_GITHUB_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
+    token = _github_token()
     if not token:
         raise RuntimeError("GitHub trajectory store requires GITHUB_TOKEN or MMM_TRAJECTORY_GITHUB_TOKEN.")
     url = "https://api.github.com" + path
@@ -339,10 +365,6 @@ def _github_write_manifest() -> None:
         json.dumps(_manifest(), ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n",
         message=f"Update MMM trajectory store manifest {REMOTE_FORMAT_VERSION}",
     )
-
-
-def _hf_token() -> str:
-    return os.environ.get("MMM_TRAJECTORY_HF_TOKEN", "").strip() or os.environ.get("HF_TOKEN", "").strip()
 
 
 def _hf_read_path(path_in_repo: str) -> list[dict[str, Any]]:
