@@ -39,6 +39,36 @@ _PROTECTED_WRITE_PREFIXES = (
     ".minecraft_ai/research",
     ".minecraft_ai/context-observations",
 )
+_REJECTED_WRITE_EXAMPLES = ("README.md", "LICENSE", "docs/")
+
+
+def custom_module_write_scope() -> dict[str, Any]:
+    """Return the single model/validator write-scope contract."""
+
+    return {
+        "allowed_prefixes": list(_ALLOWED_WRITE_PREFIXES),
+        "allowed_files": list(_ALLOWED_WRITE_FILES),
+        "protected_prefixes": list(_PROTECTED_WRITE_PREFIXES),
+        "examples_rejected": list(_REJECTED_WRITE_EXAMPLES),
+        "policy": "Every patch operation path must match this allowlist.",
+    }
+
+
+def custom_module_path_protected(path: str) -> bool:
+    normalized = str(path).replace("\\", "/").casefold()
+    return any(
+        normalized == root or normalized.startswith(root + "/")
+        for root in _PROTECTED_WRITE_PREFIXES
+    )
+
+
+def custom_module_path_allowed(path: str) -> bool:
+    normalized = str(path).replace("\\", "/")
+    if custom_module_path_protected(normalized):
+        return False
+    return normalized in _ALLOWED_WRITE_FILES or any(
+        normalized.startswith(prefix) for prefix in _ALLOWED_WRITE_PREFIXES
+    )
 
 
 def build_coder_grounding(
@@ -128,13 +158,7 @@ def build_coder_grounding(
                 "receipt": research_receipt,
             },
         },
-        "write_scope": {
-            "allowed_prefixes": list(_ALLOWED_WRITE_PREFIXES),
-            "allowed_files": list(_ALLOWED_WRITE_FILES),
-            "protected_prefixes": list(_PROTECTED_WRITE_PREFIXES),
-            "examples_rejected": ["README.md", "LICENSE", "docs/"],
-            "policy": "Every patch operation path must match this allowlist.",
-        },
+        "write_scope": custom_module_write_scope(),
         "policy": {
             "resolved_before_first_coder_decode": True,
             "baseline_grounding_owned_by_host": True,
@@ -157,3 +181,11 @@ def _ordered_existing(names: tuple[str, ...], eligible: set[str]) -> tuple[str, 
             "MinecraftCoder is missing ground-production-with-live-evidence Skill."
         )
     return tuple(result)
+
+
+__all__ = [
+    "build_coder_grounding",
+    "custom_module_path_allowed",
+    "custom_module_path_protected",
+    "custom_module_write_scope",
+]
