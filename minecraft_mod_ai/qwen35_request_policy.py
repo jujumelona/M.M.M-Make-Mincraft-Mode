@@ -15,6 +15,12 @@ from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Iterator, Mapping
 
+from .qwen_model_profiles import (
+    QWEN35_GENERAL_THINKING as _GENERAL_THINKING,
+    QWEN35_NON_THINKING as _NON_THINKING,
+    QWEN35_PRECISE_CODING as _PRECISE_CODING,
+    is_qwen35_9b,
+)
 
 _PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v2"
 _BASE_ARGS_MARKER = "_mmm_qwen35_benchmark_reasoning_off_v2"
@@ -23,42 +29,12 @@ _VARIANT_MARKER = "_mmm_qwen35_tuning_variant_scope_v1"
 _FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v2"
 _BENCHMARK_ENV = "MMM_QWEN35_DECODE_BENCHMARK"
 
-_GENERAL_THINKING = {
-    "temperature": 1.0,
-    "top_p": 0.95,
-    "top_k": 20,
-    "min_p": 0.0,
-    "presence_penalty": 1.5,
-    "repeat_penalty": 1.0,
-}
-_PRECISE_CODING = {
-    "temperature": 0.6,
-    "top_p": 0.95,
-    "top_k": 20,
-    "min_p": 0.0,
-    "presence_penalty": 0.0,
-    "repeat_penalty": 1.0,
-}
-_NON_THINKING = {
-    "temperature": 0.7,
-    "top_p": 0.8,
-    "top_k": 20,
-    "min_p": 0.0,
-    "presence_penalty": 1.5,
-    "repeat_penalty": 1.0,
-    "reasoning_effort": "none",
-}
-
 
 def _is_qwen35(config: Any) -> bool:
-    model_id = str(getattr(config, "model_id", "")).casefold()
+    model_id = getattr(config, "model_id", "")
     extra = getattr(config, "extra", {})
-    filename = (
-        str(extra.get("gguf_filename", "")).casefold()
-        if isinstance(extra, Mapping)
-        else ""
-    )
-    return "qwen3.5-9b" in model_id or "qwen3.5-9b" in filename
+    filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
+    return is_qwen35_9b(model_id, filename)
 
 
 def _request_defaults(config: Any, request: Any) -> dict[str, Any]:
