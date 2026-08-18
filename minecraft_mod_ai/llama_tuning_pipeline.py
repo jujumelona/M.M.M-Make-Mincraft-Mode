@@ -21,8 +21,9 @@ from .runtime_contract_composer import (
 )
 
 
-_TUNING_PIPELINE_VERSION = 33
+_TUNING_PIPELINE_VERSION = 34
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
+_RUNTIME_TYPE_OWNER_MARKER = "_mmm_runtime_tuning_type_owner"
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,27 @@ class NativeLlamaTuningPipeline:
         self.autotune = autotune
         self.hardware_policy = hardware_policy
         self.runtime_tuning = runtime_tuning
+
+    def _install_runtime_type_ownership(self) -> None:
+        """Publish the canonical extended tuning types before any wrapper captures them.
+
+        Historically ``llama_server_autotune`` started with a narrow ServerVariant and
+        ``llama_server_runtime_tuning.install`` replaced it later with the extended
+        runtime type. That made the public shape depend on import/bootstrap timing.
+        Type ownership is now an explicit first composition stage, so every later
+        tuning policy sees one stable production model from the start.
+        """
+
+        for name in ("ServerVariant", "ProbeResult", "AutotuneDecision"):
+            canonical = getattr(self.runtime_tuning, name, None)
+            if canonical is None:
+                raise RuntimeError(f"runtime tuning does not export canonical {name}")
+            setattr(self.autotune, name, canonical)
+        setattr(
+            self.autotune,
+            _RUNTIME_TYPE_OWNER_MARKER,
+            str(getattr(self.runtime_tuning, "__name__", type(self.runtime_tuning).__name__)),
+        )
 
     @staticmethod
     def _context_value(config: Any) -> int:
@@ -136,8 +158,6 @@ class NativeLlamaTuningPipeline:
                 self.hardware_policy,
                 self.runtime_tuning,
             )
-            # Install last among Qwen wrappers so role/task semantics remain the
-            # authoritative request policy and the full tuning benchmark is scoped.
             install_qwen35_request_policy(self.autotune, self.hardware_policy)
             self._install_profile_context_authority()
             install_single_stream_agentic_policy(
@@ -157,6 +177,7 @@ class NativeLlamaTuningPipeline:
             install_vram_parallel(self.runtime_tuning)
 
         return (
+            TuningStage("runtime-types", self._install_runtime_type_ownership),
             TuningStage("hardware", install_hardware_stage),
             TuningStage(
                 "efficiency",
@@ -174,9 +195,6 @@ class NativeLlamaTuningPipeline:
             TuningStage("decode-speed", install_decode_speed_stage),
             TuningStage("kernel-autotune", install_kernel_stage),
             TuningStage("qwen-transport", install_qwen_runtime_transport),
-            # This must be outermost. A media request may retire a text-only managed
-            # process; Qwen/T4 wrappers underneath must then observe the cold launch
-            # and reapply their draft-GPU/KV launch scope around the cached winner.
             TuningStage(
                 "multimodal",
                 lambda: install_multimodal(self.autotune, self.hardware_policy),
@@ -187,6 +205,20 @@ class NativeLlamaTuningPipeline:
         """Production call shapes every tuning wrapper must continue to accept."""
 
         return (
+            callable_boundary(
+                "autotune.server_variant",
+                self.autotune,
+                "ServerVariant",
+                call_shapes=(
+                    call_shape(
+                        3,
+                        "ubatch",
+                        "parallel",
+                        "cache_reuse",
+                        "draft_p_min",
+                    ),
+                ),
+            ),
             callable_boundary(
                 "autotune.base_args",
                 self.autotune,
