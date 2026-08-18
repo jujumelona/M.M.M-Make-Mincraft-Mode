@@ -15,6 +15,8 @@ native llama tuning pipeline) one shared execution contract:
 * a stage that raises poisons the composition owner for the rest of the process;
 * one owner may use only one composition version and one declared stage/boundary graph
   for the process lifetime;
+* stage graph identity includes installer code, so changing a phase body without a
+  version bump cannot silently reuse stale receipts;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
@@ -27,7 +29,9 @@ effects. A clean process restart is the only safe boundary for another compositi
 version or graph.
 """
 
+import hashlib
 import inspect
+import marshal
 from dataclasses import dataclass
 from functools import partial
 from threading import RLock
@@ -106,6 +110,21 @@ def _callable_identity(value: Any) -> str:
     return f"{module}:{qualname}" + (f"[{marker_suffix}]" if marker_suffix else "")
 
 
+def _installer_identity(value: Callable[[], None]) -> tuple[str, str]:
+    target: Any = value
+    while isinstance(target, partial):
+        target = target.func
+    target = getattr(target, "__func__", target)
+    code = getattr(target, "__code__", None)
+    if code is None:
+        return _callable_identity(target), "<no-code>"
+    try:
+        encoded = marshal.dumps(code)
+    except (TypeError, ValueError):
+        encoded = code.co_code
+    return _callable_identity(target), hashlib.sha256(encoded).hexdigest()
+
+
 def _state_map(state_owner: Any) -> dict[str, dict[str, Any]]:
     current = getattr(state_owner, _STATE_ATTR, None)
     if isinstance(current, dict):
@@ -120,7 +139,10 @@ def _graph_signature(
     boundaries: tuple[CallableBoundary, ...],
 ) -> tuple[Any, ...]:
     return (
-        tuple(stage.name for stage in stages),
+        tuple(
+            (stage.name, _installer_identity(stage.install))
+            for stage in stages
+        ),
         tuple(
             (
                 boundary.label,
@@ -202,9 +224,6 @@ def _verify_call_shapes(
     if not boundary.call_shapes:
         return
     try:
-        # Validate the callable Python will actually invoke. Following __wrapped__
-        # can hide a bad outer wrapper whose functools.wraps metadata still advertises
-        # the old signature even though the wrapper itself accepts fewer arguments.
         signature = inspect.signature(value, follow_wrapped=False)
     except (TypeError, ValueError) as exc:
         raise ContractCompositionError(
@@ -356,8 +375,6 @@ def compose_contract_stages(
 
 
 def stage(name: str, install: Callable[..., None], /, *args: Any, **kwargs: Any) -> ContractStage:
-    """Compact helper for turning a callable plus arguments into a stage."""
-
     return ContractStage(name=name, install=partial(install, *args, **kwargs))
 
 
