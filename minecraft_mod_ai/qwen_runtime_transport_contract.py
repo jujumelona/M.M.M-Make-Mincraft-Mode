@@ -28,11 +28,16 @@ from .qwen_model_profiles import qwen_family
 
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
+_BENCHMARK_MARKER = "_mmm_qwen_tool_calibration_benchmark_v1"
 _RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
 _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
 _PARALLEL_STAGE_MARKER = "_mmm_qwen_mtp_single_slot_stage_v1"
 _LAUNCH_MARKER = "_mmm_qwen_mtp_single_slot_launch_v1"
 _FINGERPRINT_MARKER = "_mmm_qwen_mtp_single_slot_fingerprint_v1"
+_ACTIVE_BENCHMARK_CONFIG: ContextVar[Any | None] = ContextVar(
+    "mmm_qwen_transport_benchmark_config",
+    default=None,
+)
 _ACTIVE_CALIBRATION: ContextVar[tuple[Any, Any] | None] = ContextVar(
     "mmm_qwen_transport_calibration",
     default=None,
@@ -257,6 +262,30 @@ def _install_mtp_single_slot_policy(autotune: Any) -> None:
 def _install_tool_equivalence_policy(autotune: Any) -> None:
     """Reject a Qwen speculation candidate if its native tool transport is invalid."""
 
+    current_benchmark = getattr(autotune, "_benchmark", None)
+    if not callable(current_benchmark):
+        raise RuntimeError("Qwen transport guard requires staged llama runtime tuning")
+    if not getattr(current_benchmark, _BENCHMARK_MARKER, False):
+
+        @wraps(current_benchmark)
+        def qwen_calibrated_benchmark(
+            binary: str,
+            model_path: str,
+            config: Any,
+            request: Any,
+            fingerprint: str,
+        ) -> Any:
+            if _family(config) is None:
+                return current_benchmark(binary, model_path, config, request, fingerprint)
+            token = _ACTIVE_BENCHMARK_CONFIG.set(config)
+            try:
+                return current_benchmark(binary, model_path, config, request, fingerprint)
+            finally:
+                _ACTIVE_BENCHMARK_CONFIG.reset(token)
+
+        setattr(qwen_calibrated_benchmark, _BENCHMARK_MARKER, True)
+        autotune._benchmark = qwen_calibrated_benchmark
+
     current_run = getattr(autotune, "_mmm_run_tuning_variant", None)
     if not callable(current_run):
         raise RuntimeError("Qwen transport guard requires staged llama runtime tuning")
@@ -306,12 +335,15 @@ def _install_tool_equivalence_policy(autotune: Any) -> None:
             max_tokens=max_tokens,
             variant=variant,
         )
-        active = _ACTIVE_CALIBRATION.get()
-        if active is None or max_tokens != 1 or not _initial_calibration_variant(variant):
+        if max_tokens != 1 or not _initial_calibration_variant(variant):
             return probe
 
-        config, active_variant = active
-        if active_variant != variant or _family(config) is None:
+        active_run = _ACTIVE_CALIBRATION.get()
+        benchmark_config = _ACTIVE_BENCHMARK_CONFIG.get()
+        config = active_run[0] if active_run is not None else benchmark_config
+        if config is None or _family(config) is None:
+            return probe
+        if active_run is not None and active_run[1] != variant:
             return probe
 
         valid, error = _tool_probe(base_url, autotune)
