@@ -5,8 +5,8 @@ from __future__ import annotations
 Text generation keeps the lean GGUF server. A request carrying ``media_paths``
 upgrades the managed server to the profile-declared projector only when vision is
 actually needed, then transports local images through llama.cpp's OpenAI-compatible
-``image_url`` content parts. Decode autotune decisions remain reusable because the
-projector does not change the text model or MTP draft model.
+``image_url`` content parts. Decode autotune decisions remain reusable, while models
+with an upstream MTP+mmproj incompatibility launch media requests non-speculatively.
 """
 
 import base64
@@ -19,9 +19,11 @@ from typing import Any, Mapping
 
 _BASE_ARGS_MARKER = "_mmm_llama_multimodal_base_args_v2"
 _ENSURE_MARKER = "_mmm_llama_multimodal_ensure_v2"
+_LAUNCH_MARKER = "_mmm_llama_multimodal_safe_launch_v1"
 _PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
 _ACTIVE_MEDIA_ENV = "MMM_LLAMA_MULTIMODAL_ACTIVE"
 _MANAGED_MEDIA_URL_ATTR = "_mmm_multimodal_managed_url"
+_MTP_UNSAFE_WITH_MEDIA = frozenset({"qwen3.5-9b", "qwen3.6-35b-a3b"})
 
 
 def _mmproj_filename(config: Any) -> str:
@@ -38,6 +40,20 @@ def _repo_id(config: Any) -> str:
     if not model_id.lower().endswith("-gguf") and "gguf" not in model_id.lower():
         return f"bartowski/{model_id.split('/')[-1]}-GGUF"
     return model_id
+
+
+def _registry_model(config: Any) -> str | None:
+    from .qwen_model_profiles import qwen_registry_model
+
+    extra = getattr(config, "extra", {})
+    filename = str(extra.get("gguf_filename", "")) if isinstance(extra, Mapping) else ""
+    return qwen_registry_model(getattr(config, "model_id", ""), filename)
+
+
+def _requires_media_baseline(config: Any) -> bool:
+    """Return whether current llama.cpp requires vision without MTP for this model."""
+
+    return _registry_model(config) in _MTP_UNSAFE_WITH_MEDIA
 
 
 @lru_cache(maxsize=16)
@@ -151,6 +167,27 @@ def _install_base_args(autotune: Any) -> None:
     autotune._base_args = base_args
 
 
+def _install_launch_policy(autotune: Any) -> None:
+    """Keep text MTP, but use baseline vision where upstream MTP+mmproj is unsafe."""
+
+    current = autotune._launch_selected
+    if getattr(current, _LAUNCH_MARKER, False):
+        return
+
+    @wraps(current)
+    def launch_selected(binary: str, model_path: str, config: Any, selected: Any) -> str:
+        if (
+            os.environ.get(_ACTIVE_MEDIA_ENV, "").strip() == "1"
+            and _requires_media_baseline(config)
+            and str(getattr(selected, "spec_type", "none")) != "none"
+        ):
+            selected = autotune.ServerVariant("baseline")
+        return current(binary, model_path, config, selected)
+
+    setattr(launch_selected, _LAUNCH_MARKER, True)
+    autotune._launch_selected = launch_selected
+
+
 def _restore_env(name: str, previous: str | None) -> None:
     if previous is None:
         os.environ.pop(name, None)
@@ -235,12 +272,14 @@ def _install_payload(hardware_policy: Any) -> None:
 
 def install(autotune: Any, hardware_policy: Any) -> None:
     _install_base_args(autotune)
+    _install_launch_policy(autotune)
     _install_ensure(autotune)
     _install_payload(hardware_policy)
 
 
 __all__ = [
     "_messages_with_media",
+    "_requires_media_baseline",
     "_resolve_mmproj_path",
     "install",
 ]
