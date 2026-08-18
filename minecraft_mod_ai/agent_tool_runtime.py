@@ -60,13 +60,8 @@ _MODEL_SOURCE_PREFIXES = (
 _MODEL_SOURCE_PATCH_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["project_root", "files"],
+    "required": ["files"],
     "properties": {
-        "project_root": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Existing project directory inside the bound MMM workspace.",
-        },
         "files": {
             "type": "array",
             "minItems": 1,
@@ -210,9 +205,10 @@ class AgentToolRuntime:
                                 "name": name,
                                 "description": (
                                     "Write complete semantic source/resource file text. The host "
-                                    "derives create-vs-replace, exact SHA-256 preconditions and the "
-                                    "transactional patch. Build infrastructure and Gradle files are "
-                                    "not writable through this model-facing contract."
+                                    "selects the bound project root and derives create-vs-replace, "
+                                    "exact SHA-256 preconditions and the transactional patch. Build "
+                                    "infrastructure and Gradle files are not writable through this "
+                                    "model-facing contract."
                                 ),
                                 "parameters": _MODEL_SOURCE_PATCH_SCHEMA,
                             },
@@ -481,6 +477,47 @@ class _MCPStdioSession:
         return await stack.__aexit__(exc_type, exc, tb)
 
 
+def _looks_like_bound_project(root: Path) -> bool:
+    if not root.is_dir() or root.is_symlink():
+        return False
+    source_root = root / "src"
+    if not source_root.is_dir() or source_root.is_symlink():
+        return False
+    return any(
+        (root / marker).is_file()
+        for marker in (
+            "settings.gradle",
+            "settings.gradle.kts",
+            "build.gradle",
+            "build.gradle.kts",
+            "gradle.properties",
+        )
+    )
+
+
+def _discover_model_project_root(workspace_root: str | Path) -> tuple[Path, str]:
+    """Resolve the single host-bound project without asking the model for a path."""
+
+    workspace = Path(workspace_root).expanduser().resolve()
+    if not workspace.is_dir() or workspace.is_symlink():
+        raise AgentToolRuntimeError("Bound model workspace must be a regular directory")
+    if _looks_like_bound_project(workspace):
+        return workspace, "."
+
+    candidates = [
+        child
+        for child in sorted(workspace.iterdir(), key=lambda item: item.name)
+        if _looks_like_bound_project(child)
+    ]
+    if len(candidates) != 1:
+        raise AgentToolRuntimeError(
+            "Host could not resolve exactly one source project in the bound workspace; "
+            f"found {len(candidates)} candidates"
+        )
+    root = candidates[0].resolve()
+    return root, root.relative_to(workspace).as_posix()
+
+
 def _materialize_model_source_patch(
     workspace_root: str | Path,
     payload: Mapping[str, Any],
@@ -488,34 +525,19 @@ def _materialize_model_source_patch(
     """Convert model file text into the strict patch protocol owned by the host.
 
     The model chooses semantic source/resource paths and complete text only. The host
-    enforces the writable namespace, observes current file existence and computes the
-    exact create/replace operation plus SHA-256 precondition immediately before the MCP
-    transaction. Build infrastructure therefore cannot be represented by this contract.
+    resolves the project root, enforces the writable namespace, observes current file
+    existence and computes the exact create/replace operation plus SHA-256 precondition
+    immediately before the MCP transaction. Build infrastructure therefore cannot be
+    represented by this contract.
     """
 
-    extra = set(payload) - {"project_root", "files"}
+    extra = set(payload) - {"files"}
     if extra:
         raise AgentToolRuntimeError(
-            "Model-facing source writes accept only project_root and files; "
-            f"host-owned patch fields are forbidden: {sorted(extra)}"
+            "Model-facing source writes accept only files; host-owned project/patch "
+            f"fields are forbidden: {sorted(extra)}"
         )
-    raw_project_root = payload.get("project_root")
-    if not isinstance(raw_project_root, str) or not raw_project_root.strip():
-        raise AgentToolRuntimeError("project_root must be a non-empty string")
-
-    workspace = Path(workspace_root).expanduser().resolve()
-    candidate_root = Path(raw_project_root).expanduser()
-    if not candidate_root.is_absolute():
-        candidate_root = workspace / candidate_root
-    if candidate_root.is_symlink():
-        raise AgentToolRuntimeError("project_root may not be a symlink")
-    root = candidate_root.resolve()
-    try:
-        root.relative_to(workspace)
-    except ValueError as exc:
-        raise AgentToolRuntimeError("project_root escaped the bound workspace") from exc
-    if not root.is_dir():
-        raise AgentToolRuntimeError("project_root must be an existing directory")
+    root, project_root_argument = _discover_model_project_root(workspace_root)
 
     raw_files = payload.get("files")
     if not isinstance(raw_files, list) or not raw_files:
@@ -586,7 +608,7 @@ def _materialize_model_source_patch(
             )
 
     return {
-        "project_root": raw_project_root,
+        "project_root": project_root_argument,
         "operations": operations,
     }
 
