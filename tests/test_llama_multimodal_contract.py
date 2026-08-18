@@ -50,7 +50,7 @@ def test_media_paths_become_openai_image_parts(tmp_path: Path) -> None:
     assert parts[1] == {"type": "text", "text": "Return the visual verdict."}
 
 
-def test_projector_is_loaded_only_when_media_upgrades_managed_server(
+def test_projector_is_loaded_only_for_exact_managed_media_process(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -112,19 +112,39 @@ def test_projector_is_loaded_only_when_media_upgrades_managed_server(
     text_args = autotune._base_args("llama-server", "model.gguf", config, 8910)
     assert "--mmproj" not in text_args
 
-    request = GenerationRequest(
+    media_request = GenerationRequest(
         messages=({"role": "user", "content": "Inspect."},),
         media_paths=(image,),
     )
-    url = autotune.ensure_tuned_server(config, request)
+    url = autotune.ensure_tuned_server(config, media_request)
+    media_process = autotune._MANAGED_PROCESS
 
     assert shutdown_urls == ["http://127.0.0.1:8910/v1"]
     assert url == "http://127.0.0.1:8920/v1"
     assert launched_args[-2:] == ["--mmproj", str(projector)]
     assert os.environ.get(multimodal._ACTIVE_MEDIA_ENV) is None
+    assert getattr(autotune, multimodal._MANAGED_MEDIA_PROCESS_ATTR) is media_process
 
-    payload = hardware._server_payload(SimpleNamespace(config=config), request)
+    payload = hardware._server_payload(SimpleNamespace(config=config), media_request)
     assert payload["messages"][0]["content"][0]["type"] == "image_url"
+
+    # Returning to text retires the exact media process and relaunches a lean server.
+    # The fake allocator deliberately reuses the same URL, so identity rather than
+    # URL equality must distinguish the new text process from the old media process.
+    text_request = GenerationRequest(
+        messages=({"role": "user", "content": "Continue coding."},),
+    )
+    assert autotune.ensure_tuned_server(config, text_request) == url
+    text_process = autotune._MANAGED_PROCESS
+    assert text_process is not media_process
+    assert shutdown_urls[-1] == url
+    assert not hasattr(autotune, multimodal._MANAGED_MEDIA_PROCESS_ATTR)
+
+    # Same URL must not make the replacement text process look multimodal. A second
+    # image request must retire it and launch a fresh projector-backed process.
+    assert autotune.ensure_tuned_server(config, media_request) == url
+    assert autotune._MANAGED_PROCESS is not text_process
+    assert shutdown_urls[-1] == url
 
 
 def test_media_baseline_requirement_is_model_specific() -> None:
