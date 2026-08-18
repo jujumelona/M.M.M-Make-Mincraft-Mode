@@ -1,24 +1,27 @@
 from __future__ import annotations
 
-"""Native llama.cpp multimodal support for model profiles that declare an mmproj.
+"""On-demand native llama.cpp multimodal support.
 
-The model registry owns which projector belongs to a GGUF.  This module binds that
-artifact to llama-server startup and converts host-owned local image paths into the
-OpenAI-compatible ``image_url`` content parts accepted by llama.cpp/libmtmd.
+Text generation keeps the lean GGUF server. A request carrying ``media_paths``
+upgrades the managed server to the profile-declared projector only when vision is
+actually needed, then transports local images through llama.cpp's OpenAI-compatible
+``image_url`` content parts. Decode autotune decisions remain reusable because the
+projector does not change the text model or MTP draft model.
 """
 
 import base64
-import hashlib
-import json
 import mimetypes
+import os
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Mapping
 
 
-_BASE_ARGS_MARKER = "_mmm_llama_multimodal_base_args_v1"
-_FINGERPRINT_MARKER = "_mmm_llama_multimodal_fingerprint_v1"
-_PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v1"
+_BASE_ARGS_MARKER = "_mmm_llama_multimodal_base_args_v2"
+_ENSURE_MARKER = "_mmm_llama_multimodal_ensure_v2"
+_PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
+_ACTIVE_MEDIA_ENV = "MMM_LLAMA_MULTIMODAL_ACTIVE"
+_MANAGED_MEDIA_URL_ATTR = "_mmm_multimodal_managed_url"
 
 
 def _mmproj_filename(config: Any) -> str:
@@ -102,8 +105,8 @@ def _messages_with_media(request: Any) -> list[dict[str, Any]]:
         text_parts: list[dict[str, Any]] = (
             [{"type": "text", "text": current}] if current else []
         )
-    elif isinstance(current, list):
-        text_parts = [dict(part) if isinstance(part, Mapping) else part for part in current]
+    elif isinstance(current, list) and all(isinstance(part, Mapping) for part in current):
+        text_parts = [dict(part) for part in current]
     else:
         raise RuntimeError(
             "Multimodal llama.cpp user content must be text or OpenAI content parts."
@@ -128,9 +131,13 @@ def _install_base_args(autotune: Any) -> None:
     @wraps(current)
     def base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
         args = list(current(binary, model_path, config, port))
+        if os.environ.get(_ACTIVE_MEDIA_ENV, "").strip() != "1":
+            return args
         projector = _resolve_mmproj_path(config)
         if projector is None:
-            return args
+            raise RuntimeError(
+                "A multimodal llama.cpp request requires a profile-declared mmproj_filename."
+            )
         for name in ("--mmproj", "-mm"):
             if name in args:
                 index = args.index(name)
@@ -144,33 +151,63 @@ def _install_base_args(autotune: Any) -> None:
     autotune._base_args = base_args
 
 
-def _install_fingerprint(autotune: Any) -> None:
-    current = autotune._fingerprint
-    if getattr(current, _FINGERPRINT_MARKER, False):
+def _restore_env(name: str, previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
+
+
+def _managed_server_ready(autotune: Any) -> tuple[Any | None, str]:
+    process = getattr(autotune, "_MANAGED_PROCESS", None)
+    url = str(getattr(autotune, "_MANAGED_URL", "") or "").strip()
+    if process is None or process.poll() is not None or not url:
+        return None, ""
+    return process, url
+
+
+def _install_ensure(autotune: Any) -> None:
+    current = autotune.ensure_tuned_server
+    if getattr(current, _ENSURE_MARKER, False):
         return
 
     @wraps(current)
-    def fingerprint(config: Any, binary: str, model_path: str) -> str:
-        base = str(current(config, binary, model_path))
-        projector = _resolve_mmproj_path(config)
-        if projector is None:
-            return base
-        path = Path(projector)
-        stat = path.stat()
-        payload = {
-            "base": base,
-            "mmproj_filename": _mmproj_filename(config),
-            "mmproj_path": str(path.resolve()),
-            "mmproj_size": int(stat.st_size),
-            "mmproj_mtime_ns": int(stat.st_mtime_ns),
-            "multimodal_contract": "v1",
-        }
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+    def ensure(config: Any, request: Any) -> str:
+        media_paths = tuple(getattr(request, "media_paths", ()) or ())
+        if not media_paths:
+            return current(config, request)
+        if not _mmproj_filename(config):
+            raise RuntimeError(
+                "This llama.cpp model received media_paths but declares no mmproj_filename."
+            )
 
-    setattr(fingerprint, _FINGERPRINT_MARKER, True)
-    autotune._fingerprint = fingerprint
+        process, managed_url = _managed_server_ready(autotune)
+        media_url = str(getattr(autotune, _MANAGED_MEDIA_URL_ATTR, "") or "")
+        if process is not None and managed_url == media_url:
+            return current(config, request)
+
+        # An MMM-owned text-only process cannot consume image_url parts. Retire it
+        # before launch. External LLAMA_SERVER_URL endpoints remain user-owned and are
+        # not killed; they are expected to provide their own multimodal capability.
+        if process is not None:
+            autotune._shutdown_managed_server()
+            if os.environ.get("LLAMA_SERVER_URL", "").strip() == managed_url:
+                os.environ.pop("LLAMA_SERVER_URL", None)
+
+        previous = os.environ.get(_ACTIVE_MEDIA_ENV)
+        os.environ[_ACTIVE_MEDIA_ENV] = "1"
+        try:
+            url = current(config, request)
+        finally:
+            _restore_env(_ACTIVE_MEDIA_ENV, previous)
+
+        process, managed_url = _managed_server_ready(autotune)
+        if process is not None and url == managed_url:
+            setattr(autotune, _MANAGED_MEDIA_URL_ATTR, managed_url)
+        return url
+
+    setattr(ensure, _ENSURE_MARKER, True)
+    autotune.ensure_tuned_server = ensure
 
 
 def _install_payload(hardware_policy: Any) -> None:
@@ -185,7 +222,7 @@ def _install_payload(hardware_policy: Any) -> None:
         if not media_paths:
             return result
         config = getattr(adapter, "config", None)
-        if _resolve_mmproj_path(config) is None:
+        if not _mmproj_filename(config):
             raise RuntimeError(
                 "This llama.cpp model received media_paths but declares no mmproj_filename."
             )
@@ -198,7 +235,7 @@ def _install_payload(hardware_policy: Any) -> None:
 
 def install(autotune: Any, hardware_policy: Any) -> None:
     _install_base_args(autotune)
-    _install_fingerprint(autotune)
+    _install_ensure(autotune)
     _install_payload(hardware_policy)
 
 
