@@ -73,5 +73,15 @@ def test_custom_module_path_policy_has_one_fail_closed_authority() -> None:
         assert host_grounding.custom_module_path_protected(path) is True
         assert host_grounding.custom_module_path_allowed(path) is False
 
-    for path in ("README.md", "LICENSE", "docs/design.md", "gradlew"):
+    for path in (
+        "README.md",
+        "LICENSE",
+        "docs/design.md",
+        "gradlew",
+        "../README.md",
+        "src/main/java/../../README.md",
+        ".minecraft_ai/generated/../../../README.md",
+        "/tmp/Feature.java",
+        r"src\main\java\..\..\README.md",
+    ):
         assert host_grounding.custom_module_path_allowed(path) is False
