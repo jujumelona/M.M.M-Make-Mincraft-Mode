@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -171,7 +171,7 @@ class ModelRegistry:
             "base_url_env",
             "api_key_env",
         }
-        return AdapterConfig(
+        config = AdapterConfig(
             role=role,
             adapter=adapter,
             model_id=model_id,
@@ -196,6 +196,15 @@ class ModelRegistry:
             api_key=api_key,
             extra={key: value for key, value in raw.items() if key not in known},
         )
+        if adapter == "llama_cpp":
+            from .qwen35_mtp_hotpath_contract import _context_size, _is_qwen35_mtp
+
+            if _is_qwen35_mtp(config):
+                try:
+                    config = replace(config, max_context=_context_size(config))
+                except ValueError as exc:
+                    raise ModelConfigurationError(str(exc)) from exc
+        return config
 
     def to_public_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
