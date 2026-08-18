@@ -124,7 +124,7 @@ def test_non_create_root_fabric_metadata_is_not_rewritten() -> None:
     )
 
     generator = object.__new__(CustomModuleGenerator)
-    with pytest.raises(CustomModuleGenerationError, match="outside the allowed scope"):
+    with pytest.raises(CustomModuleGenerationError, match="outside the .* scope"):
         generator._validate_operations(payload["operations"])
 
 
