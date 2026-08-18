@@ -23,6 +23,7 @@ _LAUNCH_MARKER = "_mmm_llama_multimodal_safe_launch_v1"
 _PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
 _ACTIVE_MEDIA_ENV = "MMM_LLAMA_MULTIMODAL_ACTIVE"
 _MANAGED_MEDIA_URL_ATTR = "_mmm_multimodal_managed_url"
+_MANAGED_MEDIA_PROCESS_ATTR = "_mmm_multimodal_managed_process"
 _MTP_UNSAFE_WITH_MEDIA = frozenset({"qwen3.5-9b", "qwen3.6-35b-a3b"})
 
 
@@ -203,6 +204,28 @@ def _managed_server_ready(autotune: Any) -> tuple[Any | None, str]:
     return process, url
 
 
+def _clear_media_identity(autotune: Any) -> None:
+    for name in (_MANAGED_MEDIA_PROCESS_ATTR, _MANAGED_MEDIA_URL_ATTR):
+        if hasattr(autotune, name):
+            delattr(autotune, name)
+
+
+def _is_managed_media_server(autotune: Any, process: Any | None, url: str) -> bool:
+    return (
+        process is not None
+        and process is getattr(autotune, _MANAGED_MEDIA_PROCESS_ATTR, None)
+        and bool(url)
+        and url == str(getattr(autotune, _MANAGED_MEDIA_URL_ATTR, "") or "")
+    )
+
+
+def _retire_managed_server(autotune: Any, managed_url: str) -> None:
+    autotune._shutdown_managed_server()
+    if os.environ.get("LLAMA_SERVER_URL", "").strip() == managed_url:
+        os.environ.pop("LLAMA_SERVER_URL", None)
+    _clear_media_identity(autotune)
+
+
 def _install_ensure(autotune: Any) -> None:
     current = autotune.ensure_tuned_server
     if getattr(current, _ENSURE_MARKER, False):
@@ -211,25 +234,31 @@ def _install_ensure(autotune: Any) -> None:
     @wraps(current)
     def ensure(config: Any, request: Any) -> str:
         media_paths = tuple(getattr(request, "media_paths", ()) or ())
+        process, managed_url = _managed_server_ready(autotune)
+        if process is None:
+            _clear_media_identity(autotune)
+
         if not media_paths:
+            # A media launch for 9B/35B may deliberately be baseline-only. Never let
+            # that process become the permanent text server: retire the exact media
+            # process so the cached text MTP winner is restored on the next launch.
+            if _is_managed_media_server(autotune, process, managed_url):
+                _retire_managed_server(autotune, managed_url)
             return current(config, request)
+
         if not _mmproj_filename(config):
             raise RuntimeError(
                 "This llama.cpp model received media_paths but declares no mmproj_filename."
             )
 
-        process, managed_url = _managed_server_ready(autotune)
-        media_url = str(getattr(autotune, _MANAGED_MEDIA_URL_ATTR, "") or "")
-        if process is not None and managed_url == media_url:
+        if _is_managed_media_server(autotune, process, managed_url):
             return current(config, request)
 
         # An MMM-owned text-only process cannot consume image_url parts. Retire it
         # before launch. External LLAMA_SERVER_URL endpoints remain user-owned and are
         # not killed; they are expected to provide their own multimodal capability.
         if process is not None:
-            autotune._shutdown_managed_server()
-            if os.environ.get("LLAMA_SERVER_URL", "").strip() == managed_url:
-                os.environ.pop("LLAMA_SERVER_URL", None)
+            _retire_managed_server(autotune, managed_url)
 
         previous = os.environ.get(_ACTIVE_MEDIA_ENV)
         os.environ[_ACTIVE_MEDIA_ENV] = "1"
@@ -240,6 +269,7 @@ def _install_ensure(autotune: Any) -> None:
 
         process, managed_url = _managed_server_ready(autotune)
         if process is not None and url == managed_url:
+            setattr(autotune, _MANAGED_MEDIA_PROCESS_ATTR, process)
             setattr(autotune, _MANAGED_MEDIA_URL_ATTR, managed_url)
         return url
 
