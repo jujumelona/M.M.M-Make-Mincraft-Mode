@@ -6,7 +6,7 @@ def test_t4_registry_has_role_specific_real_model_ids() -> None:
     registry = ModelRegistry()
     profile = registry.load_profile('t4_local')
     assert 'Qwen' in profile.roles['planner'].model_id
-    assert profile.roles['planner'].max_context >= 16384
+    assert profile.roles['planner'].max_context == 262144
     assert profile.roles['planner'].max_new_tokens >= 2048
     assert 'Qwen' in profile.roles['coder'].model_id
     assert 'Qwen' in profile.roles['coder_safe'].model_id
@@ -34,7 +34,7 @@ def test_t4_quantized_qwen_roles_force_fp16(registry_path: str, profile_name: st
 def test_repository_and_packaged_planner_budgets_stay_in_sync() -> None:
     repository = ModelRegistry('config/model_registry.yaml').role('t4_local', 'planner')
     packaged = ModelRegistry('minecraft_mod_ai/config/model_registry.yaml').role('t4_local', 'planner')
-    assert repository.max_context == packaged.max_context == 32768
+    assert repository.max_context == packaged.max_context == 262144
     assert repository.max_new_tokens == packaged.max_new_tokens == 8192
     repository_quality = ModelRegistry('config/model_registry.yaml').role('t4_quality', 'planner')
     packaged_quality = ModelRegistry('minecraft_mod_ai/config/model_registry.yaml').role('t4_quality', 'planner')
