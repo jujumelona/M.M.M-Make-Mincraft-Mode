@@ -28,14 +28,20 @@ def resource_manifest() -> dict[str, object]:
 
 
 def local_model_specs(profile: str = "t4_local") -> tuple[tuple[str, str], ...]:
-    """Return unique (repo_id, exact_file) specs; exact_file is empty for snapshots."""
+    """Return unique (repo_id, exact_file) artifacts; empty file means snapshot."""
     loaded = ModelRegistry().load_profile(profile)
     specs: set[tuple[str, str]] = set()
     for config in loaded.roles.values():
         if config.provider != "local" or not config.model_id:
             continue
         filename = str(config.extra.get("gguf_filename", "")).strip()
-        specs.add((config.model_id, filename))
+        if filename:
+            specs.add((config.model_id, filename))
+            mmproj = str(config.extra.get("mmproj_filename", "")).strip()
+            if mmproj:
+                specs.add((config.model_id, mmproj))
+        else:
+            specs.add((config.model_id, ""))
     return tuple(sorted(specs))
 
 
@@ -54,7 +60,7 @@ def generate_download_script(
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         "# Downloads only the artifacts required by config/model_registry.yaml.",
-        "# GGUF roles download one exact quantized file; other model roles keep snapshots.",
+        "# GGUF roles download exact model/projector files; other roles keep snapshots.",
         "command -v hf >/dev/null || { echo 'Install huggingface_hub first.' >&2; exit 2; }",
     ]
     for model_id, filename in local_model_specs(profile):
