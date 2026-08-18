@@ -23,6 +23,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .qwen_model_profiles import qwen_family
+
 _INSTALLED = False
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _TEMPORARY_SKILL_PREFIX = "MMM TEMPORARY VERIFIED SKILL:\n"
@@ -314,24 +316,16 @@ def _install_skill_evolution(trajectory_memory: Any, temporary_skill_contract: A
 def _model_family(config: Any) -> str:
     values: list[str] = []
     if isinstance(config, Mapping):
-        values.extend(str(config.get(key, "")) for key in (
-            "model_id",
-            "model",
-            "repo_id",
-            "name",
-            "path",
-        ))
+        values.extend(
+            str(config.get(key, ""))
+            for key in ("model_id", "model", "repo_id", "name", "path")
+        )
     else:
         values.extend(
             str(getattr(config, key, ""))
             for key in ("model_id", "model", "repo_id", "name", "path")
         )
-    text = " ".join(values).casefold().replace("_", ".").replace("-", ".")
-    if "qwen3.6" in text or "qwen3.6" in text.replace(" ", ""):
-        return "qwen3.6"
-    if "qwen3.5" in text or "qwen3.5" in text.replace(" ", ""):
-        return "qwen3.5"
-    return "generic"
+    return qwen_family(" ".join(values)) or "generic"
 
 
 def _compact_executor_skill(skill: Mapping[str, Any], family: str) -> dict[str, Any]:
@@ -385,7 +379,12 @@ def _install_executor_skill_rendering(
     if not getattr(current_prepare, "_mmm_executor_skill_context_v1", False):
 
         @wraps(current_prepare)
-        def prepare(self: Any, role: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any):
+        def prepare(
+            self: Any,
+            role: str,
+            messages: Sequence[Mapping[str, Any]],
+            **kwargs: Any,
+        ):
             token = _MODEL_FAMILY.set(_model_family(kwargs.get("config")))
             try:
                 return current_prepare(self, role, messages, **kwargs)
