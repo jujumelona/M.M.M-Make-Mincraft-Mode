@@ -15,12 +15,13 @@ from typing import Any, Callable
 
 from .runtime_contract_composer import (
     ContractStage,
+    call_shape,
     callable_boundary,
     compose_contract_stages,
 )
 
 
-_TUNING_PIPELINE_VERSION = 32
+_TUNING_PIPELINE_VERSION = 33
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
 
 
@@ -183,23 +184,62 @@ class NativeLlamaTuningPipeline:
         )
 
     def _callable_boundaries(self):
-        """Bindings no tuning stage may accidentally destroy while wrapping them."""
+        """Production call shapes every tuning wrapper must continue to accept."""
 
         return (
-            callable_boundary("autotune.base_args", self.autotune, "_base_args"),
-            callable_boundary("autotune.fingerprint", self.autotune, "_fingerprint"),
-            callable_boundary("autotune.probe_server", self.autotune, "_probe_server"),
-            callable_boundary("autotune.start_server", self.autotune, "_start_server"),
-            callable_boundary("autotune.launch_selected", self.autotune, "_launch_selected"),
+            callable_boundary(
+                "autotune.base_args",
+                self.autotune,
+                "_base_args",
+                call_shapes=(call_shape(4),),
+            ),
+            callable_boundary(
+                "autotune.fingerprint",
+                self.autotune,
+                "_fingerprint",
+                call_shapes=(call_shape(3),),
+            ),
+            callable_boundary(
+                "autotune.probe_server",
+                self.autotune,
+                "_probe_server",
+                call_shapes=(call_shape(2, "max_tokens", "variant"),),
+            ),
+            callable_boundary(
+                "autotune.start_server",
+                self.autotune,
+                "_start_server",
+                call_shapes=(call_shape(5),),
+            ),
+            callable_boundary(
+                "autotune.launch_selected",
+                self.autotune,
+                "_launch_selected",
+                call_shapes=(call_shape(4),),
+            ),
+            callable_boundary(
+                "autotune.benchmark",
+                self.autotune,
+                "_benchmark",
+                call_shapes=(call_shape(5),),
+            ),
+            callable_boundary(
+                "autotune.run_tuning_variant",
+                self.autotune,
+                "_mmm_run_tuning_variant",
+                call_shapes=(call_shape(5, "probe_tokens"),),
+            ),
             callable_boundary(
                 "hardware.server_payload",
                 self.hardware_policy,
                 "_server_payload",
+                call_shapes=(call_shape(2),),
             ),
             callable_boundary(
                 "runtime.ubatch_candidates",
                 self.runtime_tuning,
                 "_ubatch_candidates",
+                call_shapes=(call_shape(1),),
             ),
         )
 
