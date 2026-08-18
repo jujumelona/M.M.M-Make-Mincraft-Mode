@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_multimodal_contract as multimodal
