@@ -125,7 +125,17 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
     choices = data.get("choices") if isinstance(data, dict) else None
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("native llama-server returned no completion choice")
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        raise RuntimeError("native llama-server returned an invalid completion choice")
+    finish_reason = str(choice.get("finish_reason", "") or "").strip().lower()
+    if finish_reason == "length":
+        raise RuntimeError(
+            "native llama-server truncated the completion at max_tokens; paginate the "
+            "response or raise the explicit Qwen output limit instead of repairing a "
+            "partial answer"
+        )
+    message = choice.get("message")
     if not isinstance(message, Mapping):
         raise RuntimeError("native llama-server returned no assistant message")
     return message
