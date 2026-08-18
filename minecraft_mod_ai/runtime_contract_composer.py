@@ -179,7 +179,10 @@ def _verify_call_shapes(
     if not boundary.call_shapes:
         return
     try:
-        signature = inspect.signature(value)
+        # Validate the callable Python will actually invoke. Following __wrapped__
+        # can hide a bad outer wrapper whose functools.wraps metadata still advertises
+        # the old signature even though the wrapper itself accepts fewer arguments.
+        signature = inspect.signature(value, follow_wrapped=False)
     except (TypeError, ValueError) as exc:
         raise ContractCompositionError(
             f"contract composition {owner_name!r} stage {stage_name!r} made "
