@@ -7,7 +7,6 @@ The adapter does not impose a second model-facing JSON protocol.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Mapping
 
 import httpx
@@ -37,12 +36,13 @@ class LlamaCppAdapter(ModelAdapter):
         super().__init__(config)
 
     def _server_url(self, request: GenerationRequest) -> str:
-        explicit = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
-        if explicit:
-            return explicit
         try:
             from .. import llama_server_autotune
 
+            # The server owner must see every request. In particular, the multimodal
+            # wrapper may need to replace an MMM-owned text server with an mmproj
+            # server even though LLAMA_SERVER_URL already points at that text server.
+            # The inner autotune path still honors healthy user-owned external URLs.
             selected = llama_server_autotune.ensure_tuned_server(self.config, request)
         except Exception as exc:
             raise ModelBackendError(
