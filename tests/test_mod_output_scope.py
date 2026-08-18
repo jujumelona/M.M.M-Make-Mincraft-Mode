@@ -20,6 +20,7 @@ from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourceP
         "src/main/resources/data/mmm/dimension/frost.json",
         "src/main/resources/data/mmm/structure/frost_temple.nbt",
         "src/main/resources/data/mmm/advancement/explore_frost.json",
+        "src/main/resources/assets/mmm/model_weights.npz",
         "dist/mmm-mod-release.zip",
     ),
 )
