@@ -14,8 +14,8 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 25
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v3"
+_TUNING_PIPELINE_VERSION = 26
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v4"
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class NativeLlamaTuningPipeline:
 
     @staticmethod
     def _context_value(config: Any) -> int:
-        """Resolve the one final llama context value without inventing a host cap."""
+        """Resolve the final llama context without creating a second Qwen authority."""
         model_id = str(getattr(config, "model_id", "")).casefold()
         extra = getattr(config, "extra", {})
         filename = (
@@ -45,21 +45,15 @@ class NativeLlamaTuningPipeline:
         qwen35_mtp = "qwen3.5-9b" in model_id and (
             "mtp" in model_id or "mtp" in filename
         )
-        override_names = (
-            ("MMM_QWEN35_MTP_CTX", "MMM_LLAMA_SERVER_CTX")
-            if qwen35_mtp
-            else ("MMM_LLAMA_SERVER_CTX",)
-        )
-        for name in override_names:
-            raw = os.environ.get(name, "").strip()
-            if not raw:
-                continue
-            try:
-                value = int(raw)
-            except ValueError:
-                continue
-            if value >= 0:
-                return value
+        if not qwen35_mtp:
+            raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
+            if raw:
+                try:
+                    value = int(raw)
+                except ValueError:
+                    value = -1
+                if value >= 0:
+                    return value
         try:
             return max(0, int(getattr(config, "max_context", 0) or 0))
         except (TypeError, ValueError):
