@@ -65,6 +65,33 @@ def test_successful_composition_is_receipted_and_not_replayed() -> None:
     assert state["installed"] is True
 
 
+def test_runtime_marker_mutation_does_not_change_static_graph_identity() -> None:
+    state_owner = SimpleNamespace()
+    calls = 0
+
+    def install() -> None:
+        nonlocal calls
+        calls += 1
+        install._mmm_runtime_marker = True  # type: ignore[attr-defined]
+
+    stages = (ContractStage("marker", install),)
+    receipts = compose_contract_stages(
+        owner_name="unit-marker-state",
+        version=1,
+        state_owner=state_owner,
+        stages=stages,
+    )
+    repeated = compose_contract_stages(
+        owner_name="unit-marker-state",
+        version=1,
+        state_owner=state_owner,
+        stages=stages,
+    )
+
+    assert calls == 1
+    assert repeated == receipts
+
+
 def test_failed_stage_poison_prevents_partial_replay() -> None:
     state_owner = SimpleNamespace()
     calls: list[str] = []
