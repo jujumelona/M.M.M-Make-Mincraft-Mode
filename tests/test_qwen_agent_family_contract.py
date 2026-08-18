@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
+from minecraft_mod_ai import llama_server_hardware_policy as hardware
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
     GenerationResponse,
@@ -29,8 +29,12 @@ _TOOL = {
 
 
 class _Adapter:
-    def __init__(self, model_id: str) -> None:
-        self.config = SimpleNamespace(model_id=model_id, max_new_tokens=8192)
+    def __init__(self, model_id: str, *, role: str = "coder_safe") -> None:
+        self.config = SimpleNamespace(
+            model_id=model_id,
+            role=role,
+            max_new_tokens=8192,
+        )
 
 
 def _request(
@@ -48,7 +52,7 @@ def _request(
 
 
 def test_qwen36_auto_tool_loop_enables_thinking_preservation() -> None:
-    payload = _server_payload(
+    payload = hardware._server_payload(
         _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF"),
         _request(),
     )
@@ -66,25 +70,41 @@ def test_qwen36_auto_tool_loop_enables_thinking_preservation() -> None:
     assert payload["repetition_penalty"] == 1.0
 
 
-def test_qwen35_keeps_non_thinking_tool_agent_policy() -> None:
-    payload = _server_payload(
+def test_qwen35_keeps_existing_precise_coding_policy_unchanged() -> None:
+    payload = hardware._server_payload(
         _Adapter("unsloth/Qwen3.5-9B-MTP-GGUF"),
         _request(),
     )
 
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["reasoning_effort"] == "none"
-    assert payload["temperature"] == 0.7
-    assert payload["top_p"] == 0.8
+    assert "chat_template_kwargs" not in payload
+    assert "reasoning_effort" not in payload
+    assert payload["temperature"] == 0.6
+    assert payload["top_p"] == 0.95
     assert payload["top_k"] == 20
     assert payload["min_p"] == 0.0
-    assert payload["presence_penalty"] == 1.5
-    assert payload["repetition_penalty"] == 1.0
-    assert "preserve_thinking" not in payload["chat_template_kwargs"]
+    assert payload["presence_penalty"] == 0.0
+    assert payload["repeat_penalty"] == 1.0
+
+
+def test_family_wrapper_preserves_existing_payload_contract_markers() -> None:
+    assert getattr(hardware._server_payload, "_mmm_active_cache_reuse", False)
+    assert getattr(hardware._server_payload, "_mmm_qwen35_request_policy_v2", False)
+    assert getattr(hardware._server_payload, "_mmm_qwen_family_agent_policy", False)
+
+
+def test_family_wrapper_accepts_request_without_tools_attribute() -> None:
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": "plain text"},),
+        response_format="text",
+    )
+    payload = hardware._server_payload(_Adapter("generic/model"), request)
+
+    assert payload["messages"] == [{"role": "user", "content": "plain text"}]
+    assert payload["temperature"] == 0.0
 
 
 def test_qwen36_forced_return_function_stays_non_thinking() -> None:
-    payload = _server_payload(
+    payload = hardware._server_payload(
         _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF"),
         _request(
             tool_choice={
@@ -125,7 +145,7 @@ def test_qwen36_final_agent_continuation_keeps_thinking_without_tools() -> None:
             "content": '{"ok":true}',
         },
     )
-    payload = _server_payload(
+    payload = hardware._server_payload(
         _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF"),
         _request(tools=(), tool_choice=None, messages=messages),
     )
@@ -195,4 +215,7 @@ def test_fresh_qwen36_agent_request_does_not_leak_prior_reasoning() -> None:
     fresh = _inject_reasoning_history(adapter, _request())
 
     assert fresh.messages == _request().messages
-    assert not getattr(adapter, "_mmm_qwen36_reasoning_traces")
+    assert all(
+        not str(message.get("reasoning_content") or "").strip()
+        for message in fresh.messages
+    )
