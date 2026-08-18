@@ -11,20 +11,20 @@ as an unrelated TypeError/AttributeError much later.
 This module gives the two approved composition owners (runtime bootstrap and the
 native llama tuning pipeline) one shared execution contract:
 
-* completed stages are receipted immediately and are not replayed for the same
-  composition version;
-* a stage that raises poisons the composition owner for the rest of the process, so
-  partially-applied code is never invoked a second time merely because a version
-  number changed;
+* completed stages are receipted immediately and are not replayed;
+* a stage that raises poisons the composition owner for the rest of the process;
+* one owner may use only one composition version for the process lifetime, because
+  mixing a newer installer graph with already-mutated callables is not reversible;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
 * state is stored on the composition owner, making failures inspectable without a
   second global registry.
 
-There is deliberately no rollback. Python monkey-patching is not transactionally
-reversible once an installer has performed arbitrary side effects. Fail-closed state
-is therefore safer than pretending a failed stage can be retried in-place.
+There is deliberately no rollback or in-process upgrade. Python monkey-patching is
+not transactionally reversible once an installer has performed arbitrary side
+effects. A clean process restart is the only safe boundary for another composition
+version.
 """
 
 import inspect
@@ -242,12 +242,11 @@ def compose_contract_stages(
     stages: Iterable[ContractStage],
     boundaries: Iterable[CallableBoundary] = (),
 ) -> tuple[StageReceipt, ...]:
-    """Install ordered contract stages once, retaining safe progress on failure.
+    """Install ordered contract stages once behind a process-lifetime version pin.
 
-    A failed stage is intentionally *not* retried, including through a later
-    composition version. Callers must restart the process after fixing the
-    code/configuration because arbitrary installer side effects may already have
-    happened before the exception was raised.
+    A different composition version, whether the previous run succeeded or failed,
+    requires a clean process. Arbitrary installer side effects make in-process graph
+    upgrades unsafe and non-transactional.
     """
 
     if not owner_name.strip():
@@ -267,18 +266,23 @@ def compose_contract_stages(
     with _COMPOSITION_LOCK:
         states = _state_map(state_owner)
         prior_state = states.get(owner_name)
-        if isinstance(prior_state, dict) and prior_state.get("failed"):
-            failure = prior_state["failed"]
-            failed_version = int(prior_state.get("version", 0) or 0)
-            raise ContractCompositionError(
-                f"contract composition {owner_name!r} is poisoned by prior failure "
-                f"in version {failed_version} at stage {failure.get('stage')!r}: "
-                f"{failure.get('error')}; process restart is required before "
-                f"requesting version {int(version)}"
-            )
-
-        state = prior_state
-        if not isinstance(state, dict) or int(state.get("version", 0) or 0) != int(version):
+        if isinstance(prior_state, dict):
+            prior_version = int(prior_state.get("version", 0) or 0)
+            if prior_version != int(version):
+                raise ContractCompositionError(
+                    f"contract composition {owner_name!r} already owns version "
+                    f"{prior_version}; process restart is required before requesting "
+                    f"version {int(version)}"
+                )
+            if prior_state.get("failed"):
+                failure = prior_state["failed"]
+                raise ContractCompositionError(
+                    f"contract composition {owner_name!r} is poisoned by prior failure "
+                    f"in version {prior_version} at stage {failure.get('stage')!r}: "
+                    f"{failure.get('error')}; process restart is required"
+                )
+            state = prior_state
+        else:
             state = _fresh_state(int(version))
             states[owner_name] = state
 
