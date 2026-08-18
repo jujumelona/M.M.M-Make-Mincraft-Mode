@@ -228,6 +228,9 @@ function chat(params) {
   if (!message || message.length > 120 || /[\r\n\u0000-\u001f]/.test(message)) {
     throw new Error("Invalid chat message");
   }
+  if (message.trimStart().startsWith("/")) {
+    throw new Error("Mineflayer chat may not execute server commands");
+  }
   current.chat(message);
   return { sent: message };
 }
