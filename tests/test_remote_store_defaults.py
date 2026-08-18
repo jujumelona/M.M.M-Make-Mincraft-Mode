@@ -45,15 +45,20 @@ def test_destination_defaults_never_grant_remote_consent(monkeypatch, tmp_path) 
     assert not (tmp_path / ".minecraft_ai" / "trajectory-memory" / "remote-outbox.jsonl").exists()
 
 
-def test_explicit_consent_activates_default_mmm_data_destination(monkeypatch) -> None:
+def test_explicit_consent_needs_backend_credentials_before_remote_access(monkeypatch) -> None:
     _clear_target(monkeypatch)
     monkeypatch.setenv("MMM_REMOTE_TRAJECTORY_STORE_CONSENT", "1")
+    monkeypatch.delenv("MMM_TRAJECTORY_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     apply_remote_store_defaults()
 
     assert remote_write_allowed() is True
-    assert store.remote_configured() is True
+    assert store.remote_configured() is False
     assert os.environ["MMM_TRAJECTORY_STORE_BACKEND"] == "github"
     assert os.environ["MMM_TRAJECTORY_STORE_REPO"] == "jujumelona/mmm-data"
+
+    monkeypatch.setenv("MMM_TRAJECTORY_GITHUB_TOKEN", "test-token")
+    assert store.remote_configured() is True
 
 
 def test_explicit_operator_store_target_is_not_overridden(monkeypatch) -> None:
