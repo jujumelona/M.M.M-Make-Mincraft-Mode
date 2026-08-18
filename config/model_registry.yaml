@@ -74,6 +74,7 @@ _qwen35_9b: &qwen35_9b
   model_id: unsloth/Qwen3.5-9B-MTP-GGUF
   adapter: llama_cpp
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
+  mmproj_filename: mmproj-F16.gguf
   torch_dtype: float16
   max_context: 32768
   max_input_tokens: 0
