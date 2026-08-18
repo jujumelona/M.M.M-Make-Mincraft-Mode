@@ -12,6 +12,7 @@ with an upstream MTP+mmproj incompatibility launch media requests non-speculativ
 import base64
 import mimetypes
 import os
+from dataclasses import replace
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Mapping
@@ -142,6 +143,18 @@ def _messages_with_media(request: Any) -> list[dict[str, Any]]:
     return messages
 
 
+def _without_media(request: Any) -> Any:
+    """Create the exact same request without media for cold text-only autotuning."""
+
+    try:
+        return replace(request, media_paths=())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Multimodal llama.cpp requests must use a dataclass request so cold "
+            "text-only autotuning cannot silently alter request semantics."
+        ) from exc
+
+
 def _install_base_args(autotune: Any) -> None:
     current = autotune._base_args
     if getattr(current, _BASE_ARGS_MARKER, False):
@@ -256,6 +269,13 @@ def _install_ensure(autotune: Any) -> None:
         if _is_managed_media_server(autotune, process, managed_url):
             return current(config, request)
 
+        # If the first request is media, never benchmark unsupported MTP+mmproj.
+        # Prime the ordinary text-only autotune/cache first, then retire only the
+        # MMM-owned text process before starting the projector-backed media server.
+        if process is None and _requires_media_baseline(config):
+            current(config, _without_media(request))
+            process, managed_url = _managed_server_ready(autotune)
+
         # An MMM-owned text-only process cannot consume image_url parts. Retire it
         # before launch. External LLAMA_SERVER_URL endpoints remain user-owned and are
         # not killed; they are expected to provide their own multimodal capability.
@@ -313,5 +333,6 @@ __all__ = [
     "_messages_with_media",
     "_requires_media_baseline",
     "_resolve_mmproj_path",
+    "_without_media",
     "install",
 ]
