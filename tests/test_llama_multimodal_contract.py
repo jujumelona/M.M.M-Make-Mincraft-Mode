@@ -14,6 +14,17 @@ class _RunningProcess:
         return None
 
 
+def _variant(name: str, spec_type: str = "none", draft_n_max: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(name=name, spec_type=spec_type, draft_n_max=draft_n_max)
+
+
+def _qwen_config(model_id: str, gguf_filename: str = "") -> SimpleNamespace:
+    extra = {"mmproj_filename": "mmproj-F16.gguf"}
+    if gguf_filename:
+        extra["gguf_filename"] = gguf_filename
+    return SimpleNamespace(model_id=model_id, extra=extra)
+
+
 def test_media_paths_become_openai_image_parts(tmp_path: Path) -> None:
     image = tmp_path / "review.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nMMM")
@@ -43,10 +54,7 @@ def test_projector_is_loaded_only_when_media_upgrades_managed_server(
     projector.write_bytes(b"projector")
     image = tmp_path / "frame.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nMMM")
-    config = SimpleNamespace(
-        model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-        extra={"mmproj_filename": "mmproj-F16.gguf"},
-    )
+    config = _qwen_config("unsloth/Qwen3.5-9B-MTP-GGUF")
     monkeypatch.setattr(
         multimodal,
         "_resolve_mmproj_path",
@@ -57,6 +65,8 @@ def test_projector_is_loaded_only_when_media_upgrades_managed_server(
     autotune = SimpleNamespace()
     autotune._MANAGED_PROCESS = _RunningProcess()
     autotune._MANAGED_URL = "http://127.0.0.1:8910/v1"
+    autotune.ServerVariant = lambda name: _variant(name)
+    autotune._launch_selected = lambda *_args: "http://127.0.0.1:8920/v1"
     monkeypatch.setenv("LLAMA_SERVER_URL", autotune._MANAGED_URL)
     launched_args: list[str] = []
     shutdown_urls: list[str] = []
@@ -107,3 +117,57 @@ def test_projector_is_loaded_only_when_media_upgrades_managed_server(
 
     payload = hardware._server_payload(SimpleNamespace(config=config), request)
     assert payload["messages"][0]["content"][0]["type"] == "image_url"
+
+
+def test_media_baseline_requirement_is_model_specific() -> None:
+    qwen35_9b = _qwen_config("unsloth/Qwen3.5-9B-MTP-GGUF")
+    qwen36_35b = _qwen_config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF")
+    qwen36_27b_q4 = _qwen_config(
+        "unsloth/Qwen3.6-27B-MTP-GGUF",
+        "Qwen3.6-27B-UD-Q4_K_XL.gguf",
+    )
+    qwen36_27b_q3 = _qwen_config(
+        "unsloth/Qwen3.6-27B-MTP-GGUF",
+        "Qwen3.6-27B-Q3_K_M.gguf",
+    )
+
+    assert multimodal._requires_media_baseline(qwen35_9b)
+    assert multimodal._requires_media_baseline(qwen36_35b)
+    assert not multimodal._requires_media_baseline(qwen36_27b_q4)
+    assert not multimodal._requires_media_baseline(qwen36_27b_q3)
+
+
+def test_media_launch_policy_preserves_text_mtp_and_27b_vision_mtp(monkeypatch) -> None:
+    launched: list[tuple[str, str]] = []
+
+    def launch_selected(_binary, _model_path, config, selected):
+        launched.append((config.model_id, selected.spec_type))
+        return "http://127.0.0.1:8910/v1"
+
+    autotune = SimpleNamespace(
+        _launch_selected=launch_selected,
+        ServerVariant=lambda name: _variant(name),
+    )
+    multimodal._install_launch_policy(autotune)
+    speculative = _variant("mtp-2", "draft-mtp", 2)
+    qwen35_9b = _qwen_config("unsloth/Qwen3.5-9B-MTP-GGUF")
+    qwen36_35b = _qwen_config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF")
+    qwen36_27b = _qwen_config(
+        "unsloth/Qwen3.6-27B-MTP-GGUF",
+        "Qwen3.6-27B-UD-Q4_K_XL.gguf",
+    )
+
+    monkeypatch.delenv(multimodal._ACTIVE_MEDIA_ENV, raising=False)
+    autotune._launch_selected("server", "model.gguf", qwen35_9b, speculative)
+    assert launched[-1][1] == "draft-mtp"
+
+    monkeypatch.setenv(multimodal._ACTIVE_MEDIA_ENV, "1")
+    autotune._launch_selected("server", "model.gguf", qwen35_9b, speculative)
+    autotune._launch_selected("server", "model.gguf", qwen36_35b, speculative)
+    autotune._launch_selected("server", "model.gguf", qwen36_27b, speculative)
+
+    assert [spec_type for _, spec_type in launched[-3:]] == [
+        "none",
+        "none",
+        "draft-mtp",
+    ]
