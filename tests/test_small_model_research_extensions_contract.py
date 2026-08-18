@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from minecraft_mod_ai.small_model_research_extensions_contract import (
     _compact_executor_skill,
     _memory_route,
+    _model_family,
     _project_capability_payload,
 )
 
@@ -53,6 +56,14 @@ def test_instruction_projection_keeps_only_frontier_skills() -> None:
     assert receipt["candidate_skill_count"] == 3
     assert receipt["selected_skill_count"] == 1
     assert receipt["policy"] == "prompt_projection_only_authorization_unchanged"
+
+
+def test_model_family_reuses_central_three_model_classification() -> None:
+    assert _model_family(SimpleNamespace(model_id="unsloth/Qwen3.5-9B-MTP-GGUF")) == "qwen3.5"
+    assert _model_family(SimpleNamespace(model_id="unsloth/Qwen3.6-27B-MTP-GGUF")) == "qwen3.6"
+    assert _model_family(SimpleNamespace(model_id="unsloth/Qwen3.6-35B-A3B-MTP-GGUF")) == "qwen3.6"
+    assert _model_family({"path": "/models/qwen_3.6_27b.gguf"}) == "qwen3.6"
+    assert _model_family(SimpleNamespace(model_id="other/model")) == "generic"
 
 
 def test_executor_skill_rendering_is_compact_without_mutating_canonical() -> None:
