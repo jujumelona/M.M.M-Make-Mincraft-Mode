@@ -80,6 +80,169 @@ def _sanitize_procedure(value: Mapping[str, Any], domain_id: str) -> dict[str, A
     return canonical
 
 
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / max(1, len(left | right))
+
+
+def _activation_terms(skill: Mapping[str, Any]) -> set[str]:
+    return _tokens(
+        " ".join(
+            [
+                str(skill.get("name", "")),
+                *[str(item) for item in skill.get("activate_when", ())],
+            ]
+        )
+    )
+
+
+def _shared_step_prefix(skills: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Promote only step positions semantically supported by every member skill."""
+
+    if len(skills) < 2:
+        return []
+    sequences = [
+        [str(item).strip() for item in skill.get("steps", ()) if str(item).strip()]
+        for skill in skills
+    ]
+    if not all(sequences):
+        return []
+    result: list[str] = []
+    for index in range(min(len(items) for items in sequences)):
+        candidate = sequences[0][index]
+        candidate_terms = _tokens(candidate)
+        if not candidate_terms:
+            break
+        if all(
+            _jaccard(candidate_terms, _tokens(items[index])) >= 0.55
+            for items in sequences[1:]
+        ):
+            # Keep an actually observed phrasing rather than synthesizing a new step.
+            result.append(candidate)
+            continue
+        break
+    return result[:_MAX_STEPS]
+
+
+def _merged_member_strings(
+    skills: Sequence[Mapping[str, Any]],
+    key: str,
+    *,
+    limit: int,
+    chars: int,
+) -> list[str]:
+    values: list[str] = []
+    for skill in skills:
+        raw = skill.get(key, ())
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+            continue
+        for item in raw:
+            text = " ".join(str(item).split())[:chars]
+            if text and text not in values:
+                values.append(text)
+                if len(values) >= limit:
+                    return values
+    return values
+
+
+def _consolidated_skill(skills: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Create a conservative generalized skill without inventing procedural steps."""
+
+    if len(skills) < 2:
+        return None
+    domain_ids = {str(skill.get("domain_id", "")).strip() or "unknown" for skill in skills}
+    if len(domain_ids) != 1:
+        return None
+    shared_steps = _shared_step_prefix(skills)
+    if not shared_steps:
+        return None
+    member_ids = sorted(
+        {str(skill.get("skill_id", "")) for skill in skills if str(skill.get("skill_id", ""))}
+    )
+    if len(member_ids) < 2:
+        return None
+    evidence_refs = _merged_member_strings(skills, "evidence_refs", limit=16, chars=192)
+    if not evidence_refs:
+        return None
+    confidences: list[float] = []
+    for skill in skills:
+        try:
+            confidences.append(max(0.0, min(1.0, float(skill.get("confidence", 0.0) or 0.0))))
+        except (TypeError, ValueError):
+            confidences.append(0.0)
+    outputs = [" ".join(str(skill.get("output_contract", "")).split()) for skill in skills]
+    output_contract = outputs[0][:420] if outputs and outputs[0] and len(set(outputs)) == 1 else ""
+    domain_id = next(iter(domain_ids))
+    canonical: dict[str, Any] = {
+        "skill_kind": "consolidated",
+        "domain_id": domain_id,
+        "name": f"{domain_id} consolidated procedure",
+        "activate_when": _merged_member_strings(skills, "activate_when", limit=8, chars=320),
+        # Unioning safety constraints is conservative: a prohibition from any member
+        # remains visible in the generalized skill rather than being weakened away.
+        "contraindications": _merged_member_strings(skills, "contraindications", limit=8, chars=320),
+        "steps": shared_steps,
+        "constraints": _merged_member_strings(skills, "constraints", limit=10, chars=320),
+        "output_contract": output_contract,
+        "evidence_refs": evidence_refs,
+        "confidence": round(min(confidences) if confidences else 0.0, 4),
+        "member_skill_ids": member_ids,
+        "consolidation_policy": "common_supported_prefix_only",
+        "rule": (
+            "Generalized only from steps supported by every member skill. Re-check the "
+            "current activation conditions and exact-version evidence; use a member skill "
+            "for variant-specific steps. Current compiler, tests, runtime observations and "
+            "host validators override this skill."
+        ),
+    }
+    encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    canonical["skill_id"] = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return canonical
+
+
+def _consolidate_skills(skills: Sequence[Mapping[str, Any]], *, limit: int = 12) -> list[dict[str, Any]]:
+    """Greedily consolidate evidence-related skills without cross-domain leakage."""
+
+    ordered = sorted(
+        [dict(skill) for skill in skills],
+        key=lambda item: (str(item.get("domain_id", "")), str(item.get("skill_id", ""))),
+    )
+    consumed: set[int] = set()
+    result: list[dict[str, Any]] = []
+    for index, seed in enumerate(ordered):
+        if index in consumed:
+            continue
+        seed_terms = _activation_terms(seed)
+        if not seed_terms:
+            continue
+        group_indices = [index]
+        group: list[Mapping[str, Any]] = [seed]
+        for candidate_index in range(index + 1, len(ordered)):
+            if candidate_index in consumed:
+                continue
+            candidate = ordered[candidate_index]
+            if str(candidate.get("domain_id", "")) != str(seed.get("domain_id", "")):
+                continue
+            if _jaccard(seed_terms, _activation_terms(candidate)) < 0.24:
+                continue
+            probe = [*group, candidate]
+            if not _shared_step_prefix(probe):
+                continue
+            group.append(candidate)
+            group_indices.append(candidate_index)
+        if len(group) < 2:
+            continue
+        consolidated = _consolidated_skill(group)
+        if consolidated is None:
+            continue
+        result.append(consolidated)
+        consumed.update(group_indices)
+        if len(result) >= max(1, int(limit)):
+            break
+    return result
+
+
 def _compile_skillbank(domain_notes: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     skills: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -98,22 +261,29 @@ def _compile_skillbank(domain_notes: Sequence[Mapping[str, Any]]) -> dict[str, A
             skills.append(skill)
     skills.sort(key=lambda item: (-float(item.get("confidence", 0.0)), str(item.get("domain_id", "")), str(item.get("skill_id", ""))))
     skills = skills[:32]
+    consolidated = _consolidate_skills(skills)
+    all_skills = [*skills, *consolidated]
     relations: list[dict[str, Any]] = []
-    for index, left in enumerate(skills):
-        left_terms = _tokens(" ".join([str(left.get("name", "")), *[str(item) for item in left.get("activate_when", ())]]))
-        for right in skills[index + 1 :]:
-            right_terms = _tokens(" ".join([str(right.get("name", "")), *[str(item) for item in right.get("activate_when", ())]]))
+    for index, left in enumerate(all_skills):
+        left_terms = _activation_terms(left)
+        for right in all_skills[index + 1 :]:
+            right_terms = _activation_terms(right)
             if not left_terms or not right_terms:
                 continue
-            overlap = len(left_terms & right_terms) / max(1, len(left_terms | right_terms))
+            overlap = _jaccard(left_terms, right_terms)
             if overlap < 0.18:
                 continue
             relations.append({"left": left["skill_id"], "right": right["skill_id"], "relation": "activation_overlap", "weight": round(overlap, 4)})
-    relations.sort(key=lambda item: (-float(item["weight"]), str(item["left"]), str(item["right"])))
+    for skill in consolidated:
+        for member_id in skill.get("member_skill_ids", ()):
+            relations.append({"left": str(member_id), "right": skill["skill_id"], "relation": "member_of", "weight": 1.0})
+    relations.sort(key=lambda item: (-float(item["weight"]), str(item["relation"]), str(item["left"]), str(item["right"])))
     return {
         "schema_version": _SCHEMA_VERSION,
-        "skills": skills,
-        "relation_graph": relations[:48],
+        "skills": all_skills,
+        "source_skill_count": len(skills),
+        "consolidated_skill_count": len(consolidated),
+        "relation_graph": relations[:64],
         "policy": "Declarative RAG remains evidence authority. Skills are reusable procedures only and never authorize tools or certify correctness.",
     }
 
