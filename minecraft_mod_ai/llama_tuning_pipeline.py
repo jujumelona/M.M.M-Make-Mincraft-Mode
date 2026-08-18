@@ -14,7 +14,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 30
+_TUNING_PIPELINE_VERSION = 31
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
 
 
@@ -111,6 +111,7 @@ class NativeLlamaTuningPipeline:
         from .qwen35_runtime_efficiency_contract import (
             install as install_qwen35_runtime_efficiency,
         )
+        from .qwen_runtime_transport_contract import install as install_qwen_runtime_transport
 
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)
@@ -165,6 +166,7 @@ class NativeLlamaTuningPipeline:
             ),
             TuningStage("decode-speed", install_decode_speed_stage),
             TuningStage("kernel-autotune", install_kernel_stage),
+            TuningStage("qwen-transport", install_qwen_runtime_transport),
             # This must be outermost. A media request may retire a text-only managed
             # process; Qwen/T4 wrappers underneath must then observe the cold launch
             # and reapply their draft-GPU/KV launch scope around the cached winner.
