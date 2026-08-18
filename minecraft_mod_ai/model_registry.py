@@ -201,7 +201,9 @@ class ModelRegistry:
 
             if _is_qwen35_mtp(config):
                 try:
-                    config = replace(config, max_context=_context_size(config))
+                    context_override = _context_size(config)
+                    if context_override > 0:
+                        config = replace(config, max_context=context_override)
                 except ValueError as exc:
                     raise ModelConfigurationError(str(exc)) from exc
         return config
