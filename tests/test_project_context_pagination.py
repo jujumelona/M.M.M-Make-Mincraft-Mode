@@ -14,6 +14,22 @@ def _serialized_size(value: object) -> int:
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
+def _implement_request(messages) -> dict:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("phase") == "implement_module":
+            return payload
+    raise AssertionError("No implement_module request was found in the coder message history.")
+
+
 def test_project_context_pages_reconstruct_large_utf8_source_within_budget(tmp_path: Path) -> None:
     root = tmp_path / "project"
     source = root / "src/main/java/example"
@@ -63,7 +79,7 @@ class _ContextPagingRouter:
         assert kwargs["tool_stage"] == "generation"
         assert kwargs["enable_tools"] is True
         assert self.workspace is not None
-        request = json.loads(messages[-1]["content"])
+        request = _implement_request(messages)
         assert request["phase"] == "implement_module"
         context = request["initial_exact_source_context"]
         self.requests.append(request)
