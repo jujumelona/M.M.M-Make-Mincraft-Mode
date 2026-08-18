@@ -67,7 +67,8 @@ def test_qwen36_auto_tool_loop_enables_thinking_preservation() -> None:
     assert payload["top_k"] == 20
     assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 0.0
-    assert payload["repetition_penalty"] == 1.0
+    assert payload["repeat_penalty"] == 1.0
+    assert "repetition_penalty" not in payload
 
 
 def test_qwen35_keeps_existing_precise_coding_policy_unchanged() -> None:

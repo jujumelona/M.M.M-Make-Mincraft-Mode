@@ -86,7 +86,8 @@ def _apply_family_payload_policy(
     payload["top_k"] = 20
     payload["min_p"] = 0.0
     payload["presence_penalty"] = 0.0
-    payload["repetition_penalty"] = 1.0
+    payload.pop("repetition_penalty", None)
+    payload["repeat_penalty"] = 1.0
     return payload
 
 
