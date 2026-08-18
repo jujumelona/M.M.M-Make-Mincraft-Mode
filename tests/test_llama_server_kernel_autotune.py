@@ -174,4 +174,5 @@ def test_pipeline_keeps_existing_runtime_layers_and_adds_kernel_outer_stage() ->
         "cache-reuse",
         "decode-speed",
         "kernel-autotune",
+        "multimodal",
     )
