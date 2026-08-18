@@ -15,6 +15,13 @@ from minecraft_mod_ai.runtime_contract_composer import (
 )
 
 
+def _stage_names(state: dict[str, object]) -> tuple[str, ...]:
+    graph = state["graph_signature"]
+    assert isinstance(graph, tuple)
+    stages = graph[0]
+    return tuple(row[0] for row in stages)
+
+
 def test_successful_composition_is_receipted_and_not_replayed() -> None:
     state_owner = SimpleNamespace()
     calls: list[str] = []
@@ -48,7 +55,7 @@ def test_successful_composition_is_receipted_and_not_replayed() -> None:
     state = composition_state(state_owner, "unit-success")
     assert state is not None
     assert state["version"] == 1
-    assert state["graph_signature"][0] == ("first", "second")
+    assert _stage_names(state) == ("first", "second")
     assert state["completed"] == ("first", "second")
     assert state["receipts"] == receipts
     assert state["active"] is None
@@ -108,9 +115,7 @@ def test_callable_boundary_cannot_be_destroyed_by_contract_stage() -> None:
             version=1,
             state_owner=state_owner,
             stages=(ContractStage("bad-wrapper", destroy_handler),),
-            boundaries=(
-                callable_boundary("runtime.handler", runtime, "handler"),
-            ),
+            boundaries=(callable_boundary("runtime.handler", runtime, "handler"),),
         )
 
     state = composition_state(state_owner, "unit-boundary")
@@ -127,9 +132,6 @@ def test_callable_boundary_rejects_signature_drift_without_executing_wrapper() -
     runtime = SimpleNamespace(handler=handler)
 
     def narrow_wrapper() -> None:
-        # functools.wraps normally makes inspect.signature() report the original
-        # signature through __wrapped__. The real outer callable still accepts only
-        # one argument, so the composer must validate follow_wrapped=False.
         @wraps(handler)
         def replacement(left: object) -> None:
             del left
@@ -251,7 +253,7 @@ def test_version_bump_cannot_bypass_poisoned_process_state() -> None:
     assert state["failed"]["stage"] == "failing"
 
 
-def test_same_version_graph_change_is_rejected() -> None:
+def test_same_version_stage_list_change_is_rejected() -> None:
     state_owner = SimpleNamespace()
     calls: list[str] = []
 
@@ -262,14 +264,14 @@ def test_same_version_graph_change_is_rejected() -> None:
         calls.append("second")
 
     compose_contract_stages(
-        owner_name="unit-graph",
+        owner_name="unit-graph-list",
         version=7,
         state_owner=state_owner,
         stages=(ContractStage("first", first),),
     )
     with pytest.raises(ContractCompositionError, match="graph changed"):
         compose_contract_stages(
-            owner_name="unit-graph",
+            owner_name="unit-graph-list",
             version=7,
             state_owner=state_owner,
             stages=(
@@ -279,10 +281,39 @@ def test_same_version_graph_change_is_rejected() -> None:
         )
 
     assert calls == ["first"]
-    state = composition_state(state_owner, "unit-graph")
+    state = composition_state(state_owner, "unit-graph-list")
     assert state is not None
-    assert state["version"] == 7
-    assert state["graph_signature"][0] == ("first",)
+    assert _stage_names(state) == ("first",)
+
+
+def test_same_stage_name_with_changed_installer_code_is_rejected() -> None:
+    state_owner = SimpleNamespace()
+    calls: list[str] = []
+
+    def original() -> None:
+        calls.append("original")
+
+    def replacement() -> None:
+        calls.append("replacement")
+
+    compose_contract_stages(
+        owner_name="unit-graph-code",
+        version=9,
+        state_owner=state_owner,
+        stages=(ContractStage("phase", original),),
+    )
+    with pytest.raises(ContractCompositionError, match="graph changed"):
+        compose_contract_stages(
+            owner_name="unit-graph-code",
+            version=9,
+            state_owner=state_owner,
+            stages=(ContractStage("phase", replacement),),
+        )
+
+    assert calls == ["original"]
+    state = composition_state(state_owner, "unit-graph-code")
+    assert state is not None
+    assert _stage_names(state) == ("phase",)
 
 
 def test_duplicate_stage_names_are_rejected_before_install() -> None:
