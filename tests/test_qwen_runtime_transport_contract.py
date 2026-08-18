@@ -18,6 +18,27 @@ def _config(model_id: str) -> SimpleNamespace:
     )
 
 
+def _tuning_variant(
+    name: str,
+    spec_type: str = "none",
+    draft_n_max: int = 0,
+    *,
+    ubatch: int = 0,
+    parallel: int = 1,
+    cache_reuse: int = 0,
+) -> SimpleNamespace:
+    """Represent staged tuning metadata without changing production ServerVariant."""
+
+    return SimpleNamespace(
+        name=name,
+        spec_type=spec_type,
+        draft_n_max=draft_n_max,
+        ubatch=ubatch,
+        parallel=parallel,
+        cache_reuse=cache_reuse,
+    )
+
+
 def _tool_response(*, call_id: str, arguments: str) -> dict:
     return {
         "choices": [
@@ -65,13 +86,13 @@ def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
     assert contract._initial_calibration_variant(baseline)
     assert contract._initial_calibration_variant(mtp)
     assert not contract._initial_calibration_variant(
-        autotune.ServerVariant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024)
+        _tuning_variant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024)
     )
     assert not contract._initial_calibration_variant(
-        autotune.ServerVariant("mtp-2|p2", "draft-mtp", 2, parallel=2)
+        _tuning_variant("mtp-2|p2", "draft-mtp", 2, parallel=2)
     )
     assert not contract._initial_calibration_variant(
-        autotune.ServerVariant("mtp-2|cr64", "draft-mtp", 2, cache_reuse=64)
+        _tuning_variant("mtp-2|cr64", "draft-mtp", 2, cache_reuse=64)
     )
 
 
@@ -177,7 +198,7 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
         "/tmp/model.gguf",
         _config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF"),
         object(),
-        autotune.ServerVariant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024),
+        _tuning_variant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024),
     )
     assert calls == 0
 
