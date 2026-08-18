@@ -172,11 +172,10 @@ def _inject_reasoning_history(
 
     store = _trace_store(adapter)
     messages = _request_messages(request)
-    signatures = [
-        signature
-        for message in messages
-        if (signature := _message_signature(message))
-    ]
+    signed_messages = tuple(
+        (message, _message_signature(message)) for message in messages
+    )
+    signatures = [signature for _, signature in signed_messages if signature]
     tools = getattr(request, "tools", ()) or ()
     if tools and getattr(request, "tool_choice", None) in (None, "auto") and not any(
         signature in store for signature in signatures
@@ -187,9 +186,8 @@ def _inject_reasoning_history(
 
     changed = False
     rewritten: list[Mapping[str, Any]] = []
-    for raw in messages:
+    for raw, signature in signed_messages:
         message = dict(raw)
-        signature = _message_signature(message)
         reasoning = store.get(signature) if signature else None
         if (
             reasoning
