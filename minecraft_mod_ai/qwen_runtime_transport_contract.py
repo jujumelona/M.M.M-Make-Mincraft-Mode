@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Validate Qwen speculative decoding across the native tool-call boundary.
+"""Validate Qwen native tool transport and MTP runtime compatibility.
 
 MMM exposes first-party MCP tools, reviewed external MCP tools, and temporary Skill
 execution through the same OpenAI/Jinja function-tool transport. The staged
@@ -8,16 +8,21 @@ llama.cpp tuner already keeps each baseline/MTP candidate server alive for a war
 and an exact-output decode probe. This contract reuses that live server for one tiny,
 deterministic function call before a candidate may participate in selection.
 
-No second model load is performed, and later ubatch/parallel/cache tuning keeps its
-existing exact-output contract unchanged. A speculative candidate that cannot emit
-the canonical tool call is simply treated as a failed tuning variant.
+Qwen MTP is also kept single-slot. Current llama.cpp/Unsloth guidance does not support
+``-np > 1`` with MTP, so the parallel refinement stage is skipped only when native
+``draft-mtp`` won, and the final text launch is defensively pinned to one slot. Media
+launches may replace MTP with baseline outside this contract and therefore retain the
+normal baseline parallel policy.
 """
 
 import hashlib
 import json
+import os
+from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from .qwen_model_profiles import qwen_family
 
@@ -25,6 +30,9 @@ _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
 _RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
 _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
+_PARALLEL_STAGE_MARKER = "_mmm_qwen_mtp_single_slot_stage_v1"
+_LAUNCH_MARKER = "_mmm_qwen_mtp_single_slot_launch_v1"
+_FINGERPRINT_MARKER = "_mmm_qwen_mtp_single_slot_fingerprint_v1"
 _ACTIVE_CALIBRATION: ContextVar[tuple[Any, Any] | None] = ContextVar(
     "mmm_qwen_transport_calibration",
     default=None,
@@ -41,6 +49,36 @@ def _config_identity(config: Any) -> tuple[str, str]:
 def _family(config: Any) -> str | None:
     model_id, filename = _config_identity(config)
     return qwen_family(model_id, filename)
+
+
+def _mtp_variant(variant: Any) -> bool:
+    return str(getattr(variant, "spec_type", "none")) == "draft-mtp"
+
+
+def _single_slot_variant(variant: Any) -> Any:
+    if max(1, int(getattr(variant, "parallel", 1) or 1)) == 1:
+        return variant
+    root_name = str(getattr(variant, "name", "mtp")).split("|p", 1)[0]
+    return replace(variant, name=root_name, parallel=1)
+
+
+def _restore_env(name: str, previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
+
+
+@contextmanager
+def _single_slot_launch_scope() -> Iterator[None]:
+    """Make the inner runtime launcher observe the only supported MTP slot count."""
+
+    previous = os.environ.get("MMM_LLAMA_PARALLEL")
+    os.environ["MMM_LLAMA_PARALLEL"] = "1"
+    try:
+        yield
+    finally:
+        _restore_env("MMM_LLAMA_PARALLEL", previous)
 
 
 def _canonical_arguments(value: Any) -> Any:
@@ -156,6 +194,66 @@ def _initial_calibration_variant(variant: Any) -> bool:
     )
 
 
+def _install_mtp_single_slot_policy(autotune: Any) -> None:
+    """Prevent unsupported Qwen MTP + multi-slot tuning and final launches."""
+
+    from . import llama_server_runtime_tuning as runtime_tuning
+
+    current_stage = runtime_tuning._run_parallel_stage
+    if not getattr(current_stage, _PARALLEL_STAGE_MARKER, False):
+
+        @wraps(current_stage)
+        def qwen_mtp_parallel_stage(*args: Any, **kwargs: Any) -> Any:
+            config = kwargs.get("config")
+            selected = kwargs.get("selected")
+            if _family(config) is not None and _mtp_variant(selected):
+                return _single_slot_variant(selected), None, None, ()
+            return current_stage(*args, **kwargs)
+
+        setattr(qwen_mtp_parallel_stage, _PARALLEL_STAGE_MARKER, True)
+        runtime_tuning._run_parallel_stage = qwen_mtp_parallel_stage
+
+    current_launch = autotune._launch_selected
+    if not getattr(current_launch, _LAUNCH_MARKER, False):
+
+        @wraps(current_launch)
+        def qwen_mtp_launch(
+            binary: str,
+            model_path: str,
+            config: Any,
+            selected: Any,
+        ) -> str:
+            if _family(config) is None or not _mtp_variant(selected):
+                return current_launch(binary, model_path, config, selected)
+            selected = _single_slot_variant(selected)
+            with _single_slot_launch_scope():
+                return current_launch(binary, model_path, config, selected)
+
+        setattr(qwen_mtp_launch, _LAUNCH_MARKER, True)
+        autotune._launch_selected = qwen_mtp_launch
+
+    current_fingerprint = autotune._fingerprint
+    if not getattr(current_fingerprint, _FINGERPRINT_MARKER, False):
+
+        @wraps(current_fingerprint)
+        def qwen_mtp_fingerprint(config: Any, binary: str, model_path: str) -> str:
+            base = str(current_fingerprint(config, binary, model_path))
+            if _family(config) is None:
+                return base
+            payload = {
+                "base": base,
+                "qwen_mtp_parallel": "single-slot-v1",
+            }
+            return hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+
+        setattr(qwen_mtp_fingerprint, _FINGERPRINT_MARKER, True)
+        autotune._fingerprint = qwen_mtp_fingerprint
+
+
 def _install_tool_equivalence_policy(autotune: Any) -> None:
     """Reject a Qwen speculation candidate if its native tool transport is invalid."""
 
@@ -228,12 +326,16 @@ def _install_tool_equivalence_policy(autotune: Any) -> None:
 def install() -> None:
     from . import llama_server_autotune
 
+    _install_mtp_single_slot_policy(llama_server_autotune)
     _install_tool_equivalence_policy(llama_server_autotune)
 
 
 __all__ = [
     "_initial_calibration_variant",
+    "_install_mtp_single_slot_policy",
     "_install_tool_equivalence_policy",
+    "_mtp_variant",
+    "_single_slot_variant",
     "_tool_call_signature",
     "install",
 ]
