@@ -230,6 +230,16 @@ def _install_mtp_single_slot_policy(autotune: Any) -> None:
         ) -> str:
             if _family(config) is None or not _mtp_variant(selected):
                 return current_launch(binary, model_path, config, selected)
+
+            # Multimodal owns the MTP->baseline conversion for affected production
+            # profiles. Do not pin the outer scope to p1 before that conversion, or
+            # the inner baseline launch loses its otherwise-valid parallel policy.
+            if os.environ.get("MMM_LLAMA_MULTIMODAL_ACTIVE", "").strip() == "1":
+                from .llama_multimodal_contract import _requires_media_baseline
+
+                if _requires_media_baseline(config):
+                    return current_launch(binary, model_path, config, selected)
+
             selected = _single_slot_variant(selected)
             with _single_slot_launch_scope():
                 return current_launch(binary, model_path, config, selected)
