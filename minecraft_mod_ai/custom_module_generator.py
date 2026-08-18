@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -39,6 +41,13 @@ _ANCHOR_TERMS = {
 _FABRIC_ROOT_METADATA_PATH = "fabric.mod.json"
 _FABRIC_CANONICAL_METADATA_PATH = "src/main/resources/fabric.mod.json"
 _MAX_CUSTOM_MODULE_REPAIR_ATTEMPTS = 2
+_AGENT_MUTABLE_PREFIXES = (
+    "src/main/java/",
+    "src/main/resources/",
+    "src/test/java/",
+    "src/gametest/",
+)
+_STAGE_IGNORED_DIRS = {".git", ".gradle", "build", "run"}
 
 
 def _coder_project_context_budget(
@@ -76,13 +85,13 @@ def _coder_project_context_budget(
 
 
 class CustomModuleGenerator:
-    """Generate one custom module with host-owned patch/state semantics.
+    """Implement one approved module as a tool-using coding agent.
 
-    The model chooses semantic files and writes file text. Everything deterministic is
-    owned by the host: canonical paths, create-vs-replace, expected SHA-256, progress,
-    completion, validation and transactional application. Model output is received only
-    through native forced function-call arguments; free-form JSON repair is not part of
-    the production path.
+    The coder receives the feature goal, exact-source grounding and approved research, then
+    inspects and edits a disposable project workspace with normal MCP tools. It is never asked
+    to predict a file plan, patch protocol state, SHA values, cursors or completion metadata.
+    The host validates the staged diff and transactionally applies only module source/resource
+    changes to the real project.
     """
 
     def __init__(
@@ -157,7 +166,6 @@ class CustomModuleGenerator:
             self._cached_root = root
             self._cached_index = index
 
-        self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
         query = json.dumps(
             {
                 "module_id": module.module_id,
@@ -228,89 +236,23 @@ class CustomModuleGenerator:
             mappings=mappings,
         )
 
-        plan_request = {
-            "phase": "plan_files",
-            "task": "Choose only the source/resource files required to implement the approved module.",
-            "target": {
-                "minecraft_version": minecraft_version,
-                "loader": loader,
-                "mappings": mappings,
-                "java": java_version,
-            },
-            "module": {
-                "module_id": module.module_id,
-                "kind": module.kind,
-                "config": module.config,
-                "depends_on": list(module.depends_on),
-                "required_gates": list(module.required_gates),
-            },
-            "project_manifest": index.manifest_receipt(),
-            "source_observation_receipt": observation_ledger["receipt"],
-            "planning_context": observation_pages[0],
-            "research_context": research_context,
-            "host_grounding": host_grounding,
-            "host_owned": [
-                "create/replace/edit decision",
-                "expected_sha256",
-                "patch transaction",
-                "pagination/cursor/progress/completion",
-                "path canonicalization and protection",
-            ],
-            "rules": [
-                "Return semantic file choices only; never return patch operations or SHA values.",
-                "Use src/main/resources/fabric.mod.json for Fabric metadata.",
-                "Split large implementations into cohesive files instead of one giant source file.",
-                "Do not invent shell scripts or delete files.",
-            ],
-        }
-        plan_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are the Minecraft implementation planner. Decide only which project "
-                    "text files are needed and why. Host code owns all patch mechanics, state, "
-                    "SHA checks and completion. Use the supplied exact-source/research evidence."
-                ),
-            },
-            {"role": "user", "content": json.dumps(plan_request, ensure_ascii=False)},
-        ]
-        plan_payload = self.router.generate_tool_decision(
-            "coder",
-            plan_messages,
-            tool_name="return_custom_module_file_plan",
-            parameters=_file_plan_schema(),
-            description="Return the semantic file plan for one approved Minecraft module.",
-        )
-        planned_files, runtime_tests = self._validate_file_plan(plan_payload)
-
-        operations: list[dict[str, Any]] = []
-        touched_paths: list[str] = []
-        for planned in planned_files:
-            path = planned["path"]
-            purpose = planned["purpose"]
-            target = root / Path(path)
-            if target.is_symlink():
-                raise CustomModuleGenerationError(
-                    f"Custom module target may not replace a symlink: {path}"
-                )
-
-            existed = target.exists()
-            if existed and not target.is_file():
-                raise CustomModuleGenerationError(
-                    f"Custom module target is not a regular text file: {path}"
-                )
-            expected_sha256 = ""
-            if existed:
-                expected_sha256 = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
-
-            file_context = _select_file_context(
-                observation_ledger,
-                path=path,
-                purpose=purpose,
-                byte_budget=project_context_budget,
+        before = _project_snapshot(root)
+        with tempfile.TemporaryDirectory(prefix=".mmm-custom-", dir=str(root.parent)) as temp_dir:
+            staged_root = Path(temp_dir) / root.name
+            shutil.copytree(
+                root,
+                staged_root,
+                symlinks=True,
+                ignore=_stage_ignore,
             )
-            file_request = {
-                "phase": "write_file",
+            self.router.bind_agent_workspace(
+                staged_root.parent,
+                require_fresh_evidence=True,
+            )
+            request = {
+                "phase": "implement_module",
+                "task": "Implement the approved Minecraft/Fabric mod feature in the current project.",
+                "workspace_project_root": staged_root.name,
                 "target": {
                     "minecraft_version": minecraft_version,
                     "loader": loader,
@@ -322,71 +264,59 @@ class CustomModuleGenerator:
                     "kind": module.kind,
                     "config": module.config,
                     "depends_on": list(module.depends_on),
+                    "required_gates": list(module.required_gates),
                 },
-                "path": path,
-                "purpose": purpose,
-                "existing_file": existed,
-                "exact_source_context": file_context,
+                "project_manifest": index.manifest_receipt(),
+                "source_observation_receipt": observation_ledger["receipt"],
+                "initial_exact_source_context": observation_pages[0],
                 "research_context": research_context,
                 "host_grounding": host_grounding,
-                "prior_generated_files": _patch_operation_receipt(operations),
                 "rules": [
-                    "Return the complete final UTF-8 text for this one host-selected file.",
-                    "Do not return a path, operation, SHA, cursor, completion flag or patch wrapper.",
-                    "For JSON resources, content is still one text string containing the JSON file.",
-                    "Use only the selected Minecraft/loader/mappings/Java target.",
-                    "Keep behavior server-authoritative and persistent where the module requires it.",
+                    "Implement the feature; do not return or invent a file-plan protocol.",
+                    "Use available workspace/RAG/MCP tools to inspect any source or research you need before editing.",
+                    "Apply real edits with the available source patch tool; your final text is only a short work summary.",
+                    "Custom-module edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
+                    "Build infrastructure, Gradle wrapper/settings, shell scripts and host-owned ledgers are read-only for this task.",
+                    "Do not delete files. If a tool action is rejected, inspect the project and recover with a valid source/resource edit.",
+                    "Use only the selected Minecraft/loader/mappings/Java target and preserve existing project conventions.",
+                    "Keep gameplay state server-authoritative and persistent where the approved feature requires it.",
                 ],
             }
-            file_messages = [
+            messages = [
                 {
                     "role": "system",
                     "content": (
-                        "Write exactly one host-selected project text file. The host owns file "
-                        "identity and every patch/state decision. Your only required output is "
-                        "the complete file text plus optional observable runtime tests."
+                        "You are the implementation coder for one approved Minecraft/Fabric mod module. "
+                        "Work directly in the supplied project with MCP tools: inspect the existing code, "
+                        "retrieve relevant evidence when needed, and implement the requested feature. "
+                        "Do not design a separate file-plan/JSON patch protocol. The host owns safety, "
+                        "scope, transactional application and verification."
                     ),
                 },
-                {"role": "user", "content": json.dumps(file_request, ensure_ascii=False)},
+                {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
             ]
-            file_payload = self.router.generate_tool_decision(
+            summary = self.router.generate_text(
                 "coder",
-                file_messages,
-                tool_name="return_custom_module_file_content",
-                parameters=_file_content_schema(),
-                description="Return complete UTF-8 text for one host-selected project file.",
+                messages,
+                response_format="text",
+                tool_stage="generation",
+                enable_tools=True,
             )
-            content, file_tests = _validate_file_content_payload(file_payload)
-            runtime_tests.extend(file_tests)
-
-            operation: dict[str, Any]
-            if existed:
-                operation = {
-                    "operation": "replace",
-                    "path": path,
-                    "expected_sha256": expected_sha256,
-                    "content": content,
-                }
-            else:
-                operation = {
-                    "operation": "create",
-                    "path": path,
-                    "content": content,
-                }
-            self._validate_operations([operation])
-            operations.append(operation)
-            touched_paths.append(path)
+            operations, touched_paths, discarded_paths = _collect_staged_operations(
+                root,
+                staged_root,
+                before,
+            )
 
         if not operations:
+            discarded = ", ".join(discarded_paths[:8]) if discarded_paths else "none"
             raise CustomModuleGenerationError(
-                f"Custom module {module.module_id!r} failed to produce any planned source files."
+                "Custom-module coding agent produced no valid source/resource changes. "
+                f"Discarded out-of-scope staged paths: {discarded}."
             )
 
+        self._validate_operations(operations)
         self._validate_total_patch_bytes(operations)
-        if not runtime_tests:
-            runtime_tests = ["Verify mod functionality and compilation without crash."]
-        runtime_tests = list(dict.fromkeys(test for test in runtime_tests if test.strip()))
-
         receipt = TransactionalSourcePatcher(root).apply(operations)
         if self._cached_index is not None:
             try:
@@ -404,9 +334,11 @@ class CustomModuleGenerator:
             "status": "SOURCE_GENERATED",
             "patch_receipt": receipt,
             "operation_count": len(operations),
-            "runtime_tests": runtime_tests,
+            "runtime_tests": ["Verify the approved mod functionality, compilation, and runtime behavior without crash."],
             "source_observation_receipt": observation_ledger["receipt"],
             "touched_paths": touched_paths,
+            "discarded_out_of_scope_paths": discarded_paths,
+            "agent_summary": str(summary or "").strip()[:4096],
             "required_gates": ["JDT", "Gradle", "GameTest", *module.required_gates],
         }
 
@@ -414,6 +346,7 @@ class CustomModuleGenerator:
         self,
         payload: dict[str, Any],
     ) -> tuple[list[dict[str, str]], list[str]]:
+        """Legacy trace validator; production generation no longer asks for a file plan."""
         if not isinstance(payload, dict):
             raise CustomModuleGenerationError("Custom-module file plan must be an object.")
         raw_files = payload.get("files")
@@ -443,7 +376,6 @@ class CustomModuleGenerator:
             if path not in seen:
                 seen.add(path)
                 planned.append({"path": path, "purpose": purpose})
-
         tests_value = payload.get("runtime_tests", [])
         if not isinstance(tests_value, list) or any(not isinstance(v, str) for v in tests_value):
             raise CustomModuleGenerationError("File plan runtime_tests must be a list of strings.")
@@ -458,21 +390,91 @@ class CustomModuleGenerator:
             path = _normalized_operation_path(item)
             if custom_module_path_protected(path):
                 raise CustomModuleGenerationError(
-                    "Model patches may not modify the code-owned research ledger or "
-                    "context-observation ledger."
+                    "Model patches may not modify the code-owned research ledger or context-observation ledger."
                 )
-            if not custom_module_path_allowed(path):
+            if not _agent_mutable_path(path):
                 raise CustomModuleGenerationError(
-                    f"Custom module path is outside the allowed scope: {path}"
+                    f"Custom module path is outside the source/resource scope: {path}"
                 )
 
     def _validate_total_patch_bytes(self, operations: list[dict[str, Any]]) -> None:
         size = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))
         if size > self.policy.max_patch_bytes:
             raise CustomModuleGenerationError(
-                "Custom module patch exceeds MMM_MAX_PATCH_BYTES; raise the explicit host "
-                "resource policy or split the feature into dependency-linked modules."
+                "Custom module patch exceeds MMM_MAX_PATCH_BYTES; raise the explicit host resource policy or split the feature into dependency-linked modules."
             )
+
+
+def _agent_mutable_path(path: str) -> bool:
+    normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
+    return any(normalized.startswith(prefix) for prefix in _AGENT_MUTABLE_PREFIXES)
+
+
+def _stage_ignore(_directory: str, names: list[str]) -> set[str]:
+    return {name for name in names if name in _STAGE_IGNORED_DIRS}
+
+
+def _project_snapshot(root: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part in _STAGE_IGNORED_DIRS for part in relative.parts):
+            continue
+        if path.is_symlink() or not path.is_file():
+            continue
+        snapshot[relative.as_posix()] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return snapshot
+
+
+def _collect_staged_operations(
+    original_root: Path,
+    staged_root: Path,
+    before: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    after = _project_snapshot(staged_root)
+    operations: list[dict[str, Any]] = []
+    touched: list[str] = []
+    discarded: list[str] = []
+    for path in sorted(set(before) | set(after)):
+        old_sha = before.get(path)
+        new_sha = after.get(path)
+        if old_sha == new_sha:
+            continue
+        if not _agent_mutable_path(path) or custom_module_path_protected(path):
+            discarded.append(path)
+            continue
+        if new_sha is None:
+            raise CustomModuleGenerationError(
+                f"Custom-module coding agent may not delete source/resource files: {path}"
+            )
+        target = staged_root / Path(path)
+        if target.is_symlink() or not target.is_file():
+            raise CustomModuleGenerationError(
+                f"Custom-module staged target is not a regular file: {path}"
+            )
+        try:
+            content = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise CustomModuleGenerationError(
+                f"Custom-module generated file must be UTF-8 text: {path}: {exc}"
+            ) from exc
+        if old_sha is None:
+            operation = {"operation": "create", "path": path, "content": content}
+        else:
+            original = original_root / Path(path)
+            if original.is_symlink() or not original.is_file():
+                raise CustomModuleGenerationError(
+                    f"Custom-module original target is not a regular file: {path}"
+                )
+            operation = {
+                "operation": "replace",
+                "path": path,
+                "expected_sha256": old_sha,
+                "content": content,
+            }
+        operations.append(operation)
+        touched.append(path)
+    return operations, touched, discarded
 
 
 def _file_plan_schema() -> dict[str, Any]:
@@ -494,10 +496,7 @@ def _file_plan_schema() -> dict[str, Any]:
                     },
                 },
             },
-            "runtime_tests": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
+            "runtime_tests": {"type": "array", "items": {"type": "string"}},
         },
     }
 
@@ -509,10 +508,7 @@ def _file_content_schema() -> dict[str, Any]:
         "required": ["content", "runtime_tests"],
         "properties": {
             "content": {"type": "string"},
-            "runtime_tests": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
+            "runtime_tests": {"type": "array", "items": {"type": "string"}},
         },
     }
 
@@ -552,10 +548,7 @@ def _select_file_context(
     byte_budget: int,
 ) -> dict[str, Any]:
     records = list(ledger.get("records", []))
-    query_tokens = {
-        token.lower()
-        for token in _OBSERVATION_TOKEN.findall(f"{path} {purpose}")
-    }
+    query_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(f"{path} {purpose}")}
     ranked = sorted(
         records,
         key=lambda record: (
@@ -582,7 +575,6 @@ def _select_file_context(
 
 
 # Legacy parsing/state helpers remain for compatibility tests and old persisted traces.
-# Production generation above no longer calls them.
 def _canonicalize_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise CustomModuleGenerationError("Custom-module response must be a JSON object.")
@@ -595,39 +587,28 @@ def _canonicalize_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
         normalized["operations"] = normalized.pop("patch_operations")
     if "patches" in normalized and "operations" not in normalized:
         normalized["operations"] = normalized.pop("patches")
-
     operations_value = normalized.get("operations", [])
     if not isinstance(operations_value, list):
         raise CustomModuleGenerationError("Response 'operations' must be a JSON list.")
-    normalized["operations"] = [
-        _canonicalize_custom_module_operation(item) for item in operations_value
-    ]
-
-    tests_value = normalized.get(
-        "runtime_tests", ["Verify mod functionality and compilation without crash."]
-    )
+    normalized["operations"] = [_canonicalize_custom_module_operation(item) for item in operations_value]
+    tests_value = normalized.get("runtime_tests", ["Verify mod functionality and compilation without crash."])
     if not isinstance(tests_value, list):
         raise CustomModuleGenerationError("Response 'runtime_tests' must be a JSON list.")
     normalized["runtime_tests"] = tests_value
-
     complete_value = normalized.get("complete", True)
     if not isinstance(complete_value, bool):
         raise CustomModuleGenerationError("Response 'complete' must be a JSON boolean.")
     normalized["complete"] = complete_value
-
     next_cursor_value = normalized.get("next_cursor", "")
     if next_cursor_value is None:
         next_cursor_value = ""
     if not isinstance(next_cursor_value, str):
         raise CustomModuleGenerationError("Response 'next_cursor' must be a JSON string.")
     normalized["next_cursor"] = next_cursor_value.strip()
-
     if "context_page_complete" in normalized:
         page_complete_value = normalized["context_page_complete"]
         if not isinstance(page_complete_value, bool):
-            raise CustomModuleGenerationError(
-                "Response 'context_page_complete' must be a JSON boolean."
-            )
+            raise CustomModuleGenerationError("Response 'context_page_complete' must be a JSON boolean.")
     else:
         page_complete_value = bool(normalized["operations"]) and not normalized["next_cursor"]
     normalized["context_page_complete"] = page_complete_value
@@ -645,37 +626,22 @@ def _generation_fragment_action(
     operations = payload["operations"]
     next_cursor = payload["next_cursor"]
     page_complete = payload["context_page_complete"]
-
     if next_cursor:
         if next_cursor == current_cursor or next_cursor in seen_cursors:
-            raise CustomModuleGenerationError(
-                "Custom-module response repeated next_cursor without protocol progress."
-            )
+            raise CustomModuleGenerationError("Custom-module response repeated next_cursor without protocol progress.")
         if page_complete:
-            raise CustomModuleGenerationError(
-                "Response cannot set context_page_complete=true while also returning an "
-                "advancing next_cursor for the same observation page."
-            )
+            raise CustomModuleGenerationError("Response cannot set context_page_complete=true while also returning an advancing next_cursor for the same observation page.")
         return "cursor"
-
     if page_complete:
         if is_last_page and not has_accumulated_operations:
-            raise CustomModuleGenerationError(
-                "Final observation page completed before any patch operation was accumulated."
-            )
+            raise CustomModuleGenerationError("Final observation page completed before any patch operation was accumulated.")
         return "page_complete"
-
     if operations:
-        raise CustomModuleGenerationError(
-            "Patch operations were returned with context_page_complete=false but without an "
-            "advancing next_cursor; the response cannot make further progress."
-        )
-
+        raise CustomModuleGenerationError("Patch operations were returned with context_page_complete=false but without an advancing next_cursor; the response cannot make further progress.")
     keys_str = ", ".join(payload.keys())
     raise CustomModuleGenerationError(
         "Custom-module response fragment made no protocol progress: received object with keys "
-        f"[{keys_str}] but no operations, advancing next_cursor, or "
-        "context_page_complete=true transition."
+        f"[{keys_str}] but no operations, advancing next_cursor, or context_page_complete=true transition."
     )
 
 
@@ -689,13 +655,10 @@ def _repair_generation_messages(
             "role": "user",
             "content": (
                 "Execution & Validation Failure: the previous response failed host protocol "
-                f"validation with reason: {error_reason}. The invalid assistant payload is "
-                "intentionally omitted so you do not copy its shape. Repair only the JSON/patch/"
-                "cursor transition for the host-selected target. A valid response must make "
-                "progress using patch operations, a new next_cursor, or an explicit "
-                "context_page_complete=true transition. Do not emit range-only {start,end} "
-                "objects. Fabric metadata belongs at src/main/resources/fabric.mod.json. Do not "
-                "retrieve new RAG/MCP evidence and do not change the approved feature scope. "
+                f"validation with reason: {error_reason}. The invalid assistant payload is intentionally omitted so you do not copy its shape. "
+                "Repair only the JSON/patch/cursor transition for the host-selected target. A valid response must make progress using patch operations, "
+                "a new next_cursor, or an explicit context_page_complete=true transition. Do not emit range-only {start,end} objects. "
+                "Fabric metadata belongs at src/main/resources/fabric.mod.json. Do not retrieve new RAG/MCP evidence and do not change the approved feature scope. "
                 "Return exactly one valid JSON object using only the supplied host evidence."
             ),
         },
@@ -724,7 +687,6 @@ def _extract_json(text: str) -> dict[str, Any]:
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned_strip, re.DOTALL)
         if match:
             cleaned = match.group(1)
-
     decoder = json.JSONDecoder()
     for index, character in enumerate(cleaned):
         if character != "{":
@@ -735,7 +697,6 @@ def _extract_json(text: str) -> dict[str, Any]:
             continue
         if isinstance(value, dict):
             return value
-
     curly_match = re.search(r"\{.*\}", text, re.DOTALL)
     if curly_match:
         try:
@@ -744,9 +705,7 @@ def _extract_json(text: str) -> dict[str, Any]:
                 return value
         except Exception:
             pass
-    raise CustomModuleGenerationError(
-        "Model output did not contain one parseable JSON object; refusing a fake complete fallback."
-    )
+    raise CustomModuleGenerationError("Model output did not contain one parseable JSON object; refusing a fake complete fallback.")
 
 
 def _is_stale_project_index_error(exc: ValueError) -> bool:
@@ -770,7 +729,6 @@ def _collect_initial_observations(
     page_count = 0
     project_sha256 = ""
     query_sha256 = ""
-
     while True:
         page = index.select_page(
             query=query,
@@ -780,7 +738,6 @@ def _collect_initial_observations(
         )
         if _json_size(page) > byte_budget:
             raise CustomModuleGenerationError("Host project context page exceeded its byte budget.")
-
         current_project_sha256 = str(page["project_sha256"])
         current_query_sha256 = str(page["query_sha256"])
         if page_count == 0:
@@ -788,7 +745,6 @@ def _collect_initial_observations(
             query_sha256 = current_query_sha256
         elif current_project_sha256 != project_sha256 or current_query_sha256 != query_sha256:
             raise CustomModuleGenerationError("Project context pagination changed its bound identity.")
-
         page_commitment = {
             "page_index": page["page_index"],
             "project_sha256": current_project_sha256,
@@ -807,7 +763,6 @@ def _collect_initial_observations(
             ],
         }
         _update_digest(source_page_digest, page_commitment)
-
         for item in page.get("files", []):
             if isinstance(item, dict) and "path" in item and ("content" in item or "text" in item):
                 content_str = str(item.get("content", item.get("text", "")))
@@ -822,7 +777,6 @@ def _collect_initial_observations(
                         source_page=int(page.get("page_index", page_count)),
                     ),
                 )
-
         page_count += 1
         if bool(page.get("complete", False)):
             break
@@ -831,7 +785,6 @@ def _collect_initial_observations(
             raise CustomModuleGenerationError("Project context pagination made no progress.")
         seen_cursors.add(next_cursor)
         cursor = next_cursor
-
     observation_digest = hashlib.sha256()
     for record in records:
         _update_digest(observation_digest, record)
@@ -845,11 +798,7 @@ def _collect_initial_observations(
         "observations_sha256": "sha256:" + observation_digest.hexdigest(),
         "policy": {"exact_source_quotes": True, "path_sha256_byte_range_bound": True},
     }
-    return {
-        "schema_version": "mmm/source-observation-ledger-v1",
-        "receipt": receipt,
-        "records": records,
-    }
+    return {"schema_version": "mmm/source-observation-ledger-v1", "receipt": receipt, "records": records}
 
 
 def _observation_context_pages(
@@ -896,9 +845,7 @@ def _observation_context_pages(
             )
             if _json_size(candidate) > safe_budget:
                 if not page_records:
-                    raise CustomModuleGenerationError(
-                        "One exact source observation cannot fit the model context page."
-                    )
+                    raise CustomModuleGenerationError("One exact source observation cannot fit the model context page.")
                 break
             page_records.append(remaining[cursor])
             cursor += 1
@@ -911,13 +858,10 @@ def _observation_context_pages(
             complete=False,
         )
         if _json_size(page) > safe_budget:
-            raise CustomModuleGenerationError(
-                "Global source anchors exceed the model context page budget."
-            )
+            raise CustomModuleGenerationError("Global source anchors exceed the model context page budget.")
         pages.append(page)
         if cursor >= len(remaining):
             break
-
     page_count = len(pages)
     for index, page in enumerate(pages):
         page["page_count"] = page_count
@@ -986,11 +930,7 @@ def _append_observation(
 def _observation_score(record: dict[str, Any], query_tokens: set[str]) -> int:
     path_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(str(record["path"]))}
     text_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(str(record["text"]))}
-    return (
-        60 * len(query_tokens & path_tokens)
-        + 8 * len(query_tokens & text_tokens)
-        + 20 * len(_ANCHOR_TERMS & text_tokens)
-    )
+    return 60 * len(query_tokens & path_tokens) + 8 * len(query_tokens & text_tokens) + 20 * len(_ANCHOR_TERMS & text_tokens)
 
 
 def _patch_operation_receipt(operations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1011,35 +951,18 @@ def _normalized_operation_path(item: dict[str, Any]) -> str:
 
 def _sha256_json(value: Any) -> str:
     return "sha256:" + hashlib.sha256(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
 def _update_digest(digest: Any, value: Any) -> None:
-    encoded = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     digest.update(len(encoded).to_bytes(8, "big"))
     digest.update(encoded)
 
 
 def _json_size(value: Any) -> int:
-    return len(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
 def _mapping_namespace(value: str) -> str:

@@ -9,99 +9,90 @@ from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.scale_policy import ScalePolicy
 
 
-class _StructuralRepairRouter:
+class _AgenticRouter:
     def __init__(self) -> None:
+        self.workspace: Path | None = None
         self.calls: list[dict] = []
         self.messages: list[list[dict[str, str]]] = []
 
-    def bind_agent_workspace(self, *_args, **_kwargs):
+    def bind_agent_workspace(self, workspace_root, **_kwargs):
+        self.workspace = Path(workspace_root)
         return self
 
-    def generate_text(self, *_args, **_kwargs):
-        raise AssertionError("custom-module production must not fall back to free-form JSON repair")
+    def generate_tool_decision(self, *_args, **_kwargs):
+        raise AssertionError("custom-module production must not use a file-plan structured return channel")
 
-    def generate_tool_decision(
-        self,
-        role,
-        messages,
-        *,
-        tool_name,
-        parameters,
-        description="",
-    ):
+    def generate_text(self, role, messages, **kwargs):
         assert role == "coder"
-        self.calls.append(
-            {
-                "tool_name": tool_name,
-                "parameters": parameters,
-                "description": description,
-            }
-        )
+        assert kwargs["response_format"] == "text"
+        assert kwargs["tool_stage"] == "generation"
+        assert kwargs["enable_tools"] is True
+        assert self.workspace is not None
+        self.calls.append(dict(kwargs))
         self.messages.append([dict(message) for message in messages])
         request = json.loads(messages[-1]["content"])
-        if tool_name == "return_custom_module_file_plan":
-            assert request["phase"] == "plan_files"
-            return {
-                "files": [
-                    {
-                        "path": "src/main/java/example/Generated.java",
-                        "purpose": "Implement the approved custom module.",
-                    }
-                ],
-                "runtime_tests": [],
-            }
-        if tool_name == "return_custom_module_file_content":
-            assert request["phase"] == "write_file"
-            assert request["path"] == "src/main/java/example/Generated.java"
-            return {
-                "content": "package example; final class Generated {}\n",
-                "runtime_tests": [],
-            }
-        raise AssertionError(f"unexpected structured return channel: {tool_name}")
+        assert request["phase"] == "implement_module"
+        assert "plan_files" not in messages[-1]["content"]
+        project = self.workspace / request["workspace_project_root"]
+        target = project / "src/main/java/example/Generated.java"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("package example; final class Generated {}\n", encoding="utf-8")
+        return "Implemented the approved module."
 
 
-def test_custom_module_native_return_channel_never_builds_rag_or_enters_json_repair(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-
-    def forbidden_index(*_args, **_kwargs):
-        raise AssertionError("custom-module structured return must not build project RAG")
-
-    from minecraft_mod_ai.production_tools import ProductionToolService
-
-    monkeypatch.setattr(ProductionToolService, "index_project_rag", forbidden_index)
-    router = _StructuralRepairRouter()
+    router = _AgenticRouter()
     target = adapter_for_target("1.20.1", "fabric")
+
     result = CustomModuleGenerator(
         router,
         policy=ScalePolicy(model_context_bytes=4096),
     ).generate(
         root,
-        module=ProductionModule("shape_repair", "custom_java", {"feature": "shape"}),
+        module=ProductionModule("agentic_custom", "custom_java", {"feature": "shape"}),
         minecraft_version=target.minecraft_version,
         loader=target.loader,
         mappings=target.yarn_mappings,
     )
 
     assert result["status"] == "SOURCE_GENERATED"
-    assert [call["tool_name"] for call in router.calls] == [
-        "return_custom_module_file_plan",
-        "return_custom_module_file_content",
-    ]
-    assert all(call["parameters"]["additionalProperties"] is False for call in router.calls)
+    assert len(router.calls) == 1
     assert (root / "src/main/java/example/Generated.java").is_file()
+    assert result["touched_paths"] == ["src/main/java/example/Generated.java"]
+    request = json.loads(router.messages[0][-1]["content"])
+    assert request["task"].startswith("Implement the approved Minecraft/Fabric mod feature")
+    assert any("workspace/RAG/MCP tools" in rule for rule in request["rules"])
+    assert all("return_custom_module_file_plan" not in message["content"] for message in router.messages[0])
 
-    plan_request = json.loads(router.messages[0][-1]["content"])
-    file_request = json.loads(router.messages[1][-1]["content"])
-    assert plan_request["host_owned"] == [
-        "create/replace/edit decision",
-        "expected_sha256",
-        "patch transaction",
-        "pagination/cursor/progress/completion",
-        "path canonicalization and protection",
-    ]
-    assert file_request["existing_file"] is False
-    assert file_request["path"] == "src/main/java/example/Generated.java"
+
+def test_out_of_scope_agent_edit_is_discarded_without_touching_real_project(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    wrapper = root / "gradle/wrapper/gradle-wrapper.properties"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("distributionUrl=original\n", encoding="utf-8")
+
+    class _MixedRouter(_AgenticRouter):
+        def generate_text(self, role, messages, **kwargs):
+            summary = super().generate_text(role, messages, **kwargs)
+            request = json.loads(messages[-1]["content"])
+            assert self.workspace is not None
+            project = self.workspace / request["workspace_project_root"]
+            staged_wrapper = project / "gradle/wrapper/gradle-wrapper.properties"
+            staged_wrapper.write_text("distributionUrl=wrong\n", encoding="utf-8")
+            return summary
+
+    router = _MixedRouter()
+    target = adapter_for_target("1.20.1", "fabric")
+    result = CustomModuleGenerator(router, policy=ScalePolicy(model_context_bytes=4096)).generate(
+        root,
+        module=ProductionModule("safe_scope", "custom_java", {"feature": "shape"}),
+        minecraft_version=target.minecraft_version,
+        loader=target.loader,
+        mappings=target.yarn_mappings,
+    )
+
+    assert wrapper.read_text(encoding="utf-8") == "distributionUrl=original\n"
+    assert "gradle/wrapper/gradle-wrapper.properties" in result["discarded_out_of_scope_paths"]
+    assert (root / "src/main/java/example/Generated.java").is_file()

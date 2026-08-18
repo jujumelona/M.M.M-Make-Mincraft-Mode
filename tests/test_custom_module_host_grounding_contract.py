@@ -49,15 +49,18 @@ def test_host_grounding_is_mandatory_and_role_scoped() -> None:
     assert grounding["evidence_bindings"]["approved_research_rag"]["request_field"] == "research_context"
 
 
-def test_generator_resolves_grounding_before_first_coder_decode() -> None:
+def test_generator_resolves_grounding_before_agentic_coder_decode() -> None:
     source = inspect.getsource(CustomModuleGenerator.generate)
     grounding_index = source.index("host_grounding = build_coder_grounding(")
-    first_decode_index = source.index("self.router.generate_tool_decision(")
+    first_decode_index = source.index("self.router.generate_text(")
     assert grounding_index < first_decode_index
     assert '"host_grounding": host_grounding' in source
-    assert 'tool_name="return_custom_module_file_plan"' in source
-    assert 'tool_name="return_custom_module_file_content"' in source
-    assert "self.router.generate_text(" not in source
+    assert 'response_format="text"' in source
+    assert 'tool_stage="generation"' in source
+    assert "enable_tools=True" in source
+    assert "generate_tool_decision" not in source
+    assert '"phase": "implement_module"' in source
+    assert "plan_files" not in source
     budget_guard = source.index("project_context_budget = _coder_project_context_budget(")
     exact_observation = source.index("_collect_initial_observations(")
     assert budget_guard < exact_observation < grounding_index
