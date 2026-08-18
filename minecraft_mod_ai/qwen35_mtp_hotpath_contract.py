@@ -52,8 +52,9 @@ def _is_qwen35_mtp(config: Any) -> bool:
 
 
 def _context_size(config: Any | None = None) -> int:
-    """Return the authoritative llama.cpp context window for this model profile."""
+    """Return model-native llama.cpp context unless explicitly overridden."""
 
+    del config
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
     if raw:
         try:
@@ -63,15 +64,7 @@ def _context_size(config: Any | None = None) -> int:
         if value < 0:
             raise ValueError("MMM_QWEN35_MTP_CTX must be a non-negative integer")
         return min(_MAX_CTX, value)
-
-    configured = getattr(config, "max_context", 0) if config is not None else 0
-    try:
-        value = int(configured)
-    except (TypeError, ValueError):
-        value = 0
-    if value < 0:
-        value = 0
-    return min(_MAX_CTX, value)
+    return 0
 
 
 def _draft_gpu_layers() -> str:
