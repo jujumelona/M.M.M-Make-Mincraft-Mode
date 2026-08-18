@@ -235,7 +235,6 @@ def install() -> None:
 
     from . import llama_server_hardware_policy
     from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
-    from .qwen_runtime_transport_contract import install as install_runtime_transport
 
     current_payload = llama_server_hardware_policy._server_payload
     if not getattr(current_payload, "_mmm_qwen_family_agent_policy", False):
@@ -275,7 +274,6 @@ def install() -> None:
         generate_turn._mmm_qwen36_reasoning_history = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate_turn = generate_turn
 
-    install_runtime_transport()
     _INSTALLED = True
 
 
