@@ -7,7 +7,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .complete_spec import ProductionModule
-from .host_grounding import build_coder_grounding
+from .host_grounding import (
+    build_coder_grounding,
+    custom_module_path_allowed,
+    custom_module_path_protected,
+)
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
@@ -491,27 +495,12 @@ class CustomModuleGenerator:
             if item.get("operation") not in {"create", "replace", "edit"}:
                 raise CustomModuleGenerationError("Custom module may not delete files.")
             path = _normalized_operation_path(item)
-            protected_path = path.casefold()
-            if any(
-                protected_path == root or protected_path.startswith(root + "/")
-                for root in (
-                    ".minecraft_ai/research",
-                    ".minecraft_ai/context-observations",
-                )
-            ):
+            if custom_module_path_protected(path):
                 raise CustomModuleGenerationError(
                     "Model patches may not modify the code-owned research ledger or "
                     "context-observation ledger."
                 )
-            allowed = (
-                path.startswith("src/main/java/")
-                or path.startswith("src/main/resources/")
-                or path.startswith("src/test/java/")
-                or path.startswith("src/gametest/")
-                or path.startswith(".minecraft_ai/")
-                or path in {"build.gradle", "gradle.properties", "settings.gradle"}
-            )
-            if not allowed:
+            if not custom_module_path_allowed(path):
                 raise CustomModuleGenerationError(
                     f"Custom module path is outside the allowed scope: {path}"
                 )
