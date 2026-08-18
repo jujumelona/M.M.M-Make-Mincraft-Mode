@@ -52,6 +52,7 @@ _qwen36_27b_q4: &qwen36_27b_q4
   model_id: unsloth/Qwen3.6-27B-MTP-GGUF
   adapter: llama_cpp
   gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
+  mmproj_filename: mmproj-F16.gguf
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
@@ -63,6 +64,7 @@ _qwen36_27b_q3: &qwen36_27b_q3
   model_id: unsloth/Qwen3.6-27B-MTP-GGUF
   adapter: llama_cpp
   gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
+  mmproj_filename: mmproj-F16.gguf
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
