@@ -29,11 +29,19 @@ _TOOL = {
 
 
 class _Adapter:
-    def __init__(self, model_id: str, *, role: str = "coder_safe") -> None:
+    def __init__(
+        self,
+        model_id: str,
+        *,
+        role: str = "coder_safe",
+        gguf_filename: str = "",
+    ) -> None:
+        extra = {"gguf_filename": gguf_filename} if gguf_filename else {}
         self.config = SimpleNamespace(
             model_id=model_id,
             role=role,
             max_new_tokens=8192,
+            extra=extra,
         )
 
 
@@ -69,6 +77,23 @@ def test_qwen36_auto_tool_loop_enables_thinking_preservation() -> None:
     assert payload["presence_penalty"] == 0.0
     assert payload["repeat_penalty"] == 1.0
     assert "repetition_penalty" not in payload
+
+
+def test_qwen36_local_path_uses_gguf_identity_for_agent_policy() -> None:
+    payload = hardware._server_payload(
+        _Adapter(
+            "/models/current.gguf",
+            gguf_filename="Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+        ),
+        _request(),
+    )
+
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "preserve_thinking": True,
+    }
+    assert payload["temperature"] == 0.6
+    assert payload["repeat_penalty"] == 1.0
 
 
 def test_qwen35_keeps_existing_precise_coding_policy_unchanged() -> None:
