@@ -3,16 +3,29 @@ from __future__ import annotations
 import os
 from contextvars import ContextVar
 from functools import wraps
+from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from . import trajectory_memory
+from .trajectory_record_integrity import (
+    derive_levels,
+    record_strong_skill_eligible,
+    validate_trajectory_record,
+)
+
 _MARKER = '_mmm_adaptive_central_compute_v1'
 _ACTIVE_POLICY: ContextVar[dict[str, Any] | None] = ContextVar('mmm_adaptive_central_compute_policy', default=None)
 _SEVERITY = {'none': 0, 'low': 1, 'medium': 2, 'high': 3, 'critical': 4}
 _HIGH_RISK_EVIDENCE = frozenset({'source_code', 'local_project', 'testing', 'runtime_behavior', 'performance', 'release', 'ai_inference', 'agent_tool_use', 'translation', 'model_runtime', 'dataset_provenance', 'consent_privacy', 'latency_budget'})
 _COMPLEX_MARKERS = ('multiplayer', 'network', 'server', 'client', 'persistence', 'persist', 'migration', 'custom java', 'custom_java', 'integration', 'dimension', 'world event', 'world_event', 'ai inference', 'agent tool', '동기화', '멀티플레이', '네트워크', '서버', '클라이언트', '영속', '마이그레이션', '통합', '차원', '인공지능', '음성')
+_TIERS = ('lean', 'standard', 'full')
+_EXPERIENCE_CLASSES = ('research', 'planning', 'repair')
+
 
 def _mode() -> str:
     value = os.environ.get('MMM_CENTRAL_TEST_TIME_COMPUTE', 'auto').strip().lower()
     return value if value in {'auto', 'lean', 'full'} else 'auto'
+
 
 def _domains(brief: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     values = brief.get('domains', [])
@@ -20,16 +33,156 @@ def _domains(brief: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         return []
     return [value for value in values if isinstance(value, Mapping)]
 
-def _compute_policy(agentic_module: Any, prompt: str) -> dict[str, Any]:
+
+def _router_root(router: Any) -> Path | None:
+    value = getattr(router, '_agent_workspace_root', None)
+    if value is None:
+        return None
+    try:
+        return Path(value).expanduser().resolve()
+    except (OSError, RuntimeError, TypeError):
+        return None
+
+
+def _verified_failure(row: Mapping[str, Any]) -> bool:
+    if not validate_trajectory_record(row):
+        return False
+    derived = derive_levels(row)
+    return bool(derived and derived.get('verified_failure') is True)
+
+
+def _experience_summary(root: Path | None, prompt: str) -> dict[str, Any]:
+    summary = {
+        'sample_count': 0,
+        'strong_success_count': 0,
+        'verified_failure_count': 0,
+        'repair_count': 0,
+        'success_rate': 0.0,
+        'source': 'trajectory-v3-local-cache',
+    }
+    if root is None:
+        return summary
+
+    unique: dict[str, Mapping[str, Any]] = {}
+    try:
+        for task_class in _EXPERIENCE_CLASSES:
+            rows = trajectory_memory.relevant_trajectories(
+                root,
+                prompt,
+                task_class=task_class,
+                limit=6,
+            )
+            for row in rows:
+                identity = str(row.get('trajectory_id', '')).strip()
+                if identity:
+                    unique.setdefault(identity, row)
+    except Exception:
+        return summary
+
+    qualified: list[Mapping[str, Any]] = []
+    strong_successes = 0
+    verified_failures = 0
+    repair_count = 0
+    for row in unique.values():
+        strong = record_strong_skill_eligible(row)
+        failed = _verified_failure(row)
+        if not strong and not failed:
+            continue
+        qualified.append(row)
+        strong_successes += int(strong)
+        verified_failures += int(failed)
+        repair_count += int(str(row.get('task_class', '')).casefold() == 'repair')
+
+    sample_count = len(qualified)
+    summary.update(
+        {
+            'sample_count': sample_count,
+            'strong_success_count': strong_successes,
+            'verified_failure_count': verified_failures,
+            'repair_count': repair_count,
+            'success_rate': round(strong_successes / sample_count, 4) if sample_count else 0.0,
+        }
+    )
+    return summary
+
+
+def _experience_adjusted_policy(
+    policy: Mapping[str, Any],
+    *,
+    root: Path | None,
+    prompt: str,
+) -> dict[str, Any]:
+    result = dict(policy)
+    result['validation_policy'] = 'unchanged_authoritative'
+    if result.get('reason') == 'environment_override':
+        result['experience_adjustment'] = 'disabled_by_environment_override'
+        return result
+
+    base_tier = str(result.get('tier', 'full'))
+    if base_tier not in _TIERS:
+        return result
+
+    experience = _experience_summary(root, prompt)
+    result['experience'] = experience
+    result['base_tier'] = base_tier
+    result['experience_adjustment'] = 'insufficient_evidence'
+
+    samples = int(experience['sample_count'])
+    if samples < 4:
+        return result
+
+    failures = int(experience['verified_failure_count'])
+    repairs = int(experience['repair_count'])
+    success_rate = float(experience['success_rate'])
+    tier_index = _TIERS.index(base_tier)
+
+    if failures >= 2 or failures / samples >= 0.34 or repairs >= 2:
+        tier_index = min(len(_TIERS) - 1, tier_index + 1)
+        result['experience_adjustment'] = 'escalated_by_verified_history'
+    elif samples >= 6 and failures == 0 and repairs <= 1 and success_rate >= 0.85:
+        tier_index = max(0, tier_index - 1)
+        result['experience_adjustment'] = 'reduced_by_reliable_success_history'
+    else:
+        result['experience_adjustment'] = 'held_by_mixed_history'
+
+    tier = _TIERS[tier_index]
+    result['tier'] = tier
+    result['central_amplification'] = tier != 'lean'
+    result['review_policy'] = {
+        'lean': 'disabled_with_central_amplification',
+        'standard': 'uncertainty_gated_second_reviewer',
+        'full': 'full_parallel',
+    }[tier]
+    return result
+
+
+def _compute_policy(
+    agentic_module: Any,
+    prompt: str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
     mode = _mode()
     if mode == 'lean':
-        return {'schema_version': 'mmm/adaptive-central-compute-v1', 'tier': 'lean', 'score': 0, 'reason': 'environment_override', 'central_amplification': False, 'review_policy': 'disabled_with_central_amplification'}
+        return _experience_adjusted_policy(
+            {'schema_version': 'mmm/adaptive-central-compute-v2', 'tier': 'lean', 'score': 0, 'reason': 'environment_override', 'central_amplification': False, 'review_policy': 'disabled_with_central_amplification'},
+            root=root,
+            prompt=prompt,
+        )
     if mode == 'full':
-        return {'schema_version': 'mmm/adaptive-central-compute-v1', 'tier': 'full', 'score': 99, 'reason': 'environment_override', 'central_amplification': True, 'review_policy': 'full_parallel'}
+        return _experience_adjusted_policy(
+            {'schema_version': 'mmm/adaptive-central-compute-v2', 'tier': 'full', 'score': 99, 'reason': 'environment_override', 'central_amplification': True, 'review_policy': 'full_parallel'},
+            root=root,
+            prompt=prompt,
+        )
     try:
         brief = agentic_module.normalize_research_brief(prompt, {'title': 'adaptive central compute'})
     except Exception as exc:
-        return {'schema_version': 'mmm/adaptive-central-compute-v1', 'tier': 'full', 'score': 99, 'reason': f'classification_unavailable:{type(exc).__name__}', 'central_amplification': True, 'review_policy': 'full_parallel'}
+        return _experience_adjusted_policy(
+            {'schema_version': 'mmm/adaptive-central-compute-v2', 'tier': 'full', 'score': 99, 'reason': f'classification_unavailable:{type(exc).__name__}', 'central_amplification': True, 'review_policy': 'full_parallel'},
+            root=root,
+            prompt=prompt,
+        )
     domains = _domains(brief)
     score = 0
     reasons: list[str] = []
@@ -90,7 +243,12 @@ def _compute_policy(agentic_module: Any, prompt: str) -> dict[str, Any]:
     else:
         tier = 'lean'
         review_policy = 'disabled_with_central_amplification'
-    return {'schema_version': 'mmm/adaptive-central-compute-v1', 'tier': tier, 'score': score, 'reason': ','.join(reasons) if reasons else 'cheap_host_features', 'central_amplification': tier != 'lean', 'review_policy': review_policy, 'domain_count': len(domains), 'prompt_bytes': prompt_bytes, 'high_risk_evidence': risky, 'dependency_edges': dependency_edges}
+    return _experience_adjusted_policy(
+        {'schema_version': 'mmm/adaptive-central-compute-v2', 'tier': tier, 'score': score, 'reason': ','.join(reasons) if reasons else 'cheap_host_features', 'central_amplification': tier != 'lean', 'review_policy': review_policy, 'domain_count': len(domains), 'prompt_bytes': prompt_bytes, 'high_risk_evidence': risky, 'dependency_edges': dependency_edges},
+        root=root,
+        prompt=prompt,
+    )
+
 
 def _review_requires_expansion(review: Mapping[str, Any]) -> bool:
     severity = _SEVERITY.get(str(review.get('severity', 'none')), 0)
@@ -100,6 +258,7 @@ def _review_requires_expansion(review: Mapping[str, Any]) -> bool:
         confidence = 0.0
     material_issue = any((isinstance(review.get(field), list) and bool(review.get(field)) for field in ('missing_requirements', 'unsupported_additions', 'contradictions', 'research_gaps')))
     return severity >= _SEVERITY['medium'] or confidence < 0.72 or material_issue
+
 
 def _attach_receipt(agentic_module: Any, result: Any, policy: Mapping[str, Any]) -> Any:
     if not isinstance(result, Mapping):
@@ -113,6 +272,7 @@ def _attach_receipt(agentic_module: Any, result: Any, policy: Mapping[str, Any])
     except Exception:
         pass
     return value
+
 
 def harden(agentic_module: Any, central_module: Any) -> None:
     """Install quality-first adaptive compute outside the existing central wrappers."""
@@ -149,7 +309,7 @@ def harden(agentic_module: Any, central_module: Any) -> None:
 
         @wraps(current_collect)
         def collect(router: Any, prompt: str, *, trace_metadata=None):
-            policy = _compute_policy(agentic_module, prompt)
+            policy = _compute_policy(agentic_module, prompt, root=_router_root(router))
             token = _ACTIVE_POLICY.set(policy)
             try:
                 result = current_collect(router, prompt, trace_metadata=trace_metadata)
@@ -164,7 +324,7 @@ def harden(agentic_module: Any, central_module: Any) -> None:
 
         @wraps(current_generate)
         def generate(game_design_module: Any, router: Any, prompt: str, *, media_paths=(), research: Mapping[str, Any], trace_metadata=None):
-            policy = _compute_policy(agentic_module, prompt)
+            policy = _compute_policy(agentic_module, prompt, root=_router_root(router))
             token = _ACTIVE_POLICY.set(policy)
             try:
                 return current_generate(game_design_module, router, prompt, media_paths=media_paths, research=research, trace_metadata=trace_metadata)
@@ -173,4 +333,6 @@ def harden(agentic_module: Any, central_module: Any) -> None:
         setattr(generate, _MARKER, True)
         generate.__wrapped__ = current_generate
         agentic_module.generate_sectioned_game_design = generate
+
+
 __all__ = ['harden', '_compute_policy', '_review_requires_expansion']
