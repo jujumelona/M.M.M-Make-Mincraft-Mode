@@ -589,7 +589,7 @@ def _materialize_model_source_patch(
                 raise AgentToolRuntimeError(
                     f"Model source target must be a regular file: {normalized}"
                 )
-            expected_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+            expected_sha256 = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
             operations.append(
                 {
                     "operation": "replace",
