@@ -20,27 +20,6 @@ def _config(model_id: str) -> SimpleNamespace:
     )
 
 
-def _tuning_variant(
-    name: str,
-    spec_type: str = "none",
-    draft_n_max: int = 0,
-    *,
-    ubatch: int = 0,
-    parallel: int = 1,
-    cache_reuse: int = 0,
-) -> SimpleNamespace:
-    """Represent staged tuning metadata without changing production ServerVariant."""
-
-    return SimpleNamespace(
-        name=name,
-        spec_type=spec_type,
-        draft_n_max=draft_n_max,
-        ubatch=ubatch,
-        parallel=parallel,
-        cache_reuse=cache_reuse,
-    )
-
-
 def _tool_response(*, call_id: str, arguments: str) -> dict:
     return {
         "choices": [
@@ -60,6 +39,23 @@ def _tool_response(*, call_id: str, arguments: str) -> dict:
             }
         ]
     }
+
+
+def test_runtime_tuning_owns_extended_server_variant_after_bootstrap() -> None:
+    assert autotune.ServerVariant is runtime_tuning.ServerVariant
+    variant = runtime_tuning.ServerVariant(
+        "mtp-2|ub1024|p2|cr64",
+        "draft-mtp",
+        2,
+        ubatch=1024,
+        parallel=2,
+        cache_reuse=64,
+        draft_p_min=0.8,
+    )
+    assert variant.ubatch == 1024
+    assert variant.parallel == 2
+    assert variant.cache_reuse == 64
+    assert variant.draft_p_min == 0.8
 
 
 def test_tool_signature_is_semantic_not_call_id_or_json_format() -> None:
@@ -83,18 +79,22 @@ def test_tool_signature_rejects_wrong_tool_arguments() -> None:
 
 
 def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
-    baseline = autotune.ServerVariant("baseline")
-    mtp = autotune.ServerVariant("mtp-2", "draft-mtp", 2)
+    baseline = runtime_tuning.ServerVariant("baseline")
+    mtp = runtime_tuning.ServerVariant("mtp-2", "draft-mtp", 2)
     assert contract._initial_calibration_variant(baseline)
     assert contract._initial_calibration_variant(mtp)
     assert not contract._initial_calibration_variant(
-        _tuning_variant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024)
+        runtime_tuning.ServerVariant(
+            "mtp-2|ub1024", "draft-mtp", 2, ubatch=1024
+        )
     )
     assert not contract._initial_calibration_variant(
-        _tuning_variant("mtp-2|p2", "draft-mtp", 2, parallel=2)
+        runtime_tuning.ServerVariant("mtp-2|p2", "draft-mtp", 2, parallel=2)
     )
     assert not contract._initial_calibration_variant(
-        _tuning_variant("mtp-2|cr64", "draft-mtp", 2, cache_reuse=64)
+        runtime_tuning.ServerVariant(
+            "mtp-2|cr64", "draft-mtp", 2, cache_reuse=64
+        )
     )
 
 
@@ -238,7 +238,7 @@ def test_initial_qwen_variant_requires_tool_probe(monkeypatch) -> None:
 
     monkeypatch.setattr(contract, "_tool_probe", passing_probe)
     contract._install_tool_equivalence_policy(fake)
-    variant = autotune.ServerVariant("mtp-2", "draft-mtp", 2)
+    variant = runtime_tuning.ServerVariant("mtp-2", "draft-mtp", 2)
     result = fake._mmm_run_tuning_variant(
         "llama-server",
         "/tmp/model.gguf",
@@ -258,7 +258,7 @@ def test_bad_mtp_tool_transport_fails_variant_before_decode(monkeypatch) -> None
         lambda _base_url, _autotune: (False, "canonical call mismatch"),
     )
     contract._install_tool_equivalence_policy(fake)
-    variant = autotune.ServerVariant("mtp-4", "draft-mtp", 4)
+    variant = runtime_tuning.ServerVariant("mtp-4", "draft-mtp", 4)
     with pytest.raises(RuntimeError, match="native tool transport calibration failed"):
         fake._mmm_run_tuning_variant(
             "llama-server",
@@ -285,19 +285,22 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
         "/tmp/model.gguf",
         _config("other/model"),
         object(),
-        autotune.ServerVariant("baseline"),
+        runtime_tuning.ServerVariant("baseline"),
     )
     fake._mmm_run_tuning_variant(
         "llama-server",
         "/tmp/model.gguf",
         _config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF"),
         object(),
-        _tuning_variant("mtp-2|ub1024", "draft-mtp", 2, ubatch=1024),
+        runtime_tuning.ServerVariant(
+            "mtp-2|ub1024", "draft-mtp", 2, ubatch=1024
+        ),
     )
     assert calls == 0
 
 
 def test_runtime_installs_zero_reload_tool_calibration_and_single_slot_mtp() -> None:
+    assert autotune.ServerVariant is runtime_tuning.ServerVariant
     assert getattr(
         autotune._mmm_run_tuning_variant,
         "_mmm_qwen_tool_calibration_context_v2",
