@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from .config_paths import config_path as resolve_config_path
+from .runtime_command_scope import validate_server_command_scope
 
 
 class RuntimePolicyError(RuntimeError):
@@ -259,6 +260,10 @@ class MinecraftRuntimeManager:
     def send_server_command(self, command: str) -> dict[str, Any]:
         with self._lock:
             command = command.strip()
+            try:
+                validate_server_command_scope(command)
+            except ValueError as exc:
+                raise RuntimePolicyError(str(exc)) from exc
             if not any(
                 pattern.fullmatch(command)
                 for pattern in self.profile.allowed_server_commands
