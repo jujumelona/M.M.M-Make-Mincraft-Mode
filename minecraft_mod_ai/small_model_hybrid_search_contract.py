@@ -196,6 +196,7 @@ def install(production_tools_module: Any) -> None:
         errors: list[str] = []
         best: dict[str, Any] | None = None
         best_score = (-1, -1.0, -1.0)
+        completed_attempts: set[tuple[str, bool, bool]] = set()
 
         for retry in (False, True):
             routed_query = _expanded(query, route, retry=retry)
@@ -205,6 +206,9 @@ def install(production_tools_module: Any) -> None:
                 if mode_key in seen_modes:
                     continue
                 seen_modes.add(mode_key)
+                attempt_key = (routed_query, *mode_key)
+                if attempt_key in completed_attempts:
+                    continue
                 try:
                     result = dict(
                         current(
@@ -220,6 +224,7 @@ def install(production_tools_module: Any) -> None:
                 except Exception as exc:
                     errors.append(f"{mode}:{type(exc).__name__}:{str(exc)[:240]}")
                     continue
+                completed_attempts.add(attempt_key)
                 usable, coverage, relevance, count = _quality(result)
                 score = (count, coverage, relevance)
                 if score > best_score:
