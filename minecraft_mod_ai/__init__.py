@@ -4,12 +4,6 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
-from .small_model_research_extensions_contract import (
-    install as _install_small_model_research_extensions,
-)
-
-_install_small_model_research_extensions()
-
 from .api import (
     ChatReply,
     CompleteChatReply,

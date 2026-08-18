@@ -389,6 +389,9 @@ def _install_post_bootstrap_contracts() -> None:
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_relation_index_contract import install as install_small_model_relation_index
+    from .small_model_research_extensions_contract import (
+        install as install_small_model_research_extensions,
+    )
     from .small_model_retrieval_efficiency_contract import (
         install as install_small_model_retrieval_efficiency,
     )
@@ -424,3 +427,4 @@ def _install_post_bootstrap_contracts() -> None:
     runtime_regression_fixes.install()
     install_long_run_resilience()
     qwen_agent_family_contract.install()
+    install_small_model_research_extensions()
