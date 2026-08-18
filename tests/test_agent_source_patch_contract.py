@@ -9,6 +9,7 @@ from minecraft_mod_ai.agent_tool_runtime import (
     _MODEL_SOURCE_PATCH_SCHEMA,
     _materialize_model_source_patch,
 )
+from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
 
 def _project(workspace, name: str = "demo"):
@@ -35,6 +36,7 @@ def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> No
     source = project / "src/main/java/example/Example.java"
     source.parent.mkdir(parents=True)
     old = "package example;\nfinal class Example {}\n"
+    updated = "package example;\nfinal class Example { int value = 1; }\n"
     source.write_text(old, encoding="utf-8")
 
     payload = _materialize_model_source_patch(
@@ -43,7 +45,7 @@ def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> No
             "files": [
                 {
                     "path": "src/main/java/example/Example.java",
-                    "content": "package example;\nfinal class Example { int value = 1; }\n",
+                    "content": updated,
                 }
             ],
         },
@@ -54,10 +56,14 @@ def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> No
         {
             "operation": "replace",
             "path": "src/main/java/example/Example.java",
-            "expected_sha256": hashlib.sha256(old.encode("utf-8")).hexdigest(),
-            "content": "package example;\nfinal class Example { int value = 1; }\n",
+            "expected_sha256": "sha256:" + hashlib.sha256(old.encode("utf-8")).hexdigest(),
+            "content": updated,
         }
     ]
+
+    receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
+    assert receipt["status"] == "APPLIED"
+    assert source.read_text(encoding="utf-8") == updated
 
 
 def test_host_derives_create_without_model_patch_metadata(tmp_path) -> None:
