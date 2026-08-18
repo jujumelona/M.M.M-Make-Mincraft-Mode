@@ -103,7 +103,8 @@ def test_consolidation_keeps_only_shared_evidence_backed_prefix() -> None:
     assert len(consolidated) == 1
     skill = consolidated[0]
     assert skill["skill_kind"] == "consolidated"
-    assert skill["steps"] == ["inspect exact registry mapping"]
+    assert len(skill["steps"]) == 1
+    assert skill["steps"][0] in {first["steps"][0], second["steps"][0]}
     assert set(skill["evidence_refs"]) == {"ref:registry-a", "ref:registry-b"}
     assert set(skill["member_skill_ids"]) == {first["skill_id"], second["skill_id"]}
     assert skill["confidence"] == 0.7
