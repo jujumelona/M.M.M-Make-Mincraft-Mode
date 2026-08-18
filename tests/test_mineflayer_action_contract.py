@@ -39,6 +39,43 @@ def test_python_and_node_action_registries_match_exactly() -> None:
     assert _dispatched_actions(_bridge_source()) == set(MineflayerBridge.ACTIONS)
 
 
+def test_playtest_surface_allows_interaction_without_world_editing() -> None:
+    actions = set(MineflayerBridge.ACTIONS)
+    assert {
+        "status",
+        "walk_to",
+        "interact_block",
+        "use_item",
+        "attack_entity",
+        "inventory",
+        "chat",
+        "craft",
+        "wait_for",
+        "open_container",
+        "click_slot",
+    }.issubset(actions)
+    assert actions.isdisjoint(
+        {
+            "place_block",
+            "dig",
+            "dig_block",
+            "break_block",
+            "set_block",
+            "fill",
+            "clone",
+            "paste_schematic",
+            "worldedit",
+            "build_structure",
+        }
+    )
+
+    source = _bridge_source()
+    assert ".placeBlock(" not in source
+    assert ".dig(" not in source
+    assert 'message.trimStart().startsWith("/")' in source
+    assert "Mineflayer chat may not execute server commands" in source
+
+
 def test_required_runtime_assertion_is_real_and_bounded() -> None:
     source = _bridge_source()
     assert "async function waitFor" in source
