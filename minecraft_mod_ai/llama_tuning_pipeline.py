@@ -13,8 +13,14 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable
 
+from .runtime_contract_composer import (
+    ContractStage,
+    callable_boundary,
+    compose_contract_stages,
+)
 
-_TUNING_PIPELINE_VERSION = 31
+
+_TUNING_PIPELINE_VERSION = 32
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
 
 
@@ -176,17 +182,47 @@ class NativeLlamaTuningPipeline:
             ),
         )
 
+    def _callable_boundaries(self):
+        """Bindings no tuning stage may accidentally destroy while wrapping them."""
+
+        return (
+            callable_boundary("autotune.base_args", self.autotune, "_base_args"),
+            callable_boundary("autotune.fingerprint", self.autotune, "_fingerprint"),
+            callable_boundary("autotune.probe_server", self.autotune, "_probe_server"),
+            callable_boundary("autotune.start_server", self.autotune, "_start_server"),
+            callable_boundary("autotune.launch_selected", self.autotune, "_launch_selected"),
+            callable_boundary(
+                "hardware.server_payload",
+                self.hardware_policy,
+                "_server_payload",
+            ),
+            callable_boundary(
+                "runtime.ubatch_candidates",
+                self.runtime_tuning,
+                "_ubatch_candidates",
+            ),
+        )
+
     def install(self) -> None:
         installed_version = int(
             getattr(self.autotune, "_mmm_tuning_pipeline_version", 0) or 0
         )
         if installed_version >= _TUNING_PIPELINE_VERSION:
             return
-        installed: list[str] = []
-        for stage in self.stages():
-            stage.install()
-            installed.append(stage.name)
-        self.autotune._mmm_tuning_pipeline_stages = tuple(installed)
+
+        receipts = compose_contract_stages(
+            owner_name="native-llama-tuning",
+            version=_TUNING_PIPELINE_VERSION,
+            state_owner=self.autotune,
+            stages=(
+                ContractStage(stage.name, stage.install)
+                for stage in self.stages()
+            ),
+            boundaries=self._callable_boundaries(),
+        )
+        installed = tuple(receipt.name for receipt in receipts)
+        self.autotune._mmm_tuning_pipeline_stages = installed
+        self.autotune._mmm_tuning_pipeline_receipts = receipts
         self.autotune._mmm_tuning_pipeline_installed = True
         self.autotune._mmm_tuning_pipeline_version = _TUNING_PIPELINE_VERSION
 
