@@ -3,9 +3,10 @@ from __future__ import annotations
 """Runtime integrity audit for installed monkey-patch wrapper chains.
 
 Contract wrappers are allowed to change behavior, not the callable surface that
-existing production callers rely on.  The audit compares the *actual outer callable*
-(``follow_wrapped=False``) against the deepest original ``__wrapped__`` target and
-fails before work begins if positional/keyword compatibility was narrowed.
+existing production callers rely on. The audit validates the *actual callable* at
+every layer of each ``__wrapped__`` chain (``follow_wrapped=False``) against the
+deepest original target, so a broad outer wrapper cannot hide a narrowed middle
+wrapper that would still fail at runtime.
 """
 
 import inspect
@@ -94,17 +95,25 @@ def iter_installed_wrappers(
                     yield f"{module_name}.{value.__qualname__}.{member_name}", raw
 
 
-def deepest_wrapped(value: Any) -> Any:
-    """Return the deepest callable in a wrapper chain and reject cycles."""
+def wrapped_chain(value: Any) -> tuple[Any, ...]:
+    """Return outer-to-original wrapper chain and reject cycles."""
 
+    chain = [value]
+    seen = {id(value)}
     current = value
-    seen = {id(current)}
     while callable(getattr(current, "__wrapped__", None)):
         current = current.__wrapped__
         if id(current) in seen:
             raise RuntimeWrapperIntegrityError("cyclic __wrapped__ chain")
         seen.add(id(current))
-    return current
+        chain.append(current)
+    return tuple(chain)
+
+
+def deepest_wrapped(value: Any) -> Any:
+    """Return the deepest callable in a wrapper chain and reject cycles."""
+
+    return wrapped_chain(value)[-1]
 
 
 def _has_kind(signature: inspect.Signature, kind: Any) -> bool:
@@ -178,21 +187,31 @@ def wrapper_compatibility_error(outer: Any, original: Any) -> str:
     if _has_kind(original_signature, inspect.Parameter.VAR_POSITIONAL) and not _has_kind(
         outer_signature, inspect.Parameter.VAR_POSITIONAL
     ):
-        return "original accepts *args but outer wrapper does not"
+        return "original accepts *args but wrapper layer does not"
     if _has_kind(original_signature, inspect.Parameter.VAR_KEYWORD) and not _has_kind(
         outer_signature, inspect.Parameter.VAR_KEYWORD
     ):
-        return "original accepts **kwargs but outer wrapper does not"
+        return "original accepts **kwargs but wrapper layer does not"
 
     for args, kwargs in _representative_calls(original_signature):
         try:
             outer_signature.bind(*args, **kwargs)
         except TypeError as exc:
             return (
-                f"outer={outer_signature} does not preserve original="
+                f"layer={outer_signature} does not preserve original="
                 f"{original_signature}: {exc}"
             )
     return ""
+
+
+def _layer_identity(layer: Any) -> str:
+    module = str(getattr(layer, "__module__", ""))
+    qualname = str(
+        getattr(layer, "__qualname__", "")
+        or getattr(layer, "__name__", "")
+        or type(layer).__qualname__
+    )
+    return f"{module}:{qualname}"
 
 
 def audit_installed_wrappers(
@@ -208,13 +227,20 @@ def audit_installed_wrappers(
         seen_bindings.add(key)
         checked += 1
         try:
-            original = deepest_wrapped(outer)
+            chain = wrapped_chain(outer)
         except RuntimeWrapperIntegrityError as exc:
             issues.append(WrapperIntegrityIssue(binding, str(exc)))
             continue
-        error = wrapper_compatibility_error(outer, original)
-        if error:
-            issues.append(WrapperIntegrityIssue(binding, error))
+        original = chain[-1]
+        for layer_index, layer in enumerate(chain[:-1]):
+            error = wrapper_compatibility_error(layer, original)
+            if error:
+                issues.append(
+                    WrapperIntegrityIssue(
+                        binding,
+                        f"layer[{layer_index}] {_layer_identity(layer)}: {error}",
+                    )
+                )
     return WrapperIntegrityReport(checked=checked, issues=tuple(issues))
 
 
@@ -242,5 +268,6 @@ __all__ = [
     "deepest_wrapped",
     "iter_installed_wrappers",
     "verify_installed_wrappers",
+    "wrapped_chain",
     "wrapper_compatibility_error",
 ]
