@@ -84,72 +84,68 @@ def test_project_context_pages_reconstruct_large_utf8_source_within_budget(
 class _ContextPagingRouter:
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.file_contexts: list[dict] = []
         self.consumed_joint_contract = False
 
-    def generate_text(self, role, messages, **kwargs):
+    def bind_agent_workspace(self, *_args, **_kwargs):
+        return self
+
+    def generate_text(self, *_args, **_kwargs):
+        raise AssertionError("custom-module generation must use native structured return channels")
+
+    def generate_tool_decision(
+        self,
+        role,
+        messages,
+        *,
+        tool_name,
+        parameters,
+        description="",
+    ):
+        del description
         assert role == "coder"
-        assert kwargs["response_format"] == "json"
+        assert parameters["type"] == "object"
+        assert parameters["additionalProperties"] is False
         request = _latest_json_request(messages)
-        assert request["phase"] == "generate_patch"
         self.requests.append(request)
-        context = request["relevant_context"]
-        anchor_text = "\n".join(
-            item["text"] for item in context["global_anchors"]
-        )
-        assert "FIRST_PAGE_SOURCE_FACT" in anchor_text
 
-        if context["page_index"] == 0 and context["page_count"] > 1:
-            return json.dumps(
-                {
-                    "operations": [
-                        {
-                            "operation": "create",
-                            "path": (
-                                "src/main/resources/mmm_context_review/"
-                                "inspection.json"
-                            ),
-                            "content": '{"inspection":"complete"}',
-                        }
-                    ],
-                    "runtime_tests": [],
-                    "complete": False,
-                    "next_cursor": "",
-                    "context_page_complete": True,
-                }
-            )
-        if not context["complete"]:
-            assert request["prior_patch_receipt"]["operation_count"] == 1
-            return json.dumps(
-                {
-                    "operations": [],
-                    "runtime_tests": [],
-                    "complete": False,
-                    "next_cursor": "",
-                    "context_page_complete": True,
-                }
-            )
-
-        expected_prior = 1 if context["page_count"] > 1 else 0
-        assert request["prior_patch_receipt"]["operation_count"] == expected_prior
-        self.consumed_joint_contract = True
-        return json.dumps(
-            {
-                "operations": [
+        if tool_name == "return_custom_module_file_plan":
+            assert request["phase"] == "plan_files"
+            assert _serialized_size(request["planning_context"]) <= 4096
+            return {
+                "files": [
                     {
-                        "operation": "create",
                         "path": "src/main/java/example/GeneratedHook.java",
-                        "content": (
-                            "package example; final class GeneratedHook { "
-                            'static final String FIRST = "FIRST_PAGE_SOURCE_FACT"; }\n'
+                        "purpose": (
+                            "Implement crossFileHook while preserving FIRST_PAGE_SOURCE_FACT "
+                            "and HIGH_INDEX_SOURCE_SENTINEL exact-source contracts."
                         ),
                     }
                 ],
-                "runtime_tests": ["Generated hook preserves the discovered source contract."],
-                "complete": True,
-                "next_cursor": "",
-                "context_page_complete": True,
+                "runtime_tests": [],
             }
-        )
+
+        if tool_name == "return_custom_module_file_content":
+            assert request["phase"] == "write_file"
+            context = request["exact_source_context"]
+            self.file_contexts.append(context)
+            assert _serialized_size(context) <= 4096
+            observed_text = "\n".join(item["text"] for item in context["records"])
+            assert "FIRST_PAGE_SOURCE_FACT" in observed_text
+            assert "HIGH_INDEX_SOURCE_SENTINEL" in observed_text
+            self.consumed_joint_contract = True
+            return {
+                "content": (
+                    "package example; final class GeneratedHook { "
+                    'static final String FIRST = "FIRST_PAGE_SOURCE_FACT"; '
+                    'static final String LAST = "HIGH_INDEX_SOURCE_SENTINEL"; }\n'
+                ),
+                "runtime_tests": [
+                    "Generated hook preserves source contracts discovered across host pages."
+                ],
+            }
+
+        raise AssertionError(f"unexpected structured return channel: {tool_name}")
 
 
 def test_custom_generator_consumes_relevant_source_beyond_first_context_page(
@@ -213,12 +209,10 @@ def test_custom_generator_consumes_relevant_source_beyond_first_context_page(
     generated = source / "GeneratedHook.java"
     assert result["status"] == "SOURCE_GENERATED"
     assert router.consumed_joint_contract is True
-    assert router.requests
-    assert all(
-        _serialized_size(request["relevant_context"]) <= budget
-        for request in router.requests
-    )
+    assert router.file_contexts
+    assert all(_serialized_size(context) <= budget for context in router.file_contexts)
     generated_text = generated.read_text(encoding="utf-8")
-    assert result["operation_count"] >= 1
+    assert result["operation_count"] == 1
     assert "FIRST_PAGE_SOURCE_FACT" in generated_text
-    assert result["source_observation_receipt"]["source_page_count"] >= 1
+    assert "HIGH_INDEX_SOURCE_SENTINEL" in generated_text
+    assert result["source_observation_receipt"]["source_page_count"] > 1
