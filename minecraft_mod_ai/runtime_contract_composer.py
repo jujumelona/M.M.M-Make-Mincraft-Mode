@@ -15,9 +15,8 @@ native llama tuning pipeline) one shared execution contract:
 * a stage that raises poisons the composition owner for the rest of the process;
 * one owner may use only one composition version and one declared stage/boundary graph
   for the process lifetime;
-* stage graph identity includes installer code plus captured callable dependencies, so
-  changing a phase body or swapping the installer behind an unchanged closure cannot
-  silently reuse stale receipts;
+* stage graph identity includes installer code plus immutable/callable dependencies,
+  while deliberately excluding mutable runtime contents from the fingerprint;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
@@ -124,7 +123,7 @@ def _code_digest(value: Any) -> str:
 
 
 def _dependency_identity(value: Any) -> Any:
-    """Return a deterministic shallow identity for installer closure/partial inputs."""
+    """Return a stable implementation identity, never mutable execution contents."""
 
     if inspect.ismodule(value):
         return ("module", str(getattr(value, "__name__", "")))
@@ -146,46 +145,26 @@ def _dependency_identity(value: Any) -> Any:
             "method",
             _callable_identity(value.__func__),
             _code_digest(value.__func__),
-            (
-                type(owner).__module__,
-                type(owner).__qualname__,
-            )
+            (type(owner).__module__, type(owner).__qualname__)
             if owner is not None
             else None,
         )
     if inspect.isfunction(value) or inspect.isbuiltin(value):
-        return (
-            "callable",
-            _callable_identity(value),
-            _code_digest(value),
-        )
+        return ("callable", _callable_identity(value), _code_digest(value))
     if isinstance(value, type):
         return ("type", value.__module__, value.__qualname__)
     if value is None or isinstance(value, (bool, int, float, str, bytes)):
         return ("literal", repr(value))
-    if isinstance(value, (tuple, list)) and len(value) <= 32:
+    if isinstance(value, tuple) and len(value) <= 32:
+        return ("tuple", tuple(_dependency_identity(item) for item in value))
+    if isinstance(value, frozenset) and len(value) <= 32:
         return (
-            type(value).__name__,
-            tuple(_dependency_identity(item) for item in value),
-        )
-    if isinstance(value, (set, frozenset)) and len(value) <= 32:
-        return (
-            type(value).__name__,
+            "frozenset",
             tuple(sorted(repr(_dependency_identity(item)) for item in value)),
         )
-    if isinstance(value, dict) and len(value) <= 32:
-        return (
-            "dict",
-            tuple(
-                sorted(
-                    (
-                        repr(_dependency_identity(key)),
-                        repr(_dependency_identity(item)),
-                    )
-                    for key, item in value.items()
-                )
-            ),
-        )
+    # Lists/dicts/sets and arbitrary stateful objects are intentionally represented
+    # only by type. Their contents can legitimately change while an installer runs;
+    # graph identity must describe implementation wiring, not execution state.
     return ("object-type", type(value).__module__, type(value).__qualname__)
 
 
