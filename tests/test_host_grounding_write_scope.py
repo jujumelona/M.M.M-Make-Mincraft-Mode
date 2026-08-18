@@ -32,6 +32,7 @@ def test_coder_grounding_publishes_exact_patch_write_scope(monkeypatch) -> None:
     )
 
     scope = grounding["write_scope"]
+    assert scope == host_grounding.custom_module_write_scope()
     assert scope["allowed_prefixes"] == [
         "src/main/java/",
         "src/main/resources/",
@@ -49,3 +50,28 @@ def test_coder_grounding_publishes_exact_patch_write_scope(monkeypatch) -> None:
         ".minecraft_ai/context-observations",
     ]
     assert "README.md" in scope["examples_rejected"]
+
+
+def test_custom_module_path_policy_has_one_fail_closed_authority() -> None:
+    for path in (
+        "src/main/java/example/Feature.java",
+        "src/main/resources/fabric.mod.json",
+        "src/test/java/example/FeatureTest.java",
+        "src/gametest/resources/test.snbt",
+        ".minecraft_ai/generated/receipt.json",
+        "build.gradle",
+        "gradle.properties",
+        "settings.gradle",
+    ):
+        assert host_grounding.custom_module_path_allowed(path) is True
+        assert host_grounding.custom_module_path_protected(path) is False
+
+    for path in (
+        ".minecraft_ai/research/ledger.json",
+        ".minecraft_ai/context-observations/page.json",
+    ):
+        assert host_grounding.custom_module_path_protected(path) is True
+        assert host_grounding.custom_module_path_allowed(path) is False
+
+    for path in ("README.md", "LICENSE", "docs/design.md", "gradlew"):
+        assert host_grounding.custom_module_path_allowed(path) is False
