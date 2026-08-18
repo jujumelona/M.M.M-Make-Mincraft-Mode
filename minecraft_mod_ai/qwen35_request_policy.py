@@ -16,10 +16,9 @@ from functools import wraps
 from typing import Any, Iterator, Mapping
 
 from .qwen_model_profiles import (
-    QWEN35_GENERAL_THINKING as _GENERAL_THINKING,
-    QWEN35_NON_THINKING as _NON_THINKING,
-    QWEN35_PRECISE_CODING as _PRECISE_CODING,
+    QwenSamplingMode,
     is_qwen35_9b,
+    qwen_sampling_profile,
 )
 
 _PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v2"
@@ -30,25 +29,39 @@ _FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v2"
 _BENCHMARK_ENV = "MMM_QWEN35_DECODE_BENCHMARK"
 
 
-def _is_qwen35(config: Any) -> bool:
+def _model_identity(config: Any) -> tuple[object, object]:
     model_id = getattr(config, "model_id", "")
     extra = getattr(config, "extra", {})
     filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
+    return model_id, filename
+
+
+def _is_qwen35(config: Any) -> bool:
+    model_id, filename = _model_identity(config)
     return is_qwen35_9b(model_id, filename)
 
 
-def _request_defaults(config: Any, request: Any) -> dict[str, Any]:
+def _request_sampling_mode(config: Any, request: Any) -> QwenSamplingMode:
     tools = getattr(request, "tools", ()) or ()
     structured_fill = (
         getattr(request, "response_format", None) == "json" and not tools
     )
     if structured_fill:
-        return dict(_NON_THINKING)
+        return "non_thinking"
 
     role = str(getattr(config, "role", "")).strip().casefold()
     if role in {"coder", "coder_safe"}:
-        return dict(_PRECISE_CODING)
-    return dict(_GENERAL_THINKING)
+        return "precise_coding"
+    return "general_thinking"
+
+
+def _request_defaults(config: Any, request: Any) -> dict[str, Any]:
+    model_id, filename = _model_identity(config)
+    return qwen_sampling_profile(
+        model_id,
+        filename,
+        mode=_request_sampling_mode(config, request),
+    ) or {}
 
 
 def _install_payload_policy(hardware_policy: Any) -> None:
