@@ -18,6 +18,10 @@ def _variant(name: str, spec_type: str = "none", draft_n_max: int = 0) -> Simple
     return SimpleNamespace(name=name, spec_type=spec_type, draft_n_max=draft_n_max)
 
 
+def _server_variant(name: str) -> SimpleNamespace:
+    return _variant(name)
+
+
 def _qwen_config(model_id: str, gguf_filename: str = "") -> SimpleNamespace:
     extra = {"mmproj_filename": "mmproj-F16.gguf"}
     if gguf_filename:
@@ -65,8 +69,12 @@ def test_projector_is_loaded_only_when_media_upgrades_managed_server(
     autotune = SimpleNamespace()
     autotune._MANAGED_PROCESS = _RunningProcess()
     autotune._MANAGED_URL = "http://127.0.0.1:8910/v1"
-    autotune.ServerVariant = lambda name: _variant(name)
-    autotune._launch_selected = lambda *_args: "http://127.0.0.1:8920/v1"
+    autotune.ServerVariant = _server_variant
+
+    def dummy_launch(*_args):
+        return "http://127.0.0.1:8920/v1"
+
+    autotune._launch_selected = dummy_launch
     monkeypatch.setenv("LLAMA_SERVER_URL", autotune._MANAGED_URL)
     launched_args: list[str] = []
     shutdown_urls: list[str] = []
@@ -146,7 +154,7 @@ def test_media_launch_policy_preserves_text_mtp_and_27b_vision_mtp(monkeypatch) 
 
     autotune = SimpleNamespace(
         _launch_selected=launch_selected,
-        ServerVariant=lambda name: _variant(name),
+        ServerVariant=_server_variant,
     )
     multimodal._install_launch_policy(autotune)
     speculative = _variant("mtp-2", "draft-mtp", 2)
