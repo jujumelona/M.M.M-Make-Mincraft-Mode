@@ -13,10 +13,7 @@ _GPU_EXCLUSIVE_LOCK = threading.RLock()
 _ROLE_TOOL_STAGE = {'planner': 'planning', 'researcher': 'research', 'coder': 'generation', 'coder_safe': 'quality', 'visual_critic': 'quality'}
 _NATIVE_TOOL_ADAPTERS = frozenset({'llama_cpp', 'vllm', 'openai_compatible'})
 _RAG_EVIDENCE_TOOLS = frozenset({'search_code_rag', 'search_project_rag'})
-_PARALLEL_READ_TOOLS = frozenset({'search_code_rag', 'search_project_rag', 'discover_ecosystem_resources', 'inspect_modrinth_project', 'inspect_github_repository', 'inspect_huggingface_model', 'inspect_existing_mod', 'assess_technology_compatibility', 'java_diagnostics', 'java_workspace_symbols', 'read_complete_plan_section', 'read_quality_contract', 'quality_status', 'work_status', 'work_tasks', 'external_mcp_capabilities', 'external_mcp_schema', 'workspace_list', 'workspace_read', 'workspace_search'})
-_DEFAULT_AGENT_TOOL_ROUNDS = 12
-_MIN_AGENT_TOOL_ROUNDS = 1
-_MAX_AGENT_TOOL_ROUNDS = 64
+_PARALLEL_READ_TOOLS = frozenset({'search_code_rag', 'search_project_rag', 'discover_ecosystem_resources', 'inspect_modrinth_project', 'inspect_github_repository', 'inspect_huggingface_model', 'inspect_existing_mod', 'assess_technology_compatibility', 'java_diagnostics', 'java_workspace_symbols', 'read_complete_plan_section', 'read_quality_contract', 'quality_status', 'work_status', 'work_tasks', 'external_mcp_capabilities', 'external_mcp_schema'})
 
 class ModelRouter:
     """Role router with strict profile selection and no silent backend fallback."""
@@ -47,7 +44,14 @@ class ModelRouter:
 
     @contextmanager
     def generation_session(self, role: str):
-        """Keep one text-generation backend alive for a bounded workflow."""
+        """Keep one text-generation backend alive for a bounded workflow.
+
+        Only one role can be pinned on a router at a time. This avoids an
+        unbounded multi-model VRAM cache while allowing a paginated planner to
+        reuse the same processor and weights until its complete plan succeeds or
+        raises. Direct ``generate_text`` calls outside this context retain their
+        existing load-generate-release lifetime.
+        """
         config = self.registry.role(self.profile, role)
         adapter = self._new_text_adapter(config, role=role)
         with self._generation_lock:
@@ -145,7 +149,12 @@ class ModelRouter:
         )
 
     def _prepare_generation_request(self, role: str, messages: Sequence[Mapping[str, Any]], *, config: Any, media_paths: Sequence[str | Path]=(), response_format: str='text', response_schema: Mapping[str, Any] | None=None, tool_stage: str | None=None, enable_tools: bool=True) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
-        """Build the canonical model request used by every text execution policy."""
+        """Build the canonical model request used by every text execution policy.
+
+        Locking/concurrency contracts may decide *when* generation runs, but tool
+        exposure, role filtering, Skill/MCP context and structured-output semantics
+        are prepared here once so late runtime wrappers cannot drift from the router.
+        """
         stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, '')).strip().lower()
         runtime = None
         tools: tuple[Mapping[str, Any], ...] = ()
@@ -162,7 +171,7 @@ class ModelRouter:
         return (stage, runtime, tools, request)
 
     def _generate_with_tools(self, *, adapter: Any, request: GenerationRequest, runtime: Any, stage: str, role: str) -> str:
-        """Run bounded retrieve/act/observe production until semantic convergence."""
+        """Run adaptive retrieve/act/observe production until semantic convergence."""
         from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
         messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
         exposed_tools = frozenset(_tool_schema_names(request.tools))
@@ -171,31 +180,9 @@ class ModelRouter:
         premature_final_state: str | None = None
         rag_evidence_seen = False
         round_index = 0
-        round_limit = _agent_tool_round_limit()
         require_rag = bool(self._agent_require_fresh_evidence and role in {'coder', 'coder_safe'} and exposed_tools & _RAG_EVIDENCE_TOOLS)
         reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
         while True:
-            if round_index >= round_limit:
-                if require_rag and not rag_evidence_seen:
-                    raise ModelConfigurationError(
-                        f'Agent tool budget exhausted after {round_limit} rounds without usable fresh RAG evidence.'
-                    )
-                final_messages = [*messages, {
-                    'role': 'system',
-                    'content': (
-                        f'The host tool budget is exhausted after {round_limit} rounds. '
-                        'Do not call more tools. Return the final answer using only observations already present.'
-                    ),
-                }]
-                final_request = GenerationRequest(messages=final_messages, media_paths=(), response_format=request.response_format, response_schema=request.response_schema, tools=(), tool_choice=None, parallel_tool_calls=False)
-                final_turn = adapter.generate_turn(final_request)
-                if final_turn.tool_calls:
-                    raise ModelConfigurationError('Agent emitted tool calls after the host disabled tools at the hard round budget.')
-                final_content = final_turn.content.strip()
-                if not final_content:
-                    raise ModelConfigurationError('Agent returned an empty final response at the hard tool-round budget.')
-                return final_content
-
             turn_request = GenerationRequest(messages=messages, media_paths=request.media_paths if round_index == 0 else (), response_format=request.response_format, response_schema=request.response_schema, tools=request.tools, tool_choice=request.tool_choice, parallel_tool_calls=request.parallel_tool_calls)
             turn = adapter.generate_turn(turn_request)
             if not turn.tool_calls:
@@ -350,14 +337,6 @@ class ModelRouter:
         else:
             yield
 
-def _agent_tool_round_limit() -> int:
-    raw = os.environ.get('MMM_AGENT_TOOL_ROUNDS', str(_DEFAULT_AGENT_TOOL_ROUNDS)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _DEFAULT_AGENT_TOOL_ROUNDS
-    return max(_MIN_AGENT_TOOL_ROUNDS, min(value, _MAX_AGENT_TOOL_ROUNDS))
-
 def _parallel_read_workers() -> int:
     raw = os.environ.get('MMM_AGENT_PARALLEL_READS', '4').strip()
     try:
@@ -367,7 +346,12 @@ def _parallel_read_workers() -> int:
     return max(1, min(value, 16))
 
 def _execute_tool_waves(calls: Sequence[Any], execute: Callable[[Any], tuple[Any, Mapping[str, Any]]]) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
-    """Execute maximal read waves concurrently while preserving serial barriers."""
+    """Execute maximal read waves concurrently while preserving serial barriers.
+
+    Unclassified or side-effectful tools remain ordered barriers. Independent read
+    calls on either side of those barriers still overlap instead of forcing the whole
+    model-emitted batch through the previous all-or-nothing serial fallback.
+    """
     completed: list[tuple[Any, Mapping[str, Any]]] = []
     pending_reads: list[Any] = []
 
@@ -435,12 +419,23 @@ def _inject_system_context(messages: Sequence[Mapping[str, Any]], content: str) 
     copied.insert(insert_at, {'role': 'system', 'content': content})
     return tuple(copied)
 
-def _tool_schema_names(tools: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
-    names: list[str] = []
-    for item in tools:
-        function = item.get('function') if isinstance(item, Mapping) else None
-        if isinstance(function, Mapping):
-            name = str(function.get('name', '')).strip()
-            if name:
-                names.append(name)
-    return tuple(names)
+def _tool_schema_names(tool_schemas: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    names: set[str] = set()
+    for schema in tool_schemas:
+        function = schema.get('function')
+        if not isinstance(function, Mapping):
+            continue
+        name = str(function.get('name', '')).strip()
+        if name:
+            names.add(name)
+    return tuple(sorted(names))
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, '').strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
