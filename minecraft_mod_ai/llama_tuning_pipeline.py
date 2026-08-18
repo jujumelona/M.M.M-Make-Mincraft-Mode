@@ -14,8 +14,8 @@ from functools import wraps
 from typing import Any, Callable
 
 
-_TUNING_PIPELINE_VERSION = 28
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v4"
+_TUNING_PIPELINE_VERSION = 29
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v5"
 
 
 @dataclass(frozen=True)
@@ -45,15 +45,19 @@ class NativeLlamaTuningPipeline:
         qwen35_mtp = "qwen3.5-9b" in model_id and (
             "mtp" in model_id or "mtp" in filename
         )
-        if not qwen35_mtp:
-            raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
-            if raw:
-                try:
-                    value = int(raw)
-                except ValueError:
-                    value = -1
-                if value >= 0:
-                    return value
+        if qwen35_mtp:
+            from .qwen35_mtp_hotpath_contract import _context_size
+
+            return _context_size(config)
+
+        raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError:
+                value = -1
+            if value >= 0:
+                return value
         try:
             return max(0, int(getattr(config, "max_context", 0) or 0))
         except (TypeError, ValueError):
