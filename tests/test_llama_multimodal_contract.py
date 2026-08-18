@@ -147,7 +147,7 @@ def test_projector_is_loaded_only_for_exact_managed_media_process(
     assert shutdown_urls[-1] == url
 
 
-def test_media_baseline_requirement_is_model_specific() -> None:
+def test_media_baseline_requirement_covers_all_production_qwen_mtp_models() -> None:
     qwen35_9b = _qwen_config("unsloth/Qwen3.5-9B-MTP-GGUF")
     qwen36_35b = _qwen_config("unsloth/Qwen3.6-35B-A3B-MTP-GGUF")
     qwen36_27b_q4 = _qwen_config(
@@ -161,11 +161,11 @@ def test_media_baseline_requirement_is_model_specific() -> None:
 
     assert multimodal._requires_media_baseline(qwen35_9b)
     assert multimodal._requires_media_baseline(qwen36_35b)
-    assert not multimodal._requires_media_baseline(qwen36_27b_q4)
-    assert not multimodal._requires_media_baseline(qwen36_27b_q3)
+    assert multimodal._requires_media_baseline(qwen36_27b_q4)
+    assert multimodal._requires_media_baseline(qwen36_27b_q3)
 
 
-def test_media_launch_policy_preserves_text_mtp_and_27b_vision_mtp(monkeypatch) -> None:
+def test_media_launch_policy_preserves_text_mtp_and_disables_vision_mtp(monkeypatch) -> None:
     launched: list[tuple[str, str]] = []
 
     def launch_selected(_binary, _model_path, config, selected):
@@ -197,5 +197,5 @@ def test_media_launch_policy_preserves_text_mtp_and_27b_vision_mtp(monkeypatch) 
     assert [spec_type for _, spec_type in launched[-3:]] == [
         "none",
         "none",
-        "draft-mtp",
+        "none",
     ]
