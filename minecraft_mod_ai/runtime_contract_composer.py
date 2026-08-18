@@ -13,8 +13,9 @@ native llama tuning pipeline) one shared execution contract:
 
 * completed stages are receipted immediately and are not replayed for the same
   composition version;
-* a stage that raises poisons that composition version, so partially-applied code is
-  never invoked a second time in the same process;
+* a stage that raises poisons the composition owner for the rest of the process, so
+  partially-applied code is never invoked a second time merely because a version
+  number changed;
 * recursive/re-entrant composition is rejected with the exact owner/stage;
 * watched callables may be wrapped, but may not disappear, become non-callable, or
   stop accepting explicitly declared production call shapes;
@@ -243,9 +244,10 @@ def compose_contract_stages(
 ) -> tuple[StageReceipt, ...]:
     """Install ordered contract stages once, retaining safe progress on failure.
 
-    A failed stage is intentionally *not* retried. Callers must restart the process
-    after fixing the code/configuration because arbitrary installer side effects may
-    already have happened before the exception was raised.
+    A failed stage is intentionally *not* retried, including through a later
+    composition version. Callers must restart the process after fixing the
+    code/configuration because arbitrary installer side effects may already have
+    happened before the exception was raised.
     """
 
     if not owner_name.strip():
@@ -264,17 +266,22 @@ def compose_contract_stages(
     boundary_values = tuple(boundaries)
     with _COMPOSITION_LOCK:
         states = _state_map(state_owner)
-        state = states.get(owner_name)
+        prior_state = states.get(owner_name)
+        if isinstance(prior_state, dict) and prior_state.get("failed"):
+            failure = prior_state["failed"]
+            failed_version = int(prior_state.get("version", 0) or 0)
+            raise ContractCompositionError(
+                f"contract composition {owner_name!r} is poisoned by prior failure "
+                f"in version {failed_version} at stage {failure.get('stage')!r}: "
+                f"{failure.get('error')}; process restart is required before "
+                f"requesting version {int(version)}"
+            )
+
+        state = prior_state
         if not isinstance(state, dict) or int(state.get("version", 0) or 0) != int(version):
             state = _fresh_state(int(version))
             states[owner_name] = state
 
-        if state.get("failed"):
-            failure = state["failed"]
-            raise ContractCompositionError(
-                f"contract composition {owner_name!r} is poisoned by prior failure "
-                f"at stage {failure.get('stage')!r}: {failure.get('error')}"
-            )
         if state.get("active"):
             raise ContractCompositionError(
                 f"contract composition {owner_name!r} re-entered while stage "
