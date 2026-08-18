@@ -24,7 +24,9 @@ _PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
 _ACTIVE_MEDIA_ENV = "MMM_LLAMA_MULTIMODAL_ACTIVE"
 _MANAGED_MEDIA_URL_ATTR = "_mmm_multimodal_managed_url"
 _MANAGED_MEDIA_PROCESS_ATTR = "_mmm_multimodal_managed_process"
-_MTP_UNSAFE_WITH_MEDIA = frozenset({"qwen3.5-9b", "qwen3.6-35b-a3b"})
+_MTP_UNSAFE_WITH_MEDIA = frozenset(
+    {"qwen3.5-9b", "qwen3.6-27b", "qwen3.6-35b-a3b"}
+)
 
 
 def _mmproj_filename(config: Any) -> str:
@@ -239,8 +241,8 @@ def _install_ensure(autotune: Any) -> None:
             _clear_media_identity(autotune)
 
         if not media_paths:
-            # A media launch for 9B/35B may deliberately be baseline-only. Never let
-            # that process become the permanent text server: retire the exact media
+            # A media launch may deliberately be baseline-only. Never let that
+            # process become the permanent text server: retire the exact media
             # process so the cached text MTP winner is restored on the next launch.
             if _is_managed_media_server(autotune, process, managed_url):
                 _retire_managed_server(autotune, managed_url)
