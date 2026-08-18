@@ -281,6 +281,8 @@ def _per_request_context(config: Any) -> int:
             raise ValueError(f"{name} must be a non-negative integer") from exc
         if value < 0:
             raise ValueError(f"{name} must be a non-negative integer")
+        if value == 0:
+            continue
         return value
     try:
         return max(0, int(getattr(config, "max_context", 0) or 0))
@@ -315,6 +317,8 @@ def _context_from_args(args: list[str], config: Any) -> int:
             raise RuntimeError(f"invalid llama-server context: {args[index + 1]!r}") from exc
         if value < 0:
             raise RuntimeError("llama-server context must be non-negative")
+        if value == 0:
+            return _per_request_context(config)
         return value
     return _per_request_context(config)
 
@@ -868,13 +872,21 @@ def install(autotune_module: Any) -> None:
         def start_server(binary: str, model_path: str, config: Any, variant: ServerVariant, port: int) -> subprocess.Popen[bytes]:
             debug = autotune_module._env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
             args = list(autotune_module._base_args(binary, model_path, config, port))
+            native_context = any(
+                name in args
+                and args.index(name) + 1 < len(args)
+                and args[args.index(name) + 1] == "0"
+                for name in ("--ctx-size", "-c")
+            )
+            slots = max(1, variant.parallel)
             per_request_context = _context_from_args(args, config)
-            total_context = _total_context(per_request_context, max(1, variant.parallel))
-            _replace_option(args, ("--ctx-size", "-c"), str(total_context))
+            total_context = _total_context(per_request_context, slots)
+            if slots > 1 or not native_context:
+                _replace_option(args, ("--ctx-size", "-c"), str(total_context))
             if variant.ubatch > 0:
                 _replace_option(args, ("--ubatch-size", "-ub"), str(variant.ubatch))
-            _replace_option(args, ("--parallel", "-np"), str(max(1, variant.parallel)))
-            if variant.parallel > 1:
+            _replace_option(args, ("--parallel", "-np"), str(slots))
+            if slots > 1:
                 if "--cont-batching" not in args and "-cb" not in args:
                     args.append("--cont-batching")
                 if "--kv-unified" not in args and "-kvu" not in args:

@@ -10,7 +10,7 @@ def _config():
     return SimpleNamespace(
         model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
         extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
-        max_context=32768,
+        max_context=262144,
     )
 
 
@@ -35,7 +35,7 @@ def test_cold_tuner_sees_effective_context_and_wide_mtp_candidates(monkeypatch) 
     )
     install(autotune)
     assert autotune.ensure_tuned_server(_config(), object()).endswith("/v1")
-    assert seen == {"ctx": "32768", "widths": "1,2,3,4,5,6,8"}
+    assert seen == {"ctx": "0", "widths": "1,2,3,4,5,6,8"}
     assert os.environ["MMM_LLAMA_SERVER_CTX"] == "16384"
     assert "MMM_LLAMA_MTP_WIDTHS" not in os.environ
 

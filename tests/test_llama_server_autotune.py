@@ -220,7 +220,7 @@ def test_server_args_use_quality_neutral_performance_defaults(monkeypatch) -> No
     monkeypatch.delenv("MMM_KV_CACHE_QUANT", raising=False)
     config = SimpleNamespace(max_context=32768)
     args = _base_args("llama-server", "/tmp/model.gguf", config, 8910)
-    assert args[args.index("--ctx-size") + 1] == "32768"
+    assert args[args.index("--ctx-size") + 1] == "0"
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
     assert args[args.index("--gpu-layers") + 1] == "auto"

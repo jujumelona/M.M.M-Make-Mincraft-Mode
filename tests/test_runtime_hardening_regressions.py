@@ -185,7 +185,7 @@ def test_t4_aliases_resolve_to_actual_qwen35_9b() -> None:
             planner = registry.role(profile, "planner")
             assert planner.model_id == "unsloth/Qwen3.5-9B-MTP-GGUF"
             assert planner.extra["gguf_filename"] == "Qwen3.5-9B-UD-Q4_K_XL.gguf"
-            assert planner.max_context == 32768
+            assert planner.max_context == 262144
 
 
 def test_bounded_section_budget_does_not_cap_paginated_qwen_json(monkeypatch) -> None:
