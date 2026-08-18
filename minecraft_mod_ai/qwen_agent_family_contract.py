@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Qwen-family agent policy for native llama.cpp tool loops.
+"""Qwen-family request and agent policy for native llama.cpp tool loops.
 
 The MCP/tool surface is intentionally shared across model families. This module is a
 late, transparent decorator over the already-composed llama payload stack: every
 non-Qwen3.6 request is returned exactly as produced by the existing runtime policy.
-Only Qwen3.6 autonomous agent continuations opt into thinking preservation and
+Exact production Qwen3.6 models receive their model/mode-specific vendor sampling,
+while autonomous agent continuations additionally opt into thinking preservation and
 historical ``reasoning_content`` restoration.
 """
 
@@ -66,35 +67,62 @@ def _qwen36_agent_request(request: Any) -> bool:
     return _assistant_has_agent_history(_request_messages(request))
 
 
+def _qwen36_sampling_mode(role: object, request: Any) -> str | None:
+    """Map MMM request semantics onto Qwen's documented generation modes."""
+
+    tools = getattr(request, "tools", ()) or ()
+    if getattr(request, "response_format", None) == "json" and not tools:
+        return "non_thinking"
+    if _forced_tool_choice(getattr(request, "tool_choice", None)):
+        # Keep host-forced function returns deterministic. The generic transport owns
+        # this special case and already disables reasoning at temperature zero.
+        return None
+    normalized_role = str(role or "").strip().casefold()
+    if normalized_role in {"coder", "coder_safe"}:
+        return "precise_coding"
+    return "general_thinking"
+
+
 def _apply_family_payload_policy(
     payload: dict[str, Any],
     *,
     model_id: object,
     gguf_filename: object = "",
+    role: object = "",
     request: Any,
 ) -> dict[str, Any]:
-    """Mutate only autonomous Qwen3.6 agent turns; all other payloads pass through."""
+    """Apply Qwen3.6 mode semantics without guessing future model sampling."""
 
-    if _model_family(model_id, gguf_filename) != "qwen3.6" or not _qwen36_agent_request(request):
+    if _model_family(model_id, gguf_filename) != "qwen3.6":
         return payload
 
-    payload.pop("reasoning_effort", None)
-    payload["chat_template_kwargs"] = {
-        "enable_thinking": True,
-        "preserve_thinking": True,
-    }
+    mode = _qwen36_sampling_mode(role, request)
+    agent_request = _qwen36_agent_request(request)
+    if mode is None and not agent_request:
+        return payload
+
+    if mode == "non_thinking":
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    else:
+        payload.pop("reasoning_effort", None)
+        template_kwargs: dict[str, Any] = {"enable_thinking": True}
+        if agent_request:
+            template_kwargs["preserve_thinking"] = True
+        payload["chat_template_kwargs"] = template_kwargs
 
     # Sampling recommendations belong to exact production model identities. Keep
-    # Qwen3.6-family transport behavior forward-compatible, but never guess precise
-    # sampling for a future/unknown Qwen3.6 variant.
-    sampling = qwen_sampling_profile(
-        model_id,
-        gguf_filename,
-        mode="precise_coding",
-    )
-    if sampling is not None:
-        payload.pop("repetition_penalty", None)
-        payload.update(sampling)
+    # family-level transport behavior forward-compatible, but never guess sampling
+    # for a future/unknown Qwen3.6 variant.
+    if mode is not None:
+        sampling = qwen_sampling_profile(
+            model_id,
+            gguf_filename,
+            mode=mode,
+        )
+        if sampling is not None:
+            payload.pop("repetition_penalty", None)
+            payload.update(sampling)
     return payload
 
 
@@ -257,6 +285,7 @@ def install() -> None:
                 payload,
                 model_id=getattr(config, "model_id", ""),
                 gguf_filename=filename,
+                role=getattr(config, "role", ""),
                 request=request,
             )
 
