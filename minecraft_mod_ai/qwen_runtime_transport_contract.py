@@ -1,28 +1,34 @@
 from __future__ import annotations
 
-"""Qwen native-server transport guards for context and speculative tool calls.
+"""Validate Qwen speculative decoding across the native tool-call boundary.
 
-The production Qwen profiles share llama.cpp's native OpenAI/Jinja tool transport.
-This contract keeps the deployment context explicit for Qwen3.6 and admits a
-speculative winner only after the same model produces the same canonical function
-call on both baseline and speculative servers. MCP-backed skills are exposed to the
-model through that same function-tool transport, so the probe protects the parser
-boundary without coupling inference code to any particular MCP provider.
+MMM exposes first-party MCP tools, reviewed external MCP tools, and temporary Skill
+execution through the same OpenAI/Jinja function-tool transport. The staged
+llama.cpp tuner already keeps each baseline/MTP candidate server alive for a warm-up
+and an exact-output decode probe. This contract reuses that live server for one tiny,
+deterministic function call before a candidate may participate in selection.
+
+No second model load is performed, and later ubatch/parallel/cache tuning keeps its
+existing exact-output contract unchanged. A speculative candidate that cannot emit
+the canonical tool call is simply treated as a failed tuning variant.
 """
 
 import hashlib
 import json
-import os
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Mapping
 
 from .qwen_model_profiles import qwen_family
 
-_BASE_ARGS_MARKER = "_mmm_qwen_context_contract_v1"
-_FINGERPRINT_MARKER = "_mmm_qwen_context_fingerprint_v1"
-_BENCHMARK_MARKER = "_mmm_qwen_speculative_tool_equivalence_v1"
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
+_RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
+_PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
+_ACTIVE_CALIBRATION: ContextVar[tuple[Any, Any] | None] = ContextVar(
+    "mmm_qwen_transport_calibration",
+    default=None,
+)
 
 
 def _config_identity(config: Any) -> tuple[str, str]:
@@ -35,96 +41,6 @@ def _config_identity(config: Any) -> tuple[str, str]:
 def _family(config: Any) -> str | None:
     model_id, filename = _config_identity(config)
     return qwen_family(model_id, filename)
-
-
-def _qwen36_context(config: Any) -> int:
-    """Resolve the Qwen3.6 server context, preserving an explicit operator override."""
-
-    raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
-    if raw:
-        try:
-            value = int(raw)
-        except ValueError:
-            value = -1
-        if value >= 0:
-            return value
-    try:
-        configured = int(getattr(config, "max_context", 0) or 0)
-    except (TypeError, ValueError):
-        configured = 0
-    return max(0, configured)
-
-
-def _actual_qwen_context(config: Any) -> int:
-    """Return the context that the installed Qwen launch stack will actually use."""
-
-    if _family(config) == "qwen3.5":
-        try:
-            from .qwen35_mtp_hotpath_contract import _context_size, _is_qwen35_mtp
-
-            if _is_qwen35_mtp(config):
-                return int(_context_size(config))
-        except (ImportError, TypeError, ValueError):
-            pass
-    return _qwen36_context(config)
-
-
-def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
-    for name in names:
-        if name not in args:
-            continue
-        index = args.index(name)
-        if index + 1 < len(args):
-            args[index + 1] = value
-            return
-    args.extend([names[0], value])
-
-
-def _install_context_policy(autotune: Any) -> None:
-    current_base = autotune._base_args
-    if not getattr(current_base, _BASE_ARGS_MARKER, False):
-
-        @wraps(current_base)
-        def qwen_context_base_args(
-            binary: str,
-            model_path: str,
-            config: Any,
-            port: int,
-        ) -> list[str]:
-            args = list(current_base(binary, model_path, config, port))
-            if _family(config) == "qwen3.6":
-                _set_option(
-                    args,
-                    ("--ctx-size", "-c"),
-                    str(_qwen36_context(config)),
-                )
-            return args
-
-        setattr(qwen_context_base_args, _BASE_ARGS_MARKER, True)
-        autotune._base_args = qwen_context_base_args
-
-    current_fingerprint = autotune._fingerprint
-    if not getattr(current_fingerprint, _FINGERPRINT_MARKER, False):
-
-        @wraps(current_fingerprint)
-        def qwen_context_fingerprint(config: Any, binary: str, model_path: str) -> str:
-            base = str(current_fingerprint(config, binary, model_path))
-            if _family(config) is None:
-                return base
-            payload = {
-                "base": base,
-                "qwen_context": _actual_qwen_context(config),
-                "transport_contract": "v1",
-            }
-            encoded = json.dumps(
-                payload,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            return hashlib.sha256(encoded).hexdigest()
-
-        setattr(qwen_context_fingerprint, _FINGERPRINT_MARKER, True)
-        autotune._fingerprint = qwen_context_fingerprint
 
 
 def _canonical_arguments(value: Any) -> Any:
@@ -140,6 +56,8 @@ def _canonical_arguments(value: Any) -> Any:
 
 
 def _tool_call_signature(response: Mapping[str, Any]) -> str:
+    """Return a stable signature only for the exact expected semantic tool call."""
+
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
         return ""
@@ -155,10 +73,12 @@ def _tool_call_signature(response: Mapping[str, Any]) -> str:
     function = call.get("function")
     if not isinstance(function, Mapping):
         return ""
+
     name = str(function.get("name", "")).strip()
     arguments = _canonical_arguments(function.get("arguments", "{}"))
     if name != _TOOL_NAME or arguments != {"value": _TOOL_VALUE}:
         return ""
+
     canonical = json.dumps(
         {"name": name, "arguments": arguments},
         ensure_ascii=False,
@@ -168,8 +88,8 @@ def _tool_call_signature(response: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _tool_probe(base_url: str, autotune: Any) -> tuple[bool, str, str]:
-    """Exercise llama.cpp's native function-tool parser with a tiny deterministic call."""
+def _tool_probe(base_url: str, autotune: Any) -> tuple[bool, str]:
+    """Exercise llama.cpp's native function-tool parser on the already-live server."""
 
     import httpx
 
@@ -220,131 +140,100 @@ def _tool_probe(base_url: str, autotune: Any) -> tuple[bool, str, str]:
         data = response.json()
         signature = _tool_call_signature(data) if isinstance(data, Mapping) else ""
         if not signature:
-            return False, "", "native tool probe returned no valid canonical tool call"
-        return True, signature, ""
+            return False, "native tool probe returned no valid canonical tool call"
+        return True, ""
     except Exception as exc:
-        return False, "", f"{type(exc).__name__}: {exc}"
+        return False, f"{type(exc).__name__}: {exc}"
 
 
-def _probe_variant_tools(
-    autotune: Any,
-    binary: str,
-    model_path: str,
-    config: Any,
-    variant: Any,
-) -> tuple[bool, str, str]:
-    port = autotune._free_port(autotune._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910))
-    process = None
-    try:
-        process = autotune._start_server(binary, model_path, config, variant, port)
-        url = autotune._wait_ready(process, port)
-        return _tool_probe(url, autotune)
-    except Exception as exc:
-        return False, "", f"{type(exc).__name__}: {exc}"
-    finally:
-        autotune._stop_server(process)
+def _initial_calibration_variant(variant: Any) -> bool:
+    """Validate only the baseline/speculation search, not neutral tuning refinements."""
 
-
-def _baseline_variant(decision: Any) -> Any | None:
-    for probe in getattr(decision, "probes", ()) or ():
-        variant = getattr(probe, "variant", None)
-        if str(getattr(variant, "name", "")) == "baseline":
-            return variant
-    return None
-
-
-def _verify_speculative_tool_equivalence(
-    autotune: Any,
-    binary: str,
-    model_path: str,
-    config: Any,
-    decision: Any,
-) -> tuple[bool, str]:
-    baseline = _baseline_variant(decision)
-    selected = getattr(decision, "selected", None)
-    if baseline is None or selected is None:
-        return False, "missing baseline or selected variant"
-    base_ok, base_signature, base_error = _probe_variant_tools(
-        autotune, binary, model_path, config, baseline
-    )
-    if not base_ok:
-        return False, f"baseline tool probe failed: {base_error}"
-    selected_ok, selected_signature, selected_error = _probe_variant_tools(
-        autotune, binary, model_path, config, selected
-    )
-    if not selected_ok:
-        return False, f"speculative tool probe failed: {selected_error}"
-    if selected_signature != base_signature:
-        return False, "speculative native tool call differs from baseline"
-    return True, ""
-
-
-def _fallback_to_baseline(autotune: Any, decision: Any) -> Any:
-    baseline = _baseline_variant(decision)
-    if baseline is None:
-        return decision
-    baseline_tps = float(getattr(decision, "baseline_tps", 0.0) or 0.0)
-    return autotune.AutotuneDecision(
-        fingerprint=str(getattr(decision, "fingerprint", "")),
-        selected=baseline,
-        baseline_tps=baseline_tps,
-        selected_tps=baseline_tps,
-        speedup=1.0,
-        probes=tuple(getattr(decision, "probes", ()) or ()),
+    return bool(
+        int(getattr(variant, "ubatch", 0) or 0) == 0
+        and int(getattr(variant, "parallel", 1) or 1) == 1
+        and int(getattr(variant, "cache_reuse", 0) or 0) == 0
     )
 
 
 def _install_tool_equivalence_policy(autotune: Any) -> None:
-    current = autotune._benchmark
-    if getattr(current, _BENCHMARK_MARKER, False):
+    """Reject a Qwen speculation candidate if its native tool transport is invalid."""
+
+    current_run = getattr(autotune, "_mmm_run_tuning_variant", None)
+    if not callable(current_run):
+        raise RuntimeError("Qwen transport guard requires staged llama runtime tuning")
+
+    if not getattr(current_run, _RUN_VARIANT_MARKER, False):
+
+        @wraps(current_run)
+        def qwen_calibrated_run_variant(
+            binary: str,
+            model_path: str,
+            config: Any,
+            benchmark_request: Any,
+            variant: Any,
+            **kwargs: Any,
+        ) -> Any:
+            token = _ACTIVE_CALIBRATION.set((config, variant))
+            try:
+                return current_run(
+                    binary,
+                    model_path,
+                    config,
+                    benchmark_request,
+                    variant,
+                    **kwargs,
+                )
+            finally:
+                _ACTIVE_CALIBRATION.reset(token)
+
+        setattr(qwen_calibrated_run_variant, _RUN_VARIANT_MARKER, True)
+        autotune._mmm_run_tuning_variant = qwen_calibrated_run_variant
+
+    current_probe = autotune._probe_server
+    if getattr(current_probe, _PROBE_MARKER, False):
         return
 
-    @wraps(current)
-    def benchmark(
-        binary: str,
-        model_path: str,
-        config: Any,
+    @wraps(current_probe)
+    def qwen_tool_probe(
+        base_url: str,
         request: Any,
-        fingerprint: str,
+        *,
+        max_tokens: int,
+        variant: Any,
     ) -> Any:
-        decision = current(binary, model_path, config, request, fingerprint)
-        if decision is None or _family(config) is None:
-            return decision
-        selected = getattr(decision, "selected", None)
-        if selected is None or str(getattr(selected, "spec_type", "none")) == "none":
-            return decision
-        valid, reason = _verify_speculative_tool_equivalence(
-            autotune,
-            binary,
-            model_path,
-            config,
-            decision,
+        probe = current_probe(
+            base_url,
+            request,
+            max_tokens=max_tokens,
+            variant=variant,
         )
-        if valid:
-            return decision
-        print(
-            "llama autotune: rejecting speculative winner;",
-            reason,
-            flush=True,
-        )
-        return _fallback_to_baseline(autotune, decision)
+        active = _ACTIVE_CALIBRATION.get()
+        if active is None or max_tokens != 1 or not _initial_calibration_variant(variant):
+            return probe
 
-    setattr(benchmark, _BENCHMARK_MARKER, True)
-    autotune._benchmark = benchmark
+        config, active_variant = active
+        if active_variant != variant or _family(config) is None:
+            return probe
+
+        valid, error = _tool_probe(base_url, autotune)
+        if not valid:
+            raise RuntimeError(f"Qwen native tool transport calibration failed: {error}")
+        return probe
+
+    setattr(qwen_tool_probe, _PROBE_MARKER, True)
+    autotune._probe_server = qwen_tool_probe
 
 
 def install() -> None:
     from . import llama_server_autotune
 
-    _install_context_policy(llama_server_autotune)
     _install_tool_equivalence_policy(llama_server_autotune)
 
 
 __all__ = [
-    "_actual_qwen_context",
-    "_install_context_policy",
+    "_initial_calibration_variant",
     "_install_tool_equivalence_policy",
-    "_qwen36_context",
     "_tool_call_signature",
     "install",
 ]
