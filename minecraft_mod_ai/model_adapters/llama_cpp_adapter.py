@@ -23,6 +23,11 @@ from .base import (
 
 
 _DEFAULT_HTTPX_POST = httpx.post
+_REASONING_CONTINUATION = (
+    "Continue from the reasoning above and complete this same assistant turn now. "
+    "Call an available tool if evidence or an action is required; otherwise return "
+    "the requested final answer. Do not return another reasoning-only response."
+)
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -75,7 +80,13 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one turn using llama.cpp's native chat-template tool path."""
+        """Generate one semantic turn using llama.cpp's native chat-template path.
+
+        A reasoning-only server message is an incomplete semantic turn, not a backend
+        outage. Complete it exactly once with an explicit host continuation. This is
+        deliberately bounded: a second reasoning-only message fails closed instead
+        of becoming an implicit retry loop.
+        """
 
         cfg = self.config
         server_url = self._server_url(request)
@@ -85,20 +96,40 @@ class LlamaCppAdapter(ModelAdapter):
 
             message = _completion_message(server_url, _server_payload(self, request))
             _report_server_connection(server_url)
-
-            content_value = message.get("content")
-            content = content_value if isinstance(content_value, str) else ""
-            reasoning_value = message.get("reasoning_content")
-            reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
-            tool_calls = _parse_tool_calls(message.get("tool_calls"))
-            if not content.strip() and not tool_calls:
+            turn = _generation_response(message)
+            if _has_semantic_action(turn):
+                return turn
+            if not turn.reasoning_content:
                 raise RuntimeError(
-                    "native llama-server returned neither visible content nor tool calls"
+                    "native llama-server returned neither visible content, reasoning, nor tool calls"
+                )
+
+            continuation_request = _reasoning_continuation_request(
+                request,
+                turn.reasoning_content,
+            )
+            continued_message = _completion_message(
+                server_url,
+                _server_payload(self, continuation_request),
+            )
+            continued = _generation_response(continued_message)
+            if not _has_semantic_action(continued):
+                if continued.reasoning_content:
+                    raise RuntimeError(
+                        "native llama-server returned a reasoning-only continuation "
+                        "without a semantic action"
+                    )
+                raise RuntimeError(
+                    "native llama-server returned no semantic action after a "
+                    "reasoning-only continuation"
                 )
             return GenerationResponse(
-                content=content.strip(),
-                tool_calls=tool_calls,
-                reasoning_content=reasoning.strip(),
+                content=continued.content,
+                tool_calls=continued.tool_calls,
+                reasoning_content=_merge_reasoning(
+                    turn.reasoning_content,
+                    continued.reasoning_content,
+                ),
             )
         except ModelBackendError:
             raise
@@ -111,6 +142,58 @@ class LlamaCppAdapter(ModelAdapter):
 
     def close(self) -> None:
         return None
+
+
+def _generation_response(message: Mapping[str, Any]) -> GenerationResponse:
+    content_value = message.get("content")
+    content = content_value if isinstance(content_value, str) else ""
+    reasoning_value = message.get("reasoning_content", message.get("reasoning"))
+    reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
+    return GenerationResponse(
+        content=content.strip(),
+        tool_calls=_parse_tool_calls(message.get("tool_calls")),
+        reasoning_content=reasoning.strip(),
+    )
+
+
+def _has_semantic_action(turn: GenerationResponse) -> bool:
+    return bool(turn.content or turn.tool_calls)
+
+
+def _reasoning_continuation_request(
+    request: GenerationRequest,
+    reasoning: str,
+) -> GenerationRequest:
+    messages = [dict(message) for message in request.messages]
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": reasoning,
+            },
+            {"role": "user", "content": _REASONING_CONTINUATION},
+        ]
+    )
+    return GenerationRequest(
+        messages=tuple(messages),
+        media_paths=(),
+        response_format=request.response_format,
+        response_schema=request.response_schema,
+        tools=request.tools,
+        tool_choice=request.tool_choice,
+        parallel_tool_calls=request.parallel_tool_calls,
+    )
+
+
+def _merge_reasoning(first: str, second: str) -> str:
+    first = first.strip()
+    second = second.strip()
+    if not first:
+        return second
+    if not second or second == first:
+        return first
+    return f"{first}\n{second}"
 
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
