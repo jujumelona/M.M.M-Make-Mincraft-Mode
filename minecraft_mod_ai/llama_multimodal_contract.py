@@ -14,6 +14,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import threading
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Mapping
@@ -292,42 +293,44 @@ def _install_ensure(autotune: Any) -> None:
     current = autotune.ensure_tuned_server
     if getattr(current, _ENSURE_MARKER, False):
         return
+    state_lock = getattr(autotune, "_AUTOTUNE_LOCK", threading.RLock())
 
     @wraps(current)
     def ensure(config: Any, request: Any) -> str:
-        media_paths = tuple(getattr(request, "media_paths", ()) or ())
-        process, managed_url = _managed_server_ready(autotune)
-        if process is None:
-            _clear_media_identity(autotune)
+        with state_lock:
+            media_paths = tuple(getattr(request, "media_paths", ()) or ())
+            process, managed_url = _managed_server_ready(autotune)
+            if process is None:
+                _clear_media_identity(autotune)
 
-        if not media_paths:
+            if not media_paths:
+                if _is_managed_media_server(autotune, process, managed_url):
+                    _retire_managed_server(autotune, managed_url)
+                return current(config, request)
+
+            if not _mmproj_filename(config):
+                raise RuntimeError(
+                    "This llama.cpp model received media_paths but declares no mmproj_filename."
+                )
+
             if _is_managed_media_server(autotune, process, managed_url):
+                return current(config, request)
+
+            if process is not None:
                 _retire_managed_server(autotune, managed_url)
-            return current(config, request)
 
-        if not _mmproj_filename(config):
-            raise RuntimeError(
-                "This llama.cpp model received media_paths but declares no mmproj_filename."
-            )
+            previous = os.environ.get(_ACTIVE_MEDIA_ENV)
+            os.environ[_ACTIVE_MEDIA_ENV] = "1"
+            try:
+                url = current(config, request)
+            finally:
+                _restore_env(_ACTIVE_MEDIA_ENV, previous)
 
-        if _is_managed_media_server(autotune, process, managed_url):
-            return current(config, request)
-
-        if process is not None:
-            _retire_managed_server(autotune, managed_url)
-
-        previous = os.environ.get(_ACTIVE_MEDIA_ENV)
-        os.environ[_ACTIVE_MEDIA_ENV] = "1"
-        try:
-            url = current(config, request)
-        finally:
-            _restore_env(_ACTIVE_MEDIA_ENV, previous)
-
-        process, managed_url = _managed_server_ready(autotune)
-        if process is not None and url == managed_url:
-            setattr(autotune, _MANAGED_MEDIA_PROCESS_ATTR, process)
-            setattr(autotune, _MANAGED_MEDIA_URL_ATTR, managed_url)
-        return url
+            process, managed_url = _managed_server_ready(autotune)
+            if process is not None and url == managed_url:
+                setattr(autotune, _MANAGED_MEDIA_PROCESS_ATTR, process)
+                setattr(autotune, _MANAGED_MEDIA_URL_ATTR, managed_url)
+            return url
 
     setattr(ensure, _ENSURE_MARKER, True)
     autotune.ensure_tuned_server = ensure
