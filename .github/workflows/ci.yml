@@ -57,7 +57,12 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: python -m pytest -q tests/test_runtime_bootstrap_clean.py
+      - name: Fail-closed runtime composition contracts
+        run: >-
+          python -m pytest -q
+          tests/test_runtime_bootstrap_clean.py
+          tests/test_runtime_contract_composer.py
+          tests/test_runtime_contract_composer_ownership.py
 
   mcp-evidence:
     runs-on: ubuntu-latest
@@ -134,6 +139,8 @@ jobs:
 
           dedicated = {
               "test_runtime_bootstrap_clean.py",
+              "test_runtime_contract_composer.py",
+              "test_runtime_contract_composer_ownership.py",
               "test_minecraft_mcp_evidence_contract.py",
               "test_external_mcp_role_scope.py",
               "test_research_coordinator.py",
