@@ -11,6 +11,7 @@ historical ``reasoning_content`` restoration.
 
 import hashlib
 import json
+import threading
 from collections import OrderedDict
 from dataclasses import replace
 from functools import wraps
@@ -20,6 +21,7 @@ from .model_adapters.base import GenerationRequest, GenerationResponse
 from .qwen_model_profiles import QWEN36_PRECISE_CODING, qwen_family
 
 _MAX_REASONING_TRACES = 64
+_REASONING_TRACE_LOCK = threading.RLock()
 _INSTALLED = False
 
 
@@ -170,33 +172,34 @@ def _inject_reasoning_history(
 ) -> GenerationRequest:
     """Restore only traces whose exact assistant exchange is present in history."""
 
-    store = _trace_store(adapter)
     messages = _request_messages(request)
     signed_messages = tuple(
         (message, _message_signature(message)) for message in messages
     )
     signatures = [signature for _, signature in signed_messages if signature]
     tools = getattr(request, "tools", ()) or ()
-    if tools and getattr(request, "tool_choice", None) in (None, "auto") and not any(
-        signature in store for signature in signatures
-    ):
-        # A fresh request cannot inherit an unrelated trace. Keep the bounded store
-        # intact because the same adapter may serve concurrent independent loops.
-        return request
-
-    changed = False
-    rewritten: list[Mapping[str, Any]] = []
-    for raw, signature in signed_messages:
-        message = dict(raw)
-        reasoning = store.get(signature) if signature else None
-        if (
-            reasoning
-            and message.get("role") == "assistant"
-            and not str(message.get("reasoning_content") or "").strip()
+    with _REASONING_TRACE_LOCK:
+        store = _trace_store(adapter)
+        if tools and getattr(request, "tool_choice", None) in (None, "auto") and not any(
+            signature in store for signature in signatures
         ):
-            message["reasoning_content"] = reasoning
-            changed = True
-        rewritten.append(message)
+            # A fresh request cannot inherit an unrelated trace. Keep the bounded store
+            # intact because the same adapter may serve concurrent independent loops.
+            return request
+
+        changed = False
+        rewritten: list[Mapping[str, Any]] = []
+        for raw, signature in signed_messages:
+            message = dict(raw)
+            reasoning = store.get(signature) if signature else None
+            if (
+                reasoning
+                and message.get("role") == "assistant"
+                and not str(message.get("reasoning_content") or "").strip()
+            ):
+                message["reasoning_content"] = reasoning
+                changed = True
+            rewritten.append(message)
     if not changed:
         return request
     return replace(request, messages=tuple(rewritten))
@@ -207,11 +210,12 @@ def _remember_reasoning(adapter: Any, response: GenerationResponse) -> None:
     signature = _response_signature(response)
     if not reasoning or not signature:
         return
-    store = _trace_store(adapter)
-    store[signature] = reasoning
-    store.move_to_end(signature)
-    while len(store) > _MAX_REASONING_TRACES:
-        store.popitem(last=False)
+    with _REASONING_TRACE_LOCK:
+        store = _trace_store(adapter)
+        store[signature] = reasoning
+        store.move_to_end(signature)
+        while len(store) > _MAX_REASONING_TRACES:
+            store.popitem(last=False)
 
 
 def install() -> None:
