@@ -295,7 +295,11 @@ class AgentToolRuntime:
                 f"Tool {tool_name!r} is not exposed in stage {selected!r}."
             )
         payload = dict(arguments or {})
-        if selected == "generation" and tool_name == "apply_source_patch":
+        if (
+            external_server_ids is not None
+            and selected == "generation"
+            and tool_name == "apply_source_patch"
+        ):
             payload = _materialize_model_source_patch(self.workspace_root, payload)
         try:
             if tool_name in EXTERNAL_TOOL_NAMES:
