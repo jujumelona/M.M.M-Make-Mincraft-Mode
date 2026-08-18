@@ -17,22 +17,14 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .model_adapters.base import GenerationRequest, GenerationResponse
+from .qwen_model_profiles import QWEN36_PRECISE_CODING, qwen_family
 
 _MAX_REASONING_TRACES = 64
 _INSTALLED = False
 
 
-def _normalized_model_id(model_id: str) -> str:
-    return "".join(ch for ch in str(model_id).casefold() if ch.isalnum())
-
-
 def _model_family(model_id: str) -> str:
-    normalized = _normalized_model_id(model_id)
-    if "qwen36" in normalized:
-        return "qwen3.6"
-    if "qwen35" in normalized:
-        return "qwen3.5"
-    return "other"
+    return qwen_family(model_id) or "other"
 
 
 def _forced_tool_choice(tool_choice: Any) -> bool:
@@ -81,13 +73,8 @@ def _apply_family_payload_policy(
         "enable_thinking": True,
         "preserve_thinking": True,
     }
-    payload["temperature"] = 0.6
-    payload["top_p"] = 0.95
-    payload["top_k"] = 20
-    payload["min_p"] = 0.0
-    payload["presence_penalty"] = 0.0
     payload.pop("repetition_penalty", None)
-    payload["repeat_penalty"] = 1.0
+    payload.update(QWEN36_PRECISE_CODING)
     return payload
 
 
