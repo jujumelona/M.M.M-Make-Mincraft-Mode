@@ -12,7 +12,9 @@ Qwen MTP is also kept single-slot. Current llama.cpp/Unsloth guidance does not s
 ``-np > 1`` with MTP, so the parallel refinement stage is skipped only when native
 ``draft-mtp`` won, and the final text launch is defensively pinned to one slot. Media
 launches may replace MTP with baseline outside this contract and therefore retain the
-normal baseline parallel policy.
+normal baseline parallel policy. Default draft-width searches are bounded to each
+production model's current upstream recommendation while explicit operator overrides
+remain authoritative.
 """
 
 import hashlib
@@ -24,7 +26,7 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any, Iterator, Mapping
 
-from .qwen_model_profiles import qwen_family
+from .qwen_model_profiles import qwen_family, qwen_registry_model
 
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
@@ -34,6 +36,12 @@ _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
 _PARALLEL_STAGE_MARKER = "_mmm_qwen_mtp_single_slot_stage_v1"
 _LAUNCH_MARKER = "_mmm_qwen_mtp_single_slot_launch_v1"
 _FINGERPRINT_MARKER = "_mmm_qwen_mtp_single_slot_fingerprint_v1"
+_WIDTH_MARKER = "_mmm_qwen_recommended_mtp_widths_v1"
+_DEFAULT_MTP_WIDTHS = {
+    "qwen3.5-9b": "1,2,3,4,5,6",
+    "qwen3.6-27b": "1,2",
+    "qwen3.6-35b-a3b": "1,2",
+}
 _ACTIVE_BENCHMARK_CONFIG: ContextVar[Any | None] = ContextVar(
     "mmm_qwen_transport_benchmark_config",
     default=None,
@@ -54,6 +62,16 @@ def _config_identity(config: Any) -> tuple[str, str]:
 def _family(config: Any) -> str | None:
     model_id, filename = _config_identity(config)
     return qwen_family(model_id, filename)
+
+
+def _registry_model(config: Any) -> str | None:
+    model_id, filename = _config_identity(config)
+    return qwen_registry_model(model_id, filename)
+
+
+def _recommended_mtp_widths(config: Any) -> str | None:
+    model = _registry_model(config)
+    return _DEFAULT_MTP_WIDTHS.get(model) if model is not None else None
 
 
 def _mtp_variant(variant: Any) -> bool:
@@ -84,6 +102,31 @@ def _single_slot_launch_scope() -> Iterator[None]:
         yield
     finally:
         _restore_env("MMM_LLAMA_PARALLEL", previous)
+
+
+def _install_mtp_width_policy(autotune: Any) -> None:
+    """Bound default cold-start width search without overriding explicit tuning."""
+
+    current = autotune.ensure_tuned_server
+    if getattr(current, _WIDTH_MARKER, False):
+        return
+
+    @wraps(current)
+    def ensure(config: Any, request: Any) -> str:
+        widths = _recommended_mtp_widths(config)
+        explicit = os.environ.get("MMM_LLAMA_MTP_WIDTHS", "")
+        if widths is None or explicit.strip():
+            return current(config, request)
+
+        previous = os.environ.get("MMM_LLAMA_MTP_WIDTHS")
+        os.environ["MMM_LLAMA_MTP_WIDTHS"] = widths
+        try:
+            return current(config, request)
+        finally:
+            _restore_env("MMM_LLAMA_MTP_WIDTHS", previous)
+
+    setattr(ensure, _WIDTH_MARKER, True)
+    autotune.ensure_tuned_server = ensure
 
 
 def _canonical_arguments(value: Any) -> Any:
@@ -368,6 +411,7 @@ def _install_tool_equivalence_policy(autotune: Any) -> None:
 def install() -> None:
     from . import llama_server_autotune
 
+    _install_mtp_width_policy(llama_server_autotune)
     _install_mtp_single_slot_policy(llama_server_autotune)
     _install_tool_equivalence_policy(llama_server_autotune)
 
@@ -375,8 +419,10 @@ def install() -> None:
 __all__ = [
     "_initial_calibration_variant",
     "_install_mtp_single_slot_policy",
+    "_install_mtp_width_policy",
     "_install_tool_equivalence_policy",
     "_mtp_variant",
+    "_recommended_mtp_widths",
     "_single_slot_variant",
     "_tool_call_signature",
     "install",
