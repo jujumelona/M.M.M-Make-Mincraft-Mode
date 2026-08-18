@@ -14,17 +14,41 @@ import os
 import re
 import stat
 import threading
+from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 _INSTALLED = False
-_LOCK = threading.RLock()
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[str, tuple[threading.RLock, int]] = {}
 _SCHEMA_VERSION = "mmm/external-procedural-skillbank-v1"
 _MAX_STEPS = 8
 _MAX_ITEMS = 6
 _MAX_SKILLS = 256
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
+
+
+@contextmanager
+def _skillbank_lock(path: Path):
+    key = str(path.expanduser().resolve())
+    with _PATH_LOCKS_GUARD:
+        lock, users = _PATH_LOCKS.get(key, (threading.RLock(), 0))
+        _PATH_LOCKS[key] = (lock, users + 1)
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _PATH_LOCKS_GUARD:
+            current = _PATH_LOCKS.get(key)
+            if current is None or current[0] is not lock:
+                return
+            remaining = current[1] - 1
+            if remaining <= 0:
+                _PATH_LOCKS.pop(key, None)
+            else:
+                _PATH_LOCKS[key] = (lock, remaining)
 
 
 def _tokens(value: str) -> set[str]:
@@ -118,7 +142,6 @@ def _shared_step_prefix(skills: Sequence[Mapping[str, Any]]) -> list[str]:
             _jaccard(candidate_terms, _tokens(items[index])) >= 0.55
             for items in sequences[1:]
         ):
-            # Keep an actually observed phrasing rather than synthesizing a new step.
             result.append(candidate)
             continue
         break
@@ -147,8 +170,6 @@ def _merged_member_strings(
 
 
 def _consolidated_skill(skills: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    """Create a conservative generalized skill without inventing procedural steps."""
-
     if len(skills) < 2:
         return None
     domain_ids = {str(skill.get("domain_id", "")).strip() or "unknown" for skill in skills}
@@ -179,8 +200,6 @@ def _consolidated_skill(skills: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
         "domain_id": domain_id,
         "name": f"{domain_id} consolidated procedure",
         "activate_when": _merged_member_strings(skills, "activate_when", limit=8, chars=320),
-        # Unioning safety constraints is conservative: a prohibition from any member
-        # remains visible in the generalized skill rather than being weakened away.
         "contraindications": _merged_member_strings(skills, "contraindications", limit=8, chars=320),
         "steps": shared_steps,
         "constraints": _merged_member_strings(skills, "constraints", limit=10, chars=320),
@@ -202,8 +221,6 @@ def _consolidated_skill(skills: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
 
 
 def _consolidate_skills(skills: Sequence[Mapping[str, Any]], *, limit: int = 12) -> list[dict[str, Any]]:
-    """Greedily consolidate evidence-related skills without cross-domain leakage."""
-
     ordered = sorted(
         [dict(skill) for skill in skills],
         key=lambda item: (str(item.get("domain_id", "")), str(item.get("skill_id", ""))),
@@ -324,14 +341,24 @@ def _load_persistent_skills(path: Path, *, limit: int = _MAX_SKILLS) -> list[dic
     return rows[-max(1, int(limit)) :]
 
 
-def _persist_skills(path: Path, skills: Sequence[Mapping[str, Any]]) -> None:
+def _persist_skills(
+    path: Path,
+    skills: Sequence[Mapping[str, Any]],
+    *,
+    prior: Sequence[Mapping[str, Any]] | None = None,
+) -> None:
     if not skills:
         return
-    with _LOCK:
+    with _skillbank_lock(path):
         if path.exists() and (path.is_symlink() or not path.is_file()):
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        by_id = {str(row.get("skill_id", "")): dict(row) for row in _load_persistent_skills(path) if str(row.get("skill_id", ""))}
+        existing = prior if prior is not None else _load_persistent_skills(path)
+        by_id = {
+            str(row.get("skill_id", "")): dict(row)
+            for row in existing
+            if str(row.get("skill_id", ""))
+        }
         for skill in skills:
             identity = str(skill.get("skill_id", ""))
             if identity:
@@ -462,8 +489,9 @@ def _install_research_skill_compiler() -> None:
             path = _skillbank_path(router)
             prior: list[dict[str, Any]] = []
             if path is not None:
-                prior = _load_persistent_skills(path)
-                _persist_skills(path, current_bank["skills"])
+                with _skillbank_lock(path):
+                    prior = _load_persistent_skills(path)
+                    _persist_skills(path, current_bank["skills"], prior=prior)
             retrieved = _select_skills(prompt, [*prior, *current_bank["skills"]], limit=6)
             value["procedural_skillbank"] = {
                 **current_bank,
@@ -475,7 +503,7 @@ def _install_research_skill_compiler() -> None:
             value["method"] = method
             value["research_sha256"] = research._json_sha256(value)
             return value
-        collect._mmm_external_procedural_skill = True  # type: ignore[attr-defined]
+        research_messages._mmm_external_procedural_skill = True  # type: ignore[attr-defined]
         collect.__wrapped__ = current_collect  # type: ignore[attr-defined]
         research.collect_pre_design_research = collect
 
