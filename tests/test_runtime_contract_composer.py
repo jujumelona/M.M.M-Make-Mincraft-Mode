@@ -210,6 +210,41 @@ def test_new_composition_version_is_an_explicit_recomposition_boundary() -> None
     assert state["completed"] == ("only",)
 
 
+def test_version_bump_cannot_bypass_poisoned_process_state() -> None:
+    state_owner = SimpleNamespace()
+    calls: list[str] = []
+
+    def failing() -> None:
+        calls.append("failing")
+        raise RuntimeError("partial mutation")
+
+    stages = (ContractStage("failing", failing),)
+    with pytest.raises(ContractCompositionError, match="failed at stage 'failing'"):
+        compose_contract_stages(
+            owner_name="unit-version-poison",
+            version=1,
+            state_owner=state_owner,
+            stages=stages,
+        )
+
+    with pytest.raises(
+        ContractCompositionError,
+        match="process restart is required before requesting version 2",
+    ):
+        compose_contract_stages(
+            owner_name="unit-version-poison",
+            version=2,
+            state_owner=state_owner,
+            stages=stages,
+        )
+
+    assert calls == ["failing"]
+    state = composition_state(state_owner, "unit-version-poison")
+    assert state is not None
+    assert state["version"] == 1
+    assert state["failed"]["stage"] == "failing"
+
+
 def test_duplicate_stage_names_are_rejected_before_install() -> None:
     state_owner = SimpleNamespace()
     calls = 0
