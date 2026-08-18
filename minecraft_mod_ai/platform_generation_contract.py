@@ -11,6 +11,12 @@ from .platform_catalog import adapter_for_lock_values
 def install(generator_module: Any) -> None:
     """Bind generated artifacts to the exact provider receipt without target-era rewrites."""
 
+    from .deterministic_minecraft_content_contract import (
+        install as install_deterministic_minecraft_content,
+    )
+
+    install_deterministic_minecraft_content()
+
     generator = generator_module.FabricProjectGenerator
     if getattr(generator.generate, "_mmm_dynamic_platform_generation", False):
         return
