@@ -10,6 +10,8 @@ with an upstream MTP+mmproj incompatibility launch media requests non-speculativ
 """
 
 import base64
+import hashlib
+import json
 import mimetypes
 import os
 from functools import lru_cache, wraps
@@ -20,6 +22,7 @@ from typing import Any, Mapping
 _BASE_ARGS_MARKER = "_mmm_llama_multimodal_base_args_v2"
 _BENCHMARK_MARKER = "_mmm_llama_multimodal_text_benchmark_v1"
 _ENSURE_MARKER = "_mmm_llama_multimodal_ensure_v2"
+_FINGERPRINT_MARKER = "_mmm_llama_multimodal_fingerprint_v1"
 _LAUNCH_MARKER = "_mmm_llama_multimodal_safe_launch_v1"
 _PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
 _ACTIVE_MEDIA_ENV = "MMM_LLAMA_MULTIMODAL_ACTIVE"
@@ -178,6 +181,30 @@ def _restore_env(name: str, previous: str | None) -> None:
         os.environ[name] = previous
 
 
+def _install_fingerprint_policy(autotune: Any) -> None:
+    """Invalidate pre-policy caches while keeping one decision shared by text/media."""
+
+    current = autotune._fingerprint
+    if getattr(current, _FINGERPRINT_MARKER, False):
+        return
+
+    @wraps(current)
+    def fingerprint(config: Any, binary: str, model_path: str) -> str:
+        base = str(current(config, binary, model_path))
+        if not _requires_media_baseline(config):
+            return base
+        payload = {
+            "base": base,
+            "multimodal_mtp_policy": "text-benchmark-baseline-media-v1",
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    setattr(fingerprint, _FINGERPRINT_MARKER, True)
+    autotune._fingerprint = fingerprint
+
+
 def _install_benchmark_policy(autotune: Any) -> None:
     """Keep media cold-start autotuning text-only while final launch stays multimodal."""
 
@@ -274,9 +301,6 @@ def _install_ensure(autotune: Any) -> None:
             _clear_media_identity(autotune)
 
         if not media_paths:
-            # A media launch may deliberately be baseline-only. Never let that
-            # process become the permanent text server: retire the exact media
-            # process so the cached text MTP winner is restored on the next launch.
             if _is_managed_media_server(autotune, process, managed_url):
                 _retire_managed_server(autotune, managed_url)
             return current(config, request)
@@ -289,9 +313,6 @@ def _install_ensure(autotune: Any) -> None:
         if _is_managed_media_server(autotune, process, managed_url):
             return current(config, request)
 
-        # An MMM-owned text-only process cannot consume image_url parts. Retire it
-        # before launch. External LLAMA_SERVER_URL endpoints remain user-owned and are
-        # not killed; they are expected to provide their own multimodal capability.
         if process is not None:
             _retire_managed_server(autotune, managed_url)
 
@@ -337,6 +358,7 @@ def _install_payload(hardware_policy: Any) -> None:
 
 def install(autotune: Any, hardware_policy: Any) -> None:
     _install_base_args(autotune)
+    _install_fingerprint_policy(autotune)
     _install_benchmark_policy(autotune)
     _install_launch_policy(autotune)
     _install_ensure(autotune)
@@ -345,6 +367,7 @@ def install(autotune: Any, hardware_policy: Any) -> None:
 
 __all__ = [
     "_install_benchmark_policy",
+    "_install_fingerprint_policy",
     "_messages_with_media",
     "_requires_media_baseline",
     "_resolve_mmproj_path",
