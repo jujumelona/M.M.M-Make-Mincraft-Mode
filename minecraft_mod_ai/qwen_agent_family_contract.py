@@ -18,7 +18,7 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .model_adapters.base import GenerationRequest, GenerationResponse
-from .qwen_model_profiles import QWEN36_PRECISE_CODING, qwen_family
+from .qwen_model_profiles import qwen_family, qwen_sampling_profile
 
 _MAX_REASONING_TRACES = 64
 _REASONING_TRACE_LOCK = threading.RLock()
@@ -83,8 +83,18 @@ def _apply_family_payload_policy(
         "enable_thinking": True,
         "preserve_thinking": True,
     }
-    payload.pop("repetition_penalty", None)
-    payload.update(QWEN36_PRECISE_CODING)
+
+    # Sampling recommendations belong to exact production model identities. Keep
+    # Qwen3.6-family transport behavior forward-compatible, but never guess precise
+    # sampling for a future/unknown Qwen3.6 variant.
+    sampling = qwen_sampling_profile(
+        model_id,
+        gguf_filename,
+        mode="precise_coding",
+    )
+    if sampling is not None:
+        payload.pop("repetition_penalty", None)
+        payload.update(sampling)
     return payload
 
 
@@ -191,8 +201,6 @@ def _inject_reasoning_history(
         if tools and getattr(request, "tool_choice", None) in (None, "auto") and not any(
             signature in store for signature in signatures
         ):
-            # A fresh request cannot inherit an unrelated trace. Keep the bounded store
-            # intact because the same adapter may serve concurrent independent loops.
             return request
 
         changed = False
