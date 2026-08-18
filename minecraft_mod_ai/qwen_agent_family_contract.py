@@ -25,8 +25,15 @@ _REASONING_TRACE_LOCK = threading.RLock()
 _INSTALLED = False
 
 
-def _model_family(model_id: str) -> str:
-    return qwen_family(model_id) or "other"
+def _model_family(model_id: object, gguf_filename: object = "") -> str:
+    return qwen_family(model_id, gguf_filename) or "other"
+
+
+def _config_family(config: Any) -> str:
+    model_id = getattr(config, "model_id", "")
+    extra = getattr(config, "extra", {})
+    filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
+    return _model_family(model_id, filename)
 
 
 def _forced_tool_choice(tool_choice: Any) -> bool:
@@ -62,12 +69,13 @@ def _qwen36_agent_request(request: Any) -> bool:
 def _apply_family_payload_policy(
     payload: dict[str, Any],
     *,
-    model_id: str,
+    model_id: object,
+    gguf_filename: object = "",
     request: Any,
 ) -> dict[str, Any]:
     """Mutate only autonomous Qwen3.6 agent turns; all other payloads pass through."""
 
-    if _model_family(model_id) != "qwen3.6" or not _qwen36_agent_request(request):
+    if _model_family(model_id, gguf_filename) != "qwen3.6" or not _qwen36_agent_request(request):
         return payload
 
     payload.pop("reasoning_effort", None)
@@ -236,10 +244,12 @@ def install() -> None:
         def server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             payload = current_payload(adapter, request)
             config = getattr(adapter, "config", None)
-            model_id = str(getattr(config, "model_id", ""))
+            extra = getattr(config, "extra", {})
+            filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
             return _apply_family_payload_policy(
                 payload,
-                model_id=model_id,
+                model_id=getattr(config, "model_id", ""),
+                gguf_filename=filename,
                 request=request,
             )
 
@@ -255,8 +265,7 @@ def install() -> None:
             request: GenerationRequest,
         ) -> GenerationResponse:
             config = getattr(self, "config", None)
-            family = _model_family(str(getattr(config, "model_id", "")))
-            qwen36_agent = family == "qwen3.6" and _qwen36_agent_request(request)
+            qwen36_agent = _config_family(config) == "qwen3.6" and _qwen36_agent_request(request)
             prepared = _inject_reasoning_history(self, request) if qwen36_agent else request
             response = current_generate_turn(self, prepared)
             if qwen36_agent:
