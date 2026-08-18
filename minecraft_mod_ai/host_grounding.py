@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from .agent_capability_context import reviewed_mcp_servers_for_model_role
@@ -54,8 +55,21 @@ def custom_module_write_scope() -> dict[str, Any]:
     }
 
 
+def _normalized_scope_path(path: str) -> str:
+    raw = str(path).replace("\\", "/").strip()
+    if not raw:
+        return ""
+    candidate = PurePosixPath(raw)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return ""
+    normalized = candidate.as_posix()
+    return "" if normalized in {"", "."} else normalized
+
+
 def custom_module_path_protected(path: str) -> bool:
-    normalized = str(path).replace("\\", "/").casefold()
+    normalized = _normalized_scope_path(path).casefold()
+    if not normalized:
+        return False
     return any(
         normalized == root or normalized.startswith(root + "/")
         for root in _PROTECTED_WRITE_PREFIXES
@@ -63,8 +77,8 @@ def custom_module_path_protected(path: str) -> bool:
 
 
 def custom_module_path_allowed(path: str) -> bool:
-    normalized = str(path).replace("\\", "/")
-    if custom_module_path_protected(normalized):
+    normalized = _normalized_scope_path(path)
+    if not normalized or custom_module_path_protected(normalized):
         return False
     return normalized in _ALLOWED_WRITE_FILES or any(
         normalized.startswith(prefix) for prefix in _ALLOWED_WRITE_PREFIXES
