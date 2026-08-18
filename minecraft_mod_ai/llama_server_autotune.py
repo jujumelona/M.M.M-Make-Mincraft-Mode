@@ -323,17 +323,15 @@ def _free_port(preferred: int) -> int:
 
 
 def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
-    configured_context = max(1, int(config.max_context))
     raw_context = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
+    context = 0
     if raw_context:
         try:
-            context = int(raw_context)
+            value = int(raw_context)
         except ValueError:
-            context = configured_context
-        if context <= 0:
-            context = configured_context
-    else:
-        context = configured_context
+            value = 0
+        if value >= 0:
+            context = value
     batch = _env_int("MMM_LLAMA_BATCH", 2048)
     ubatch = min(batch, _env_int("MMM_LLAMA_UBATCH", 512))
     kv = os.environ.get("MMM_KV_CACHE_QUANT", "q4_0").strip().lower() or "q4_0"
