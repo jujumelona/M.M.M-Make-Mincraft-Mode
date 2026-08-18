@@ -92,7 +92,7 @@ def test_fast_tuning_defaults_remove_duplicate_reload_stages(monkeypatch) -> Non
     monkeypatch.delenv("MMM_QWEN35_MTP_TUNING", raising=False)
     defaults = contract._fast_tuning_defaults()
 
-    assert defaults["MMM_LLAMA_MTP_WIDTHS"] == "2,4,8"
+    assert defaults["MMM_LLAMA_MTP_WIDTHS"] == "2,4,6"
     assert defaults["MMM_LLAMA_MTP_CONFIDENCE_WIDTHS"] == ""
     assert defaults["MMM_LLAMA_MTP_P_MIN_CANDIDATES"] == "0"
     assert defaults["MMM_LLAMA_UBATCH_CANDIDATES"] == "512"
