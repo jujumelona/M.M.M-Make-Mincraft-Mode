@@ -503,7 +503,7 @@ def _install_research_skill_compiler() -> None:
             value["method"] = method
             value["research_sha256"] = research._json_sha256(value)
             return value
-        research_messages._mmm_external_procedural_skill = True  # type: ignore[attr-defined]
+        collect._mmm_external_procedural_skill = True  # type: ignore[attr-defined]
         collect.__wrapped__ = current_collect  # type: ignore[attr-defined]
         research.collect_pre_design_research = collect
 
