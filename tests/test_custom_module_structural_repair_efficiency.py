@@ -75,7 +75,8 @@ def test_structural_response_repair_never_enables_rag_or_tools(
     repaired = router.messages[1]
     assert len(initial) == 2
     assert repaired[:2] == initial
-    assert repaired[2]["role"] == "assistant"
-    assert repaired[3]["role"] == "user"
-    assert "Repair only the JSON/patch/precondition shape" in repaired[3]["content"]
-    assert "Do not retrieve new RAG/MCP evidence" in repaired[3]["content"]
+    assert len(repaired) == 3
+    assert repaired[2]["role"] == "user"
+    assert "Repair only the JSON/patch/cursor transition" in repaired[2]["content"]
+    assert "invalid assistant payload is intentionally omitted" in repaired[2]["content"]
+    assert "Do not retrieve new RAG/MCP evidence" in repaired[2]["content"]
