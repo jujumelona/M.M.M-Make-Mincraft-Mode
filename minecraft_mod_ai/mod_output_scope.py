@@ -66,6 +66,14 @@ _BUILDER_NPZ_DIRS = frozenset(
         "block-delta",
     }
 )
+_BUILDER_NPZ_MARKERS = (
+    "block_delta",
+    "block-delta",
+    "blockdelta",
+    "world_delta",
+    "world-delta",
+)
+_WORLD_CONTAINER_DIRS = frozenset({"world", "worlds"})
 
 
 def _normalized_parts(value: Any) -> tuple[str, ...]:
@@ -74,6 +82,36 @@ def _normalized_parts(value: Any) -> tuple[str, ...]:
         return ()
     path = PurePosixPath(raw)
     return tuple(part.casefold() for part in path.parts if part not in {"", "."})
+
+
+def _is_builder_npz(parts: tuple[str, ...], name: str, suffix: str) -> bool:
+    if suffix != ".npz":
+        return False
+    return (
+        name in _BUILDER_NPZ_NAMES
+        or any(marker in name for marker in _BUILDER_NPZ_MARKERS)
+        or any(part in _BUILDER_NPZ_DIRS for part in parts[:-1])
+    )
+
+
+def _world_save_violation(parts: tuple[str, ...], name: str) -> str | None:
+    # A normal mod source tree can legitimately contain packages named ``world`` or
+    # resource paths named ``advancements``. Only recognize save-layout directories
+    # at a project/save root, or beneath an explicit saves/world container.
+    if len(parts) == 1 and name in _STANDALONE_ROOT_FILES:
+        return "Minecraft world-save root file"
+    if parts[0] in _STANDALONE_ROOT_DIRS:
+        return "Minecraft world-save root directory"
+    if "saves" in parts:
+        return "Minecraft saves directory"
+
+    for index, part in enumerate(parts[:-1]):
+        if part not in _WORLD_CONTAINER_DIRS:
+            continue
+        child = parts[index + 1]
+        if child in _STANDALONE_ROOT_DIRS or child in _STANDALONE_ROOT_FILES:
+            return "Minecraft world-save layout"
+    return None
 
 
 def mod_output_scope_violation(path: Any) -> str | None:
@@ -96,34 +134,9 @@ def mod_output_scope_violation(path: Any) -> str | None:
         return f"standalone world/builder artifact suffix {suffix}"
     if name in _BUILDER_OUTPUT_NAMES or name.endswith(".buildspec"):
         return "Builder/BuildSpec output"
-    if suffix == ".npz" and (
-        name in _BUILDER_NPZ_NAMES
-        or any(
-            marker in name
-            for marker in ("block_delta", "block-delta", "blockdelta", "world_delta", "world-delta")
-        )
-        or any(part in _BUILDER_NPZ_DIRS for part in parts[:-1])
-    ):
+    if _is_builder_npz(parts, name, suffix):
         return "Builder NPZ block-delta output"
-
-    # A normal mod source tree can legitimately contain packages named ``world`` or
-    # resource paths named ``advancements``. Only recognize save-layout directories
-    # at a project/save root, or beneath an explicit saves/world container.
-    if len(parts) == 1 and name in _STANDALONE_ROOT_FILES:
-        return "Minecraft world-save root file"
-    if parts[0] in _STANDALONE_ROOT_DIRS:
-        return "Minecraft world-save root directory"
-    if "saves" in parts:
-        return "Minecraft saves directory"
-
-    for index, part in enumerate(parts[:-1]):
-        if part not in {"world", "worlds"}:
-            continue
-        child = parts[index + 1]
-        if child in _STANDALONE_ROOT_DIRS or child in _STANDALONE_ROOT_FILES:
-            return "Minecraft world-save layout"
-
-    return None
+    return _world_save_violation(parts, name)
 
 
 def validate_mod_output_path(path: Any) -> None:
