@@ -1,5 +1,6 @@
 from __future__ import annotations
 'Adaptive test-time compute for the frozen small central agent.\n\nThe central council/reviewer stack is valuable on hard requests, but paying the full\nensemble cost for every request wastes the limited local-model budget. This late\nhardener keeps existing planning/research authority intact and only changes when the\noptional advisory amplification is invoked:\n\n* clearly simple requests use the existing research/planner/verifier stack directly;\n* ordinary non-trivial requests keep the council, but a second adversarial reviewer\n  is requested only when the first review is uncertain or finds a material issue;\n* complex/high-risk requests retain the complete existing council and parallel reviews.\n\nNo model weights, schemas, validation rules, or execution authority are changed.\n'
+import hashlib
 import os
 from contextvars import ContextVar
 from functools import wraps
@@ -42,6 +43,10 @@ def _router_root(router: Any) -> Path | None:
         return Path(value).expanduser().resolve()
     except (OSError, RuntimeError, TypeError):
         return None
+
+
+def _prompt_sha256(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode('utf-8')).hexdigest()
 
 
 def _verified_failure(row: Mapping[str, Any]) -> bool:
@@ -274,6 +279,18 @@ def _attach_receipt(agentic_module: Any, result: Any, policy: Mapping[str, Any])
     return value
 
 
+def _reuse_policy(research: Mapping[str, Any], prompt: str) -> dict[str, Any] | None:
+    method = research.get('method')
+    if not isinstance(method, Mapping):
+        return None
+    policy = method.get('adaptive_test_time_compute')
+    if not isinstance(policy, Mapping):
+        return None
+    if str(policy.get('prompt_sha256', '')) != _prompt_sha256(prompt):
+        return None
+    return dict(policy)
+
+
 def harden(agentic_module: Any, central_module: Any) -> None:
     """Install quality-first adaptive compute outside the existing central wrappers."""
     current_enabled = central_module._amplification_enabled
@@ -310,6 +327,7 @@ def harden(agentic_module: Any, central_module: Any) -> None:
         @wraps(current_collect)
         def collect(router: Any, prompt: str, *, trace_metadata=None):
             policy = _compute_policy(agentic_module, prompt, root=_router_root(router))
+            policy['prompt_sha256'] = _prompt_sha256(prompt)
             token = _ACTIVE_POLICY.set(policy)
             try:
                 result = current_collect(router, prompt, trace_metadata=trace_metadata)
@@ -324,7 +342,10 @@ def harden(agentic_module: Any, central_module: Any) -> None:
 
         @wraps(current_generate)
         def generate(game_design_module: Any, router: Any, prompt: str, *, media_paths=(), research: Mapping[str, Any], trace_metadata=None):
-            policy = _compute_policy(agentic_module, prompt, root=_router_root(router))
+            policy = _reuse_policy(research, prompt)
+            if policy is None:
+                policy = _compute_policy(agentic_module, prompt, root=_router_root(router))
+                policy['prompt_sha256'] = _prompt_sha256(prompt)
             token = _ACTIVE_POLICY.set(policy)
             try:
                 return current_generate(game_design_module, router, prompt, media_paths=media_paths, research=research, trace_metadata=trace_metadata)
