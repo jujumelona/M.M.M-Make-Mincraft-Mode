@@ -10,16 +10,17 @@ _GROUNDING_MARKER = "__mmm_repository_grounding_v1__"
 
 
 def install(model_router_module: Any) -> None:
-    """Install progress-aware retrieval and task-adaptive repository grounding.
+    """Install adaptive retrieval, repository grounding and inference-time scaling.
 
     The router module remains the canonical owner of ModelRouter and all of its
-    globals. This contract replaces only the retrieve/act/observe method and the
-    two host-owned repository-context selectors used by generation and repair.
-    Existing runtime wrappers and test monkeypatches keep their normal module
-    semantics.
+    globals. Late hardening happens after generation/repair candidate owners are
+    installed, so their isolation, staging and fail-closed semantics remain intact.
     """
+    from .inference_time_scaling import harden_runtime
+
     _install_router_loop(model_router_module)
     _install_repository_grounding()
+    harden_runtime()
 
 
 def _install_router_loop(model_router_module: Any) -> None:
