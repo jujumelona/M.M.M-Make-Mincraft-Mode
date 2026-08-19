@@ -106,9 +106,9 @@ def test_resident_planner_research_turn_uses_research_agent_policy() -> None:
 
     skills = {item["name"]: item for item in context["eligible_skills"]}
     assert "gather-adaptive-minecraft-evidence" in skills
-    inspect = skills["inspect-existing-project"]
-    assert "java_diagnostics" not in inspect["model_tools"]
-    assert "java_diagnostics" not in inspect["host_owned_tools"]
+    for skill in skills.values():
+        assert "java_diagnostics" not in skill["model_tools"]
+        assert "java_diagnostics" not in skill["host_owned_tools"]
     assert "gather-adaptive-minecraft-evidence" in skills_for_tool(
         "research",
         "search_code_rag",
