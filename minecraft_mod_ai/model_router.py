@@ -181,7 +181,8 @@ class ModelRouter:
         exposed_tools = frozenset(_tool_schema_names(request.tools))
         previous_exchange_state: str | None = None
         weak_fixed_point_seen = False
-        premature_final_state: str | None = None
+        forced_rag_tool: str | None = None
+        forced_rag_attempts = 0
         rag_evidence_seen = False
         round_index = 0
         round_limit = _agent_tool_round_limit()
@@ -209,21 +210,52 @@ class ModelRouter:
                     raise ModelConfigurationError('Agent returned an empty final response at the hard tool-round budget.')
                 return final_content
 
-            turn_request = GenerationRequest(messages=messages, media_paths=request.media_paths if round_index == 0 else (), response_format=request.response_format, response_schema=request.response_schema, tools=request.tools, tool_choice=request.tool_choice, parallel_tool_calls=request.parallel_tool_calls)
+            tool_choice = request.tool_choice
+            parallel_tool_calls = request.parallel_tool_calls
+            if forced_rag_tool is not None:
+                tool_choice = {'type': 'function', 'function': {'name': forced_rag_tool}}
+                parallel_tool_calls = False
+            turn_request = GenerationRequest(messages=messages, media_paths=request.media_paths if round_index == 0 else (), response_format=request.response_format, response_schema=request.response_schema, tools=request.tools, tool_choice=tool_choice, parallel_tool_calls=parallel_tool_calls)
             turn = adapter.generate_turn(turn_request)
             if not turn.tool_calls:
                 content = turn.content.strip()
                 if not content:
                     raise ModelConfigurationError('Tool-capable model returned an empty final response.')
                 if require_rag and (not rag_evidence_seen):
-                    state = hashlib.sha256(content.encode('utf-8')).hexdigest()
-                    if state == premature_final_state:
-                        raise ModelConfigurationError('Production coder repeated a final answer without gathering fresh RAG evidence.')
-                    premature_final_state = state
-                    messages.extend([{'role': 'assistant', 'content': content}, {'role': 'system', 'content': 'This production coding turn requires fresh evidence before finalization. Use search_code_rag and/or search_project_rag. Inspect the retrieval receipt. If result_count/coverage/relevance is weak or empty, change the query or reviewed evidence source. Do not guess exact Minecraft/Fabric/mapping/dependency/Java API facts from memory.'}])
+                    if forced_rag_tool is None:
+                        forced_rag_tool = next((name for name in ('search_code_rag', 'search_project_rag') if name in exposed_tools), None)
+                        if forced_rag_tool is None:
+                            raise ModelConfigurationError('Fresh RAG evidence is required but no reviewed RAG tool is exposed.')
+                        forced_rag_attempts = 0
+                    else:
+                        forced_rag_attempts += 1
+                        if forced_rag_attempts >= 2:
+                            raise ModelConfigurationError(
+                                f'Production coder did not honor the host-forced RAG tool choice {forced_rag_tool!r} after two bounded attempts.'
+                            )
+                    messages.extend([
+                        {'role': 'assistant', 'content': content},
+                        {
+                            'role': 'system',
+                            'content': (
+                                f'Fresh production evidence is mandatory. Call the host-required function {forced_rag_tool} exactly once now; '
+                                'do not answer in prose. Form a concrete query for the current implementation task. Inspect the retrieval receipt. '
+                                'If result_count/coverage/relevance is weak or empty after the tool returns, reformulate the query or use the other reviewed evidence source. '
+                                'Do not guess exact Minecraft/Fabric/mapping/dependency/Java API facts from memory.'
+                            ),
+                        },
+                    ])
                     round_index += 1
                     continue
                 return content
+            if forced_rag_tool is not None:
+                if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_rag_tool:
+                    called = ', '.join(call.name for call in turn.tool_calls) or '<none>'
+                    raise ModelConfigurationError(
+                        f'Production coder violated host-forced RAG tool choice {forced_rag_tool!r}; received {called}.'
+                    )
+                forced_rag_tool = None
+                forced_rag_attempts = 0
             messages.append({'role': 'assistant', 'content': turn.content or None, 'tool_calls': [{'id': call.id, 'type': 'function', 'function': {'name': call.name, 'arguments': call.raw_arguments or json.dumps(dict(call.arguments), ensure_ascii=False, separators=(',', ':'))}} for call in turn.tool_calls]})
 
             def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
