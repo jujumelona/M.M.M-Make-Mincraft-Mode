@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-"""Cross-phase hardening for bounded coder RAG and repair evidence reuse.
+"""Cross-phase coder research -> repair evidence reuse.
 
-The canonical retrieval, scoring, repair and generation implementations stay in their
-owning modules. This module adds bounded state, dependency-directed query hints, and
-compact host receipts so repair can reuse already-paid-for coder evidence without a
-second retriever or an unbounded research loop.
+The canonical retrieval, scoring, repair, and generation implementations stay in their
+owning modules. This module adds dependency-directed query hints, compact receipts, and
+bounded diagnostic reuse without introducing a second retriever or an artificial
+research-round cap.
 """
 
 import copy
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -22,7 +23,6 @@ from typing import Any, Iterator, Mapping, Sequence
 _MARKER = "_mmm_research_coder_repair_reuse_v1"
 _RECEIPT_PATH = Path(".minecraft_ai/research-code-context-receipts.json")
 _DEPENDENCY_INDEX_ATTR = "_mmm_dependency_neighborhood_index_v1"
-_QUERY_PATH_MAX = 5
 _LOG_READ_BYTES = 32_768
 _LOG_TEXT_CHARS = 16_000
 _COMMAND_TEXT_CHARS = 4_096
@@ -73,30 +73,6 @@ class _ProjectLockPool:
 _RECEIPT_LOCKS = _ProjectLockPool()
 
 
-def _round_budget() -> int:
-    raw = os.environ.get("MMM_CODE_RESEARCH_EVOLUTION_ROUNDS", "2").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = 2
-    # RepoCoder-style draft->retrieve evolution is deliberately small. Operators may
-    # lower the budget, but cannot silently turn the coder into an unbounded agent.
-    return max(1, min(2, value))
-
-
-def _bounded_evolution_state_budget() -> int:
-    return _round_budget()
-
-
-def _query_path_budget() -> int:
-    raw = os.environ.get("MMM_CODE_RESEARCH_QUERY_PATHS", "").strip()
-    try:
-        value = int(raw) if raw else _QUERY_PATH_MAX
-    except ValueError:
-        value = _QUERY_PATH_MAX
-    return max(2, min(_QUERY_PATH_MAX, value))
-
-
 def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
     cached = getattr(context, _DEPENDENCY_INDEX_ATTR, None)
     if isinstance(cached, dict):
@@ -106,9 +82,9 @@ def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
     by_type: dict[str, list[str]] = {}
     by_package: dict[str, list[str]] = {}
     token_to_paths: dict[str, set[str]] = {}
+    contract_token_to_paths: dict[str, set[str]] = {}
     reverse_exact: dict[str, set[str]] = {}
     reverse_wildcard: dict[str, set[str]] = {}
-    contracts: list[str] = []
 
     for path, unit in context.units.items():
         by_package.setdefault(unit.package, []).append(path)
@@ -123,9 +99,9 @@ def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
             fqcn = f"{unit.package}.{type_name}" if unit.package else type_name
             by_fqcn[fqcn] = path
             by_type.setdefault(type_name, []).append(path)
-        lowered = path.casefold()
-        if any(term in lowered for term in ("contract", "interface", "api")):
-            contracts.append(path)
+        if any(term in path.casefold() for term in ("contract", "interface", "api")):
+            for token in tokens:
+                contract_token_to_paths.setdefault(token, set()).add(path)
 
     for path, unit in context.units.items():
         for imported in unit.imports:
@@ -139,11 +115,13 @@ def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
         "by_type": {key: tuple(sorted(value)) for key, value in by_type.items()},
         "by_package": {key: tuple(sorted(value)) for key, value in by_package.items()},
         "token_to_paths": {key: tuple(sorted(value)) for key, value in token_to_paths.items()},
+        "contract_token_to_paths": {
+            key: tuple(sorted(value)) for key, value in contract_token_to_paths.items()
+        },
         "reverse_exact": {key: tuple(sorted(value)) for key, value in reverse_exact.items()},
         "reverse_wildcard": {
             key: tuple(sorted(value)) for key, value in reverse_wildcard.items()
         },
-        "contracts": tuple(sorted(contracts)),
         "build_paths": tuple(
             sorted(
                 indexed.path
@@ -213,15 +191,12 @@ def _dependency_neighborhood_query(
     direct.difference_update(seeds)
     reverse.difference_update(seeds)
 
-    contract_tokens = query_tokens | {"contract", "interface", "api"}
     contracts: set[str] = set()
-    for path in index["contracts"]:
-        if path in seeds or path in direct or path in reverse:
-            continue
-        unit = context.units[path]
-        tokens = research_module._tokens(path) | research_module._tokens(unit.types)
-        if research_module._overlap(contract_tokens, tokens) > 0.0:
-            contracts.add(path)
+    for token in query_tokens | {"contract", "interface", "api"}:
+        contracts.update(index["contract_token_to_paths"].get(token, ()))
+    contracts.difference_update(seeds)
+    contracts.difference_update(direct)
+    contracts.difference_update(reverse)
 
     wants_build = bool(
         query_tokens
@@ -256,42 +231,28 @@ def _dependency_neighborhood_query(
 
 
 def _reusable_evidence(context: Any, *, limit: int = 8) -> list[dict[str, Any]]:
-    ranked = sorted(
+    ranked = heapq.nsmallest(
+        limit,
         context.evidence.values(),
         key=lambda item: (-float(item.bestfit_score), item.path, item.start_line),
     )
-    result: list[dict[str, Any]] = []
-    for item in ranked[:limit]:
-        result.append(
-            {
-                "evidence_id": item.evidence_id,
-                "source_type": item.source_type,
-                "path": item.path,
-                "sha256": item.sha256,
-                "start_line": item.start_line,
-                "end_line": item.end_line,
-                "symbols": list(item.symbols[:12]),
-                "snippet": item.text[:640],
-            }
-        )
-    return result
+    return [
+        {
+            "evidence_id": item.evidence_id,
+            "source_type": item.source_type,
+            "path": item.path,
+            "sha256": item.sha256,
+            "start_line": item.start_line,
+            "end_line": item.end_line,
+            "symbols": list(item.symbols[:12]),
+            "snippet": item.text[:640],
+        }
+        for item in ranked
+    ]
 
 
 def _install_research_context_hardening(research_module: Any) -> None:
     cls = research_module.ResearchCodeContext
-
-    current_init = cls.__init__
-    if not getattr(current_init, _MARKER, False):
-
-        @wraps(current_init)
-        def init(self: Any, *args: Any, **kwargs: Any) -> None:
-            current_init(self, *args, **kwargs)
-            self._mmm_generation_retrieval_rounds = 0
-            self._mmm_generation_retrieval_round_budget = _round_budget()
-
-        setattr(init, _MARKER, True)
-        init.__wrapped__ = current_init  # type: ignore[attr-defined]
-        cls.__init__ = init
 
     current_paths = cls._query_paths
     if not getattr(current_paths, _MARKER, False):
@@ -303,42 +264,23 @@ def _install_research_context_hardening(research_module: Any) -> None:
                 research_module, self, query, plan_step
             )
             if dependency_query and dependency_query not in paths:
-                # Exact query remains first. Dependency evidence displaces the broad
-                # vocabulary fallback rather than increasing retrieval fanout.
-                paths.insert(1 if paths else 0, dependency_query)
-            budget = _query_path_budget()
-            if len(paths) <= budget:
-                return tuple(paths)
-            focused = [path for path in paths if "known repository vocabulary" not in path]
-            broad = [path for path in paths if "known repository vocabulary" in path]
-            return tuple([*focused, *broad][:budget])
+                broad_index = next(
+                    (
+                        index
+                        for index, path in enumerate(paths)
+                        if "known repository vocabulary" in path
+                    ),
+                    None,
+                )
+                if broad_index is None:
+                    paths.insert(1 if paths else 0, dependency_query)
+                else:
+                    paths[broad_index] = dependency_query
+            return tuple(dict.fromkeys(paths))
 
         setattr(query_paths, _MARKER, True)
-        query_paths._mmm_query_path_budget = _QUERY_PATH_MAX  # type: ignore[attr-defined]
         query_paths.__wrapped__ = current_paths  # type: ignore[attr-defined]
         cls._query_paths = query_paths
-
-    current_evolve = cls.evolve_from_generation
-    if not getattr(current_evolve, _MARKER, False):
-
-        @wraps(current_evolve)
-        def evolve_from_generation(self: Any, text: str):
-            rounds = int(getattr(self, "_mmm_generation_retrieval_rounds", 0))
-            budget = int(
-                getattr(self, "_mmm_generation_retrieval_round_budget", _round_budget())
-            )
-            if rounds >= budget:
-                violations = self.monitor.validate_model_output(text)
-                return (self.bundle(), violations) if violations else (None, ())
-            before_queries = len(self.query_history)
-            result = current_evolve(self, text)
-            if len(self.query_history) > before_queries:
-                self._mmm_generation_retrieval_rounds = rounds + 1
-            return result
-
-        setattr(evolve_from_generation, _MARKER, True)
-        evolve_from_generation.__wrapped__ = current_evolve  # type: ignore[attr-defined]
-        cls.evolve_from_generation = evolve_from_generation
 
     current_receipt = cls.receipt
     if not getattr(current_receipt, _MARKER, False):
@@ -354,12 +296,6 @@ def _install_research_context_hardening(research_module: Any) -> None:
                         "loader": self.loader,
                         "mappings": self.mappings,
                     },
-                    "retrieval_round_budget": int(
-                        getattr(self, "_mmm_generation_retrieval_round_budget", _round_budget())
-                    ),
-                    "retrieval_round_count": int(
-                        getattr(self, "_mmm_generation_retrieval_rounds", 0)
-                    ),
                     "query_history_tail": list(self.query_history[-8:]),
                     "reusable_evidence": reusable,
                     "reusable_evidence_sha256": research_module._sha(reusable),
@@ -732,7 +668,6 @@ def _install_repair_context_reuse(repair_module: Any) -> None:
 def harden() -> None:
     """Apply only late, idempotent hardeners; package bootstrap owns composition."""
 
-    from . import custom_generation_search_contract
     from . import custom_module_generator
     from . import repair_engine
     from . import research_code_context
@@ -740,16 +675,12 @@ def harden() -> None:
     _install_research_context_hardening(research_code_context)
     _install_generation_receipt_persistence(custom_module_generator)
     _install_repair_context_reuse(repair_engine)
-    custom_generation_search_contract._evolution_state_budget = _bounded_evolution_state_budget
 
 
 __all__ = [
-    "_bounded_evolution_state_budget",
     "_dependency_neighborhood_query",
     "_diagnostic_signature_payload",
     "_persist_research_receipt",
     "_prior_evidence_for_diagnostic",
-    "_query_path_budget",
-    "_round_budget",
     "harden",
 ]
