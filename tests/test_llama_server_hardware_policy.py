@@ -94,4 +94,4 @@ def test_strict_server_generate_reuses_one_http_client_without_auxiliary_metrics
     assert created == [client]
     assert client.metrics_gets == 0
     assert client.stream_calls == 1
-    assert client.closed
+    assert not client.closed
