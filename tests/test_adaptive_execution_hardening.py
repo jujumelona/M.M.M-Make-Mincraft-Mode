@@ -83,7 +83,13 @@ def test_research_symbol_filter_drops_zero_score_global_seeds(
     monkeypatch.setattr(
         research,
         "adapter_for_target",
-        lambda _version, _loader: SimpleNamespace(yarn_mappings="test"),
+        lambda _version, _loader: SimpleNamespace(
+            loader="fabric",
+            fabric_loader="test-loader",
+            fabric_api="test-api",
+            yarn_mappings="test",
+            fabric_loom="test-loom",
+        ),
     )
     module = SimpleNamespace(
         kind="custom_java",
