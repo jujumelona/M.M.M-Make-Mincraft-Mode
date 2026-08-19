@@ -16,11 +16,13 @@ def install(model_router_module: Any) -> None:
     globals. Late hardening happens after generation/repair candidate owners are
     installed, so their isolation, staging and fail-closed semantics remain intact.
     """
+    from .adaptive_execution_hardening import harden_adaptive_execution
     from .inference_time_scaling import harden_runtime
 
     _install_router_loop(model_router_module)
     _install_repository_grounding()
     harden_runtime()
+    harden_adaptive_execution()
 
 
 def _install_router_loop(model_router_module: Any) -> None:
