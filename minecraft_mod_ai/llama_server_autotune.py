@@ -230,9 +230,8 @@ def _fingerprint(config: Any, binary: str, model_path: str) -> str:
         "hardware": _hardware_identity(),
         "batch": _env_int("MMM_LLAMA_BATCH", 2048),
         "ubatch": _env_int("MMM_LLAMA_UBATCH", 512),
-        "probe_tokens": min(
-            int(config.max_new_tokens),
-            _env_int("MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS),
+        "probe_tokens": _env_int(
+            "MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS
         ),
         "variants": [asdict(value) for value in _candidate_variants()],
     }
@@ -536,9 +535,8 @@ def _benchmark(
     fingerprint: str,
 ) -> AutotuneDecision | None:
     benchmark_request = _compact_benchmark_request(request)
-    probe_tokens = min(
-        int(config.max_new_tokens),
-        _env_int("MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS),
+    probe_tokens = _env_int(
+        "MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS
     )
     preferred_port = _env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
     probes: list[ProbeResult] = []
