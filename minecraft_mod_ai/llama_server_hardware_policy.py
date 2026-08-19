@@ -458,14 +458,9 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     except Exception as exc:
         # Count native work consumed by a failed request too when exact server counters
         # are still available. This makes cumulative usage reflect retries/failures.
-        if not metrics_committed:
+        if not metrics_committed and client is not None and metrics_before is not None:
             try:
-                telemetry_http = client
-                if telemetry_http is None:
-                    import httpx
-
-                    telemetry_http = httpx
-                metrics_after = _metrics_snapshot(telemetry_http, server_url)
+                metrics_after = _metrics_snapshot(client, server_url)
                 _commit_metrics_delta(metrics_before, metrics_after)
             except Exception:
                 pass
