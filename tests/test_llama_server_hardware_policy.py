@@ -65,8 +65,9 @@ def test_strict_server_generate_reuses_one_http_client(monkeypatch) -> None:
     client = _FakeClient()
     created: list[_FakeClient] = []
     fake_httpx = SimpleNamespace(
-        Client=lambda: created.append(client) or client,
+        Client=lambda **_kwargs: created.append(client) or client,
         Timeout=lambda **_kwargs: object(),
+        Limits=lambda **_kwargs: object(),
     )
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
     monkeypatch.setattr(
