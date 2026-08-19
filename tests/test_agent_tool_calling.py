@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
-from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
+from minecraft_mod_ai.model_adapters import GenerationResponse, ModelConfigurationError, ToolCall
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_tool_calls
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -176,7 +178,7 @@ def test_llama_openai_tool_call_parser_accepts_json_arguments() -> None:
     assert calls[0].arguments["capability"] == "mapping_resolution"
 
 
-def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
+def test_agent_can_exceed_eight_tool_rounds_when_evidence_keeps_changing(monkeypatch) -> None:
     class LongAdapter:
         def __init__(self) -> None:
             self.count = 0
@@ -197,8 +199,21 @@ def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
                 )
             return GenerationResponse(content="enough evidence")
 
+    class NovelRuntime(_ToolRuntime):
+        def call(self, stage: str, name: str, arguments):
+            payload = dict(arguments)
+            self.calls.append((stage, name, payload))
+            return {
+                "hits": [
+                    {
+                        "path": f"{payload['query']}.java",
+                        "line": len(self.calls),
+                    }
+                ]
+            }
+
     adapter = LongAdapter()
-    runtime = _ToolRuntime()
+    runtime = NovelRuntime()
     monkeypatch.setattr(
         ModelRouter,
         "_new_text_adapter",
@@ -215,9 +230,7 @@ def test_agent_can_exceed_eight_tool_rounds(monkeypatch) -> None:
     assert len(runtime.calls) == 12
 
 
-def test_agent_synthesizes_final_answer_on_consecutive_exact_tool_fixed_point(
-    monkeypatch,
-) -> None:
+def test_duplicate_retrieval_query_is_not_executed_twice(monkeypatch) -> None:
     class LoopAdapter:
         def __init__(self) -> None:
             self.requests = []
@@ -240,7 +253,7 @@ def test_agent_synthesizes_final_answer_on_consecutive_exact_tool_fixed_point(
             assert request.parallel_tool_calls is False
             assert request.media_paths == ()
             assert request.messages[-1]["role"] == "system"
-            assert "Tool use has converged" in request.messages[-1]["content"]
+            assert "no-progress fixed point" in request.messages[-1]["content"]
             return GenerationResponse(content="final answer from converged evidence")
 
     adapter = LoopAdapter()
@@ -258,5 +271,124 @@ def test_agent_synthesizes_final_answer_on_consecutive_exact_tool_fixed_point(
     assert router.generate_text(
         "coder", [{"role": "user", "content": "research"}]
     ) == "final answer from converged evidence"
-    assert len(runtime.calls) == 2
+    assert len(runtime.calls) == 1
+    assert len(adapter.requests) == 3
+
+
+def test_host_owned_grounding_satisfies_baseline_without_forced_rag(monkeypatch) -> None:
+    class FinalAdapter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate_turn(self, request):
+            self.requests.append(request)
+            return GenerationResponse(content="implemented from host grounding")
+
+    grounding = {
+        "schema_version": "mmm/host-owned-coder-grounding-v1",
+        "evidence_bindings": {
+            "project_exact_rag": {
+                "receipt": {
+                    "project_sha256": "sha256:project",
+                    "observations_sha256": "sha256:observations",
+                }
+            }
+        },
+        "policy": {
+            "resolved_before_first_coder_decode": True,
+            "baseline_grounding_owned_by_host": True,
+            "baseline_grounding_optional_for_model": False,
+            "model_tool_choice_required_for_baseline": False,
+            "supplemental_retrieval_after_host_validation": True,
+        },
+    }
+    adapter = FinalAdapter()
+    runtime = _ToolRuntime()
+    monkeypatch.setattr(
+        ModelRouter,
+        "_new_text_adapter",
+        staticmethod(lambda config, *, role: adapter),
+    )
+    router = ModelRouter(
+        profile="test",
+        registry=_Registry(),
+        agent_tool_runtime_factory=lambda **_: runtime,
+    )
+    router._agent_require_fresh_evidence = True
+
+    result = router.generate_text(
+        "coder",
+        [
+            {
+                "role": "user",
+                "content": json.dumps({"host_grounding": grounding}),
+            }
+        ],
+    )
+
+    assert result == "implemented from host grounding"
+    assert runtime.calls == []
+    assert len(adapter.requests) == 1
+    assert adapter.requests[0].tool_choice == "auto"
+
+
+def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> None:
+    class WeakRuntime(_ToolRuntime):
+        def call(self, stage: str, name: str, arguments):
+            payload = dict(arguments)
+            self.calls.append((stage, name, payload))
+            return {
+                "receipt": {
+                    "result_count": 0,
+                    "coverage_score": 0.0,
+                    "relevance_score": 0.0,
+                }
+            }
+
+    class ExhaustAdapter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate_turn(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return GenerationResponse(content="draft without evidence")
+            if len(self.requests) == 2:
+                assert request.tool_choice == {
+                    "type": "function",
+                    "function": {"name": "search_code_rag"},
+                }
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="forced_1",
+                            name="search_code_rag",
+                            arguments={"query": "missing registration api"},
+                            raw_arguments='{"query":"missing registration api"}',
+                        ),
+                    )
+                )
+            return GenerationResponse(content="no reviewed evidence route remains")
+
+    adapter = ExhaustAdapter()
+    runtime = WeakRuntime()
+    monkeypatch.setattr(
+        ModelRouter,
+        "_new_text_adapter",
+        staticmethod(lambda config, *, role: adapter),
+    )
+    router = ModelRouter(
+        profile="test",
+        registry=_Registry(),
+        agent_tool_runtime_factory=lambda **_: runtime,
+    )
+    router._agent_require_fresh_evidence = True
+
+    with pytest.raises(ModelConfigurationError, match="Required production evidence is unavailable"):
+        router.generate_text(
+            "coder",
+            [{"role": "user", "content": "implement unknown API"}],
+        )
+
+    assert len(runtime.calls) == 1
     assert len(adapter.requests) == 3
