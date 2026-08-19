@@ -62,6 +62,8 @@ schema_version: mmm/runtime-profiles-v1
 profiles:
   permissive_test:
     minecraft_version: '1.21.1'
+    loader: fabric
+    java_project_version: '21'
     server_java_command: java
     server_memory_mb: 2048
     server_launcher_relative: fabric-server-launch.jar
