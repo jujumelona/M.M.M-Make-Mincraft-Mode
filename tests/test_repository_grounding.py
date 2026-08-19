@@ -60,12 +60,71 @@ def test_grounding_is_exact_and_region_ranked(tmp_path: Path) -> None:
     assert receipt["retrieval_route"] == "api"
     assert receipt["semantic_used"] is True
     assert receipt["rerank_used"] is True
+    assert receipt["baseline_anchor_count"] >= 1
     assert receipt["policy"]["line_ranked_context"] is True
+    assert receipt["policy"]["global_contract_anchors_before_ranked_regions"] is True
     for record in ledger["records"]:
         assert record["sha256"].startswith("sha256:")
         assert record["content_end_bytes"] >= record["content_start_bytes"]
         assert record["start_line"] >= 1
         assert record["text"]
+
+
+def test_global_exact_anchor_lane_preserves_distant_contracts(tmp_path: Path) -> None:
+    root = tmp_path / "mod"
+    java = root / "src/main/java/example"
+    java.mkdir(parents=True)
+    size = 320
+
+    def write_fixed(name: str, body: str) -> None:
+        raw = body.encode("utf-8")
+        assert len(raw) < size
+        (java / name).write_bytes(raw + b" " * (size - len(raw)))
+
+    write_fixed(
+        "A0000.java",
+        "package example; // required contract FIRST_PAGE_SOURCE_FACT\n"
+        'final class A0000 { static final String HOOK = "crossFileHook"; }\n',
+    )
+    for index in range(1, 60):
+        write_fixed(
+            f"A{index:04d}.java",
+            f"package example; final class A{index:04d} {{ "
+            'static final String HOOK = "crossFileHook"; }\n',
+        )
+    write_fixed(
+        "Z9999.java",
+        "package example; // required contract HIGH_INDEX_SOURCE_SENTINEL\n"
+        'final class Z9999 { static final String HOOK = "crossFileHook"; }\n',
+    )
+
+    ledger = build_repository_observation_ledger(
+        _Router(),
+        ProjectIndex(root),
+        query="crossFileHook",
+        byte_budget=4096,
+    )
+    text = "\n".join(str(item.get("text", "")) for item in ledger["records"])
+    assert "FIRST_PAGE_SOURCE_FACT" in text
+    assert "HIGH_INDEX_SOURCE_SENTINEL" in text
+    assert ledger["receipt"]["source_page_count"] > 1
+
+
+def test_greenfield_project_has_valid_zero_source_grounding(tmp_path: Path) -> None:
+    root = tmp_path / "empty"
+    root.mkdir()
+    ledger = build_repository_observation_ledger(
+        _Router(),
+        ProjectIndex(root),
+        query="implement a new custom module",
+        byte_budget=4096,
+    )
+    assert ledger["records"] == []
+    assert ledger["receipt"]["observation_count"] == 0
+    assert ledger["receipt"]["source_page_count"] == 0
+    assert ledger["receipt"]["project_sha256"].startswith("sha256:")
+    assert ledger["receipt"]["observations_sha256"].startswith("sha256:")
+    assert ledger["receipt"]["policy"]["greenfield_zero_source_is_valid"] is True
 
 
 def test_repair_context_reuses_same_explorer_contract(tmp_path: Path) -> None:
