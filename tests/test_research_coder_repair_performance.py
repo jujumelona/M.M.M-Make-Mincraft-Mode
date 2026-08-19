@@ -28,6 +28,7 @@ def _dependency_context() -> SimpleNamespace:
     target = "src/main/java/demo/Target.java"
     helper = "src/main/java/demo/Helper.java"
     caller = "src/main/java/demo/Caller.java"
+    contract = "src/main/java/demo/api/TargetContract.java"
     return SimpleNamespace(
         knowledge_terms=Counter({"vocabulary": 1}),
         units={
@@ -44,6 +45,7 @@ def _dependency_context() -> SimpleNamespace:
                 imports=("demo.Target",),
                 types=("Caller",),
             ),
+            contract: _unit(contract, "demo.api", types=("TargetContract",)),
         },
         index=SimpleNamespace(
             files=[SimpleNamespace(path="build.gradle"), SimpleNamespace(path=target)]
@@ -51,11 +53,10 @@ def _dependency_context() -> SimpleNamespace:
     )
 
 
-def test_runtime_wires_single_repository_research_hardener() -> None:
+def test_runtime_wires_only_useful_repository_research_hardeners() -> None:
     cls = research_code_context.ResearchCodeContext
     for function in (
         cls._entry_points,
-        cls._expand_partial_graph,
         cls.evolve_from_generation,
         research_code_context._retrieval_metrics,
         research_code_context._adaptive_weights,
@@ -63,18 +64,26 @@ def test_runtime_wires_single_repository_research_hardener() -> None:
         assert getattr(function, context_performance._MARKER, False)
 
     assert getattr(cls._entry_points, "_mmm_semantic_entry_filter_v1", False)
-    assert getattr(cls._expand_partial_graph, "_mmm_two_hop_graph_v1", False)
     assert getattr(cls.evolve_from_generation, "_mmm_generation_fixed_point_v1", False)
+    assert not getattr(cls._expand_partial_graph, context_performance._MARKER, False)
+    assert not getattr(cls._expand_partial_graph, "_mmm_two_hop_graph_v1", False)
 
 
-def test_runtime_wires_single_coder_repair_reuse_owner() -> None:
+def test_runtime_wires_single_coder_repair_reuse_owner_without_round_override() -> None:
     cls = research_code_context.ResearchCodeContext
     assert getattr(cls._query_paths, reuse._MARKER, False)
-    assert getattr(cls.evolve_from_generation, reuse._MARKER, False)
+    assert not getattr(cls.evolve_from_generation, reuse._MARKER, False)
     assert getattr(CustomModuleGenerator.generate, reuse._MARKER, False)
     assert getattr(RepairEngine._context, reuse._MARKER, False)
     assert getattr(RepairEngine._context, "_mmm_narrow_diagnostic_repair_rag", False)
-    assert custom_search._evolution_state_budget is reuse._bounded_evolution_state_budget
+    assert custom_search._evolution_state_budget.__module__.endswith(
+        "custom_generation_search_contract"
+    )
+
+
+def test_native_evolution_state_budget_is_not_forced_to_two(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_CODE_RESEARCH_EVOLUTION_STATES", "8")
+    assert custom_search._evolution_state_budget() == 8
 
 
 def test_repository_research_exposes_exactly_eight_weighted_signals() -> None:
@@ -129,10 +138,12 @@ def test_dependency_neighborhood_index_is_reused_without_rescanning_units() -> N
     assert "src/main/java/demo/Target.java" in first
     assert "src/main/java/demo/Helper.java" in first
     assert "src/main/java/demo/Caller.java" in first
+    assert "src/main/java/demo/api/TargetContract.java" in first
     assert "build.gradle" in first
+    assert "contract_token_to_paths" in cached
 
 
-def test_dependency_lane_replaces_broad_fallback_instead_of_growing_fanout() -> None:
+def test_dependency_lane_replaces_broad_fallback_without_a_fixed_path_cap() -> None:
     context = _dependency_context()
     plan_step = SimpleNamespace(
         capability="Target API",
@@ -140,14 +151,12 @@ def test_dependency_lane_replaces_broad_fallback_instead_of_growing_fanout() -> 
         action="bind_dependency",
         required_symbols=("Target",),
     )
+    wrapped = research_code_context.ResearchCodeContext._query_paths
+    baseline = wrapped.__wrapped__(context, "Target dependency API", plan_step)
 
-    paths = research_code_context.ResearchCodeContext._query_paths(
-        context,
-        "Target dependency API",
-        plan_step,
-    )
+    paths = wrapped(context, "Target dependency API", plan_step)
 
-    assert len(paths) == reuse._QUERY_PATH_MAX
+    assert len(paths) == len(baseline)
     assert paths[0] == "Target dependency API"
     assert "repository dependency neighborhood" in paths[1]
     assert all("known repository vocabulary" not in path for path in paths)
