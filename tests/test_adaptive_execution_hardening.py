@@ -68,11 +68,23 @@ def test_research_symbol_filter_drops_zero_score_global_seeds(
     java = root / "src/main/java/example"
     java.mkdir(parents=True)
     (java / "Entry.java").write_text(
-        "package example; public final class Entry { public void tick(){ Service.compute(); } }\n",
+        """package example;
+public final class Entry {
+    public void tick() {
+        Service.compute();
+    }
+}
+""",
         encoding="utf-8",
     )
     (java / "Service.java").write_text(
-        "package example; public final class Service { public static void compute(){} public void unrelated(){} }\n",
+        """package example;
+public final class Service {
+    public static void compute() {}
+
+    public void unrelated() {}
+}
+""",
         encoding="utf-8",
     )
 
