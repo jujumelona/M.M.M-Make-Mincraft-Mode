@@ -469,12 +469,12 @@ def _install_ordered_skill_composition(skills_module: Any) -> None:
     if not getattr(current_consolidated, "_mmm_ordered_skill_composition_v1", False):
 
         @wraps(current_consolidated)
-        def consolidated(values: Sequence[Mapping[str, Any]]):
-            skill = current_consolidated(values)
+        def consolidated(skills: Sequence[Mapping[str, Any]]):
+            skill = current_consolidated(skills)
             if skill is None:
                 return None
-            require_sets = [set(_bounded_strings(value.get("requires"), limit=8)) for value in values]
-            provide_sets = [set(_bounded_strings(value.get("provides"), limit=8)) for value in values]
+            require_sets = [set(_bounded_strings(value.get("requires"), limit=8)) for value in skills]
+            provide_sets = [set(_bounded_strings(value.get("provides"), limit=8)) for value in skills]
             common_requires = set.intersection(*require_sets) if require_sets else set()
             common_provides = set.intersection(*provide_sets) if provide_sets else set()
             result = dict(skill)
@@ -599,9 +599,9 @@ def _install_ordered_skill_composition(skills_module: Any) -> None:
             if not getattr(current_compact, "_mmm_ordered_skill_composition_v1", False):
 
                 @wraps(current_compact)
-                def compact(research_payload: Mapping[str, Any]) -> dict[str, Any]:
-                    result = dict(current_compact(research_payload))
-                    bank = research_payload.get("procedural_skillbank")
+                def compact(research: Mapping[str, Any]) -> dict[str, Any]:
+                    result = dict(current_compact(research))
+                    bank = research.get("procedural_skillbank")
                     if isinstance(bank, Mapping):
                         compact_bank = dict(result.get("procedural_skillbank", {}))
                         composition = bank.get("skill_composition")
