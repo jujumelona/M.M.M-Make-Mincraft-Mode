@@ -13,6 +13,7 @@ _GPU_EXCLUSIVE_LOCK = threading.RLock()
 _ROLE_TOOL_STAGE = {'planner': 'planning', 'researcher': 'research', 'coder': 'generation', 'coder_safe': 'quality', 'visual_critic': 'quality'}
 _NATIVE_TOOL_ADAPTERS = frozenset({'llama_cpp', 'vllm', 'openai_compatible'})
 _RAG_EVIDENCE_TOOLS = frozenset({'search_code_rag', 'search_project_rag'})
+_EXTERNAL_RAG_CAPABILITIES = frozenset({'mapping_resolution', 'mod_examples', 'mod_jar_analysis', 'official_mod_docs', 'registry_lookup', 'source_search', 'vanilla_knowledge', 'version_diff'})
 _PARALLEL_READ_TOOLS = frozenset({'search_code_rag', 'search_project_rag', 'discover_ecosystem_resources', 'inspect_modrinth_project', 'inspect_github_repository', 'inspect_huggingface_model', 'inspect_existing_mod', 'assess_technology_compatibility', 'java_diagnostics', 'java_workspace_symbols', 'read_complete_plan_section', 'read_quality_contract', 'quality_status', 'work_status', 'work_tasks', 'external_mcp_capabilities', 'external_mcp_schema'})
 _DEFAULT_AGENT_TOOL_ROUNDS = 12
 _MIN_AGENT_TOOL_ROUNDS = 1
@@ -252,11 +253,18 @@ class ModelRouter:
             for call, payload in executed:
                 messages.append({'role': 'tool', 'tool_call_id': call.id, 'name': call.name, 'content': json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)})
                 observations.append({'name': call.name, 'arguments': dict(call.arguments), 'observation': payload})
-                if call.name in _RAG_EVIDENCE_TOOLS and bool(payload.get('ok')):
-                    if _usable_rag_result(payload.get('result')):
-                        rag_evidence_seen = True
-                    else:
-                        weak_rag_in_round = True
+                if not bool(payload.get('ok')):
+                    continue
+                if call.name in _RAG_EVIDENCE_TOOLS:
+                    usable_rag = _usable_rag_result(payload.get('result'))
+                elif call.name == 'external_mcp_call' and _external_rag_capability(call.arguments):
+                    usable_rag = _usable_external_rag_result(call.arguments, payload.get('result'))
+                else:
+                    continue
+                if usable_rag:
+                    rag_evidence_seen = True
+                else:
+                    weak_rag_in_round = True
             if require_rag and weak_rag_in_round and (not rag_evidence_seen):
                 messages.append({'role': 'system', 'content': 'The latest RAG observation is not usable fresh evidence. Use its receipt/correction fields to reformulate the query, or switch between current code RAG and reviewed exact-version project/API evidence. Do not finalize and do not repeat the identical weak retrieval.'})
             exchange_state = hashlib.sha256(json.dumps({'assistant_content': turn.content or '', 'tool_exchanges': observations}, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')).hexdigest()
@@ -407,6 +415,48 @@ def _execute_tool_waves(calls: Sequence[Any], execute: Callable[[Any], tuple[Any
         completed.append(execute(call))
     flush_reads()
     return tuple(completed)
+
+def _external_rag_capability(arguments: Mapping[str, Any]) -> str:
+    capability = str(arguments.get('capability', '')).strip()
+    return capability if capability in _EXTERNAL_RAG_CAPABILITIES else ''
+
+def _external_mcp_result_has_content(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    for key in ('structured', 'parsed_text'):
+        item = value.get(key)
+        if item not in (None, '', [], {}):
+            return True
+    texts = value.get('text')
+    if isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)) and any(str(item).strip() for item in texts):
+        return True
+    other = value.get('other_content')
+    return isinstance(other, Sequence) and not isinstance(other, (str, bytes)) and bool(other)
+
+def _usable_external_rag_result(arguments: Mapping[str, Any], value: Any) -> bool:
+    """Accept only reviewed external retrieval receipts with real provider content."""
+    capability = _external_rag_capability(arguments)
+    if not capability or not isinstance(value, Mapping):
+        return False
+    if str(value.get('schema_version', '')).strip() != 'mmm/external-mcp-evidence-bundle-v1':
+        return False
+    if str(value.get('capability', '')).strip() != capability or str(value.get('status', '')).strip() != 'PASS':
+        return False
+    evidence = value.get('evidence')
+    if not isinstance(evidence, Sequence) or isinstance(evidence, (str, bytes)) or not evidence:
+        return False
+    for receipt in evidence:
+        if not isinstance(receipt, Mapping):
+            continue
+        if str(receipt.get('schema_version', '')).strip() != 'mmm/external-mcp-call-receipt-v1':
+            continue
+        if str(receipt.get('capability', '')).strip() != capability or str(receipt.get('status', '')).strip() != 'PASS':
+            continue
+        if str(receipt.get('access', '')).strip() != 'read':
+            continue
+        if _external_mcp_result_has_content(receipt.get('result')):
+            return True
+    return False
 
 def _usable_rag_result(value: Any) -> bool:
     """Treat RAG receipts as authoritative and accept other non-empty evidence packs."""
