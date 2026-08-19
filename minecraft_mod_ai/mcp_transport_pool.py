@@ -65,9 +65,8 @@ async def _stdio_session(
             args=["-m", "minecraft_mod_ai.mcp_server"],
             env=dict(env),
         )
-        # The previous session wrapper kept fail_after open for the complete
-        # session lifetime. A pooled transport needs startup and request timeouts
-        # to be independent, otherwise a healthy warm session expires by age.
+        # A pooled transport needs startup and request timeouts to be independent;
+        # otherwise a healthy warm session would expire merely because it is old.
         with anyio.fail_after(timeout_seconds):
             read_stream, write_stream = await stack.enter_async_context(
                 stdio_client(params, errlog=errlog)
@@ -110,24 +109,31 @@ class _SessionWorker:
         with self._state_lock:
             return self._pending
 
-    def submit(self, request: _TransportRequest) -> None:
-        self._ensure_started()
+    def reserve(self) -> None:
+        """Reserve one queue position while the pool still owns dispatch ordering."""
         with self._state_lock:
             if self._closed:
                 raise RuntimeError("MCP transport worker is closed")
-            startup_error = self._startup_error
-            loop = self._loop
-            queue = self._queue
             self._pending += 1
-        if startup_error is not None:
-            self._release_pending()
-            raise RuntimeError("MCP transport worker failed to start") from startup_error
-        if loop is None or queue is None:
-            self._release_pending()
-            raise RuntimeError("MCP transport worker did not initialize")
 
+    def submit(self, request: _TransportRequest) -> None:
+        # The pool reserves before returning this worker so simultaneous dispatchers
+        # cannot all observe the same stale pending count. Cancellation/failure then
+        # releases that reservation through the future callback exactly once.
         request.result.add_done_callback(lambda _future: self._release_pending())
         try:
+            self._ensure_started()
+            with self._state_lock:
+                if self._closed:
+                    raise RuntimeError("MCP transport worker is closed")
+                startup_error = self._startup_error
+                loop = self._loop
+                queue = self._queue
+            if startup_error is not None:
+                raise RuntimeError("MCP transport worker failed to start") from startup_error
+            if loop is None or queue is None:
+                raise RuntimeError("MCP transport worker did not initialize")
+
             enqueue = asyncio.run_coroutine_threadsafe(queue.put(request), loop)
             enqueue.result(timeout=request.timeout_seconds)
         except BaseException:
@@ -369,15 +375,17 @@ class MCPTransportPool:
             name=name,
             arguments=dict(arguments or {}),
         )
-        worker = self._select_worker()
+        worker = self._reserve_worker()
         worker.submit(request)
         return await asyncio.wrap_future(future)
 
-    def _select_worker(self) -> _SessionWorker:
+    def _reserve_worker(self) -> _SessionWorker:
         with self._dispatch_lock:
             if self._closed:
                 raise RuntimeError("MCP transport pool is closed")
-            return min(self._workers, key=lambda worker: worker.pending)
+            worker = min(self._workers, key=lambda candidate: candidate.pending)
+            worker.reserve()
+            return worker
 
 
 class _PooledSession:
