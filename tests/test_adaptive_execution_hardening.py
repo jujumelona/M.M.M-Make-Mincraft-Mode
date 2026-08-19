@@ -58,7 +58,10 @@ def test_auto_repair_width_keeps_single_decode_when_one_slot(monkeypatch) -> Non
     assert agentic._repair_candidate_count(engine, evidence, ()) == 1
 
 
-def test_research_symbol_filter_drops_zero_score_global_seeds(tmp_path: Path) -> None:
+def test_research_symbol_filter_drops_zero_score_global_seeds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     from minecraft_mod_ai import research_code_context as research
 
     root = tmp_path / "mod"
@@ -77,6 +80,11 @@ def test_research_symbol_filter_drops_zero_score_global_seeds(tmp_path: Path) ->
         def rerank(self, query, documents):
             return [1.0 if " tick" in (" " + document.casefold()) else 0.0 for document in documents]
 
+    monkeypatch.setattr(
+        research,
+        "adapter_for_target",
+        lambda _version, _loader: SimpleNamespace(yarn_mappings="test"),
+    )
     module = SimpleNamespace(
         kind="custom_java",
         config={"feature": "tick"},
