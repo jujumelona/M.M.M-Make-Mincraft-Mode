@@ -34,17 +34,8 @@ class _FakeClient:
 
     def get(self, url: str, *, timeout: float) -> _FakeResponse:
         assert url.endswith("/metrics")
-        snapshots = (
-            "llamacpp:prompt_tokens_total 10\n"
-            "llamacpp:tokens_predicted_total 5\n"
-            "llamacpp:tokens_predicted_seconds_total 1\n",
-            "llamacpp:prompt_tokens_total 12\n"
-            "llamacpp:tokens_predicted_total 6\n"
-            "llamacpp:tokens_predicted_seconds_total 1.5\n",
-        )
-        response = _FakeResponse(text=snapshots[self.metrics_gets])
         self.metrics_gets += 1
-        return response
+        return _FakeResponse(text="unexpected auxiliary telemetry request")
 
     def stream(self, method: str, url: str, **_kwargs) -> _FakeResponse:
         assert method == "POST"
@@ -61,7 +52,7 @@ class _FakeClient:
         self.closed = True
 
 
-def test_strict_server_generate_reuses_one_http_client(monkeypatch) -> None:
+def test_strict_server_generate_reuses_one_http_client_without_auxiliary_metrics(monkeypatch) -> None:
     client = _FakeClient()
     created: list[_FakeClient] = []
     fake_httpx = SimpleNamespace(
@@ -101,6 +92,6 @@ def test_strict_server_generate_reuses_one_http_client(monkeypatch) -> None:
 
     assert result == "ok"
     assert created == [client]
-    assert client.metrics_gets == 2
+    assert client.metrics_gets == 0
     assert client.stream_calls == 1
     assert client.closed
