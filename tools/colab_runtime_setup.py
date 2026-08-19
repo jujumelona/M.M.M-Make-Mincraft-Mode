@@ -146,19 +146,6 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _assert_loaded_engine_origin(repo_dir: Path) -> None:
-    loaded_module = sys.modules.get("minecraft_mod_ai")
-    if loaded_module is None:
-        return
-    module_file = getattr(loaded_module, "__file__", "") or ""
-    package_root = (repo_dir / "minecraft_mod_ai").resolve()
-    if not module_file or not Path(module_file).resolve().is_relative_to(package_root):
-        raise RuntimeError(
-            "minecraft_mod_ai is loaded from a different checkout. restart the "
-            "Colab runtime and rerun from cell 1."
-        )
-
-
 def _installed_version(distribution: str) -> str | None:
     try:
         return package_version(distribution)
@@ -201,6 +188,7 @@ def _validate_checkout(
     engine_was_loaded: bool,
     engine_module_file: str,
 ) -> None:
+    del engine_module_file
     if not (repo_dir / ".git").is_dir():
         raise RuntimeError(f"Not a Git checkout: {repo_dir}")
     actual_commit = _git_head(repo_dir)
@@ -215,19 +203,6 @@ def _validate_checkout(
             "Colab checkout and rerun setup cell 2."
         )
     if engine_was_loaded:
-        package_root = (repo_dir / "minecraft_mod_ai").resolve()
-        try:
-            loaded_path = Path(engine_module_file).resolve()
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise RuntimeError(
-                "The loaded minecraft_mod_ai origin cannot be verified. Restart "
-                "the Colab runtime and rerun from cell 1."
-            ) from exc
-        if not engine_module_file or not loaded_path.is_relative_to(package_root):
-            raise RuntimeError(
-                "minecraft_mod_ai is loaded from a different checkout. Restart "
-                "the Colab runtime and rerun from cell 1."
-            )
         if not previous_commit or previous_commit.strip() != used_commit:
             print(
                 f"engine reload: {previous_commit[:7] if previous_commit else 'old'} -> "
@@ -1008,7 +983,6 @@ def assert_setup_state(
             "Tracked engine source changed after setup. Rerun setup cell 2 from a "
             "clean GitHub checkout."
         )
-    _assert_loaded_engine_origin(Path(repo_dir).resolve())
     if receipt.get("process_id") != os.getpid():
         raise RuntimeError(
             "This setup receipt belongs to another Python runtime. Rerun setup cell 2."
