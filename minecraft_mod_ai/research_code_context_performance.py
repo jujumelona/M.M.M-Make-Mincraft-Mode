@@ -2,48 +2,16 @@ from __future__ import annotations
 
 """Narrow hot-path fixes for the canonical repository-research owner.
 
-Do not duplicate retrieval, graph, or scoring implementations here. Reuse canonical
-results while pruning irrelevant roots, folding the accidental ninth metric back into
-the declared eight-signal fusion, and making exact draft evolution reach a host fixed
-point. Graph depth remains owned by the canonical graph/query budgets.
+Do not duplicate retrieval, graph, entry selection, or scoring implementations here.
+Reuse canonical results while folding the accidental ninth metric back into the
+declared eight-signal fusion and making exact draft evolution reach a host fixed point.
+Graph depth and entry selection remain owned by the canonical graph/query pipeline.
 """
 
 from functools import wraps
 from typing import Any, Mapping
 
 _MARKER = "_mmm_research_code_context_performance_v1"
-
-
-def _install_entry_pruning(module: Any) -> None:
-    cls = module.ResearchCodeContext
-    current = cls._entry_points
-    if getattr(current, _MARKER, False):
-        return
-
-    @wraps(current)
-    def entry_points(self: Any, query: str):
-        selected = current(self, query)
-        query_tokens = module._tokens(query)
-        if not query_tokens or len(selected) <= 1:
-            return selected
-        relevant = []
-        for symbol in selected:
-            unit = self.units.get(symbol.path)
-            tokens = module._tokens(symbol.name) | module._tokens(symbol.signature)
-            tokens |= module._tokens(symbol.path)
-            if unit is not None:
-                tokens |= module._tokens(unit.package)
-                tokens |= module._tokens(unit.imports)
-            if query_tokens & tokens:
-                relevant.append(symbol)
-        # Semantic-only queries may have no literal root match. Preserve canonical
-        # ranking in that case; otherwise avoid clearly irrelevant graph roots.
-        return relevant or selected
-
-    setattr(entry_points, _MARKER, True)
-    entry_points._mmm_semantic_entry_filter_v1 = True  # type: ignore[attr-defined]
-    entry_points.__wrapped__ = current  # type: ignore[attr-defined]
-    cls._entry_points = entry_points
 
 
 def _install_eight_metric_fusion(module: Any) -> None:
@@ -112,7 +80,6 @@ def _install_generation_fixed_point(module: Any) -> None:
 
 
 def harden(module: Any) -> None:
-    _install_entry_pruning(module)
     _install_eight_metric_fusion(module)
     _install_generation_fixed_point(module)
 
