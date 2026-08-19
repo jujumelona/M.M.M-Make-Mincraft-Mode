@@ -7,8 +7,9 @@ import re
 from typing import Any, Iterable
 
 from .model_adapters import ModelConfigurationError
+from .procedural_retrieval import decompose_task_procedure, procedural_region_score
 from .project_index import ProjectIndex
-from .repository_explorer import RepositoryExplorer, exploration_fingerprint
+from .repository_explorer import CodeRegion, RepositoryExplorer, exploration_fingerprint
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,127}")
 _BASELINE_ANCHOR_TERMS = frozenset(
@@ -42,13 +43,7 @@ def build_repository_observation_ledger(
     byte_budget: int,
     diagnostic_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Build bounded exact grounding from global anchors plus ranked code regions.
-
-    Global anchors preserve exact repository contracts that must be visible before
-    the first coder decode.  Ranked regions provide the task-adaptive line/symbol
-    localization lane.  The two lanes share one host-owned byte budget and exact
-    path/SHA/byte-range commitments; neither retrieved lane grants write authority.
-    """
+    """Build bounded exact grounding from anchors, regions and procedural alignment."""
     if type(byte_budget) is not int or byte_budget < 1024:
         raise ValueError("repository grounding byte_budget must be an integer >= 1024")
     query = str(query or "").strip()
@@ -73,26 +68,41 @@ def build_repository_observation_ledger(
     }
 
     explorer = RepositoryExplorer(index, router=router)
+    procedure_plan = decompose_task_procedure(query)
     line_budget = max(8, byte_budget // 192)
     degraded: list[str] = []
-    try:
-        exploration = explorer.explore(
-            query,
-            diagnostic_paths=diagnostics,
+    exploration = _explore_with_degraded_fallback(
+        explorer,
+        query,
+        diagnostics=diagnostics,
+        line_budget=line_budget,
+        degraded=degraded,
+        lane="task",
+    )
+    procedure_exploration = None
+    if index.files and procedure_plan.steps:
+        procedure_query = " procedure-flow ".join(procedure_plan.steps)
+        procedure_exploration = _explore_with_degraded_fallback(
+            explorer,
+            procedure_query,
+            diagnostics=diagnostics,
             line_budget=line_budget,
-        )
-    except ModelConfigurationError as exc:
-        degraded.append(f"{type(exc).__name__}: {exc}")
-        exploration = explorer.explore(
-            query,
-            diagnostic_paths=diagnostics,
-            line_budget=line_budget,
-            semantic=False,
-            rerank=False,
+            degraded=degraded,
+            lane="procedure",
         )
 
-    for region in exploration.regions:
+    region_candidates = list(exploration.regions)
+    if procedure_exploration is not None:
+        region_candidates.extend(procedure_exploration.regions)
+    ranked_regions = _procedurally_ranked_regions(region_candidates, procedure_plan.steps)
+
+    procedure_hits = 0
+    for region, alignment, observed_steps in ranked_regions:
         record = _exact_region_record(index, region.to_dict())
+        record["retrieval_scores"]["procedure_alignment"] = round(alignment, 6)
+        if alignment > 0:
+            procedure_hits += 1
+            record["procedure_trace"] = list(observed_steps[:24])
         key = (
             record["path"],
             int(record["content_start_bytes"]),
@@ -105,9 +115,17 @@ def build_repository_observation_ledger(
             "records": [*records, record],
         }
         if _json_size(candidate) > byte_budget:
-            remaining = max(0, byte_budget - _json_size(
-                {"schema_version": "mmm/source-observation-ledger-v2", "records": records}
-            ) - 256)
+            remaining = max(
+                0,
+                byte_budget
+                - _json_size(
+                    {
+                        "schema_version": "mmm/source-observation-ledger-v2",
+                        "records": records,
+                    }
+                )
+                - 256,
+            )
             if remaining < 64:
                 break
             clipped = _clip_record(record, remaining)
@@ -130,23 +148,43 @@ def build_repository_observation_ledger(
         _update_digest(observation_digest, record)
     query_sha256 = "sha256:" + hashlib.sha256(query.encode("utf-8")).hexdigest()
     project_sha256 = str(index.manifest_receipt()["sha256"])
+    procedural_receipt = {
+        "plan": procedure_plan.to_dict(),
+        "candidate_region_count": len(ranked_regions),
+        "aligned_region_count": procedure_hits,
+        "secondary_procedure_query_used": procedure_exploration is not None,
+        "generic_semantic_similarity_is_not_procedural_authority": True,
+    }
     receipt = {
         "schema_version": "mmm/source-observation-receipt-v2",
         "project_sha256": project_sha256,
         "query_sha256": query_sha256,
-        # Compatibility field: host source partitions represented by the current
-        # project/query snapshot.  It is not a model pagination/completion signal.
         "source_page_count": baseline_meta["source_partition_count"],
         "observation_count": len(records),
         "observations_sha256": "sha256:" + observation_digest.hexdigest(),
         "exploration_sha256": exploration_fingerprint(exploration),
+        "procedural_retrieval_sha256": "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                procedural_receipt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
         "retrieval_route": exploration.route,
         "baseline_anchor_count": baseline_meta["anchor_count"],
         "baseline_candidate_count": baseline_meta["candidate_count"],
         "line_budget": exploration.line_budget,
         "lines_selected": sum(_record_line_count(item) for item in records),
-        "semantic_used": exploration.semantic_used,
-        "rerank_used": exploration.rerank_used,
+        "semantic_used": exploration.semantic_used
+        or bool(procedure_exploration and procedure_exploration.semantic_used),
+        "rerank_used": exploration.rerank_used
+        or bool(procedure_exploration and procedure_exploration.rerank_used),
+        "procedure_decomposition_used": True,
+        "procedure_step_count": len(procedure_plan.steps),
+        "procedural_similarity_used": bool(ranked_regions),
+        "procedural_aligned_region_count": procedure_hits,
         "degraded_retrieval": degraded,
         "missing_terms": list(exploration.missing_terms),
         "policy": {
@@ -155,6 +193,7 @@ def build_repository_observation_ledger(
             "global_contract_anchors_before_ranked_regions": True,
             "task_adaptive_retrieval": True,
             "line_ranked_context": True,
+            "ordered_procedure_alignment": True,
             "greenfield_zero_source_is_valid": True,
             "generic_similar_code_not_authoritative": True,
         },
@@ -163,6 +202,7 @@ def build_repository_observation_ledger(
         "schema_version": "mmm/source-observation-ledger-v2",
         "receipt": receipt,
         "exploration": exploration.to_dict(),
+        "procedural_retrieval": procedural_receipt,
         "records": records,
     }
 
@@ -188,6 +228,7 @@ def build_repair_repository_context(
         "manifest": index.manifest_receipt(),
         "retrieval_receipt": dict(ledger["receipt"]),
         "exploration": dict(ledger["exploration"]),
+        "procedural_retrieval": dict(ledger["procedural_retrieval"]),
         "relevant": {
             "schema_version": "mmm/project-context-regions-v1",
             "selected_file_count": len({item["path"] for item in ledger["records"]}),
@@ -195,6 +236,64 @@ def build_repair_repository_context(
             "files": list(ledger["records"]),
         },
     }
+
+
+def _explore_with_degraded_fallback(
+    explorer: RepositoryExplorer,
+    query: str,
+    *,
+    diagnostics: tuple[str, ...],
+    line_budget: int,
+    degraded: list[str],
+    lane: str,
+):
+    try:
+        return explorer.explore(
+            query,
+            diagnostic_paths=diagnostics,
+            line_budget=line_budget,
+        )
+    except ModelConfigurationError as exc:
+        degraded.append(f"{lane}:{type(exc).__name__}: {exc}")
+        return explorer.explore(
+            query,
+            diagnostic_paths=diagnostics,
+            line_budget=line_budget,
+            semantic=False,
+            rerank=False,
+        )
+
+
+def _procedurally_ranked_regions(
+    regions: Iterable[CodeRegion],
+    plan_steps: tuple[str, ...],
+) -> list[tuple[CodeRegion, float, tuple[str, ...]]]:
+    unique: dict[tuple[str, int, int], CodeRegion] = {}
+    for region in regions:
+        key = (region.path, region.start_line, region.end_line)
+        current = unique.get(key)
+        if current is None or region.score > current.score:
+            unique[key] = region
+    ranked: list[tuple[float, float, int, str, int, CodeRegion, tuple[str, ...]]] = []
+    for region in unique.values():
+        alignment, observed = procedural_region_score(
+            decompose_task_procedure(" -> ".join(plan_steps)),
+            region.text,
+        )
+        combined = region.score + 3.0 * alignment
+        ranked.append(
+            (
+                -combined,
+                -alignment,
+                region.line_count,
+                region.path,
+                region.start_line,
+                region,
+                observed,
+            )
+        )
+    ranked.sort(key=lambda item: item[:5])
+    return [(item[5], -item[1], item[6]) for item in ranked]
 
 
 def _baseline_anchor_records(
@@ -255,9 +354,7 @@ def _baseline_anchor_records(
         records.append(record)
 
     partition_bytes = max(1024, byte_budget)
-    source_partition_count = (
-        0 if not ranked else max(1, math.ceil(eligible_bytes / partition_bytes))
-    )
+    source_partition_count = 0 if not ranked else max(1, math.ceil(eligible_bytes / partition_bytes))
     return records, {
         "anchor_count": len(records),
         "candidate_count": len(ranked),
