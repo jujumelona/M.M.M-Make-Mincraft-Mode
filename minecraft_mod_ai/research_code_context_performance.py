@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Narrow hot-path fixes for the canonical repository-research owner.
 
-Do not duplicate retrieval, graph, or scoring implementations here.  Reuse their
-results while pruning irrelevant root entries, folding the accidental ninth metric
-back into the declared eight-signal fusion, and making exact draft evolution reach a
-host fixed point after one successful pass.
+Do not duplicate retrieval, graph, or scoring implementations here. Reuse their
+results while pruning irrelevant roots, bounding partial-graph evidence, folding the
+accidental ninth metric back into the declared eight-signal fusion, and making exact
+draft evolution reach a host fixed point after one successful pass.
 """
 
 from functools import wraps
@@ -37,13 +37,36 @@ def _install_entry_pruning(module: Any) -> None:
             if query_tokens & tokens:
                 relevant.append(symbol)
         # A semantic-only query may legitimately have no literal root match. Keep
-        # the canonical ranking in that case; otherwise do not seed the partial graph
-        # with zero-literal unrelated roots that create avoidable graph expansion.
+        # canonical ranking then; otherwise avoid zero-literal graph roots.
         return relevant or selected
 
     setattr(entry_points, _MARKER, True)
+    entry_points._mmm_semantic_entry_filter_v1 = True  # type: ignore[attr-defined]
     entry_points.__wrapped__ = current  # type: ignore[attr-defined]
     cls._entry_points = entry_points
+
+
+def _install_graph_cap(module: Any) -> None:
+    cls = module.ResearchCodeContext
+    current = cls._expand_partial_graph
+    if getattr(current, _MARKER, False):
+        return
+
+    @wraps(current)
+    def expand_partial_graph(self: Any, entries: Any, *, query: str = ""):
+        # Keep the canonical graph implementation as the only traversal owner. The
+        # repository-research evidence surface is limited to two hops so a broad
+        # third-hop tail cannot enter scoring/context.
+        return [
+            (symbol, hop)
+            for symbol, hop in current(self, entries, query=query)
+            if hop <= 2
+        ]
+
+    setattr(expand_partial_graph, _MARKER, True)
+    expand_partial_graph._mmm_two_hop_graph_v1 = True  # type: ignore[attr-defined]
+    expand_partial_graph.__wrapped__ = current  # type: ignore[attr-defined]
+    cls._expand_partial_graph = expand_partial_graph
 
 
 def _install_eight_metric_fusion(module: Any) -> None:
@@ -55,9 +78,8 @@ def _install_eight_metric_fusion(module: Any) -> None:
             metrics = dict(current_metrics(*args, **kwargs))
             alignment = float(metrics.pop("plan_alignment", 0.0))
             if alignment:
-                # PERC plan alignment remains represented, but as a structural
-                # refinement rather than a second independently weighted semantic
-                # signal. This restores the documented eight complementary metrics.
+                # PERC plan alignment remains represented as a structural refinement
+                # rather than a second independently weighted semantic signal.
                 structure = float(metrics.get("structure", 0.0))
                 metrics["structure"] = min(1.0, 0.80 * structure + 0.20 * alignment)
             return metrics
@@ -98,7 +120,7 @@ def _install_generation_fixed_point(module: Any) -> None:
     def evolve_from_generation(self: Any, text: str):
         key = module._sha(str(text))
         seen = getattr(self, "_mmm_generation_evolution_seen", None)
-        if seen is None:
+        if not isinstance(seen, set):
             seen = set()
             self._mmm_generation_evolution_seen = seen
         if key in seen:
@@ -109,12 +131,14 @@ def _install_generation_fixed_point(module: Any) -> None:
         return result
 
     setattr(evolve_from_generation, _MARKER, True)
+    evolve_from_generation._mmm_generation_fixed_point_v1 = True  # type: ignore[attr-defined]
     evolve_from_generation.__wrapped__ = current  # type: ignore[attr-defined]
     cls.evolve_from_generation = evolve_from_generation
 
 
 def harden(module: Any) -> None:
     _install_entry_pruning(module)
+    _install_graph_cap(module)
     _install_eight_metric_fusion(module)
     _install_generation_fixed_point(module)
 
