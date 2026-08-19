@@ -15,6 +15,9 @@ _RIPPLE = (
     "rename", "refactor", "impact", "ripple", "all usages", "all callers",
     "all references", "affected callers", "affected dependencies",
 )
+_DEPENDENCY = (
+    "dependency", "depends", "caller", "callee", "import", "extends", "implements",
+)
 _API = (
     " api ", "signature", "callback", "codec", "registry", "register", "mapping namespace",
     "method contract", "interface contract", "event hook", "packet handler", "payload type",
@@ -64,8 +67,6 @@ def harden_code_search_routes() -> None:
                 required_metadata=required_metadata,
             )
         )
-        # Preserve the user's exact question as the public query while retaining
-        # the steering query and the pre-existing coarse route for auditability.
         result["query"] = original
         result["fine_task_route"] = fine_route
         result["fine_route_query"] = routed
@@ -88,15 +89,14 @@ def classify_code_evidence_need(query: str) -> str:
         return "trace"
     if any(marker in value for marker in _RIPPLE):
         return "ripple"
+    # Dependency intent outranks API nouns such as RegistryBootstrap. Otherwise a
+    # query like "what depends on RegistryBootstrap" loses its graph/caller route.
+    if any(marker in value for marker in _DEPENDENCY):
+        return "dependency"
     if any(marker in value for marker in _API):
         return "api"
     if any(marker in value for marker in _PROCEDURAL):
         return "procedural"
-    if any(
-        marker in value
-        for marker in ("dependency", "depends", "caller", "callee", "import", "extends", "implements")
-    ):
-        return "dependency"
     if any(marker in value for marker in ("whole project", "entire project", "architecture", "overview")):
         return "global"
     return "exact_or_semantic"
