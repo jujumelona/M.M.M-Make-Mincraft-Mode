@@ -297,11 +297,11 @@ def harden(agentic_module: Any, central_module: Any) -> None:
     if not getattr(current_enabled, _MARKER, False):
 
         @wraps(current_enabled)
-        def amplification_enabled(agentic: Any, router: Any) -> bool:
+        def amplification_enabled(agentic_module: Any, router: Any) -> bool:
             policy = _ACTIVE_POLICY.get()
             if isinstance(policy, Mapping) and policy.get('tier') == 'lean':
                 return False
-            return current_enabled(agentic, router)
+            return current_enabled(agentic_module, router)
         setattr(amplification_enabled, _MARKER, True)
         amplification_enabled.__wrapped__ = current_enabled
         central_module._amplification_enabled = amplification_enabled
