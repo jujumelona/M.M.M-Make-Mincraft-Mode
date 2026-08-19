@@ -186,9 +186,9 @@ def install(agentic_module: Any, complete_planner_module: Any | None=None) -> No
         original = current_normalize
 
         @wraps(original)
-        def normalize(prompt: str, design: dict[str, Any], candidate: Any | None=None):
-            base = original(prompt, design, candidate)
-            return _augment_brief(original, prompt, design, compile_minecraft_knowledge_plan(prompt, design), base)
+        def normalize(prompt: str, game_design: dict[str, Any], candidate: Any | None=None):
+            base = original(prompt, game_design, candidate)
+            return _augment_brief(original, prompt, game_design, compile_minecraft_knowledge_plan(prompt, game_design), base)
         setattr(normalize, _MARKER, True)
         normalize.__wrapped__ = original
         agentic_module.normalize_research_brief = normalize
