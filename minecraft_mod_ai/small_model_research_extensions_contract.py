@@ -423,7 +423,6 @@ def install() -> None:
         agent_capability_context,
         agentic_research_game_design,
         central_intelligence_amplifier,
-        complete_planner,
         model_router,
         small_model_adaptive_compute,
         small_model_agent_policy,
@@ -439,7 +438,6 @@ def install() -> None:
         agentic_research_game_design,
         central_intelligence_amplifier,
     )
-    small_model_agent_policy.enhance_planner(complete_planner)
     _install_instruction_projection(agent_capability_context)
     _install_intent_routed_memory(trajectory_memory)
     _install_skill_evolution(trajectory_memory, temporary_skill_contract)
