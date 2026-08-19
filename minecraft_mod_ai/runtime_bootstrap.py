@@ -412,6 +412,9 @@ def _install_post_bootstrap_contracts() -> None:
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_compacting_adapter import install as install_small_model_compaction
+    from .small_model_execution_extensions_contract import (
+        install as install_small_model_execution_extensions,
+    )
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
     from .small_model_relation_index_contract import install as install_small_model_relation_index
@@ -453,6 +456,7 @@ def _install_post_bootstrap_contracts() -> None:
     install_small_model_compaction(model_router)
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
+    install_small_model_execution_extensions()
     harden_adaptive_compute(
         agentic_research_game_design,
         central_intelligence_amplifier,
