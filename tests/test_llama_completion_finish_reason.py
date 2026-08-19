@@ -21,14 +21,14 @@ def _response(finish_reason: str):
     )
 
 
-def test_completion_message_rejects_max_token_truncation(monkeypatch) -> None:
+def test_completion_message_rejects_length_truncation(monkeypatch) -> None:
     monkeypatch.setattr(
         llama_cpp_adapter,
         "_post_completion",
         lambda server_url, payload: _response("length"),
     )
 
-    with pytest.raises(RuntimeError, match="truncated the completion at max_tokens"):
+    with pytest.raises(RuntimeError, match="context boundary before the assistant turn completed"):
         llama_cpp_adapter._completion_message("http://127.0.0.1:8910/v1", {})
 
 
