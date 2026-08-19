@@ -393,6 +393,7 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_optimization_contract,
         agentic_pre_design_rag,
         agentic_research_game_design,
+        central_intelligence_amplifier,
         model_router,
         production_tools,
         qwen_agent_family_contract,
@@ -409,6 +410,7 @@ def _install_post_bootstrap_contracts() -> None:
     from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
+    from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_compacting_adapter import install as install_small_model_compaction
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_max_agent_contract import install as install_small_model_max_agent
@@ -451,6 +453,10 @@ def _install_post_bootstrap_contracts() -> None:
     install_small_model_compaction(model_router)
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
+    harden_adaptive_compute(
+        agentic_research_game_design,
+        central_intelligence_amplifier,
+    )
     runtime_regression_fixes.install()
     install_long_run_resilience()
     qwen_agent_family_contract.install()
