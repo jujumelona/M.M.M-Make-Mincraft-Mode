@@ -88,6 +88,17 @@ def _name(schema: Mapping[str, Any]) -> str:
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
 
 
+def _forced_tool_name(tool_choice: Any) -> str:
+    if not isinstance(tool_choice, Mapping):
+        return ""
+    if str(tool_choice.get("type", "")).strip() != "function":
+        return ""
+    function = tool_choice.get("function")
+    if not isinstance(function, Mapping):
+        return ""
+    return str(function.get("name", "")).strip()
+
+
 def _query(messages: Sequence[Mapping[str, Any]]) -> str:
     """Recover terminal intent from user turns only."""
 
@@ -164,7 +175,7 @@ class CausalFrontierAdapter:
 
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
-        from .model_adapters import GenerationRequest
+        from .model_adapters import GenerationRequest, ModelConfigurationError
 
         # The core loop intentionally emits an explicit tools=() request for
         # fixed-point/final synthesis. That is a control signal, not a new planning
@@ -184,16 +195,30 @@ class CausalFrontierAdapter:
         )
         query = _query(request.messages)
         goals = goals_for_query(query)
-        names = executable_frontier(
-            candidates,
-            state=state,
-            goals=goals,
-            limit=self.frontier_limit,
-            max_depth=8,
-            preference=authorized_tool_preference(),
-        )
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
-        selected = tuple(by_name[name] for name in names if name in by_name)
+        forced_name = _forced_tool_name(request.tool_choice)
+        if forced_name:
+            forced_schema = by_name.get(forced_name)
+            if forced_schema is None:
+                raise ModelConfigurationError(
+                    f"Host-forced tool {forced_name!r} is outside the authorized causal frontier surface."
+                )
+            names = (forced_name,)
+            selected = (forced_schema,)
+            tool_choice = request.tool_choice
+            parallel_tool_calls = request.parallel_tool_calls
+        else:
+            names = executable_frontier(
+                candidates,
+                state=state,
+                goals=goals,
+                limit=self.frontier_limit,
+                max_depth=8,
+                preference=authorized_tool_preference(),
+            )
+            selected = tuple(by_name[name] for name in names if name in by_name)
+            tool_choice = "auto" if selected else None
+            parallel_tool_calls = True if selected else False
         self._publish_frontier(tuple(_name(schema) for schema in selected))
 
         rebuilt = GenerationRequest(
@@ -207,8 +232,8 @@ class CausalFrontierAdapter:
             response_format=request.response_format,
             response_schema=request.response_schema,
             tools=selected,
-            tool_choice="auto" if selected else None,
-            parallel_tool_calls=True if selected else False,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
         )
         print(
             "causal per-turn frontier:",
