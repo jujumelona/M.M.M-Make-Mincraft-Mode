@@ -106,9 +106,14 @@ def test_projector_is_loaded_only_for_exact_managed_media_process(
             "messages": [dict(message) for message in request.messages]
         }
     )
-    multimodal.install(autotune, hardware)
 
-    # Text-only launch args stay lean and never resolve/load the projector.
+    # This test isolates projector/process identity. Fingerprint and benchmark tuning
+    # are unrelated contracts and deliberately are not mocked here.
+    multimodal._install_base_args(autotune)
+    multimodal._install_launch_policy(autotune)
+    multimodal._install_ensure(autotune)
+    multimodal._install_payload(hardware)
+
     text_args = autotune._base_args("llama-server", "model.gguf", config, 8910)
     assert "--mmproj" not in text_args
 
@@ -128,9 +133,6 @@ def test_projector_is_loaded_only_for_exact_managed_media_process(
     payload = hardware._server_payload(SimpleNamespace(config=config), media_request)
     assert payload["messages"][0]["content"][0]["type"] == "image_url"
 
-    # Returning to text retires the exact media process and relaunches a lean server.
-    # The fake allocator deliberately reuses the same URL, so identity rather than
-    # URL equality must distinguish the new text process from the old media process.
     text_request = GenerationRequest(
         messages=({"role": "user", "content": "Continue coding."},),
     )
@@ -140,8 +142,6 @@ def test_projector_is_loaded_only_for_exact_managed_media_process(
     assert shutdown_urls[-1] == url
     assert not hasattr(autotune, multimodal._MANAGED_MEDIA_PROCESS_ATTR)
 
-    # Same URL must not make the replacement text process look multimodal. A second
-    # image request must retire it and launch a fresh projector-backed process.
     assert autotune.ensure_tuned_server(config, media_request) == url
     assert autotune._MANAGED_PROCESS is not text_process
     assert shutdown_urls[-1] == url
