@@ -510,9 +510,9 @@ def _install_research_skill_compiler() -> None:
     current_compact = research._compact_research_for_design
     if not getattr(current_compact, "_mmm_external_procedural_skill", False):
         @wraps(current_compact)
-        def compact(research_payload: Mapping[str, Any]) -> dict[str, Any]:
-            result = dict(current_compact(research_payload))
-            bank = research_payload.get("procedural_skillbank")
+        def compact(research: Mapping[str, Any]) -> dict[str, Any]:
+            result = dict(current_compact(research))
+            bank = research.get("procedural_skillbank")
             if isinstance(bank, Mapping):
                 result["procedural_skillbank"] = {
                     "schema_version": bank.get("schema_version"),
