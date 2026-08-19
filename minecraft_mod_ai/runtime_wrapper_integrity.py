@@ -120,6 +120,23 @@ def _has_kind(signature: inspect.Signature, kind: Any) -> bool:
     return any(parameter.kind is kind for parameter in signature.parameters.values())
 
 
+def _is_transparent_lru_cache_wrapper(value: Any) -> bool:
+    """Return whether ``value`` is functools' transparent C cache wrapper.
+
+    ``functools.lru_cache`` preserves calls through ``__wrapped__`` but its C-level
+    ``_lru_cache_wrapper`` has no independent signature for
+    ``inspect.signature(..., follow_wrapped=False)``.  Skip only that transparent
+    layer; deeper Python wrappers are still audited normally.
+    """
+
+    wrapper_type = type(value)
+    return (
+        wrapper_type.__module__ == "functools"
+        and wrapper_type.__name__ == "_lru_cache_wrapper"
+        and callable(getattr(value, "__wrapped__", None))
+    )
+
+
 def _representative_calls(
     signature: inspect.Signature,
 ) -> tuple[tuple[tuple[object, ...], dict[str, object]], ...]:
@@ -177,6 +194,9 @@ def _representative_calls(
 
 def wrapper_compatibility_error(outer: Any, original: Any) -> str:
     """Return an explanation if ``outer`` narrows ``original``'s call surface."""
+
+    if _is_transparent_lru_cache_wrapper(outer):
+        return ""
 
     try:
         outer_signature = inspect.signature(outer, follow_wrapped=False)
