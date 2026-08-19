@@ -291,12 +291,9 @@ def _install_draft_kv_benchmark(autotune: Any) -> None:
             return decision
 
         benchmark_request = autotune._compact_benchmark_request(request)
-        probe_tokens = min(
-            int(config.max_new_tokens),
-            autotune._env_int(
-                "MMM_LLAMA_AUTOTUNE_TOKENS",
-                autotune._BENCHMARK_OUTPUT_TOKENS,
-            ),
+        probe_tokens = autotune._env_int(
+            "MMM_LLAMA_AUTOTUNE_TOKENS",
+            autotune._BENCHMARK_OUTPUT_TOKENS,
         )
         base_name = str(getattr(selected, "name", "mtp")).split("|dkv-", 1)[0]
         probes: list[Any] = []
