@@ -184,8 +184,8 @@ class ModelRegistry:
             max_input_tokens=_nonnegative_int(
                 raw.get("max_input_tokens", 0), f"{role}.max_input_tokens"
             ),
-            max_new_tokens=_backend_max_new_tokens(
-                raw.get("max_new_tokens", 1200), f"{role}.max_new_tokens", adapter
+            max_new_tokens=_positive_int(
+                raw.get("max_new_tokens", 1200), f"{role}.max_new_tokens"
             ),
             min_free_vram_mb=_nonnegative_int(
                 raw.get("min_free_vram_mb", 0), f"{role}.min_free_vram_mb"
@@ -240,12 +240,6 @@ def _required_env(raw: Mapping[str, Any], key: str, role: str) -> str:
             f"Environment variable {env_name} is required for role {role!r}."
         )
     return value
-
-
-def _backend_max_new_tokens(value: Any, field: str, adapter: str) -> int:
-    """Keep configured limits for other backends; llama.cpp uses native unlimited decode."""
-    configured = _positive_int(value, field)
-    return -1 if adapter == "llama_cpp" else configured
 
 
 def _positive_int(value: Any, field: str) -> int:
