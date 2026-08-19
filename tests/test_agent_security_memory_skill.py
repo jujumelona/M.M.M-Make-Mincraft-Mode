@@ -21,7 +21,10 @@ def _schema(name: str) -> dict[str, object]:
     }
 
 
-def test_verified_repair_memory_is_scoped_and_bounded(tmp_path: Path) -> None:
+def test_repair_memory_uses_single_v3_owner_without_legacy_patch_store(tmp_path: Path) -> None:
+    assert getattr(agentic._write_memory, "_mmm_v3_repair_memory", False)
+    assert getattr(agentic._read_memory, "_mmm_v3_repair_memory", False)
+
     agentic._write_memory(
         tmp_path,
         {
@@ -38,28 +41,8 @@ def test_verified_repair_memory_is_scoped_and_bounded(tmp_path: Path) -> None:
         },
     )
 
-    path = tmp_path / ".minecraft_ai" / "repair-experience.jsonl"
-    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    scope = record["evidence"]["memory_scope"]
-    assert scope["workflow"] == "repair"
-    assert scope["subtask"] == "diagnostic_repair"
-    assert scope["promotion_gate"] == "host_verified_repair_result"
-    assert scope["function_error_sha256"].startswith("sha256:")
-    pattern = record["repair_pattern"][0]
-    assert pattern["trust"] == "untrusted_prior_patch_data"
-    assert len(pattern["repair_excerpt"]) <= 1024
-
-    matches = agentic._read_memory(tmp_path, "cannot find symbol RegistryKey")
-    assert len(matches) == 1
-    match = matches[0]
-    assert match["memory_scope"] == {
-        "workflow": "repair",
-        "subtask": "diagnostic_repair",
-        "trust": "untrusted_prior_verified_evidence",
-        "can_authorize_tools": False,
-    }
-    assert match["repair_pattern"][0]["trust"] == "untrusted_prior_patch_data"
-    assert len(match["repair_pattern"][0]["repair_excerpt"]) <= 1024
+    legacy = tmp_path / ".minecraft_ai" / "repair-experience.jsonl"
+    assert not legacy.exists()
 
 
 def test_skill_context_is_compact_typed_and_cannot_widen_tool_authority() -> None:
