@@ -264,9 +264,11 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 
     metrics_before: dict[str, float] | None = None
     metrics_committed = False
+    client: Any | None = None
     try:
         import httpx
 
+        client = httpx.Client()
         payload = _server_payload(adapter, request)
         payload["stream"] = True
         timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
@@ -283,10 +285,10 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         first_output_reported = False
         saw_done = False
         last_slot: dict[str, int] | None = None
-        metrics_before = _metrics_snapshot(httpx, server_url)
+        metrics_before = _metrics_snapshot(client, server_url)
         committed_at_start = _telemetry_totals()
 
-        with httpx.stream("POST", endpoint, json=payload, timeout=timeout) as response:
+        with client.stream("POST", endpoint, json=payload, timeout=timeout) as response:
             if response.status_code != 200:
                 response.read()
                 body = response.text.strip().replace("\n", " ")
@@ -353,7 +355,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                     )
                     first_output_reported = True
                 if now - last_progress_report >= 15.0:
-                    slot = _slot_snapshot(httpx, server_url)
+                    slot = _slot_snapshot(client, server_url)
                     if slot is not None:
                         last_slot = slot
                         output_tokens = slot["output_tokens"]
@@ -406,7 +408,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 )
             raise RuntimeError("llama server stream produced no text content")
 
-        metrics_after = _metrics_snapshot(httpx, server_url)
+        metrics_after = _metrics_snapshot(client, server_url)
         usage = _commit_metrics_delta(metrics_before, metrics_after)
         metrics_committed = usage is not None
         elapsed = time.monotonic() - request_started
@@ -458,9 +460,12 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         # are still available. This makes cumulative usage reflect retries/failures.
         if not metrics_committed:
             try:
-                import httpx
+                telemetry_http = client
+                if telemetry_http is None:
+                    import httpx
 
-                metrics_after = _metrics_snapshot(httpx, server_url)
+                    telemetry_http = httpx
+                metrics_after = _metrics_snapshot(telemetry_http, server_url)
                 _commit_metrics_delta(metrics_before, metrics_after)
             except Exception:
                 pass
@@ -471,6 +476,12 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             model_id=adapter.config.model_id,
             cause=exc,
         ) from exc
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def install(autotune_module: Any) -> None:
