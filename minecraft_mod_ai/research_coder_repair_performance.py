@@ -51,13 +51,12 @@ class _ProjectLockPool:
             lock.release()
             with self._guard:
                 current = self._entries.get(key)
-                if current is None or current[0] is not lock:
-                    return
-                remaining = current[1] - 1
-                if remaining <= 0:
-                    self._entries.pop(key, None)
-                else:
-                    self._entries[key] = (lock, remaining)
+                if current is not None and current[0] is lock:
+                    remaining = current[1] - 1
+                    if remaining <= 0:
+                        self._entries.pop(key, None)
+                    else:
+                        self._entries[key] = (lock, remaining)
 
 
 _RECEIPT_LOCKS = _ProjectLockPool()
