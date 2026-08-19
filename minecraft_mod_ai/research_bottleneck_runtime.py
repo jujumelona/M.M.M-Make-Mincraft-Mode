@@ -319,6 +319,9 @@ def install() -> None:
     _restore_complete_plan_collection_pages()
     _restore_discovery_http_pool()
     _restore_research_code_context_contracts()
+    from .research_coder_repair_reuse import harden as harden_coder_repair_reuse
+
+    harden_coder_repair_reuse()
 
 
 __all__ = ["install"]
