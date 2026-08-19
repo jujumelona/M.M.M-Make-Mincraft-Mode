@@ -17,6 +17,7 @@ def install(model_router_module: Any) -> None:
     installed, so their isolation, staging and fail-closed semantics remain intact.
     """
     from .adaptive_execution_hardening import harden_adaptive_execution
+    from .agent_tool_allowlist_hardening import harden_agent_tool_allowlist
     from .hybrid_route_hardening import harden_code_search_routes
     from .inference_time_scaling import harden_runtime
     from .runtime_composer_hardening import harden_runtime_composer_identity
@@ -27,6 +28,7 @@ def install(model_router_module: Any) -> None:
     harden_adaptive_execution()
     harden_code_search_routes()
     harden_runtime_composer_identity()
+    harden_agent_tool_allowlist()
 
 
 def _install_router_loop(model_router_module: Any) -> None:
