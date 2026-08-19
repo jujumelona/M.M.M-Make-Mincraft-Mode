@@ -4,11 +4,6 @@ from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
 
-from . import model_router as _model_router
-from .adaptive_retrieval_contract import install as _install_adaptive_retrieval
-
-_install_adaptive_retrieval(_model_router)
-
 from .api import (
     ChatReply,
     CompleteChatReply,
