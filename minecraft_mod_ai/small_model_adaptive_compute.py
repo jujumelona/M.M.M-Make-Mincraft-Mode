@@ -293,9 +293,6 @@ def _reuse_policy(research: Mapping[str, Any], prompt: str) -> dict[str, Any] | 
 
 def harden(agentic_module: Any, central_module: Any) -> None:
     """Install quality-first adaptive compute outside the existing central wrappers."""
-    from .small_model_execution_extensions_contract import install as install_execution_extensions
-
-    install_execution_extensions()
     current_enabled = central_module._amplification_enabled
     if not getattr(current_enabled, _MARKER, False):
 
