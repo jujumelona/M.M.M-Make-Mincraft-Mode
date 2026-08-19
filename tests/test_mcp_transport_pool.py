@@ -109,6 +109,41 @@ class MCPTransportPoolTests(unittest.TestCase):
 
         self.assertEqual(tracker.closes.count("research"), 2)
 
+    def test_reservation_balances_simultaneous_dispatch(self) -> None:
+        tracker = _Tracker()
+
+        def factory(
+            stage: str,
+            env: Mapping[str, str],
+            timeout_seconds: float,
+        ) -> _FakeSessionContext:
+            del env, timeout_seconds
+            return _FakeSessionContext(tracker, stage)
+
+        pool = MCPTransportPool(worker_count=4, session_factory=factory)
+        barrier = threading.Barrier(4)
+        selected: list[Any] = []
+        selected_lock = threading.Lock()
+
+        def reserve() -> None:
+            barrier.wait()
+            worker = pool._reserve_worker()
+            with selected_lock:
+                selected.append(worker)
+
+        threads = [threading.Thread(target=reserve) for _ in range(4)]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2.0)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(len({id(worker) for worker in selected}), 4)
+        finally:
+            for worker in selected:
+                worker._release_pending()
+            pool.close()
+
     def test_stage_change_recycles_a_worker_without_growing_the_pool(self) -> None:
         tracker = _Tracker()
 
