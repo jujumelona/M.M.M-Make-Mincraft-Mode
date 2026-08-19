@@ -188,13 +188,6 @@ class CausalFrontierAdapter:
         if not candidates:
             self._publish_frontier(())
             return self.inner.generate_turn(request)
-        state = verified_state_from_messages(
-            request.messages,
-            candidates,
-            require_fresh_evidence=self.require_fresh_evidence,
-        )
-        query = _query(request.messages)
-        goals = goals_for_query(query)
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         forced_name = _forced_tool_name(request.tool_choice)
         if forced_name:
@@ -203,11 +196,20 @@ class CausalFrontierAdapter:
                 raise ModelConfigurationError(
                     f"Host-forced tool {forced_name!r} is outside the authorized causal frontier surface."
                 )
+            state: set[str] = set()
+            goals: tuple[str, ...] = ()
             names = (forced_name,)
             selected = (forced_schema,)
             tool_choice = request.tool_choice
             parallel_tool_calls = request.parallel_tool_calls
         else:
+            state = verified_state_from_messages(
+                request.messages,
+                candidates,
+                require_fresh_evidence=self.require_fresh_evidence,
+            )
+            query = _query(request.messages)
+            goals = tuple(goals_for_query(query))
             names = executable_frontier(
                 candidates,
                 state=state,
