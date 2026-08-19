@@ -41,7 +41,7 @@ class NativeLlamaTuningPipeline:
         self.runtime_tuning = runtime_tuning
 
     def _install_runtime_type_ownership(self) -> None:
-        """Publish the canonical extended tuning types before any wrapper captures them.
+        """Publish the canonical extended tuning type before any wrapper captures it.
 
         Historically ``llama_server_autotune`` started with a narrow ServerVariant and
         ``llama_server_runtime_tuning.install`` replaced it later with the extended
@@ -50,7 +50,7 @@ class NativeLlamaTuningPipeline:
         tuning policy sees one stable production model from the start.
         """
 
-        for name in ("ServerVariant", "ProbeResult", "AutotuneDecision"):
+        for name in ("ServerVariant",):
             canonical = getattr(self.runtime_tuning, name, None)
             if canonical is None:
                 raise RuntimeError(f"runtime tuning does not export canonical {name}")
