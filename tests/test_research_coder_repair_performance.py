@@ -30,6 +30,7 @@ def _dependency_context() -> SimpleNamespace:
     caller = "src/main/java/demo/Caller.java"
     contract = "src/main/java/demo/api/TargetContract.java"
     return SimpleNamespace(
+        byte_budget=16 * 1024,
         knowledge_terms=Counter({"vocabulary": 1}),
         units={
             target: _unit(
@@ -53,20 +54,14 @@ def _dependency_context() -> SimpleNamespace:
     )
 
 
-def test_runtime_wires_only_useful_repository_research_hardeners() -> None:
+def test_runtime_keeps_scoring_single_owned_and_only_hardens_fixed_point() -> None:
     cls = research_code_context.ResearchCodeContext
-    for function in (
-        cls.evolve_from_generation,
-        research_code_context._retrieval_metrics,
-        research_code_context._adaptive_weights,
-    ):
-        assert getattr(function, context_performance._MARKER, False)
-
+    assert getattr(cls.evolve_from_generation, context_performance._MARKER, False)
+    assert not getattr(research_code_context._retrieval_metrics, context_performance._MARKER, False)
+    assert not getattr(research_code_context._adaptive_weights, context_performance._MARKER, False)
     assert not getattr(cls._entry_points, context_performance._MARKER, False)
-    assert not getattr(cls._entry_points, "_mmm_semantic_entry_filter_v1", False)
     assert getattr(cls.evolve_from_generation, "_mmm_generation_fixed_point_v1", False)
     assert not getattr(cls._expand_partial_graph, context_performance._MARKER, False)
-    assert not getattr(cls._expand_partial_graph, "_mmm_two_hop_graph_v1", False)
 
 
 def test_runtime_wires_single_coder_repair_reuse_owner_without_round_override() -> None:
@@ -86,7 +81,7 @@ def test_native_evolution_state_budget_is_not_forced_to_two(monkeypatch) -> None
     assert custom_search._evolution_state_budget() == 8
 
 
-def test_repository_research_exposes_exactly_eight_weighted_signals() -> None:
+def test_repository_research_exposes_eight_weighted_signals_plus_quality_gate() -> None:
     quality = research_code_context.QualityVector(
         correctness=0.8,
         efficiency=0.7,
@@ -108,10 +103,10 @@ def test_repository_research_exposes_exactly_eight_weighted_signals() -> None:
     )
     weights = research_code_context._adaptive_weights("plan API Target", metrics)
 
-    assert "plan_alignment" not in metrics
-    assert "plan_alignment" not in weights
+    assert "plan_alignment" in metrics
+    assert "plan_alignment" in weights
     assert "quality" in metrics
-    assert "quality" in weights
+    assert "quality" not in weights
     assert len(weights) == 8
     assert sum(weights.values()) == pytest.approx(1.0)
 
@@ -160,6 +155,23 @@ def test_dependency_lane_replaces_broad_fallback_without_a_fixed_path_cap() -> N
     assert paths[0] == "Target dependency API"
     assert "repository dependency neighborhood" in paths[1]
     assert all("known repository vocabulary" not in path for path in paths)
+
+
+def test_dependency_query_uses_byte_budget_not_fixed_path_count() -> None:
+    context = _dependency_context()
+    context.byte_budget = 64 * 1024
+    for index in range(32):
+        path = f"src/main/java/demo/api/TargetContract{index}.java"
+        context.units[path] = _unit(path, "demo.api", types=(f"TargetContract{index}",))
+
+    query = reuse._dependency_neighborhood_query(
+        research_code_context,
+        context,
+        "Target dependency API contract",
+        None,
+    )
+
+    assert "TargetContract31.java" in query
 
 
 def test_build_log_signature_reads_only_a_bounded_tail(tmp_path: Path) -> None:

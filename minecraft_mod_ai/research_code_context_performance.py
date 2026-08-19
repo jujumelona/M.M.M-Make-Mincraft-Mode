@@ -1,56 +1,17 @@
 from __future__ import annotations
 
-"""Narrow hot-path fixes for the canonical repository-research owner.
+"""Hot-path lifecycle fixes for the canonical repository-research owner.
 
-Do not duplicate retrieval, graph, entry selection, or scoring implementations here.
-Reuse canonical results while folding the accidental ninth metric back into the
-declared eight-signal fusion and making exact draft evolution reach a host fixed point.
-Graph depth and entry selection remain owned by the canonical graph/query pipeline.
+Retrieval metrics, fusion weights, graph traversal, and ranking stay owned by
+``research_code_context``.  This module only prevents duplicate draft evolution for an
+identical generated state.  Keeping scoring in one owner avoids wrapper-dependent metric
+vectors and redundant normalization work on every candidate.
 """
 
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 _MARKER = "_mmm_research_code_context_performance_v1"
-
-
-def _install_eight_metric_fusion(module: Any) -> None:
-    current_metrics = module._retrieval_metrics
-    if not getattr(current_metrics, _MARKER, False):
-
-        @wraps(current_metrics)
-        def retrieval_metrics(*args: Any, **kwargs: Any) -> dict[str, float]:
-            metrics = dict(current_metrics(*args, **kwargs))
-            alignment = float(metrics.pop("plan_alignment", 0.0))
-            if alignment:
-                structure = float(metrics.get("structure", 0.0))
-                metrics["structure"] = min(1.0, 0.80 * structure + 0.20 * alignment)
-            return metrics
-
-        setattr(retrieval_metrics, _MARKER, True)
-        retrieval_metrics.__wrapped__ = current_metrics  # type: ignore[attr-defined]
-        module._retrieval_metrics = retrieval_metrics
-
-    current_weights = module._adaptive_weights
-    if getattr(current_weights, _MARKER, False):
-        return
-
-    @wraps(current_weights)
-    def adaptive_weights(
-        query: str,
-        metrics: Mapping[str, float] | None = None,
-    ) -> dict[str, float]:
-        weights = dict(current_weights(query, metrics))
-        alignment_weight = float(weights.pop("plan_alignment", 0.0))
-        weights["quality"] = float(weights.get("quality", 0.0)) + alignment_weight
-        total = sum(weights.values())
-        if total <= 0:
-            return weights
-        return {key: value / total for key, value in weights.items()}
-
-    setattr(adaptive_weights, _MARKER, True)
-    adaptive_weights.__wrapped__ = current_weights  # type: ignore[attr-defined]
-    module._adaptive_weights = adaptive_weights
 
 
 def _install_generation_fixed_point(module: Any) -> None:
@@ -80,7 +41,6 @@ def _install_generation_fixed_point(module: Any) -> None:
 
 
 def harden(module: Any) -> None:
-    _install_eight_metric_fusion(module)
     _install_generation_fixed_point(module)
 
 

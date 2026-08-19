@@ -7,7 +7,7 @@ from threading import RLock
 from . import runtime_contract_composer as _contract_composer
 
 _BOOTSTRAP_LOCK = RLock()
-_RUNTIME_COMPOSITION_VERSION = 2
+_RUNTIME_COMPOSITION_VERSION = 3
 _INITIALIZED = False
 
 
@@ -402,6 +402,7 @@ def _install_post_bootstrap_contracts() -> None:
         work_graph,
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
+    from .adaptive_retrieval_contract import install as install_adaptive_retrieval
     from .agent_security_contract import install as install_agent_security
     from .causal_tool_frontier_contract import install as install_causal_tool_frontier
     from .external_procedural_skill_contract import (
@@ -466,4 +467,5 @@ def _install_post_bootstrap_contracts() -> None:
     qwen_agent_family_contract.install()
     install_small_model_research_extensions()
     install_unified_trajectory_memory()
+    install_adaptive_retrieval(model_router)
     install_external_procedural_skill()

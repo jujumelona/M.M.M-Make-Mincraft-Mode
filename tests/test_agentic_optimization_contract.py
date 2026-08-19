@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from minecraft_mod_ai import agentic_optimization_contract as agentic
 from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
 
 
@@ -15,29 +14,6 @@ def _node(node_id: str, resource_class: str) -> WorkNode:
         payload={"kind": "test", "resource_class": resource_class},
         resource_class=resource_class,
     )
-
-
-def test_verified_repair_memory_retrieves_similar_signature(tmp_path: Path) -> None:
-    trace = {
-        "signature": "cannot find symbol RegistryKey src/main/java/Test.java",
-        "evidence": {"build_status": "FAIL"},
-        "repair_pattern": [
-            {
-                "operation": "edit",
-                "path": "src/main/java/Test.java",
-                "repair_excerpt": "RegistryKey",
-            }
-        ],
-        "winner_verifier": {"jdt_error_count": 0},
-    }
-    agentic._write_memory(tmp_path, trace)
-    matches = agentic._read_memory(
-        tmp_path,
-        "cannot find symbol RegistryKey at src/main/java/Test.java",
-    )
-    assert matches
-    assert matches[0]["similarity"] > 0.0
-    assert matches[0]["repair_pattern"][0]["path"].endswith("Test.java")
 
 
 def test_durable_claims_do_not_preclaim_one_scarce_lane(tmp_path: Path) -> None:

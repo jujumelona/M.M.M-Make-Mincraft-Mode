@@ -140,11 +140,13 @@ def test_native_tuning_pipeline_keeps_single_stage_order_and_is_versioned() -> N
         runtime_tuning=SimpleNamespace(),
     )
     assert tuple(stage.name for stage in pipeline.stages()) == (
+        "runtime-types",
         "hardware",
         "efficiency",
         "runtime",
         "cache-reuse",
         "decode-speed",
         "kernel-autotune",
+        "qwen-transport",
         "multimodal",
     )

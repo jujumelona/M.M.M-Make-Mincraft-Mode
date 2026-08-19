@@ -36,11 +36,7 @@ class AdapterConfig:
     provider: str = "local"
     quantization: str | None = None
     torch_dtype: str = "auto"
-    # Zero means native/backend-auto context. Host code must never invent a smaller
-    # context window; large authoritative requests are handled losslessly in pages.
     max_context: int = 0
-    # Legacy explicit prefill guard only. Zero disables it; it is never a truncation
-    # mechanism and production profiles should leave it disabled.
     max_input_tokens: int = 0
     max_new_tokens: int = 1200
     min_free_vram_mb: int = 0
@@ -49,6 +45,25 @@ class AdapterConfig:
     base_url: str = ""
     api_key: str = ""
     extra: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    """Transport-neutral function-tool definition kept for adapter compatibility."""
+
+    name: str
+    description: str = ""
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": dict(self.parameters),
+            },
+        }
 
 
 @dataclass(frozen=True)
@@ -68,13 +83,19 @@ class GenerationResponse:
 
 @dataclass(frozen=True)
 class GenerationRequest:
-    messages: Sequence[Mapping[str, Any]]
+    # ``messages`` is the canonical transport. The legacy task/prompt/metadata
+    # fields remain additive so old adapters/contracts can be upgraded without
+    # converting native tool definitions or dropping host metadata.
+    messages: Sequence[Mapping[str, Any]] = ()
     media_paths: tuple[Path, ...] = ()
     response_format: str = "text"
     response_schema: Mapping[str, Any] | None = None
-    tools: tuple[Mapping[str, Any], ...] = ()
+    tools: tuple[Mapping[str, Any] | ToolDefinition, ...] = ()
     tool_choice: str | Mapping[str, Any] | None = None
     parallel_tool_calls: bool = True
+    task: str = ""
+    prompt: str = ""
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 class ModelAdapter(ABC):

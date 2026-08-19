@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from minecraft_mod_ai import custom_generation_search_contract as custom_search
 from minecraft_mod_ai import research_code_context
 from minecraft_mod_ai import research_coder_repair_reuse as reuse
 
@@ -18,14 +19,11 @@ def _unit(path: str, package: str, imports=(), types=()):
     )
 
 
-def test_repocoder_retrieval_round_budget_is_hard_bounded(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_CODE_RESEARCH_EVOLUTION_ROUNDS", raising=False)
-    assert reuse._round_budget() == 2
-    monkeypatch.setenv("MMM_CODE_RESEARCH_EVOLUTION_ROUNDS", "99")
-    assert reuse._round_budget() == 2
-    monkeypatch.setenv("MMM_CODE_RESEARCH_EVOLUTION_ROUNDS", "1")
-    assert reuse._round_budget() == 1
-    assert reuse._bounded_evolution_state_budget() == 1
+def test_repocoder_has_no_legacy_fixed_round_override(monkeypatch) -> None:
+    assert not hasattr(reuse, "_round_budget")
+    assert not hasattr(reuse, "_bounded_evolution_state_budget")
+    monkeypatch.setenv("MMM_CODE_RESEARCH_EVOLUTION_STATES", "8")
+    assert custom_search._evolution_state_budget() == 8
 
 
 def test_dependency_query_prioritizes_direct_reverse_and_build_neighbors() -> None:
@@ -34,6 +32,7 @@ def test_dependency_query_prioritizes_direct_reverse_and_build_neighbors() -> No
     caller = "src/main/java/demo/Caller.java"
     contract = "src/main/java/demo/TargetContract.java"
     context = SimpleNamespace(
+        byte_budget=16 * 1024,
         units={
             target: _unit(target, "demo", imports=("demo.Helper",), types=("Target",)),
             helper: _unit(helper, "demo", types=("Helper",)),
@@ -53,6 +52,7 @@ def test_dependency_query_prioritizes_direct_reverse_and_build_neighbors() -> No
     assert target in query
     assert helper in query
     assert caller in query
+    assert contract in query
     assert "build.gradle" in query
 
 

@@ -101,14 +101,21 @@ def test_benchmark_is_staged_not_cartesian(monkeypatch: pytest.MonkeyPatch) -> N
         **_kwargs,
     ):
         calls.append(config)
-        bonus = (10.0 if config.flash_attn == "auto" else 0.0)
+        bonus = 10.0 if config.flash_attn == "auto" else 0.0
         bonus += 10.0 if config.batch == 1024 else 0.0
         bonus += 10.0 if (config.cache_type_k, config.cache_type_v) == ("q8_0", "f16") else 0.0
         return _probe(config, tps=20.0 + bonus)
 
     monkeypatch.setattr(kernel, "_run_probe", fake_run_probe)
     fake_autotune = SimpleNamespace(_env_float=lambda _n, default: default)
-    selected, probes = kernel._benchmark(fake_autotune, "llama-server", "/tmp/model.gguf", object(), object(), "NVIDIA Tesla T4")
+    selected, probes = kernel._benchmark(
+        fake_autotune,
+        "llama-server",
+        "/tmp/model.gguf",
+        object(),
+        object(),
+        "NVIDIA Tesla T4",
+    )
     assert len(calls) == 4
     assert len(probes) == 4
     assert selected == kernel.KernelConfig("auto", 1024, "q8_0", "f16")
@@ -116,7 +123,19 @@ def test_benchmark_is_staged_not_cartesian(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_install_applies_active_kernel_winner_and_clamps_ubatch(monkeypatch: pytest.MonkeyPatch) -> None:
     def base_args(_binary, _model_path, _config, _port):
-        return ["llama-server", "--flash-attn", "on", "--batch-size", "2048", "--ubatch-size", "2048", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0"]
+        return [
+            "llama-server",
+            "--flash-attn",
+            "on",
+            "--batch-size",
+            "2048",
+            "--ubatch-size",
+            "2048",
+            "--cache-type-k",
+            "q4_0",
+            "--cache-type-v",
+            "q4_0",
+        ]
 
     autotune = SimpleNamespace(
         _base_args=base_args,
@@ -168,11 +187,13 @@ def test_pipeline_keeps_existing_runtime_layers_and_adds_kernel_outer_stage() ->
         runtime_tuning=SimpleNamespace(),
     )
     assert tuple(stage.name for stage in pipeline.stages()) == (
+        "runtime-types",
         "hardware",
         "efficiency",
         "runtime",
         "cache-reuse",
         "decode-speed",
         "kernel-autotune",
+        "qwen-transport",
         "multimodal",
     )
