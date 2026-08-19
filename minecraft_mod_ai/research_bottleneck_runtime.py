@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Late-bootstrap bridge for supported hot paths that lost their source binding.
 
-Broad cross-module research monkeypatch composition is retired.  This bridge restores
+Broad cross-module research monkeypatch composition is retired. This bridge restores
 only still-supported behavior whose implementation remains present but became detached
-during the compatibility cleanup.  Each repair is narrow, idempotent, and can disappear
+during compatibility cleanup. Each repair is narrow, idempotent, and can disappear
 once the owning source module absorbs it directly.
 """
 
@@ -58,6 +58,7 @@ def _restore_complete_plan_collection_pages() -> None:
     if getattr(current, "_mmm_collection_page_bridge_v1", False):
         read_section = current
     else:
+
         @wraps(current)
         def read_section(
             index_path,
@@ -250,68 +251,11 @@ def _restore_discovery_http_pool() -> None:
 
 
 def _restore_research_code_context_contracts() -> None:
-    from . import research_code_context as research
+    """Delegate repository-research hardening to its single narrow owner."""
+    from . import research_code_context
+    from .research_code_context_performance import harden
 
-    cls = research.ResearchCodeContext
-
-    current_entry_points = cls._entry_points
-    if not getattr(current_entry_points, "_mmm_semantic_entry_filter_v1", False):
-        @wraps(current_entry_points)
-        def entry_points(self, query: str):
-            candidates = current_entry_points(self, query)
-            if not candidates:
-                return candidates
-            query_tokens = research._tokens(query)
-            relevant = [
-                symbol
-                for symbol in candidates
-                if research._overlap(
-                    query_tokens,
-                    research._tokens(symbol.name)
-                    | research._tokens(symbol.signature)
-                    | research._tokens(symbol.path),
-                )
-                > 0.0
-            ]
-            return relevant or candidates
-
-        entry_points._mmm_semantic_entry_filter_v1 = True
-        entry_points.__wrapped__ = current_entry_points
-        cls._entry_points = entry_points
-
-    current_expand = cls._expand_partial_graph
-    if not getattr(current_expand, "_mmm_two_hop_graph_v1", False):
-        @wraps(current_expand)
-        def expand_partial_graph(self, entries, *, query=""):
-            return [
-                (symbol, hop)
-                for symbol, hop in current_expand(self, entries, query=query)
-                if hop <= 2
-            ]
-
-        expand_partial_graph._mmm_two_hop_graph_v1 = True
-        expand_partial_graph.__wrapped__ = current_expand
-        cls._expand_partial_graph = expand_partial_graph
-
-    current_evolve = cls.evolve_from_generation
-    if not getattr(current_evolve, "_mmm_generation_fixed_point_v1", False):
-        @wraps(current_evolve)
-        def evolve_from_generation(self, text: str):
-            digest = research._sha(text)
-            seen = getattr(self, "_mmm_generation_evolution_seen", None)
-            if not isinstance(seen, set):
-                seen = set()
-                self._mmm_generation_evolution_seen = seen
-            if digest in seen:
-                violations = self.monitor.validate_model_output(text)
-                return (self.bundle(), violations) if violations else (None, ())
-            result = current_evolve(self, text)
-            seen.add(digest)
-            return result
-
-        evolve_from_generation._mmm_generation_fixed_point_v1 = True
-        evolve_from_generation.__wrapped__ = current_evolve
-        cls.evolve_from_generation = evolve_from_generation
+    harden(research_code_context)
 
 
 def install() -> None:
