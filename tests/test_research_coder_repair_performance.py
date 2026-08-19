@@ -56,14 +56,14 @@ def _dependency_context() -> SimpleNamespace:
 def test_runtime_wires_only_useful_repository_research_hardeners() -> None:
     cls = research_code_context.ResearchCodeContext
     for function in (
-        cls._entry_points,
         cls.evolve_from_generation,
         research_code_context._retrieval_metrics,
         research_code_context._adaptive_weights,
     ):
         assert getattr(function, context_performance._MARKER, False)
 
-    assert getattr(cls._entry_points, "_mmm_semantic_entry_filter_v1", False)
+    assert not getattr(cls._entry_points, context_performance._MARKER, False)
+    assert not getattr(cls._entry_points, "_mmm_semantic_entry_filter_v1", False)
     assert getattr(cls.evolve_from_generation, "_mmm_generation_fixed_point_v1", False)
     assert not getattr(cls._expand_partial_graph, context_performance._MARKER, False)
     assert not getattr(cls._expand_partial_graph, "_mmm_two_hop_graph_v1", False)
