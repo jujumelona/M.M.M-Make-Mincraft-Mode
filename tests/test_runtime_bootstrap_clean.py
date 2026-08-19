@@ -45,6 +45,16 @@ def _composition_calls(path: Path) -> tuple[set[str], set[str]]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        # A tuning installer may be passed as the callable owned by TuningStage
+        # instead of being invoked through a lambda. That is still composition and
+        # must be visible to this static ownership audit.
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == 'TuningStage'
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Name)
+        ):
+            direct.add(node.args[1].id)
         if isinstance(node.func, ast.Name):
             direct.add(node.func.id)
             continue
