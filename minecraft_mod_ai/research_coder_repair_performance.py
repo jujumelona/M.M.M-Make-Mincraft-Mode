@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Narrow hot-path hardening for coder research -> repair evidence reuse.
 
-The semantic feature stays owned by :mod:`research_coder_repair_reuse`.  This module
+The semantic feature stays owned by :mod:`research_coder_repair_reuse`. This module
 only removes repeated whole-repository scans, caps query-path fanout at the canonical
-budget, tail-reads build logs, and keeps receipt writes project-scoped.  It does not
+budget, tail-reads build logs, and keeps receipt writes project-scoped. It does not
 introduce a second retriever, scorer, repair engine, or runtime composition owner.
 """
 
@@ -21,6 +21,7 @@ _INDEX_ATTR = "_mmm_dependency_neighborhood_index_v1"
 _DEFAULT_QUERY_PATH_BUDGET = 5
 _LOG_READ_BYTES = 32_768
 _LOG_TEXT_CHARS = 16_000
+_COMMAND_TEXT_CHARS = 4_096
 _BUILD_NAMES = {
     "build.gradle",
     "build.gradle.kts",
@@ -233,7 +234,7 @@ def _dependency_neighborhood_query(
 
 def _bounded_log_tail(command: Mapping[str, Any]) -> str:
     pieces = [
-        str(command.get(key, ""))
+        command[key][-_COMMAND_TEXT_CHARS:]
         for key in ("error", "stderr", "stdout", "output")
         if isinstance(command.get(key), str)
     ]
@@ -247,10 +248,10 @@ def _bounded_log_tail(command: Mapping[str, Any]) -> str:
                     size = handle.tell()
                     handle.seek(max(0, size - _LOG_READ_BYTES), os.SEEK_SET)
                     tail = handle.read(_LOG_READ_BYTES)
-                pieces.append(tail.decode("utf-8", errors="replace")[-_LOG_TEXT_CHARS:])
+                pieces.append(tail.decode("utf-8", errors="replace"))
             except OSError:
                 pass
-    return "\n".join(pieces)
+    return "\n".join(pieces)[-_LOG_TEXT_CHARS:]
 
 
 def _persist_research_receipt(
@@ -324,7 +325,7 @@ def _persist_research_receipt(
                 pass
 
 
-def _install_helper_replacements(reuse_module: Any, research_module: Any) -> None:
+def _install_helper_replacements(reuse_module: Any) -> None:
     current_dependency = reuse_module._dependency_neighborhood_query
     if not getattr(current_dependency, _MARKER, False):
 
@@ -400,7 +401,7 @@ def harden() -> None:
     from . import research_code_context
     from . import research_coder_repair_reuse
 
-    _install_helper_replacements(research_coder_repair_reuse, research_code_context)
+    _install_helper_replacements(research_coder_repair_reuse)
     _install_query_path_budget(research_code_context)
 
 
