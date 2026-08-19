@@ -1,8 +1,10 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
+from .mcp_transport_pool import install_agent_mcp_transport_pool
 from .runtime_bootstrap import initialize_runtime
 
 initialize_runtime()
+install_agent_mcp_transport_pool()
 
 from .api import (
     ChatReply,
