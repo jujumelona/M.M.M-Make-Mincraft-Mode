@@ -56,3 +56,66 @@ def test_auto_repair_width_keeps_single_decode_when_one_slot(monkeypatch) -> Non
         "build": {"status": "FAIL", "error": "x" * 200},
     }
     assert agentic._repair_candidate_count(engine, evidence, ()) == 1
+
+
+def test_research_symbol_filter_drops_zero_score_global_seeds(tmp_path: Path) -> None:
+    from minecraft_mod_ai import research_code_context as research
+
+    root = tmp_path / "mod"
+    java = root / "src/main/java/example"
+    java.mkdir(parents=True)
+    (java / "Entry.java").write_text(
+        "package example; public final class Entry { public void tick(){ Service.compute(); } }\n",
+        encoding="utf-8",
+    )
+    (java / "Service.java").write_text(
+        "package example; public final class Service { public static void compute(){} public void unrelated(){} }\n",
+        encoding="utf-8",
+    )
+
+    class Router:
+        def rerank(self, query, documents):
+            return [1.0 if " tick" in (" " + document.casefold()) else 0.0 for document in documents]
+
+    module = SimpleNamespace(
+        kind="custom_java",
+        config={"feature": "tick"},
+        depends_on=(),
+        required_gates=(),
+    )
+    context = research.ResearchCodeContext(
+        root,
+        project_index=ProjectIndex(root),
+        router=Router(),
+        module=module,
+        minecraft_version="test",
+        loader="fabric",
+        mappings="test",
+        byte_budget=8192,
+    )
+    entries = context._entry_points("tick")
+    assert entries
+    assert {item.name for item in entries} == {"tick"}
+
+
+def test_research_metric_vector_always_preserves_plan_alignment() -> None:
+    from minecraft_mod_ai import research_code_context as research
+
+    quality = research._quality(
+        "public int compute(){ return normalize(1); }",
+        path="src/main/java/example/Service.java",
+    )
+    metrics = research._retrieval_metrics(
+        "Service compute dependency API validate",
+        "public int compute(){ return normalize(1); }",
+        path="src/main/java/example/Service.java",
+        symbols=("compute",),
+        graph_hop=1,
+        quality=quality,
+        target_plan="locate contract -> call normalize -> validate",
+        example_plan="call normalize",
+    )
+    assert "plan_alignment" in metrics
+    weights = research._adaptive_weights("Service.compute dependency API", metrics)
+    assert "plan_alignment" in weights
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
