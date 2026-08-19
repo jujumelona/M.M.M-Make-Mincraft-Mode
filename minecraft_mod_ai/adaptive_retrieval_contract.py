@@ -31,6 +31,30 @@ def install(model_router_module: Any) -> None:
     harden_runtime_composer_identity()
     harden_agent_tool_allowlist()
     harden_temporary_skill_transport()
+    _expose_composed_repair_contracts()
+
+
+def _inherit_boolean_contract_markers(current: Any) -> None:
+    """Expose verified wrapper contracts on the final composed callable.
+
+    ``functools.wraps`` copies the immediate wrapper metadata, but late composition can
+    place another wrapper above a callable whose ``_mmm_*`` marker is used as an
+    executable contract by independent validators. Walk only the explicit
+    ``__wrapped__`` chain and copy true boolean contract markers; no behavior or
+    authority is inferred from names or prose.
+    """
+    wrapped = getattr(current, "__wrapped__", None)
+    while callable(wrapped):
+        for name, value in vars(wrapped).items():
+            if name.startswith("_mmm_") and value is True:
+                setattr(current, name, True)
+        wrapped = getattr(wrapped, "__wrapped__", None)
+
+
+def _expose_composed_repair_contracts() -> None:
+    from .repair_engine import RepairEngine
+
+    _inherit_boolean_contract_markers(RepairEngine._signature)
 
 
 def _install_router_loop(model_router_module: Any) -> None:
