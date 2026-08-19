@@ -214,9 +214,8 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
     finish_reason = str(choice.get("finish_reason", "") or "").strip().lower()
     if finish_reason == "length":
         raise RuntimeError(
-            "native llama-server truncated the completion at max_tokens; paginate the "
-            "response or raise the explicit Qwen output limit instead of repairing a "
-            "partial answer"
+            "native llama-server reached its model/server context boundary before "
+            "the assistant turn completed"
         )
     message = choice.get("message")
     if not isinstance(message, Mapping):
