@@ -498,7 +498,7 @@ def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = No
             model_path: str,
             config: Any,
             request: Any,
-            fingerprint_value: str,
+            fingerprint: str,
         ):
             with _BENCHMARK_LOCK:
                 old_target = runtime_tuning._parallel_target
@@ -513,7 +513,7 @@ def install(autotune: Any, runtime_tuning: Any, hardware_policy: Any | None = No
                         runtime_tuning._parallel_candidates = lambda *_args, **_kwargs: ()
                     runtime_tuning._balanced_score = _decode_ratio
                     decision = current_benchmark(
-                        binary, model_path, config, request, fingerprint_value
+                        binary, model_path, config, request, fingerprint
                     )
                 finally:
                     runtime_tuning._parallel_target = old_target
