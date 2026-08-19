@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
 from minecraft_mod_ai import research_code_context
+from minecraft_mod_ai import research_code_context_performance as context_performance
 from minecraft_mod_ai import research_coder_repair_performance as performance
 from minecraft_mod_ai import research_coder_repair_reuse as reuse
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
@@ -19,6 +22,22 @@ def _unit(path: str, package: str, *, imports=(), types=()):
         types=tuple(types),
         methods=(),
     )
+
+
+def test_runtime_wires_single_repository_research_hardener() -> None:
+    cls = research_code_context.ResearchCodeContext
+    for function in (
+        cls._entry_points,
+        cls._expand_partial_graph,
+        cls.evolve_from_generation,
+        research_code_context._retrieval_metrics,
+        research_code_context._adaptive_weights,
+    ):
+        assert getattr(function, context_performance._MARKER, False)
+
+    assert getattr(cls._entry_points, "_mmm_semantic_entry_filter_v1", False)
+    assert getattr(cls._expand_partial_graph, "_mmm_two_hop_graph_v1", False)
+    assert getattr(cls.evolve_from_generation, "_mmm_generation_fixed_point_v1", False)
 
 
 def test_runtime_wires_semantic_reuse_and_performance_hardening() -> None:
@@ -39,6 +58,36 @@ def test_runtime_wires_semantic_reuse_and_performance_hardening() -> None:
     assert getattr(reuse._read_log_tail, performance._MARKER, False)
     assert getattr(reuse._persist_research_receipt, performance._MARKER, False)
     assert custom_search._evolution_state_budget is reuse._bounded_evolution_state_budget
+
+
+def test_repository_research_exposes_exactly_eight_weighted_signals() -> None:
+    quality = research_code_context.QualityVector(
+        correctness=0.8,
+        efficiency=0.7,
+        security=0.9,
+        maintainability=0.8,
+        complexity_fit=0.7,
+        readability=0.8,
+        stepwise_clarity=0.9,
+    )
+    metrics = research_code_context._retrieval_metrics(
+        "plan API Target",
+        "class Target { void register() {} }",
+        path="src/main/java/demo/Target.java",
+        symbols=("Target", "register"),
+        graph_hop=0,
+        quality=quality,
+        target_plan="locate -> register -> validate",
+        example_plan="locate -> register -> validate",
+    )
+    weights = research_code_context._adaptive_weights("plan API Target", metrics)
+
+    assert "plan_alignment" not in metrics
+    assert "plan_alignment" not in weights
+    assert "quality" in metrics
+    assert "quality" in weights
+    assert len(weights) == 8
+    assert sum(weights.values()) == pytest.approx(1.0)
 
 
 def test_dependency_neighborhood_index_is_reused_without_rescanning_units() -> None:
@@ -118,10 +167,16 @@ def test_build_log_signature_reads_only_a_bounded_tail(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    tail = performance._bounded_log_tail({"log_path": str(log)})
+    tail = performance._bounded_log_tail(
+        {
+            "stderr": "OLD_STDERR\n" + ("y" * 20_000),
+            "log_path": str(log),
+        }
+    )
 
     assert "END_MARKER" in tail
     assert "START_MARKER" not in tail
+    assert "OLD_STDERR" not in tail
     assert len(tail) <= performance._LOG_TEXT_CHARS
 
 
@@ -132,4 +187,12 @@ def test_receipt_lock_pool_uses_distinct_project_locks() -> None:
         with pool.hold("project-b"):
             second = pool._entries["project-b"][0]
             assert first is not second
+    assert not pool._entries
+
+
+def test_receipt_lock_pool_preserves_exceptions_and_cleans_up() -> None:
+    pool = performance._ProjectLockPool()
+    with pytest.raises(RuntimeError, match="boom"):
+        with pool.hold("project-a"):
+            raise RuntimeError("boom")
     assert not pool._entries
