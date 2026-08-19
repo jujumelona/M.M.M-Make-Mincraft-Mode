@@ -285,6 +285,7 @@ def _install_architecture_contracts() -> None:
     from .atomic_quality_binding_contract import install as install_atomic_quality
     from .build_input_scope_contract import install as install_build_input_scope
     from .clean_room_verification_contract import install as install_clean_room
+    from .coder_max_efficiency_contract import install_coder_max_efficiency
     from .custom_generation_search_contract import install as install_custom_generation_search
     from .orchestrator_jdt_gate_contract import install as install_orchestrator_jdt_gate
     from .repair_diagnostics_contract import install as install_repair_diagnostics
@@ -324,6 +325,7 @@ def _install_architecture_contracts() -> None:
         work_graph_module=work_graph,
     )
     install_custom_generation_search(custom_module_generator)
+    install_coder_max_efficiency()
     install_repair_memory_budget(agentic_optimization_contract)
     install_visual_scope(complete_orchestrator)
     install_gate_compatibility(complete_orchestrator)
