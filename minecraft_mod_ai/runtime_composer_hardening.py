@@ -15,9 +15,13 @@ def harden_runtime_composer_identity() -> None:
     installer itself are execution state and are represented only by type; counters,
     markers and other STORE_DEREF mutations therefore cannot make a completed graph
     appear to have changed on safe re-entry.
-    """
-    from . import runtime_contract_composer as composer
 
+    The actual composer reference is obtained through runtime_bootstrap, which remains
+    the package's sole approved owner of the package-level composition graph.
+    """
+    from . import runtime_bootstrap as bootstrap_owner
+
+    composer = bootstrap_owner._contract_composer
     current = composer._installer_identity
     if getattr(current, _MARKER, False):
         return
