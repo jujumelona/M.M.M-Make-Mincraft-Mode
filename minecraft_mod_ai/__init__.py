@@ -3,6 +3,7 @@
 from .coder_tool_route_integrity_contract import install as install_coder_tool_route_integrity
 from .mcp_transport_pool import install_agent_mcp_transport_pool
 from .runtime_bootstrap import initialize_runtime
+from .runtime_preflight import run_runtime_preflight
 
 initialize_runtime()
 install_agent_mcp_transport_pool()
@@ -19,6 +20,11 @@ install_coder_tool_route_integrity(
     small_model_module=_small_model_max_agent_contract,
     causal_module=_causal_tool_frontier_contract,
 )
+
+# Run a model-free structural smoke test only after the final tool-loop composition
+# is installed. Any Python/wrapper/causal regression now fails during package import,
+# before a production run spends time loading multi-gigabyte model weights.
+run_runtime_preflight()
 
 from .api import (
     ChatReply,
