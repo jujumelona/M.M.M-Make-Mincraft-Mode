@@ -2,8 +2,10 @@ from __future__ import annotations
 
 """Per-turn causal tool exposure for the live retrieve/act/observe loop."""
 
+import json
 import threading
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 from .causal_tool_graph import executable_frontier, verified_state_from_messages
@@ -19,6 +21,16 @@ _CURRENT_FRONTIER_NAMES: ContextVar[tuple[str, ...] | None] = ContextVar(
     "mmm_causal_current_frontier_names", default=None
 )
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
+_INTENT_FIELDS = (
+    "phase",
+    "task",
+    "goal",
+    "objective",
+    "action",
+    "request",
+    "query",
+    "instruction",
+)
 
 
 class FrontierExecutionGate:
@@ -100,16 +112,63 @@ def _forced_tool_name(tool_choice: Any) -> str:
     return str(function.get("name", "")).strip()
 
 
+def _structured_intent(payload: Mapping[str, Any]) -> str:
+    """Extract routing intent without hauling evidence/context blobs into the query."""
+
+    parts: list[str] = []
+    for key in _INTENT_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(f"{key}: {value.strip()[:4096]}")
+    rules = payload.get("rules")
+    if isinstance(rules, Sequence) and not isinstance(rules, (str, bytes, bytearray)):
+        for value in rules[:16]:
+            if isinstance(value, str) and value.strip():
+                parts.append(f"rule: {value.strip()[:1024]}")
+    module = payload.get("module")
+    if isinstance(module, Mapping):
+        for key in ("module_id", "kind", "name", "type"):
+            value = module.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(f"module.{key}: {value.strip()[:512]}")
+    return "\n".join(parts)
+
+
+def _intent_text(content: Any) -> str:
+    if isinstance(content, Mapping):
+        extracted = _structured_intent(content)
+        return extracted or json.dumps(content, ensure_ascii=False, default=str)
+    if not isinstance(content, str) or not content.strip():
+        return ""
+    raw = content.strip()
+    if not raw.startswith("{"):
+        return raw
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if not isinstance(payload, Mapping):
+        return raw
+    extracted = _structured_intent(payload)
+    return extracted or raw
+
+
 def _query(messages: Sequence[Mapping[str, Any]]) -> str:
-    """Recover terminal intent from user turns only."""
+    """Recover bounded terminal intent from user turns only.
+
+    Structured user requests can contain tens of kilobytes of repository evidence.
+    Routing from the last 12 KiB of that blob can discard the leading ``phase`` and
+    ``task`` fields entirely. Extract explicit intent fields before applying the byte
+    bound so evidence payload size cannot change the terminal causal goal.
+    """
 
     parts: list[str] = []
     for message in reversed(messages):
         if str(message.get("role", "")).casefold() != "user":
             continue
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            parts.append(content.strip())
+        value = _intent_text(message.get("content"))
+        if value:
+            parts.append(value)
         if sum(len(item) for item in parts) >= 12_000:
             break
     return "\n".join(reversed(parts))[-12_000:]
@@ -176,7 +235,7 @@ class CausalFrontierAdapter:
 
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
-        from .model_adapters import GenerationRequest, ModelConfigurationError
+        from .model_adapters import ModelConfigurationError
 
         # The core loop intentionally emits an explicit tools=() request for
         # fixed-point/final synthesis. That is a control signal, not a new planning
@@ -228,22 +287,20 @@ class CausalFrontierAdapter:
             parallel_tool_calls = True if selected else False
         self._publish_frontier(tuple(_name(schema) for schema in selected))
 
-        rebuilt = GenerationRequest(
+        # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
+        # owned by upstream contracts (including future additions) while changing only
+        # the per-turn causal surface and injected capability context.
+        rebuilt = replace(
+            request,
             messages=_with_capability_context(
                 request.messages,
                 stage=self.stage,
                 role=self.role,
                 tools=selected,
             ),
-            media_paths=request.media_paths,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
             tools=selected,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
-            task=getattr(request, "task", ""),
-            prompt=getattr(request, "prompt", ""),
-            metadata=getattr(request, "metadata", {}),
         )
         print(
             "causal per-turn frontier:",
