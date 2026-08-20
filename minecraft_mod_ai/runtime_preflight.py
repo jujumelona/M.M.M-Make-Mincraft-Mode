@@ -127,6 +127,19 @@ def _assert_generation_concurrency_guards() -> None:
             )
 
 
+def _assert_retrieval_model_residency() -> None:
+    from .model_router import ModelRouter
+
+    if getattr(ModelRouter.embed, "_mmm_resident_embedding_adapter", False) is not True:
+        raise RuntimePreflightError(
+            "ModelRouter.embed would reconstruct the embedding adapter per RAG batch"
+        )
+    if getattr(ModelRouter.rerank, "_mmm_resident_reranker_adapter", False) is not True:
+        raise RuntimePreflightError(
+            "ModelRouter.rerank would reconstruct the reranker adapter per query"
+        )
+
+
 def _assert_repair_causal_progression() -> None:
     from .causal_tool_graph import executable_frontier, verified_state_from_messages
 
@@ -273,6 +286,7 @@ def run_runtime_preflight() -> None:
             ("wrapper-chain", _assert_wrapper_chain),
             ("routing-intent", _assert_routing_intent_alignment),
             ("generation-concurrency", _assert_generation_concurrency_guards),
+            ("retrieval-model-residency", _assert_retrieval_model_residency),
             ("repair-causal-progression", _assert_repair_causal_progression),
             ("per-turn-adapter", _assert_per_turn_adapter),
             ("compaction-clone", _assert_compaction_clone),
