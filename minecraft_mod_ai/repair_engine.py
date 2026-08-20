@@ -278,14 +278,19 @@ class RepairEngine:
             "project_context": context,
         }
         text = self.router.generate_text(
-            "coder",
+            "coder_safe",
             [
                 {
                     "role": "system",
-                    "content": "You are a hash-guarded Minecraft source repair agent.",
+                    "content": (
+                        "You are a hash-guarded Minecraft source repair planner. "
+                        "Inspect evidence with read-only tools and return patch operations; "
+                        "the host transaction is the only writer."
+                    ),
                 },
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
+            tool_stage="quality",
             response_format="json",
         )
         value = _extract_json(text)
