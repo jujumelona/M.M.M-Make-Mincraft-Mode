@@ -11,6 +11,7 @@ FULL_MODE = "Full"
 EXISTING_MOD_MODE = "Revise"
 EXISTING_PLAN_MODE = "Execute"
 DEBUG_MODE = "Debug"
+DEBUG_AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
 RUN_MODES = (
     PLAN_MODE,
     FULL_MODE,
@@ -55,6 +56,12 @@ def needs_existing_mod(run_mode: str) -> bool:
 
 def should_build(run_mode: str) -> bool:
     return validate_run_mode(run_mode) not in {PLAN_MODE, DEBUG_MODE}
+
+
+def debug_audit_path(repo_dir: str | Path) -> Path:
+    """Return the canonical Debug audit entrypoint inside a repository checkout."""
+
+    return Path(repo_dir) / DEBUG_AUDIT_RELATIVE_PATH
 
 
 def _uploaded_file(*, suffix: str, destination: Path, purpose: str) -> Path:
@@ -191,6 +198,7 @@ def run_plan_dialog(
 
 
 __all__ = [
+    "DEBUG_AUDIT_RELATIVE_PATH",
     "DEBUG_MODE",
     "EXISTING_MOD_MODE",
     "EXISTING_PLAN_MODE",
@@ -199,6 +207,7 @@ __all__ = [
     "PLAN_MODE",
     "RUN_MODES",
     "PlanDialogResult",
+    "debug_audit_path",
     "needs_existing_mod",
     "needs_prompt",
     "prepare_existing_mod_input",
