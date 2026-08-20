@@ -49,23 +49,12 @@ _qwen36_35b: &qwen36_35b
   min_free_vram_mb: 2000
   exclusive_gpu: true
 
-_qwen36_27b_q4: &qwen36_27b_q4
-  model_id: unsloth/Qwen3.6-27B-MTP-GGUF
+_qwen38_27b_q4: &qwen38_27b_q4
+  model_id: unsloth/Qwen3.8-27B-GGUF
   adapter: llama_cpp
-  gguf_filename: Qwen3.6-27B-UD-Q4_K_XL.gguf
-  mmproj_filename: mmproj-F16.gguf
-  torch_dtype: float16
-  max_context: 262144
-  max_input_tokens: 0
-  max_new_tokens: 8192
-  min_free_vram_mb: 2000
-  exclusive_gpu: true
-
-_qwen36_27b_q3: &qwen36_27b_q3
-  model_id: unsloth/Qwen3.6-27B-MTP-GGUF
-  adapter: llama_cpp
-  gguf_filename: Qwen3.6-27B-Q3_K_M.gguf
-  mmproj_filename: mmproj-F16.gguf
+  gguf_filename: Qwen3.8-27B-UD-Q4_K_XL.gguf
+  mmproj_filename: mmproj-BF16.gguf
+  native_mtp: true
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
@@ -110,26 +99,14 @@ profiles:
       reranker: *reranker
       image_generator: *image_gen
 
-  Qwen3.6-27B_18GB:
-    description: unsloth/Qwen3.6-27B-MTP-GGUF UD-Q4_K_XL (17.9GB)
+  Qwen3.8-27B_18GB:
+    description: unsloth/Qwen3.8-27B-GGUF UD-Q4_K_XL (17.9GB); native MTP.
     roles:
-      planner: *qwen36_27b_q4
-      researcher: *qwen36_27b_q4
-      coder: *qwen36_27b_q4
-      coder_safe: *qwen36_27b_q4
-      visual_critic: *qwen36_27b_q4
-      embedding: *embedding
-      reranker: *reranker
-      image_generator: *image_gen
-
-  Qwen3.6-27B_14GB:
-    description: unsloth/Qwen3.6-27B-MTP-GGUF Q3_K_M (13.8GB)
-    roles:
-      planner: *qwen36_27b_q3
-      researcher: *qwen36_27b_q3
-      coder: *qwen36_27b_q3
-      coder_safe: *qwen36_27b_q3
-      visual_critic: *qwen36_27b_q3
+      planner: *qwen38_27b_q4
+      researcher: *qwen38_27b_q4
+      coder: *qwen38_27b_q4
+      coder_safe: *qwen38_27b_q4
+      visual_critic: *qwen38_27b_q4
       embedding: *embedding
       reranker: *reranker
       image_generator: *image_gen
