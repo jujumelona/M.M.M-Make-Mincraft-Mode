@@ -33,6 +33,21 @@ _MUTATION_TOOLS = frozenset(
         "repair_project",
     }
 )
+_FAILURE_STATUSES = frozenset(
+    {
+        "FAIL",
+        "FAILED",
+        "ERROR",
+        "UNAVAILABLE",
+        "PARTIAL",
+        "BLOCKED",
+        "INVALID",
+        "REJECTED",
+        "CANCELLED",
+        "CANCELED",
+        "TIMEOUT",
+    }
+)
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -80,6 +95,111 @@ def _is_implementation_request(messages: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+def _tool_payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    content = message.get("content")
+    if isinstance(content, Mapping):
+        return content
+    if not isinstance(content, str) or not content.strip():
+        return None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _walk_mappings(value: Any):
+    pending = [value]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if isinstance(current, Mapping):
+            marker = id(current)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            yield current
+            pending.extend(current.values())
+        elif isinstance(current, Sequence) and not isinstance(
+            current, (str, bytes, bytearray)
+        ):
+            pending.extend(current)
+
+
+def _has_applied_patch_receipt(payload: Mapping[str, Any]) -> bool:
+    """Require the transaction receipt that is emitted only after a real source diff."""
+
+    for item in _walk_mappings(payload):
+        if str(item.get("schema_version", "")) != "mmm/source-patch-receipt-v1":
+            continue
+        if str(item.get("status", "")).strip().upper() != "APPLIED":
+            continue
+        operations = item.get("operations")
+        if isinstance(operations, Sequence) and not isinstance(
+            operations, (str, bytes, bytearray)
+        ) and len(operations) > 0:
+            return True
+    return False
+
+
+def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
+    """Return true only for a successful mutation observation already seen by the host loop."""
+
+    for message in reversed(messages):
+        if str(message.get("role", "")).strip().casefold() != "tool":
+            continue
+        name = str(message.get("name", "")).strip()
+        if name not in _MUTATION_TOOLS:
+            continue
+        payload = _tool_payload(message)
+        if payload is None or payload.get("ok") is not True:
+            continue
+        if _has_applied_patch_receipt(payload):
+            return True
+        # Older reviewed mutation tools may expose a different receipt envelope.
+        # Accept them only when the transport succeeded and no nested result reports
+        # an explicit semantic failure. `apply_source_patch` is stricter because its
+        # source-patch receipt is the production custom-coder write contract.
+        if name == "apply_source_patch":
+            continue
+        failed = any(
+            str(item.get("status", "")).strip().upper() in _FAILURE_STATUSES
+            for item in _walk_mappings(payload)
+        )
+        if not failed:
+            return True
+    return False
+
+
+def _force_tool_choice(request: Any, tool_name: str) -> Any:
+    from .model_adapters import GenerationRequest
+
+    selected = tuple(
+        schema
+        for schema in request.tools
+        if _tool_name(schema) == tool_name
+    )
+    if not selected:
+        return request
+    remainder = tuple(
+        schema
+        for schema in request.tools
+        if _tool_name(schema) != tool_name
+    )
+    return GenerationRequest(
+        messages=request.messages,
+        media_paths=request.media_paths,
+        response_format=request.response_format,
+        response_schema=request.response_schema,
+        tools=selected + remainder,
+        tool_choice={"type": "function", "function": {"name": tool_name}},
+        parallel_tool_calls=False,
+        task=getattr(request, "task", ""),
+        prompt=getattr(request, "prompt", ""),
+        metadata=getattr(request, "metadata", {}),
+    )
+
+
 def _require_mutation_surface(
     tools: Sequence[Mapping[str, Any]],
     *,
@@ -115,25 +235,33 @@ def _require_mutation_surface(
 
 
 class _WritableProgressAdapter:
-    """Force a source edit only after the causal frontier makes mutation legal.
+    """Keep an implementation turn alive until a reviewed source mutation succeeds.
 
-    Retrieval and observation frontiers stay model/router-owned. In particular,
-    this adapter must not turn an ``auto`` frontier such as ``search_code_rag`` plus
-    ``java_workspace_symbols`` into a one-shot required tool call: the router already
-    owns bounded fresh-evidence retries and the causal adapter owns legal next-step
-    selection. Once a reviewed mutation tool becomes visible, fail closed on a model
-    that tries to finalize without performing the source edit.
+    Prerequisite retrieval remains ``auto`` on the first attempt. If a small model
+    answers in prose instead of taking one of the already-authorized causal actions,
+    retry exactly once with the first visible frontier action forced. Mutation actions
+    are forced as soon as the causal frontier makes them legal. Final synthesis is
+    rejected until a successful mutation observation is present in the transcript.
     """
 
     def __init__(self, inner: Any) -> None:
         self.inner = inner
 
     def generate_turn(self, request: Any) -> Any:
-        from .model_adapters import GenerationRequest, ModelConfigurationError
+        from .model_adapters import ModelConfigurationError
 
         if not _is_implementation_request(request.messages):
             return self.inner.generate_turn(request)
-        if not request.tools or request.tool_choice != "auto":
+
+        if not request.tools:
+            if request.tool_choice is None and not _source_mutation_applied(request.messages):
+                raise ModelConfigurationError(
+                    "Writable coder attempted final synthesis before any reviewed source "
+                    "mutation succeeded; refusing an implementation summary without a source diff."
+                )
+            return self.inner.generate_turn(request)
+
+        if request.tool_choice != "auto":
             return self.inner.generate_turn(request)
 
         mutation = next(
@@ -144,25 +272,39 @@ class _WritableProgressAdapter:
             ),
             "",
         )
-        if not mutation:
-            return self.inner.generate_turn(request)
+        if mutation:
+            forced = _force_tool_choice(request, mutation)
+            turn = self.inner.generate_turn(forced)
+            if not turn.tool_calls or mutation not in {call.name for call in turn.tool_calls}:
+                raise ModelConfigurationError(
+                    f"Writable coder did not execute required source-mutation action {mutation!r}; "
+                    "refusing a prose-only implementation turn after mutation became causal/legal."
+                )
+            return turn
 
-        forced = GenerationRequest(
-            messages=request.messages,
-            media_paths=request.media_paths,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
-            tools=request.tools,
-            tool_choice={"type": "function", "function": {"name": mutation}},
-            parallel_tool_calls=False,
+        # Observation/retrieval frontiers remain model-owned on the first attempt.
+        # If the model refuses every visible action and emits prose, that prose is not
+        # a valid implementation result: make bounded causal progress by forcing only
+        # an action that the outer CausalFrontierAdapter already exposed and fenced.
+        turn = self.inner.generate_turn(request)
+        if turn.tool_calls:
+            return turn
+        fallback = next(
+            (name for schema in request.tools if (name := _tool_name(schema))),
+            "",
         )
-        turn = self.inner.generate_turn(forced)
-        if not turn.tool_calls or mutation not in {call.name for call in turn.tool_calls}:
+        if not fallback:
             raise ModelConfigurationError(
-                f"Writable coder did not execute required source-mutation action {mutation!r}; "
-                "refusing a prose-only implementation turn after mutation became causal/legal."
+                "Writable coder causal frontier contained no executable named tool."
             )
-        return turn
+        forced = _force_tool_choice(request, fallback)
+        retry = self.inner.generate_turn(forced)
+        if not retry.tool_calls or fallback not in {call.name for call in retry.tool_calls}:
+            raise ModelConfigurationError(
+                f"Writable coder returned prose twice instead of executing causal action {fallback!r}; "
+                "refusing to terminate before source mutation."
+            )
+        return retry
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
@@ -197,6 +339,9 @@ def _run_with_dynamic_frontier(
         tools=complete_surface,
         tool_choice="auto" if complete_surface else None,
         parallel_tool_calls=True if complete_surface else False,
+        task=getattr(request, "task", ""),
+        prompt=getattr(request, "prompt", ""),
+        metadata=getattr(request, "metadata", {}),
     )
     execution_gate = FrontierExecutionGate()
     wrapped_adapter = CausalFrontierAdapter(
@@ -301,6 +446,7 @@ def install(
     generate_with_route_integrity._mmm_writable_coder_fail_closed = True
     generate_with_route_integrity._mmm_writable_coder_progress_forced = True
     generate_with_route_integrity._mmm_writable_coder_route_reachable = True
+    generate_with_route_integrity._mmm_writable_coder_mutation_completion_invariant = True
     cls._generate_with_tools = generate_with_route_integrity
 
 
@@ -309,6 +455,7 @@ __all__ = [
     "_is_implementation_request",
     "_require_mutation_surface",
     "_run_with_dynamic_frontier",
+    "_source_mutation_applied",
     "_user_only_request_query",
     "install",
 ]
