@@ -1,15 +1,8 @@
 from __future__ import annotations
 
 import os
-import threading
-from typing import Any, Iterator, Sequence
+from typing import Iterator, Sequence
 
-
-# Image residency is process-scoped because image generation can span many adapter
-# objects. image_runtime_residency is the only module allowed to mutate this state.
-_IMAGE_LOCK = threading.RLock()
-_IMAGE_PIPELINE: Any | None = None
-_IMAGE_PIPELINE_KEY: tuple[Any, ...] | None = None
 
 _GIB = 1024**3
 _MAX_RERANK_MICROBATCH = 32
