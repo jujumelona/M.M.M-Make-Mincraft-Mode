@@ -11,9 +11,10 @@ generation round.
 
 This contract sits at the model-adapter boundary. Whenever the host names one exact
 function, both the native schema surface and the injected capability context are
-reduced to that function. A prose-only response gets one bounded protocol retry using
-an alternate native ``required`` representation. Callers retain semantic checks, but
-they no longer reinvent transport enforcement.
+reduced to that function. The actual llama.cpp/OpenAI-compatible transport uses the
+native ``tool_choice='required'`` mode; exact identity is guaranteed by exposing one
+schema only. A prose-only response gets one bounded retry with an explicit execution
+instruction. Callers retain semantic checks, but no longer reinvent transport forcing.
 """
 
 import json
@@ -104,23 +105,18 @@ def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
         request.messages,
         selected,
     )
-    tool_choice: Any = {
-        "type": "function",
-        "function": {"name": name},
-    }
     if retry:
         messages = (*tuple(messages), {"role": "system", "content": _RETRY_INSTRUCTION})
-        # Some OpenAI-compatible native servers honor `required` more reliably than
-        # the named-choice object. With exactly one schema exposed both forms have
-        # identical semantics, so the retry deliberately changes protocol form rather
-        # than repeating the same failed request.
-        tool_choice = "required"
 
+    # llama.cpp's native OpenAI-compatible forcing contract is `required`. Exact tool
+    # identity is represented structurally by exposing only the selected function.
+    # This also works for remote OpenAI-compatible adapters and avoids relying on
+    # provider-specific support for a named function-object tool_choice form.
     return replace(
         request,
         messages=messages,
         tools=selected,
-        tool_choice=tool_choice,
+        tool_choice="required",
         parallel_tool_calls=False,
     )
 
@@ -162,14 +158,14 @@ def _install_adapter_class(cls: Any) -> None:
             for call in tuple(getattr(second, "tool_calls", ()) or ())
         ) or "<prose>"
         raise ModelConfigurationError(
-            "Native model violated the host-forced tool contract after both exact "
-            f"single-tool protocol forms for {name!r}; first={first_calls}, "
-            f"retry={second_calls}."
+            "Native model violated the host-forced single-tool contract after the "
+            f"bounded retry for {name!r}; first={first_calls}, retry={second_calls}."
         )
 
     setattr(generate_turn, _MARKER, True)
     generate_turn._mmm_forced_tool_single_surface = True
     generate_turn._mmm_forced_tool_single_context = True
+    generate_turn._mmm_forced_tool_required_transport = True
     generate_turn._mmm_forced_tool_bounded_retry = True
     cls.generate_turn = generate_turn
 
