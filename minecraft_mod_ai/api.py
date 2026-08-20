@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -99,6 +100,14 @@ def _attach_existing_target(owner: Any, existing_input: Path | None) -> None:
         "loader": report.loader,
         "source": str(existing_input),
     }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -393,8 +402,10 @@ class CompleteModAISession:
         except ValueError as exc:
             raise SpecValidationError("대화 내용을 입력해 주세요.") from exc
         existing_hash = ""
-        if self.existing_input is not None and not self.existing_input.is_file():
-            raise FileNotFoundError(self.existing_input)
+        if self.existing_input is not None:
+            if not self.existing_input.is_file():
+                raise FileNotFoundError(self.existing_input)
+            existing_hash = _sha256_file(self.existing_input)
 
         proposal = self.planner.plan(
             updated_brief,
