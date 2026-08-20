@@ -119,10 +119,10 @@ def goals_for_query(query: str) -> tuple[str, ...]:
     )
     plan = ("plan", "planning", "계획", "플랜")
 
-    # Specific terminal outcomes win over implementation means. Keep the historical
-    # runtime/release priorities, then prefer source-changing goals before external
-    # observation. This prevents a broad MCP/capability mention from hijacking a
-    # generation-stage coder turn.
+    # Specific terminal outcomes win over implementation means. External MCP/tools
+    # are a terminal goal only when the query names no stronger semantic outcome.
+    # This prevents transport/capability wording from hijacking verify/runtime,
+    # evidence, or planning requests as well as source-changing coder turns.
     if _contains(value, runtime_verify):
         return ("runtime_verify",)
     if _contains(value, release):
@@ -133,8 +133,6 @@ def goals_for_query(query: str) -> tuple[str, ...]:
         return ("generate",)
     if _contains(value, act):
         return ("act",)
-    if _contains(value, external):
-        return ("external",)
     if _contains(value, verify):
         return ("verify",)
     if _contains(value, runtime):
@@ -143,6 +141,8 @@ def goals_for_query(query: str) -> tuple[str, ...]:
         return ("evidence",)
     if _contains(value, plan):
         return ("plan",)
+    if _contains(value, external):
+        return ("external",)
     return ("observe",)
 
 
