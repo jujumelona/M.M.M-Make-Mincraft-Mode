@@ -1,0 +1,115 @@
+name: Native ProjectIndex execution cleanup once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/native-project-index-execution-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mmm-native-project-index-execution-once
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase onto latest main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
+      - name: Make ProjectIndex reuse explicit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:120]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          helper = Path('minecraft_mod_ai/project_index_execution_reuse_contract.py')
+          helper.write_text('''from __future__ import annotations\n\n"""Explicit execution-scoped ProjectIndex reuse.\n\nThe orchestrator calls these helpers directly; this module never replaces imported\nclasses or functions at runtime.\n"""\n\nfrom contextvars import ContextVar\nfrom functools import wraps\nfrom pathlib import Path\nfrom typing import Any, Callable, TypeVar\n\n_F = TypeVar("_F", bound=Callable[..., Any])\n_POST_GENERATION: ContextVar[bool] = ContextVar(\n    "mmm_project_index_post_generation",\n    default=False,\n)\n_EXECUTION_INDEXES: ContextVar[dict[tuple[str, int], Any] | None] = ContextVar(\n    "mmm_project_index_execution_cache",\n    default=None,\n)\n\n\ndef _root_key(project_root: str | Path) -> str:\n    return str(Path(project_root).expanduser().resolve())\n\n\ndef _cache_key(project_root: str | Path, policy: Any | None) -> tuple[str, int]:\n    return _root_key(project_root), 0 if policy is None else id(policy)\n\n\ndef _cached_indexes_for_root(\n    cache: dict[tuple[str, int], Any],\n    project_root: str | Path,\n) -> tuple[Any, ...]:\n    root = _root_key(project_root)\n    seen: set[int] = set()\n    indexes: list[Any] = []\n    for (cached_root, _policy_id), index in cache.items():\n        if cached_root != root:\n            continue\n        identity = id(index)\n        if identity in seen:\n            continue\n        seen.add(identity)\n        indexes.append(index)\n    return tuple(indexes)\n\n\ndef _evict_root(cache: dict[tuple[str, int], Any], project_root: str | Path) -> None:\n    root = _root_key(project_root)\n    for key in tuple(cache):\n        if key[0] == root:\n            cache.pop(key, None)\n\n\ndef _receipt_paths(value: Any) -> tuple[str, ...]:\n    ordered: list[str] = []\n    seen: set[str] = set()\n\n    def add(raw: Any) -> None:\n        if not isinstance(raw, (str, Path)):\n            return\n        path = str(raw).strip()\n        if path and path not in seen:\n            seen.add(path)\n            ordered.append(path)\n\n    def visit(node: Any) -> None:\n        if isinstance(node, dict):\n            if (\n                node.get("operation") in {"create", "replace", "edit", "delete"}\n                and isinstance(node.get("path"), str)\n            ):\n                add(node["path"])\n            for key in (\n                "touched_paths",\n                "written_files",\n                "deleted_files",\n                "removed_files",\n            ):\n                paths = node.get(key)\n                if isinstance(paths, (list, tuple, set)):\n                    for path in paths:\n                        add(path)\n            files = node.get("files")\n            if isinstance(files, (list, tuple, set)):\n                for path in files:\n                    add(path)\n            for child in node.values():\n                visit(child)\n        elif isinstance(node, (list, tuple)):\n            for child in node:\n                visit(child)\n\n    visit(value)\n    return tuple(ordered)\n\n\ndef execution_scoped(function: _F) -> _F:\n    """Give one orchestrator execution an isolated post-generation index cache."""\n\n    @wraps(function)\n    def wrapped(*args: Any, **kwargs: Any):\n        index_token = _EXECUTION_INDEXES.set({})\n        phase_token = _POST_GENERATION.set(False)\n        try:\n            return function(*args, **kwargs)\n        finally:\n            _POST_GENERATION.reset(phase_token)\n            _EXECUTION_INDEXES.reset(index_token)\n\n    wrapped._mmm_project_index_execution_scope = True  # type: ignore[attr-defined]\n    return wrapped  # type: ignore[return-value]\n\n\ndef mark_post_generation() -> None:\n    _POST_GENERATION.set(True)\n\n\ndef project_index(\n    factory: Callable[..., Any],\n    project_root: str | Path,\n    *args: Any,\n    **kwargs: Any,\n) -> Any:\n    """Construct normally before generation; reuse by root/policy afterwards."""\n    if not _POST_GENERATION.get():\n        return factory(project_root, *args, **kwargs)\n    cache = _EXECUTION_INDEXES.get()\n    if cache is None:\n        return factory(project_root, *args, **kwargs)\n    policy = kwargs.get("policy")\n    key = _cache_key(project_root, policy)\n    cached = cache.get(key)\n    if cached is not None:\n        return cached\n    created = factory(project_root, *args, **kwargs)\n    cache[key] = created\n    return created\n\n\ndef _update_from_receipt(project_root: str | Path, receipt: Any) -> None:\n    if not _POST_GENERATION.get():\n        return\n    cache = _EXECUTION_INDEXES.get()\n    if cache is None:\n        return\n    indexes = _cached_indexes_for_root(cache, project_root)\n    if not indexes:\n        return\n    paths = _receipt_paths(receipt)\n    status = str(receipt.get("status", "")) if isinstance(receipt, dict) else ""\n    if paths:\n        for index in indexes:\n            index.update_files(paths)\n    elif status not in {"", "UNCHANGED"}:\n        _evict_root(cache, project_root)\n\n\ndef tune_gradle_resources(project_root: str | Path, *args: Any, **kwargs: Any):\n    """Run canonical resource tuning and reconcile active indexes from its receipt."""\n    from .resource_tuning import tune_gradle_resources as tune\n\n    receipt = tune(project_root, *args, **kwargs)\n    _update_from_receipt(project_root, receipt)\n    return receipt\n\n\ndef install(orchestrator_module: Any) -> None:\n    """Compatibility verifier for callers that still invoke the former installer."""\n    execute = orchestrator_module.CompleteProductionOrchestrator.execute\n    if not getattr(execute, "_mmm_project_index_execution_scope", False):\n        raise RuntimeError("ProjectIndex execution reuse must be owned by the orchestrator.")\n\n\n__all__ = [\n    "_cached_indexes_for_root",\n    "_receipt_paths",\n    "execution_scoped",\n    "install",\n    "mark_post_generation",\n    "project_index",\n    "tune_gradle_resources",\n]\n''', encoding='utf-8')
+
+          orchestrator = Path('minecraft_mod_ai/complete_orchestrator.py')
+          replace_once(
+              orchestrator,
+              'from .project_index import ProjectIndex\n',
+              '''from .project_index import ProjectIndex\nfrom .project_index_execution_reuse_contract import (\n    execution_scoped,\n    mark_post_generation,\n    project_index as execution_project_index,\n    tune_gradle_resources,\n)\n''',
+          )
+          replace_once(orchestrator, 'from .resource_tuning import tune_gradle_resources\n', '')
+          replace_once(
+              orchestrator,
+              '    def execute(self, proposal:',
+              '    @execution_scoped\n    def execute(self, proposal:',
+          )
+          replace_once(
+              orchestrator,
+              "        generation = self._execute_generation_work(approved=approved, ordered=ordered, work_plan=work_plan, ledger=ledger, project_root=project_root, run_root=run_root, options=options, router=router)\n",
+              "        generation = self._execute_generation_work(approved=approved, ordered=ordered, work_plan=work_plan, ledger=ledger, project_root=project_root, run_root=run_root, options=options, router=router)\n        mark_post_generation()\n",
+          )
+          text = orchestrator.read_text(encoding='utf-8')
+          occurrences = text.count('ProjectIndex(')
+          if occurrences != 4:
+              raise SystemExit(f'expected four ProjectIndex constructions, found {occurrences}')
+          orchestrator.write_text(
+              text.replace('ProjectIndex(', 'execution_project_index(ProjectIndex, '),
+              encoding='utf-8',
+          )
+
+          bootstrap = Path('minecraft_mod_ai/runtime_bootstrap.py')
+          source = bootstrap.read_text(encoding='utf-8')
+          source = source.replace(
+              '    from .project_index_execution_reuse_contract import (\n        install as install_project_index_execution_reuse,\n    )\n',
+              '',
+          )
+          source = source.replace(
+              '    install_project_index_execution_reuse(complete_orchestrator)\n',
+              '',
+          )
+          bootstrap.write_text(source, encoding='utf-8')
+          PY
+      - name: Validate explicit execution ownership
+        run: |
+          python -m compileall -q minecraft_mod_ai/project_index_execution_reuse_contract.py minecraft_mod_ai/complete_orchestrator.py minecraft_mod_ai/runtime_bootstrap.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          path = Path('minecraft_mod_ai/project_index_execution_reuse_contract.py')
+          tree = ast.parse(path.read_text())
+          install = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'install')
+          forbidden = []
+          for node in ast.walk(install):
+              if isinstance(node, ast.Assign):
+                  forbidden.extend(ast.unparse(t) for t in node.targets if isinstance(t, ast.Attribute))
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'setattr':
+                  forbidden.append('setattr')
+          if forbidden:
+              raise SystemExit(f'installer still mutates runtime behavior: {forbidden}')
+          orchestrator = Path('minecraft_mod_ai/complete_orchestrator.py').read_text()
+          if 'ProjectIndex(' in orchestrator:
+              raise SystemExit('unscoped ProjectIndex construction remains in orchestrator')
+          bootstrap = Path('minecraft_mod_ai/runtime_bootstrap.py').read_text()
+          if 'install_project_index_execution_reuse' in bootstrap:
+              raise SystemExit('bootstrap still installs ProjectIndex execution monkeypatch')
+          PY
+          git diff --check
+      - name: Commit cleanup and remove one-shot workflow
+        run: |
+          rm .github/workflows/native-project-index-execution-once.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor(index): make execution reuse explicit"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
