@@ -24,6 +24,10 @@ def generate_with_tools(
     model-driven and repeated queries/evidence never count as progress.
     """
     from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
+    from .coder_tool_route_integrity_contract import (
+        _is_implementation_request,
+        _source_mutation_applied,
+    )
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
@@ -49,6 +53,11 @@ def generate_with_tools(
         and role in {"coder", "coder_safe"}
         and exposed_tools & _RAG_EVIDENCE_TOOLS
     )
+    implementation_requires_mutation = bool(
+        role in {"coder", "coder_safe"}
+        and stage == "generation"
+        and _is_implementation_request(request.messages)
+    )
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
     while True:
@@ -58,6 +67,11 @@ def generate_with_tools(
                     "Agent reached the hard tool-round liveness guard before required "
                     "evidence became available. Retrieval progress should normally "
                     "terminate earlier."
+                )
+            if implementation_requires_mutation and not _source_mutation_applied(messages):
+                raise ModelConfigurationError(
+                    "Writable coder reached the hard tool-round liveness guard before a "
+                    "reviewed source mutation was applied; refusing a prose-only implementation."
                 )
             return _finalize_without_tools(
                 adapter,
@@ -83,6 +97,9 @@ def generate_with_tools(
             tools=request.tools,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
+            task=request.task,
+            prompt=request.prompt,
+            metadata=request.metadata,
         )
         turn = adapter.generate_turn(turn_request)
 
@@ -132,6 +149,11 @@ def generate_with_tools(
                 ])
                 round_index += 1
                 continue
+            if implementation_requires_mutation and not _source_mutation_applied(messages):
+                raise ModelConfigurationError(
+                    "Writable coder returned a final prose answer before a reviewed source mutation "
+                    "was applied; implementation completion requires a real source diff."
+                )
             return content
 
         if forced_rag_tool is not None:
@@ -253,6 +275,19 @@ def generate_with_tools(
                 weak_retrieval = True
 
         if retrieval_no_progress and progress.has_fresh_evidence:
+            if implementation_requires_mutation and not _source_mutation_applied(messages):
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Retrieval has converged and usable evidence is already available. "
+                            "Do not finalize: proceed to the reviewed source-mutation action for "
+                            "the implementation now."
+                        ),
+                    }
+                )
+                round_index += 1
+                continue
             return _finalize_without_tools(
                 adapter,
                 request,
@@ -292,6 +327,9 @@ def _finalize_without_tools(
         tools=(),
         tool_choice=None,
         parallel_tool_calls=False,
+        task=request.task,
+        prompt=request.prompt,
+        metadata=request.metadata,
     )
     final_turn = adapter.generate_turn(final_request)
     if final_turn.tool_calls:
