@@ -8,7 +8,7 @@ import time
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 _MAX_CTX = 2147483647
@@ -20,7 +20,6 @@ _DRAFT_KV_BENCHMARK_MARKER = "_mmm_qwen35_draft_kv_benchmark_v1"
 _DRAFT_KV_LAUNCH_MARKER = "_mmm_qwen35_draft_kv_launch_v1"
 _SLOT_POLL_MARKER = "_mmm_qwen35_no_decode_slot_poll_v1"
 _ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
-_DEFAULT_MTP_WIDTHS = "1,2,3,4,5,6,8"
 _ALLOWED_DRAFT_KV = ("f16", "q8_0", "q4_0")
 _ACTIVE_RUNTIME_KEYS = (
     "MMM_LLAMA_ACTIVE_SPEC_TYPE",
@@ -35,24 +34,60 @@ _ACTIVE_RUNTIME_KEYS = (
 )
 
 
+def _config_extra(config: Any) -> Mapping[str, Any]:
+    extra = getattr(config, "extra", {})
+    return extra if isinstance(extra, Mapping) else {}
+
+
 def _enabled() -> bool:
     raw = os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
 
 def _is_qwen35_mtp(config: Any) -> bool:
-    model_id = str(getattr(config, "model_id", "")).casefold()
-    extra = getattr(config, "extra", {})
-    filename = (
-        str(extra.get("gguf_filename", "")).casefold()
-        if isinstance(extra, dict)
-        else ""
+    """Legacy-named predicate backed only by registry metadata.
+
+    Model repository ids, filenames, versions, sizes and quantizations are deliberately
+    ignored. The registry opts a role into this measured hotpath with
+    ``decode_hotpath: t4_mtp``.
+    """
+
+    extra = _config_extra(config)
+    return (
+        str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
+        and str(extra.get("decode_hotpath", "")).strip().casefold() == "t4_mtp"
     )
-    return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
+
+
+def _registry_mtp_widths(config: Any) -> str | None:
+    raw = _config_extra(config).get("mtp_widths")
+    if raw is None:
+        return None
+    values = (
+        [part.strip() for part in raw.split(",")]
+        if isinstance(raw, str)
+        else [str(part).strip() for part in raw]
+        if isinstance(raw, (list, tuple))
+        else []
+    )
+    normalized: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        try:
+            width = int(value)
+        except ValueError:
+            return None
+        if width <= 0:
+            return None
+        text = str(width)
+        if text not in normalized:
+            normalized.append(text)
+    return ",".join(normalized) or None
 
 
 def _context_size(config: Any | None = None) -> int:
-    """Return model-native llama.cpp context unless explicitly overridden."""
+    """Return runtime context override when explicitly configured by the operator."""
 
     del config
     raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
@@ -68,7 +103,7 @@ def _context_size(config: Any | None = None) -> int:
 
 
 def _draft_gpu_layers() -> str:
-    """Return the Qwen MTP draft offload policy used by tuning and launch."""
+    """Return the MTP draft offload policy used by tuning and launch."""
 
     raw = os.environ.get("MMM_QWEN35_MTP_DRAFT_NGL", "all").strip().lower() or "all"
     if raw in {"all", "auto"}:
@@ -142,7 +177,7 @@ def _set_option(args: list[str], names: tuple[str, ...], value: str) -> None:
 
 
 def _disable_decode_slot_polling() -> None:
-    """Keep progress reporting local while Qwen is actively decoding on the T4."""
+    """Keep progress reporting local while the measured hotpath is decoding."""
 
     from . import llama_server_hardware_policy as hardware_policy
 
@@ -159,7 +194,7 @@ def _disable_decode_slot_polling() -> None:
 
 
 def _install_measured_fast_base_args(autotune: Any) -> None:
-    """Install the Qwen3.5 T4 launch constraints without masking decode tuners."""
+    """Install registry-declared T4 launch constraints without masking decode tuners."""
 
     current = getattr(autotune, "_base_args", None)
     if not callable(current) or getattr(current, _BASE_MARKER, False):
@@ -197,7 +232,7 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
 
 
 def _install_measured_fast_variant_args(autotune: Any) -> None:
-    """Keep Qwen MTP draft compute and its selected KV cache on the GPU hot path."""
+    """Keep MTP draft compute and its selected KV cache on the GPU hot path."""
 
     current = getattr(autotune, "_variant_args", None)
     if not callable(current) or getattr(current, _VARIANT_MARKER, False):
@@ -238,7 +273,7 @@ def _install_measured_fast_variant_args(autotune: Any) -> None:
 
 
 def _install_qwen35_fingerprint(autotune: Any) -> None:
-    """Invalidate cached winners when Qwen draft memory policy changes."""
+    """Invalidate cached winners when declared draft memory policy changes."""
 
     current = getattr(autotune, "_fingerprint", None)
     if not callable(current) or getattr(current, _FINGERPRINT_MARKER, False):
@@ -253,7 +288,7 @@ def _install_qwen35_fingerprint(autotune: Any) -> None:
             "base": base,
             "qwen35_mtp_draft_ngl": _draft_gpu_layers(),
             "qwen35_mtp_draft_kv_candidates": list(_draft_kv_candidates()),
-            "qwen35_hotpath": "v11",
+            "qwen35_hotpath": "registry-v1",
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -466,7 +501,7 @@ def _restore_env(name: str, previous: str | None) -> None:
 
 
 def install(autotune: Any) -> None:
-    """Keep Qwen3.5 on the T4 hot path while delegating winner selection."""
+    """Install the measured T4 MTP hotpath for registry-opted roles."""
 
     _disable_decode_slot_polling()
     _install_measured_fast_base_args(autotune)
@@ -492,10 +527,13 @@ def install(autotune: Any) -> None:
         previous_ctx = os.environ.get("MMM_LLAMA_SERVER_CTX")
         previous_widths = os.environ.get("MMM_LLAMA_MTP_WIDTHS")
         previous_active = os.environ.get(_ACTIVE_TUNING_ENV)
-        os.environ["MMM_LLAMA_SERVER_CTX"] = str(_context_size(config))
+        context_override = _context_size(config)
+        if context_override > 0:
+            os.environ["MMM_LLAMA_SERVER_CTX"] = str(context_override)
         os.environ[_ACTIVE_TUNING_ENV] = "1"
-        if not (previous_widths or "").strip():
-            os.environ["MMM_LLAMA_MTP_WIDTHS"] = _DEFAULT_MTP_WIDTHS
+        registry_widths = _registry_mtp_widths(config)
+        if not (previous_widths or "").strip() and registry_widths:
+            os.environ["MMM_LLAMA_MTP_WIDTHS"] = registry_widths
         try:
             return current(config, request)
         finally:
