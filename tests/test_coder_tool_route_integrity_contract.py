@@ -128,6 +128,41 @@ def test_initial_one_tool_frontier_recovers_complete_mutation_surface() -> None:
     assert captured["role"] == "coder"
 
 
+def test_writable_progress_leaves_prerequisite_frontier_auto() -> None:
+    captured = {}
+
+    class Adapter:
+        def generate_turn(self, request):
+            captured["tool_choice"] = request.tool_choice
+            captured["parallel_tool_calls"] = request.parallel_tool_calls
+            captured["tools"] = tuple(
+                item["function"]["name"] for item in request.tools
+            )
+            return SimpleNamespace(tool_calls=(), content="draft before retrieval")
+
+    wrapped = _WritableProgressAdapter(Adapter())
+    turn = wrapped.generate_turn(
+        GenerationRequest(
+            messages=_implement_messages(),
+            media_paths=(),
+            response_format="text",
+            response_schema=None,
+            tools=(
+                _schema("search_code_rag"),
+                _schema("java_workspace_symbols"),
+            ),
+            tool_choice="auto",
+            parallel_tool_calls=True,
+        )
+    )
+
+    assert captured["tools"] == ("search_code_rag", "java_workspace_symbols")
+    assert captured["tool_choice"] == "auto"
+    assert captured["parallel_tool_calls"] is True
+    assert turn.tool_calls == ()
+    assert turn.content == "draft before retrieval"
+
+
 def test_writable_progress_forces_visible_causal_action() -> None:
     captured = {}
 
