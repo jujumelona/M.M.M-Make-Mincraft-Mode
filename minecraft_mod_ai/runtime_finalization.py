@@ -27,6 +27,7 @@ def finalize_runtime() -> None:
 
         from . import agent_tool_runtime
         from . import causal_tool_frontier_contract
+        from . import llama_server_hardware_policy
         from . import model_router
         from . import parallel_runtime_contract
         from . import small_model_max_agent_contract
@@ -36,6 +37,7 @@ def finalize_runtime() -> None:
         from .context_budget_preflight import run_context_budget_preflight
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_length_resilience import install as install_llama_length_resilience
+        from .llama_unbounded_generation import install as install_llama_unbounded_generation
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter
         from .model_prefetch_resilience import install as install_prefetch_resilience
@@ -60,9 +62,11 @@ def finalize_runtime() -> None:
         # structural preflight so a fresh process cannot silently regress to per-call
         # CPU model construction.
         install_retrieval_residency(model_router_module=model_router)
-        # llama.cpp reports both max-output exhaustion and true context exhaustion as
-        # finish_reason='length'. Recover once with bounded context fitting/output
-        # expansion instead of aborting the whole production node immediately.
+        # llama.cpp n_predict/max_tokens=-1 is its native unlimited policy. Do not
+        # truncate source-edit/tool turns at a registry max_new_tokens value.
+        install_llama_unbounded_generation(llama_server_hardware_policy)
+        # A remaining finish_reason='length' is then context pressure. Recover once by
+        # compacting large observations; never invent another output-token ceiling.
         install_llama_length_resilience(llama_cpp_adapter)
         # Exercise the exact first assistant + parallel 48 KiB tool-observation shape
         # that previously reached the server boundary before a second assistant turn.
