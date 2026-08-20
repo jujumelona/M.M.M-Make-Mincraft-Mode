@@ -114,11 +114,27 @@ def run_context_budget_preflight() -> None:
             "content": large_result.replace("search_code_rag", "java_workspace_symbols", 1),
         },
     )
-    config = SimpleNamespace(max_context=32768, max_new_tokens=8192)
+    config = SimpleNamespace(
+        adapter="llama_cpp",
+        max_context=32768,
+        max_new_tokens=8192,
+    )
     tools = (
         {"type": "function", "function": {"name": "apply_source_edit"}},
     )
     budget = request_message_budget(config, tools)
+    legacy_reserved_budget = request_message_budget(
+        SimpleNamespace(
+            adapter="transformers_text",
+            max_context=32768,
+            max_new_tokens=8192,
+        ),
+        tools,
+    )
+    if budget <= legacy_reserved_budget:
+        raise ContextBudgetPreflightError(
+            "llama input budget still reserves the registry max_new_tokens value"
+        )
     if _encoded_size(messages) <= budget:
         raise ContextBudgetPreflightError(
             "synthetic first-tool-round fixture no longer exceeds its context budget"
