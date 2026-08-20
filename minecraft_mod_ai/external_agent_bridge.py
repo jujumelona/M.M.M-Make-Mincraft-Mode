@@ -8,6 +8,8 @@ from typing import Any, Collection, Mapping
 
 import anyio
 
+from .mcp_stdio_support import open_mcp_stdio_errlog
+
 
 CAPABILITIES_TOOL = "external_mcp_capabilities"
 SCHEMA_TOOL = "external_mcp_schema"
@@ -422,9 +424,10 @@ async def _provider_schema(
                 args=[str(value) for value in command[1:]],
                 env=dict(env),
             )
-            async with stdio_client(params) as (read_stream, write_stream):
-                async with ClientSession(read_stream, write_stream) as session:
-                    return await read(session)
+            with open_mcp_stdio_errlog() as errlog:
+                async with stdio_client(params, errlog=errlog) as (read_stream, write_stream):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        return await read(session)
         if transport == "streamable_http":
             if not url:
                 raise ExternalAgentBridgeError("External MCP HTTP URL is missing")
