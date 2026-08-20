@@ -10,11 +10,13 @@ PLAN_MODE = "Plan"
 FULL_MODE = "Full"
 EXISTING_MOD_MODE = "Revise"
 EXISTING_PLAN_MODE = "Execute"
+DEBUG_MODE = "Debug"
 RUN_MODES = (
     PLAN_MODE,
     FULL_MODE,
     EXISTING_MOD_MODE,
     EXISTING_PLAN_MODE,
+    DEBUG_MODE,
 )
 
 # Backward compatibility for already-open Colab notebooks and saved notebook copies
@@ -44,7 +46,7 @@ def validate_run_mode(run_mode: str) -> str:
 
 
 def needs_prompt(run_mode: str) -> bool:
-    return validate_run_mode(run_mode) != EXISTING_PLAN_MODE
+    return validate_run_mode(run_mode) not in {EXISTING_PLAN_MODE, DEBUG_MODE}
 
 
 def needs_existing_mod(run_mode: str) -> bool:
@@ -52,7 +54,7 @@ def needs_existing_mod(run_mode: str) -> bool:
 
 
 def should_build(run_mode: str) -> bool:
-    return validate_run_mode(run_mode) != PLAN_MODE
+    return validate_run_mode(run_mode) not in {PLAN_MODE, DEBUG_MODE}
 
 
 def _uploaded_file(*, suffix: str, destination: Path, purpose: str) -> Path:
@@ -166,6 +168,9 @@ def run_plan_dialog(
     mode = validate_run_mode(run_mode)
     target = Path(plan_path)
 
+    if mode == DEBUG_MODE:
+        raise RuntimeError("Debug 모드는 플랜을 만들지 않고 프로젝트 진단만 실행합니다.")
+
     if mode == EXISTING_PLAN_MODE:
         reply = session.load_plan(target)
         show_full_plan(reply, print_fn=print_fn)
@@ -186,6 +191,7 @@ def run_plan_dialog(
 
 
 __all__ = [
+    "DEBUG_MODE",
     "EXISTING_MOD_MODE",
     "EXISTING_PLAN_MODE",
     "FULL_MODE",
