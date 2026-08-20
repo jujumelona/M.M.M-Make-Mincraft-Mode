@@ -24,9 +24,36 @@ def _encoded_size(messages: Any) -> int:
 
 
 def run_context_budget_preflight() -> None:
+    from . import llama_server_hardware_policy
     from . import small_model_context_compaction as archive_module
     from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
+
+    if (
+        getattr(
+            llama_server_hardware_policy._server_payload,
+            "_mmm_unbounded_llama_completion_v1",
+            False,
+        )
+        is not True
+    ):
+        raise ContextBudgetPreflightError(
+            "llama-server payload is missing the native unbounded completion policy"
+        )
+    synthetic_payload = llama_server_hardware_policy._server_payload(
+        SimpleNamespace(
+            config=SimpleNamespace(max_new_tokens=8192, model_id="synthetic")
+        ),
+        SimpleNamespace(
+            messages=({"role": "user", "content": "test"},),
+            tools=(),
+            response_format="text",
+        ),
+    )
+    if synthetic_payload.get("max_tokens") != -1:
+        raise ContextBudgetPreflightError(
+            "llama-server production payload is still capped by max_new_tokens"
+        )
 
     if (
         getattr(
