@@ -27,20 +27,58 @@ _TOOL = {
     },
 }
 
+_SAMPLING = {
+    "general_thinking": {
+        "temperature": 0.31,
+        "top_p": 0.71,
+        "top_k": 17,
+        "min_p": 0.03,
+        "presence_penalty": 0.21,
+        "repeat_penalty": 0.91,
+    },
+    "precise_coding": {
+        "temperature": 0.23,
+        "top_p": 0.67,
+        "top_k": 13,
+        "min_p": 0.02,
+        "presence_penalty": 0.12,
+        "repeat_penalty": 0.89,
+    },
+    "non_thinking": {
+        "temperature": 0.11,
+        "top_p": 0.61,
+        "top_k": 7,
+        "min_p": 0.01,
+        "presence_penalty": 0.04,
+        "repeat_penalty": 0.83,
+        "reasoning_effort": "none",
+    },
+}
+
 
 class _Adapter:
     def __init__(
         self,
-        model_id: str,
         *,
         role: str = "coder_safe",
-        gguf_filename: str = "",
+        enabled: bool = True,
+        reasoning_effort: str = "",
     ) -> None:
-        extra = {"gguf_filename": gguf_filename} if gguf_filename else {}
+        extra = {}
+        if enabled:
+            extra.update(
+                {
+                    "runtime_contract": "qwen",
+                    "agent_thinking": True,
+                    "sampling_profiles": _SAMPLING,
+                }
+            )
+            if reasoning_effort:
+                extra["thinking_reasoning_effort"] = reasoning_effort
         self.config = SimpleNamespace(
-            model_id=model_id,
+            model_id="vendor/arbitrary-runtime-model",
             role=role,
-            max_new_tokens=8192,
+            max_new_tokens=2048,
             extra=extra,
         )
 
@@ -59,57 +97,44 @@ def _request(
     )
 
 
-def test_qwen36_auto_tool_loop_enables_thinking_preservation() -> None:
-    payload = hardware._server_payload(
-        _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF"),
-        _request(),
-    )
+def test_registry_declared_auto_tool_loop_enables_thinking_preservation() -> None:
+    payload = hardware._server_payload(_Adapter(), _request())
 
     assert payload["chat_template_kwargs"] == {
         "enable_thinking": True,
         "preserve_thinking": True,
     }
     assert "reasoning_effort" not in payload
-    assert payload["temperature"] == 0.6
-    assert payload["top_p"] == 0.95
-    assert payload["top_k"] == 20
-    assert payload["min_p"] == 0.0
-    assert payload["presence_penalty"] == 0.0
-    assert payload["repeat_penalty"] == 1.0
+    assert payload["temperature"] == 0.23
+    assert payload["top_p"] == 0.67
+    assert payload["top_k"] == 13
+    assert payload["min_p"] == 0.02
+    assert payload["presence_penalty"] == 0.12
+    assert payload["repeat_penalty"] == 0.89
     assert "repetition_penalty" not in payload
 
 
-def test_qwen36_local_path_uses_gguf_identity_for_agent_policy() -> None:
+def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
+    enabled = hardware._server_payload(_Adapter(enabled=True), _request())
+    disabled = hardware._server_payload(_Adapter(enabled=False), _request())
+
+    assert enabled["chat_template_kwargs"]["preserve_thinking"] is True
+    assert enabled["temperature"] == 0.23
+    assert "chat_template_kwargs" not in disabled
+
+
+def test_registry_reasoning_effort_is_forwarded_without_version_branch() -> None:
     payload = hardware._server_payload(
-        _Adapter(
-            "/models/current.gguf",
-            gguf_filename="Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-        ),
+        _Adapter(role="researcher", reasoning_effort="high"),
         _request(),
     )
 
     assert payload["chat_template_kwargs"] == {
         "enable_thinking": True,
+        "reasoning_effort": "high",
         "preserve_thinking": True,
     }
-    assert payload["temperature"] == 0.6
-    assert payload["repeat_penalty"] == 1.0
-
-
-def test_qwen35_keeps_existing_precise_coding_policy_unchanged() -> None:
-    payload = hardware._server_payload(
-        _Adapter("unsloth/Qwen3.5-9B-MTP-GGUF"),
-        _request(),
-    )
-
-    assert "chat_template_kwargs" not in payload
-    assert "reasoning_effort" not in payload
-    assert payload["temperature"] == 0.6
-    assert payload["top_p"] == 0.95
-    assert payload["top_k"] == 20
-    assert payload["min_p"] == 0.0
-    assert payload["presence_penalty"] == 0.0
-    assert payload["repeat_penalty"] == 1.0
+    assert payload["temperature"] == 0.31
 
 
 def test_family_wrapper_preserves_existing_payload_contract_markers() -> None:
@@ -123,15 +148,15 @@ def test_family_wrapper_accepts_request_without_tools_attribute() -> None:
         messages=({"role": "user", "content": "plain text"},),
         response_format="text",
     )
-    payload = hardware._server_payload(_Adapter("generic/model"), request)
+    payload = hardware._server_payload(_Adapter(enabled=False), request)
 
     assert payload["messages"] == [{"role": "user", "content": "plain text"}]
     assert payload["temperature"] == 0.0
 
 
-def test_qwen36_forced_return_function_stays_non_thinking() -> None:
+def test_forced_return_function_stays_owned_by_transport_layer() -> None:
     payload = hardware._server_payload(
-        _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF"),
+        _Adapter(),
         _request(
             tool_choice={
                 "type": "function",
@@ -140,13 +165,11 @@ def test_qwen36_forced_return_function_stays_non_thinking() -> None:
         ),
     )
 
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["reasoning_effort"] == "none"
     assert payload["temperature"] == 0.0
-    assert "preserve_thinking" not in payload["chat_template_kwargs"]
+    assert "preserve_thinking" not in payload.get("chat_template_kwargs", {})
 
 
-def test_qwen36_final_agent_continuation_keeps_thinking_without_tools() -> None:
+def test_final_agent_continuation_keeps_thinking_without_tools() -> None:
     messages = (
         {"role": "user", "content": "Implement the feature."},
         {
@@ -172,7 +195,7 @@ def test_qwen36_final_agent_continuation_keeps_thinking_without_tools() -> None:
         },
     )
     payload = hardware._server_payload(
-        _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF"),
+        _Adapter(role="researcher"),
         _request(tools=(), tool_choice=None, messages=messages),
     )
 
@@ -181,8 +204,8 @@ def test_qwen36_final_agent_continuation_keeps_thinking_without_tools() -> None:
     assert "reasoning_effort" not in payload
 
 
-def test_qwen36_reasoning_trace_is_restored_for_next_tool_turn() -> None:
-    adapter = _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF")
+def test_reasoning_trace_is_restored_for_next_tool_turn() -> None:
+    adapter = _Adapter()
     response = GenerationResponse(
         content="",
         reasoning_content="Inspect the exact Java API before editing.",
@@ -228,8 +251,8 @@ def test_qwen36_reasoning_trace_is_restored_for_next_tool_turn() -> None:
     assert assistant["reasoning_content"] == "Inspect the exact Java API before editing."
 
 
-def test_fresh_qwen36_agent_request_does_not_leak_prior_reasoning() -> None:
-    adapter = _Adapter("unsloth/Qwen3.6-27B-MTP-GGUF")
+def test_fresh_agent_request_does_not_leak_prior_reasoning() -> None:
+    adapter = _Adapter()
     _remember_reasoning(
         adapter,
         GenerationResponse(
