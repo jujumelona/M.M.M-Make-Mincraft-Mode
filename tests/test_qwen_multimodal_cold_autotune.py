@@ -8,17 +8,20 @@ from minecraft_mod_ai import llama_multimodal_contract as multimodal
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 
 
-def _config() -> SimpleNamespace:
+def _config(*, guarded: bool = True, native_mtp: bool = False) -> SimpleNamespace:
+    extra = {"mmproj_filename": "projector.gguf"}
+    if guarded:
+        extra["runtime_contract"] = "qwen"
+        extra["native_mtp"] = native_mtp
     return SimpleNamespace(
-        model_id="unsloth/Qwen3.6-27B-MTP-GGUF",
-        extra={
-            "gguf_filename": "Qwen3.6-27B-UD-Q4_K_XL.gguf",
-            "mmproj_filename": "mmproj-F16.gguf",
-        },
+        model_id="vendor/arbitrary-runtime-model",
+        extra=extra,
     )
 
 
-def test_cold_media_benchmark_runs_without_media_scope(monkeypatch) -> None:
+def test_cold_media_benchmark_runs_without_media_scope_for_declared_baseline_policy(
+    monkeypatch,
+) -> None:
     seen: list[str] = []
 
     def benchmark(_binary, _model_path, _config, _request, _fingerprint):
@@ -42,7 +45,7 @@ def test_cold_media_benchmark_runs_without_media_scope(monkeypatch) -> None:
     assert os.environ[multimodal._ACTIVE_MEDIA_ENV] == "1"
 
 
-def test_non_qwen_media_benchmark_keeps_media_scope(monkeypatch) -> None:
+def test_unconfigured_runtime_keeps_media_scope(monkeypatch) -> None:
     seen: list[str] = []
 
     def benchmark(_binary, _model_path, _config, _request, _fingerprint):
@@ -52,9 +55,36 @@ def test_non_qwen_media_benchmark_keeps_media_scope(monkeypatch) -> None:
     fake = SimpleNamespace(_benchmark=benchmark)
     multimodal._install_benchmark_policy(fake)
     monkeypatch.setenv(multimodal._ACTIVE_MEDIA_ENV, "1")
-    generic = SimpleNamespace(model_id="other/model", extra={"mmproj_filename": "x.gguf"})
 
-    fake._benchmark("llama-server", "/tmp/model.gguf", generic, object(), "fingerprint")
+    fake._benchmark(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config(guarded=False),
+        object(),
+        "fingerprint",
+    )
+
+    assert seen == ["1"]
+
+
+def test_native_mtp_runtime_keeps_media_scope(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def benchmark(_binary, _model_path, _config, _request, _fingerprint):
+        seen.append(os.environ.get(multimodal._ACTIVE_MEDIA_ENV, ""))
+        return "decision"
+
+    fake = SimpleNamespace(_benchmark=benchmark)
+    multimodal._install_benchmark_policy(fake)
+    monkeypatch.setenv(multimodal._ACTIVE_MEDIA_ENV, "1")
+
+    fake._benchmark(
+        "llama-server",
+        "/tmp/model.gguf",
+        _config(native_mtp=True),
+        object(),
+        "fingerprint",
+    )
 
     assert seen == ["1"]
 
