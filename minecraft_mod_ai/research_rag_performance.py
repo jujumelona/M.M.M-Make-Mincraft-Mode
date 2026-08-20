@@ -395,6 +395,8 @@ def _parse_embedding(raw: Any) -> list[float]:
 
 
 def _ensure_semantic_lsh(connection: sqlite3.Connection) -> None:
+    """Incrementally reconcile the LSH side index without a full anti-join delete."""
+
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS mmm_semantic_lsh (
@@ -410,9 +412,21 @@ def _ensure_semantic_lsh(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS mmm_semantic_lsh_b ON mmm_semantic_lsh(sig_b)"
     )
-    connection.execute(
-        "DELETE FROM mmm_semantic_lsh WHERE chunk_id NOT IN (SELECT chunk_id FROM chunks)"
-    )
+    stale = connection.execute(
+        """
+        SELECT l.chunk_id
+        FROM mmm_semantic_lsh AS l
+        LEFT JOIN chunks AS c ON c.chunk_id = l.chunk_id
+        WHERE c.chunk_id IS NULL
+        LIMIT 2048
+        """
+    ).fetchall()
+    if stale:
+        connection.executemany(
+            "DELETE FROM mmm_semantic_lsh WHERE chunk_id = ?",
+            [(str(row[0]),) for row in stale],
+        )
+
     batch_size = env_int("MMM_RAG_LSH_BUILD_BATCH", 256, minimum=32, maximum=2048)
     while True:
         rows = connection.execute(
@@ -453,6 +467,9 @@ def _ensure_semantic_lsh(connection: sqlite3.Connection) -> None:
                 [(chunk_id,) for chunk_id in invalid_ids],
             )
         connection.commit()
+
+
+_ensure_semantic_lsh._mmm_no_blanket_delete_v1 = True  # type: ignore[attr-defined]
 
 
 def _hamming_neighborhood(signature: int, bits: int, radius: int) -> list[int]:
