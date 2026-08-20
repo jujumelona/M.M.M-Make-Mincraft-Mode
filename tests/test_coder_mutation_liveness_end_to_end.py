@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 
 from minecraft_mod_ai import model_router
-from minecraft_mod_ai.causal_frontier_adapter import CausalFrontierAdapter
+from minecraft_mod_ai.causal_frontier_adapter import (
+    CausalFrontierAdapter,
+    remember_authorized_tools,
+)
 from minecraft_mod_ai.coder_tool_route_integrity_contract import _WritableProgressAdapter
 from minecraft_mod_ai.model_adapters import (
     GenerationRequest,
@@ -48,7 +51,7 @@ class _BaseAdapter:
             return GenerationResponse(content="implemented after source mutation")
 
         if request.tool_choice == "auto":
-            # This reproduces the recurring small-model failure: it sees a legal
+            # Reproduce the recurring small-model failure: the model sees a legal
             # prerequisite tool but initially tries to answer in prose instead.
             return GenerationResponse(content="I can implement this from the context.")
 
@@ -143,14 +146,21 @@ def test_prose_refusal_cannot_finish_before_source_patch(monkeypatch) -> None:
         parallel_tool_calls=True,
     )
 
-    result = generate_with_tools(
-        type("Router", (), {"_agent_require_fresh_evidence": False})(),
-        adapter=adapter,
-        request=request,
-        runtime=runtime,
-        stage="generation",
-        role="coder",
+    remember_authorized_tools(
+        request.tools,
+        {"search_code_rag": 0, "apply_source_patch": 1},
     )
+    try:
+        result = generate_with_tools(
+            type("Router", (), {"_agent_require_fresh_evidence": False})(),
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        remember_authorized_tools(())
 
     assert result == "implemented after source mutation"
     assert runtime.calls == ["search_code_rag", "apply_source_patch"]
