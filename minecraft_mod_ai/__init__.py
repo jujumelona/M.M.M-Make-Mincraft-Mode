@@ -1,6 +1,7 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
 from .coder_tool_route_integrity_contract import install as install_coder_tool_route_integrity
+from .generation_concurrency_safety import install as install_generation_concurrency_safety
 from .mcp_transport_pool import install_agent_mcp_transport_pool
 from .runtime_bootstrap import initialize_runtime
 from .runtime_preflight import run_runtime_preflight
@@ -21,9 +22,15 @@ install_coder_tool_route_integrity(
     causal_module=_causal_tool_frontier_contract,
 )
 
+# The DAG scheduler can reuse one CustomModuleGenerator/ProjectIndex across worker
+# threads. Install per-instance snapshot boundaries after all generation wrappers so
+# the final callable, rather than a buried inner implementation, owns the lock.
+install_generation_concurrency_safety()
+
 # Run a model-free structural smoke test only after the final tool-loop composition
-# is installed. Any Python/wrapper/causal regression now fails during package import,
-# before a production run spends time loading multi-gigabyte model weights.
+# and generation concurrency boundaries are installed. Any Python/wrapper/causal
+# regression now fails during package import, before a production run spends time
+# loading multi-gigabyte model weights.
 run_runtime_preflight()
 
 from .api import (
