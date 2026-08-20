@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -13,6 +14,7 @@ _CLIENTS: dict[str, Any] = {}
 _CLIENT_LIMIT = 4
 _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
+_DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 300.0
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -20,6 +22,23 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _stream_idle_timeout_seconds() -> float:
+    raw = os.environ.get("MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS must be a positive finite number."
+        ) from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(
+            "MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS must be a positive finite number."
+        )
+    return value
 
 
 def _client(server_url: str) -> Any:
@@ -30,7 +49,12 @@ def _client(server_url: str) -> Any:
         client = _CLIENTS.get(origin)
         if client is not None:
             return client
-        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+        timeout = httpx.Timeout(
+            connect=30.0,
+            read=_stream_idle_timeout_seconds(),
+            write=30.0,
+            pool=30.0,
+        )
         client = httpx.Client(
             timeout=timeout,
             limits=httpx.Limits(
@@ -341,4 +365,9 @@ def install(hardware_module: Any) -> None:
     hardware_module._strict_server_generate = fast_stream_generate
 
 
-__all__ = ["_active_decode_profile", "_native_timing_summary", "install"]
+__all__ = [
+    "_active_decode_profile",
+    "_native_timing_summary",
+    "_stream_idle_timeout_seconds",
+    "install",
+]
