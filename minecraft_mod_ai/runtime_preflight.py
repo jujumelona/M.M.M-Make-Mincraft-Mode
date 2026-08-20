@@ -10,6 +10,7 @@ state) before a Colab user spends time loading multi-gigabyte models.
 
 import io
 import json
+import sys
 import threading
 from contextlib import redirect_stdout
 from typing import Any, Mapping
@@ -287,7 +288,9 @@ def run_runtime_preflight() -> None:
                     f"runtime preflight {name!r} crashed: {type(exc).__name__}: {exc}"
                 ) from exc
         _PREFLIGHT_DONE = True
-        print("runtime preflight: PASS", flush=True)
+        # MCP stdio reserves stdout for JSON-RPC frames. Diagnostics must never
+        # write there, including package-import preflight success messages.
+        print("runtime preflight: PASS", file=sys.stderr, flush=True)
 
 
 __all__ = ["RuntimePreflightError", "run_runtime_preflight"]
