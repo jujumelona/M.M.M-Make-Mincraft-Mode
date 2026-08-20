@@ -96,6 +96,22 @@ def _stable_value(value: Any, *, drop_volatile: bool) -> Any:
             if stable_child not in (None, "", [], {}):
                 result[key] = stable_child
         return result
+    if isinstance(value, (set, frozenset)):
+        # Tool/runtime results are normally JSON-like, but host-side helpers can
+        # legitimately return set-valued facts. Serializing a raw set through
+        # ``default=str`` makes fingerprints depend on hash iteration order. Convert
+        # unordered containers into a canonically sorted JSON-compatible sequence.
+        items = [_stable_value(item, drop_volatile=drop_volatile) for item in value]
+        return sorted(
+            items,
+            key=lambda item: json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_stable_value(item, drop_volatile=drop_volatile) for item in value]
     return value
