@@ -42,7 +42,9 @@ def finalize_runtime() -> None:
         from .model_adapters import llama_cpp_adapter
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .retrieval_model_residency import install as install_retrieval_residency
+        from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
+        from .small_model_compacting_adapter import install as install_small_model_compaction
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
         # retrieval replaces ModelRouter._generate_with_tools late. Structured intent
@@ -62,6 +64,10 @@ def finalize_runtime() -> None:
         # structural preflight so a fresh process cannot silently regress to per-call
         # CPU model construction.
         install_retrieval_residency(model_router_module=model_router)
+        # Bootstrap installs an early compactor, but adaptive retrieval later replaces
+        # the tool loop instead of delegating through that old callable. Re-bind the
+        # compactor here, after every loop owner, so it is on the executable path.
+        install_small_model_compaction(model_router)
         # llama.cpp n_predict/max_tokens=-1 is its native unlimited policy. Do not
         # truncate source-edit/tool turns at a registry max_new_tokens value.
         install_llama_unbounded_generation(llama_server_hardware_policy)
@@ -71,6 +77,9 @@ def finalize_runtime() -> None:
         # Exercise the exact first assistant + parallel 48 KiB tool-observation shape
         # that previously reached the server boundary before a second assistant turn.
         run_context_budget_preflight()
+        # Marker inheritance cannot prove that a wrapper executes. Verify the concrete
+        # code-object order of the final ModelRouter path before any model is loaded.
+        run_runtime_live_path_preflight()
         run_runtime_preflight()
         _FINALIZED = True
 
