@@ -2,13 +2,10 @@ from __future__ import annotations
 
 """Temporary compatibility repairs not yet moved into canonical owners.
 
-Every repair in this module must disappear once its canonical module owns the same
-behavior. Do not add new production behavior here.
+Only the remaining ecosystem-discovery gap and research-RAG integration live here.
+Do not add new production behavior to this module.
 """
 
-import json
-import os
-from dataclasses import replace
 from functools import wraps
 from typing import Any
 
@@ -122,7 +119,7 @@ def _fix_ecosystem_discovery() -> None:
             )
             return payload
 
-        search._mmm_openverse_route_v1 = True
+        search._mmm_openverse_route_v1 = True  # type: ignore[attr-defined]
         cls.search = search
 
     current_openverse = cls._search_openverse
@@ -160,10 +157,16 @@ def _fix_ecosystem_discovery() -> None:
                 identifier = str(item.get("id", "")).strip()
                 license_name = str(item.get("license", "")).strip().lower()
                 license_version = str(item.get("license_version", "")).strip()
-                if not identifier or license_name not in {"cc0", "pdm", "by", "by-sa"}:
+                if not identifier or license_name not in {
+                    "cc0",
+                    "pdm",
+                    "by",
+                    "by-sa",
+                }:
                     continue
                 license_id = discovery._creative_commons_id(
-                    license_name, license_version
+                    license_name,
+                    license_version,
                 )
                 source_url = discovery._safe_https_url(
                     item.get("foreign_landing_url") or item.get("detail_url")
@@ -201,11 +204,13 @@ def _fix_ecosystem_discovery() -> None:
                         ),
                         source_url=source_url,
                         api_url=discovery._safe_https_url(
-                            item.get("detail_url"), allow_empty=True
+                            item.get("detail_url"),
+                            allow_empty=True,
                         ),
                         license_id=license_id,
                         license_url=discovery._safe_https_url(
-                            item.get("license_url"), allow_empty=True
+                            item.get("license_url"),
+                            allow_empty=True,
                         ),
                         license_policy=discovery._media_license_policy(license_name),
                         minecraft_version="not_applicable",
@@ -216,7 +221,8 @@ def _fix_ecosystem_discovery() -> None:
                         ),
                         attribution=attribution,
                         preview_urls=discovery._safe_preview_urls(
-                            [item.get("thumbnail")], allowed_hosts=None
+                            [item.get("thumbnail")],
+                            allowed_hosts=None,
                         ),
                         reuse_status="origin_license_verification_required",
                         evidence_sha256=discovery._sha256_text(
@@ -236,7 +242,7 @@ def _fix_ecosystem_discovery() -> None:
                 page + 1 if page_count and page < page_count else None,
             )
 
-        search_openverse._mmm_openverse_candidates_v1 = True
+        search_openverse._mmm_openverse_candidates_v1 = True  # type: ignore[attr-defined]
         cls._search_openverse = search_openverse
 
     def seed_query(prompt: str, game_design: dict[str, Any]) -> str:
@@ -253,224 +259,14 @@ def _fix_ecosystem_discovery() -> None:
                 parts.append(str(item.get("brief") or ""))
         return " ".join(part.strip() for part in parts if part.strip())
 
-    seed_query._mmm_lossless_seed_query_v1 = True
+    seed_query._mmm_lossless_seed_query_v1 = True  # type: ignore[attr-defined]
     discovery._seed_query = seed_query
 
 
 def _fix_research_hotpaths() -> None:
     from . import centroid_vector_rag, rag_index, research_rag_performance
-    from . import research_memory_performance, trajectory_memory
 
     research_rag_performance.harden(rag_index, centroid_vector_rag)
-    research_memory_performance.harden(trajectory_memory)
-
-
-def _fix_llama_runtime_tuning() -> None:
-    from . import llama_server_runtime_tuning as runtime
-
-    if not getattr(runtime._explicit_parallel, "_mmm_parallel_cap_v1", False):
-
-        def explicit_parallel() -> int | None:
-            raw = os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
-            if not raw:
-                return None
-            try:
-                value = int(raw)
-            except ValueError as exc:
-                raise ValueError("MMM_LLAMA_PARALLEL must be an integer") from exc
-            return max(1, min(8, value))
-
-        explicit_parallel._mmm_parallel_cap_v1 = True
-        runtime._explicit_parallel = explicit_parallel
-
-    if not getattr(
-        runtime._parallel_resource_feasible,
-        "_mmm_parallel_fit_v1",
-        False,
-    ):
-
-        def parallel_resource_feasible(
-            slots: int,
-            config: Any,
-            model_path: str | None,
-            resources: Any,
-        ) -> bool:
-            slots = max(1, int(slots))
-            if slots == 1:
-                return True
-            context = runtime._per_request_context(config)
-            try:
-                total_context = runtime._total_context(context, slots)
-            except RuntimeError:
-                return False
-            model_bytes = runtime._model_size(model_path) or 6 * 1024**3
-            gpu_free = resources.gpu_free_bytes or (
-                14 * 1024**3 if resources.gpu_total_bytes else 0
-            )
-            ram_avail = resources.ram_available_bytes or 12 * 1024**3
-            if not gpu_free or not ram_avail:
-                return False
-            gpu_required = (
-                int(model_bytes * 1.02)
-                + total_context * runtime._kv_bytes_per_token()
-                + 256 * 1024**2
-            )
-            ram_required = int(model_bytes * 0.30) + (
-                512 + 256 * slots
-            ) * 1024**2
-            return bool(
-                gpu_required <= int(gpu_free * 0.95)
-                and ram_required <= int(ram_avail * 0.95)
-            )
-
-        parallel_resource_feasible._mmm_parallel_fit_v1 = True
-        runtime._parallel_resource_feasible = parallel_resource_feasible
-
-    current_install = runtime.install
-    if getattr(current_install, "_mmm_launch_geometry_v1", False):
-        return
-
-    def fix_installed(autotune_module: Any) -> None:
-        installed_launch = getattr(autotune_module, "_launch_selected", None)
-        if installed_launch is None or getattr(
-            installed_launch, "_mmm_launch_geometry_v1", False
-        ):
-            return
-        base_launch = getattr(installed_launch, "__wrapped__", None)
-        if not callable(base_launch):
-            return
-
-        @wraps(installed_launch)
-        def launch_selected(
-            binary: str,
-            model_path: str,
-            config: Any,
-            selected: Any,
-        ) -> str:
-            explicit = runtime._explicit_parallel()
-            requested = (
-                explicit
-                if explicit is not None
-                else max(1, int(getattr(selected, "parallel", 1) or 1))
-            )
-            if explicit is not None:
-                attempts = [requested]
-            else:
-                attempts = []
-                slots = requested
-                while True:
-                    attempts.append(slots)
-                    if slots <= 1:
-                        break
-                    slots = max(1, slots // 2)
-
-            failures: list[str] = []
-            active = selected
-            url = ""
-            for slots in attempts:
-                root_name = str(getattr(selected, "name", "baseline")).split(
-                    "|p", 1
-                )[0]
-                active = replace(
-                    selected,
-                    name=root_name if slots == 1 else f"{root_name}|p{slots}",
-                    parallel=slots,
-                )
-                try:
-                    url = base_launch(binary, model_path, config, active)
-                    break
-                except Exception as exc:
-                    failures.append(f"p{slots}: {type(exc).__name__}: {exc}")
-
-            if not url:
-                message = (
-                    "native llama-server failed every measured slot launch: "
-                    + " | ".join(failures)
-                )
-                fresh_resources = runtime._runtime_resources()
-                if runtime._recoverable_resource_failure(
-                    failures,
-                    slots=min(attempts),
-                    config=config,
-                    model_path=model_path,
-                    resources=fresh_resources,
-                ):
-                    raise runtime.RecoverableResourceLaunchError(message)
-                raise RuntimeError(message)
-
-            resources = runtime._runtime_resources()
-            slots = max(1, int(active.parallel))
-            context_per_slot = runtime._per_request_context(config)
-            context_total = runtime._total_context(context_per_slot, slots)
-            active_ubatch = active.ubatch or min(
-                autotune_module._env_int("MMM_LLAMA_BATCH", 2048),
-                autotune_module._env_int("MMM_LLAMA_UBATCH", 512),
-            )
-            kv_k = os.environ.get(
-                "MMM_LLAMA_ACTIVE_CACHE_TYPE_K",
-                os.environ.get("MMM_KV_CACHE_QUANT", "q4_0"),
-            ).strip().lower()
-            kv_v = os.environ.get(
-                "MMM_LLAMA_ACTIVE_CACHE_TYPE_V",
-                os.environ.get("MMM_KV_CACHE_QUANT", "q4_0"),
-            ).strip().lower()
-            prompt_cache_enabled = not (
-                runtime._is_qwen35_mtp_config(config)
-                and os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1")
-                .strip()
-                .lower()
-                not in {"0", "false", "no", "off"}
-            )
-            receipt = {
-                "schema_version": "mmm/llama-runtime-receipt-v1",
-                "performance_mode": runtime._performance_mode(),
-                "slots": slots,
-                "context_per_slot": context_per_slot,
-                "context_total": context_total,
-                "ubatch": active_ubatch,
-                "kv_k": kv_k,
-                "kv_v": kv_v,
-                "spec_type": active.spec_type,
-                "draft_n_max": int(active.draft_n_max),
-                "draft_p_min": float(active.draft_p_min),
-                "cache_reuse": int(active.cache_reuse),
-                "prompt_cache": prompt_cache_enabled,
-                "cache_ram_mib": (
-                    runtime._cache_ram_mib() if prompt_cache_enabled else 0
-                ),
-                "resource_bucket": runtime._resource_bucket(resources),
-            }
-            receipt["selection_inputs_sha256"] = runtime._json_fingerprint(
-                runtime._selection_inputs(config)
-            )
-            receipt["selection_sha256"] = runtime._json_fingerprint(receipt)
-            encoded = json.dumps(
-                receipt, sort_keys=True, separators=(",", ":")
-            )
-            os.environ["MMM_LLAMA_RUNTIME_RECEIPT"] = encoded
-            autotune_module._MMM_LLAMA_RUNTIME_RECEIPT = receipt
-            os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(slots)
-            os.environ["MMM_LLAMA_ACTIVE_UBATCH"] = str(active_ubatch)
-            os.environ["MMM_LLAMA_ACTIVE_CACHE_REUSE"] = str(active.cache_reuse)
-            os.environ["MMM_LLAMA_ACTIVE_SPEC_TYPE"] = active.spec_type
-            return url
-
-        launch_selected._mmm_launch_geometry_v1 = True
-        autotune_module._launch_selected = launch_selected
-
-    @wraps(current_install)
-    def install(autotune_module: Any) -> None:
-        current_install(autotune_module)
-        fix_installed(autotune_module)
-
-    install._mmm_launch_geometry_v1 = True
-    runtime.install = install
-
-    try:
-        from . import llama_server_autotune
-    except Exception:
-        return
-    fix_installed(llama_server_autotune)
 
 
 def install() -> None:
@@ -479,7 +275,6 @@ def install() -> None:
         return
     _fix_ecosystem_discovery()
     _fix_research_hotpaths()
-    _fix_llama_runtime_tuning()
     _INSTALLED = True
 
 
