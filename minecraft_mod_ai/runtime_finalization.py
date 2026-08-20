@@ -27,11 +27,13 @@ def finalize_runtime() -> None:
 
         from . import causal_tool_frontier_contract
         from . import model_router
+        from . import parallel_runtime_contract
         from . import small_model_max_agent_contract
         from .agent_routing_intent_contract import install as install_routing_intent
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .generation_concurrency_safety import install as install_generation_safety
         from .mcp_transport_pool import install_agent_mcp_transport_pool
+        from .model_prefetch_resilience import install as install_prefetch_resilience
         from .runtime_preflight import run_runtime_preflight
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
@@ -39,6 +41,7 @@ def finalize_runtime() -> None:
         # comes after route integrity because route integrity also installs a legacy
         # user-only query wrapper; the structured projection must own the final call.
         install_agent_mcp_transport_pool()
+        install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_route_integrity(
             model_router_module=model_router,
             small_model_module=small_model_max_agent_contract,
