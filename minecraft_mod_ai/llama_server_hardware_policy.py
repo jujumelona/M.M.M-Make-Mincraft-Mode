@@ -63,9 +63,11 @@ def _bootstrap_native_server() -> str | None:
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the authoritative OpenAI-compatible llama-server chat payload.
 
-    Tool-capable turns use the model's native Jinja template through llama.cpp's
-    ``tools``/``tool_calls`` transport. JSON syntax/schema validation for ordinary
-    structured output stays host-owned, so no JSON grammar or schema sampler is sent.
+    Tool-capable turns keep the model's native Jinja ``tools`` prompt while forcing
+    transport ``tool_choice=none`` so llama.cpp never activates PEG-native tool
+    parsing. The request's semantic tool-choice contract remains host-owned and is
+    validated after Qwen markup parsing. JSON syntax/schema validation for ordinary
+    structured output is likewise host-owned, so no sampler grammar is sent.
     """
 
     payload: dict[str, Any] = {
@@ -77,9 +79,7 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     tools = getattr(request, "tools", ()) or ()
     if tools:
         payload["tools"] = [dict(tool) for tool in tools]
-        tool_choice = getattr(request, "tool_choice", None)
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
+        payload["tool_choice"] = "none"
         payload["parallel_tool_calls"] = bool(
             getattr(request, "parallel_tool_calls", False)
         )
@@ -257,11 +257,30 @@ def _commit_metrics_delta(
     }
 
 
+def _reject_tool_stream_request(adapter: Any, request: Any) -> None:
+    """Keep tool semantics out of the text-only streaming transport."""
+
+    if not (getattr(request, "tools", ()) or ()):
+        return
+    from .model_adapters import ModelBackendError
+
+    raise ModelBackendError(
+        role=adapter.config.role,
+        model_id=adapter.config.model_id,
+        cause=(
+            "A tool-aware completion reached the text-only streaming API. "
+            "Use ModelRouter.generate_text() or LlamaCppAdapter.generate_turn() so "
+            "Qwen tool calls are parsed and executed by the host."
+        ),
+    )
+
+
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
-    """Stream one native server with low-overhead native token telemetry."""
+    """Stream one native text-only server turn with native token telemetry."""
 
     from .model_adapters import ModelBackendError
 
+    _reject_tool_stream_request(adapter, request)
     metrics_before: dict[str, float] | None = None
     metrics_committed = False
     client: Any | None = None
@@ -617,6 +636,7 @@ def install(autotune_module: Any) -> None:
 
         @wraps(current_generate)
         def strict_selected_server_generate(self: Any, request: Any) -> str:
+            _reject_tool_stream_request(self, request)
             explicit = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
             if not explicit:
                 explicit = (
