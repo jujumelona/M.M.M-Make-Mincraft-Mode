@@ -103,22 +103,20 @@ class _Runtime:
                 },
             }
         if name == "apply_source_patch":
+            # Simulate AgentToolRuntime's bounded observation after a large patch:
+            # the underlying first-party call succeeded, but the detailed APPLIED
+            # receipt is no longer present in the model-visible result body.
             return {
-                "schema_version": "mmm/source-patch-receipt-v1",
-                "status": "APPLIED",
-                "operations": [
-                    {
-                        "path": "src/main/java/example/Test.java",
-                        "operation": "create",
-                        "before_sha256": None,
-                        "after_sha256": "sha256:" + "1" * 64,
-                    }
-                ],
+                "truncated": True,
+                "original_bytes": 256_000,
+                "preview": "{...large source-patch observation omitted...}",
             }
         raise AssertionError(f"unexpected runtime call: {name} {arguments}")
 
 
-def test_prose_refusal_cannot_finish_before_source_patch(monkeypatch) -> None:
+def test_prose_refusal_cannot_finish_before_source_patch_even_when_result_is_truncated(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(model_router, "_agent_tool_round_limit", lambda: 8)
     monkeypatch.setattr(model_router, "_usable_rag_result", lambda result: bool(result))
     monkeypatch.setattr(
