@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Bounded recovery for llama.cpp ``finish_reason='length'`` responses.
 
-OpenAI-compatible ``length`` is ambiguous: it can mean the requested completion-token
-budget was exhausted, or that prompt+completion reached the server/model context
-boundary.  The base adapter historically treated both as an unrecoverable context
-failure.  This contract performs exactly one recovery attempt: compact large tool
-observations and increase the completion allowance within a fixed ceiling.
+Production llama.cpp requests use the server's native unlimited prediction budget
+(``max_tokens=-1``). Therefore a remaining ``length`` stop is treated as a real
+prompt/context-pressure event, not as a reason to invent another output-token ceiling.
+Recovery is exactly one retry after compacting large tool observations.
 """
 
 import json
@@ -18,7 +17,6 @@ from .model_context_budget import emergency_fit_messages
 
 _MARKER = "_mmm_bounded_length_recovery_v1"
 _LENGTH_ERROR_FRAGMENT = "reached its model/server context boundary before the assistant turn completed"
-_MAX_RECOVERY_TOKENS = 16_384
 
 
 def _payload_bytes(messages: Any) -> int:
@@ -36,16 +34,8 @@ def _payload_bytes(messages: Any) -> int:
         return 0
 
 
-def _recovery_max_tokens(payload: Mapping[str, Any]) -> int:
-    try:
-        current = max(1, int(payload.get("max_tokens", 0) or 0))
-    except (TypeError, ValueError):
-        current = 1
-    return min(_MAX_RECOVERY_TOKENS, max(current + 2048, current * 2))
-
-
 def install(llama_cpp_module: Any) -> None:
-    """Install one non-recursive retry around the final completion-message owner."""
+    """Install one non-recursive context-pressure retry around completion handling."""
 
     current = llama_cpp_module._completion_message
     if getattr(current, _MARKER, False):
@@ -62,27 +52,27 @@ def install(llama_cpp_module: Any) -> None:
             if _LENGTH_ERROR_FRAGMENT not in str(exc):
                 raise
 
-            retry_payload = dict(payload)
             original_messages = tuple(payload.get("messages", ()) or ())
             fitted_messages = emergency_fit_messages(
                 original_messages,
                 budget_bytes=40 * 1024,
             )
-            original_tokens = int(payload.get("max_tokens", 0) or 0)
-            recovery_tokens = _recovery_max_tokens(payload)
-            retry_payload["messages"] = [dict(message) for message in fitted_messages]
-            retry_payload["max_tokens"] = recovery_tokens
-
             before_bytes = _payload_bytes(original_messages)
             after_bytes = _payload_bytes(fitted_messages)
-            if after_bytes >= before_bytes and recovery_tokens <= original_tokens:
+            if after_bytes >= before_bytes:
                 raise
+
+            retry_payload = dict(payload)
+            retry_payload["messages"] = [dict(message) for message in fitted_messages]
+            # Keep llama.cpp's native unlimited generation policy. Do not replace one
+            # arbitrary max_tokens cap with another during recovery.
+            retry_payload["max_tokens"] = -1
 
             # stderr is mandatory: MCP stdio reserves stdout for JSON-RPC frames.
             print(
                 "llama length recovery: retrying once",
                 f" message_bytes={before_bytes}->{after_bytes}",
-                f" max_tokens={original_tokens}->{recovery_tokens}",
+                " max_tokens=-1",
                 file=sys.stderr,
                 flush=True,
             )
