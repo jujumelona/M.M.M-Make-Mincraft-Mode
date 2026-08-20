@@ -16,6 +16,12 @@ from .importer import ExistingProjectImportError, inspect_existing_project_archi
 from .local_ai_sidecar_generator import INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE, generate_local_ai_sidecar
 from .java_lsp import JavaLanguageService
 from .project_index import ProjectIndex
+from .project_index_execution_reuse_contract import (
+    execution_scoped,
+    mark_post_generation,
+    project_index as execution_project_index,
+    tune_gradle_resources,
+)
 from .model_router import ModelRouter
 from .project_edit import ProjectEditError, inspect_fabric_project
 from .research_ledger import is_research_shard, write_research_shard
@@ -24,7 +30,6 @@ from .quality_evidence import compile_quality_evidence
 from .proposal_store import write_sharded_complete_proposal
 from .publisher import build_distribution_metadata, package_distribution_bundle, publish_curseforge, publish_modrinth
 from .repair_engine import RepairEngine
-from .resource_tuning import tune_gradle_resources
 from .runner import GradleRunner
 from .runtime_manager import MinecraftRuntimeManager
 from .scalable_validator import ScalableProjectValidator
@@ -120,6 +125,7 @@ class CompleteProductionOrchestrator:
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
 
+    @execution_scoped
     def execute(self, proposal: CompleteProposal | dict[str, Any], *, approval_hash: str, run_name: str, options: CompleteExecutionOptions | None=None, existing_input: str | Path | None=None) -> CompletePipelineResult:
         options = options or CompleteExecutionOptions()
         options.validate(policy=self.policy)
@@ -154,15 +160,16 @@ class CompleteProductionOrchestrator:
         self._write_complete_approval(project_root, approved)
         self._succeed_work_node(ledger, 'prepare-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'SUCCEEDED', 'project_root': str(project_root)})
         generation = self._execute_generation_work(approved=approved, ordered=ordered, work_plan=work_plan, ledger=ledger, project_root=project_root, run_root=run_root, options=options, router=router)
+        mark_post_generation()
         module_receipts.extend(generation['module_receipts'])
         blockbench_receipts.extend(generation['blockbench_receipts'])
         unresolved.extend(generation['unresolved'])
         asset_receipt = generation['asset_receipt']
         router = generation['router']
-        index = ProjectIndex(project_root, policy=self.policy)
+        index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
         heap_receipt = run_named_checkpoint(ledger, 'tune-resources', stage='prepare:resources', input_value={'graph_hash': work_plan.graph_hash, 'module_count': len(ordered), 'source_file_count': len(index.files), 'gradle_heap_mb': options.gradle_heap_mb}, action=lambda: tune_gradle_resources(project_root, module_count=len(ordered), source_file_count=len(index.files), policy=self._policy_with_heap_override(options.gradle_heap_mb)), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: False)
         module_receipts.append({'schema_version': 'mmm/resource-tuning-v1', **heap_receipt})
-        ProjectIndex(project_root, policy=self.policy).write_manifest()
+        execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
         source_report = run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}, action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: False)
         if source_report.get('status') != 'PASS':
@@ -372,7 +379,7 @@ class CompleteProductionOrchestrator:
                     if router is None:
                         router = self.router_factory()
             return router
-        shared_project_index = ProjectIndex(project_root, policy=self.policy)
+        shared_project_index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
         custom_generator: CustomModuleGenerator | None = None
 
         def get_custom_generator() -> CustomModuleGenerator:
@@ -760,7 +767,7 @@ class CompleteProductionOrchestrator:
         return True
 
     def _project_manifest_hash(self, project_root: Path) -> str:
-        return str(ProjectIndex(project_root, policy=self.policy).manifest_receipt()['sha256'])
+        return str(execution_project_index(ProjectIndex, project_root, policy=self.policy).manifest_receipt()['sha256'])
 
     @staticmethod
     def _file_hash(path: Path) -> str:

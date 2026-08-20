@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+"""Explicit execution-scoped ProjectIndex reuse.
+
+The orchestrator calls these helpers directly; this module never replaces imported
+classes or functions at runtime.
+"""
+
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
+_F = TypeVar("_F", bound=Callable[..., Any])
 _POST_GENERATION: ContextVar[bool] = ContextVar(
     "mmm_project_index_post_generation",
     default=False,
@@ -41,10 +48,7 @@ def _cached_indexes_for_root(
     return tuple(indexes)
 
 
-def _evict_root(
-    cache: dict[tuple[str, int], Any],
-    project_root: str | Path,
-) -> None:
+def _evict_root(cache: dict[tuple[str, int], Any], project_root: str | Path) -> None:
     root = _root_key(project_root)
     for key in tuple(cache):
         if key[0] == root:
@@ -94,100 +98,89 @@ def _receipt_paths(value: Any) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def execution_scoped(function: _F) -> _F:
+    """Give one orchestrator execution an isolated post-generation index cache."""
+
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any):
+        index_token = _EXECUTION_INDEXES.set({})
+        phase_token = _POST_GENERATION.set(False)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _POST_GENERATION.reset(phase_token)
+            _EXECUTION_INDEXES.reset(index_token)
+
+    wrapped._mmm_project_index_execution_scope = True  # type: ignore[attr-defined]
+    return wrapped  # type: ignore[return-value]
+
+
+def mark_post_generation() -> None:
+    _POST_GENERATION.set(True)
+
+
+def project_index(
+    factory: Callable[..., Any],
+    project_root: str | Path,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Construct normally before generation; reuse by root/policy afterwards."""
+    if not _POST_GENERATION.get():
+        return factory(project_root, *args, **kwargs)
+    cache = _EXECUTION_INDEXES.get()
+    if cache is None:
+        return factory(project_root, *args, **kwargs)
+    policy = kwargs.get("policy")
+    key = _cache_key(project_root, policy)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    created = factory(project_root, *args, **kwargs)
+    cache[key] = created
+    return created
+
+
+def _update_from_receipt(project_root: str | Path, receipt: Any) -> None:
+    if not _POST_GENERATION.get():
+        return
+    cache = _EXECUTION_INDEXES.get()
+    if cache is None:
+        return
+    indexes = _cached_indexes_for_root(cache, project_root)
+    if not indexes:
+        return
+    paths = _receipt_paths(receipt)
+    status = str(receipt.get("status", "")) if isinstance(receipt, dict) else ""
+    if paths:
+        for index in indexes:
+            index.update_files(paths)
+    elif status not in {"", "UNCHANGED"}:
+        _evict_root(cache, project_root)
+
+
+def tune_gradle_resources(project_root: str | Path, *args: Any, **kwargs: Any):
+    """Run canonical resource tuning and reconcile active indexes from its receipt."""
+    from .resource_tuning import tune_gradle_resources as tune
+
+    receipt = tune(project_root, *args, **kwargs)
+    _update_from_receipt(project_root, receipt)
+    return receipt
+
+
 def install(orchestrator_module: Any) -> None:
-    """Reuse one authoritative post-generation ProjectIndex inside an execution.
-
-    Generation itself keeps its existing fresh shared index. Only after generation
-    completes do we cache the next ProjectIndex construction. Resource hardening then
-    updates every cached index for the same project root from its transactional
-    receipts, independent of which derived tuning policy produced those receipts. If a
-    mutating receipt cannot prove which files changed, all cached indexes for that root
-    are discarded and the next construction falls back to the original full scan.
-    """
-
-    cls = orchestrator_module.CompleteProductionOrchestrator
-
-    current_execute = cls.execute
-    if not getattr(current_execute, "_mmm_project_index_execution_scope", False):
-
-        @wraps(current_execute)
-        def execute(self: Any, *args: Any, **kwargs: Any):
-            index_token = _EXECUTION_INDEXES.set({})
-            phase_token = _POST_GENERATION.set(False)
-            try:
-                return current_execute(self, *args, **kwargs)
-            finally:
-                _POST_GENERATION.reset(phase_token)
-                _EXECUTION_INDEXES.reset(index_token)
-
-        execute._mmm_project_index_execution_scope = True  # type: ignore[attr-defined]
-        cls.execute = execute
-
-    current_generation = cls._execute_generation_work
-    if not getattr(current_generation, "_mmm_marks_post_generation", False):
-
-        @wraps(current_generation)
-        def execute_generation_work(self: Any, *args: Any, **kwargs: Any):
-            result = current_generation(self, *args, **kwargs)
-            _POST_GENERATION.set(True)
-            return result
-
-        execute_generation_work._mmm_marks_post_generation = True  # type: ignore[attr-defined]
-        cls._execute_generation_work = execute_generation_work
-
-    current_project_index = orchestrator_module.ProjectIndex
-    if not getattr(current_project_index, "_mmm_post_generation_reuse", False):
-
-        def project_index(project_root: str | Path, *args: Any, **kwargs: Any):
-            if not _POST_GENERATION.get():
-                return current_project_index(project_root, *args, **kwargs)
-            cache = _EXECUTION_INDEXES.get()
-            if cache is None:
-                return current_project_index(project_root, *args, **kwargs)
-            policy = kwargs.get("policy")
-            key = _cache_key(project_root, policy)
-            cached = cache.get(key)
-            if cached is not None:
-                return cached
-            created = current_project_index(project_root, *args, **kwargs)
-            cache[key] = created
-            return created
-
-        project_index._mmm_post_generation_reuse = True  # type: ignore[attr-defined]
-        project_index.__wrapped__ = current_project_index  # type: ignore[attr-defined]
-        orchestrator_module.ProjectIndex = project_index
-
-    current_tune = orchestrator_module.tune_gradle_resources
-    if not getattr(current_tune, "_mmm_updates_execution_project_index", False):
-
-        @wraps(current_tune)
-        def tune_gradle_resources(project_root: str | Path, *args: Any, **kwargs: Any):
-            receipt = current_tune(project_root, *args, **kwargs)
-            if not _POST_GENERATION.get():
-                return receipt
-            cache = _EXECUTION_INDEXES.get()
-            if cache is None:
-                return receipt
-            indexes = _cached_indexes_for_root(cache, project_root)
-            if not indexes:
-                return receipt
-            paths = _receipt_paths(receipt)
-            status = str(receipt.get("status", "")) if isinstance(receipt, dict) else ""
-            if paths:
-                for index in indexes:
-                    index.update_files(paths)
-            elif status not in {"", "UNCHANGED"}:
-                # Unknown mutating receipt shape: fail safe to a fresh scan on the
-                # next ProjectIndex construction rather than trusting stale state.
-                _evict_root(cache, project_root)
-            return receipt
-
-        tune_gradle_resources._mmm_updates_execution_project_index = True  # type: ignore[attr-defined]
-        orchestrator_module.tune_gradle_resources = tune_gradle_resources
+    """Compatibility verifier for callers that still invoke the former installer."""
+    execute = orchestrator_module.CompleteProductionOrchestrator.execute
+    if not getattr(execute, "_mmm_project_index_execution_scope", False):
+        raise RuntimeError("ProjectIndex execution reuse must be owned by the orchestrator.")
 
 
 __all__ = [
     "_cached_indexes_for_root",
     "_receipt_paths",
+    "execution_scoped",
     "install",
+    "mark_post_generation",
+    "project_index",
+    "tune_gradle_resources",
 ]
