@@ -114,6 +114,7 @@ _qwen35_9b: &qwen35_9b
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   runtime_contract: qwen
+  decode_hotpath: t4_mtp
   mtp_widths: "1,2,3,4,5,6"
   torch_dtype: float16
   max_context: 262144
