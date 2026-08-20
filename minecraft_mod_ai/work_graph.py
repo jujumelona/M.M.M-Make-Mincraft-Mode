@@ -67,10 +67,11 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
     """
     policy = policy or ScalePolicy.from_environment()
     proposal.validate(policy=policy)
-    proposal_hash = proposal.calculate_hash()
+    proposal_hash = proposal.approval_hash or proposal.calculate_hash()
     selected_modules = tuple(proposal.modules) if modules is None else tuple(modules)
-    for module in selected_modules:
-        module.validate(policy=policy)
+    if modules is not None:
+        for module in selected_modules:
+            module.validate(policy=policy)
     selected_ids = {module.module_id for module in selected_modules}
     if len(selected_ids) != len(selected_modules):
         raise WorkGraphError('Production work modules contain duplicate IDs.')
@@ -347,8 +348,35 @@ class DurableWorkLedger:
             params.append(state.value)
         params.append(limit + 1)
         with self._connect() as connection:
-            rows = connection.execute(f"\n                SELECT node_id FROM tasks\n                WHERE {' AND '.join(clauses)}\n                ORDER BY node_id LIMIT ?\n                ", tuple(params)).fetchall()
-        page = [self.task(str(row[0])) for row in rows[:limit]]
+            rows = connection.execute(f"\n                SELECT node_id, stage, input_hash, payload_json, state,\n                       attempt, lease_owner, lease_until, output_hash,\n                       receipt_json, error, updated_at\n                FROM tasks\n                WHERE {' AND '.join(clauses)}\n                ORDER BY node_id LIMIT ?\n                ", tuple(params)).fetchall()
+            page_rows = rows[:limit]
+            node_ids = [str(row[0]) for row in page_rows]
+            dependencies: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
+            for start in range(0, len(node_ids), 900):
+                batch = node_ids[start:start + 900]
+                if not batch:
+                    continue
+                placeholders = ','.join('?' for _ in batch)
+                for node_id, dependency_id in connection.execute(f"\n                    SELECT node_id, dependency_id FROM edges\n                    WHERE node_id IN ({placeholders})\n                    ORDER BY node_id, dependency_id\n                    ", tuple(batch)):
+                    dependencies[str(node_id)].append(str(dependency_id))
+        page = [
+            {
+                'node_id': row[0],
+                'stage': row[1],
+                'input_hash': row[2],
+                'payload': json.loads(row[3]),
+                'state': row[4],
+                'attempt': row[5],
+                'lease_owner': row[6],
+                'lease_until': row[7],
+                'output_hash': row[8],
+                'receipt': json.loads(row[9]) if row[9] else None,
+                'error': row[10],
+                'updated_at': row[11],
+                'dependencies': dependencies[str(row[0])],
+            }
+            for row in page_rows
+        ]
         return {'schema_version': 'mmm/work-task-page-v1', 'tasks': page, 'next_cursor': page[-1]['node_id'] if len(rows) > limit else ''}
 
     def summary(self) -> dict[str, Any]:
@@ -357,8 +385,10 @@ class DurableWorkLedger:
             total = sum(counts.values())
             checkpoint_counts = {row[0]: row[1] for row in connection.execute('SELECT state, COUNT(*) FROM checkpoints GROUP BY state')}
             cancel_requested = self._meta(connection, 'cancel_requested')
+            graph_hash = self._meta(connection, 'graph_hash')
+            module_count = self._meta(connection, 'module_count')
         completed = counts.get(WorkState.SUCCEEDED.value, 0)
-        return {'schema_version': 'mmm/work-ledger-summary-v1', 'proposal_hash': self.proposal_hash, 'graph_hash': self._read_meta('graph_hash'), 'module_count': int(self._read_meta('module_count') or '0'), 'task_count': total, 'counts': counts, 'checkpoint_counts': checkpoint_counts, 'cancel_requested': cancel_requested or None, 'progress': 1.0 if total == 0 else round(completed / total, 6)}
+        return {'schema_version': 'mmm/work-ledger-summary-v1', 'proposal_hash': self.proposal_hash, 'graph_hash': graph_hash, 'module_count': int(module_count or '0'), 'task_count': total, 'counts': counts, 'checkpoint_counts': checkpoint_counts, 'cancel_requested': cancel_requested or None, 'progress': 1.0 if total == 0 else round(completed / total, 6)}
 
     def export_receipts(self, path: str | Path) -> Path:
         """Stream a portable audit log without loading every receipt at once."""
@@ -476,16 +506,20 @@ def _module_payload(module: ProductionModule) -> dict[str, Any]:
     return {'module_id': module.module_id, 'kind': module.kind, 'config': module.config, 'depends_on': list(module.depends_on), 'required_gates': list(module.required_gates)}
 
 def _module_stage(module: ProductionModule) -> str:
-    if is_research_shard(module) or module.kind == 'research_shard' or module.kind == 'integration':
+    if is_research_shard(module) or module.kind == 'research_shard':
         return 'content'
+    if module.kind == 'integration':
+        if str(module.config.get('integration_type', '')) == 'mmm_local_ai_sidecar':
+            return 'content'
+        return 'custom'
     if module.kind == 'custom_java' or module.config.get('implementation') == 'custom':
         return 'custom'
     if module.kind in {'entity', 'boss', 'npc'}:
         return 'entity'
     if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
         return 'system'
-    _extended_kinds = {'item', 'block', 'fluid', 'status_effect', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
-    if module.kind in _extended_kinds:
+    extended_kinds = {'item', 'block', 'fluid', 'status_effect', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
+    if module.kind in extended_kinds:
         return 'content'
     return 'custom'
 

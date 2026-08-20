@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Late runtime policy for compile, routing, and isolated candidate efficiency.
+"""Late runtime policy for isolated custom-candidate efficiency.
 
-The production graph owns dependency safety, durable leases and executor capacity.
-This contract keeps only optimizations that belong outside that scheduler owner:
-compile-local reuse, exact integration routing, batched ledger status reads, and
-isolated parallel custom candidate generation with a single winner commit.
+Work-graph validation, routing, and ledger reads are owned directly by work_graph.
+This module only keeps the cross-module candidate search optimization that needs an
+isolated workspace per candidate and a single deterministic winner commit.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +13,6 @@ import hashlib
 import json
 import os
 import shutil
-import sys
 import tempfile
 from contextvars import ContextVar
 from functools import wraps
@@ -26,14 +24,6 @@ _FORCE_SINGLE_CUSTOM_SEARCH: ContextVar[bool] = ContextVar(
     "mmm_force_single_custom_search",
     default=False,
 )
-_WORK_GRAPH_HASH_CACHE: ContextVar[dict[int, str] | None] = ContextVar(
-    "mmm_work_graph_hash_cache",
-    default=None,
-)
-_WORK_GRAPH_VALIDATION_CACHE: ContextVar[set[tuple[int, int]] | None] = ContextVar(
-    "mmm_work_graph_validation_cache",
-    default=None,
-)
 
 
 def _active_parallelism() -> int:
@@ -42,233 +32,6 @@ def _active_parallelism() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
-
-
-def _install_work_graph_compile_cache(work_graph_module: Any) -> None:
-    """Deduplicate validation and full proposal hashing inside one graph compile.
-
-    CompleteProposal.validate already validates every proposal-owned module before
-    build_production_work_plan historically validates that exact same object set a
-    second time. The builder also asks for the same canonical proposal hash three
-    times. Keep those checks authoritative on every invocation, but reuse their
-    successful result only for the lifetime of that one synchronous compile. The
-    ContextVars make concurrent compiles independent and prevent stale cross-call
-    validation or hash reuse after callers mutate nested proposal data.
-    """
-
-    proposal_cls = work_graph_module.CompleteProposal
-    module_cls = work_graph_module.ProductionModule
-
-    current_hash = proposal_cls.calculate_hash
-    if not getattr(current_hash, "_mmm_compile_local_hash_cache", False):
-
-        @wraps(current_hash)
-        def calculate_hash(self: Any) -> str:
-            cache = _WORK_GRAPH_HASH_CACHE.get()
-            if cache is None:
-                return current_hash(self)
-            key = id(self)
-            if key not in cache:
-                cache[key] = current_hash(self)
-            return cache[key]
-
-        calculate_hash._mmm_compile_local_hash_cache = True  # type: ignore[attr-defined]
-        proposal_cls.calculate_hash = calculate_hash
-
-    current_validate = module_cls.validate
-    if not getattr(current_validate, "_mmm_compile_local_validation_cache", False):
-
-        @wraps(current_validate)
-        def validate(self: Any, *, policy: Any = None) -> None:
-            cache = _WORK_GRAPH_VALIDATION_CACHE.get()
-            if cache is None:
-                current_validate(self, policy=policy)
-                return
-            key = (id(self), id(policy))
-            if key in cache:
-                return
-            current_validate(self, policy=policy)
-            cache.add(key)
-
-        validate._mmm_compile_local_validation_cache = True  # type: ignore[attr-defined]
-        module_cls.validate = validate
-
-    current_build = work_graph_module.build_production_work_plan
-    if getattr(current_build, "_mmm_compile_local_cache", False):
-        return
-
-    @wraps(current_build)
-    def build_production_work_plan(*args: Any, **kwargs: Any):
-        hash_token = _WORK_GRAPH_HASH_CACHE.set({})
-        validation_token = _WORK_GRAPH_VALIDATION_CACHE.set(set())
-        try:
-            return current_build(*args, **kwargs)
-        finally:
-            _WORK_GRAPH_VALIDATION_CACHE.reset(validation_token)
-            _WORK_GRAPH_HASH_CACHE.reset(hash_token)
-
-    build_production_work_plan._mmm_compile_local_cache = True  # type: ignore[attr-defined]
-    work_graph_module.build_production_work_plan = build_production_work_plan
-
-    for loaded in tuple(sys.modules.values()):
-        if loaded is None:
-            continue
-        try:
-            if getattr(loaded, "build_production_work_plan", None) is current_build:
-                setattr(loaded, "build_production_work_plan", build_production_work_plan)
-        except (AttributeError, TypeError):
-            continue
-
-
-def _install_work_ledger_read_batching(work_graph_module: Any) -> None:
-    """Remove N+1 SQLite reads from status pages without changing ledger authority."""
-
-    ledger_cls = work_graph_module.DurableWorkLedger
-    current_tasks = ledger_cls.tasks
-    if not getattr(current_tasks, "_mmm_batched_status_reads", False):
-
-        @wraps(current_tasks)
-        def tasks(
-            self: Any,
-            *,
-            cursor: str = "",
-            limit: int = 100,
-            state: Any = None,
-        ) -> dict[str, Any]:
-            if not 1 <= limit <= 1000:
-                raise work_graph_module.WorkGraphError(
-                    "Task page size must be between 1 and 1000."
-                )
-            clauses = ["node_id > ?"]
-            params: list[Any] = [cursor]
-            if state is not None:
-                clauses.append("state = ?")
-                params.append(state.value)
-            params.append(limit + 1)
-            with self._connect() as connection:
-                rows = connection.execute(
-                    f"""
-                    SELECT node_id, stage, input_hash, payload_json, state,
-                           attempt, lease_owner, lease_until, output_hash,
-                           receipt_json, error, updated_at
-                    FROM tasks
-                    WHERE {' AND '.join(clauses)}
-                    ORDER BY node_id LIMIT ?
-                    """,
-                    tuple(params),
-                ).fetchall()
-                page_rows = rows[:limit]
-                node_ids = [str(row[0]) for row in page_rows]
-                dependencies: dict[str, list[str]] = {
-                    node_id: [] for node_id in node_ids
-                }
-                for start in range(0, len(node_ids), 900):
-                    batch = node_ids[start : start + 900]
-                    if not batch:
-                        continue
-                    placeholders = ",".join("?" for _ in batch)
-                    for node_id, dependency_id in connection.execute(
-                        f"""
-                        SELECT node_id, dependency_id FROM edges
-                        WHERE node_id IN ({placeholders})
-                        ORDER BY node_id, dependency_id
-                        """,
-                        tuple(batch),
-                    ):
-                        dependencies[str(node_id)].append(str(dependency_id))
-
-            page = [
-                {
-                    "node_id": row[0],
-                    "stage": row[1],
-                    "input_hash": row[2],
-                    "payload": json.loads(row[3]),
-                    "state": row[4],
-                    "attempt": row[5],
-                    "lease_owner": row[6],
-                    "lease_until": row[7],
-                    "output_hash": row[8],
-                    "receipt": json.loads(row[9]) if row[9] else None,
-                    "error": row[10],
-                    "updated_at": row[11],
-                    "dependencies": dependencies[str(row[0])],
-                }
-                for row in page_rows
-            ]
-            return {
-                "schema_version": "mmm/work-task-page-v1",
-                "tasks": page,
-                "next_cursor": page[-1]["node_id"] if len(rows) > limit else "",
-            }
-
-        tasks._mmm_batched_status_reads = True  # type: ignore[attr-defined]
-        tasks.__wrapped__ = current_tasks  # type: ignore[attr-defined]
-        ledger_cls.tasks = tasks
-
-    current_summary = ledger_cls.summary
-    if getattr(current_summary, "_mmm_single_connection_summary", False):
-        return
-
-    @wraps(current_summary)
-    def summary(self: Any) -> dict[str, Any]:
-        with self._connect() as connection:
-            counts = {
-                row[0]: row[1]
-                for row in connection.execute(
-                    "SELECT state, COUNT(*) FROM tasks GROUP BY state"
-                )
-            }
-            total = sum(counts.values())
-            checkpoint_counts = {
-                row[0]: row[1]
-                for row in connection.execute(
-                    "SELECT state, COUNT(*) FROM checkpoints GROUP BY state"
-                )
-            }
-            cancel_requested = self._meta(connection, "cancel_requested")
-            graph_hash = self._meta(connection, "graph_hash")
-            module_count = self._meta(connection, "module_count")
-        completed = counts.get(work_graph_module.WorkState.SUCCEEDED.value, 0)
-        return {
-            "schema_version": "mmm/work-ledger-summary-v1",
-            "proposal_hash": self.proposal_hash,
-            "graph_hash": graph_hash,
-            "module_count": int(module_count or "0"),
-            "task_count": total,
-            "counts": counts,
-            "checkpoint_counts": checkpoint_counts,
-            "cancel_requested": cancel_requested or None,
-            "progress": 1.0 if total == 0 else round(completed / total, 6),
-        }
-
-    summary._mmm_single_connection_summary = True  # type: ignore[attr-defined]
-    summary.__wrapped__ = current_summary  # type: ignore[attr-defined]
-    ledger_cls.summary = summary
-
-
-def _install_module_routing(work_graph_module: Any) -> None:
-    """Route only genuinely model-backed integrations into the custom LLM lane."""
-
-    current_stage = work_graph_module._module_stage
-    if getattr(current_stage, "_mmm_exact_integration_stage", False):
-        return
-
-    @wraps(current_stage)
-    def module_stage(module: Any) -> str:
-        from .research_ledger import is_research_shard
-
-        if is_research_shard(module) or str(getattr(module, "kind", "")) == "research_shard":
-            return current_stage(module)
-        if str(getattr(module, "kind", "")) == "integration":
-            config = getattr(module, "config", {})
-            config = config if isinstance(config, Mapping) else {}
-            if str(config.get("integration_type", "")) == "mmm_local_ai_sidecar":
-                return "content"
-            return "custom"
-        return current_stage(module)
-
-    module_stage._mmm_exact_integration_stage = True  # type: ignore[attr-defined]
-    work_graph_module._module_stage = module_stage
 
 
 def _sha256_receipt(data: bytes) -> str:
@@ -557,22 +320,16 @@ def _install_parallel_custom_search(custom_module_generator_module: Any) -> None
     cls.generate = generate
 
 
-def enhance_runtime(*, work_graph_module: Any) -> None:
-    """Install non-scheduler throughput features after runtime safety contracts."""
+def enhance_runtime(*, work_graph_module: Any | None = None) -> None:
+    """Install isolated custom-candidate throughput after runtime safety contracts."""
 
     from . import custom_module_generator
 
-    _install_work_graph_compile_cache(work_graph_module)
-    _install_work_ledger_read_batching(work_graph_module)
-    _install_module_routing(work_graph_module)
     _install_parallel_custom_search(custom_module_generator)
 
 
 __all__ = [
     "_active_parallelism",
-    "_install_work_graph_compile_cache",
-    "_install_work_ledger_read_batching",
-    "_install_module_routing",
     "_install_parallel_custom_search",
     "enhance_runtime",
 ]
