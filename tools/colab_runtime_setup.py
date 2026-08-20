@@ -615,6 +615,19 @@ def _install_project(*, local_profile: bool) -> None:
     print("project dependencies: installed", flush=True)
 
 
+def _preflight_jdtls() -> str:
+    from minecraft_mod_ai.jdtls_bootstrap import ensure_jdtls
+
+    print("JDT LS: checking", flush=True)
+    launcher = ensure_jdtls().resolve()
+    if not launcher.is_file() or not os.access(launcher, os.X_OK):
+        raise RuntimeError(f"Managed JDT LS launcher is unavailable: {launcher}")
+    resolved = str(launcher)
+    os.environ["MMM_JDTLS_CMD"] = resolved
+    print("JDT LS: available", resolved, flush=True)
+    return resolved
+
+
 def _configure_output(save_to_google_drive: bool) -> str:
     if save_to_google_drive:
         try:
@@ -828,6 +841,7 @@ def setup_colab_runtime(
         torch = _require_local_cuda()
         llama_server_binary = _ensure_native_server(torch)
     _install_project(local_profile=local_profile)
+    _preflight_jdtls()
     if not local_profile:
         try:
             import torch as installed_torch
