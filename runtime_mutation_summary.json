@@ -1,10 +1,9 @@
 {
-  "schema_version": "mmm/runtime-mutation-summary-v1",
-  "behavioral_count": 387,
-  "path_count": 130,
+  "schema_version": "mmm/runtime-mutation-summary-v2",
+  "behavioral_count": 372,
+  "path_count": 128,
   "by_path": {
     "minecraft_mod_ai/llama_server_runtime_tuning.py": 13,
-    "minecraft_mod_ai/colab_prefetch_bootstrap.py": 11,
     "minecraft_mod_ai/resource_asset_production.py": 11,
     "minecraft_mod_ai/adaptive_execution_hardening.py": 10,
     "minecraft_mod_ai/llama_server_efficiency_contract.py": 10,
@@ -37,7 +36,6 @@
     "minecraft_mod_ai/external_procedural_skill_contract.py": 4,
     "minecraft_mod_ai/minecraft_knowledge_contract.py": 4,
     "minecraft_mod_ai/minecraft_mcp_evidence_contract.py": 4,
-    "minecraft_mod_ai/parallel_runtime_contract.py": 4,
     "minecraft_mod_ai/small_model_adaptive_compute.py": 4,
     "minecraft_mod_ai/adaptive_retrieval_contract.py": 3,
     "minecraft_mod_ai/agent_observation_determinism.py": 3,
