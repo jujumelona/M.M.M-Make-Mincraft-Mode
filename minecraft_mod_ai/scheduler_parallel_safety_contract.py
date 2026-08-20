@@ -39,15 +39,6 @@ def _cpu_capacity() -> int:
     return max(1, min(4, os.cpu_count() or 2))
 
 
-def _pipeline_shard_size(name: str, default: int, upper: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    try:
-        value = int(raw) if raw else default
-    except ValueError:
-        value = default
-    return max(1, min(max(1, upper), value))
-
-
 def _capacities() -> dict[str, int]:
     return {
         "cpu_io": _cpu_capacity(),
@@ -126,25 +117,6 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
-    """Keep only explicit model-backed integrations out of deterministic CPU lanes."""
-
-    members = payload.get("members")
-    if not isinstance(members, list):
-        return True
-    for member in members:
-        if not isinstance(member, dict):
-            return False
-        if str(member.get("kind", "")) != "integration":
-            continue
-        config = member.get("config")
-        if not isinstance(config, dict):
-            return False
-        if str(config.get("integration_type", "")) != "mmm_local_ai_sidecar":
-            return False
-    return True
-
-
 def _profile_uses_shared_local_gpu(profile: str, registry: Any | None = None) -> bool:
     """Return whether generation text and image roles contend for one local GPU.
 
@@ -197,110 +169,6 @@ def _install_profile_gpu_lane(orchestrator_module: Any) -> None:
 
     execute_generation_work._mmm_profile_shared_gpu_lane = True  # type: ignore[attr-defined]
     orchestrator_cls._execute_generation_work = execute_generation_work
-
-
-def _install_pipeline_shards(work_graph_module: Any) -> None:
-    """Pipeline deterministic entity generation without exploding LLM task rows.
-
-    Dependency-aware custom sharding already bounds row count and models the selected
-    native decode slots. Re-splitting those shards into one row per module creates
-    scheduler overhead without increasing the selected Qwen decode capacity, so custom
-    shards are deliberately preserved.
-
-    Entity generation is deterministic, while post-generation Blockbench review runs
-    after the stage write lock is released. Small entity shards therefore let later
-    entity generation overlap earlier review safely.
-    """
-
-    current = work_graph_module._module_shards
-    if getattr(current, "_mmm_entity_pipeline_granularity", False):
-        return
-
-    @wraps(current)
-    def module_shards(modules: Any, *, policy: Any):
-        for stage, members in current(modules, policy=policy):
-            if stage != "entity":
-                yield stage, members
-                continue
-            size = _pipeline_shard_size(
-                "MMM_ENTITY_PIPELINE_SHARD_SIZE",
-                2,
-                len(members),
-            )
-            for offset in range(0, len(members), size):
-                yield stage, tuple(members[offset : offset + size])
-
-    module_shards._mmm_entity_pipeline_granularity = True  # type: ignore[attr-defined]
-    work_graph_module._module_shards = module_shards
-
-
-def _install_generation_lanes(work_graph_module: Any) -> None:
-    """Override only the model-backed content exception to base lane ownership."""
-
-    current = work_graph_module._node
-    if getattr(current, "_mmm_stage_parallel_generation_lanes", False):
-        return
-
-    @wraps(current)
-    def node(
-        node_id: str,
-        stage: str,
-        dependencies: Any,
-        payload: dict[str, Any],
-    ):
-        normalized = dict(payload)
-        if (
-            normalized.get("kind") == "module-shard"
-            and str(normalized.get("generation_stage", "")) == "content"
-            and not str(normalized.get("resource_class", "")).strip()
-            and not _content_node_is_cpu_safe(normalized)
-        ):
-            normalized["resource_class"] = "llm"
-        return current(node_id, stage, dependencies, normalized)
-
-    node._mmm_stage_parallel_generation_lanes = True  # type: ignore[attr-defined]
-    node._mmm_shared_write_commit_lane = True  # type: ignore[attr-defined]
-    work_graph_module._node = node
-
-
-def _install_thread_local_connections(work_graph_module: Any) -> None:
-    """Bound SQLite connections to one reusable handle per ledger/thread."""
-
-    ledger_cls = work_graph_module.DurableWorkLedger
-    current = ledger_cls._connect
-    if getattr(current, "_mmm_thread_local_connection", False):
-        return
-
-    @wraps(current)
-    def connect(self: Any):
-        local = getattr(self, "_mmm_sqlite_local", None)
-        if local is None:
-            local = threading.local()
-            setattr(self, "_mmm_sqlite_local", local)
-
-        connection = getattr(local, "connection", None)
-        pid = getattr(local, "pid", None)
-        if connection is not None and pid != os.getpid():
-            try:
-                connection.close()
-            except Exception:
-                pass
-            connection = None
-
-        if connection is None:
-            connection = work_graph_module.sqlite3.connect(
-                self.path,
-                timeout=30,
-            )
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = NORMAL")
-            local.connection = connection
-            local.pid = os.getpid()
-        return connection
-
-    connect._mmm_thread_local_connection = True
-    ledger_cls._connect = connect
 
 
 def _install_lane_aware_claim(work_graph_module: Any) -> None:
@@ -633,15 +501,11 @@ def install(
     orchestrator_module: Any,
 ) -> None:
     _install_profile_gpu_lane(orchestrator_module)
-    _install_pipeline_shards(work_graph_module)
-    _install_generation_lanes(work_graph_module)
-    _install_thread_local_connections(work_graph_module)
     _install_lane_aware_claim(work_graph_module)
     _install_index_commit_order(work_graph_module, orchestrator_module)
 
 
 __all__ = [
-    "_content_node_is_cpu_safe",
     "_profile_uses_shared_local_gpu",
     "_receipt_touched_paths",
     "_stage_write_lock",
