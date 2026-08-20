@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+import shutil
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -108,6 +109,35 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _complete_workspace_root(output_root: Path) -> Path:
+    configured = os.environ.get("MMM_COMPLETE_WORKSPACE_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    resolved_output = output_root.expanduser().resolve()
+    drive_root = Path("/content/drive").resolve()
+    if resolved_output == drive_root or drive_root in resolved_output.parents:
+        return Path("/content/mmm-work").resolve()
+    return resolved_output
+
+
+def _atomic_copy(source: Path, destination: Path) -> Path:
+    source = source.expanduser().resolve()
+    destination = destination.expanduser().resolve()
+    if source == destination:
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(
+        f".{destination.name}.tmp-{os.getpid()}-{hashlib.sha256(str(source).encode()).hexdigest()[:8]}"
+    )
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
 
 
 @dataclass(frozen=True)
@@ -331,6 +361,7 @@ class CompleteModAISession:
         self.minecraft_version = version
         self.loader = loader_id
         self.output_root = Path(output_root)
+        self.workspace_root = _complete_workspace_root(self.output_root)
         self.model_profile = model_profile
         self.fast_mode = fast_mode
         self.kv_cache_quant = kv_cache_quant
@@ -366,7 +397,7 @@ class CompleteModAISession:
 
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
-            workspace_root=self.output_root,
+            workspace_root=self.workspace_root,
             profile=model_profile,
             router_factory=lambda: self.router,
         )
@@ -478,6 +509,31 @@ class CompleteModAISession:
         self.brief = ""
         self.complete_proposal = None
 
+    def _persist_result_artifacts(
+        self,
+        result: "CompletePipelineResult",
+        *,
+        run_name: str,
+    ) -> "CompletePipelineResult":
+        if self.workspace_root == self.output_root.expanduser().resolve():
+            return result
+        run_label = Path(run_name).name
+        if not run_label or run_label in {".", ".."}:
+            run_label = "complete-run"
+        persistent_root = self.output_root.expanduser().resolve() / "runs" / run_label
+        updates: dict[str, str | None] = {}
+        for field_name in ("release_zip", "jar_path", "work_ledger_path"):
+            raw = getattr(result, field_name, None)
+            if not raw:
+                continue
+            source = Path(str(raw)).expanduser().resolve()
+            if not source.is_file():
+                continue
+            destination = persistent_root / source.name
+            _atomic_copy(source, destination)
+            updates[field_name] = str(destination)
+        return replace(result, **updates) if updates else result
+
     def build(
         self,
         candidate: CompleteChatReply | "CompleteProposal | None" = None,
@@ -506,13 +562,14 @@ class CompleteModAISession:
             selected = CompleteExecutionOptions(
                 **{**selected.__dict__, "source_only": True}
             )
-        return self.orchestrator.execute(
+        result = self.orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),
             run_name=run_name,
             options=selected,
             existing_input=self.existing_input,
         )
+        return self._persist_result_artifacts(result, run_name=run_name)
 
 
 __all__ = [
