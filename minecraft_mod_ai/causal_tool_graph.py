@@ -376,17 +376,17 @@ def _transitions(schemas: Sequence[Mapping[str, Any]]) -> dict[str, ToolTransiti
     return result
 
 
-def shortest_causal_path(
-    schemas: Sequence[Mapping[str, Any]],
+def _shortest_causal_path_from_transitions(
+    transitions: Mapping[str, ToolTransition],
     *,
     state: frozenset[str],
     goals: Iterable[str],
-    max_depth: int = 6,
+    max_depth: int,
 ) -> tuple[str, ...]:
-    transitions = _transitions(schemas)
     target = _goal_facts(goals)
     if target.issubset(state):
         return ()
+    ordered_transitions = tuple(sorted(transitions.items()))
     queue: deque[tuple[frozenset[str], tuple[str, ...], int]] = deque([(state, (), 0)])
     best_cost: dict[frozenset[str], int] = {state: 0}
     solutions: list[tuple[int, int, tuple[str, ...]]] = []
@@ -394,8 +394,7 @@ def shortest_causal_path(
         current_state, path, cost = queue.popleft()
         if len(path) >= max_depth:
             continue
-        for name in sorted(transitions):
-            transition = transitions[name]
+        for name, transition in ordered_transitions:
             if name in path or not transition.preconditions.issubset(current_state):
                 continue
             if not (set(transition.effects) - set(current_state)):
@@ -413,6 +412,21 @@ def shortest_causal_path(
         return ()
     solutions.sort(key=lambda item: (item[0], item[1], item[2]))
     return solutions[0][2]
+
+
+def shortest_causal_path(
+    schemas: Sequence[Mapping[str, Any]],
+    *,
+    state: frozenset[str],
+    goals: Iterable[str],
+    max_depth: int = 6,
+) -> tuple[str, ...]:
+    return _shortest_causal_path_from_transitions(
+        _transitions(schemas),
+        state=state,
+        goals=goals,
+        max_depth=max_depth,
+    )
 
 
 def _path_cost(path: Sequence[str], transitions: Mapping[str, ToolTransition]) -> int:
@@ -490,8 +504,8 @@ def executable_frontier(
             total_cost = transition.cost
             total_steps = 1
         else:
-            tail = shortest_causal_path(
-                schemas,
+            tail = _shortest_causal_path_from_transitions(
+                transitions,
                 state=next_state,
                 goals=target_goals,
                 max_depth=max(0, max_depth - 1),
