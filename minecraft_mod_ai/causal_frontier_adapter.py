@@ -197,21 +197,22 @@ class CausalFrontierAdapter:
                 raise ModelConfigurationError(
                     f"Host-forced tool {forced_name!r} is outside the authorized causal frontier surface."
                 )
-            state: set[str] = set()
+            state: frozenset[str] = frozenset()
             goals: tuple[str, ...] = ()
             names = (forced_name,)
             selected = (forced_schema,)
             tool_choice = request.tool_choice
             parallel_tool_calls = request.parallel_tool_calls
         else:
-            state = set(
+            state_facts = set(
                 verified_state_from_messages(
                     request.messages,
                     candidates,
                     require_fresh_evidence=self.require_fresh_evidence,
                 )
             )
-            state.update(host_baseline_causal_facts(request.messages))
+            state_facts.update(host_baseline_causal_facts(request.messages))
+            state = frozenset(state_facts)
             query = _query(request.messages)
             goals = tuple(goals_for_query(query))
             names = executable_frontier(
