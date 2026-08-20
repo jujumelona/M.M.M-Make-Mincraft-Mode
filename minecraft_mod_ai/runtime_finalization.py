@@ -34,7 +34,9 @@ def finalize_runtime() -> None:
         from .agent_routing_intent_contract import install as install_routing_intent
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .generation_concurrency_safety import install as install_generation_safety
+        from .llama_length_resilience import install as install_llama_length_resilience
         from .mcp_transport_pool import install_agent_mcp_transport_pool
+        from .model_adapters import llama_cpp_adapter
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_preflight import run_runtime_preflight
@@ -57,6 +59,10 @@ def finalize_runtime() -> None:
         # structural preflight so a fresh process cannot silently regress to per-call
         # CPU model construction.
         install_retrieval_residency(model_router_module=model_router)
+        # llama.cpp reports both max-output exhaustion and true context exhaustion as
+        # finish_reason='length'. Recover once with bounded context fitting/output
+        # expansion instead of aborting the whole production node immediately.
+        install_llama_length_resilience(llama_cpp_adapter)
         run_runtime_preflight()
         _FINALIZED = True
 
