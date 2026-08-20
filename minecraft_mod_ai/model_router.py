@@ -203,6 +203,15 @@ class ModelRouter:
             tool_stage=tool_stage,
             enable_tools=enable_tools,
         )
+        if (
+            self._agent_require_fresh_evidence
+            and role in {"coder", "coder_safe"}
+            and (runtime is None or not tools)
+        ):
+            raise ModelConfigurationError(
+                "Fresh production evidence is required for coder generation, but reviewed "
+                "agent tools are disabled or no eligible tools are exposed."
+            )
         with self._generation_scope(config):
             if runtime is not None and tools:
                 return self._generate_with_tools(
@@ -242,40 +251,36 @@ class ModelRouter:
                 f"Role {role!r} adapter {config.adapter!r} does not support "
                 "native tool decisions."
             )
-        base_messages = tuple(dict(message) for message in messages)
+        request_messages = (
+            *(dict(message) for message in messages),
+            {
+                "role": "system",
+                "content": (
+                    f"Call the required function {name} exactly once. "
+                    "Do not answer in prose."
+                ),
+            },
+        )
+        request = GenerationRequest(
+            messages=request_messages,
+            media_paths=(),
+            response_format="text",
+            response_schema=None,
+            tools=(schema,),
+            tool_choice={
+                "type": "function",
+                "function": {"name": name},
+            },
+            parallel_tool_calls=False,
+        )
         with self._generation_scope(config):
-            for attempt in range(2):
-                request_messages = base_messages
-                if attempt:
-                    request_messages = (
-                        *base_messages,
-                        {
-                            "role": "system",
-                            "content": (
-                                f"Call the required function {name} exactly once. "
-                                "Do not answer in prose."
-                            ),
-                        },
-                    )
-                request = GenerationRequest(
-                    messages=request_messages,
-                    media_paths=(),
-                    response_format="text",
-                    response_schema=None,
-                    tools=(schema,),
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": name},
-                    },
-                    parallel_tool_calls=False,
-                )
-                turn = adapter.generate_turn(request)
-                matches = tuple(call for call in turn.tool_calls if call.name == name)
-                if len(matches) == 1 and len(turn.tool_calls) == 1:
-                    return dict(matches[0].arguments)
+            turn = adapter.generate_turn(request)
+        matches = tuple(call for call in turn.tool_calls if call.name == name)
+        if len(matches) == 1 and len(turn.tool_calls) == 1:
+            return dict(matches[0].arguments)
         raise ModelConfigurationError(
             "Native structured decision did not return exactly one "
-            f"{name!r} tool call after bounded retry."
+            f"{name!r} tool call."
         )
 
     def _prepare_generation_request(
@@ -354,9 +359,7 @@ class ModelRouter:
         round_index = 0
         round_limit = _agent_tool_round_limit()
         require_rag = bool(
-            self._agent_require_fresh_evidence
-            and role in {"coder", "coder_safe"}
-            and exposed_tools & _RAG_EVIDENCE_TOOLS
+            self._agent_require_fresh_evidence and role in {"coder", "coder_safe"}
         )
         reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
