@@ -800,6 +800,8 @@ def setup_colab_runtime(
 
     del transformers_was_loaded
     profile = model_profile.strip()
+    if not profile:
+        raise ValueError("model_profile must be non-empty.")
     if profile == REMOTE_PROFILE:
         remote_base_url = _validated_remote_url(remote_base_url)
         remote_text_model = remote_text_model.strip()
