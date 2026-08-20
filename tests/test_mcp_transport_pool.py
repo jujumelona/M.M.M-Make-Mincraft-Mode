@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+import types
 import unittest
+from contextlib import asynccontextmanager
 from typing import Any, Mapping
+from unittest.mock import patch
 
-from minecraft_mod_ai.mcp_transport_pool import MCPTransportPool
+import anyio
+
+from minecraft_mod_ai.mcp_transport_pool import MCPTransportPool, _stdio_session
 
 
 class _Tracker:
@@ -65,7 +71,63 @@ class _FakeSessionContext:
             self._tracker.closes.append(self._stage)
 
 
+class _FakeStdioParameters:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = dict(kwargs)
+
+
+class _InitializedSession:
+    def __init__(self) -> None:
+        self.initialized = False
+
+    async def initialize(self) -> None:
+        await asyncio.sleep(0)
+        self.initialized = True
+
+
 class MCPTransportPoolTests(unittest.TestCase):
+    def test_stdio_session_preserves_nested_anyio_cancel_scope_order(self) -> None:
+        """Persistent MCP task-group scopes must outlive only nested request scopes."""
+        session = _InitializedSession()
+
+        @asynccontextmanager
+        async def fake_stdio_client(params: Any, *, errlog: Any):
+            del params, errlog
+            async with anyio.create_task_group():
+                yield object(), object()
+
+        @asynccontextmanager
+        async def fake_client_session(read_stream: Any, write_stream: Any):
+            del read_stream, write_stream
+            async with anyio.create_task_group():
+                yield session
+
+        mcp_module = types.ModuleType("mcp")
+        mcp_module.ClientSession = fake_client_session
+        mcp_module.StdioServerParameters = _FakeStdioParameters
+        client_module = types.ModuleType("mcp.client")
+        stdio_module = types.ModuleType("mcp.client.stdio")
+        stdio_module.stdio_client = fake_stdio_client
+
+        async def exercise() -> None:
+            async with _stdio_session(
+                "generation",
+                {"MMM_WORKSPACE": "/tmp/workspace"},
+                1.0,
+            ) as opened:
+                self.assertIs(opened, session)
+                self.assertTrue(session.initialized)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mcp": mcp_module,
+                "mcp.client": client_module,
+                "mcp.client.stdio": stdio_module,
+            },
+        ):
+            asyncio.run(exercise())
+
     def test_reuses_bounded_workers_and_preserves_parallelism(self) -> None:
         tracker = _Tracker()
 
