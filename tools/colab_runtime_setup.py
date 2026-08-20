@@ -15,19 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 SETUP_API_VERSION = "mmm/colab-runtime-setup-v4-max-native"
 RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v2"
-LOCAL_PROFILES = frozenset(
-    {
-        "t4_quality",
-        "t4_local",
-        "Qwen3.6-35B_23GB",
-        "Qwen3.6-27B_18GB",
-        "Qwen3.6-27B_14GB",
-        "Qwen3.5-9B_6GB",
-        "Gemma4-26B_14GB",
-        "Gemma4-12B_7GB",
-    }
-)
-SUPPORTED_PROFILES = LOCAL_PROFILES | {"remote_quality"}
+REMOTE_PROFILE = "remote_quality"
 REMOTE_TEXT_ROLES = ("PLANNER", "RESEARCH", "CODER", "CODER_SAFE", "VISION")
 REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio,training]"
 LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio,training]"
@@ -40,6 +28,10 @@ LLAMA_SERVER_SOURCE_REF = "1d2869c6e54d5003f3927a79efbca0fefa034a6d"
 LLAMA_SERVER_DEFAULT_SOURCE_DIR = Path("/content/llama.cpp")
 _NATIVE_VERIFY_CACHE: dict[tuple[object, ...], tuple[bool, str]] = {}
 _NATIVE_VERIFY_CACHE_LIMIT = 16
+
+
+def _is_local_profile(profile: object) -> bool:
+    return str(profile or "").strip() != REMOTE_PROFILE
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -115,7 +107,7 @@ def setup_request_fingerprint(
         "remote_image_model": remote_image_model.strip(),
         "remote_speech_model": remote_speech_model.strip(),
         "llama_server_source_ref": (
-            LLAMA_SERVER_SOURCE_REF if model_profile.strip() in LOCAL_PROFILES else ""
+            LLAMA_SERVER_SOURCE_REF if _is_local_profile(model_profile) else ""
         ),
     }
     return hashlib.sha256(_canonical_json(request).encode("utf-8")).hexdigest()
@@ -722,8 +714,6 @@ def _runtime_details(torch: Any | None) -> dict[str, Any]:
                 memory.get("MemFree", 0),
             )
     except (OSError, ValueError):
-        # Non-Linux callers still get a valid setup receipt; Colab always exposes
-        # /proc/meminfo and therefore records the live RAM budget used by auto tuning.
         pass
     if details["cuda_available"]:
         free_bytes, total_bytes = torch.cuda.mem_get_info()
@@ -763,7 +753,7 @@ def _build_receipt(
         "repo_dir": str(repo_dir),
         "used_commit": used_commit,
         "model_profile": model_profile,
-        "backend": "local_cuda" if model_profile in LOCAL_PROFILES else "remote_api",
+        "backend": "local_cuda" if _is_local_profile(model_profile) else "remote_api",
         "save_to_google_drive": bool(save_to_google_drive),
         "output_root": output_root,
         "process_id": os.getpid(),
@@ -810,12 +800,7 @@ def setup_colab_runtime(
 
     del transformers_was_loaded
     profile = model_profile.strip()
-    if profile not in SUPPORTED_PROFILES:
-        raise ValueError(
-            f"Unsupported model profile {profile!r}; choose one of "
-            f"{', '.join(sorted(SUPPORTED_PROFILES))}."
-        )
-    if profile == "remote_quality":
+    if profile == REMOTE_PROFILE:
         remote_base_url = _validated_remote_url(remote_base_url)
         remote_text_model = remote_text_model.strip()
         if not remote_text_model:
@@ -833,14 +818,15 @@ def setup_colab_runtime(
     )
     os.chdir(checkout)
 
+    local_profile = _is_local_profile(profile)
     torch = None
     llama_server_binary = ""
-    if profile in LOCAL_PROFILES:
+    if local_profile:
         print("CUDA: checking", flush=True)
         torch = _require_local_cuda()
         llama_server_binary = _ensure_native_server(torch)
-    _install_project(local_profile=profile in LOCAL_PROFILES)
-    if profile not in LOCAL_PROFILES:
+    _install_project(local_profile=local_profile)
+    if not local_profile:
         try:
             import torch as installed_torch
         except ImportError:
@@ -850,7 +836,7 @@ def setup_colab_runtime(
     output_root = _configure_output(save_to_google_drive)
     os.environ["MMM_BLOCKBENCH_WORKSPACE_ROOT"] = "/content"
     os.environ["MMM_ECOSYSTEM_DISCOVERY"] = "auto"
-    if profile == "remote_quality":
+    if profile == REMOTE_PROFILE:
         _configure_remote(
             remote_base_url=remote_base_url,
             remote_text_model=remote_text_model,
@@ -956,7 +942,7 @@ def assert_setup_state(
             + ", ".join(mismatched)
             + "). Rerun setup cell 2 before planning or building."
         )
-    if model_profile.strip() == "remote_quality":
+    if model_profile.strip() == REMOTE_PROFILE:
         _assert_remote_environment(
             remote_base_url=remote_base_url,
             remote_text_model=remote_text_model,
