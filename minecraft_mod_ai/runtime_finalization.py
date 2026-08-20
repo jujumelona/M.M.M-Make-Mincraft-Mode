@@ -36,6 +36,7 @@ def finalize_runtime() -> None:
         from .generation_concurrency_safety import install as install_generation_safety
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_prefetch_resilience import install as install_prefetch_resilience
+        from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_preflight import run_runtime_preflight
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
@@ -52,6 +53,10 @@ def finalize_runtime() -> None:
         )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
+        # RAG build/search may call embed/rerank repeatedly. Install this before the
+        # structural preflight so a fresh process cannot silently regress to per-call
+        # CPU model construction.
+        install_retrieval_residency(model_router_module=model_router)
         run_runtime_preflight()
         _FINALIZED = True
 
