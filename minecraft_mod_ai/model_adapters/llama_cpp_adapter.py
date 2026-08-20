@@ -1,16 +1,14 @@
 """Native llama.cpp server GGUF inference adapter.
 
-Local GGUF inference is server-only. Plain text generation follows the model's own
-Jinja chat template. Agent tool turns deliberately do *not* use llama.cpp's native
-PEG tool parser: current Qwen-family llama.cpp builds can turn an otherwise usable
-completion into HTTP 500 when the generated tool markup does not match peg-native
-exactly. MMM therefore keeps tool selection/arguments host-owned over ordinary JSON
-text generation and reconstructs transport-neutral ``ToolCall`` objects locally.
+Local GGUF inference is server-only. Tool-aware turns keep the model's own Jinja
+``tools`` prompt, but deliberately disable llama.cpp's PEG-native tool parser and
+parse the model's native Qwen tagged tool calls on the host. This keeps one decode,
+the same sampling/MTP path, and one canonical model-facing tool protocol.
 """
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import httpx
@@ -31,11 +29,12 @@ _REASONING_CONTINUATION = (
     "Call an available tool if evidence or an action is required; otherwise return "
     "the requested final answer. Do not return another reasoning-only response."
 )
-_HOST_TOOL_RETRY = (
-    "The previous host-tool protocol response was invalid. Return exactly one valid "
-    "JSON object matching the protocol below. Do not use Markdown fences, XML tool "
-    "tags, prose prefixes, or prose suffixes."
-)
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
+_FUNCTION_OPEN = "<function="
+_FUNCTION_CLOSE = "</function>"
+_PARAMETER_OPEN = "<parameter="
+_PARAMETER_CLOSE = "</parameter>"
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -48,10 +47,6 @@ class LlamaCppAdapter(ModelAdapter):
         try:
             from .. import llama_server_autotune
 
-            # The server owner must see every request. In particular, the multimodal
-            # wrapper may need to replace an MMM-owned text server with an mmproj
-            # server even though LLAMA_SERVER_URL already points at that text server.
-            # The inner autotune path still honors healthy user-owned external URLs.
             selected = llama_server_autotune.ensure_tuned_server(self.config, request)
         except Exception as exc:
             raise ModelBackendError(
@@ -89,21 +84,13 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one semantic turn without exposing PEG-native tool parsing.
-
-        llama.cpp currently has real peg-native failure modes for Qwen-family agent
-        turns: prefix text, malformed XML, or parser/grammar disagreement can surface
-        as HTTP 500 after an expensive decode. Tool-aware MMM requests therefore use a
-        host-owned JSON envelope sent as an ordinary text completion. The host validates
-        the envelope and reconstructs ``ToolCall`` values. Requests without tools keep
-        the normal native text path, including one bounded reasoning continuation.
-        """
+        """Generate one semantic turn without llama.cpp PEG-native tool parsing."""
 
         cfg = self.config
         server_url = self._server_url(request)
         try:
             if request.tools:
-                return _host_tool_completion(self, server_url, request)
+                return _tool_semantic_completion(self, server_url, request)
             return _plain_semantic_completion(self, server_url, request)
         except ModelBackendError:
             raise
@@ -148,12 +135,12 @@ def _plain_semantic_completion(
     if not _has_semantic_action(continued):
         if continued.reasoning_content:
             raise RuntimeError(
-                "native llama-server returned a reasoning-only continuation "
-                "without a semantic action"
+                "native llama-server returned a reasoning-only continuation without "
+                "a semantic action"
             )
         raise RuntimeError(
-            "native llama-server returned no semantic action after a "
-            "reasoning-only continuation"
+            "native llama-server returned no semantic action after a reasoning-only "
+            "continuation"
         )
     return GenerationResponse(
         content=continued.content,
@@ -165,305 +152,462 @@ def _plain_semantic_completion(
     )
 
 
-def _host_tool_completion(
+def _tool_semantic_completion(
     adapter: LlamaCppAdapter,
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Execute one tool-aware turn through grammar-free host JSON transport."""
+    """Run one normal Qwen tool turn while keeping llama.cpp PEG fully inactive.
 
-    from ..llama_server_hardware_policy import _server_payload
+    ``tools`` stay in the request so the model's official Jinja template sees the exact
+    same schemas. Only the transport ``tool_choice`` is set to ``none``; llama.cpp then
+    skips its PEG grammar/parser. The original semantic tool-choice contract is checked
+    by the host after parsing Qwen's native tagged output.
+    """
+
     from ..llama_stream_efficiency_contract import _report_server_connection
 
-    last_error = ""
-    for attempt in range(2):
-        bridged = _host_tool_request(
-            request,
-            retry=attempt > 0,
-            retry_error=last_error,
-        )
-        message = _completion_message(server_url, _server_payload(adapter, bridged))
-        _report_server_connection(server_url)
-        turn = _generation_response(message)
-        try:
-            if not turn.content:
-                if turn.reasoning_content:
-                    raise RuntimeError(
-                        "host-tool completion returned reasoning without protocol JSON"
-                    )
-                raise RuntimeError("host-tool completion returned empty protocol JSON")
-            return _decode_host_tool_turn(request, turn.content, turn.reasoning_content)
-        except RuntimeError as exc:
-            last_error = str(exc)
-
-    raise RuntimeError(
-        "native llama-server did not produce a valid host-owned tool envelope after "
-        f"one bounded protocol repair: {last_error or 'unknown protocol error'}"
-    )
-
-
-def _host_tool_request(
-    request: GenerationRequest,
-    *,
-    retry: bool,
-    retry_error: str,
-) -> GenerationRequest:
-    schemas = tuple(_normalized_tool_schema(schema) for schema in request.tools)
-    if not schemas:
-        raise RuntimeError("host-tool bridge received no usable tool schemas")
-
-    exact_name = _exact_forced_tool_name(request, schemas)
-    if exact_name:
-        selected = tuple(
-            schema for schema in schemas if _schema_name(schema) == exact_name
-        )
-        if len(selected) != 1:
-            raise RuntimeError(
-                f"forced host tool {exact_name!r} does not resolve to exactly one schema"
-            )
-        protocol = _forced_tool_protocol(exact_name, selected[0])
-    else:
-        protocol = _automatic_tool_protocol(
-            schemas,
-            require_tool=_requires_some_tool(request.tool_choice),
-            parallel=bool(request.parallel_tool_calls),
-            response_format=str(request.response_format or "text"),
+    message = _completion_message(server_url, _peg_free_tool_payload(adapter, request))
+    _report_server_connection(server_url)
+    turn = _qwen_tool_generation_response(message, request)
+    if _has_semantic_action(turn):
+        return turn
+    if not turn.reasoning_content:
+        raise RuntimeError(
+            "native llama-server returned neither visible content, reasoning, nor "
+            "Qwen tool calls"
         )
 
-    messages: list[Mapping[str, Any]] = [dict(message) for message in request.messages]
-    if retry:
-        bounded_error = " ".join(str(retry_error).split())[:400]
-        messages.append(
-            {
-                "role": "system",
-                "content": _HOST_TOOL_RETRY
-                + (f" Validation error: {bounded_error}" if bounded_error else ""),
-            }
-        )
-    messages.append({"role": "system", "content": protocol})
-
-    # Crucial invariant: tools/tool_choice are removed before _server_payload. The
-    # server therefore sees an ordinary JSON-text completion and never activates its
-    # PEG-native tool grammar/parser. response_format remains host-owned; MMM does not
-    # send a JSON grammar/schema sampler to llama.cpp.
-    return replace(
+    continuation_request = _reasoning_continuation_request(
         request,
-        messages=tuple(messages),
-        response_format="json",
-        response_schema=None,
-        tools=(),
-        tool_choice=None,
-        parallel_tool_calls=False,
+        turn.reasoning_content,
     )
-
-
-def _forced_tool_protocol(name: str, schema: Mapping[str, Any]) -> str:
-    parameters = schema.get("function", {}).get("parameters", {})
-    return (
-        "MMM host tool transport is active. Native llama.cpp tool parsing is disabled. "
-        f"The host requires the function {name!r} now. Return ONLY the function's "
-        "arguments as one JSON object. Do not return a wrapper object, function name, "
-        "Markdown, XML, commentary, or final answer. The JSON object must satisfy this "
-        "parameter schema:\n"
-        + json.dumps(parameters, ensure_ascii=False, separators=(",", ":"))
+    continued_message = _completion_message(
+        server_url,
+        _peg_free_tool_payload(adapter, continuation_request),
     )
-
-
-def _automatic_tool_protocol(
-    schemas: Sequence[Mapping[str, Any]],
-    *,
-    require_tool: bool,
-    parallel: bool,
-    response_format: str,
-) -> str:
-    compact_tools = [
-        {
-            "name": _schema_name(schema),
-            "description": str(schema.get("function", {}).get("description", "")),
-            "parameters": schema.get("function", {}).get("parameters", {}),
-        }
-        for schema in schemas
-    ]
-    if require_tool:
-        decision = (
-            'Return {"kind":"tool","calls":[{"name":"...","arguments":{...}}]}. '
-            "A final response is not legal on this turn."
-        )
-    else:
-        decision = (
-            'Return either {"kind":"tool","calls":[{"name":"...","arguments":{...}}]} '
-            'or {"kind":"final","content":"..."}. '
-        )
-    parallel_rule = (
-        "Multiple calls are allowed only when they are independent and safe to run in parallel."
-        if parallel
-        else "Return at most one tool call."
+    continued = _qwen_tool_generation_response(
+        continued_message,
+        continuation_request,
     )
-    return (
-        "MMM host tool transport is active. Native llama.cpp tool parsing is disabled. "
-        "Choose the next semantic action using ONLY one JSON object and no Markdown, "
-        "XML, prose prefix, or prose suffix. "
-        + decision
-        + " Every tool name must exactly match one available tool and every arguments "
-        "value must be a JSON object matching that tool's parameter schema. "
-        + parallel_rule
-        + f" If kind=final, content must preserve the caller's requested {response_format!r} "
-        "response format. Available tools:\n"
-        + json.dumps(compact_tools, ensure_ascii=False, separators=(",", ":"))
-    )
-
-
-def _decode_host_tool_turn(
-    request: GenerationRequest,
-    content: str,
-    reasoning: str,
-) -> GenerationResponse:
-    schemas = tuple(_normalized_tool_schema(schema) for schema in request.tools)
-    available = {_schema_name(schema): schema for schema in schemas}
-    if "" in available:
-        available.pop("", None)
-    if not available:
-        raise RuntimeError("host-tool response has no authorized tool surface")
-
-    payload = _decode_json_object(content)
-    exact_name = _exact_forced_tool_name(request, schemas)
-    if exact_name:
-        if exact_name not in available:
-            raise RuntimeError(f"forced tool {exact_name!r} is outside the authorized surface")
-        arguments = payload.get("arguments") if set(payload) == {"arguments"} else payload
-        if not isinstance(arguments, Mapping):
-            raise RuntimeError(f"forced tool {exact_name!r} arguments must be a JSON object")
-        raw_arguments = json.dumps(
-            dict(arguments),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        return GenerationResponse(
-            content="",
-            tool_calls=(
-                ToolCall(
-                    id="call_0",
-                    name=exact_name,
-                    arguments=dict(arguments),
-                    raw_arguments=raw_arguments,
-                ),
-            ),
-            reasoning_content=reasoning.strip(),
-        )
-
-    kind = str(payload.get("kind", "")).strip().lower()
-    if kind == "final":
-        if _requires_some_tool(request.tool_choice):
-            raise RuntimeError("host-required tool turn returned kind=final")
-        final_content = payload.get("content")
-        if not isinstance(final_content, str) or not final_content.strip():
-            raise RuntimeError("host-tool final envelope requires non-empty string content")
-        return GenerationResponse(
-            content=final_content.strip(),
-            reasoning_content=reasoning.strip(),
-        )
-    if kind != "tool":
-        raise RuntimeError("host-tool envelope kind must be 'tool' or 'final'")
-
-    raw_calls = payload.get("calls")
-    if not isinstance(raw_calls, list) or not raw_calls:
-        raise RuntimeError("host-tool envelope kind=tool requires a non-empty calls list")
-    if not request.parallel_tool_calls and len(raw_calls) != 1:
-        raise RuntimeError("host-tool turn returned parallel calls when parallelism is disabled")
-
-    calls: list[ToolCall] = []
-    for index, raw_call in enumerate(raw_calls):
-        if not isinstance(raw_call, Mapping):
-            raise RuntimeError("host-tool call entry must be a JSON object")
-        name = str(raw_call.get("name", "")).strip()
-        if name not in available:
-            raise RuntimeError(f"host-tool response selected unauthorized tool {name!r}")
-        arguments = raw_call.get("arguments")
-        if not isinstance(arguments, Mapping):
-            raise RuntimeError(f"host-tool arguments for {name!r} must be a JSON object")
-        raw_arguments = json.dumps(
-            dict(arguments),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        calls.append(
-            ToolCall(
-                id=f"call_{index}",
-                name=name,
-                arguments=dict(arguments),
-                raw_arguments=raw_arguments,
+    if not _has_semantic_action(continued):
+        if continued.reasoning_content:
+            raise RuntimeError(
+                "native llama-server returned a reasoning-only tool continuation "
+                "without a semantic action"
             )
+        raise RuntimeError(
+            "native llama-server returned no semantic action after a reasoning-only "
+            "tool continuation"
         )
     return GenerationResponse(
-        content="",
+        content=continued.content,
+        tool_calls=continued.tool_calls,
+        reasoning_content=_merge_reasoning(
+            turn.reasoning_content,
+            continued.reasoning_content,
+        ),
+    )
+
+
+def _peg_free_tool_payload(
+    adapter: LlamaCppAdapter,
+    request: GenerationRequest,
+) -> dict[str, Any]:
+    """Keep native Jinja/tools but disable llama.cpp's PEG-native tool machinery."""
+
+    from ..llama_server_hardware_policy import _server_payload
+
+    payload = _server_payload(adapter, request)
+    if not payload.get("tools"):
+        raise RuntimeError("PEG-free tool transport received no tool schemas")
+
+    # llama.cpp activates parse_tool_calls and its PEG grammar whenever tools are
+    # present and tool_choice != none. Qwen3.5's official Jinja consumes ``tools`` but
+    # not ``tool_choice``, so this changes only server-side parsing/sampling machinery.
+    payload["tool_choice"] = "none"
+    return payload
+
+
+def _qwen_tool_generation_response(
+    message: Mapping[str, Any],
+    request: GenerationRequest,
+) -> GenerationResponse:
+    if message.get("tool_calls"):
+        raise RuntimeError(
+            "llama-server returned server-parsed tool_calls even though PEG-free "
+            "transport disabled server tool parsing"
+        )
+
+    schemas = _tool_schema_map(request.tools)
+    content_value = message.get("content")
+    content_raw = content_value if isinstance(content_value, str) else ""
+    reasoning_value = message.get("reasoning_content", message.get("reasoning"))
+    reasoning_raw = reasoning_value if isinstance(reasoning_value, str) else ""
+
+    reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
+    content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
+    calls = (*reasoning_calls, *content_calls)
+    _validate_tool_choice(request, calls)
+
+    return GenerationResponse(
+        content=content.strip(),
         tool_calls=tuple(calls),
         reasoning_content=reasoning.strip(),
     )
 
 
-def _decode_json_object(content: str) -> dict[str, Any]:
-    text = content.strip()
-    if text.startswith("```") and text.endswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 3:
-            text = "\n".join(lines[1:-1]).strip()
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("host-tool response is not one valid JSON object") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("host-tool response must decode to one JSON object")
-    return payload
-
-
-def _normalized_tool_schema(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    to_schema = getattr(value, "to_schema", None)
-    if callable(to_schema):
-        schema = to_schema()
-        if isinstance(schema, Mapping):
-            return dict(schema)
-    raise RuntimeError("host-tool bridge received an invalid tool schema")
-
-
-def _schema_name(schema: Mapping[str, Any]) -> str:
-    function = schema.get("function")
-    if not isinstance(function, Mapping):
-        return ""
-    return str(function.get("name", "")).strip()
-
-
-def _exact_forced_tool_name(
-    request: GenerationRequest,
+def _tool_schema_map(
     schemas: Sequence[Mapping[str, Any]],
-) -> str:
-    choice = request.tool_choice
-    if isinstance(choice, Mapping):
-        function = choice.get("function")
+) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for schema in schemas:
+        function = schema.get("function")
+        if not isinstance(function, Mapping):
+            raise RuntimeError("tool schema lacks function metadata")
+        name = str(function.get("name", "")).strip()
+        if not name:
+            raise RuntimeError("tool schema lacks a function name")
+        if name in result:
+            raise RuntimeError(f"duplicate tool schema name {name!r}")
+        parameters = function.get("parameters", {})
+        if parameters is not None and not isinstance(parameters, Mapping):
+            raise RuntimeError(f"tool {name!r} parameters schema must be an object")
+        result[name] = dict(parameters or {})
+    return result
+
+
+def _parse_qwen_tool_markup(
+    text: str,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, tuple[ToolCall, ...]]:
+    """Parse Qwen3.5 native tagged tool calls without regex or PEG.
+
+    The scanner accepts both the official ``<tool_call><function=...>`` form and the
+    wrapper-omitted ``<function=...>`` form supported by llama.cpp's Qwen parser. A
+    parameter terminator is structural only when it is followed by another parameter,
+    ``</function>``, or ``</tool_call>``. This avoids truncating Java/source strings
+    that merely contain XML-looking text.
+    """
+
+    if not text:
+        return "", ()
+
+    calls: list[ToolCall] = []
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    while cursor < len(text):
+        wrapped_at = text.find(_TOOL_CALL_OPEN, cursor)
+        direct_at = text.find(_FUNCTION_OPEN, cursor)
+        starts = [value for value in (wrapped_at, direct_at) if value >= 0]
+        if not starts:
+            break
+        start = min(starts)
+        wrapped = wrapped_at == start
+        function_at = start + len(_TOOL_CALL_OPEN) if wrapped else start
+        function_at = _skip_space(text, function_at)
+        if not text.startswith(_FUNCTION_OPEN, function_at):
+            if wrapped:
+                raise RuntimeError("Qwen tool_call block does not begin with a function")
+            cursor = start + 1
+            continue
+
+        call, end = _parse_qwen_function(
+            text,
+            function_at,
+            schemas,
+            call_index=len(calls),
+        )
+        if wrapped:
+            close_at = _skip_space(text, end)
+            if not text.startswith(_TOOL_CALL_CLOSE, close_at):
+                raise RuntimeError("Qwen tool_call block is missing </tool_call>")
+            end = close_at + len(_TOOL_CALL_CLOSE)
+        calls.append(call)
+        spans.append((start, end))
+        cursor = end
+
+    # A structural opener that was not consumed is malformed rather than prose.
+    for marker in (_TOOL_CALL_OPEN, _FUNCTION_OPEN, _PARAMETER_OPEN):
+        pos = text.find(marker)
+        if pos >= 0 and not any(begin <= pos < end for begin, end in spans):
+            raise RuntimeError(f"unparsed Qwen tool markup begins at {marker!r}")
+
+    if not spans:
+        return text, ()
+    visible: list[str] = []
+    previous = 0
+    for begin, end in spans:
+        visible.append(text[previous:begin])
+        previous = end
+    visible.append(text[previous:])
+    return "".join(visible), tuple(calls)
+
+
+def _parse_qwen_function(
+    text: str,
+    start: int,
+    schemas: Mapping[str, Mapping[str, Any]],
+    *,
+    call_index: int,
+) -> tuple[ToolCall, int]:
+    name_start = start + len(_FUNCTION_OPEN)
+    name_end = text.find(">", name_start)
+    if name_end < 0:
+        raise RuntimeError("Qwen function tag is missing '>'")
+    name = text[name_start:name_end].strip()
+    if not name:
+        raise RuntimeError("Qwen function tag has an empty tool name")
+    schema = schemas.get(name)
+    if schema is None:
+        raise RuntimeError(f"Qwen requested an unexposed tool {name!r}")
+
+    properties_value = schema.get("properties", {})
+    properties = properties_value if isinstance(properties_value, Mapping) else {}
+    required_value = schema.get("required", ())
+    required = {
+        str(value)
+        for value in required_value
+        if isinstance(required_value, Sequence)
+        and not isinstance(required_value, (str, bytes))
+    }
+    additional = schema.get("additionalProperties", True)
+
+    arguments: dict[str, Any] = {}
+    raw_parts: dict[str, str] = {}
+    pos = name_end + 1
+    while True:
+        pos = _skip_space(text, pos)
+        if text.startswith(_FUNCTION_CLOSE, pos):
+            end = pos + len(_FUNCTION_CLOSE)
+            break
+        if not text.startswith(_PARAMETER_OPEN, pos):
+            snippet = " ".join(text[pos : pos + 120].split())
+            raise RuntimeError(
+                f"Qwen tool {name!r} emitted invalid parameter structure near {snippet!r}"
+            )
+
+        key_start = pos + len(_PARAMETER_OPEN)
+        key_end = text.find(">", key_start)
+        if key_end < 0:
+            raise RuntimeError(f"Qwen tool {name!r} parameter tag is missing '>'")
+        key = text[key_start:key_end].strip()
+        if not key:
+            raise RuntimeError(f"Qwen tool {name!r} emitted an empty parameter name")
+        if key in arguments:
+            raise RuntimeError(f"Qwen tool {name!r} repeated parameter {key!r}")
+        if key not in properties and additional is False:
+            raise RuntimeError(f"Qwen tool {name!r} emitted unknown parameter {key!r}")
+
+        value_start = key_end + 1
+        close_at = _find_parameter_close(text, value_start)
+        if close_at < 0:
+            raise RuntimeError(
+                f"Qwen tool {name!r} parameter {key!r} is missing a structural "
+                "</parameter> terminator"
+            )
+        raw = _unwrap_parameter_text(text[value_start:close_at])
+        value_schema = properties.get(key, {})
+        if not isinstance(value_schema, Mapping):
+            value_schema = {}
+        arguments[key] = _decode_parameter_value(name, key, raw, value_schema)
+        raw_parts[key] = raw
+        pos = close_at + len(_PARAMETER_CLOSE)
+
+    missing = sorted(required - arguments.keys())
+    if missing:
+        raise RuntimeError(
+            f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}"
+        )
+
+    raw_arguments = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(
+        f"{call_index}\0{name}\0{raw_arguments}".encode("utf-8")
+    ).hexdigest()[:16]
+    return (
+        ToolCall(
+            id=f"call_{digest}",
+            name=name,
+            arguments=arguments,
+            raw_arguments=raw_arguments,
+        ),
+        end,
+    )
+
+
+def _find_parameter_close(text: str, start: int) -> int:
+    search = start
+    while True:
+        candidate = text.find(_PARAMETER_CLOSE, search)
+        if candidate < 0:
+            return -1
+        after = _skip_space(text, candidate + len(_PARAMETER_CLOSE))
         if (
-            str(choice.get("type", "")).strip() == "function"
-            and isinstance(function, Mapping)
+            text.startswith(_PARAMETER_OPEN, after)
+            or text.startswith(_FUNCTION_CLOSE, after)
+            or text.startswith(_TOOL_CALL_CLOSE, after)
         ):
-            return str(function.get("name", "")).strip()
-    if str(choice or "").strip().lower() == "required" and len(schemas) == 1:
-        return _schema_name(schemas[0])
+            return candidate
+        search = candidate + len(_PARAMETER_CLOSE)
+
+
+def _unwrap_parameter_text(value: str) -> str:
+    if value.startswith("\r\n"):
+        value = value[2:]
+    elif value.startswith("\n"):
+        value = value[1:]
+    if value.endswith("\r\n"):
+        value = value[:-2]
+    elif value.endswith("\n"):
+        value = value[:-1]
+    return value
+
+
+def _decode_parameter_value(
+    tool_name: str,
+    key: str,
+    raw: str,
+    schema: Mapping[str, Any],
+) -> Any:
+    expected = _schema_value_type(schema)
+    compact = raw.strip()
+    try:
+        if expected == "string":
+            value: Any = raw
+        elif expected == "integer":
+            if not compact or any(ch in compact.lower() for ch in (".", "e")):
+                raise ValueError("not an integer")
+            value = int(compact)
+        elif expected == "number":
+            value = float(compact)
+        elif expected == "boolean":
+            lowered = compact.lower()
+            if lowered not in {"true", "false"}:
+                raise ValueError("not a boolean")
+            value = lowered == "true"
+        elif expected == "null":
+            if compact.lower() != "null":
+                raise ValueError("not null")
+            value = None
+        elif expected in {"object", "array"}:
+            value = json.loads(compact)
+            if expected == "object" and not isinstance(value, Mapping):
+                raise ValueError("not an object")
+            if expected == "array" and not isinstance(value, list):
+                raise ValueError("not an array")
+        else:
+            # Typeless schemas are common for permissive MCP tools. Preserve strings,
+            # but honor unambiguous JSON scalars/containers when the model emits them.
+            if compact.startswith(("{", "[", '"')) or compact in {
+                "true",
+                "false",
+                "null",
+            }:
+                value = json.loads(compact)
+            else:
+                value = raw
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
+            f"for parameter {key!r}"
+        ) from exc
+
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum and value not in enum:
+        raise RuntimeError(
+            f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
+        )
+    return value
+
+
+def _schema_value_type(schema: Mapping[str, Any]) -> str:
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str):
+        return raw_type
+    if isinstance(raw_type, list):
+        non_null = [str(value) for value in raw_type if str(value) != "null"]
+        if len(non_null) == 1:
+            return non_null[0]
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        kinds = {_json_type(value) for value in enum if value is not None}
+        if len(kinds) == 1:
+            return next(iter(kinds))
+    for keyword in ("oneOf", "anyOf"):
+        choices = schema.get(keyword)
+        if isinstance(choices, list):
+            kinds = {
+                _schema_value_type(choice)
+                for choice in choices
+                if isinstance(choice, Mapping)
+            }
+            kinds.discard("")
+            kinds.discard("null")
+            if len(kinds) == 1:
+                return next(iter(kinds))
     return ""
 
 
-def _requires_some_tool(tool_choice: Any) -> bool:
-    if isinstance(tool_choice, Mapping):
-        return bool(_forced_choice_name(tool_choice))
-    return str(tool_choice or "").strip().lower() == "required"
+def _json_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, Mapping):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if value is None:
+        return "null"
+    return ""
 
 
-def _forced_choice_name(choice: Mapping[str, Any]) -> str:
-    function = choice.get("function")
-    if str(choice.get("type", "")).strip() != "function" or not isinstance(
-        function, Mapping
-    ):
-        return ""
-    return str(function.get("name", "")).strip()
+def _validate_tool_choice(
+    request: GenerationRequest,
+    calls: Sequence[ToolCall],
+) -> None:
+    if not request.parallel_tool_calls and len(calls) > 1:
+        raise RuntimeError("model emitted parallel tool calls when they are disabled")
+
+    choice = request.tool_choice
+    if choice is None or choice == "auto":
+        return
+    if choice == "none":
+        if calls:
+            raise RuntimeError("model emitted a tool call when tool_choice is none")
+        return
+    if choice == "required":
+        if not calls:
+            raise RuntimeError("model did not emit a tool call when one is required")
+        return
+    if isinstance(choice, Mapping):
+        function = choice.get("function")
+        if not isinstance(function, Mapping):
+            raise RuntimeError("named tool_choice lacks function metadata")
+        expected = str(function.get("name", "")).strip()
+        if not expected:
+            raise RuntimeError("named tool_choice lacks a function name")
+        if len(calls) != 1 or calls[0].name != expected:
+            received = ", ".join(call.name for call in calls) or "<none>"
+            raise RuntimeError(
+                f"model violated named tool_choice {expected!r}; received {received}"
+            )
+        return
+    raise RuntimeError(f"unsupported tool_choice contract: {choice!r}")
+
+
+def _skip_space(text: str, position: int) -> int:
+    while position < len(text) and text[position].isspace():
+        position += 1
+    return position
 
 
 def _generation_response(message: Mapping[str, Any]) -> GenerationResponse:
@@ -497,10 +641,14 @@ def _reasoning_continuation_request(
             {"role": "user", "content": _REASONING_CONTINUATION},
         ]
     )
-    return replace(
-        request,
+    return GenerationRequest(
         messages=tuple(messages),
         media_paths=(),
+        response_format=request.response_format,
+        response_schema=request.response_schema,
+        tools=request.tools,
+        tool_choice=request.tool_choice,
+        parallel_tool_calls=request.parallel_tool_calls,
     )
 
 
@@ -549,18 +697,11 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
         return httpx.post(endpoint, json=payload, timeout=None)
     from ..llama_stream_efficiency_contract import _client
 
-    # Tool protocol turns are intentionally non-streaming so the complete host JSON
-    # envelope arrives atomically. The shared client read timeout is an SSE idle
-    # timeout; applying it here turns a healthy >300 s decode into ReadTimeout because
-    # non-streaming responses emit no intermediate body bytes. Keep connect, write and
-    # pool acquisition bounded while allowing the local decode to finish.
     timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
     return _client(server_url).post(endpoint, json=payload, timeout=timeout)
 
 
 def _bounded_response_body(response: Any, *, limit: int = 1600) -> str:
-    """Keep server diagnostics bounded without echoing the model request."""
-
     try:
         body = str(response.text)
     except Exception:
