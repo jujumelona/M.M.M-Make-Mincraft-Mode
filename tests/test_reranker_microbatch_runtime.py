@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import minecraft_mod_ai.model_adapters.base as adapter_base
+import minecraft_mod_ai.model_adapters.reranker as reranker_module
 import minecraft_mod_ai.model_runtime_performance as runtime
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.reranker import RerankerAdapter
@@ -120,13 +120,6 @@ class _InferenceMode:
         return False
 
 
-def _cached_score_implementation():
-    implementation = RerankerAdapter.score
-    while not getattr(implementation, "_mmm_cached_reranker_model", False):
-        implementation = implementation.__wrapped__
-    return implementation
-
-
 def test_auto_microbatch_size_uses_live_cpu_and_available_ram(monkeypatch) -> None:
     monkeypatch.delenv("MMM_RERANK_MICROBATCH", raising=False)
     monkeypatch.setattr(runtime.os, "cpu_count", lambda: 8)
@@ -147,7 +140,7 @@ def test_explicit_microbatch_override_is_honored_and_bounded(monkeypatch) -> Non
         runtime._rerank_microbatch_size(20)
 
 
-def test_reranker_buckets_by_length_restores_order_and_reuses_one_model(
+def test_reranker_buckets_by_length_restores_order_and_reuses_backend_across_adapters(
     monkeypatch,
 ) -> None:
     fake_transformers = SimpleNamespace(
@@ -163,23 +156,25 @@ def test_reranker_buckets_by_length_restores_order_and_reuses_one_model(
     )
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setattr(adapter_base, "require_package", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        reranker_module,
+        "require_package",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setenv("MMM_CPU_RETRIEVAL_CACHE", "1")
     monkeypatch.setenv("MMM_RERANK_MICROBATCH", "2")
-    monkeypatch.setattr(runtime, "_RERANK_TOKENIZER", None)
-    monkeypatch.setattr(runtime, "_RERANK_MODEL", None)
-    monkeypatch.setattr(runtime, "_RERANK_KEY", None)
+    with reranker_module._BACKEND_CACHE_LOCK:
+        reranker_module._BACKEND_CACHE.clear()
     _FakeTokenizer.load_count = 0
     _FakeModel.load_count = 0
 
-    adapter = RerankerAdapter(
-        AdapterConfig(
-            role="reranker",
-            adapter="reranker",
-            model_id="fake/reranker",
-            max_context=512,
-        )
+    config = AdapterConfig(
+        role="reranker",
+        adapter="reranker",
+        model_id="fake/reranker",
+        max_context=512,
     )
+    adapter = RerankerAdapter(config)
     documents = [
         "SCORE=0.11 " + ("L" * 80),
         "SCORE=0.22 x",
@@ -188,9 +183,8 @@ def test_reranker_buckets_by_length_restores_order_and_reuses_one_model(
         "SCORE=0.55 " + ("X" * 120),
     ]
 
-    score = _cached_score_implementation()
-    values = score(adapter, "query", documents)
-    second_values = score(adapter, "query", ["SCORE=0.66 z"])
+    values = adapter.score("query", documents)
+    second_values = RerankerAdapter(config).score("query", ["SCORE=0.66 z"])
 
     assert values == [0.11, 0.22, 0.33, 0.44, 0.55]
     assert second_values == [0.66]
