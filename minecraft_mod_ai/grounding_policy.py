@@ -4,6 +4,9 @@ import json
 from typing import Any, Mapping, Sequence
 
 _HOST_GROUNDING_SCHEMA = "mmm/host-owned-coder-grounding-v1"
+_HOST_BASELINE_CAUSAL_FACTS = frozenset(
+    {"project_observed", "code_evidence", "evidence_ready"}
+)
 
 
 def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
@@ -31,6 +34,16 @@ def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
         if grounding is not None and _grounding_ready(grounding):
             return True
     return False
+
+
+def host_baseline_causal_facts(
+    messages: Sequence[Mapping[str, Any]],
+) -> frozenset[str]:
+    """Translate validated host-owned project grounding into causal evidence facts."""
+
+    if not host_baseline_evidence_ready(messages):
+        return frozenset()
+    return _HOST_BASELINE_CAUSAL_FACTS
 
 
 def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
@@ -76,3 +89,6 @@ def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
         str(receipt.get("project_sha256", "")).strip()
         and str(receipt.get("observations_sha256", "")).strip()
     )
+
+
+__all__ = ["host_baseline_causal_facts", "host_baseline_evidence_ready"]
