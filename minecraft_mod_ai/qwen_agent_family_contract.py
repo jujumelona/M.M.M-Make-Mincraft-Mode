@@ -3,11 +3,10 @@ from __future__ import annotations
 """Qwen-family request and agent policy for native llama.cpp tool loops.
 
 The MCP/tool surface is intentionally shared across model families. This module is a
-late, transparent decorator over the already-composed llama payload stack: every
-non-Qwen3.6 request is returned exactly as produced by the existing runtime policy.
-Exact production Qwen3.6 models receive their model/mode-specific vendor sampling,
-while autonomous agent continuations additionally opt into thinking preservation and
-historical ``reasoning_content`` restoration.
+late, transparent decorator over the already-composed llama payload stack. Exact
+production Qwen models receive model/mode-specific sampling, while Qwen3.6 and
+Qwen3.8 autonomous agent continuations opt into thinking preservation and historical
+``reasoning_content`` restoration required by their hybrid-thinking templates.
 """
 
 import hashlib
@@ -24,6 +23,7 @@ from .qwen_model_profiles import qwen_family, qwen_sampling_profile
 _MAX_REASONING_TRACES = 64
 _REASONING_TRACE_LOCK = threading.RLock()
 _INSTALLED = False
+_AGENT_THINKING_FAMILIES = frozenset({"qwen3.6", "qwen3.8"})
 
 
 def _model_family(model_id: object, gguf_filename: object = "") -> str:
@@ -57,7 +57,7 @@ def _assistant_has_agent_history(messages: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
-def _qwen36_agent_request(request: Any) -> bool:
+def _qwen_agent_request(request: Any) -> bool:
     tool_choice = getattr(request, "tool_choice", None)
     if _forced_tool_choice(tool_choice):
         return False
@@ -67,15 +67,15 @@ def _qwen36_agent_request(request: Any) -> bool:
     return _assistant_has_agent_history(_request_messages(request))
 
 
-def _qwen36_sampling_mode(role: object, request: Any) -> str | None:
+def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     """Map MMM request semantics onto Qwen's documented generation modes."""
 
     tools = getattr(request, "tools", ()) or ()
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
     if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        # Keep host-forced function returns deterministic. The generic transport owns
-        # this special case and already disables reasoning at temperature zero.
+        # Forced transport probes/tool actions stay deterministic and non-thinking;
+        # the generic transport owns temperature zero for this special case.
         return None
     normalized_role = str(role or "").strip().casefold()
     if normalized_role in {"coder", "coder_safe"}:
@@ -91,13 +91,14 @@ def _apply_family_payload_policy(
     role: object = "",
     request: Any,
 ) -> dict[str, Any]:
-    """Apply Qwen3.6 mode semantics without guessing future model sampling."""
+    """Apply Qwen hybrid-thinking/tool-loop semantics for supported families."""
 
-    if _model_family(model_id, gguf_filename) != "qwen3.6":
+    family = _model_family(model_id, gguf_filename)
+    if family not in _AGENT_THINKING_FAMILIES:
         return payload
 
-    mode = _qwen36_sampling_mode(role, request)
-    agent_request = _qwen36_agent_request(request)
+    mode = _qwen_sampling_mode(role, request)
+    agent_request = _qwen_agent_request(request)
     if mode is None and not agent_request:
         return payload
 
@@ -108,18 +109,14 @@ def _apply_family_payload_policy(
         payload.pop("reasoning_effort", None)
         template_kwargs: dict[str, Any] = {"enable_thinking": True}
         if agent_request:
+            # Preserve prior reasoning across tool-result continuations. This is
+            # important for Qwen3.8 nested/sequential tool use; the host still decides
+            # whether independent calls may execute in parallel.
             template_kwargs["preserve_thinking"] = True
         payload["chat_template_kwargs"] = template_kwargs
 
-    # Sampling recommendations belong to exact production model identities. Keep
-    # family-level transport behavior forward-compatible, but never guess sampling
-    # for a future/unknown Qwen3.6 variant.
     if mode is not None:
-        sampling = qwen_sampling_profile(
-            model_id,
-            gguf_filename,
-            mode=mode,
-        )
+        sampling = qwen_sampling_profile(model_id, gguf_filename, mode=mode)
         if sampling is not None:
             payload.pop("repetition_penalty", None)
             payload.update(sampling)
@@ -133,21 +130,9 @@ def _canonical_arguments(value: Any) -> str:
             decoded = json.loads(raw)
         except json.JSONDecodeError:
             return raw
-        return json.dumps(
-            decoded,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
+        return json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     if isinstance(value, Mapping):
-        return json.dumps(
-            dict(value),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
+        return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return str(value)
 
 
@@ -161,13 +146,11 @@ def _message_signature(message: Mapping[str, Any]) -> str:
         function = raw.get("function")
         if not isinstance(function, Mapping):
             continue
-        calls.append(
-            {
-                "id": str(raw.get("id") or ""),
-                "name": str(function.get("name") or ""),
-                "arguments": _canonical_arguments(function.get("arguments", "{}")),
-            }
-        )
+        calls.append({
+            "id": str(raw.get("id") or ""),
+            "name": str(function.get("name") or ""),
+            "arguments": _canonical_arguments(function.get("arguments", "{}")),
+        })
     content = message.get("content")
     normalized_content = content if isinstance(content, str) else ""
     if not normalized_content and not calls:
@@ -186,9 +169,7 @@ def _response_signature(response: GenerationResponse) -> str:
         {
             "id": call.id,
             "name": call.name,
-            "arguments": _canonical_arguments(
-                call.raw_arguments or dict(call.arguments)
-            ),
+            "arguments": _canonical_arguments(call.raw_arguments or dict(call.arguments)),
         }
         for call in response.tool_calls
     ]
@@ -204,24 +185,19 @@ def _response_signature(response: GenerationResponse) -> str:
 
 
 def _trace_store(adapter: Any) -> OrderedDict[str, str]:
-    current = getattr(adapter, "_mmm_qwen36_reasoning_traces", None)
+    current = getattr(adapter, "_mmm_qwen_reasoning_traces", None)
     if isinstance(current, OrderedDict):
         return current
     store: OrderedDict[str, str] = OrderedDict()
-    setattr(adapter, "_mmm_qwen36_reasoning_traces", store)
+    setattr(adapter, "_mmm_qwen_reasoning_traces", store)
     return store
 
 
-def _inject_reasoning_history(
-    adapter: Any,
-    request: GenerationRequest,
-) -> GenerationRequest:
+def _inject_reasoning_history(adapter: Any, request: GenerationRequest) -> GenerationRequest:
     """Restore only traces whose exact assistant exchange is present in history."""
 
     messages = _request_messages(request)
-    signed_messages = tuple(
-        (message, _message_signature(message)) for message in messages
-    )
+    signed_messages = tuple((message, _message_signature(message)) for message in messages)
     signatures = [signature for _, signature in signed_messages if signature]
     tools = getattr(request, "tools", ()) or ()
     with _REASONING_TRACE_LOCK:
@@ -236,11 +212,9 @@ def _inject_reasoning_history(
         for raw, signature in signed_messages:
             message = dict(raw)
             reasoning = store.get(signature) if signature else None
-            if (
-                reasoning
-                and message.get("role") == "assistant"
-                and not str(message.get("reasoning_content") or "").strip()
-            ):
+            if reasoning and message.get("role") == "assistant" and not str(
+                message.get("reasoning_content") or ""
+            ).strip():
                 message["reasoning_content"] = reasoning
                 changed = True
             rewritten.append(message)
@@ -263,7 +237,7 @@ def _remember_reasoning(adapter: Any, response: GenerationResponse) -> None:
 
 
 def install() -> None:
-    """Install the Qwen3.6 incremental backend policy exactly once."""
+    """Install Qwen hybrid-thinking agent policy exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -293,25 +267,26 @@ def install() -> None:
         llama_server_hardware_policy._server_payload = server_payload
 
     current_generate_turn = LlamaCppAdapter.generate_turn
-    if not getattr(current_generate_turn, "_mmm_qwen36_reasoning_history", False):
+    if not getattr(current_generate_turn, "_mmm_qwen_reasoning_history", False):
 
         @wraps(current_generate_turn)
-        def generate_turn(
-            self: Any,
-            request: GenerationRequest,
-        ) -> GenerationResponse:
+        def generate_turn(self: Any, request: GenerationRequest) -> GenerationResponse:
             config = getattr(self, "config", None)
-            qwen36_agent = _config_family(config) == "qwen3.6" and _qwen36_agent_request(request)
-            prepared = _inject_reasoning_history(self, request) if qwen36_agent else request
+            qwen_agent = _config_family(config) in _AGENT_THINKING_FAMILIES and _qwen_agent_request(request)
+            prepared = _inject_reasoning_history(self, request) if qwen_agent else request
             response = current_generate_turn(self, prepared)
-            if qwen36_agent:
+            if qwen_agent:
                 _remember_reasoning(self, response)
             return response
 
-        generate_turn._mmm_qwen36_reasoning_history = True  # type: ignore[attr-defined]
+        generate_turn._mmm_qwen_reasoning_history = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate_turn = generate_turn
 
     _INSTALLED = True
 
+
+# Backward-compatible private aliases for tests/extensions that imported the old names.
+_qwen36_agent_request = _qwen_agent_request
+_qwen36_sampling_mode = _qwen_sampling_mode
 
 __all__ = ["install"]
