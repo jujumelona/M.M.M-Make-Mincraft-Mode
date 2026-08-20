@@ -33,6 +33,7 @@ def finalize_runtime() -> None:
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
         from .coder_tool_route_integrity_contract import install as install_route_integrity
+        from .context_budget_preflight import run_context_budget_preflight
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_length_resilience import install as install_llama_length_resilience
         from .mcp_transport_pool import install_agent_mcp_transport_pool
@@ -63,6 +64,9 @@ def finalize_runtime() -> None:
         # finish_reason='length'. Recover once with bounded context fitting/output
         # expansion instead of aborting the whole production node immediately.
         install_llama_length_resilience(llama_cpp_adapter)
+        # Exercise the exact first assistant + parallel 48 KiB tool-observation shape
+        # that previously reached the server boundary before a second assistant turn.
+        run_context_budget_preflight()
         run_runtime_preflight()
         _FINALIZED = True
 
