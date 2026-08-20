@@ -115,7 +115,15 @@ def _require_mutation_surface(
 
 
 class _WritableProgressAdapter:
-    """Force one already-causal/legal next action until implementation reaches mutation."""
+    """Force a source edit only after the causal frontier makes mutation legal.
+
+    Retrieval and observation frontiers stay model/router-owned. In particular,
+    this adapter must not turn an ``auto`` frontier such as ``search_code_rag`` plus
+    ``java_workspace_symbols`` into a one-shot required tool call: the router already
+    owns bounded fresh-evidence retries and the causal adapter owns legal next-step
+    selection. Once a reviewed mutation tool becomes visible, fail closed on a model
+    that tries to finalize without performing the source edit.
+    """
 
     def __init__(self, inner: Any) -> None:
         self.inner = inner
@@ -128,25 +136,31 @@ class _WritableProgressAdapter:
         if not request.tools or request.tool_choice != "auto":
             return self.inner.generate_turn(request)
 
-        names = tuple(_tool_name(schema) for schema in request.tools if _tool_name(schema))
-        if not names:
+        mutation = next(
+            (
+                name
+                for schema in request.tools
+                if (name := _tool_name(schema)) in _MUTATION_TOOLS
+            ),
+            "",
+        )
+        if not mutation:
             return self.inner.generate_turn(request)
-        mutation = next((name for name in names if name in _MUTATION_TOOLS), "")
-        chosen = mutation or names[0]
+
         forced = GenerationRequest(
             messages=request.messages,
             media_paths=request.media_paths,
             response_format=request.response_format,
             response_schema=request.response_schema,
             tools=request.tools,
-            tool_choice={"type": "function", "function": {"name": chosen}},
+            tool_choice={"type": "function", "function": {"name": mutation}},
             parallel_tool_calls=False,
         )
         turn = self.inner.generate_turn(forced)
-        if not turn.tool_calls or chosen not in {call.name for call in turn.tool_calls}:
+        if not turn.tool_calls or mutation not in {call.name for call in turn.tool_calls}:
             raise ModelConfigurationError(
-                f"Writable coder did not execute required causal action {chosen!r}; "
-                "refusing a prose-only implementation turn."
+                f"Writable coder did not execute required source-mutation action {mutation!r}; "
+                "refusing a prose-only implementation turn after mutation became causal/legal."
             )
         return turn
 
