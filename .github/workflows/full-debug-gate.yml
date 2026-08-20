@@ -1,0 +1,64 @@
+name: Full Debug Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-gate:
+    name: Import, pytest, audit, package
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install debug dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
+
+      - name: Catch stale or missing internal imports
+        run: python .github/scripts/debug_repo_audit.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+
+      - name: Import package bootstrap
+        run: python -c "import minecraft_mod_ai"
+
+      - name: Collect the entire pytest suite
+        run: python -m pytest --collect-only -q
+
+      - name: Run exhaustive project Debug audit
+        if: ${{ always() }}
+        run: python tools/full_project_audit.py
+
+      - name: Upload Debug report even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-project-debug-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            audit/FULL_PROJECT_AUDIT.json
+            audit/FULL_PROJECT_AUDIT.log
+            audit/dist/*
