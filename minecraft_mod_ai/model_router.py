@@ -752,6 +752,28 @@ class ModelRouter:
             instruction=instruction,
         )
 
+    @contextmanager
+    def image_generation_session(self, role: str = "image_generator"):
+        """Hold one exclusive local-image GPU lease through final pipeline parking."""
+
+        config = self.registry.role(self.profile, role)
+        local_diffusion = (
+            str(config.provider) == "local"
+            and str(config.adapter) == "image_diffusion"
+            and bool(config.exclusive_gpu)
+        )
+        if not local_diffusion:
+            yield self
+            return
+
+        from .model_adapters import image_diffusion as image_module
+
+        with self._gpu_scope(True):
+            try:
+                yield self
+            finally:
+                image_module.finish_image_shard()
+
     def generate_image(
         self,
         role: str,

@@ -85,7 +85,6 @@ def _install_model_runtime_contracts() -> None:
     from .colab_gpu_handoff_contract import install as install_gpu_handoff
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
-    from .image_runtime_residency import install as install_image_runtime_residency
     from .llama_prefill_telemetry_contract import install as install_llama_prefill_telemetry
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
@@ -110,7 +109,6 @@ def _install_model_runtime_contracts() -> None:
         llama_server_autotune_module=llama_server_autotune,
     )
     start_colab_prefetch(model_registry)
-    install_image_runtime_residency()
 
 
 def _install_validation_contracts() -> None:

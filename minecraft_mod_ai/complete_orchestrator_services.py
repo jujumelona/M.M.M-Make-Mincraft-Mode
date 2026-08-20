@@ -338,7 +338,7 @@ def _generate_tiled_asset_source(
     }
 
 
-def generate_assets(
+def _generate_assets_impl(
     router: ModelRouter,
     proposal: CompleteProposal,
     project_root: Path,
@@ -409,6 +409,21 @@ def generate_assets(
         "status": "GENERATED",
         "assets": generated,
     }
+
+
+def generate_assets(
+    router: ModelRouter,
+    proposal: CompleteProposal,
+    project_root: Path,
+    run_root: Path,
+) -> dict[str, Any]:
+    """Generate one asset shard inside the router-owned image residency session."""
+
+    with router.image_generation_session("image_generator"):
+        return _generate_assets_impl(router, proposal, project_root, run_root)
+
+
+generate_assets._mmm_adaptive_image_gpu_session = True  # type: ignore[attr-defined]
 
 
 def blockbench_review(
