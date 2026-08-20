@@ -36,6 +36,7 @@ from .scalable_validator import ScalableProjectValidator
 from .scale_policy import ScalePolicy
 from .spec import SpecValidationError
 from .system_pack_generator import generate_system_pack
+from .validation_checkpoint_policy import cached_validation_is_reusable, validation_checkpoint_input
 from .validator import validate_jar
 from .complete_orchestrator_services import blockbench_review, generate_assets, package_source_only, run_playtest, runtime_profile, visual_review
 from .work_graph import DurableWorkLedger, WorkGraphError, WorkNode, WorkGraphPlan, build_production_work_plan, run_named_checkpoint
@@ -171,7 +172,7 @@ class CompleteProductionOrchestrator:
         module_receipts.append({'schema_version': 'mmm/resource-tuning-v1', **heap_receipt})
         execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
-        source_report = run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}, action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: False)
+        source_report = run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value=validation_checkpoint_input('validate-source', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-source', cached))
         if source_report.get('status') != 'PASS':
             raise CompleteProductionError('Generated complete project failed deterministic validation.')
         self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})
@@ -183,7 +184,7 @@ class CompleteProductionOrchestrator:
                     return JavaLanguageService().diagnostics(project_root, timeout_seconds=90)
                 except Exception as exc:
                     return {'status': 'UNAVAILABLE', 'error': f'{type(exc).__name__}: {exc}'}
-            jdt_receipt = run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}, action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: False)
+            jdt_receipt = run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
             module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})
             if jdt_receipt.get('status') == 'UNAVAILABLE':
                 raise CompleteProductionError('JDT Language Server is required for a fully verified build: ' + str(jdt_receipt.get('error', 'unavailable')))
