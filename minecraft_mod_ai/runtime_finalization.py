@@ -35,11 +35,12 @@ def finalize_runtime() -> None:
         from .agent_routing_intent_contract import install as install_routing_intent
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .context_budget_preflight import run_context_budget_preflight
+        from .forced_tool_execution_contract import install as install_forced_tool_execution
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_length_resilience import install as install_llama_length_resilience
         from .llama_unbounded_generation import install as install_llama_unbounded_generation
         from .mcp_transport_pool import install_agent_mcp_transport_pool
-        from .model_adapters import llama_cpp_adapter
+        from .model_adapters import llama_cpp_adapter, openai_compatible
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
@@ -60,6 +61,13 @@ def finalize_runtime() -> None:
         )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
+        # Every exact host-required native action now shares one transport contract.
+        # Mutation, mandatory RAG, and structured decisions all reduce to one visible
+        # function before the model request is sent, with one bounded protocol retry.
+        install_forced_tool_execution(
+            llama_cpp_module=llama_cpp_adapter,
+            openai_compatible_module=openai_compatible,
+        )
         # RAG build/search may call embed/rerank repeatedly. Install this before the
         # structural preflight so a fresh process cannot silently regress to per-call
         # CPU model construction.
