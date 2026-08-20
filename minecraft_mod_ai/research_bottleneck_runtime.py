@@ -10,6 +10,7 @@ once the owning source module absorbs it directly.
 
 import json
 import sys
+import weakref
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -112,107 +113,45 @@ def _restore_complete_plan_collection_pages() -> None:
 
 
 def _restore_discovery_http_pool() -> None:
-    """Keep one httpx connection pool per discovery client instance."""
+    """Reuse one httpx pool while leaving native request policy as the sole owner."""
     import httpx
 
     from . import ecosystem_discovery as discovery
 
     cls = discovery.EcosystemDiscoveryClient
     current_init = cls.__init__
-    if getattr(current_init, "_mmm_persistent_http_pool_v1", False):
+    if getattr(current_init, "_mmm_persistent_http_pool_v2", False):
         return
+
+    class PersistentClientTransport(httpx.BaseTransport):
+        """Route temporary native clients through one shared thread-safe client."""
+
+        def __init__(self, client: httpx.Client) -> None:
+            self._client = client
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            return self._client.send(request)
+
+        def close(self) -> None:
+            # Native _get_json creates a short-lived Client per call. Its close must not
+            # tear down the shared owner; the finalizer below owns that lifecycle.
+            return None
 
     @wraps(current_init)
     def init(self, *args, **kwargs) -> None:
         current_init(self, *args, **kwargs)
-        self._mmm_http_client = httpx.Client(
+        shared = httpx.Client(
             timeout=self.timeout_seconds,
             follow_redirects=False,
             transport=self.transport,
         )
+        self._mmm_http_client = shared
+        self.transport = PersistentClientTransport(shared)
+        weakref.finalize(self, shared.close)
 
-    @wraps(cls._get_json)
-    def get_json(
-        self,
-        url: str,
-        *,
-        params: dict[str, str] | None = None,
-        provider: str = "",
-        include_next_url: bool = False,
-    ) -> Any:
-        parsed = discovery.urlparse(url)
-        allowed_hosts = {
-            "api.modrinth.com",
-            "api.github.com",
-            "api.openverse.org",
-            "en.wikipedia.org",
-            "ko.wikipedia.org",
-            "huggingface.co",
-            "api.openalex.org",
-            "api.crossref.org",
-        }
-        if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
-            raise discovery.SpecValidationError("Discovery request escaped the API allowlist.")
-        if parsed.hostname == "huggingface.co" and not (
-            parsed.path == "/api/models" or parsed.path.startswith("/api/models/")
-        ):
-            raise discovery.SpecValidationError(
-                "Hugging Face discovery is restricted to metadata API paths."
-            )
-        if parsed.hostname == "api.openalex.org" and not (
-            parsed.path == "/works" or parsed.path.startswith("/works/")
-        ):
-            raise discovery.SpecValidationError(
-                "OpenAlex discovery is restricted to works metadata paths."
-            )
-        if parsed.hostname == "api.crossref.org" and not (
-            parsed.path == "/works" or parsed.path.startswith("/works/")
-        ):
-            raise discovery.SpecValidationError(
-                "Crossref discovery is restricted to works metadata paths."
-            )
-
-        headers = {"Accept": "application/json", "User-Agent": discovery._USER_AGENT}
-        if provider == "github":
-            headers["X-GitHub-Api-Version"] = "2022-11-28"
-            headers["Accept"] = "application/vnd.github+json"
-            if self.github_token:
-                headers["Authorization"] = f"Bearer {self.github_token}"
-        elif provider == "openverse" and self.openverse_token:
-            headers["Authorization"] = f"Bearer {self.openverse_token}"
-
-        try:
-            response = self._mmm_http_client.get(url, params=params, headers=headers)
-        except httpx.HTTPError as exc:
-            raise discovery.EcosystemDiscoveryUnavailable(
-                f"{parsed.hostname} discovery request failed: {type(exc).__name__}."
-            ) from exc
-        if response.status_code != 200:
-            raise discovery.EcosystemDiscoveryUnavailable(
-                f"{parsed.hostname} discovery returned HTTP {response.status_code}."
-            )
-        if len(response.content) > discovery._MAX_RESPONSE_BYTES:
-            raise discovery.EcosystemDiscoveryUnavailable(
-                f"{parsed.hostname} discovery response exceeded the byte policy."
-            )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise discovery.EcosystemDiscoveryUnavailable(
-                f"{parsed.hostname} discovery returned invalid JSON."
-            ) from exc
-        if include_next_url:
-            next_link = response.links.get("next")
-            next_url = str(next_link.get("url") or "") if isinstance(next_link, dict) else ""
-            return payload, next_url
-        return payload
-
-    init._mmm_persistent_http_pool_v1 = True
+    init._mmm_persistent_http_pool_v2 = True
     init.__wrapped__ = current_init
-    get_json._mmm_persistent_http_pool_v1 = True
-    get_json.__wrapped__ = cls._get_json
     cls.__init__ = init
-    cls._get_json = get_json
 
 
 def _restore_research_code_context_contracts() -> None:
