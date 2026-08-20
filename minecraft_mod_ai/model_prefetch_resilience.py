@@ -12,7 +12,7 @@ def install(*, parallel_runtime_module: Any) -> None:
         return
 
     @wraps(current)
-    def ensure_model_prefetch(config: Any):
+    def ensure_model_prefetch(config: Any, resolver: Any):
         key = parallel_runtime_module._model_key(config)
         with parallel_runtime_module._PREFETCH_LOCK:
             cached = parallel_runtime_module._PREFETCH_FUTURES.get(key)
@@ -26,7 +26,7 @@ def install(*, parallel_runtime_module: Any) -> None:
                 if failed and parallel_runtime_module._PREFETCH_FUTURES.get(key) is cached:
                     parallel_runtime_module._PREFETCH_FUTURES.pop(key, None)
 
-        future = current(config)
+        future = current(config, resolver)
         if future is None:
             return None
 
