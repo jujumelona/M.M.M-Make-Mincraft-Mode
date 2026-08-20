@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-"""Qwen3.5-9B request semantics for the native llama.cpp runtime.
+"""Registry-driven request semantics for native llama.cpp runtimes.
 
-Generic llama-server transport stays model-agnostic. This module owns the small set
-of Qwen3.5-specific choices that materially change inference quality or benchmark
-cost: task-aware sampling, per-request thinking for host-owned structured fills, and
-reasoning-free speculative-decode benchmarking.
+The transport stays model-agnostic. Profiles opt in through AdapterConfig.extra
+instead of being identified from repository names or GGUF filenames.
 """
 
 import hashlib
@@ -13,35 +11,35 @@ import json
 import os
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Literal, Mapping
 
-from .qwen_model_profiles import (
-    QwenSamplingMode,
-    is_qwen35_9b,
-    qwen_sampling_profile,
-)
+SamplingMode = Literal["general_thinking", "precise_coding", "non_thinking"]
 
-_PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v2"
-_BASE_ARGS_MARKER = "_mmm_qwen35_benchmark_reasoning_off_v2"
-_BENCHMARK_MARKER = "_mmm_qwen35_decode_benchmark_scope_v2"
-_VARIANT_MARKER = "_mmm_qwen35_tuning_variant_scope_v1"
-_FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v2"
+_PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v3"
+_BASE_ARGS_MARKER = "_mmm_qwen35_benchmark_reasoning_off_v3"
+_BENCHMARK_MARKER = "_mmm_qwen35_decode_benchmark_scope_v3"
+_VARIANT_MARKER = "_mmm_qwen35_tuning_variant_scope_v2"
+_FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v3"
 _BENCHMARK_ENV = "MMM_QWEN35_DECODE_BENCHMARK"
+_POLICY_NAME = "task_aware_sampling"
 
 
-def _model_identity(config: Any) -> tuple[object, object]:
-    model_id = getattr(config, "model_id", "")
+def _extra(config: Any) -> Mapping[str, Any]:
     extra = getattr(config, "extra", {})
-    filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
-    return model_id, filename
+    return extra if isinstance(extra, Mapping) else {}
+
+
+def _policy_enabled(config: Any) -> bool:
+    return str(_extra(config).get("request_policy", "")).strip().casefold() == _POLICY_NAME
 
 
 def _is_qwen35(config: Any) -> bool:
-    model_id, filename = _model_identity(config)
-    return is_qwen35_9b(model_id, filename)
+    """Compatibility name for the legacy hook; activation is registry-driven."""
+
+    return _policy_enabled(config)
 
 
-def _request_sampling_mode(config: Any, request: Any) -> QwenSamplingMode:
+def _request_sampling_mode(config: Any, request: Any) -> SamplingMode:
     tools = getattr(request, "tools", ()) or ()
     structured_fill = (
         getattr(request, "response_format", None) == "json" and not tools
@@ -56,12 +54,13 @@ def _request_sampling_mode(config: Any, request: Any) -> QwenSamplingMode:
 
 
 def _request_defaults(config: Any, request: Any) -> dict[str, Any]:
-    model_id, filename = _model_identity(config)
-    return qwen_sampling_profile(
-        model_id,
-        filename,
-        mode=_request_sampling_mode(config, request),
-    ) or {}
+    profiles = _extra(config).get("sampling_profiles")
+    if not isinstance(profiles, Mapping):
+        return {}
+    selected = profiles.get(_request_sampling_mode(config, request))
+    if not isinstance(selected, Mapping):
+        return {}
+    return dict(selected)
 
 
 def _install_payload_policy(hardware_policy: Any) -> None:
@@ -73,12 +72,10 @@ def _install_payload_policy(hardware_policy: Any) -> None:
     def payload(adapter: Any, request: Any) -> dict[str, Any]:
         result = current(adapter, request)
         config = getattr(adapter, "config", None)
-        if not _is_qwen35(config):
+        if not _policy_enabled(config):
             return result
 
         defaults = _request_defaults(config, request)
-        # Current llama.cpp accepts reasoning_effort="none" as the native
-        # per-request disable switch. Do not also send the legacy template kwarg.
         result.pop("chat_template_kwargs", None)
         result.pop("thinking_budget_tokens", None)
         if "reasoning_effort" not in defaults:
@@ -109,7 +106,7 @@ def _install_benchmark_base_args(autotune: Any) -> None:
     def base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
         args = list(current(binary, model_path, config, port))
         if (
-            _is_qwen35(config)
+            _policy_enabled(config)
             and os.environ.get(_BENCHMARK_ENV, "").strip() == "1"
         ):
             _set_reasoning_off(args)
@@ -128,7 +125,7 @@ def _restore_env(name: str, previous: str | None) -> None:
 
 @contextmanager
 def _benchmark_scope(config: Any) -> Iterator[None]:
-    if not _is_qwen35(config):
+    if not _policy_enabled(config):
         yield
         return
     previous = os.environ.get(_BENCHMARK_ENV)
@@ -197,11 +194,11 @@ def _install_fingerprint(autotune: Any) -> None:
     @wraps(current)
     def fingerprint(config: Any, binary: str, model_path: str) -> str:
         base = str(current(config, binary, model_path))
-        if not _is_qwen35(config):
+        if not _policy_enabled(config):
             return base
         payload = {
             "base": base,
-            "qwen35_request_policy": "v2",
+            "request_policy": _POLICY_NAME,
             "benchmark_reasoning": "off",
         }
         return hashlib.sha256(
@@ -213,7 +210,7 @@ def _install_fingerprint(autotune: Any) -> None:
 
 
 def install(autotune: Any, hardware_policy: Any) -> None:
-    """Install Qwen3.5 behavior after generic and output-budget wrappers."""
+    """Install the registry-selected task-aware request policy."""
 
     _install_payload_policy(hardware_policy)
     _install_benchmark_base_args(autotune)
