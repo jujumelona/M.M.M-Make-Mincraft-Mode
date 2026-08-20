@@ -5,10 +5,9 @@ from typing import Any
 import httpx
 import pytest
 
+import minecraft_mod_ai.model_adapters.openai_compatible as openai_adapter
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
-from minecraft_mod_ai.model_adapters.openai_compatible import (
-    OpenAICompatibleAdapter,
-)
+from minecraft_mod_ai.model_adapters.openai_compatible import OpenAICompatibleAdapter
 
 
 def _adapter() -> OpenAICompatibleAdapter:
@@ -42,12 +41,6 @@ def _capture_payload(
         def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
             assert timeout == 120.0
             assert follow_redirects is False
-
-        def __enter__(self) -> "_Client":
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
 
         def post(self, url: str, **kwargs: Any) -> _Response:
             assert url == "https://models.example.test/v1/chat/completions"
@@ -89,7 +82,6 @@ def test_openai_compatible_text_generation_keeps_standard_text_request(
     assert "response_format" not in payload
 
 
-
 def test_openai_compatible_json_schema_is_forwarded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -116,3 +108,47 @@ def test_openai_compatible_json_schema_is_forwarded(
             "schema": schema,
         },
     }
+
+
+def test_openai_compatible_reuses_one_completion_client_across_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+    calls = 0
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class _Client:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            nonlocal created
+            assert timeout == 120.0
+            assert follow_redirects is False
+            created += 1
+
+        def post(self, url: str, **kwargs: Any) -> _Response:
+            nonlocal calls
+            assert url == "https://models.example.test/v1/chat/completions"
+            calls += 1
+            return _Response()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "reuse the transport"},),
+    )
+
+    assert _adapter().generate(request) == "ok"
+    assert _adapter().generate(request) == "ok"
+
+    assert created == 1
+    assert calls == 2
+    with openai_adapter._CLIENT_LOCK:
+        keys = tuple(openai_adapter._CLIENTS)
+    assert any(
+        base_url == "https://models.example.test/v1" and purpose == "completion"
+        for base_url, purpose, _factory in keys
+    )
