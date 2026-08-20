@@ -129,6 +129,8 @@ class EcosystemDiscoveryClient:
             candidates, total, next_position = self._search_modrinth(query, offset=position, limit=limit, target=target)
         elif provider == 'github':
             candidates, total, next_position = self._search_github(query, page=position or 1, limit=limit, target_profile=target_profile, target=target)
+        elif provider == 'openverse_images':
+            candidates, total, next_position = self._search_openverse(query, media_type='images', page=position or 1, limit=limit)
         elif provider == 'wikipedia':
             candidates, total, next_position = self._search_wikipedia(query, offset=position, limit=limit)
         elif provider == 'openalex_works':
@@ -398,7 +400,13 @@ class EcosystemDiscoveryClient:
             source_url = _safe_https_url(item.get('foreign_landing_url') or item.get('detail_url'))
             if not source_url:
                 continue
-            {'id': identifier, 'title': str(item.get('title') or 'Untitled'), 'creator': str(item.get('creator') or ''), 'source_url': source_url, 'license_id': license_id, 'provider': str(item.get('provider') or ''), 'source': str(item.get('source') or '')}
+            title = str(item.get('title') or 'Untitled').strip() or 'Untitled'
+            creator = str(item.get('creator') or '').strip()
+            attribution = str(item.get('attribution') or '').strip()
+            if not attribution:
+                attribution = f'{title} by {creator}, {license_id}' if creator else f'{title}, {license_id}'
+            stable = {'id': identifier, 'title': title, 'creator': creator, 'source_url': source_url, 'license_id': license_id, 'provider': str(item.get('provider') or ''), 'source': str(item.get('source') or '')}
+            candidates.append(EcosystemCandidate(candidate_id=f'openverse:{identifier}', provider='openverse_images', resource_kind='image_asset', title=title, summary=f'Openverse image metadata by {creator}.' if creator else 'Openverse image metadata.', source_url=source_url, api_url=_safe_https_url(item.get('detail_url'), allow_empty=True), license_id=license_id, license_url=_safe_https_url(item.get('license_url'), allow_empty=True), license_policy=_media_license_policy(license_name), minecraft_version='not_applicable', loader='not_applicable', compatibility='visual_reference_only; verify origin, dimensions, and exact license before reuse', attribution=attribution, preview_urls=_safe_preview_urls([item.get('thumbnail')], allowed_hosts=None), reuse_status='origin_license_verification_required', evidence_sha256=_sha256_text(canonical_json(stable)), metadata={'creator': creator, 'provider': stable['provider'], 'source': stable['source']}))
         page_count = _nonnegative_int(raw.get('page_count'))
         return (candidates, total, page + 1 if page_count and page < page_count else None)
 
@@ -542,11 +550,7 @@ def _seed_query(prompt: str, game_design: dict[str, Any]) -> str:
     for item in game_design.get('assets', []):
         if isinstance(item, dict):
             parts.append(str(item.get('brief') or ''))
-    joined = ' '.join((part.strip() for part in parts if part.strip()))
-    encoded = joined.encode('utf-8')
-    if len(encoded) <= 2000:
-        return joined
-    return encoded[:2000].decode('utf-8', errors='ignore').rstrip()
+    return ' '.join(part.strip() for part in parts if part.strip())
 
 def _encode_cursor(*, provider: str, query: str, position_kind: str, position: int, target_profile: str='minecraft_mod', minecraft_version: str='unresolved', loader: str='unresolved') -> str:
     payload = f'{provider}\x00{_sha256_text(query)}\x00{target_profile}\x00{minecraft_version}\x00{loader}\x00{position_kind}\x00{position}'
