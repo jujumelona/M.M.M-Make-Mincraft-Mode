@@ -108,6 +108,11 @@ def _apply_family_payload_policy(
     else:
         payload.pop("reasoning_effort", None)
         template_kwargs: dict[str, Any] = {"enable_thinking": True}
+        if family == "qwen3.8":
+            # Qwen3.8-27B exposes low/medium/xhigh through its chat template. The
+            # production coding path optimizes for solution quality, so pin xhigh
+            # instead of relying on a server/template default that may change.
+            template_kwargs["reasoning_effort"] = "xhigh"
         if agent_request:
             # Preserve prior reasoning across tool-result continuations. This is
             # important for Qwen3.8 nested/sequential tool use; the host still decides
