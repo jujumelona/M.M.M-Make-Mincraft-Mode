@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from collections.abc import Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterable, TypeVar
@@ -141,10 +142,133 @@ def _install_model_prefetch(
     registry_cls.load_profile = load_profile_with_prefetch
 
 
+def _discovery_routes(
+    ecosystem_module: Any,
+    prompt: str,
+    game_design: dict[str, Any],
+    research_brief: dict[str, Any] | None,
+    discovery: Any,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Resolve only the calls to prefetch; native discovery still owns the response."""
+    query = ecosystem_module._seed_query(prompt, game_design)
+    if research_brief is not None:
+        return query, list(ecosystem_module.external_discovery_routes(research_brief))
+
+    routes = [
+        {
+            "domain_id": "request",
+            "provider": provider,
+            "query": query,
+            "target_profile": (
+                "media" if provider == "openverse_images" else "minecraft_mod"
+            ),
+        }
+        for provider in ("modrinth", "openverse_images")
+    ]
+    if getattr(discovery, "github_token", "") or os.environ.get("GITHUB_TOKEN"):
+        routes.append(
+            {
+                "domain_id": "request",
+                "provider": "github",
+                "query": query,
+                "target_profile": "minecraft_mod",
+            }
+        )
+    return query, routes
+
+
+def _discovery_target(
+    research_brief: dict[str, Any] | None,
+) -> tuple[str | None, str | None]:
+    selected_target: Mapping[str, Any] = {}
+    if isinstance(research_brief, Mapping):
+        raw_target = research_brief.get("_mmm_platform_target")
+        if isinstance(raw_target, Mapping):
+            selected_target = raw_target
+    minecraft_version = str(selected_target.get("minecraft_version") or "") or None
+    loader = str(selected_target.get("loader") or "") or None
+    return minecraft_version, loader
+
+
+def _discovery_key(
+    provider: str,
+    query: str,
+    *,
+    cursor: str = "",
+    limit: int = 20,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
+    target_profile: str = "minecraft_mod",
+) -> tuple[Any, ...]:
+    return (
+        provider,
+        query,
+        cursor,
+        limit,
+        minecraft_version,
+        loader,
+        target_profile,
+    )
+
+
+class _PrefetchedDiscoveryClient:
+    """Expose the native client API while reusing already-running route requests."""
+
+    def __init__(
+        self,
+        base: Any,
+        futures: dict[tuple[Any, ...], Future[dict[str, Any]]],
+    ) -> None:
+        self._base = base
+        self._futures = futures
+        self.transport = getattr(base, "transport", None)
+        self.timeout_seconds = getattr(base, "timeout_seconds", 12.0)
+        self.github_token = getattr(base, "github_token", "")
+        self.openverse_token = getattr(base, "openverse_token", "")
+
+    def search(
+        self,
+        provider: str,
+        query: str,
+        *,
+        cursor: str = "",
+        limit: int = 20,
+        minecraft_version: str | None = None,
+        loader: str | None = None,
+        target_profile: str = "minecraft_mod",
+    ) -> dict[str, Any]:
+        key = _discovery_key(
+            provider,
+            query,
+            cursor=cursor,
+            limit=limit,
+            minecraft_version=minecraft_version,
+            loader=loader,
+            target_profile=target_profile,
+        )
+        future = self._futures.get(key)
+        if future is not None:
+            return future.result()
+        return self._base.search(
+            provider,
+            query,
+            cursor=cursor,
+            limit=limit,
+            minecraft_version=minecraft_version,
+            loader=loader,
+            target_profile=target_profile,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
+
+
 def _parallel_discover_seed_bundle_factory(
     ecosystem_module: Any,
     original_discover: Callable[..., dict[str, Any]],
 ) -> Callable[..., dict[str, Any]]:
+    """Prefetch independent provider calls without copying native v2 semantics."""
+
     @wraps(original_discover)
     def discover_seed_bundle_parallel(
         prompt: str,
@@ -155,174 +279,177 @@ def _parallel_discover_seed_bundle_factory(
         route_cursor: str = "",
         route_limit: int = 12,
     ) -> dict[str, Any]:
+        # Injected clients may deliberately be single-threaded test doubles or custom
+        # transports. Preserve their exact call ordering and let native code own them.
+        if client is not None:
+            return original_discover(
+                prompt,
+                game_design,
+                research_brief=research_brief,
+                client=client,
+                route_cursor=route_cursor,
+                route_limit=route_limit,
+            )
+
         mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
-        if mode not in {"auto", "on", "off"}:
-            raise ecosystem_module.SpecValidationError(
-                "MMM_ECOSYSTEM_DISCOVERY must be auto, on or off."
-            )
-        if type(route_limit) is not int or not 1 <= route_limit <= 100:
-            raise ecosystem_module.SpecValidationError(
-                "route_limit must be between 1 and 100."
+        if mode not in {"auto", "on"} or type(route_limit) is not int or not 1 <= route_limit <= 100:
+            return original_discover(
+                prompt,
+                game_design,
+                research_brief=research_brief,
+                client=client,
+                route_cursor=route_cursor,
+                route_limit=route_limit,
             )
 
-        query = ecosystem_module._seed_query(prompt, game_design)
-        if research_brief is None:
-            routes = [
-                {
-                    "domain_id": "request",
-                    "provider": provider,
-                    "query": query,
-                    "target_profile": (
-                        "media" if provider == "openverse_images" else "minecraft_mod"
-                    ),
-                }
-                for provider in ("modrinth", "openverse_images")
-            ]
-            if (client is not None and client.github_token) or os.environ.get(
-                "GITHUB_TOKEN"
-            ):
-                routes.append(
-                    {
-                        "domain_id": "request",
-                        "provider": "github",
-                        "query": query,
-                        "target_profile": "minecraft_mod",
-                    }
-                )
-        else:
-            routes = list(ecosystem_module.external_discovery_routes(research_brief))
-
+        discovery = ecosystem_module.EcosystemDiscoveryClient()
+        _query, routes = _discovery_routes(
+            ecosystem_module,
+            prompt,
+            game_design,
+            research_brief,
+            discovery,
+        )
+        minecraft_version, loader = _discovery_target(research_brief)
         route_receipt = ecosystem_module._sha256_text(
-            ecosystem_module.canonical_json(routes)
+            ecosystem_module.canonical_json(
+                {
+                    "routes": routes,
+                    "minecraft_version": minecraft_version or "unresolved",
+                    "loader": loader or "unresolved",
+                }
+            )
         )
         route_offset = ecosystem_module._decode_seed_route_cursor(
             route_cursor,
             route_sha256=route_receipt,
             route_limit=route_limit,
         )
-        if route_offset > len(routes):
-            raise ecosystem_module.SpecValidationError(
-                "Seed route cursor is beyond the route catalog."
-            )
         selected_routes = routes[route_offset : route_offset + route_limit]
-        next_route_offset = route_offset + len(selected_routes)
-        next_route_cursor = (
-            ecosystem_module._encode_seed_route_cursor(
-                next_route_offset,
-                route_sha256=route_receipt,
+        workers = _env_workers("MMM_DISCOVERY_WORKERS", 8, maximum=32)
+        if len(selected_routes) <= 1 or workers <= 1:
+            return original_discover(
+                prompt,
+                game_design,
+                research_brief=research_brief,
+                client=discovery,
+                route_cursor=route_cursor,
                 route_limit=route_limit,
             )
-            if next_route_offset < len(routes)
-            else ""
-        )
-        if mode == "off":
-            return {
-                "schema_version": "mmm/ecosystem-seed-bundle-v1",
-                "status": "disabled",
-                "query_sha256": ecosystem_module._sha256_text(query),
-                "route_sha256": route_receipt,
-                "route_count": len(routes),
-                "route_offset": route_offset,
-                "processed_route_count": 0,
-                "remaining_route_count": len(routes) - route_offset,
-                "next_route_cursor": next_route_cursor,
-                "routes_complete": not next_route_cursor,
-                "candidate_count": 0,
-                "pages": [],
-                "errors": [],
-                "coverage": "specialist discovery still required per production batch",
-                "authorization": "none",
-                "download_performed": False,
-            }
 
-        discovery = client or ecosystem_module.EcosystemDiscoveryClient()
-
-        def search_route(route: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-            provider = route["provider"]
-            provider_query = route["query"]
-            if provider == "openverse_images":
-                provider_query += " visual reference texture architecture objects"
-            try:
-                page = discovery.search(
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(selected_routes)),
+            thread_name_prefix="mmm_discovery",
+        ) as pool:
+            futures: dict[tuple[Any, ...], Future[dict[str, Any]]] = {}
+            for route in selected_routes:
+                provider = route["provider"]
+                provider_query = route["query"]
+                if provider == "openverse_images":
+                    provider_query += " visual reference texture architecture objects"
+                target_profile = str(route.get("target_profile", "minecraft_mod"))
+                target_version = minecraft_version if target_profile == "minecraft_mod" else None
+                target_loader = loader if target_profile == "minecraft_mod" else None
+                key = _discovery_key(
                     provider,
                     provider_query,
                     limit=10,
-                    target_profile=str(route.get("target_profile", "minecraft_mod")),
+                    minecraft_version=target_version,
+                    loader=target_loader,
+                    target_profile=target_profile,
                 )
-                return (
-                    "page",
-                    {
-                        **page,
-                        "research_domain_id": route["domain_id"],
-                        "route_query_sha256": ecosystem_module._sha256_text(
-                            route["query"]
-                        ),
-                    },
-                )
-            except ecosystem_module.EcosystemDiscoveryUnavailable as exc:
-                return (
-                    "error",
-                    {
-                        "domain_id": route["domain_id"],
-                        "provider": provider,
-                        "query_sha256": ecosystem_module._sha256_text(route["query"]),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                    },
+                if key in futures:
+                    continue
+                futures[key] = pool.submit(
+                    discovery.search,
+                    provider,
+                    provider_query,
+                    limit=10,
+                    minecraft_version=target_version,
+                    loader=target_loader,
+                    target_profile=target_profile,
                 )
 
-        workers = (
-            1
-            if client is not None
-            else _env_workers("MMM_DISCOVERY_WORKERS", 8, maximum=32)
-        )
-        outcomes = _ordered_parallel_map(
-            search_route,
-            selected_routes,
-            workers=workers,
-        )
-        pages = [payload for kind, payload in outcomes if kind == "page"]
-        errors = [payload for kind, payload in outcomes if kind == "error"]
-        candidate_count = sum(
-            int(page.get("returned", 0))
-            for page in pages
-            if isinstance(page, dict)
-        )
-        status = "available" if candidate_count else "empty" if pages else "unavailable"
-        if mode == "on" and not pages:
-            raise ecosystem_module.EcosystemDiscoveryUnavailable(
-                "Required ecosystem discovery providers were unavailable."
+            prefetched = _PrefetchedDiscoveryClient(discovery, futures)
+            return original_discover(
+                prompt,
+                game_design,
+                research_brief=research_brief,
+                client=prefetched,
+                route_cursor=route_cursor,
+                route_limit=route_limit,
             )
-        return {
-            "schema_version": "mmm/ecosystem-seed-bundle-v1",
-            "status": status,
-            "query_sha256": ecosystem_module._sha256_text(query),
-            "route_sha256": route_receipt,
-            "route_count": len(routes),
-            "route_offset": route_offset,
-            "processed_route_count": len(selected_routes),
-            "remaining_route_count": len(routes) - next_route_offset,
-            "next_route_cursor": next_route_cursor,
-            "routes_complete": not next_route_cursor,
-            "candidate_count": candidate_count,
-            "pages": pages,
-            "errors": errors,
-            "coverage": (
-                "seed pages only; continue each provider cursor and run exact project "
-                "inspection for every dependency or third-party asset considered"
-            ),
-            "authorization": "none",
-            "download_performed": False,
-        }
 
     discover_seed_bundle_parallel._mmm_parallel_routes = True
     return discover_seed_bundle_parallel
+
+
+class _PrefetchedRetriever:
+    """Deduplicate and pipeline official-RAG primaries and corrective hops."""
+
+    def __init__(
+        self,
+        retrieve: Callable[..., Any],
+        pool: ThreadPoolExecutor,
+        *,
+        minecraft_version: str,
+        loader: str,
+        mappings: str,
+    ) -> None:
+        self._retrieve = retrieve
+        self._pool = pool
+        self._minecraft_version = minecraft_version
+        self._loader = loader
+        self._mappings = mappings
+        self._lock = threading.RLock()
+        self._futures: dict[tuple[str, int], Future[Any]] = {}
+
+    def prefetch_primary(self, query: str) -> None:
+        future = self._submit(query, 8)
+        future.add_done_callback(self._prefetch_corrections)
+
+    def _submit(self, query: str, limit: int) -> Future[Any]:
+        key = (query, limit)
+        with self._lock:
+            existing = self._futures.get(key)
+            if existing is not None:
+                return existing
+            future = self._pool.submit(
+                self._retrieve,
+                query,
+                minecraft_version=self._minecraft_version,
+                loader=self._loader,
+                mappings=self._mappings,
+                limit=limit,
+            )
+            self._futures[key] = future
+            return future
+
+    def _prefetch_corrections(self, future: Future[Any]) -> None:
+        if future.cancelled() or future.exception() is not None:
+            return
+        primary = future.result()
+        for correction_query in getattr(primary, "correction_queries", ()):
+            self._submit(str(correction_query), 4)
+
+    def __call__(self, query: str, **kwargs: Any) -> Any:
+        limit = int(kwargs.get("limit", 8))
+        expected = {
+            "minecraft_version": self._minecraft_version,
+            "loader": self._loader,
+            "mappings": self._mappings,
+            "limit": limit,
+        }
+        if any(kwargs.get(name) != value for name, value in expected.items()):
+            return self._retrieve(query, **kwargs)
+        return self._submit(query, limit).result()
 
 
 def _parallel_retrieve_domain_evidence_factory(
     central_module: Any,
     original_retrieve_graph: Callable[..., dict[str, Any]],
 ) -> Callable[..., dict[str, Any]]:
+    """Pipeline native official retrieval while delegating all graph semantics."""
     original_default_retrieve = central_module.retrieve_official_evidence
 
     @wraps(original_retrieve_graph)
@@ -334,25 +461,9 @@ def _parallel_retrieve_domain_evidence_factory(
         selected_retrieve = retrieve or original_default_retrieve
         if retrieve is not None and retrieve is not original_default_retrieve:
             return original_retrieve_graph(research_brief, retrieve=retrieve)
-        raw_domains = research_brief.get("domains")
-        if not isinstance(raw_domains, list) or not raw_domains:
-            raise central_module.SpecValidationError(
-                "Central research brief has no domains."
-            )
-        domains = [central_module._research_domain(raw) for raw in raw_domains]
-        ordered_jobs: list[tuple[int, int, str]] = []
-        for domain_index, domain in enumerate(domains):
-            if "official_docs" not in domain.providers:
-                continue
-            for query_index, query in enumerate(domain.queries):
-                ordered_jobs.append((domain_index, query_index, query))
-        if len(ordered_jobs) <= 1:
-            return original_retrieve_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
+
         raw_target = research_brief.get("_mmm_platform_target")
-        if not isinstance(raw_target, dict):
+        if not isinstance(raw_target, Mapping):
             return original_retrieve_graph(
                 research_brief,
                 retrieve=selected_retrieve,
@@ -364,110 +475,54 @@ def _parallel_retrieve_domain_evidence_factory(
                 research_brief,
                 retrieve=selected_retrieve,
             )
+        try:
+            adapter = central_module.adapter_for_target(version, loader)
+        except ValueError:
+            return original_retrieve_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
 
-        from .platform_catalog import adapter_for_target
-
-        adapter = adapter_for_target(version, loader)
+        raw_domains = research_brief.get("domains")
+        if not isinstance(raw_domains, list) or not raw_domains:
+            return original_retrieve_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+        try:
+            domains = [central_module._research_domain(raw) for raw in raw_domains]
+        except Exception:
+            return original_retrieve_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+        primary_queries = [
+            query
+            for domain in domains
+            if "official_docs" in domain.providers
+            for query in domain.queries
+        ]
         workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
-        primary_results: dict[tuple[int, int], Any] = {}
-        correction_futures: dict[tuple[int, int, int], Future[Any]] = {}
+        if len(primary_queries) <= 1 or workers <= 1:
+            return original_retrieve_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+
         with ThreadPoolExecutor(
-            max_workers=min(workers, len(ordered_jobs)),
+            max_workers=min(workers, len(primary_queries)),
             thread_name_prefix="mmm_official_rag",
         ) as pool:
-            future_to_job = {
-                pool.submit(
-                    selected_retrieve,
-                    query,
-                    minecraft_version=adapter.minecraft_version,
-                    loader=adapter.loader,
-                    mappings=adapter.yarn_mappings,
-                    limit=8,
-                ): (domain_index, query_index, query)
-                for domain_index, query_index, query in ordered_jobs
-            }
-            for future in as_completed(future_to_job):
-                domain_index, query_index, _query = future_to_job[future]
-                primary = future.result()
-                primary_results[domain_index, query_index] = primary
-                for correction_index, correction_query in enumerate(
-                    primary.correction_queries
-                ):
-                    correction_futures[
-                        domain_index,
-                        query_index,
-                        correction_index,
-                    ] = pool.submit(
-                        selected_retrieve,
-                        correction_query,
-                        minecraft_version=adapter.minecraft_version,
-                        loader=adapter.loader,
-                        mappings=adapter.yarn_mappings,
-                        limit=4,
-                    )
-
-            results: list[dict[str, Any]] = []
-            unresolved: list[str] = []
-            for domain_index, domain in enumerate(domains):
-                if "official_docs" not in domain.providers:
-                    results.append(
-                        {
-                            "domain_id": domain.domain_id,
-                            "strategy": "routed_to_other_providers",
-                            "queries": [],
-                        }
-                    )
-                    continue
-                query_results: list[dict[str, Any]] = []
-                has_hits = False
-                for query_index, query in enumerate(domain.queries):
-                    primary = primary_results[domain_index, query_index]
-                    corrections: list[dict[str, Any]] = []
-                    for correction_index, _correction_query in enumerate(
-                        primary.correction_queries
-                    ):
-                        correction = correction_futures[
-                            domain_index,
-                            query_index,
-                            correction_index,
-                        ].result()
-                        corrections.append(correction.to_dict())
-                        has_hits = has_hits or bool(correction.hits)
-                    has_hits = has_hits or bool(primary.hits)
-                    query_results.append(
-                        {
-                            "query_sha256": central_module._sha256(query),
-                            "strategy": (
-                                "single"
-                                if not primary.correction_required
-                                else "corrective_multi_hop"
-                            ),
-                            "primary": primary.to_dict(),
-                            "corrections": corrections,
-                        }
-                    )
-                if not has_hits:
-                    unresolved.append(domain.domain_id)
-                results.append(
-                    {
-                        "domain_id": domain.domain_id,
-                        "strategy": "adaptive_per_query",
-                        "queries": query_results,
-                    }
-                )
-
-        payload = {
-            "schema_version": "mmm/central-evidence-graph-v1",
-            "brief_sha256": research_brief.get("brief_sha256", ""),
-            "domains": results,
-            "unresolved_official_domains": unresolved,
-            "authorization": "none",
-            "retrieval_is_authority": False,
-        }
-        payload["evidence_sha256"] = central_module._sha256(
-            central_module.canonical_json(payload)
-        )
-        return payload
+            prefetched = _PrefetchedRetriever(
+                selected_retrieve,
+                pool,
+                minecraft_version=adapter.minecraft_version,
+                loader=adapter.loader,
+                mappings=adapter.yarn_mappings,
+            )
+            for query in primary_queries:
+                prefetched.prefetch_primary(query)
+            return original_retrieve_graph(research_brief, retrieve=prefetched)
 
     retrieve_domain_evidence_parallel._mmm_parallel_rag = True
     return retrieve_domain_evidence_parallel
@@ -478,7 +533,7 @@ def install(
     model_registry_module: Any,
     llama_server_autotune_module: Any,
 ) -> None:
-    """Parallelize bounded provider/RAG work at the modules that own it."""
+    """Install bounded prefetch adapters without duplicating native business logic."""
     from . import central_research as central_module
     from . import ecosystem_discovery as ecosystem_module
 
