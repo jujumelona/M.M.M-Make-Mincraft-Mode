@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from typing import Any, Mapping, Sequence
 
 from .causal_tool_graph import executable_frontier, verified_state_from_messages
+from .grounding_policy import host_baseline_causal_facts
 
 _AUTHORIZED_TOOLS: ContextVar[tuple[Mapping[str, Any], ...]] = ContextVar(
     "mmm_causal_authorized_tools", default=()
@@ -203,11 +204,14 @@ class CausalFrontierAdapter:
             tool_choice = request.tool_choice
             parallel_tool_calls = request.parallel_tool_calls
         else:
-            state = verified_state_from_messages(
-                request.messages,
-                candidates,
-                require_fresh_evidence=self.require_fresh_evidence,
+            state = set(
+                verified_state_from_messages(
+                    request.messages,
+                    candidates,
+                    require_fresh_evidence=self.require_fresh_evidence,
+                )
             )
+            state.update(host_baseline_causal_facts(request.messages))
             query = _query(request.messages)
             goals = tuple(goals_for_query(query))
             names = executable_frontier(
