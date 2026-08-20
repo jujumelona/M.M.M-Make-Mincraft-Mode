@@ -97,9 +97,9 @@ def generate_with_tools(
             tools=request.tools,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
-            task=request.task,
-            prompt=request.prompt,
-            metadata=request.metadata,
+            task=getattr(request, "task", ""),
+            prompt=getattr(request, "prompt", ""),
+            metadata=getattr(request, "metadata", {}),
         )
         turn = adapter.generate_turn(turn_request)
 
@@ -327,9 +327,9 @@ def _finalize_without_tools(
         tools=(),
         tool_choice=None,
         parallel_tool_calls=False,
-        task=request.task,
-        prompt=request.prompt,
-        metadata=request.metadata,
+        task=getattr(request, "task", ""),
+        prompt=getattr(request, "prompt", ""),
+        metadata=getattr(request, "metadata", {}),
     )
     final_turn = adapter.generate_turn(final_request)
     if final_turn.tool_calls:
