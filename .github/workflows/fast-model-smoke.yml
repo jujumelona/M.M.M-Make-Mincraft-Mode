@@ -1,0 +1,75 @@
+name: Fast Real Model Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Model registry profile to smoke
+        required: false
+        default: t4_quality
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'minecraft_mod_ai/model_smoke.py'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/model_registry.py'
+      - 'minecraft_mod_ai/model_adapters/**'
+      - 'minecraft_mod_ai/llama_*.py'
+      - 'minecraft_mod_ai/qwen*.py'
+      - 'minecraft_mod_ai/runtime_bootstrap.py'
+      - 'minecraft_mod_ai/config/model_registry.yaml'
+      - 'config/model_registry.yaml'
+      - '.github/workflows/fast-model-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-real-model-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Real model quick sweep
+    runs-on: [self-hosted, linux, x64, t4]
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      MMM_MODEL_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 't4_quality' }}
+      MMM_CHECKPOINT_DIR: ${{ runner.temp }}/mmm-fast-model-smoke
+      MMM_DEBUG_MODEL_SMOKE: '1'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install native-model runtime only
+        run: python -m pip install --prefer-binary -e '.[local-model]'
+
+      - name: Sweep unique real text backends
+        timeout-minutes: 12
+        run: >-
+          python -m minecraft_mod_ai.model_smoke
+          --profile "$MMM_MODEL_PROFILE"
+          --roles planner,researcher,coder,coder_safe,visual_critic
+          --quick
+          --require-real
+          --timeout 120
+          --max-new-tokens 4
+          --output-dir audit
+
+      - name: Upload smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-model-smoke-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            audit/MODEL_SMOKE.json
+            audit/*-smoke.json
