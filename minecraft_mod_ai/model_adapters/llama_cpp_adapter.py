@@ -14,7 +14,6 @@ from typing import Any, Mapping, Sequence
 import httpx
 
 from .base import (
-    AdapterConfig,
     GenerationRequest,
     GenerationResponse,
     ModelAdapter,
@@ -47,10 +46,6 @@ _STRUCTURAL_MARKERS = (
 
 class LlamaCppAdapter(ModelAdapter):
     """OpenAI-compatible client for the managed native llama-server."""
-
-    def __init__(self, config: AdapterConfig) -> None:
-        super().__init__(config)
-        _bind_peg_free_runtime_guard()
 
     def _server_url(self, request: GenerationRequest) -> str:
         try:
@@ -114,57 +109,6 @@ class LlamaCppAdapter(ModelAdapter):
         return None
 
 
-def _bind_peg_free_runtime_guard() -> None:
-    """Seal legacy/direct server entry points so no tool request can re-enable PEG.
-
-    Hardware policy already owns runtime adapter binding. Keep that architecture, but
-    harden its two generic hooks once: every tool-bearing payload gets transport
-    ``tool_choice=none``, and its text-only streaming shortcut delegates tool turns to
-    ``generate_turn`` instead of streaming raw Qwen markup.
-    """
-
-    from .. import llama_server_hardware_policy as policy
-
-    current_payload = policy._server_payload
-    if not getattr(current_payload, "_mmm_peg_free_tools", False):
-        original_payload = current_payload
-
-        def peg_free_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-            payload = original_payload(adapter, request)
-            if getattr(request, "tools", ()):
-                payload["tool_choice"] = "none"
-            return payload
-
-        peg_free_server_payload._mmm_peg_free_tools = True  # type: ignore[attr-defined]
-        policy._server_payload = peg_free_server_payload
-
-    current_strict = policy._strict_server_generate
-    if not getattr(current_strict, "_mmm_peg_free_tool_guard", False):
-        original_strict = current_strict
-
-        def peg_free_strict_generate(
-            adapter: Any,
-            request: Any,
-            server_url: str,
-        ) -> str:
-            if getattr(request, "tools", ()):
-                turn = adapter.generate_turn(request)
-                if turn.tool_calls:
-                    raise ModelBackendError(
-                        role=adapter.config.role,
-                        model_id=adapter.config.model_id,
-                        cause=(
-                            "A tool-aware completion reached the text-only streaming "
-                            "API. Use ModelRouter.generate_text() so calls are executed."
-                        ),
-                    )
-                return turn.content
-            return original_strict(adapter, request, server_url)
-
-        peg_free_strict_generate._mmm_peg_free_tool_guard = True  # type: ignore[attr-defined]
-        policy._strict_server_generate = peg_free_strict_generate
-
-
 def _plain_semantic_completion(
     adapter: LlamaCppAdapter,
     server_url: str,
@@ -220,7 +164,7 @@ def _tool_semantic_completion(
 
     from ..llama_stream_efficiency_contract import _report_server_connection
 
-    message = _completion_message(server_url, _peg_free_tool_payload(adapter, request))
+    message = _completion_message(server_url, _tool_server_payload(adapter, request))
     _report_server_connection(server_url)
     turn = _qwen_tool_generation_response(message, request)
     if _has_semantic_action(turn):
@@ -237,7 +181,7 @@ def _tool_semantic_completion(
     )
     continued_message = _completion_message(
         server_url,
-        _peg_free_tool_payload(adapter, continuation_request),
+        _tool_server_payload(adapter, continuation_request),
     )
     continued = _qwen_tool_generation_response(
         continued_message,
@@ -263,18 +207,22 @@ def _tool_semantic_completion(
     )
 
 
-def _peg_free_tool_payload(
+def _tool_server_payload(
     adapter: LlamaCppAdapter,
     request: GenerationRequest,
 ) -> dict[str, Any]:
-    """Keep native Jinja/tools but disable llama.cpp's PEG-native tool machinery."""
+    """Assert the canonical hardware policy produced PEG-free tool transport."""
 
     from ..llama_server_hardware_policy import _server_payload
 
     payload = _server_payload(adapter, request)
     if not payload.get("tools"):
         raise RuntimeError("PEG-free tool transport received no tool schemas")
-    payload["tool_choice"] = "none"
+    if payload.get("tool_choice") != "none":
+        raise RuntimeError(
+            "llama hardware policy violated PEG-free tool transport: "
+            "tool_choice must be none"
+        )
     return payload
 
 
