@@ -220,9 +220,12 @@ def _install_implementation_goal_priority(causal_module: Any) -> None:
     def goals_for_query(query: str) -> tuple[str, ...]:
         # Host custom generation embeds evidence/tool metadata in the user JSON. The
         # explicit phase is stronger terminal intent than incidental strings such as
-        # "external MCP" appearing inside that metadata.
+        # "external MCP" appearing inside that metadata. Use the existing `repair`
+        # terminal fact because it is produced only by reviewed source-edit tools;
+        # the broader `act/project_changed` goal could terminate on unrelated project
+        # mutation and recreate the empty-source-diff failure.
         if "implement_module" in str(query).casefold():
-            return ("act",)
+            return ("repair",)
         return tuple(current(query))
 
     setattr(goals_for_query, _GOAL_MARKER, True)
