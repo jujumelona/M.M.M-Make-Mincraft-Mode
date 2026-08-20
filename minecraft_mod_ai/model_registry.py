@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -151,6 +151,10 @@ class ModelRegistry:
             api_key = _required_env(raw, "api_key_env", role)
         elif not model_id:
             raise ModelConfigurationError(f"Local role {role!r} has no model_id.")
+        if model_id.startswith("Qwen/Qwen3.5-") and model_id.endswith("-Instruct"):
+            raise ModelConfigurationError(
+                f"Invalid Qwen3.5 repository ID for role {role!r}: {model_id!r}"
+            )
         known = {
             "model_id",
             "provider",
@@ -167,7 +171,7 @@ class ModelRegistry:
             "base_url_env",
             "api_key_env",
         }
-        return AdapterConfig(
+        config = AdapterConfig(
             role=role,
             adapter=adapter,
             model_id=model_id,
@@ -192,6 +196,17 @@ class ModelRegistry:
             api_key=api_key,
             extra={key: value for key, value in raw.items() if key not in known},
         )
+        if adapter == "llama_cpp":
+            from .qwen35_mtp_hotpath_contract import _context_size, _is_qwen35_mtp
+
+            if _is_qwen35_mtp(config):
+                try:
+                    context_override = _context_size(config)
+                    if context_override > 0:
+                        config = replace(config, max_context=context_override)
+                except ValueError as exc:
+                    raise ModelConfigurationError(str(exc)) from exc
+        return config
 
     def to_public_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
