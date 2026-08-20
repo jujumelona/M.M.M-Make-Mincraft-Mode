@@ -397,9 +397,9 @@ def _shortest_causal_path_from_transitions(
         for name, transition in ordered_transitions:
             if name in path or not transition.preconditions.issubset(current_state):
                 continue
-            if not (set(transition.effects) - set(current_state)):
+            if not transition.effects.difference(current_state):
                 continue
-            next_state = frozenset(set(current_state) | set(transition.effects))
+            next_state = current_state | transition.effects
             next_path = path + (name,)
             next_cost = cost + transition.cost
             if target.issubset(next_state):
@@ -429,8 +429,78 @@ def shortest_causal_path(
     )
 
 
-def _path_cost(path: Sequence[str], transitions: Mapping[str, ToolTransition]) -> int:
-    return sum(transitions[name].cost for name in path if name in transitions)
+def _minimal_causal_first_steps_from_transitions(
+    transitions: Mapping[str, ToolTransition],
+    *,
+    state: frozenset[str],
+    goals: Iterable[str],
+    max_depth: int,
+) -> tuple[str, ...]:
+    """Return all first tools on globally minimal causal paths in one traversal.
+
+    The previous frontier implementation launched a fresh shortest-path search for
+    every executable first tool. This search carries the equally optimal first-step
+    set through each best state label, so one state-space traversal is sufficient.
+    """
+
+    target = _goal_facts(goals)
+    if target.issubset(state):
+        return ()
+
+    depth_limit = max(1, int(max_depth))
+    ordered_transitions = tuple(sorted(transitions.items()))
+    queue: deque[tuple[frozenset[str], int, int]] = deque([(state, 0, 0)])
+    best_label: dict[frozenset[str], tuple[int, int]] = {state: (0, 0)}
+    first_steps: dict[frozenset[str], frozenset[str]] = {state: frozenset()}
+    best_goal_label: tuple[int, int] | None = None
+    best_goal_first_steps: set[str] = set()
+
+    while queue:
+        current_state, cost, steps = queue.popleft()
+        current_label = (cost, steps)
+        if best_label.get(current_state) != current_label:
+            continue
+        if steps >= depth_limit:
+            continue
+
+        current_first_steps = first_steps[current_state]
+        for name, transition in ordered_transitions:
+            if not transition.preconditions.issubset(current_state):
+                continue
+            if not transition.effects.difference(current_state):
+                continue
+
+            next_state = current_state | transition.effects
+            next_cost = cost + transition.cost
+            next_steps = steps + 1
+            next_label = (next_cost, next_steps)
+            candidate_first_steps = (
+                frozenset({name}) if steps == 0 else current_first_steps
+            )
+
+            if target.issubset(next_state):
+                if best_goal_label is None or next_label < best_goal_label:
+                    best_goal_label = next_label
+                    best_goal_first_steps = set(candidate_first_steps)
+                elif next_label == best_goal_label:
+                    best_goal_first_steps.update(candidate_first_steps)
+                continue
+
+            previous_label = best_label.get(next_state)
+            if previous_label is None or next_label < previous_label:
+                best_label[next_state] = next_label
+                first_steps[next_state] = candidate_first_steps
+                queue.append((next_state, next_cost, next_steps))
+                continue
+            if next_label != previous_label:
+                continue
+
+            merged_first_steps = first_steps[next_state] | candidate_first_steps
+            if merged_first_steps != first_steps[next_state]:
+                first_steps[next_state] = merged_first_steps
+                queue.append((next_state, next_cost, next_steps))
+
+    return tuple(sorted(best_goal_first_steps))
 
 
 def _progress_frontier(
@@ -441,18 +511,18 @@ def _progress_frontier(
     preference: Mapping[str, int] | None,
     limit: int,
 ) -> tuple[str, ...]:
-    support = _support_facts(goals) - set(state)
+    support = _support_facts(goals).difference(state)
     rank = preference or {}
     fallback_rank = len(rank) + len(transitions) + 1
     scored: list[tuple[int, int, int, str]] = []
     for name, transition in transitions.items():
         if not transition.preconditions.issubset(state):
             continue
-        new_effects = set(transition.effects) - set(state)
-        safe_effects = new_effects & set(_SAFE_PROGRESS_EFFECTS)
+        new_effects = transition.effects.difference(state)
+        safe_effects = new_effects.intersection(_SAFE_PROGRESS_EFFECTS)
         if not safe_effects:
             continue
-        direct_support = len(safe_effects & set(support))
+        direct_support = len(safe_effects.intersection(support))
         scored.append(
             (
                 -direct_support,
@@ -492,31 +562,20 @@ def executable_frontier(
     if target.issubset(state):
         return ()
 
-    candidates: list[tuple[int, int, str]] = []
-    for name, transition in transitions.items():
-        if not transition.preconditions.issubset(state):
-            continue
-        new_facts = set(transition.effects) - set(state)
-        if not new_facts:
-            continue
-        next_state = frozenset(set(state) | set(transition.effects))
-        if target.issubset(next_state):
-            total_cost = transition.cost
-            total_steps = 1
-        else:
-            tail = _shortest_causal_path_from_transitions(
-                transitions,
-                state=next_state,
-                goals=target_goals,
-                max_depth=max(0, max_depth - 1),
-            )
-            if not tail:
-                continue
-            total_cost = transition.cost + _path_cost(tail, transitions)
-            total_steps = 1 + len(tail)
-        candidates.append((total_cost, total_steps, name))
+    equally_minimal = list(
+        _minimal_causal_first_steps_from_transitions(
+            transitions,
+            state=state,
+            goals=target_goals,
+            max_depth=max_depth,
+        )
+    )
 
-    if not candidates and set(transitions) <= _EXTERNAL_NAMES:
+    if (
+        not equally_minimal
+        and set(transitions) <= _EXTERNAL_NAMES
+        and target_goals != ("external",)
+    ):
         return executable_frontier(
             schemas,
             state=state,
@@ -525,7 +584,7 @@ def executable_frontier(
             max_depth=max_depth,
             preference=preference,
         )
-    if not candidates:
+    if not equally_minimal:
         return _progress_frontier(
             transitions,
             state=state,
@@ -534,13 +593,6 @@ def executable_frontier(
             limit=limit,
         )
 
-    min_cost = min(item[0] for item in candidates)
-    min_steps = min(item[1] for item in candidates if item[0] == min_cost)
-    equally_minimal = [
-        name
-        for cost, steps, name in candidates
-        if cost == min_cost and steps == min_steps
-    ]
     rank = preference or {}
     fallback_rank = len(rank) + len(equally_minimal) + 1
     equally_minimal.sort(
