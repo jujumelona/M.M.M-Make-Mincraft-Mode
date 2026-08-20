@@ -20,6 +20,7 @@ from .causal_frontier_adapter import (
     clear_current_frontier,
 )
 from .causal_tool_frontier_contract import _FrontierRuntimeProxy
+from .causal_tool_graph import shortest_causal_path
 
 _MARKER = "_mmm_coder_tool_route_integrity_v1"
 _QUERY_MARKER = "_mmm_user_only_tool_routing_query_v1"
@@ -90,15 +91,27 @@ def _require_mutation_surface(
         return
     if not _is_implementation_request(messages):
         return
-    names = {_tool_name(schema) for schema in tools}
-    if names & _MUTATION_TOOLS:
-        return
+
     from .model_adapters import ModelConfigurationError
 
-    raise ModelConfigurationError(
-        "Writable coder generation has no authorized source-mutation tool. "
-        "The host refuses to run a model turn that cannot produce a source diff."
+    names = {_tool_name(schema) for schema in tools}
+    if not names & _MUTATION_TOOLS:
+        raise ModelConfigurationError(
+            "Writable coder generation has no authorized source-mutation tool. "
+            "The host refuses to run a model turn that cannot produce a source diff."
+        )
+
+    route = shortest_causal_path(
+        tools,
+        state=frozenset({"workspace_bound"}),
+        goals=("repair",),
+        max_depth=8,
     )
+    if not route or not any(name in _MUTATION_TOOLS for name in route):
+        raise ModelConfigurationError(
+            "Writable coder generation has source-mutation tools but no reachable "
+            "causal route from workspace observation/evidence to a source edit."
+        )
 
 
 class _WritableProgressAdapter:
@@ -273,6 +286,7 @@ def install(
     generate_with_route_integrity._mmm_progress_aware_causal_composed = True
     generate_with_route_integrity._mmm_writable_coder_fail_closed = True
     generate_with_route_integrity._mmm_writable_coder_progress_forced = True
+    generate_with_route_integrity._mmm_writable_coder_route_reachable = True
     cls._generate_with_tools = generate_with_route_integrity
 
 
