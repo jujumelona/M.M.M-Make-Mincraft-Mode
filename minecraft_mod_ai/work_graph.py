@@ -252,8 +252,8 @@ class DurableWorkLedger:
     def fail(self, node_id: str, error: str, *, input_required: bool=False) -> dict[str, Any]:
         state = WorkState.INPUT_REQUIRED if input_required else WorkState.FAILED
         with self._connect() as connection:
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ?\n                ', (state.value, error[:16384], time.time(), node_id))
-            if connection.total_changes == 0:
+            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ?\n                ', (state.value, error[:16384], time.time(), node_id))
+            if cursor.rowcount == 0:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
             connection.commit()
         return self.task(node_id)
@@ -336,8 +336,8 @@ class DurableWorkLedger:
         rendered = canonical_json(receipt)
         output_hash = 'sha256:' + hashlib.sha256(rendered.encode('utf-8')).hexdigest()
         with self._connect() as connection:
-            connection.execute('\n                UPDATE checkpoints\n                SET state = ?, receipt_json = ?, output_hash = ?,\n                    error = NULL, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state = ?\n                ', (WorkState.SUCCEEDED.value, rendered, output_hash, time.time(), checkpoint_id, input_hash, WorkState.RUNNING.value))
-            if connection.total_changes == 0:
+            cursor = connection.execute('\n                UPDATE checkpoints\n                SET state = ?, receipt_json = ?, output_hash = ?,\n                    error = NULL, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state = ?\n                ', (WorkState.SUCCEEDED.value, rendered, output_hash, time.time(), checkpoint_id, input_hash, WorkState.RUNNING.value))
+            if cursor.rowcount == 0:
                 raise WorkGraphError(f'Checkpoint changed while running: {checkpoint_id}')
             connection.commit()
 
