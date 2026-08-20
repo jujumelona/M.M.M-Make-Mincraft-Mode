@@ -11,6 +11,7 @@ from .agent_roles import (
     skills_for_model_role,
 )
 from .external_mcp_router import ExternalMCPRouter
+from .model_tool_aliases import canonical_model_tool
 from .skill_catalog import (
     REVIEWED_TOOL_STAGES,
     SkillContract,
@@ -78,6 +79,11 @@ def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]
     return tuple(contract for contract in stage_contracts if contract.name in assigned)
 
 
+def _reviewed_stage_for_model_tool(name: str, stage: str) -> bool:
+    canonical = canonical_model_tool(name)
+    return stage in REVIEWED_TOOL_STAGES.get(canonical, frozenset())
+
+
 def filter_tool_schemas_for_role(
     stage: str,
     model_role: str,
@@ -85,10 +91,10 @@ def filter_tool_schemas_for_role(
 ) -> tuple[Mapping[str, Any], ...]:
     """Expose only tools reachable through reviewed stage/Skill/agent routes.
 
-    The physical model role may remain ``planner`` during a resident planning session;
-    research-stage calls are evaluated against ResearchAgent through
-    :func:`_policy_model_role`. Unknown roles keep the stage-level schema set for
-    backwards compatibility.
+    Narrow model-facing ACIs inherit authorization from one canonical reviewed tool;
+    aliases never create a second Skill/stage permission namespace. The physical model
+    role may remain ``planner`` during a resident planning session; research-stage calls
+    are evaluated against ResearchAgent through :func:`_policy_model_role`.
     """
 
     policy_role = _policy_model_role(stage, model_role)
@@ -105,17 +111,22 @@ def filter_tool_schemas_for_role(
         allowed.update(_EXTERNAL_AGENT_TOOLS)
 
     selected_stage = stage.strip().lower()
-    return tuple(
-        schema
-        for schema in tool_schemas
-        if (
-            (name := _schema_tool_name(schema)) in allowed
-            and (
-                name in _EXTERNAL_AGENT_TOOLS
-                or selected_stage in REVIEWED_TOOL_STAGES.get(name, frozenset())
-            )
-        )
-    )
+    result: list[Mapping[str, Any]] = []
+    for schema in tool_schemas:
+        name = _schema_tool_name(schema)
+        if not name:
+            continue
+        if name in _EXTERNAL_AGENT_TOOLS:
+            if name in allowed:
+                result.append(schema)
+            continue
+        canonical = canonical_model_tool(name)
+        if canonical not in allowed:
+            continue
+        if not _reviewed_stage_for_model_tool(name, selected_stage):
+            continue
+        result.append(schema)
+    return tuple(result)
 
 
 def skills_for_tool(
@@ -128,17 +139,16 @@ def skills_for_tool(
 
     selected_tool = tool.strip()
     selected_stage = stage.strip().lower()
-    if (
-        not selected_tool
-        or selected_tool in _EXTERNAL_AGENT_TOOLS
-        or selected_stage not in REVIEWED_TOOL_STAGES.get(selected_tool, frozenset())
-    ):
+    if not selected_tool or selected_tool in _EXTERNAL_AGENT_TOOLS:
+        return ()
+    canonical = canonical_model_tool(selected_tool)
+    if selected_stage not in REVIEWED_TOOL_STAGES.get(canonical, frozenset()):
         return ()
     policy_role = _policy_model_role(selected_stage, model_role)
     return tuple(
         contract.name
         for contract in _request_contracts(selected_stage, policy_role)
-        if selected_tool in contract.allowed_tools
+        if canonical in contract.allowed_tools
     )
 
 
@@ -170,8 +180,22 @@ def build_agent_capability_context(
             for tool in contract.allowed_tools
             if selected in REVIEWED_TOOL_STAGES.get(tool, frozenset())
         )
-        model_tools = tuple(tool for tool in stage_tools if tool in exposed_tools)
-        host_tools = tuple(tool for tool in stage_tools if tool not in exposed_tools)
+        stage_tool_set = frozenset(stage_tools)
+        model_tools = tuple(
+            name
+            for name in sorted(exposed_tools)
+            if (
+                name not in _EXTERNAL_AGENT_TOOLS
+                and canonical_model_tool(name) in stage_tool_set
+                and _reviewed_stage_for_model_tool(name, selected)
+            )
+        )
+        represented_permissions = frozenset(
+            canonical_model_tool(name) for name in model_tools
+        )
+        host_tools = tuple(
+            tool for tool in stage_tools if tool not in represented_permissions
+        )
         skills.append(
             {
                 "name": contract.name,
