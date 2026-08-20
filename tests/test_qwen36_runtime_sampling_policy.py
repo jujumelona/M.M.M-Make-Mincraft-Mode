@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai import llama_server_hardware_policy as hardware
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
+from minecraft_mod_ai.qwen_agent_family_contract import _apply_family_payload_policy
 
 
 _TOOL = {
@@ -19,15 +19,44 @@ _TOOL = {
     },
 }
 
+_PROFILES = {
+    "general_thinking": {
+        "temperature": 0.31,
+        "top_p": 0.71,
+        "top_k": 17,
+        "presence_penalty": 0.21,
+        "repeat_penalty": 0.91,
+    },
+    "precise_coding": {
+        "temperature": 0.23,
+        "top_p": 0.67,
+        "top_k": 13,
+        "presence_penalty": 0.12,
+        "repeat_penalty": 0.89,
+    },
+    "non_thinking": {
+        "temperature": 0.11,
+        "top_p": 0.61,
+        "top_k": 7,
+        "presence_penalty": 0.04,
+        "repeat_penalty": 0.83,
+        "reasoning_effort": "none",
+    },
+}
 
-def _adapter(model_id: str, filename: str, *, role: str) -> SimpleNamespace:
+
+def _config(*, effort: str = "") -> SimpleNamespace:
+    extra = {
+        "runtime_contract": "qwen",
+        "agent_thinking": True,
+        "sampling_profiles": _PROFILES,
+    }
+    if effort:
+        extra["thinking_reasoning_effort"] = effort
     return SimpleNamespace(
-        config=SimpleNamespace(
-            model_id=model_id,
-            role=role,
-            max_new_tokens=8192,
-            extra={"gguf_filename": filename},
-        )
+        model_id="vendor/arbitrary-runtime-model",
+        role="researcher",
+        extra=extra,
     )
 
 
@@ -38,99 +67,68 @@ def _request(**kwargs) -> GenerationRequest:
     )
 
 
-def test_qwen36_general_thinking_sampling_is_model_specific() -> None:
-    q27 = hardware._server_payload(
-        _adapter(
-            "unsloth/Qwen3.6-27B-MTP-GGUF",
-            "Qwen3.6-27B-UD-Q4_K_XL.gguf",
-            role="researcher",
-        ),
-        _request(),
-    )
-    q35 = hardware._server_payload(
-        _adapter(
-            "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
-            "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-            role="planner",
-        ),
-        _request(),
+def _payload(*, role: str, request: GenerationRequest, effort: str = "") -> dict:
+    return _apply_family_payload_policy(
+        {"temperature": 0.0, "repetition_penalty": 1.05},
+        config=_config(effort=effort),
+        role=role,
+        request=request,
     )
 
-    assert q27["temperature"] == 1.0
-    assert q27["top_p"] == 0.95
-    assert q27["top_k"] == 20
-    assert q27["presence_penalty"] == 0.0
-    assert q27["chat_template_kwargs"] == {"enable_thinking": True}
 
-    assert q35["temperature"] == 1.0
-    assert q35["top_p"] == 0.95
-    assert q35["top_k"] == 20
-    assert q35["presence_penalty"] == 1.5
-    assert q35["chat_template_kwargs"] == {"enable_thinking": True}
+def test_general_thinking_sampling_comes_from_registry_metadata() -> None:
+    payload = _payload(role="researcher", request=_request())
 
-
-def test_qwen36_coder_uses_precise_coding_sampling() -> None:
-    payload = hardware._server_payload(
-        _adapter(
-            "unsloth/Qwen3.6-27B-MTP-GGUF",
-            "Qwen3.6-27B-UD-Q4_K_XL.gguf",
-            role="coder_safe",
-        ),
-        _request(),
-    )
-
-    assert payload["temperature"] == 0.6
-    assert payload["top_p"] == 0.95
-    assert payload["top_k"] == 20
-    assert payload["presence_penalty"] == 0.0
+    assert payload["temperature"] == 0.31
+    assert payload["top_p"] == 0.71
+    assert payload["top_k"] == 17
+    assert payload["presence_penalty"] == 0.21
+    assert payload["repeat_penalty"] == 0.91
     assert payload["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "repetition_penalty" not in payload
 
 
-def test_qwen36_auto_tool_agent_preserves_thinking_with_role_sampling() -> None:
-    payload = hardware._server_payload(
-        _adapter(
-            "unsloth/Qwen3.6-27B-MTP-GGUF",
-            "Qwen3.6-27B-UD-Q4_K_XL.gguf",
-            role="researcher",
-        ),
-        _request(tools=(_TOOL,), tool_choice="auto"),
+def test_coder_sampling_comes_from_precise_registry_profile() -> None:
+    payload = _payload(role="coder_safe", request=_request())
+
+    assert payload["temperature"] == 0.23
+    assert payload["top_p"] == 0.67
+    assert payload["top_k"] == 13
+    assert payload["presence_penalty"] == 0.12
+    assert payload["repeat_penalty"] == 0.89
+
+
+def test_auto_tool_agent_preserves_thinking_without_model_identity() -> None:
+    payload = _payload(
+        role="researcher",
+        request=_request(tools=(_TOOL,), tool_choice="auto"),
+        effort="high",
     )
 
-    assert payload["temperature"] == 1.0
-    assert payload["presence_penalty"] == 0.0
+    assert payload["temperature"] == 0.31
     assert payload["chat_template_kwargs"] == {
         "enable_thinking": True,
+        "reasoning_effort": "high",
         "preserve_thinking": True,
     }
     assert "reasoning_effort" not in payload
 
 
-def test_qwen36_json_fill_uses_non_thinking_profile() -> None:
-    payload = hardware._server_payload(
-        _adapter(
-            "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
-            "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-            role="planner",
-        ),
-        _request(response_format="json"),
-    )
+def test_json_fill_uses_registry_non_thinking_profile() -> None:
+    payload = _payload(role="planner", request=_request(response_format="json"))
 
-    assert payload["temperature"] == 0.7
-    assert payload["top_p"] == 0.8
-    assert payload["top_k"] == 20
-    assert payload["presence_penalty"] == 1.5
+    assert payload["temperature"] == 0.11
+    assert payload["top_p"] == 0.61
+    assert payload["top_k"] == 7
+    assert payload["presence_penalty"] == 0.04
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_qwen36_forced_tool_remains_deterministic_non_thinking() -> None:
-    payload = hardware._server_payload(
-        _adapter(
-            "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
-            "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-            role="researcher",
-        ),
-        _request(
+def test_forced_tool_does_not_apply_registry_sampling_profile() -> None:
+    payload = _payload(
+        role="researcher",
+        request=_request(
             tools=(_TOOL,),
             tool_choice={
                 "type": "function",
@@ -140,5 +138,5 @@ def test_qwen36_forced_tool_remains_deterministic_non_thinking() -> None:
     )
 
     assert payload["temperature"] == 0.0
-    assert payload["reasoning_effort"] == "none"
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["repetition_penalty"] == 1.05
+    assert "chat_template_kwargs" not in payload
