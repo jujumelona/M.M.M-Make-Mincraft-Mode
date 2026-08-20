@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
+import queue
 import re
+import smtplib
 import subprocess
 import sys
 import tempfile
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -19,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 AUDIT_DIR = ROOT / "audit"
 REPORT_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.json"
 LOG_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.log"
+
+STATUSES = {"PASS", "WARN", "FAIL", "SKIP"}
 
 OBSOLETE_FILES = (
     "mcp_gateway.py",
@@ -48,21 +54,48 @@ OBSOLETE_MODULES = {
 @dataclass
 class Check:
     name: str
-    passed: bool
+    status: str
     detail: str
     duration_seconds: float = 0.0
+    category: str = "core"
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "FAIL"
+
+    def payload(self) -> dict[str, Any]:
+        item = asdict(self)
+        item["passed"] = self.passed
+        return item
 
 
 CHECKS: list[Check] = []
 LOGS: list[str] = []
 
 
-def record(name: str, passed: bool, detail: str, duration: float = 0.0) -> None:
-    CHECKS.append(Check(name, passed, detail, round(duration, 3)))
-    LOGS.append(f"[{'PASS' if passed else 'FAIL'}] {name}: {detail}")
+def record(
+    name: str,
+    status: str,
+    detail: str,
+    duration: float = 0.0,
+    *,
+    category: str = "core",
+) -> None:
+    normalized = status.upper()
+    if normalized not in STATUSES:
+        raise ValueError(f"unsupported audit status: {status}")
+    check = Check(name, normalized, detail, round(duration, 3), category)
+    CHECKS.append(check)
+    LOGS.append(f"[{normalized}] [{category}] {name}: {detail}")
 
 
-def command(name: str, args: list[str], *, timeout: int = 1800) -> None:
+def command(
+    name: str,
+    args: list[str],
+    *,
+    timeout: int = 1800,
+    category: str = "core",
+) -> None:
     started = time.monotonic()
     try:
         process = subprocess.run(
@@ -77,17 +110,58 @@ def command(name: str, args: list[str], *, timeout: int = 1800) -> None:
     except subprocess.TimeoutExpired as exc:
         output = (exc.stdout or "") + (exc.stderr or "")
         LOGS.append(f"\n$ {' '.join(args)}\n{output}\n")
-        record(name, False, f"timeout={timeout}s", time.monotonic() - started)
+        record(
+            name,
+            "FAIL",
+            f"timeout={timeout}s",
+            time.monotonic() - started,
+            category=category,
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 - aggregate audit failures.
+        record(
+            name,
+            "FAIL",
+            f"{type(exc).__name__}: {exc}",
+            time.monotonic() - started,
+            category=category,
+        )
         return
 
     output = process.stdout.strip()
     LOGS.append(f"\n$ {' '.join(args)}\n{output}\n")
     record(
         name,
-        process.returncode == 0,
+        "PASS" if process.returncode == 0 else "FAIL",
         f"exit={process.returncode}; output_tail={output[-1200:]}",
         time.monotonic() - started,
+        category=category,
     )
+
+
+def isolated_probe(
+    name: str,
+    category: str,
+    probe: Callable[[], tuple[str, str] | str | None],
+) -> None:
+    started = time.monotonic()
+    try:
+        result = probe()
+        if result is None:
+            status, detail = "PASS", "ok"
+        elif isinstance(result, tuple):
+            status, detail = result
+        else:
+            status, detail = "PASS", result
+        record(name, status, detail, time.monotonic() - started, category=category)
+    except Exception as exc:  # noqa: BLE001 - every probe must be isolated.
+        record(
+            name,
+            "FAIL",
+            f"{type(exc).__name__}: {exc}",
+            time.monotonic() - started,
+            category=category,
+        )
 
 
 def tracked_files() -> list[Path]:
@@ -127,7 +201,7 @@ def audit_syntax_and_data(files: list[Path]) -> None:
     detail = ", ".join(f"{key}={value}" for key, value in counts.items())
     if failures:
         detail += "; failures=" + " | ".join(failures[:30])
-    record("syntax_and_structured_data", not failures, detail)
+    record("syntax_and_structured_data", "FAIL" if failures else "PASS", detail)
 
 
 def audit_relative_imports(files: list[Path]) -> None:
@@ -160,7 +234,7 @@ def audit_relative_imports(files: list[Path]) -> None:
     detail = f"checked={checked}"
     if failures:
         detail += "; failures=" + " | ".join(failures[:30])
-    record("relative_import_resolution", not failures, detail)
+    record("relative_import_resolution", "FAIL" if failures else "PASS", detail)
 
 
 def audit_versions() -> None:
@@ -181,7 +255,7 @@ def audit_versions() -> None:
         versions[relative] = match.group(1) if match else "missing"
     record(
         "version_consistency",
-        all(value == expected for value in versions.values()),
+        "PASS" if all(value == expected for value in versions.values()) else "FAIL",
         json.dumps(versions, sort_keys=True),
     )
 
@@ -215,7 +289,7 @@ def audit_mod_only_surface() -> None:
 
     record(
         "mod_only_public_surface",
-        not failures,
+        "FAIL" if failures else "PASS",
         "clean" if not failures else " | ".join(failures),
     )
 
@@ -241,7 +315,7 @@ def audit_obsolete_imports(files: list[Path]) -> None:
 
     record(
         "obsolete_imports",
-        not failures,
+        "FAIL" if failures else "PASS",
         "clean" if not failures else " | ".join(failures[:30]),
     )
 
@@ -255,11 +329,14 @@ def audit_runtime_contracts() -> None:
         from minecraft_mod_ai.mod_development_methods import resolve_mod_development_methods
         from minecraft_mod_ai.skill_catalog import validate_skill_catalog
 
+        expected_version = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]["version"]
         food = resolve_mod_development_methods("음식 아이템 모드를 만들어줘")
         biome = resolve_mod_development_methods("새 바이옴 구조물 모드를 만들어줘")
         exclusion = resolve_mod_development_methods("월드 ZIP은 만들지 말고 모드만 만들어줘")
         assertions = [
-            minecraft_mod_ai.__version__ == "0.8.0",
+            minecraft_mod_ai.__version__ == expected_version,
             "generate_world_ir" not in mcp_server._TOOL_STAGES,
             "compile_world_ir" not in mcp_server._TOOL_STAGES,
             not hasattr(MMMToolService, "generate_world_ir"),
@@ -272,30 +349,208 @@ def audit_runtime_contracts() -> None:
             raise AssertionError(f"runtime assertions={assertions}")
         record(
             "runtime_contract_smoke",
-            True,
+            "PASS",
             "canonical MCP, skill catalog and mod-scope routing passed",
             time.monotonic() - started,
+            category="runtime",
         )
     except Exception as exc:  # noqa: BLE001 - aggregate audit failure.
         record(
             "runtime_contract_smoke",
-            False,
+            "FAIL",
             f"{type(exc).__name__}: {exc}",
             time.monotonic() - started,
+            category="runtime",
         )
+
+
+def module_readiness(name: str, module: str, *, optional: bool, category: str) -> None:
+    def probe() -> tuple[str, str]:
+        try:
+            spec = importlib.util.find_spec(module)
+        except (ImportError, ModuleNotFoundError) as exc:
+            if optional:
+                return "SKIP", f"optional module not installed: {module} ({type(exc).__name__})"
+            return "FAIL", f"required module not importable: {module} ({type(exc).__name__})"
+        if spec is not None:
+            return "PASS", f"module={module}"
+        if optional:
+            return "SKIP", f"optional module not installed: {module}"
+        return "FAIL", f"required module not importable: {module}"
+
+    isolated_probe(name, category, probe)
+
+
+def audit_environment_config() -> None:
+    def probe() -> tuple[str, str]:
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        if not pyproject.get("project", {}).get("dependencies"):
+            return "FAIL", "pyproject project.dependencies is empty"
+        config_dir = ROOT / "minecraft_mod_ai/config"
+        if not config_dir.is_dir():
+            return "FAIL", "minecraft_mod_ai/config is missing"
+        interesting = sorted(
+            name
+            for name, value in os.environ.items()
+            if value and (
+                name.startswith("MMM_")
+                or name.startswith("SMTP_")
+                or name.endswith("_API_KEY")
+            )
+        )
+        return "PASS", "config readable; configured env names=" + (
+            ",".join(interesting) if interesting else "none"
+        )
+
+    isolated_probe("environment_and_config", "config", probe)
+
+
+def audit_filesystem_permissions() -> None:
+    def probe() -> str:
+        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=AUDIT_DIR,
+            prefix=".write-probe-",
+            delete=False,
+        ) as handle:
+            path = Path(handle.name)
+            handle.write("ok")
+        try:
+            if path.read_text(encoding="utf-8") != "ok":
+                raise RuntimeError("write/read mismatch")
+        finally:
+            path.unlink(missing_ok=True)
+        return "audit directory write/read/delete passed"
+
+    isolated_probe("filesystem_permissions", "filesystem", probe)
+
+
+def audit_structured_output() -> None:
+    def probe() -> str:
+        from jsonschema import validate
+
+        schema = {
+            "type": "object",
+            "required": ["ok", "items"],
+            "properties": {
+                "ok": {"type": "boolean"},
+                "items": {"type": "array", "items": {"type": "string"}},
+            },
+            "additionalProperties": False,
+        }
+        payload = json.loads(json.dumps({"ok": True, "items": ["probe"]}))
+        validate(instance=payload, schema=schema)
+        return "JSON round-trip and jsonschema validation passed"
+
+    isolated_probe("structured_output_schema", "schema", probe)
+
+
+def audit_timeout_retry_primitives() -> None:
+    def probe() -> str:
+        try:
+            subprocess.run(
+                [sys.executable, "-c", "import time; time.sleep(2)"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=0.05,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return "subprocess timeout enforcement passed"
+        raise AssertionError("timeout probe unexpectedly completed")
+
+    isolated_probe("timeout_enforcement", "resilience", probe)
+
+
+def audit_concurrency_queue() -> None:
+    def concurrency_probe() -> str:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            values = list(executor.map(lambda value: value * value, range(8)))
+        if values != [value * value for value in range(8)]:
+            raise AssertionError(f"unexpected executor result: {values}")
+        return "ThreadPoolExecutor parallel task completion passed"
+
+    def queue_probe() -> str:
+        work: queue.Queue[int] = queue.Queue()
+        for value in range(8):
+            work.put(value)
+        drained = [work.get_nowait() for _ in range(8)]
+        if drained != list(range(8)) or not work.empty():
+            raise AssertionError(f"unexpected queue result: {drained}")
+        return "queue put/drain ordering passed"
+
+    isolated_probe("concurrency_executor", "concurrency", concurrency_probe)
+    isolated_probe("queue_runtime", "concurrency", queue_probe)
+
+
+def audit_integration_readiness() -> None:
+    required = (
+        ("mcp_sdk", "mcp", "mcp"),
+        ("mcp_server_module", "minecraft_mod_ai.mcp_server", "mcp"),
+        ("mcp_tools_module", "minecraft_mod_ai.mcp_tools", "tools"),
+        ("external_mcp_module", "minecraft_mod_ai.integrations.external_mcp", "mcp"),
+        ("agent_tools_module", "minecraft_mod_ai.integrations.agent_tools", "tools"),
+        ("skill_catalog_module", "minecraft_mod_ai.skill_catalog", "skills"),
+        ("retrieval_module", "minecraft_mod_ai.architect.retrieval", "retrieval"),
+        ("adaptive_retrieval_contract", "minecraft_mod_ai.adaptive_retrieval_contract", "retrieval"),
+        ("routing_contract_module", "minecraft_mod_ai.agent_routing_intent_contract", "routing"),
+        ("model_registry_module", "minecraft_mod_ai.config.model_registry", "model"),
+    )
+    for name, module, category in required:
+        module_readiness(name, module, optional=False, category=category)
+
+    for name, module, category in (
+        ("transformers_backend", "transformers", "model"),
+        ("faiss_backend", "faiss", "retrieval"),
+        ("llamaindex_backend", "llama_index", "retrieval"),
+        ("openai_backend", "openai", "model"),
+    ):
+        module_readiness(name, module, optional=True, category=category)
+
+    isolated_probe(
+        "smtp_stdlib",
+        "smtp",
+        lambda: "smtplib available; no connection or message send attempted"
+        if smtplib.SMTP is not None
+        else ("FAIL", "smtplib.SMTP unavailable"),
+    )
+
+    def smtp_config_probe() -> tuple[str, str]:
+        names = sorted(
+            name
+            for name, value in os.environ.items()
+            if value and ("SMTP" in name.upper() or name.upper().startswith("MAIL_"))
+        )
+        if not names:
+            return "SKIP", "no SMTP/mail environment configured; network probe intentionally skipped"
+        return "PASS", "SMTP/mail configuration names present (values redacted): " + ",".join(names)
+
+    isolated_probe("smtp_runtime_config", "smtp", smtp_config_probe)
+
+    isolated_probe(
+        "external_service_connectivity",
+        "external",
+        lambda: (
+            "SKIP",
+            "network side effects disabled in Debug audit; service connectivity must be exercised by explicit runtime gates",
+        ),
+    )
 
 
 def audit_wheel_import() -> None:
     wheels = sorted((AUDIT_DIR / "dist").glob("*.whl"))
     if not wheels:
-        record("wheel_clean_environment_import", False, "no wheel produced")
+        record("wheel_clean_environment_import", "FAIL", "no wheel produced", category="packaging")
         return
 
     with tempfile.TemporaryDirectory(prefix="mmm-audit-venv-") as temp:
-        venv = Path(temp)
+        env_dir = Path(temp)
         started = time.monotonic()
         create = subprocess.run(
-            [sys.executable, "-m", "venv", str(venv)],
+            [sys.executable, "-m", "venv", str(env_dir)],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -303,13 +558,14 @@ def audit_wheel_import() -> None:
         if create.returncode != 0:
             record(
                 "wheel_clean_environment_import",
-                False,
+                "FAIL",
                 create.stdout + create.stderr,
                 time.monotonic() - started,
+                category="packaging",
             )
             return
 
-        python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        python = env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         install = subprocess.run(
             [str(python), "-m", "pip", "install", str(wheels[-1])],
             cwd=ROOT,
@@ -324,8 +580,9 @@ def audit_wheel_import() -> None:
                     str(python),
                     "-c",
                     "import minecraft_mod_ai; "
+                    "from importlib.metadata import version; "
                     "from minecraft_mod_ai.mod_development_methods import resolve_mod_development_methods; "
-                    "assert minecraft_mod_ai.__version__ == '0.8.0'; "
+                    "assert minecraft_mod_ai.__version__ == version('minecraft-mod-ai'); "
                     "assert resolve_mod_development_methods('food item mod')",
                 ],
                 cwd=ROOT,
@@ -341,29 +598,67 @@ def audit_wheel_import() -> None:
         LOGS.append(f"\n[wheel clean env]\n{output}\n")
         record(
             "wheel_clean_environment_import",
-            passed,
+            "PASS" if passed else "FAIL",
             f"wheel={wheels[-1].name}; output_tail={output[-1200:]}",
             time.monotonic() - started,
+            category="packaging",
         )
 
 
 def main() -> int:
+    CHECKS.clear()
+    LOGS.clear()
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-    files = tracked_files()
-    record("tracked_file_inventory", True, f"tracked_files={len(files)}")
-    audit_syntax_and_data(files)
-    audit_relative_imports(files)
-    audit_versions()
-    audit_mod_only_surface()
-    audit_obsolete_imports(files)
-    audit_runtime_contracts()
+
+    try:
+        files = tracked_files()
+        record("tracked_file_inventory", "PASS", f"tracked_files={len(files)}")
+    except Exception as exc:  # noqa: BLE001 - keep audit progressing.
+        files = []
+        record("tracked_file_inventory", "FAIL", f"{type(exc).__name__}: {exc}")
+
+    for name, function in (
+        ("syntax_audit_internal", lambda: audit_syntax_and_data(files)),
+        ("relative_import_audit_internal", lambda: audit_relative_imports(files)),
+        ("version_audit_internal", audit_versions),
+        ("public_surface_audit_internal", audit_mod_only_surface),
+        ("obsolete_import_audit_internal", lambda: audit_obsolete_imports(files)),
+        ("runtime_contract_audit_internal", audit_runtime_contracts),
+        ("environment_config_audit_internal", audit_environment_config),
+        ("filesystem_audit_internal", audit_filesystem_permissions),
+        ("structured_output_audit_internal", audit_structured_output),
+        ("timeout_audit_internal", audit_timeout_retry_primitives),
+        ("concurrency_queue_audit_internal", audit_concurrency_queue),
+        ("integration_readiness_audit_internal", audit_integration_readiness),
+    ):
+        before = len(CHECKS)
+        started = time.monotonic()
+        try:
+            function()
+        except Exception as exc:  # noqa: BLE001 - one audit family must not abort the run.
+            record(
+                name,
+                "FAIL",
+                f"{type(exc).__name__}: {exc}",
+                time.monotonic() - started,
+                category="audit-runner",
+            )
+        if len(CHECKS) == before:
+            record(
+                name,
+                "WARN",
+                "audit family produced no checks",
+                time.monotonic() - started,
+                category="audit-runner",
+            )
 
     command(
         "compileall",
         [sys.executable, "-m", "compileall", "-q", "minecraft_mod_ai", "tests", "tools"],
+        category="python",
     )
-    command("pip_check", [sys.executable, "-m", "pip", "check"], timeout=300)
-    command("pytest_full", [sys.executable, "-m", "pytest", "-q"], timeout=2400)
+    command("pip_check", [sys.executable, "-m", "pip", "check"], timeout=300, category="dependencies")
+    command("pytest_full", [sys.executable, "-m", "pytest", "-q"], timeout=2400, category="tests")
     command(
         "package_build",
         [
@@ -376,21 +671,45 @@ def main() -> int:
             str(AUDIT_DIR / "dist"),
         ],
         timeout=900,
+        category="packaging",
     )
-    audit_wheel_import()
+    try:
+        audit_wheel_import()
+    except Exception as exc:  # noqa: BLE001 - keep report generation guaranteed.
+        record(
+            "wheel_clean_environment_import",
+            "FAIL",
+            f"{type(exc).__name__}: {exc}",
+            category="packaging",
+        )
 
-    passed = all(check.passed for check in CHECKS)
+    counts = {status: sum(check.status == status for check in CHECKS) for status in sorted(STATUSES)}
+    failures = [check.name for check in CHECKS if check.status == "FAIL"]
+    warnings = [check.name for check in CHECKS if check.status == "WARN"]
+    skipped = [check.name for check in CHECKS if check.status == "SKIP"]
+    overall_status = "failed" if failures else ("warning" if warnings else "passed")
     report: dict[str, Any] = {
-        "schema_version": "mmm/full-project-audit-v1",
-        "overall_status": "passed" if passed else "failed",
+        "schema_version": "mmm/full-project-audit-v2",
+        "overall_status": overall_status,
         "python": sys.version,
         "tracked_file_count": len(files),
-        "checks": [asdict(check) for check in CHECKS],
-        "failed_checks": [check.name for check in CHECKS if not check.passed],
+        "summary": {
+            "total": len(CHECKS),
+            "passed": counts["PASS"],
+            "warned": counts["WARN"],
+            "failed": counts["FAIL"],
+            "skipped": counts["SKIP"],
+        },
+        "checks": [check.payload() for check in CHECKS],
+        "failed_checks": failures,
+        "warning_checks": warnings,
+        "skipped_checks": skipped,
         "limitations": [
             "No Minecraft/Fabric client or dedicated server was launched by this Python repository audit.",
-            "No GPU model, Blockbench, JDT LS, Modrinth publication or external sidecar was executed.",
-            "Those integrations remain release-time gates for requests that require them.",
+            "No GPU model, Blockbench, JDT LS, Modrinth publication or external service was contacted.",
+            "SMTP and other external services are configuration/readiness checks only; no message or network side effect is performed.",
+            "Optional uninstalled or unconfigured integrations are reported as SKIP rather than false failures.",
+            "Runtime integration gates remain required when a request explicitly needs those external systems.",
         ],
     }
     REPORT_PATH.write_text(
@@ -399,7 +718,7 @@ def main() -> int:
     )
     LOG_PATH.write_text("\n".join(LOGS) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
