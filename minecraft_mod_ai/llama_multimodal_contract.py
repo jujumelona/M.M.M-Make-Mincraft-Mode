@@ -5,8 +5,9 @@ from __future__ import annotations
 Text generation keeps the lean GGUF server. A request carrying ``media_paths``
 upgrades the managed server to the profile-declared projector only when vision is
 actually needed, then transports local images through llama.cpp's OpenAI-compatible
-``image_url`` content parts. Decode autotune decisions remain reusable, while models
-with an upstream MTP+mmproj incompatibility launch media requests non-speculatively.
+``image_url`` content parts. Decode autotune decisions remain reusable, while
+registry-declared MTP runtimes that do not advertise native MTP support launch media
+requests non-speculatively.
 """
 
 import base64
@@ -29,16 +30,15 @@ _PAYLOAD_MARKER = "_mmm_llama_multimodal_payload_v2"
 _ACTIVE_MEDIA_ENV = "MMM_LLAMA_MULTIMODAL_ACTIVE"
 _MANAGED_MEDIA_URL_ATTR = "_mmm_multimodal_managed_url"
 _MANAGED_MEDIA_PROCESS_ATTR = "_mmm_multimodal_managed_process"
-_MTP_UNSAFE_WITH_MEDIA = frozenset(
-    {"qwen3.5-9b", "qwen3.6-27b", "qwen3.6-35b-a3b"}
-)
+
+
+def _extra(config: Any) -> Mapping[str, Any]:
+    value = getattr(config, "extra", {})
+    return value if isinstance(value, Mapping) else {}
 
 
 def _mmproj_filename(config: Any) -> str:
-    extra = getattr(config, "extra", {})
-    if not isinstance(extra, Mapping):
-        return ""
-    return str(extra.get("mmproj_filename", "")).strip()
+    return str(_extra(config).get("mmproj_filename", "")).strip()
 
 
 def _repo_id(config: Any) -> str:
@@ -50,18 +50,15 @@ def _repo_id(config: Any) -> str:
     return model_id
 
 
-def _registry_model(config: Any) -> str | None:
-    from .qwen_model_profiles import qwen_registry_model
-
-    extra = getattr(config, "extra", {})
-    filename = str(extra.get("gguf_filename", "")) if isinstance(extra, Mapping) else ""
-    return qwen_registry_model(getattr(config, "model_id", ""), filename)
-
-
 def _requires_media_baseline(config: Any) -> bool:
-    """Return whether current llama.cpp requires vision without MTP for this model."""
+    """Return whether declared runtime metadata requires vision without MTP."""
 
-    return _registry_model(config) in _MTP_UNSAFE_WITH_MEDIA
+    extra = _extra(config)
+    return bool(
+        str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
+        and _mmproj_filename(config)
+        and not bool(extra.get("native_mtp", False))
+    )
 
 
 @lru_cache(maxsize=16)
@@ -239,7 +236,7 @@ def _install_benchmark_policy(autotune: Any) -> None:
 
 
 def _install_launch_policy(autotune: Any) -> None:
-    """Keep text MTP, but use baseline vision where upstream MTP+mmproj is unsafe."""
+    """Keep text MTP, but use baseline vision where registry metadata requires it."""
 
     current = autotune._launch_selected
     if getattr(current, _LAUNCH_MARKER, False):
