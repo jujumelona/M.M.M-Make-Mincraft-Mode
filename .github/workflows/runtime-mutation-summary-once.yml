@@ -1,0 +1,49 @@
+name: Runtime mutation summary once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/runtime-mutation-summary-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase onto latest main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
+      - name: Summarize
+        run: |
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+          data = json.loads(Path('runtime_mutation_audit.json').read_text())
+          behavioral = data['behavioral']
+          summary = {
+              'schema_version': 'mmm/runtime-mutation-summary-v1',
+              'behavioral_count': len(behavioral),
+              'path_count': len({item['path'] for item in behavioral}),
+              'by_path': dict(Counter(item['path'] for item in behavioral).most_common()),
+          }
+          Path('runtime_mutation_summary.json').write_text(json.dumps(summary, indent=2, sort_keys=False) + '\n')
+          PY
+      - name: Commit and self-remove
+        run: |
+          rm .github/workflows/runtime-mutation-summary-once.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "chore(audit): summarize runtime rebindings"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
