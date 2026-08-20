@@ -6,11 +6,14 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai.colab_run_modes import (
+    DEBUG_AUDIT_RELATIVE_PATH,
+    DEBUG_MODE,
     EXISTING_MOD_MODE,
     EXISTING_PLAN_MODE,
     FULL_MODE,
     PLAN_MODE,
     RUN_MODES,
+    debug_audit_path,
     resolve_plan_path,
     run_plan_dialog,
     should_build,
@@ -76,20 +79,23 @@ def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
     assert FULL_MODE == "Full"
     assert EXISTING_MOD_MODE == "Revise"
     assert EXISTING_PLAN_MODE == "Execute"
+    assert DEBUG_MODE == "Debug"
     assert RUN_MODES == (
         PLAN_MODE,
         FULL_MODE,
         EXISTING_MOD_MODE,
         EXISTING_PLAN_MODE,
+        DEBUG_MODE,
     )
     assert should_build(PLAN_MODE) is False
     assert should_build(FULL_MODE) is True
     assert should_build(EXISTING_MOD_MODE) is True
     assert should_build(EXISTING_PLAN_MODE) is True
+    assert should_build(DEBUG_MODE) is False
 
 
-def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() -> None:
-    expected = 'RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute"]'
+def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_debug_mode() -> None:
+    expected = 'RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute", "Debug"]'
     legacy_labels = (
         "플랜모드",
         "풀모드",
@@ -105,6 +111,11 @@ def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_four_modes() 
         assert all(label not in source for label in legacy_labels)
         payload = json.loads(notebook.read_text(encoding="utf-8"))
         assert not any(cell.get("id") == "revise" for cell in payload["cells"])
+
+
+def test_debug_audit_entrypoint_is_canonical() -> None:
+    assert DEBUG_AUDIT_RELATIVE_PATH == "tools/full_project_audit.py"
+    assert debug_audit_path("/repo") == Path("/repo/tools/full_project_audit.py")
 
 
 def test_new_plan_auto_saves_without_user_confirmation(tmp_path: Path) -> None:
