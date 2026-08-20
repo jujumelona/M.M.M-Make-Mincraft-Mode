@@ -4,8 +4,8 @@ from __future__ import annotations
 
 These checks deliberately use synthetic tool schemas and fake adapters. They are
 intended to catch Python/runtime composition regressions (bad wrapper replacement,
-unhashable causal state, request-field loss, broken causal progression) before a
-Colab user spends time loading multi-gigabyte models.
+unhashable causal state, request-field loss, broken causal progression, unsafe shared
+state) before a Colab user spends time loading multi-gigabyte models.
 """
 
 import io
@@ -44,6 +44,16 @@ class _CaptureAdapter:
         return GenerationResponse(content="preflight-ok")
 
 
+def _large_implementation_messages() -> tuple[dict[str, str], ...]:
+    payload = {
+        "phase": "implement_module",
+        "task": "Implement the approved Minecraft/Fabric feature in the current project.",
+        # Deliberately larger than the historical 12 KiB tail routing window.
+        "research_context": "e" * 20_000,
+    }
+    return ({"role": "user", "content": json.dumps(payload)},)
+
+
 def _assert_wrapper_chain() -> None:
     from .model_router import ModelRouter
 
@@ -72,6 +82,48 @@ def _assert_wrapper_chain() -> None:
         if depth > 64:
             raise RuntimePreflightError("ModelRouter tool-loop wrapper chain is unexpectedly deep")
         current = getattr(current, "__wrapped__", None)
+
+
+def _assert_routing_intent_alignment() -> None:
+    from .causal_frontier_adapter import _query as causal_query
+    from .causal_tool_frontier_contract import goals_for_query
+    from . import small_model_max_agent_contract as small_model
+
+    if getattr(small_model._request_query, "_mmm_structured_terminal_intent", False) is not True:
+        raise RuntimePreflightError("small-model selector is not bound to structured terminal intent")
+    messages = _large_implementation_messages()
+    causal = causal_query(messages)
+    selector = small_model._request_query(messages)
+    if selector != causal:
+        raise RuntimePreflightError("small-model and causal routing queries diverged")
+    if "implement_module" not in selector:
+        raise RuntimePreflightError("structured implementation phase was lost from routing query")
+    goals = tuple(goals_for_query(selector))
+    if goals != ("repair",):
+        raise RuntimePreflightError(
+            f"structured implementation request routed to {goals!r}, not repair"
+        )
+
+
+def _assert_generation_concurrency_guards() -> None:
+    from .custom_module_generator import CustomModuleGenerator
+    from .project_index import ProjectIndex
+
+    if getattr(CustomModuleGenerator.generate, "_mmm_instance_generation_serialized", False) is not True:
+        raise RuntimePreflightError("shared CustomModuleGenerator is missing its per-instance lock")
+    for method_name in (
+        "update_files",
+        "write_manifest",
+        "manifest",
+        "manifest_receipt",
+        "select",
+        "select_page",
+    ):
+        method = getattr(ProjectIndex, method_name)
+        if getattr(method, "_mmm_snapshot_locked", False) is not True:
+            raise RuntimePreflightError(
+                f"ProjectIndex.{method_name} is outside the shared snapshot lock"
+            )
 
 
 def _assert_repair_causal_progression() -> None:
@@ -126,26 +178,10 @@ def _assert_repair_causal_progression() -> None:
 
 
 def _assert_per_turn_adapter() -> None:
-    from .causal_frontier_adapter import CausalFrontierAdapter, _query, clear_current_frontier
-    from .causal_tool_frontier_contract import goals_for_query
+    from .causal_frontier_adapter import CausalFrontierAdapter, clear_current_frontier
     from .model_adapters import GenerationRequest
 
-    payload = {
-        "phase": "implement_module",
-        "task": "Implement the approved Minecraft/Fabric feature in the current project.",
-        # Deliberately larger than the old 12 KiB tail routing window. The explicit
-        # phase/task above must remain authoritative regardless of evidence size.
-        "research_context": "e" * 20_000,
-    }
-    messages = ({"role": "user", "content": json.dumps(payload)},)
-    query = _query(messages)
-    if "implement_module" not in query:
-        raise RuntimePreflightError("structured implementation phase was lost from routing query")
-    if tuple(goals_for_query(query)) != ("repair",):
-        raise RuntimePreflightError(
-            f"structured implementation request routed to {goals_for_query(query)!r}, not repair"
-        )
-
+    messages = _large_implementation_messages()
     capture = _CaptureAdapter()
     request = GenerationRequest(
         messages=messages,
@@ -234,6 +270,8 @@ def run_runtime_preflight() -> None:
             return
         checks = (
             ("wrapper-chain", _assert_wrapper_chain),
+            ("routing-intent", _assert_routing_intent_alignment),
+            ("generation-concurrency", _assert_generation_concurrency_guards),
             ("repair-causal-progression", _assert_repair_causal_progression),
             ("per-turn-adapter", _assert_per_turn_adapter),
             ("compaction-clone", _assert_compaction_clone),
