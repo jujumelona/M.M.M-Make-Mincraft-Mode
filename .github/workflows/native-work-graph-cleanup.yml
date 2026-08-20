@@ -26,6 +26,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Rebase onto latest main
+        run: git pull --rebase origin main
+
       - name: Install test dependencies
         run: python -m pip install -e '.[dev]'
 
@@ -43,14 +46,16 @@ jobs:
           efficiency_path = root / "minecraft_mod_ai" / "max_efficiency_runtime_contract.py"
           bootstrap_path = root / "minecraft_mod_ai" / "runtime_bootstrap.py"
 
-          def replace_span(source: str, node: ast.AST, replacement: str) -> str:
+          def replace_span(source: str, node: ast.AST, replacement: str, *, indent: str = "") -> str:
               lines = source.splitlines(keepends=True)
               decorators = getattr(node, "decorator_list", ())
               start_line = min((item.lineno for item in decorators), default=node.lineno)
               start = start_line - 1
               end = node.end_lineno
               rendered = textwrap.dedent(replacement).strip("\n")
-              chunk = (rendered + "\n\n") if rendered else ""
+              if rendered and indent:
+                  rendered = textwrap.indent(rendered, indent)
+              chunk = rendered + "\n\n" if rendered else ""
               return "".join(lines[:start]) + chunk + "".join(lines[end:])
 
           def top_function(source: str, name: str) -> ast.FunctionDef:
@@ -69,164 +74,117 @@ jobs:
 
           def top_assignment(source: str, name: str) -> ast.AST:
               for node in ast.parse(source).body:
-                  if isinstance(node, ast.Assign):
-                      if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
-                          return node
+                  if isinstance(node, ast.Assign) and any(
+                      isinstance(target, ast.Name) and target.id == name for target in node.targets
+                  ):
+                      return node
                   if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
                       return node
               raise RuntimeError(f"top-level assignment not found: {name}")
 
+          def replace_once(source: str, old: str, new: str, label: str) -> str:
+              if source.count(old) != 1:
+                  raise RuntimeError(f"expected exactly one {label}, found {source.count(old)}")
+              return source.replace(old, new, 1)
+
           work_graph = work_graph_path.read_text(encoding="utf-8")
-
-          work_graph = replace_span(
+          work_graph = replace_once(
               work_graph,
-              top_function(work_graph, "build_production_work_plan"),
-              '''
-              def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolicy | None=None, modules: Sequence[ProductionModule] | None=None) -> WorkGraphPlan:
-                  """Compile a proposal into deterministic, dependency-aware work shards.
-
-                  The proposal has no global content-count limit. Only each work unit is bounded,
-                  so adding content creates more nodes instead of growing one model/tool call.
-                  """
-                  policy = policy or ScalePolicy.from_environment()
-                  proposal.validate(policy=policy)
-                  proposal_hash = proposal.approval_hash or proposal.calculate_hash()
-                  selected_modules = tuple(proposal.modules) if modules is None else tuple(modules)
-                  if modules is not None:
-                      for module in selected_modules:
-                          module.validate(policy=policy)
-                  selected_ids = {module.module_id for module in selected_modules}
-                  if len(selected_ids) != len(selected_modules):
-                      raise WorkGraphError('Production work modules contain duplicate IDs.')
-                  for module in selected_modules:
-                      missing = set(module.depends_on) - selected_ids
-                      if missing:
-                          raise WorkGraphError(f'Production work module {module.module_id} references missing dependencies: {sorted(missing)}')
-                  ordered = _topological_modules(selected_modules)
-                  nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
-                  module_node: dict[str, str] = {}
-                  generated_nodes: list[str] = []
-                  for stage, members in _module_shards(ordered, policy=policy):
-                      node_id = f'generate-{stage}-{len(generated_nodes):08d}'
-                      member_ids = {module.module_id for module in members}
-                      dependencies = {'prepare-project'}
-                      for module in members:
-                          dependencies.update((module_node[dependency] for dependency in module.depends_on if dependency not in member_ids))
-                      payload = {'kind': 'module-shard', 'generation_stage': stage, 'members': [_module_payload(module) for module in members]}
-                      nodes.append(_node(node_id, f'generate:{stage}', sorted(dependencies), payload))
-                      generated_nodes.append(node_id)
-                      for module in members:
-                          module_node[module.module_id] = node_id
-                  for index, assets in enumerate(_chunks(proposal.assets, max(1, policy.java_shard_size))):
-                      node_id = f'generate-assets-{index:08d}'
-                      nodes.append(_node(node_id, 'generate:assets', ('prepare-project',), {'kind': 'asset-shard', 'members': [asdict(asset) for asset in assets]}))
-                      generated_nodes.append(node_id)
-
-                  validation_dependencies = tuple(generated_nodes or ['prepare-project'])
-                  nodes.extend([_node('validate-source', 'validate:source', validation_dependencies, {'kind': 'validation', 'acceptance_tests': list(proposal.acceptance_tests)}), _node('build-project', 'build', ('validate-source',), {'kind': 'gradle-build'}), _node('validate-jar', 'validate:jar', ('build-project',), {'kind': 'jar-validation'}), _node('runtime-playtest', 'validate:runtime', ('validate-jar',), {'kind': 'runtime-playtest', 'external_runtime_required': proposal.external_runtime_required})])
-                  quality_nodes: list[str] = []
-                  contract = proposal.game_design.get('_production_contract')
-                  if proposal.schema_version == 'mmm/complete-proposal-v2' and isinstance(contract, dict):
-                      for dimension in contract.get('quality_dimension_catalog', []):
-                          dimension_id = str(dimension['dimension_id'])
-                          node_id = 'validate-quality-' + dimension_id.replace('_', '-')
-                          quality_dependency = 'validate-jar' if dimension_id in {'correctness', 'build', 'research'} else 'runtime-playtest'
-                          nodes.append(_node(node_id, 'validate:quality', (quality_dependency,), {'kind': 'quality-validation', 'dimension_id': dimension_id, 'evidence_route_ref': dimension['evidence_route_ref'], 'contract_sha256': contract['contract_sha256']}))
-                          quality_nodes.append(node_id)
-                  nodes.append(_node('package-release', 'package', tuple(quality_nodes or ['runtime-playtest']), {'kind': 'release'}))
-                  graph_body = {'schema_version': 'mmm/production-work-graph-v1', 'proposal_hash': proposal_hash, 'nodes': [node.to_dict() for node in nodes]}
-                  return WorkGraphPlan(schema_version='mmm/production-work-graph-v1', proposal_hash=proposal_hash, graph_hash=_hash_json(graph_body), module_count=len(selected_modules), nodes=tuple(nodes))
-              ''',
+              """    policy = policy or ScalePolicy.from_environment()\n    proposal.validate(policy=policy)\n    proposal_hash = proposal.calculate_hash()\n    selected_modules = tuple(proposal.modules) if modules is None else tuple(modules)\n    for module in selected_modules:\n        module.validate(policy=policy)\n""",
+              """    policy = policy or ScalePolicy.from_environment()\n    proposal.validate(policy=policy)\n    proposal_hash = proposal.approval_hash or proposal.calculate_hash()\n    selected_modules = tuple(proposal.modules) if modules is None else tuple(modules)\n    if modules is not None:\n        for module in selected_modules:\n            module.validate(policy=policy)\n""",
+              "build validation/hash block",
           )
 
           work_graph = replace_span(
               work_graph,
               class_method(work_graph, "DurableWorkLedger", "tasks"),
               '''
-                  def tasks(self, *, cursor: str='', limit: int=100, state: WorkState | None=None) -> dict[str, Any]:
-                      if not 1 <= limit <= 1000:
-                          raise WorkGraphError('Task page size must be between 1 and 1000.')
-                      clauses = ['node_id > ?']
-                      params: list[Any] = [cursor]
-                      if state is not None:
-                          clauses.append('state = ?')
-                          params.append(state.value)
-                      params.append(limit + 1)
-                      with self._connect() as connection:
-                          rows = connection.execute(f"""
-                              SELECT node_id, stage, input_hash, payload_json, state,
-                                     attempt, lease_owner, lease_until, output_hash,
-                                     receipt_json, error, updated_at
-                              FROM tasks
-                              WHERE {' AND '.join(clauses)}
-                              ORDER BY node_id LIMIT ?
-                              """, tuple(params)).fetchall()
-                          page_rows = rows[:limit]
-                          node_ids = [str(row[0]) for row in page_rows]
-                          dependencies: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
-                          for start in range(0, len(node_ids), 900):
-                              batch = node_ids[start:start + 900]
-                              if not batch:
-                                  continue
-                              placeholders = ','.join('?' for _ in batch)
-                              for node_id, dependency_id in connection.execute(f"""
-                                  SELECT node_id, dependency_id FROM edges
-                                  WHERE node_id IN ({placeholders})
-                                  ORDER BY node_id, dependency_id
-                                  """, tuple(batch)):
-                                  dependencies[str(node_id)].append(str(dependency_id))
+              def tasks(self, *, cursor: str='', limit: int=100, state: WorkState | None=None) -> dict[str, Any]:
+                  if not 1 <= limit <= 1000:
+                      raise WorkGraphError('Task page size must be between 1 and 1000.')
+                  clauses = ['node_id > ?']
+                  params: list[Any] = [cursor]
+                  if state is not None:
+                      clauses.append('state = ?')
+                      params.append(state.value)
+                  params.append(limit + 1)
+                  with self._connect() as connection:
+                      rows = connection.execute(f"""
+                          SELECT node_id, stage, input_hash, payload_json, state,
+                                 attempt, lease_owner, lease_until, output_hash,
+                                 receipt_json, error, updated_at
+                          FROM tasks
+                          WHERE {' AND '.join(clauses)}
+                          ORDER BY node_id LIMIT ?
+                          """, tuple(params)).fetchall()
+                      page_rows = rows[:limit]
+                      node_ids = [str(row[0]) for row in page_rows]
+                      dependencies: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
+                      for start in range(0, len(node_ids), 900):
+                          batch = node_ids[start:start + 900]
+                          if not batch:
+                              continue
+                          placeholders = ','.join('?' for _ in batch)
+                          for node_id, dependency_id in connection.execute(f"""
+                              SELECT node_id, dependency_id FROM edges
+                              WHERE node_id IN ({placeholders})
+                              ORDER BY node_id, dependency_id
+                              """, tuple(batch)):
+                              dependencies[str(node_id)].append(str(dependency_id))
 
-                      page = [
-                          {
-                              'node_id': row[0],
-                              'stage': row[1],
-                              'input_hash': row[2],
-                              'payload': json.loads(row[3]),
-                              'state': row[4],
-                              'attempt': row[5],
-                              'lease_owner': row[6],
-                              'lease_until': row[7],
-                              'output_hash': row[8],
-                              'receipt': json.loads(row[9]) if row[9] else None,
-                              'error': row[10],
-                              'updated_at': row[11],
-                              'dependencies': dependencies[str(row[0])],
-                          }
-                          for row in page_rows
-                      ]
-                      return {
-                          'schema_version': 'mmm/work-task-page-v1',
-                          'tasks': page,
-                          'next_cursor': page[-1]['node_id'] if len(rows) > limit else '',
+                  page = [
+                      {
+                          'node_id': row[0],
+                          'stage': row[1],
+                          'input_hash': row[2],
+                          'payload': json.loads(row[3]),
+                          'state': row[4],
+                          'attempt': row[5],
+                          'lease_owner': row[6],
+                          'lease_until': row[7],
+                          'output_hash': row[8],
+                          'receipt': json.loads(row[9]) if row[9] else None,
+                          'error': row[10],
+                          'updated_at': row[11],
+                          'dependencies': dependencies[str(row[0])],
                       }
+                      for row in page_rows
+                  ]
+                  return {
+                      'schema_version': 'mmm/work-task-page-v1',
+                      'tasks': page,
+                      'next_cursor': page[-1]['node_id'] if len(rows) > limit else '',
+                  }
               ''',
+              indent="    ",
           )
 
           work_graph = replace_span(
               work_graph,
               class_method(work_graph, "DurableWorkLedger", "summary"),
               '''
-                  def summary(self) -> dict[str, Any]:
-                      with self._connect() as connection:
-                          counts = {row[0]: row[1] for row in connection.execute('SELECT state, COUNT(*) FROM tasks GROUP BY state')}
-                          total = sum(counts.values())
-                          checkpoint_counts = {row[0]: row[1] for row in connection.execute('SELECT state, COUNT(*) FROM checkpoints GROUP BY state')}
-                          cancel_requested = self._meta(connection, 'cancel_requested')
-                          graph_hash = self._meta(connection, 'graph_hash')
-                          module_count = self._meta(connection, 'module_count')
-                      completed = counts.get(WorkState.SUCCEEDED.value, 0)
-                      return {
-                          'schema_version': 'mmm/work-ledger-summary-v1',
-                          'proposal_hash': self.proposal_hash,
-                          'graph_hash': graph_hash,
-                          'module_count': int(module_count or '0'),
-                          'task_count': total,
-                          'counts': counts,
-                          'checkpoint_counts': checkpoint_counts,
-                          'cancel_requested': cancel_requested or None,
-                          'progress': 1.0 if total == 0 else round(completed / total, 6),
-                      }
+              def summary(self) -> dict[str, Any]:
+                  with self._connect() as connection:
+                      counts = {row[0]: row[1] for row in connection.execute('SELECT state, COUNT(*) FROM tasks GROUP BY state')}
+                      total = sum(counts.values())
+                      checkpoint_counts = {row[0]: row[1] for row in connection.execute('SELECT state, COUNT(*) FROM checkpoints GROUP BY state')}
+                      cancel_requested = self._meta(connection, 'cancel_requested')
+                      graph_hash = self._meta(connection, 'graph_hash')
+                      module_count = self._meta(connection, 'module_count')
+                  completed = counts.get(WorkState.SUCCEEDED.value, 0)
+                  return {
+                      'schema_version': 'mmm/work-ledger-summary-v1',
+                      'proposal_hash': self.proposal_hash,
+                      'graph_hash': graph_hash,
+                      'module_count': int(module_count or '0'),
+                      'task_count': total,
+                      'counts': counts,
+                      'checkpoint_counts': checkpoint_counts,
+                      'cancel_requested': cancel_requested or None,
+                      'progress': 1.0 if total == 0 else round(completed / total, 6),
+                  }
               ''',
+              indent="    ",
           )
 
           work_graph = replace_span(
@@ -247,12 +205,11 @@ jobs:
                   if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
                       return 'system'
                   extended_kinds = {'item', 'block', 'fluid', 'status_effect', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
-                      if module.kind in extended_kinds:
-                          return 'content'
-                      return 'custom'
+                  if module.kind in extended_kinds:
+                      return 'content'
+                  return 'custom'
               ''',
           )
-
           ast.parse(work_graph)
           work_graph_path.write_text(work_graph, encoding="utf-8")
 
@@ -265,7 +222,6 @@ jobs:
               efficiency = replace_span(efficiency, top_function(efficiency, name), "")
           for name in ("_WORK_GRAPH_HASH_CACHE", "_WORK_GRAPH_VALIDATION_CACHE"):
               efficiency = replace_span(efficiency, top_assignment(efficiency, name), "")
-
           efficiency = replace_span(
               efficiency,
               top_function(efficiency, "enhance_runtime"),
@@ -291,40 +247,44 @@ jobs:
           )
           if "sys." not in efficiency:
               efficiency = efficiency.replace("import sys\n", "")
-          old_doc = '''"""Late runtime policy for compile, routing, and isolated candidate efficiency.
-
-          The production graph owns dependency safety, durable leases and executor capacity.
-          This contract keeps only optimizations that belong outside that scheduler owner:
-          compile-local reuse, exact integration routing, batched ledger status reads, and
-          isolated parallel custom candidate generation with a single winner commit.
-          """'''
-          new_doc = '''"""Late runtime policy for isolated custom-candidate efficiency.
-
-          The production graph owns dependency safety, durable leases, routing and ledger reads.
-          This contract keeps only isolated parallel custom candidate generation with a single
-          winner commit, because that optimization crosses the custom-generator boundary.
-          """'''
-          efficiency = efficiency.replace(textwrap.dedent(old_doc), textwrap.dedent(new_doc), 1)
+          efficiency = efficiency.replace(
+              """Late runtime policy for compile, routing, and isolated candidate efficiency.\n\nThe production graph owns dependency safety, durable leases and executor capacity.\nThis contract keeps only optimizations that belong outside that scheduler owner:\ncompile-local reuse, exact integration routing, batched ledger status reads, and\nisolated parallel custom candidate generation with a single winner commit.\n""",
+              """Late runtime policy for isolated custom-candidate efficiency.\n\nThe production graph owns dependency safety, durable leases, routing and ledger reads.\nThis contract keeps only isolated parallel custom candidate generation with a single\nwinner commit because that optimization crosses the custom-generator boundary.\n""",
+              1,
+          )
           ast.parse(efficiency)
           efficiency_path.write_text(efficiency, encoding="utf-8")
 
           bootstrap = bootstrap_path.read_text(encoding="utf-8")
-          old_call = "    enhance_max_efficiency_runtime(work_graph_module=work_graph)\n"
-          if bootstrap.count(old_call) != 1:
-              raise RuntimeError("expected one max-efficiency bootstrap call")
-          bootstrap = bootstrap.replace(old_call, "    enhance_max_efficiency_runtime()\n", 1)
+          bootstrap = replace_once(
+              bootstrap,
+              "    enhance_max_efficiency_runtime(work_graph_module=work_graph)\n",
+              "    enhance_max_efficiency_runtime()\n",
+              "max-efficiency bootstrap call",
+          )
           ast.parse(bootstrap)
           bootstrap_path.write_text(bootstrap, encoding="utf-8")
 
-          for path in (work_graph_path, efficiency_path, bootstrap_path):
-              source = path.read_text(encoding="utf-8")
-              if "_install_work_ledger_read_batching" in source or "_install_work_graph_compile_cache" in source or "_install_module_routing" in source:
-                  raise RuntimeError(f"stale work-graph runtime patch remains in {path}")
+          stale = (
+              "_install_work_graph_compile_cache",
+              "_install_work_ledger_read_batching",
+              "_install_module_routing",
+              "_WORK_GRAPH_HASH_CACHE",
+              "_WORK_GRAPH_VALIDATION_CACHE",
+          )
+          final_efficiency = efficiency_path.read_text(encoding="utf-8")
+          leftovers = [name for name in stale if name in final_efficiency]
+          if leftovers:
+              raise RuntimeError(f"stale work-graph runtime patches remain: {leftovers}")
           PY
 
-      - name: Verify source and tests
+      - name: Verify source, lint, tests and mutation audit
         run: |
           python -m compileall -q minecraft_mod_ai
+          python -m ruff check \
+            minecraft_mod_ai/work_graph.py \
+            minecraft_mod_ai/max_efficiency_runtime_contract.py \
+            minecraft_mod_ai/runtime_bootstrap.py
           python -m pytest
           python scripts/audit_runtime_mutations.py \
             --root minecraft_mod_ai \
@@ -347,5 +307,17 @@ jobs:
           git commit -m "refactor(work-graph): make efficiency native"
           git pull --rebase origin main
           python -m compileall -q minecraft_mod_ai
+          python -m ruff check \
+            minecraft_mod_ai/work_graph.py \
+            minecraft_mod_ai/max_efficiency_runtime_contract.py \
+            minecraft_mod_ai/runtime_bootstrap.py
           python -m pytest
+          python scripts/audit_runtime_mutations.py \
+            --root minecraft_mod_ai \
+            --json-out runtime_mutation_audit.json \
+            --summary-out runtime_mutation_summary.json
+          git add runtime_mutation_audit.json runtime_mutation_summary.json
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
           git push origin HEAD:main
