@@ -234,6 +234,19 @@ def generate_with_tools(
                     **route_metadata,
                     "result": result,
                 }
+                # This proof is host-owned: first-party apply_source_patch raises on
+                # invalid/no-op/failed transactions, so reaching here means a real
+                # staged source mutation returned successfully. Keep the proof beside
+                # the potentially size-bounded tool result so result truncation cannot
+                # erase the implementation completion fact.
+                if call.name == "apply_source_patch":
+                    payload = {
+                        **payload,
+                        "_mmm_source_mutation": {
+                            "tool": "apply_source_patch",
+                            "status": "APPLIED_BY_HOST_RUNTIME",
+                        },
+                    }
             except Exception as exc:
                 payload = {
                     "ok": False,
