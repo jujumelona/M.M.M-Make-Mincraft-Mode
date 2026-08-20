@@ -42,6 +42,32 @@ _qwen36_35b: &qwen36_35b
   adapter: llama_cpp
   gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
+  runtime_contract: qwen
+  agent_thinking: true
+  mtp_widths: "1,2"
+  sampling_profiles:
+    general_thinking: &qwen36_general_thinking
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+    precise_coding: &qwen36_precise_coding
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    non_thinking: &qwen36_non_thinking
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+      reasoning_effort: none
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
@@ -54,7 +80,27 @@ _qwen38_27b_q4: &qwen38_27b_q4
   adapter: llama_cpp
   gguf_filename: Qwen3.8-27B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-BF16.gguf
+  runtime_contract: qwen
+  agent_thinking: true
+  thinking_reasoning_effort: xhigh
   native_mtp: true
+  sampling_profiles:
+    general_thinking: &qwen38_thinking
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    precise_coding: *qwen38_thinking
+    non_thinking: &qwen38_non_thinking
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+      reasoning_effort: none
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
@@ -67,6 +113,8 @@ _qwen35_9b: &qwen35_9b
   adapter: llama_cpp
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
+  runtime_contract: qwen
+  mtp_widths: "1,2,3,4,5,6"
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
