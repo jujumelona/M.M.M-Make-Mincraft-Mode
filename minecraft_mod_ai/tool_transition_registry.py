@@ -53,7 +53,7 @@ TRANSITIONS: dict[str, TransitionSpec] = {
     "generate_system_plugin": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "source_generated", "generated"), cost=2),
     "apply_minecraft_content_spec": _spec(pre=("project_observed",), effects=("project_changed", "source_generated", "generated"), cost=1),
     "apply_source_edit": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=1),
-    "apply_source_patch": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=2),
+    "apply_source_patch": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=1),
     "apply_java_operations": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=2),
     "repair_project": _spec(pre=("project_observed", "evidence_ready"), effects=("project_changed", "repaired"), cost=2),
     "work_cancel_run": _spec(pre=("work_observed",), effects=("work_changed",), cost=2),
