@@ -9,45 +9,10 @@ once the owning source module absorbs it directly.
 """
 
 import json
-import os
 import sys
 from functools import wraps
 from pathlib import Path
 from typing import Any
-
-
-def _restore_managed_research_capacity() -> None:
-    from . import central_intelligence_amplifier as central
-    from .llama_vram_parallel_policy import validated_active_parallelism
-
-    current = central._research_domain_worker_count
-    if getattr(current, "_mmm_receipt_capacity_bridge_v1", False):
-        return
-
-    @wraps(current)
-    def research_domain_worker_count(router: Any, width: int) -> int:
-        requested = min(max(1, int(width)), central._worker_count())
-        if not os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip():
-            return current(router, width)
-
-        validated = validated_active_parallelism()
-        if validated <= 1:
-            return 1
-        try:
-            config = router.registry.role(router.profile, "planner")
-        except Exception:
-            return 1
-        if not bool(getattr(config, "exclusive_gpu", False)):
-            return 1
-        if str(getattr(config, "provider", "")) != "local":
-            return 1
-        if str(getattr(config, "adapter", "")) not in {"llama_cpp", "vllm"}:
-            return 1
-        return max(1, min(requested, validated))
-
-    research_domain_worker_count._mmm_receipt_capacity_bridge_v1 = True
-    research_domain_worker_count.__wrapped__ = current
-    central._research_domain_worker_count = research_domain_worker_count
 
 
 def _restore_complete_plan_collection_pages() -> None:
@@ -259,7 +224,6 @@ def _restore_research_code_context_contracts() -> None:
 
 
 def install() -> None:
-    _restore_managed_research_capacity()
     _restore_complete_plan_collection_pages()
     _restore_discovery_http_pool()
     _restore_research_code_context_contracts()
