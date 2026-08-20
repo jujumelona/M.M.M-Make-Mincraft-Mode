@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-"""Narrow current-runtime repairs for contracts that are still production-owned.
+"""Temporary compatibility repairs not yet moved into canonical owners.
 
-This module does not revive retired planner/bottleneck monkeypatch APIs. It only repairs
-live public/runtime behavior that is exercised by the current production surface.
+Every repair in this module must disappear once its canonical module owns the same
+behavior. Do not add new production behavior here.
 """
 
 import json
-import math
 import os
 from dataclasses import replace
 from functools import wraps
@@ -15,97 +14,6 @@ from typing import Any
 
 
 _INSTALLED = False
-
-
-def _fix_openai_planner() -> None:
-    from . import planner as planner_module
-
-    cls = planner_module.OpenAICompatiblePlanner
-    if getattr(cls.__init__, "_mmm_timeout_bound_v1", False):
-        return
-
-    def init(
-        self: Any,
-        *,
-        base_url: str,
-        model: str,
-        api_key: str,
-        timeout_seconds: float = 30.0,
-    ) -> None:
-        base_url = base_url.strip().rstrip("/")
-        model = model.strip()
-        api_key = api_key.strip()
-        try:
-            timeout = float(timeout_seconds)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("timeout_seconds must be a positive number.") from exc
-        if not math.isfinite(timeout) or timeout <= 0:
-            raise ValueError("timeout_seconds must be a positive number.")
-        if not base_url.startswith("https://"):
-            raise ValueError("외부 AI API 주소는 https://로 시작해야 합니다.")
-        if not model:
-            raise ValueError("외부 AI API 모델 이름을 입력해 주세요.")
-        if not api_key:
-            raise ValueError("외부 AI API 키가 없습니다.")
-        self.base_url = base_url
-        self.model = model
-        self.api_key = api_key
-        self.timeout_seconds = timeout
-
-    def plan(self: Any, prompt: str):
-        request_body = planner_module.json.dumps(
-            {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": planner_module._planner_system_prompt()},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.2,
-            }
-        ).encode("utf-8")
-        request = planner_module.urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=request_body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "mmm-make-mincraft-mode/0.1",
-            },
-        )
-        try:
-            with planner_module.urllib.request.urlopen(
-                request, timeout=self.timeout_seconds
-            ) as response:
-                payload_bytes = response.read(2 * 1024 * 1024 + 1)
-        except (
-            planner_module.urllib.error.HTTPError,
-            planner_module.urllib.error.URLError,
-        ) as exc:
-            raise RuntimeError("외부 AI API 호출에 실패했습니다.") from exc
-        if len(payload_bytes) > 2 * 1024 * 1024:
-            raise RuntimeError("외부 AI API 응답이 너무 큽니다.")
-        try:
-            payload = planner_module.json.loads(payload_bytes.decode("utf-8"))
-            content = payload["choices"][0]["message"]["content"]
-        except (
-            KeyError,
-            IndexError,
-            TypeError,
-            UnicodeDecodeError,
-            planner_module.json.JSONDecodeError,
-        ) as exc:
-            raise RuntimeError("외부 AI API 응답 형식이 올바르지 않습니다.") from exc
-        if not isinstance(content, str):
-            raise RuntimeError("외부 AI API가 텍스트 계획을 반환하지 않았습니다.")
-        return planner_module._proposal_from_model_data(
-            prompt, planner_module._extract_json_object(content)
-        )
-
-    init._mmm_timeout_bound_v1 = True
-    plan._mmm_timeout_bound_v1 = True
-    cls.__init__ = init
-    cls.plan = plan
 
 
 def _fix_ecosystem_discovery() -> None:
@@ -660,7 +568,6 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    _fix_openai_planner()
     _fix_ecosystem_discovery()
     _fix_research_hotpaths()
     _fix_llama_runtime_tuning()
