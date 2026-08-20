@@ -98,7 +98,7 @@ def run_model_smoke(
                             "role": "system",
                             "content": "Return exactly one valid JSON object. No markdown.",
                         },
-                        {"role": "user", "content": 'Return exactly {"ok":true}.'},
+                        {"role": "user", "content": "Return exactly {}."},
                     ],
                     media_paths=media,
                     response_format="json",
