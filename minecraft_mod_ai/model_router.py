@@ -212,15 +212,16 @@ class ModelRouter:
                 "Fresh production evidence is required for coder generation, but reviewed "
                 "agent tools are disabled or no eligible tools are exposed."
             )
+        if runtime is not None and tools:
+            return self._generate_with_tools(
+                config=config,
+                adapter=adapter,
+                request=request,
+                runtime=runtime,
+                stage=stage,
+                role=role,
+            )
         with self._generation_scope(config):
-            if runtime is not None and tools:
-                return self._generate_with_tools(
-                    adapter=adapter,
-                    request=request,
-                    runtime=runtime,
-                    stage=stage,
-                    role=role,
-                )
             return adapter.generate(request)
 
     def generate_tool_decision(
@@ -338,6 +339,7 @@ class ModelRouter:
     def _generate_with_tools(
         self,
         *,
+        config: Any,
         adapter: Any,
         request: GenerationRequest,
         runtime: Any,
@@ -502,7 +504,8 @@ class ModelRouter:
                     tool_choice=None,
                     parallel_tool_calls=False,
                 )
-                final_turn = adapter.generate_turn(final_request)
+                with self._generation_scope(config):
+                    final_turn = adapter.generate_turn(final_request)
                 if final_turn.tool_calls:
                     raise ModelConfigurationError(
                         "Agent emitted tool calls after the host disabled tools at the "
@@ -524,7 +527,8 @@ class ModelRouter:
                 tool_choice=request.tool_choice,
                 parallel_tool_calls=request.parallel_tool_calls,
             )
-            turn = adapter.generate_turn(turn_request)
+            with self._generation_scope(config):
+                turn = adapter.generate_turn(turn_request)
             if not turn.tool_calls:
                 content = turn.content.strip()
                 if not content:
@@ -669,7 +673,8 @@ class ModelRouter:
                     tool_choice=None,
                     parallel_tool_calls=False,
                 )
-                final_turn = adapter.generate_turn(final_request)
+                with self._generation_scope(config):
+                    final_turn = adapter.generate_turn(final_request)
                 if final_turn.tool_calls:
                     raise ModelConfigurationError(
                         "Agent emitted tool calls after tools were disabled at an exact "
