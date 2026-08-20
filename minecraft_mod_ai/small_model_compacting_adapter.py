@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import wraps
 from typing import Any
 
@@ -20,19 +21,11 @@ class CompactingAdapter:
         messages = compact_messages(request.messages)
         if messages == tuple(request.messages):
             return self.inner.generate_turn(request)
-        from .model_adapters import GenerationRequest
 
-        return self.inner.generate_turn(
-            GenerationRequest(
-                messages=messages,
-                media_paths=request.media_paths,
-                response_format=request.response_format,
-                response_schema=request.response_schema,
-                tools=request.tools,
-                tool_choice=request.tool_choice,
-                parallel_tool_calls=request.parallel_tool_calls,
-            )
-        )
+        # Clone the frozen GenerationRequest instead of reconstructing it field by
+        # field. This preserves task/prompt/metadata and any future request fields
+        # added by another runtime contract while changing only the compacted history.
+        return self.inner.generate_turn(replace(request, messages=messages))
 
 
 def install(model_router_module: Any) -> None:
