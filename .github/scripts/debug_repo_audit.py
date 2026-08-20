@@ -16,7 +16,9 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # this audit exists to prevent.
 TOMBSTONED_OWNER_MODULES = (
     "minecraft_mod_ai/colab_mtp_server.py",
+    "minecraft_mod_ai/max_efficiency_runtime_contract.py",
     "minecraft_mod_ai/production_stream_resume_contract.py",
+    "minecraft_mod_ai/scheduler_connection_reuse_contract.py",
 )
 
 # Direct-main development must not use self-deleting patch workflows. They race with
