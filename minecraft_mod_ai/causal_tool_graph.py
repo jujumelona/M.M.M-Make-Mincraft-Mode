@@ -51,7 +51,46 @@ _EXTERNAL_NAMES = frozenset({
     "external_mcp_call",
 })
 _RAG_NAMES = frozenset({"search_code_rag", "search_project_rag"})
-_GRADLE_VERIFY_NAMES = frozenset({"run_gradle_build", "gradle_build"})
+_GRADLE_VERIFY_NAMES = frozenset({"run_gradle_build", "gradle_build", "run_gametest"})
+_DIAGNOSTIC_VERIFY_NAMES = frozenset({"java_diagnostics", "jdt_diagnostics"})
+_SEMANTIC_FAILURE_STATUSES = frozenset({
+    "FAIL",
+    "FAILED",
+    "ERROR",
+    "UNAVAILABLE",
+    "PARTIAL",
+    "BLOCKED",
+    "INVALID",
+    "REJECTED",
+    "CANCELLED",
+    "CANCELED",
+    "TIMEOUT",
+})
+_CERTIFICATION_EFFECTS = frozenset({
+    "project_changed",
+    "repaired",
+    "generated",
+    "source_generated",
+    "assets_generated",
+    "static_verified",
+    "build_verified",
+    "gametest_verified",
+    "test_verified",
+    "geometry_verified",
+    "benchmark_verified",
+    "verified",
+    "quality_verified",
+    "runtime_verified",
+    "packaged",
+    "external_schema",
+    "external_observation",
+    "evidence_ready",
+    "runtime_prepared",
+    "server_started",
+    "client_started",
+    "mineflayer_connected",
+    "model_ready",
+})
 _SAFE_PROGRESS_EFFECTS = frozenset({
     "project_observed",
     "work_observed",
@@ -137,6 +176,32 @@ def _result_mappings(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
             pending.extend(current)
 
 
+def _primary_result_mappings(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """Return only transport-envelope result roots used for semantic status checks.
+
+    Do not recursively inspect arbitrary evidence rows here: an inner provider attempt
+    may legitimately be ERROR while the enclosing corroborated bundle is PASS.
+    """
+
+    root = payload.get("result", payload)
+    if not isinstance(root, Mapping):
+        return ()
+    values: list[Mapping[str, Any]] = [root]
+    for key in ("structured_content", "structured", "parsed_text"):
+        nested = root.get(key)
+        if isinstance(nested, Mapping):
+            values.append(nested)
+    return tuple(values)
+
+
+def _has_explicit_semantic_failure(payload: Mapping[str, Any]) -> bool:
+    for result in _primary_result_mappings(payload):
+        status = str(result.get("status", "")).strip().upper()
+        if status in _SEMANTIC_FAILURE_STATUSES:
+            return True
+    return False
+
+
 def _rag_receipt_ready(payload: Mapping[str, Any]) -> bool:
     """Certify terminal RAG evidence only from objective retrieval-quality fields."""
 
@@ -192,6 +257,20 @@ def _gradle_build_passed(payload: Mapping[str, Any]) -> bool:
     return False
 
 
+def _diagnostics_clean(payload: Mapping[str, Any]) -> bool:
+    """Treat a diagnostics transport as verification only when it reports zero errors."""
+
+    for result in _result_mappings(payload):
+        schema_version = str(result.get("schema_version", ""))
+        if not schema_version.startswith("mmm/java-diagnostics-"):
+            continue
+        try:
+            return int(result.get("error_count", -1)) == 0
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 def _semantic_effects(
     name: str,
     payload: Mapping[str, Any],
@@ -203,6 +282,9 @@ def _semantic_effects(
     must never by itself turn a FAIL/UNAVAILABLE result into verified evidence.
     """
 
+    if _has_explicit_semantic_failure(payload):
+        effects.difference_update(_CERTIFICATION_EFFECTS)
+
     if name in _RAG_NAMES and "evidence_ready" in effects:
         if not _rag_receipt_ready(payload):
             effects.discard("evidence_ready")
@@ -213,6 +295,11 @@ def _semantic_effects(
     if name in _GRADLE_VERIFY_NAMES:
         if not _gradle_build_passed(payload):
             effects.discard("build_verified")
+            effects.discard("gametest_verified")
+            effects.discard("verified")
+    if name in _DIAGNOSTIC_VERIFY_NAMES:
+        if not _diagnostics_clean(payload):
+            effects.discard("static_verified")
             effects.discard("verified")
     return effects
 
