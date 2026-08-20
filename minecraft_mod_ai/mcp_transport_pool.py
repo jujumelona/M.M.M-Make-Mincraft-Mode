@@ -44,7 +44,7 @@ async def _stdio_session(
     env: Mapping[str, str],
     timeout_seconds: float,
 ):
-    """Open one reusable stdio transport; timeout only the startup itself."""
+    """Open one reusable stdio transport with LIFO-safe AnyIO scope ownership."""
     try:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
@@ -65,21 +65,26 @@ async def _stdio_session(
             args=["-m", "minecraft_mod_ai.mcp_server"],
             env=dict(env),
         )
-        # A pooled transport needs startup and request timeouts to be independent;
-        # otherwise a healthy warm session would expire merely because it is old.
+        # stdio_client() and ClientSession() own long-lived AnyIO task-group cancel
+        # scopes. They must remain the current outer scopes until their matching
+        # __aexit__ calls. Wrapping __aenter__ in fail_after() would close the
+        # timeout scope first and violate AnyIO's strict LIFO cancel-scope stack.
+        read_stream, write_stream = await stack.enter_async_context(
+            stdio_client(params, errlog=errlog)
+        )
+        session = await stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+        # Initialization is a bounded operation that completes before this timeout
+        # scope exits, so it is safe to time independently of the pooled lifetime.
         with anyio.fail_after(timeout_seconds):
-            read_stream, write_stream = await stack.enter_async_context(
-                stdio_client(params, errlog=errlog)
-            )
-            session = await stack.enter_async_context(
-                ClientSession(read_stream, write_stream)
-            )
             await session.initialize()
         yield session
     finally:
-        # Do not let a broken child process stall interpreter/runtime teardown.
-        with anyio.move_on_after(min(timeout_seconds, 10.0), shield=True):
-            await stack.aclose()
+        # Close the persistent MCP contexts directly in the same worker task and in
+        # AsyncExitStack LIFO order. An extra move_on_after() scope here would again
+        # sit above the MCP task-group scopes and make their __aexit__ invalid.
+        await stack.aclose()
 
 
 class _SessionWorker:
