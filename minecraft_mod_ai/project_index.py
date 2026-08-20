@@ -27,6 +27,12 @@ _TEXT_SUFFIXES = {
     ".md",
     ".txt",
 }
+_SPECIAL_TEXT_NAMES = {
+    "build.gradle",
+    "settings.gradle",
+    "gradle.properties",
+    "fabric.mod.json",
+}
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,127}")
 _IGNORED_PARTS = {
     ".git",
@@ -41,6 +47,7 @@ _IGNORED_PARTS = {
     ".minecraft_ai",
 }
 _MANIFEST_SHARD_SIZE = 256
+_RANK_CACHE_MAX_ENTRIES = 32
 _PROJECT_CONTEXT_CURSOR = re.compile(
     r"^pc1:(?P<position>[0-9]+):(?P<offset>[0-9]+):(?P<page>[0-9]+):"
     r"(?P<fingerprint>[0-9a-f]{24})$"
@@ -61,7 +68,7 @@ class IndexedFile:
 
 
 class ProjectIndex:
-    """Whole-project metadata index with byte-bounded relevance retrieval."""
+    """Whole-project metadata index with native incremental update and manifest I/O."""
 
     def __init__(
         self,
@@ -78,6 +85,12 @@ class ProjectIndex:
         self.policy.validate()
         self.files = self._scan()
         self._by_path = {item.path: item for item in self.files}
+        self._manifest_receipt_cache: dict[str, Any] | None = None
+        self._ranked_files_cache: dict[
+            tuple[tuple[str, ...], tuple[str, ...]], tuple[IndexedFile, ...]
+        ] = {}
+        self._manifest_fast_receipts: set[tuple[str, str]] = set()
+        self._manifest_shard_cache: dict[int, tuple[bytes, str]] = {}
 
     def _scan(self) -> tuple[IndexedFile, ...]:
         indexed: list[IndexedFile] = []
@@ -85,99 +98,144 @@ class ProjectIndex:
             if not path.is_file() or path.is_symlink():
                 continue
             relative = path.relative_to(self.root)
-            if any(part in _IGNORED_PARTS for part in relative.parts):
-                continue
-            suffix = path.suffix.lower()
-            if suffix not in _TEXT_SUFFIXES and path.name not in {
-                "build.gradle",
-                "settings.gradle",
-                "gradle.properties",
-                "fabric.mod.json",
-            }:
-                continue
-            size = path.stat().st_size
-            if size > self.policy.max_single_file_bytes:
-                tokens: tuple[str, ...] = ()
-                digest = self._sha256(path)
-            else:
-                raw = path.read_bytes()
-                digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-                text = raw.decode("utf-8", errors="replace")
-                tokens = tuple(
-                    sorted(
-                        {
-                            token.lower()
-                            for token in _TOKEN.findall(text)
-                        }
-                    )
-                )
-            indexed.append(
-                IndexedFile(
-                    path=relative.as_posix(),
-                    size_bytes=size,
-                    sha256=digest,
-                    suffix=suffix,
-                    tokens=tokens,
-                )
-            )
+            item = self._indexed_file(relative.as_posix(), path)
+            if item is not None:
+                indexed.append(item)
         return tuple(indexed)
 
+    def _indexed_file(self, normalized: str, path: Path | None) -> IndexedFile | None:
+        if path is None or not path.is_file() or path.is_symlink():
+            return None
+        relative = Path(normalized)
+        if any(part in _IGNORED_PARTS for part in relative.parts):
+            return None
+        suffix = path.suffix.lower()
+        if suffix not in _TEXT_SUFFIXES and path.name not in _SPECIAL_TEXT_NAMES:
+            return None
+        size = path.stat().st_size
+        if size > self.policy.max_single_file_bytes:
+            tokens: tuple[str, ...] = ()
+            digest = self._sha256(path)
+        else:
+            raw = path.read_bytes()
+            digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+            text = raw.decode("utf-8", errors="replace")
+            tokens = tuple(sorted({token.lower() for token in _TOKEN.findall(text)}))
+        return IndexedFile(
+            path=normalized,
+            size_bytes=size,
+            sha256=digest,
+            suffix=suffix,
+            tokens=tokens,
+        )
+
+    def _resolve_touched(self, raw_path: str | Path) -> tuple[str, Path | None] | None:
+        raw = Path(raw_path)
+        if raw.is_absolute():
+            try:
+                relative = raw.relative_to(self.root)
+            except ValueError:
+                return None
+        else:
+            relative = raw
+        normalized = relative.as_posix()
+        if not normalized or normalized == ".":
+            return None
+        candidate = self.root / relative
+        try:
+            resolved = candidate.resolve(strict=False)
+            resolved.relative_to(self.root)
+        except (OSError, ValueError):
+            return normalized, None
+        return normalized, candidate
+
+    @staticmethod
+    def _find_position(files: list[IndexedFile], path: str) -> tuple[int, bool]:
+        lo = 0
+        hi = len(files)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if files[mid].path < path:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo, lo < len(files) and files[lo].path == path
+
+    def _invalidate_after_update(
+        self,
+        *,
+        dirty_shards: set[int],
+        structural_from: int | None,
+    ) -> None:
+        self._manifest_receipt_cache = None
+        self._ranked_files_cache.clear()
+        self._manifest_fast_receipts.clear()
+        if structural_from is not None:
+            for shard in tuple(self._manifest_shard_cache):
+                if shard >= structural_from:
+                    self._manifest_shard_cache.pop(shard, None)
+        for shard in dirty_shards:
+            self._manifest_shard_cache.pop(shard, None)
+
     def update_files(self, touched_paths: Iterable[str | Path]) -> None:
-        """Incrementally update index for touched relative or absolute paths."""
-        by_path = dict(self._by_path)
+        """Update only touched sorted entries and invalidate only affected caches."""
+
+        files = list(self.files)
+        dirty_shards: set[int] = set()
+        structural_from: int | None = None
+        changed = False
+
         for raw_path in touched_paths:
-            path = Path(raw_path)
-            if path.is_absolute():
-                try:
-                    relative = path.relative_to(self.root)
-                except ValueError:
+            resolved = self._resolve_touched(raw_path)
+            if resolved is None:
+                continue
+            normalized, path = resolved
+            position, existed = self._find_position(files, normalized)
+            before = files[position] if existed else None
+            item = self._indexed_file(normalized, path)
+
+            if item is None:
+                if not existed:
+                    self._by_path.pop(normalized, None)
                     continue
+                self._by_path.pop(normalized, None)
+                files.pop(position)
+                changed = True
+                shard = position // _MANIFEST_SHARD_SIZE
+                structural_from = (
+                    shard if structural_from is None else min(structural_from, shard)
+                )
+                continue
+
+            if existed and before == item:
+                self._by_path[normalized] = item
+                continue
+
+            self._by_path[normalized] = item
+            changed = True
+            shard = position // _MANIFEST_SHARD_SIZE
+            if existed:
+                files[position] = item
+                dirty_shards.add(shard)
             else:
-                relative = path
-            norm_path = relative.as_posix()
-            abs_path = self.root / relative
-            if not abs_path.is_file() or abs_path.is_symlink():
-                by_path.pop(norm_path, None)
-                continue
-            if any(part in _IGNORED_PARTS for part in relative.parts):
-                by_path.pop(norm_path, None)
-                continue
-            suffix = abs_path.suffix.lower()
-            if suffix not in _TEXT_SUFFIXES and abs_path.name not in {
-                "build.gradle",
-                "settings.gradle",
-                "gradle.properties",
-                "fabric.mod.json",
-            }:
-                by_path.pop(norm_path, None)
-                continue
-            size = abs_path.stat().st_size
-            if size > self.policy.max_single_file_bytes:
-                tokens: tuple[str, ...] = ()
-                digest = self._sha256(abs_path)
-            else:
-                raw = abs_path.read_bytes()
-                digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-                text = raw.decode("utf-8", errors="replace")
-                tokens = tuple(sorted({token.lower() for token in _TOKEN.findall(text)}))
-            by_path[norm_path] = IndexedFile(
-                path=norm_path,
-                size_bytes=size,
-                sha256=digest,
-                suffix=suffix,
-                tokens=tokens,
-            )
-        self.files = tuple(sorted(by_path.values(), key=lambda f: f.path))
-        self._by_path = by_path
+                files.insert(position, item)
+                structural_from = (
+                    shard if structural_from is None else min(structural_from, shard)
+                )
+
+        if not changed:
+            return
+        self.files = tuple(files)
+        self._invalidate_after_update(
+            dirty_shards=dirty_shards,
+            structural_from=structural_from,
+        )
 
     @staticmethod
     def _sha256(path: Path) -> str:
         digest = hashlib.sha256()
         with path.open("rb") as stream:
-            for chunk in iter(
-                lambda: stream.read(1024 * 1024),
-                b"",
-            ):
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
         return "sha256:" + digest.hexdigest()
 
@@ -193,14 +251,24 @@ class ProjectIndex:
             "schema_version": "mmm/project-index-v1",
             "project_root": str(self.root),
             "file_count": len(self.files),
-            "total_text_bytes": sum(
-                item.size_bytes for item in self.files
-            ),
+            "total_text_bytes": sum(item.size_bytes for item in self.files),
             "files": [item.to_dict() for item in self.files],
         }
 
+    @staticmethod
+    def _copy_receipt(value: dict[str, Any]) -> dict[str, Any]:
+        copied = dict(value)
+        suffix_counts = value.get("suffix_counts")
+        if isinstance(suffix_counts, dict):
+            copied["suffix_counts"] = dict(suffix_counts)
+        return copied
+
     def manifest_receipt(self) -> dict[str, Any]:
-        """Return a fixed-size, stable commitment to the complete source tree."""
+        """Return a cached fixed-size stable commitment to the complete source tree."""
+
+        cached = self._manifest_receipt_cache
+        if cached is not None:
+            return self._copy_receipt(cached)
 
         digest = hashlib.sha256()
         total_bytes = 0
@@ -223,7 +291,7 @@ class ProjectIndex:
             suffix_counts[item.suffix or "<none>"] = (
                 suffix_counts.get(item.suffix or "<none>", 0) + 1
             )
-        return {
+        value = {
             "schema_version": "mmm/project-index-receipt-v2",
             "file_count": len(self.files),
             "total_text_bytes": total_bytes,
@@ -231,6 +299,8 @@ class ProjectIndex:
             "suffix_counts": dict(sorted(suffix_counts.items())),
             "expanded_manifest": ".minecraft_ai/project-index.json",
         }
+        self._manifest_receipt_cache = self._copy_receipt(value)
+        return self._copy_receipt(value)
 
     def select(
         self,
@@ -239,43 +309,23 @@ class ProjectIndex:
         diagnostic_paths: Iterable[str] = (),
         byte_budget: int | None = None,
     ) -> dict[str, Any]:
-        budget = (
-            self.policy.model_context_bytes
-            if byte_budget is None
-            else byte_budget
-        )
+        budget = self.policy.model_context_bytes if byte_budget is None else byte_budget
         if type(budget) is not int or budget < 1:
             raise ValueError("byte_budget must be a positive integer")
-        query_text = (
-            query
-            if isinstance(query, str)
-            else " ".join(str(value) for value in query)
-        )
-        query_tokens = {
-            token.lower() for token in _TOKEN.findall(query_text)
-        }
-        explicit = {
-            self._normalize_path(value)
-            for value in diagnostic_paths
-            if value
-        }
+        query_text = query if isinstance(query, str) else " ".join(str(value) for value in query)
+        query_tokens = {token.lower() for token in _TOKEN.findall(query_text)}
+        explicit = {self._normalize_path(value) for value in diagnostic_paths if value}
 
         selected: list[dict[str, Any]] = []
         consumed = 0
-        for item in self._ranked_files(
-            query_tokens=query_tokens,
-            explicit=explicit,
-        ):
+        for item in self._ranked_files(query_tokens=query_tokens, explicit=explicit):
             remaining = budget - consumed
             if remaining <= 0:
                 break
             if item.size_bytes > self.policy.max_single_file_bytes:
                 continue
             path = self.root / item.path
-            text = path.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
+            text = path.read_text(encoding="utf-8", errors="replace")
             raw = text.encode("utf-8")
             truncated = False
             if len(raw) > remaining:
@@ -325,40 +375,17 @@ class ProjectIndex:
         byte_budget: int | None = None,
         cursor: str = "",
     ) -> dict[str, Any]:
-        """Return one bounded page from the complete relevance-ordered source.
+        """Return one bounded page from the complete relevance-ordered source."""
 
-        ``select`` intentionally remains the compatibility one-shot retrieval API.
-        This method adds an independent, host-owned cursor for generation workflows:
-        every text file allowed by the explicit host file-size policy is reachable,
-        and files larger than one page are continued as UTF-8 fragments instead of
-        being silently abandoned.  The cursor is bound to the project receipt,
-        query, explicit paths and byte budget, so it cannot be replayed against a
-        different source snapshot.
-        """
-
-        budget = (
-            self.policy.model_context_bytes
-            if byte_budget is None
-            else byte_budget
-        )
+        budget = self.policy.model_context_bytes if byte_budget is None else byte_budget
         if type(budget) is not int or budget < _MIN_PROJECT_CONTEXT_PAGE_BYTES:
             raise ValueError(
                 "Project context page byte_budget must be an integer >= "
                 f"{_MIN_PROJECT_CONTEXT_PAGE_BYTES}."
             )
-        query_text = (
-            query
-            if isinstance(query, str)
-            else " ".join(str(value) for value in query)
-        )
-        query_tokens = {
-            token.lower() for token in _TOKEN.findall(query_text)
-        }
-        explicit = {
-            self._normalize_path(value)
-            for value in diagnostic_paths
-            if value
-        }
+        query_text = query if isinstance(query, str) else " ".join(str(value) for value in query)
+        query_tokens = {token.lower() for token in _TOKEN.findall(query_text)}
+        explicit = {self._normalize_path(value) for value in diagnostic_paths if value}
         ranked = [
             item
             for item in self._ranked_files(
@@ -367,9 +394,7 @@ class ProjectIndex:
             )
             if item.size_bytes <= self.policy.max_single_file_bytes
         ]
-        query_sha256 = "sha256:" + hashlib.sha256(
-            query_text.encode("utf-8")
-        ).hexdigest()
+        query_sha256 = "sha256:" + hashlib.sha256(query_text.encode("utf-8")).hexdigest()
         project_sha256 = self.manifest_receipt()["sha256"]
         fingerprint = self._page_fingerprint(
             project_sha256=project_sha256,
@@ -396,10 +421,7 @@ class ProjectIndex:
                     "Project source changed after its context index was built: "
                     f"{item.path}"
                 )
-            normalized = current.decode(
-                "utf-8",
-                errors="replace",
-            ).encode("utf-8")
+            normalized = current.decode("utf-8", errors="replace").encode("utf-8")
             if offset > len(normalized):
                 raise ValueError("Project context cursor byte offset is invalid.")
             if not normalized and offset == 0:
@@ -505,14 +527,17 @@ class ProjectIndex:
         query_tokens: set[str],
         explicit: set[str],
     ) -> list[IndexedFile]:
+        key = (tuple(sorted(query_tokens)), tuple(sorted(explicit)))
+        cached = self._ranked_files_cache.get(key)
+        if cached is not None:
+            return list(cached)
+
         scored: list[tuple[int, int, str, IndexedFile]] = []
         for item in self.files:
             score = 0
             if item.path in explicit:
                 score += 1_000_000
-            path_tokens = {
-                token.lower() for token in _TOKEN.findall(item.path)
-            }
+            path_tokens = {token.lower() for token in _TOKEN.findall(item.path)}
             score += 60 * len(query_tokens & path_tokens)
             score += 8 * len(query_tokens & set(item.tokens))
             if item.path in {
@@ -522,13 +547,15 @@ class ProjectIndex:
                 "src/main/resources/fabric.mod.json",
             }:
                 score += 100
-            if item.path.endswith("Mod.java") or item.path.endswith(
-                "Client.java"
-            ):
+            if item.path.endswith("Mod.java") or item.path.endswith("Client.java"):
                 score += 80
             scored.append((-score, item.size_bytes, item.path, item))
         scored.sort()
-        return [item for _, _, _, item in scored]
+        value = tuple(item for _, _, _, item in scored)
+        if len(self._ranked_files_cache) >= _RANK_CACHE_MAX_ENTRIES:
+            self._ranked_files_cache.pop(next(iter(self._ranked_files_cache)))
+        self._ranked_files_cache[key] = value
+        return list(value)
 
     def _page_fingerprint(
         self,
@@ -723,11 +750,7 @@ class ProjectIndex:
         candidate = Path(raw)
         if candidate.is_absolute():
             try:
-                return (
-                    candidate.resolve()
-                    .relative_to(self.root)
-                    .as_posix()
-                )
+                return candidate.resolve().relative_to(self.root).as_posix()
             except ValueError:
                 return ""
         normalized = candidate.as_posix()
@@ -735,10 +758,87 @@ class ProjectIndex:
             normalized = normalized[2:]
         return normalized
 
-    def write_manifest(
+    @staticmethod
+    def _part_bytes(index: int, members: tuple[IndexedFile, ...]) -> bytes:
+        payload = {
+            "schema_version": "mmm/project-index-part-v2",
+            "part": index,
+            "files": [item.to_dict() for item in members],
+        }
+        return (
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+
+    @staticmethod
+    def _load_index(target: Path) -> dict[str, Any]:
+        if not target.is_file() or target.is_symlink():
+            return {}
+        try:
+            value = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _safe_existing_part(target_parent: Path, relative: Any) -> Path | None:
+        if not isinstance(relative, str) or not relative:
+            return None
+        candidate = target_parent / relative
+        if candidate.is_symlink():
+            return None
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(target_parent.resolve())
+        except (OSError, ValueError):
+            return None
+        if not resolved.is_file():
+            return None
+        return resolved
+
+    def _current_snapshot_parts(
         self,
-        path: str | Path | None = None,
-    ) -> Path:
+        *,
+        existing: dict[str, Any],
+        target: Path,
+        version: str,
+        expected_parts: int,
+    ) -> list[tuple[Path, str]] | None:
+        if existing.get("schema_version") != "mmm/project-index-v2":
+            return None
+        if existing.get("sha256") != f"sha256:{version}":
+            return None
+        if existing.get("shard_size") != _MANIFEST_SHARD_SIZE:
+            return None
+        records = existing.get("parts")
+        if not isinstance(records, list) or len(records) != expected_parts:
+            return None
+        expected_root = (target.parent / f"{target.stem}-parts" / version).resolve()
+        parts: list[tuple[Path, str]] = []
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                return None
+            part = self._safe_existing_part(target.parent, record.get("path"))
+            digest = record.get("sha256")
+            if part is None or not isinstance(digest, str):
+                return None
+            try:
+                part.relative_to(expected_root)
+            except ValueError:
+                return None
+            if part.name != f"part-{index:08d}.json":
+                return None
+            parts.append((part, digest))
+        return parts
+
+    def write_manifest(self, path: str | Path | None = None) -> Path:
+        """Persist only changed manifest shards and reuse validated existing shards."""
+
         target = (
             Path(path).expanduser().resolve()
             if path is not None
@@ -746,48 +846,99 @@ class ProjectIndex:
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         receipt = self.manifest_receipt()
-        version = receipt["sha256"].removeprefix("sha256:")
+        version = str(receipt["sha256"]).removeprefix("sha256:")
+        expected_parts = (
+            len(self.files) + _MANIFEST_SHARD_SIZE - 1
+        ) // _MANIFEST_SHARD_SIZE
+        existing = self._load_index(target)
+        current_parts = self._current_snapshot_parts(
+            existing=existing,
+            target=target,
+            version=version,
+            expected_parts=expected_parts,
+        )
+        fast_key = (str(target), version)
+
+        if current_parts is not None and fast_key in self._manifest_fast_receipts:
+            return target
+        if current_parts is not None and all(
+            self._sha256(part) == digest for part, digest in current_parts
+        ):
+            self._manifest_fast_receipts.add(fast_key)
+            return target
+
+        previous_by_name: dict[str, tuple[Path, str]] = {}
+        records = existing.get("parts")
+        if isinstance(records, list):
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                source = self._safe_existing_part(target.parent, record.get("path"))
+                digest = record.get("sha256")
+                if source is not None and isinstance(digest, str):
+                    previous_by_name[source.name] = (source, digest)
+
         parts_root = target.parent / f"{target.stem}-parts"
         version_root = parts_root / version
+        rendered_parts: list[tuple[str, bytes, str]] = []
+        for index, start in enumerate(
+            range(0, len(self.files), _MANIFEST_SHARD_SIZE)
+        ):
+            cached = self._manifest_shard_cache.get(index)
+            if cached is None:
+                raw = self._part_bytes(
+                    index,
+                    self.files[start : start + _MANIFEST_SHARD_SIZE],
+                )
+                digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+                self._manifest_shard_cache[index] = (raw, digest)
+            else:
+                raw, digest = cached
+            rendered_parts.append((f"part-{index:08d}.json", raw, digest))
+
+        created_version = False
         if not version_root.is_dir():
             temporary_root = parts_root / f".{version}.{uuid.uuid4().hex}.tmp"
             temporary_root.mkdir(parents=True, exist_ok=False)
             try:
-                for index, start in enumerate(
-                    range(0, len(self.files), _MANIFEST_SHARD_SIZE)
-                ):
-                    members = self.files[start : start + _MANIFEST_SHARD_SIZE]
-                    payload = {
-                        "schema_version": "mmm/project-index-part-v2",
-                        "part": index,
-                        "files": [item.to_dict() for item in members],
-                    }
-                    (temporary_root / f"part-{index:08d}.json").write_text(
-                        json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            indent=2,
-                            sort_keys=True,
-                        )
-                        + "\n",
-                        encoding="utf-8",
-                    )
+                for name, raw, digest in rendered_parts:
+                    destination = temporary_root / name
+                    previous = previous_by_name.get(name)
+                    linked = False
+                    if previous is not None and previous[1] == digest:
+                        source = previous[0]
+                        if self._sha256(source) == digest:
+                            try:
+                                os.link(source, destination)
+                                linked = True
+                            except OSError:
+                                linked = False
+                    if not linked:
+                        destination.write_bytes(raw)
                 parts_root.mkdir(parents=True, exist_ok=True)
                 os.replace(temporary_root, version_root)
+                created_version = True
             except BaseException:
                 if temporary_root.is_dir():
                     import shutil
 
                     shutil.rmtree(temporary_root)
                 raise
-        part_records = []
-        for part in sorted(version_root.glob("part-*.json")):
+
+        part_records: list[dict[str, str]] = []
+        for name, _raw, digest in rendered_parts:
+            part = version_root / name
+            if not part.is_file() or part.is_symlink():
+                raise OSError(f"Project index shard is missing: {part}")
+            if not created_version and self._sha256(part) != digest:
+                raise OSError(f"Project index shard digest mismatch: {part}")
             part_records.append(
                 {
                     "path": part.relative_to(target.parent).as_posix(),
-                    "sha256": self._sha256(part),
+                    "sha256": digest,
                 }
             )
+
         index_payload = {
             **receipt,
             "schema_version": "mmm/project-index-v2",
@@ -808,7 +959,14 @@ class ProjectIndex:
             encoding="utf-8",
         )
         os.replace(temporary_target, target)
+        self._manifest_fast_receipts.add(fast_key)
         return target
+
+
+ProjectIndex.manifest_receipt._mmm_cached_manifest_receipt = True  # type: ignore[attr-defined]
+ProjectIndex._ranked_files._mmm_cached_relevance_order = True  # type: ignore[attr-defined]
+ProjectIndex.update_files._mmm_incremental_sorted_update = True  # type: ignore[attr-defined]
+ProjectIndex.write_manifest._mmm_incremental_manifest_io = True  # type: ignore[attr-defined]
 
 
 def _relevant_excerpt(
@@ -823,10 +981,7 @@ def _relevant_excerpt(
     matching = [
         index
         for index, line in enumerate(lines)
-        if query_tokens
-        & {
-            token.lower() for token in _TOKEN.findall(line)
-        }
+        if query_tokens & {token.lower() for token in _TOKEN.findall(line)}
     ]
     if not matching:
         raw = text.encode("utf-8")[:byte_budget]
