@@ -1,37 +1,10 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .coder_tool_route_integrity_contract import install as install_coder_tool_route_integrity
-from .generation_concurrency_safety import install as install_generation_concurrency_safety
-from .mcp_transport_pool import install_agent_mcp_transport_pool
 from .runtime_bootstrap import initialize_runtime
-from .runtime_preflight import run_runtime_preflight
+from .runtime_finalization import finalize_runtime
 
 initialize_runtime()
-install_agent_mcp_transport_pool()
-
-# The progress-aware retrieval loop is intentionally installed late by the runtime
-# bootstrap. Recompose the live causal frontier after that late owner so writable
-# coder turns retain the complete authorized mutation surface behind per-turn gates.
-from . import causal_tool_frontier_contract as _causal_tool_frontier_contract
-from . import model_router as _model_router
-from . import small_model_max_agent_contract as _small_model_max_agent_contract
-
-install_coder_tool_route_integrity(
-    model_router_module=_model_router,
-    small_model_module=_small_model_max_agent_contract,
-    causal_module=_causal_tool_frontier_contract,
-)
-
-# The DAG scheduler can reuse one CustomModuleGenerator/ProjectIndex across worker
-# threads. Install per-instance snapshot boundaries after all generation wrappers so
-# the final callable, rather than a buried inner implementation, owns the lock.
-install_generation_concurrency_safety()
-
-# Run a model-free structural smoke test only after the final tool-loop composition
-# and generation concurrency boundaries are installed. Any Python/wrapper/causal
-# regression now fails during package import, before a production run spends time
-# loading multi-gigabyte model weights.
-run_runtime_preflight()
+finalize_runtime()
 
 from .api import (
     ChatReply,
