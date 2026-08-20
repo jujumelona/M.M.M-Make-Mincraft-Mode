@@ -3,13 +3,20 @@ from __future__ import annotations
 import concurrent.futures
 import inspect
 
+import pytest
+
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
-from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
+from minecraft_mod_ai.work_graph import (
+    DurableWorkLedger,
+    WorkGraphError,
+    WorkGraphPlan,
+    WorkNode,
+)
 
 
 def _node(node_id: str, resource_class: str) -> WorkNode:
@@ -133,6 +140,27 @@ def test_shared_gpu_allows_llm_read_sharing_but_blocks_image(monkeypatch, tmp_pa
         assert image["node_id"] == "z-image"
     finally:
         safety._SHARED_LOCAL_GPU_LANE.reset(token)
+
+
+def test_reused_sqlite_connection_rejects_stale_checkpoint_completion(tmp_path) -> None:
+    ledger = DurableWorkLedger(
+        tmp_path / "rowcount.sqlite",
+        proposal_hash="sha256:rowcount-regression",
+    )
+    ledger.begin_checkpoint(
+        "compile",
+        stage="validate:source",
+        input_hash="sha256:current",
+    )
+
+    with pytest.raises(WorkGraphError, match="Checkpoint changed while running"):
+        ledger.succeed_checkpoint(
+            "compile",
+            input_hash="sha256:stale",
+            receipt={"status": "PASS"},
+        )
+
+    assert ledger.cached_checkpoint("compile", input_hash="sha256:current") is None
 
 
 def test_parallel_custom_search_has_one_runtime_owner() -> None:
