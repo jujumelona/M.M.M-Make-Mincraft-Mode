@@ -114,6 +114,8 @@ def install(java_lsp_module: Any) -> None:
                             message = self.messages.get(timeout=min(0.25, remaining))
                         except java_lsp_module.queue.Empty:
                             continue
+                        if java_lsp_module._respond_to_server_request(self, message):
+                            continue
                         if message.get("id") == request_id:
                             if "error" in message:
                                 raise java_lsp_module.JDTLanguageServerError(
