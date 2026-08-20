@@ -26,14 +26,14 @@ _MARKER = "_mmm_coder_tool_route_integrity_v1"
 _QUERY_MARKER = "_mmm_user_only_tool_routing_query_v1"
 _GOAL_MARKER = "_mmm_implementation_goal_priority_v1"
 _HOST_MUTATION_PROOF_KEY = "_mmm_source_mutation"
-_MUTATION_TOOLS = frozenset(
-    {
-        "apply_source_patch",
-        "apply_source_edit",
-        "apply_java_operations",
-        "repair_project",
-    }
+_MUTATION_PRIORITY = (
+    "apply_source_patch",
+    "apply_source_edit",
+    "apply_java_operations",
+    "repair_project",
 )
+_MUTATION_TOOLS = frozenset(_MUTATION_PRIORITY)
+_MUTATION_FAILURE_LIMIT = 2
 _FAILURE_STATUSES = frozenset(
     {
         "FAIL",
@@ -188,6 +188,39 @@ def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+def _failed_mutation_attempts(
+    messages: Sequence[Mapping[str, Any]],
+    name: str,
+) -> int:
+    """Count only explicit host-call failures for one mutation route."""
+
+    failures = 0
+    for message in messages:
+        if str(message.get("role", "")).strip().casefold() != "tool":
+            continue
+        if str(message.get("name", "")).strip() != name:
+            continue
+        payload = _tool_payload(message)
+        if payload is not None and payload.get("ok") is False:
+            failures += 1
+    return failures
+
+
+def _preferred_visible_mutation(
+    tools: Sequence[Mapping[str, Any]],
+    messages: Sequence[Mapping[str, Any]],
+) -> str:
+    """Choose a reviewed mutation route without depending on schema ordering."""
+
+    visible = {_tool_name(schema) for schema in tools}
+    for name in _MUTATION_PRIORITY:
+        if name not in visible:
+            continue
+        if _failed_mutation_attempts(messages, name) < _MUTATION_FAILURE_LIMIT:
+            return name
+    return ""
+
+
 def _force_tool_choice(request: Any, tool_name: str) -> Any:
     from .model_adapters import GenerationRequest
 
@@ -257,7 +290,8 @@ class _WritableProgressAdapter:
     Prerequisite retrieval remains ``auto`` on the first attempt. If a small model
     answers in prose instead of taking one of the already-authorized causal actions,
     retry exactly once with the first visible frontier action forced. Mutation actions
-    are forced as soon as the causal frontier makes them legal. Final synthesis is
+    are forced by explicit host priority as soon as the causal frontier makes them
+    legal, with bounded failover after explicit host-call failures. Final synthesis is
     rejected until a successful mutation observation is present in the transcript.
     """
 
@@ -281,14 +315,12 @@ class _WritableProgressAdapter:
         if request.tool_choice != "auto":
             return self.inner.generate_turn(request)
 
-        mutation = next(
-            (
-                name
-                for schema in request.tools
-                if (name := _tool_name(schema)) in _MUTATION_TOOLS
-            ),
-            "",
+        visible_mutations = tuple(
+            name
+            for schema in request.tools
+            if (name := _tool_name(schema)) in _MUTATION_TOOLS
         )
+        mutation = _preferred_visible_mutation(request.tools, request.messages)
         if mutation:
             forced = _force_tool_choice(request, mutation)
             turn = self.inner.generate_turn(forced)
@@ -298,6 +330,13 @@ class _WritableProgressAdapter:
                     "refusing a prose-only implementation turn after mutation became causal/legal."
                 )
             return turn
+        if visible_mutations:
+            exhausted = ", ".join(dict.fromkeys(visible_mutations))
+            raise ModelConfigurationError(
+                "Writable coder exhausted the bounded mutation retry budget for the "
+                f"current causal frontier ({exhausted}); refusing to repeat the same "
+                "failed source-edit loop."
+            )
 
         # Observation/retrieval frontiers remain model-owned on the first attempt.
         # If the model refuses every visible action and emits prose, that prose is not
