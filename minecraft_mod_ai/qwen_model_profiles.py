@@ -67,7 +67,7 @@ QWEN36_NON_THINKING: Final = {
     "reasoning_effort": "none",
 }
 
-# Qwen3.8-27B uses the new release's hybrid-thinking defaults. Coding agent turns
+# Qwen3.8-27B uses the release's hybrid-thinking defaults. Coding agent turns
 # intentionally use the same documented thinking sampler instead of inheriting the
 # old Qwen3.6 coding-temperature override.
 QWEN38_THINKING: Final = {
@@ -83,7 +83,7 @@ QWEN38_NON_THINKING: Final = {
     "top_p": 0.8,
     "top_k": 20,
     "min_p": 0.0,
-    "presence_penalty": 0.0,
+    "presence_penalty": 1.5,
     "repeat_penalty": 1.0,
     "reasoning_effort": "none",
 }
