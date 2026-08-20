@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import base64
 import json
 import mimetypes
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
@@ -17,6 +19,10 @@ from .base import (
 )
 
 
+_CLIENT_LOCK = threading.RLock()
+_CLIENTS: dict[tuple[str, str, Any], Any] = {}
+
+
 def _data_url(path: Path) -> str:
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
@@ -24,6 +30,53 @@ def _data_url(path: Path) -> str:
     mime = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
     encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
+
+
+def _validated_remote(config: Any) -> tuple[str, str]:
+    base_url = str(config.base_url or "").strip().rstrip("/")
+    if not base_url.startswith("https://"):
+        raise ModelConfigurationError("Remote base_url must use HTTPS.")
+    api_key = str(config.api_key or "").strip()
+    if not api_key:
+        raise ModelConfigurationError(f"API key is missing for role {config.role!r}.")
+    return base_url, api_key
+
+
+def _http_client(base_url: str, *, purpose: str) -> Any:
+    """Reuse one thread-safe HTTP connection pool per remote origin and call type."""
+
+    import httpx
+
+    factory = httpx.Client
+    key = (base_url, purpose, factory)
+    with _CLIENT_LOCK:
+        client = _CLIENTS.get(key)
+        if client is not None:
+            return client
+        if purpose == "completion":
+            client = factory(timeout=120.0, follow_redirects=False)
+        elif purpose == "image":
+            client = factory(follow_redirects=False, trust_env=False)
+        else:
+            raise ValueError(f"Unsupported remote HTTP client purpose: {purpose!r}")
+        _CLIENTS[key] = client
+        return client
+
+
+def _close_http_clients() -> None:
+    with _CLIENT_LOCK:
+        clients = tuple(_CLIENTS.values())
+        _CLIENTS.clear()
+    for client in clients:
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+atexit.register(_close_http_clients)
 
 
 class OpenAICompatibleAdapter(ModelAdapter):
@@ -44,14 +97,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
         cfg = self.config
         try:
-            import httpx
-
-            if not cfg.base_url.startswith("https://"):
-                raise ModelConfigurationError("Remote base_url must use HTTPS.")
-            if not cfg.api_key:
-                raise ModelConfigurationError(
-                    f"API key is missing for role {cfg.role!r}."
-                )
+            base_url, api_key = _validated_remote(cfg)
             messages: list[dict[str, Any]] = [dict(item) for item in request.messages]
             if request.media_paths:
                 if not messages or messages[-1].get("role") != "user":
@@ -89,17 +135,16 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 payload["tool_choice"] = request.tool_choice or "auto"
                 payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
 
-            with httpx.Client(timeout=120.0, follow_redirects=False) as client:
-                response = client.post(
-                    f"{cfg.base_url.rstrip('/')}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {cfg.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = _http_client(base_url, purpose="completion").post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
 
             choices = data.get("choices") if isinstance(data, dict) else None
             if not isinstance(choices, list) or not choices:
@@ -146,54 +191,47 @@ class OpenAICompatibleAdapter(ModelAdapter):
         seed: int,
     ) -> Path:
         """Call an OpenAI-compatible image endpoint; FLUX remains a separate role."""
+
         del seed
         cfg = self.config
         try:
-            import httpx
-
-            if not cfg.base_url.startswith("https://"):
-                raise ModelConfigurationError("Remote base_url must use HTTPS.")
-            if not cfg.api_key:
-                raise ModelConfigurationError(
-                    f"API key is missing for role {cfg.role!r}."
-                )
+            base_url, api_key = _validated_remote(cfg)
             if not prompt.strip() or width < 1 or height < 1:
                 raise ModelConfigurationError(
                     "Remote image prompt and dimensions must be valid."
                 )
-            with httpx.Client(follow_redirects=False, trust_env=False) as client:
-                response = client.post(
-                    f"{cfg.base_url.rstrip('/')}/images/generations",
-                    headers={
-                        "Authorization": f"Bearer {cfg.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": cfg.model_id,
-                        "prompt": prompt,
-                        "size": f"{width}x{height}",
-                        "response_format": "b64_json",
-                        "n": 1,
-                    },
+            response = _http_client(base_url, purpose="image").post(
+                f"{base_url}/images/generations",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": cfg.model_id,
+                    "prompt": prompt,
+                    "size": f"{width}x{height}",
+                    "response_format": "b64_json",
+                    "n": 1,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            entries = payload.get("data")
+            if not isinstance(entries, list) or len(entries) != 1:
+                raise ModelConfigurationError(
+                    "Remote image endpoint returned invalid data."
                 )
-                response.raise_for_status()
-                payload = response.json()
-                entries = payload.get("data")
-                if not isinstance(entries, list) or len(entries) != 1:
-                    raise ModelConfigurationError(
-                        "Remote image endpoint returned invalid data."
-                    )
-                item = entries[0]
-                if not isinstance(item, dict):
-                    raise ModelConfigurationError(
-                        "Remote image result must be an object."
-                    )
-                encoded = item.get("b64_json")
-                if not isinstance(encoded, str) or not encoded:
-                    raise ModelConfigurationError(
-                        "Remote image result must contain inline b64_json bytes."
-                    )
-                image_bytes = base64.b64decode(encoded, validate=True)
+            item = entries[0]
+            if not isinstance(item, dict):
+                raise ModelConfigurationError(
+                    "Remote image result must be an object."
+                )
+            encoded = item.get("b64_json")
+            if not isinstance(encoded, str) or not encoded:
+                raise ModelConfigurationError(
+                    "Remote image result must contain inline b64_json bytes."
+                )
+            image_bytes = base64.b64decode(encoded, validate=True)
 
             if not image_bytes or len(image_bytes) > 128 * 1024 * 1024:
                 raise ModelConfigurationError(
