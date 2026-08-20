@@ -114,8 +114,32 @@ _qwen35_9b: &qwen35_9b
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   runtime_contract: qwen
+  request_policy: task_aware_sampling
   decode_hotpath: t4_mtp
   mtp_widths: "1,2,3,4,5,6"
+  sampling_profiles:
+    general_thinking:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+    precise_coding:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
+    non_thinking:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+      reasoning_effort: none
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
