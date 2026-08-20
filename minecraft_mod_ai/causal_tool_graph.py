@@ -51,6 +51,7 @@ _EXTERNAL_NAMES = frozenset({
     "external_mcp_call",
 })
 _RAG_NAMES = frozenset({"search_code_rag", "search_project_rag"})
+_GRADLE_VERIFY_NAMES = frozenset({"run_gradle_build", "gradle_build"})
 _SAFE_PROGRESS_EFFECTS = frozenset({
     "project_observed",
     "work_observed",
@@ -116,21 +117,104 @@ def _payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
 
 
+def _result_mappings(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    """Walk normalized tool results without assuming one transport envelope shape."""
+
+    root: Any = payload.get("result", payload)
+    pending: list[Any] = [root]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if isinstance(current, Mapping):
+            marker = id(current)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            yield current
+            pending.extend(current.values())
+            continue
+        if isinstance(current, Sequence) and not isinstance(current, (str, bytes, bytearray)):
+            pending.extend(current)
+
+
 def _rag_receipt_ready(payload: Mapping[str, Any]) -> bool:
     """Certify terminal RAG evidence only from objective retrieval-quality fields."""
 
-    result = payload.get("result")
-    result = result if isinstance(result, Mapping) else payload
-    receipt = result.get("receipt") if isinstance(result, Mapping) else None
-    if not isinstance(receipt, Mapping):
-        return False
-    try:
-        count = int(receipt.get("result_count", 0) or 0)
-        coverage = float(receipt.get("coverage_score", 0.0) or 0.0)
-        relevance = float(receipt.get("relevance_score", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return False
-    return count > 0 and coverage >= 0.50 and relevance > 0.0
+    for result in _result_mappings(payload):
+        receipt = result.get("receipt")
+        if not isinstance(receipt, Mapping):
+            continue
+        try:
+            count = int(receipt.get("result_count", 0) or 0)
+            coverage = float(receipt.get("coverage_score", 0.0) or 0.0)
+            relevance = float(receipt.get("relevance_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if count > 0 and coverage >= 0.50 and relevance > 0.0:
+            return True
+    return False
+
+
+def _external_evidence_ready(payload: Mapping[str, Any]) -> bool:
+    """Accept external evidence only from a satisfied federation bundle."""
+
+    for result in _result_mappings(payload):
+        if str(result.get("schema_version", "")) != "mmm/external-mcp-evidence-bundle-v1":
+            continue
+        if str(result.get("status", "")).strip().upper() != "PASS":
+            return False
+        evidence = result.get("evidence")
+        if not isinstance(evidence, Sequence) or isinstance(evidence, (str, bytes, bytearray)):
+            return False
+        try:
+            required = max(1, int(result.get("required_corroboration", 1) or 1))
+        except (TypeError, ValueError):
+            return False
+        return len(evidence) >= required
+    return False
+
+
+def _gradle_build_passed(payload: Mapping[str, Any]) -> bool:
+    """Separate a successful MCP transport from a successful Gradle process."""
+
+    for result in _result_mappings(payload):
+        if "status" not in result or not ({"command", "returncode"} & set(result)):
+            continue
+        if str(result.get("status", "")).strip().upper() != "PASS":
+            return False
+        if "returncode" in result:
+            try:
+                if int(result.get("returncode", -1)) != 0:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
+    return False
+
+
+def _semantic_effects(
+    name: str,
+    payload: Mapping[str, Any],
+    effects: set[str],
+) -> set[str]:
+    """Gate state-changing facts on tool-specific semantic success.
+
+    ``payload['ok']`` certifies only that the host call returned without raising. It
+    must never by itself turn a FAIL/UNAVAILABLE result into verified evidence.
+    """
+
+    if name in _RAG_NAMES and "evidence_ready" in effects:
+        if not _rag_receipt_ready(payload):
+            effects.discard("evidence_ready")
+    if name == "external_mcp_call":
+        if not _external_evidence_ready(payload):
+            effects.discard("external_observation")
+            effects.discard("evidence_ready")
+    if name in _GRADLE_VERIFY_NAMES:
+        if not _gradle_build_passed(payload):
+            effects.discard("build_verified")
+            effects.discard("verified")
+    return effects
 
 
 def verified_state_from_messages(
@@ -157,14 +241,7 @@ def verified_state_from_messages(
             continue
         if not transition.preconditions.issubset(state):
             continue
-        effects = set(transition.effects)
-        # A successful transport/tool invocation is merely an observation. For RAG,
-        # `evidence_ready` is a stronger state and requires retrieval coverage +
-        # relevance evidence. Weak/no-receipt searches remain repeatable and can be
-        # reformulated instead of prematurely terminating retrieval.
-        if name in _RAG_NAMES and "evidence_ready" in effects:
-            if not _rag_receipt_ready(payload):
-                effects.discard("evidence_ready")
+        effects = _semantic_effects(name, payload, set(transition.effects))
         state.update(effects)
     if require_fresh_evidence and not any(
         fact in state
