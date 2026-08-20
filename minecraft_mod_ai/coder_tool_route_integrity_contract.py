@@ -25,6 +25,7 @@ from .causal_tool_graph import shortest_causal_path
 _MARKER = "_mmm_coder_tool_route_integrity_v1"
 _QUERY_MARKER = "_mmm_user_only_tool_routing_query_v1"
 _GOAL_MARKER = "_mmm_implementation_goal_priority_v1"
+_HOST_MUTATION_PROOF_KEY = "_mmm_source_mutation"
 _MUTATION_TOOLS = frozenset(
     {
         "apply_source_patch",
@@ -142,6 +143,19 @@ def _has_applied_patch_receipt(payload: Mapping[str, Any]) -> bool:
     return False
 
 
+def _has_host_mutation_proof(payload: Mapping[str, Any], name: str) -> bool:
+    """Accept only the host-loop marker created after first-party mutation returned."""
+
+    proof = payload.get(_HOST_MUTATION_PROOF_KEY)
+    if not isinstance(proof, Mapping):
+        return False
+    return (
+        name == "apply_source_patch"
+        and str(proof.get("tool", "")).strip() == name
+        and str(proof.get("status", "")).strip() == "APPLIED_BY_HOST_RUNTIME"
+    )
+
+
 def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
     """Return true only for a successful mutation observation already seen by the host loop."""
 
@@ -154,12 +168,15 @@ def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
         payload = _tool_payload(message)
         if payload is None or payload.get("ok") is not True:
             continue
+        if _has_host_mutation_proof(payload, name):
+            return True
         if _has_applied_patch_receipt(payload):
             return True
         # Older reviewed mutation tools may expose a different receipt envelope.
         # Accept them only when the transport succeeded and no nested result reports
         # an explicit semantic failure. `apply_source_patch` is stricter because its
-        # source-patch receipt is the production custom-coder write contract.
+        # source-patch receipt or host mutation proof is the production custom-coder
+        # write contract.
         if name == "apply_source_patch":
             continue
         failed = any(
