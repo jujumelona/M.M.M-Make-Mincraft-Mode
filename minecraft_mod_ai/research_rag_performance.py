@@ -865,28 +865,107 @@ def _bounded_centroid_factory(centroid: Any, original: Callable[..., Any]):
     return search
 
 
+def _native_incremental_build():
+    from . import rag_index as rag
+
+    return _incremental_rag_build_factory(rag, rag.ProjectRAGIndex._full_rebuild)
+
+
+_native_incremental_build = lru_cache(maxsize=1)(_native_incremental_build)
+
+
+def build_index(
+    index: Any,
+    roots: Sequence[str | Path],
+    *,
+    metadata: dict[str, Any],
+    router: Any | None = None,
+    semantic: bool = False,
+    max_files: int | None = None,
+) -> dict[str, Any]:
+    return _native_incremental_build()(
+        index,
+        roots,
+        metadata=metadata,
+        router=router,
+        semantic=semantic,
+        max_files=max_files,
+    )
+
+
+def _native_sqlite_search_pass():
+    from . import rag_index as rag
+
+    return _bounded_sqlite_search_pass_factory(rag, rag._full_sqlite_search_pass)
+
+
+_native_sqlite_search_pass = lru_cache(maxsize=1)(_native_sqlite_search_pass)
+
+
+def sqlite_search_pass(
+    connection: sqlite3.Connection,
+    query: str,
+    *,
+    route: str,
+    limit: int,
+    metadata: dict[str, Any],
+    router: Any | None,
+    semantic: bool,
+    rerank: bool,
+    fts5_available: bool,
+) -> Any:
+    return _native_sqlite_search_pass()(
+        connection,
+        query,
+        route=route,
+        limit=limit,
+        metadata=metadata,
+        router=router,
+        semantic=semantic,
+        rerank=rerank,
+        fts5_available=fts5_available,
+    )
+
+
+def _native_centroid_search():
+    from . import centroid_vector_rag as centroid
+
+    return _bounded_centroid_factory(
+        centroid,
+        centroid._full_direct_centroid_vector_search,
+    )
+
+
+_native_centroid_search = lru_cache(maxsize=1)(_native_centroid_search)
+
+
+def centroid_vector_search(
+    index_path: str | Path,
+    *,
+    query: str,
+    q1_vector: Sequence[float],
+    router: Any,
+    limit: int = 8,
+    required_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    return _native_centroid_search()(
+        index_path,
+        query=query,
+        q1_vector=q1_vector,
+        router=router,
+        limit=limit,
+        required_metadata=required_metadata,
+    )
+
+
 def harden(rag_index_module: Any, centroid_module: Any) -> None:
-    current_build = rag_index_module.ProjectRAGIndex.build
-    if not getattr(current_build, _MARKER, False):
-        rag_index_module.ProjectRAGIndex.build = _incremental_rag_build_factory(
-            rag_index_module, current_build
-        )
-
-    current_search = rag_index_module._sqlite_search_pass
-    if not getattr(current_search, _MARKER, False):
-        rag_index_module._sqlite_search_pass = _bounded_sqlite_search_pass_factory(
-            rag_index_module, current_search
-        )
-
-    current_centroid = centroid_module.direct_centroid_vector_search
-    if not getattr(current_centroid, _MARKER, False):
-        bounded_centroid = _bounded_centroid_factory(centroid_module, current_centroid)
-        centroid_module.direct_centroid_vector_search = bounded_centroid
-        try:
-            from . import small_model_hybrid_search_contract as hybrid
-            hybrid.direct_centroid_vector_search = bounded_centroid
-        except Exception:
-            pass
+    """Compatibility verifier; canonical modules already own the optimized path."""
+    if not hasattr(rag_index_module.ProjectRAGIndex, '_full_rebuild'):
+        raise RuntimeError('ProjectRAGIndex native performance path is not installed.')
+    if not hasattr(rag_index_module, '_full_sqlite_search_pass'):
+        raise RuntimeError('RAG native bounded search path is not installed.')
+    if not hasattr(centroid_module, '_full_direct_centroid_vector_search'):
+        raise RuntimeError('Centroid native bounded search path is not installed.')
 
 
-__all__ = ["harden"]
+__all__ = ["build_index", "sqlite_search_pass", "centroid_vector_search", "harden"]

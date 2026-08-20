@@ -86,6 +86,28 @@ def direct_centroid_vector_search(
     limit: int = 8,
     required_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    """Use the bounded semantic path natively, with exhaustive search as fallback."""
+    from . import research_rag_performance
+
+    return research_rag_performance.centroid_vector_search(
+        index_path,
+        query=query,
+        q1_vector=q1_vector,
+        router=router,
+        limit=limit,
+        required_metadata=required_metadata,
+    )
+
+
+def _full_direct_centroid_vector_search(
+    index_path: str | Path,
+    *,
+    query: str,
+    q1_vector: Sequence[float],
+    router: Any,
+    limit: int = 8,
+    required_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Retrieve directly with q1 against stored chunk vectors, then rerank.
 
     Returns ``None`` when the durable index has no semantic vectors; callers can

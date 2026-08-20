@@ -400,7 +400,6 @@ def _install_post_bootstrap_contracts() -> None:
         production_tools,
         qwen_agent_family_contract,
         repair_engine,
-        runtime_regression_fixes,
         work_graph,
     )
     from .active_repair_verifier_contract import install as install_active_repair_verifier
@@ -464,7 +463,6 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_research_game_design,
         central_intelligence_amplifier,
     )
-    runtime_regression_fixes.install()
     install_long_run_resilience()
     qwen_agent_family_contract.install()
     install_small_model_research_extensions()

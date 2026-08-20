@@ -185,6 +185,27 @@ class ProjectRAGIndex:
         semantic: bool = False,
         max_files: int | None = None,
     ) -> dict[str, Any]:
+        """Build or incrementally refresh through the canonical RAG performance path."""
+        from . import research_rag_performance
+
+        return research_rag_performance.build_index(
+            self,
+            roots,
+            metadata=metadata,
+            router=router,
+            semantic=semantic,
+            max_files=max_files,
+        )
+
+    def _full_rebuild(
+        self,
+        roots: Sequence[str | Path],
+        *,
+        metadata: dict[str, Any],
+        router: ModelRouter | None = None,
+        semantic: bool = False,
+        max_files: int | None = None,
+    ) -> dict[str, Any]:
         """Build an atomic SQLite index without a product-level file-count cap.
 
         ``max_files`` is retained as an opt-in host resource policy. The default
@@ -827,6 +848,34 @@ def _insert_relations(
 
 
 def _sqlite_search_pass(
+    connection: sqlite3.Connection,
+    query: str,
+    *,
+    route: str,
+    limit: int,
+    metadata: dict[str, Any],
+    router: ModelRouter | None,
+    semantic: bool,
+    rerank: bool,
+    fts5_available: bool,
+) -> _PassResult:
+    """Use bounded ANN when eligible, with the exhaustive pass as correctness fallback."""
+    from . import research_rag_performance
+
+    return research_rag_performance.sqlite_search_pass(
+        connection,
+        query,
+        route=route,
+        limit=limit,
+        metadata=metadata,
+        router=router,
+        semantic=semantic,
+        rerank=rerank,
+        fts5_available=fts5_available,
+    )
+
+
+def _full_sqlite_search_pass(
     connection: sqlite3.Connection,
     query: str,
     *,
