@@ -33,6 +33,7 @@ class _JsonRpcProcess:
         )
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stderr: deque[str] = deque(maxlen=30)
+        self.workspace_folders = [{"uri": cwd.resolve().as_uri(), "name": cwd.name}]
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._error_reader = threading.Thread(target=self._read_stderr, daemon=True)
         self._reader.start()
@@ -50,6 +51,8 @@ class _JsonRpcProcess:
                 try:
                     message = self.messages.get(timeout=min(0.25, deadline - time.monotonic()))
                 except queue.Empty:
+                    continue
+                if _respond_to_server_request(self, message):
                     continue
                 if message.get("id") == request_id:
                     if "error" in message:
@@ -123,6 +126,49 @@ class _JsonRpcProcess:
             return
         for raw in iter(stream.readline, b""):
             self.stderr.append(raw.decode("utf-8", errors="replace").rstrip())
+
+
+def _respond_to_server_request(
+    rpc: _JsonRpcProcess,
+    message: dict[str, Any],
+) -> bool:
+    method = message.get("method")
+    if "id" not in message or not isinstance(method, str):
+        return False
+
+    params = message.get("params")
+    if not isinstance(params, dict):
+        params = {}
+
+    if method in {
+        "client/registerCapability",
+        "client/unregisterCapability",
+        "window/showMessageRequest",
+        "window/workDoneProgress/create",
+    }:
+        result: Any = None
+    elif method == "workspace/configuration":
+        items = params.get("items")
+        result = [None] * len(items) if isinstance(items, list) else []
+    elif method == "workspace/workspaceFolders":
+        result = list(rpc.workspace_folders)
+    elif method == "workspace/applyEdit":
+        result = {"applied": False}
+    else:
+        rpc.send(
+            {
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "error": {
+                    "code": -32601,
+                    "message": f"Unsupported server request: {method}",
+                },
+            }
+        )
+        return True
+
+    rpc.send({"jsonrpc": "2.0", "id": message.get("id"), "result": result})
+    return True
 
 
 class JavaLanguageService:
@@ -204,7 +250,7 @@ class JavaLanguageService:
                         },
                         "workspace": {"workspaceFolders": True},
                     },
-                    "workspaceFolders": [{"uri": root.as_uri(), "name": root.name}],
+                    "workspaceFolders": list(rpc.workspace_folders),
                 },
                 timeout=min(timeout_seconds, 45),
             )
@@ -292,7 +338,7 @@ class JavaLanguageService:
                     "processId": os.getpid(),
                     "rootUri": root.as_uri(),
                     "capabilities": {"workspace": {"symbol": {}}},
-                    "workspaceFolders": [{"uri": root.as_uri(), "name": root.name}],
+                    "workspaceFolders": list(rpc.workspace_folders),
                 },
                 timeout=min(timeout_seconds, 45),
             )
@@ -404,6 +450,8 @@ def _collect_diagnostics(
         try:
             message = rpc.messages.get(timeout=wait_seconds)
         except queue.Empty:
+            continue
+        if _respond_to_server_request(rpc, message):
             continue
         if message.get("method") != "textDocument/publishDiagnostics":
             continue
