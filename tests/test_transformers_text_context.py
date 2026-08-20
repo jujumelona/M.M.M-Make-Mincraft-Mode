@@ -17,6 +17,7 @@ from minecraft_mod_ai.model_adapters.base import (
 class _FakeTokenizer:
     instance: "_FakeTokenizer | None" = None
     token_count = 9
+    load_count = 0
 
     def __init__(self) -> None:
         self.rendered = ""
@@ -25,6 +26,7 @@ class _FakeTokenizer:
 
     @classmethod
     def from_pretrained(cls, *_args, **_kwargs):
+        cls.load_count += 1
         cls.instance = cls()
         return cls.instance
 
@@ -75,9 +77,11 @@ class _FakeOutput:
 
 class _FakeModel:
     load_kwargs: dict[str, object] = {}
+    load_count = 0
 
     @classmethod
     def from_pretrained(cls, *_args, **kwargs):
+        cls.load_count += 1
         cls.load_kwargs = dict(kwargs)
         return cls()
 
@@ -128,6 +132,9 @@ def _install_fake_runtime(
         "preflight_cuda",
         lambda _config: None,
     )
+    _FakeTokenizer.load_count = 0
+    if hasattr(model, "load_count"):
+        model.load_count = 0
 
 
 def test_text_adapter_rejects_context_overflow_without_losing_sentinel(
@@ -198,3 +205,35 @@ def test_text_adapter_accepts_a_bounded_page_at_context_limit(
     assert _FakeModel.load_kwargs["dtype"] == "auto"
     assert _FakeModel.load_kwargs["attn_implementation"] == "sdpa"
     assert "torch_dtype" not in _FakeModel.load_kwargs
+
+
+def test_text_generation_session_reuses_one_backend_and_releases_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FakeTokenizer.token_count = 6
+    _install_fake_runtime(monkeypatch, model=_FakeModel)
+    adapter = text_adapter.TransformersTextAdapter(
+        AdapterConfig(
+            role="coder",
+            adapter="transformers_text",
+            model_id="fake/text-model",
+            max_context=8,
+            max_new_tokens=2,
+        )
+    )
+    request = GenerationRequest(
+        messages=(
+            {"role": "user", "content": "one bounded planner page"},
+        )
+    )
+
+    with adapter.generation_session():
+        assert adapter.generate(request) == "BOUNDED_PAGE_ACCEPTED"
+        assert adapter.generate(request) == "BOUNDED_PAGE_ACCEPTED"
+        assert adapter._model is not None
+        assert adapter._tokenizer is not None
+
+    assert _FakeTokenizer.load_count == 1
+    assert _FakeModel.load_count == 1
+    assert adapter._model is None
+    assert adapter._tokenizer is None
