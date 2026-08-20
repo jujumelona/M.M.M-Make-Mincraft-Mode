@@ -21,8 +21,8 @@ from .runtime_contract_composer import (
 )
 
 
-_TUNING_PIPELINE_VERSION = 34
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
+_TUNING_PIPELINE_VERSION = 35
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v7"
 _RUNTIME_TYPE_OWNER_MARKER = "_mmm_runtime_tuning_type_owner"
 
 
@@ -70,24 +70,8 @@ class NativeLlamaTuningPipeline:
         a model's context window. Only an explicit operator override may replace
         that model-native value.
         """
-        model_id = str(getattr(config, "model_id", "")).casefold()
-        extra = getattr(config, "extra", {})
-        filename = (
-            str(extra.get("gguf_filename", "")).casefold()
-            if isinstance(extra, dict)
-            else ""
-        )
-        qwen35_mtp = "qwen3.5-9b" in model_id and (
-            "mtp" in model_id or "mtp" in filename
-        )
-        if qwen35_mtp:
-            raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
-            if raw:
-                from .qwen35_mtp_hotpath_contract import _context_size
 
-                return _context_size(config)
-            return 0
-
+        del config
         raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
         if raw:
             try:
@@ -135,11 +119,6 @@ class NativeLlamaTuningPipeline:
         from .planner_single_stream_search_contract import (
             install as install_single_stream_agentic_policy,
         )
-        from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
-        from .qwen35_request_policy import install as install_qwen35_request_policy
-        from .qwen35_runtime_efficiency_contract import (
-            install as install_qwen35_runtime_efficiency,
-        )
         from .qwen_runtime_transport_contract import install as install_qwen_runtime_transport
 
         def install_hardware_stage() -> None:
@@ -152,13 +131,6 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
                 self.hardware_policy,
             )
-            install_qwen35_hotpath(self.autotune)
-            install_qwen35_runtime_efficiency(
-                self.autotune,
-                self.hardware_policy,
-                self.runtime_tuning,
-            )
-            install_qwen35_request_policy(self.autotune, self.hardware_policy)
             self._install_profile_context_authority()
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
