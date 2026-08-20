@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +31,38 @@ def _metadata_attribute(name: str) -> bool:
 
 
 class MutationVisitor(ast.NodeVisitor):
-    def __init__(self, path: Path) -> None:
+    """Find rebinding of imported/runtime-owned objects, not ordinary object state."""
+
+    def __init__(self, path: Path, tree: ast.Module) -> None:
         self.path = path
         self.scope: list[str] = []
         self.findings: list[dict[str, Any]] = []
-        self.local_names: list[set[str]] = [set()]
+        self.external_names: list[set[str]] = [set()]
+        self.namespace_names: list[set[str]] = [set()]
+        self.constants = self._string_constants(tree)
+
+    @staticmethod
+    def _string_constants(tree: ast.Module) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = node.value
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    values[target.id] = value.value
+        return values
+
+    @property
+    def external(self) -> set[str]:
+        return self.external_names[-1]
+
+    @property
+    def namespaces(self) -> set[str]:
+        return self.namespace_names[-1]
 
     def _record(self, node: ast.AST, *, kind: str, target: str, metadata: bool = False) -> None:
         self.findings.append(
@@ -48,61 +76,130 @@ class MutationVisitor(ast.NodeVisitor):
             }
         )
 
-    def _remember_target(self, node: ast.AST) -> None:
+    def _resolved_attr_name(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
         if isinstance(node, ast.Name):
-            self.local_names[-1].add(node.id)
-        elif isinstance(node, (ast.Tuple, ast.List)):
-            for item in node.elts:
-                self._remember_target(item)
+            return self.constants.get(node.id, "")
+        return ""
+
+    def _is_external_expr(self, node: ast.AST) -> bool:
+        root = _root_name(node)
+        if root in self.external:
+            return True
+        text = _target_text(node)
+        if "sys.modules" in text:
+            return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "vars":
+            return bool(node.args and self._is_external_expr(node.args[0]))
+        return False
+
+    def visit_Import(self, node: ast.Import) -> Any:
+        for alias in node.names:
+            self.external.add(alias.asname or alias.name.split(".", 1)[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> Any:
+        for alias in node.names:
+            if alias.name != "*":
+                self.external.add(alias.asname or alias.name)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
-        self.scope.append(node.name)
-        names = {arg.arg for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)}
+        inherited = set(self.external)
+        parameters = {
+            arg.arg
+            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+        }
         if node.args.vararg:
-            names.add(node.args.vararg.arg)
+            parameters.add(node.args.vararg.arg)
         if node.args.kwarg:
-            names.add(node.args.kwarg.arg)
-        self.local_names.append(names)
+            parameters.add(node.args.kwarg.arg)
+        inherited.update(
+            name
+            for name in parameters
+            if name == "module" or name.endswith("_module") or name.endswith("_cls")
+        )
+        self.scope.append(node.name)
+        self.external_names.append(inherited)
+        self.namespace_names.append(set(self.namespaces))
         for statement in node.body:
             self.visit(statement)
-        self.local_names.pop()
+        self.namespace_names.pop()
+        self.external_names.pop()
         self.scope.pop()
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node: ast.ClassDef) -> Any:
+        # A class defined in this file is a canonical owner, not an external target.
         self.scope.append(node.name)
-        self.local_names.append(set())
+        self.external_names.append(set(self.external))
+        self.namespace_names.append(set(self.namespaces))
         for statement in node.body:
             self.visit(statement)
-        self.local_names.pop()
+        self.namespace_names.pop()
+        self.external_names.pop()
         self.scope.pop()
+
+    def visit_For(self, node: ast.For) -> Any:
+        text = _target_text(node.iter)
+        added: list[str] = []
+        if "sys.modules" in text or "sys.modules.items" in text or "sys.modules.values" in text:
+            targets = []
+            if isinstance(node.target, ast.Name):
+                targets = [node.target.id]
+            elif isinstance(node.target, (ast.Tuple, ast.List)):
+                targets = [item.id for item in node.target.elts if isinstance(item, ast.Name)]
+            for name in targets:
+                if name not in self.external:
+                    self.external.add(name)
+                    added.append(name)
+        self.visit(node.iter)
+        for statement in node.body:
+            self.visit(statement)
+        for statement in node.orelse:
+            self.visit(statement)
+        for name in added:
+            self.external.discard(name)
 
     def visit_Assign(self, node: ast.Assign) -> Any:
         for target in node.targets:
             self._inspect_assignment_target(node, target)
-            self._remember_target(target)
         self.visit(node.value)
+        for target in node.targets:
+            self._propagate_alias(target, node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> Any:
         self._inspect_assignment_target(node, node.target)
-        self._remember_target(node.target)
         if node.value is not None:
             self.visit(node.value)
+            self._propagate_alias(node.target, node.value)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> Any:
         self._inspect_assignment_target(node, node.target)
         self.visit(node.value)
 
+    def _propagate_alias(self, target: ast.AST, value: ast.AST) -> None:
+        if not isinstance(target, ast.Name):
+            return
+        if self._is_external_expr(value):
+            self.external.add(target.id)
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "vars"
+            and value.args
+            and self._is_external_expr(value.args[0])
+        ):
+            self.namespaces.add(target.id)
+
     def _inspect_assignment_target(self, node: ast.AST, target: ast.AST) -> None:
         if isinstance(target, ast.Attribute):
             root = _root_name(target)
-            # self/cls mutation is object-internal state, not runtime patching.
-            if root in {"self", "cls"}:
+            if root not in self.external:
                 return
             self._record(
                 node,
-                kind="attribute_assignment",
+                kind="external_attribute_rebind",
                 target=_target_text(target),
                 metadata=_metadata_attribute(target.attr),
             )
@@ -110,21 +207,18 @@ class MutationVisitor(ast.NodeVisitor):
         if isinstance(target, ast.Subscript):
             text = _target_text(target)
             root = _root_name(target)
-            # Namespace/sys.modules retargeting is behavior mutation. Ordinary local
-            # dict/list updates are intentionally not reported.
-            if root in {"namespace", "modules", "sys"} or "sys.modules" in text or "vars(" in text:
-                self._record(node, kind="namespace_assignment", target=text)
+            if root in self.namespaces or "sys.modules" in text:
+                self._record(node, kind="loaded_namespace_rebind", target=text)
 
     def visit_Call(self, node: ast.Call) -> Any:
         if isinstance(node.func, ast.Name) and node.func.id == "setattr" and len(node.args) >= 2:
-            attr = node.args[1]
-            attr_name = attr.value if isinstance(attr, ast.Constant) and isinstance(attr.value, str) else ""
-            target = _target_text(node.args[0])
-            if _root_name(node.args[0]) not in {"self", "cls"}:
+            target_node = node.args[0]
+            if self._is_external_expr(target_node):
+                attr_name = self._resolved_attr_name(node.args[1])
                 self._record(
                     node,
-                    kind="setattr",
-                    target=f"setattr({target}, {attr_name or '?'})",
+                    kind="external_setattr",
+                    target=f"setattr({_target_text(target_node)}, {attr_name or '?'})",
                     metadata=bool(attr_name and _metadata_attribute(attr_name)),
                 )
         self.generic_visit(node)
@@ -148,7 +242,7 @@ def audit() -> list[dict[str, Any]]:
                 }
             )
             continue
-        visitor = MutationVisitor(path)
+        visitor = MutationVisitor(path, tree)
         visitor.visit(tree)
         findings.extend(visitor.findings)
     return findings
@@ -161,12 +255,14 @@ def main() -> int:
     args = parser.parse_args()
     findings = audit()
     behavioral = [item for item in findings if not item["metadata_only"]]
+    metadata = [item for item in findings if item["metadata_only"]]
     payload = {
-        "schema_version": "mmm/runtime-mutation-audit-v1",
+        "schema_version": "mmm/runtime-mutation-audit-v2",
         "behavioral_count": len(behavioral),
-        "metadata_count": len(findings) - len(behavioral),
+        "metadata_count": len(metadata),
+        "behavioral_by_path": dict(sorted(Counter(item["path"] for item in behavioral).items())),
         "behavioral": behavioral,
-        "metadata": [item for item in findings if item["metadata_only"]],
+        "metadata": metadata,
     }
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:
