@@ -11,6 +11,7 @@ from typing import Any, Collection, Mapping
 import anyio
 
 from .external_mcp import ExternalMCPRegistry
+from .mcp_stdio_support import open_mcp_stdio_errlog
 
 
 class ExternalMCPError(RuntimeError):
@@ -329,9 +330,10 @@ class ExternalMCPRouter:
                     args=[str(value) for value in command[1:]],
                     env=self._child_env(entry),
                 )
-                async with stdio_client(params) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        return await self._initialized_call(session, tool, arguments)
+                with open_mcp_stdio_errlog() as errlog:
+                    async with stdio_client(params, errlog=errlog) as (read_stream, write_stream):
+                        async with ClientSession(read_stream, write_stream) as session:
+                            return await self._initialized_call(session, tool, arguments)
             if transport == "streamable_http":
                 url = self._server_url(entry)
                 if not url:
