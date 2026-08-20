@@ -4,7 +4,6 @@ import concurrent.futures
 import inspect
 
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
-import minecraft_mod_ai.max_efficiency_runtime_contract as max_efficiency
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
@@ -51,7 +50,7 @@ def test_generation_scheduler_uses_owner_capacities_and_event_wait() -> None:
     assert "_acquire_path_lock" not in source
 
 
-def test_max_efficiency_preserves_existing_dependency_wave_shards(monkeypatch) -> None:
+def test_runtime_efficiency_preserves_existing_dependency_wave_shards(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
     modules = tuple(
         ProductionModule(
@@ -136,7 +135,10 @@ def test_shared_gpu_allows_llm_read_sharing_but_blocks_image(monkeypatch, tmp_pa
         safety._SHARED_LOCAL_GPU_LANE.reset(token)
 
 
-def test_parallel_custom_search_is_outermost_and_context_bounded() -> None:
-    assert getattr(CustomModuleGenerator.generate, "_mmm_max_parallel_custom_search", False)
-    assert getattr(custom_search._width, "_mmm_context_single_candidate", False)
-    assert max_efficiency._active_parallelism() >= 1
+def test_parallel_custom_search_has_one_runtime_owner() -> None:
+    generate = CustomModuleGenerator.generate
+    assert getattr(generate, "_mmm_parallel_custom_search", False)
+    assert getattr(generate, "_mmm_custom_verifier_search", False)
+    assert getattr(generate, "_mmm_research_generation_search", False)
+    assert not getattr(custom_search._width, "_mmm_context_single_candidate", False)
+    assert custom_search._active_native_slots() >= 1

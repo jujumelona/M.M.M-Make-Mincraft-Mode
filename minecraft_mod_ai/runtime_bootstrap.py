@@ -331,9 +331,6 @@ def _install_late_safety_contracts() -> None:
         work_graph,
     )
     from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
-    from .max_efficiency_runtime_contract import (
-        enhance_runtime as enhance_max_efficiency_runtime,
-    )
     from .parallel_result_determinism_contract import (
         install as install_parallel_result_determinism,
     )
@@ -353,7 +350,6 @@ def _install_late_safety_contracts() -> None:
         orchestrator_module=complete_orchestrator,
     )
     install_llama_parallel_runtime(model_router, scheduler_parallel_safety_contract)
-    enhance_max_efficiency_runtime(work_graph_module=work_graph)
     install_scheduler_claim_fencing(
         work_graph_module=work_graph,
         orchestrator_module=complete_orchestrator,
