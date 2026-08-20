@@ -1418,38 +1418,6 @@
     },
     {
       "kind": "external_attribute_rebind",
-      "line": 124,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/parallel_runtime_contract.py",
-      "scope": "_install_model_prefetch",
-      "target": "llama_server_autotune_module._resolve_model_path"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 142,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/parallel_runtime_contract.py",
-      "scope": "_install_model_prefetch",
-      "target": "registry_cls.load_profile"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 547,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/parallel_runtime_contract.py",
-      "scope": "install",
-      "target": "ecosystem_module.discover_seed_bundle"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 554,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/parallel_runtime_contract.py",
-      "scope": "install",
-      "target": "central_module.retrieve_domain_evidence"
-    },
-    {
-      "kind": "external_attribute_rebind",
       "line": 53,
       "metadata_only": false,
       "path": "minecraft_mod_ai/performance_final_contract.py",
@@ -3069,7 +3037,6 @@
     "minecraft_mod_ai/model_prefetch_resilience.py": 1,
     "minecraft_mod_ai/orchestrator_jdt_gate_contract.py": 1,
     "minecraft_mod_ai/parallel_result_determinism_contract.py": 1,
-    "minecraft_mod_ai/parallel_runtime_contract.py": 4,
     "minecraft_mod_ai/performance_final_contract.py": 2,
     "minecraft_mod_ai/performance_final_tuning.py": 2,
     "minecraft_mod_ai/planner_single_stream_search_contract.py": 2,
@@ -3140,7 +3107,7 @@
     "minecraft_mod_ai/work_graph_mutation_contract.py": 2,
     "minecraft_mod_ai/work_graph_state_transition_contract.py": 8
   },
-  "behavioral_count": 376,
+  "behavioral_count": 372,
   "metadata": [
     {
       "kind": "external_attribute_rebind",

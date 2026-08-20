@@ -154,7 +154,7 @@ def normalize_research_brief(
     return payload
 
 
-def retrieve_domain_evidence(
+def _serial_retrieve_domain_evidence(
     research_brief: dict[str, Any],
     *,
     retrieve: Callable[..., RetrievalReceipt] = retrieve_official_evidence,
@@ -271,6 +271,19 @@ def retrieve_domain_evidence(
     }
     payload["evidence_sha256"] = _sha256(canonical_json(payload))
     return payload
+
+
+def retrieve_domain_evidence(
+    research_brief: dict[str, Any],
+    *,
+    retrieve: Callable[..., RetrievalReceipt] = retrieve_official_evidence,
+) -> dict[str, Any]:
+    from .parallel_runtime_contract import retrieve_domain_evidence as parallel_retrieve
+
+    return parallel_retrieve(research_brief, retrieve=retrieve)
+
+
+retrieve_domain_evidence._mmm_parallel_rag = True  # type: ignore[attr-defined]
 
 
 def external_discovery_routes(

@@ -89,7 +89,6 @@ def _install_model_runtime_contracts() -> None:
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_runtime_performance import install as install_model_runtime_performance
-    from .parallel_runtime_contract import install as install_parallel_runtime
 
     install_gpu_resource(model_registry)
     install_model_runtime_performance()
@@ -104,10 +103,6 @@ def _install_model_runtime_contracts() -> None:
     )
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
-    install_parallel_runtime(
-        model_registry_module=model_registry,
-        llama_server_autotune_module=llama_server_autotune,
-    )
     start_colab_prefetch(model_registry)
 
 

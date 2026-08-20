@@ -117,11 +117,15 @@ class ModelRegistry:
             role: self._resolve_role(role, config)
             for role, config in raw_roles.items()
         }
-        return ModelProfile(
+        profile = ModelProfile(
             name=name,
             description=str(raw_profile.get("description", "")),
             roles=roles,
         )
+        from .parallel_runtime_contract import prefetch_profile
+
+        prefetch_profile(profile)
+        return profile
 
     def role(self, profile: str, role: str) -> AdapterConfig:
         loaded = self.load_profile(profile)

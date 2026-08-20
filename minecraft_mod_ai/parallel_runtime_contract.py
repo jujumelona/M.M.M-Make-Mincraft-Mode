@@ -4,7 +4,7 @@ import os
 import threading
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from functools import wraps
+from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Callable, Iterable, TypeVar
 
@@ -16,7 +16,6 @@ _PREFETCH_EXECUTOR = ThreadPoolExecutor(
     max_workers=2,
     thread_name_prefix="mmm_model_prefetch",
 )
-_MODEL_RESOLVER: Callable[[Any], str] | None = None
 
 
 def _env_workers(name: str, default: int, *, maximum: int = 32) -> int:
@@ -74,14 +73,14 @@ def _eligible_for_model_prefetch(config: Any) -> bool:
     return bool(model_id)
 
 
-def _prefetch_model_worker(config: Any) -> str:
-    resolver = _MODEL_RESOLVER
-    if resolver is None:
-        raise RuntimeError("GGUF prefetch resolver is not installed.")
+def _prefetch_model_worker(config: Any, resolver: Callable[[Any], str]) -> str:
     return resolver(config)
 
 
-def _ensure_model_prefetch(config: Any) -> Future[str] | None:
+def _ensure_model_prefetch(
+    config: Any,
+    resolver: Callable[[Any], str],
+) -> Future[str] | None:
     """Start exactly one asynchronous GGUF resolution for a local Colab model."""
     if not _eligible_for_model_prefetch(config):
         return None
@@ -90,57 +89,29 @@ def _ensure_model_prefetch(config: Any) -> Future[str] | None:
         future = _PREFETCH_FUTURES.get(key)
         if future is not None:
             return future
-        future = _PREFETCH_EXECUTOR.submit(_prefetch_model_worker, config)
+        future = _PREFETCH_EXECUTOR.submit(_prefetch_model_worker, config, resolver)
         _PREFETCH_FUTURES[key] = future
     label = key[1] or Path(key[0]).name or key[0]
     print("GGUF prefetch: started", label, flush=True)
     return future
 
 
-def _resolve_prefetched_model(config: Any) -> str:
+def resolve_model_path(config: Any, resolver: Callable[[Any], str]) -> str:
     """Reuse an already-running model download, otherwise resolve synchronously."""
-    resolver = _MODEL_RESOLVER
-    if resolver is None:
-        raise RuntimeError("GGUF model resolver is not installed.")
-    future = _ensure_model_prefetch(config)
+    future = _ensure_model_prefetch(config, resolver)
     if future is None:
         return resolver(config)
     return future.result()
 
 
-_resolve_prefetched_model._mmm_parallel_prefetch_resolver = True
-
-
-def _install_model_prefetch(
-    *,
-    model_registry_module: Any,
-    llama_server_autotune_module: Any,
-) -> None:
-    """Bind asynchronous GGUF resolution to the single native server resolver."""
-    global _MODEL_RESOLVER
-    current_resolver = llama_server_autotune_module._resolve_model_path
-    if not getattr(current_resolver, "_mmm_parallel_prefetch_resolver", False):
-        _MODEL_RESOLVER = current_resolver
-        llama_server_autotune_module._resolve_model_path = _resolve_prefetched_model
-    elif _MODEL_RESOLVER is None:
+def prefetch_profile(profile: Any) -> None:
+    """Start planner GGUF prefetch explicitly after a profile is resolved."""
+    config = profile.roles.get("planner")
+    if config is None or not _eligible_for_model_prefetch(config):
         return
+    from .llama_server_autotune import _resolve_model_path_direct
 
-    registry_cls = model_registry_module.ModelRegistry
-    current_load_profile = registry_cls.load_profile
-    if getattr(current_load_profile, "_mmm_parallel_model_prefetch", False):
-        return
-
-    @wraps(current_load_profile)
-    def load_profile_with_prefetch(self: Any, name: str):
-        profile = current_load_profile(self, name)
-        config = profile.roles.get("planner")
-        if config is not None:
-            _ensure_model_prefetch(config)
-        return profile
-
-    load_profile_with_prefetch._mmm_parallel_model_prefetch = True
-    registry_cls.load_profile = load_profile_with_prefetch
-
+    _ensure_model_prefetch(config, _resolve_model_path_direct)
 
 def _discovery_routes(
     ecosystem_module: Any,
@@ -528,33 +499,50 @@ def _parallel_retrieve_domain_evidence_factory(
     return retrieve_domain_evidence_parallel
 
 
+@lru_cache(maxsize=1)
+def _native_discovery_wrapper() -> Callable[..., dict[str, Any]]:
+    from . import ecosystem_discovery as ecosystem_module
+
+    return _parallel_discover_seed_bundle_factory(
+        ecosystem_module,
+        ecosystem_module._serial_discover_seed_bundle,
+    )
+
+
+def discover_seed_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _native_discovery_wrapper()(*args, **kwargs)
+
+
+@lru_cache(maxsize=1)
+def _native_research_wrapper() -> Callable[..., dict[str, Any]]:
+    from . import central_research as central_module
+
+    return _parallel_retrieve_domain_evidence_factory(
+        central_module,
+        central_module._serial_retrieve_domain_evidence,
+    )
+
+
+def retrieve_domain_evidence(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _native_research_wrapper()(*args, **kwargs)
+
+
 def install(
     *,
     model_registry_module: Any,
     llama_server_autotune_module: Any,
 ) -> None:
-    """Install bounded prefetch adapters without duplicating native business logic."""
-    from . import central_research as central_module
-    from . import ecosystem_discovery as ecosystem_module
-
-    _install_model_prefetch(
-        model_registry_module=model_registry_module,
-        llama_server_autotune_module=llama_server_autotune_module,
-    )
-
-    original_discover = ecosystem_module.discover_seed_bundle
-    if not getattr(original_discover, "_mmm_parallel_routes", False):
-        ecosystem_module.discover_seed_bundle = _parallel_discover_seed_bundle_factory(
-            ecosystem_module,
-            original_discover,
-        )
-
-    original_retrieve = central_module.retrieve_domain_evidence
-    if not getattr(original_retrieve, "_mmm_parallel_rag", False):
-        central_module.retrieve_domain_evidence = _parallel_retrieve_domain_evidence_factory(
-            central_module,
-            original_retrieve,
-        )
+    """Compatibility verifier; canonical owners call parallel helpers explicitly."""
+    if not hasattr(llama_server_autotune_module, "_resolve_model_path_direct"):
+        raise RuntimeError("llama autotune must own native prefetch delegation")
+    if not hasattr(model_registry_module.ModelRegistry, "load_profile"):
+        raise RuntimeError("model registry is unavailable")
 
 
-__all__ = ["install"]
+__all__ = [
+    "discover_seed_bundle",
+    "install",
+    "prefetch_profile",
+    "resolve_model_path",
+    "retrieve_domain_evidence",
+]

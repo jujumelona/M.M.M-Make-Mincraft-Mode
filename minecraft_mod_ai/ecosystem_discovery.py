@@ -475,7 +475,7 @@ class EcosystemDiscoveryClient:
             return (payload, next_url)
         return payload
 
-def discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, research_brief: dict[str, Any] | None=None, client: EcosystemDiscoveryClient | None=None, route_cursor: str='', route_limit: int=12) -> dict[str, Any]:
+def _serial_discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, research_brief: dict[str, Any] | None=None, client: EcosystemDiscoveryClient | None=None, route_cursor: str='', route_limit: int=12) -> dict[str, Any]:
     mode = os.environ.get('MMM_ECOSYSTEM_DISCOVERY', 'auto').strip().lower()
     if mode not in {'auto', 'on', 'off'}:
         raise SpecValidationError('MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.')
@@ -541,6 +541,12 @@ def _decode_seed_route_cursor(cursor: str, *, route_sha256: str, route_limit: in
     if _encode_seed_route_cursor(offset, route_sha256=route_sha256, route_limit=route_limit) != cursor:
         raise SpecValidationError('Seed route cursor does not match this route catalog and page size.')
     return offset
+
+def discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, research_brief: dict[str, Any] | None=None, client: EcosystemDiscoveryClient | None=None, route_cursor: str='', route_limit: int=12) -> dict[str, Any]:
+    from .parallel_runtime_contract import discover_seed_bundle as parallel_discover
+    return parallel_discover(prompt, game_design, research_brief=research_brief, client=client, route_cursor=route_cursor, route_limit=route_limit)
+
+discover_seed_bundle._mmm_parallel_routes = True
 
 def _seed_query(prompt: str, game_design: dict[str, Any]) -> str:
     parts = [prompt, str(game_design.get('title', '')), str(game_design.get('pitch', ''))]

@@ -184,7 +184,7 @@ def _hardware_identity() -> str:
     return "unknown-gpu"
 
 
-def _resolve_model_path(config: Any) -> str:
+def _resolve_model_path_direct(config: Any) -> str:
     model_id = str(config.model_id)
     candidate = Path(model_id).expanduser()
     if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".gguf":
@@ -212,6 +212,12 @@ def _resolve_model_path(config: Any) -> str:
             raise RuntimeError(f"No GGUF file found in {repo_id!r}.")
         filename = (preferred or files)[0]
     return hf_hub_download(repo_id=repo_id, filename=filename)
+
+
+def _resolve_model_path(config: Any) -> str:
+    from .parallel_runtime_contract import resolve_model_path
+
+    return resolve_model_path(config, _resolve_model_path_direct)
 
 
 def _fingerprint(config: Any, binary: str, model_path: str) -> str:
