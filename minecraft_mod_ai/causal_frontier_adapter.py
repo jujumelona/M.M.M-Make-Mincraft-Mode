@@ -240,6 +240,9 @@ class CausalFrontierAdapter:
             tools=selected,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
+            task=getattr(request, "task", ""),
+            prompt=getattr(request, "prompt", ""),
+            metadata=getattr(request, "metadata", {}),
         )
         print(
             "causal per-turn frontier:",
