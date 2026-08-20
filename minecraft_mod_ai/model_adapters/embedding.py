@@ -1,88 +1,126 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from .base import AdapterConfig, ModelBackendError, require_package
 
 
-class EmbeddingAdapter:
-    """Lazy-resident Qwen/compatible sentence embedding adapter.
+@dataclass
+class _EmbeddingBackend:
+    model: Any
+    lock: threading.RLock = field(default_factory=threading.RLock)
 
-    The T4 profile intentionally defaults this role to CPU so retrieval does not
-    compete with the planner or coder for GPU residency. A router may call this
-    adapter once per RAG batch, so the model must remain resident for the adapter's
-    lifetime rather than being reconstructed for every batch.
+
+_BACKEND_CACHE_LOCK = threading.RLock()
+_BACKEND_CACHE: dict[tuple[str, str, str], _EmbeddingBackend] = {}
+
+
+def _cache_enabled() -> bool:
+    raw = os.environ.get("MMM_CPU_RETRIEVAL_CACHE", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+class EmbeddingAdapter:
+    """Sentence embedding adapter with one shared CPU backend per model profile.
+
+    Retrieval adapters are short-lived at the router boundary, so instance-only
+    caching still reloads the same model on every RAG batch. The backend cache is
+    therefore owned here, next to the model lifecycle it controls, rather than by a
+    bootstrap monkey-patch layer.
     """
 
     def __init__(self, config: AdapterConfig) -> None:
         self.config = config
-        self._lock = threading.RLock()
-        self._model: Any | None = None
+        self._backend: _EmbeddingBackend | None = None
 
-    def _ensure_model(self) -> Any:
-        if self._model is not None:
-            return self._model
+    def _backend_key(self) -> tuple[str, str, str]:
+        return (
+            self.config.model_id,
+            str(self.config.extra.get("device", "cpu")),
+            str(self.config.extra.get("revision", "")).strip(),
+        )
+
+    def _load_backend(self) -> _EmbeddingBackend:
         require_package("sentence-transformers", minimum="3.0.0")
         from sentence_transformers import SentenceTransformer
 
-        device = str(self.config.extra.get("device", "cpu"))
-        load_options: dict[str, object] = {
+        model_id, device, revision = self._backend_key()
+        options: dict[str, object] = {
             "device": device,
             "trust_remote_code": False,
         }
-        revision = str(self.config.extra.get("revision", "")).strip()
         if revision:
-            load_options["revision"] = revision
+            options["revision"] = revision
+
         started = time.monotonic()
         print(
             "retrieval embedding: model load start",
-            f"model={self.config.model_id}",
+            f"model={model_id}",
             f"device={device}",
             file=sys.stderr,
             flush=True,
         )
-        model = SentenceTransformer(self.config.model_id, **load_options)
-        self._model = model
+        backend = _EmbeddingBackend(SentenceTransformer(model_id, **options))
         print(
             "retrieval embedding: model load done",
             f"elapsed={time.monotonic() - started:.1f}s",
             file=sys.stderr,
             flush=True,
         )
-        return model
+        return backend
+
+    def _ensure_backend(self) -> _EmbeddingBackend:
+        if self._backend is not None:
+            return self._backend
+
+        key = self._backend_key()
+        if not _cache_enabled():
+            self._backend = self._load_backend()
+            return self._backend
+
+        with _BACKEND_CACHE_LOCK:
+            backend = _BACKEND_CACHE.get(key)
+            if backend is None:
+                backend = self._load_backend()
+                _BACKEND_CACHE[key] = backend
+            self._backend = backend
+            return backend
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         cleaned = [str(text).strip() for text in texts]
         if not cleaned or any(not text for text in cleaned):
             raise ValueError("Embedding input must contain non-empty strings.")
+
         try:
-            with self._lock:
-                model = self._ensure_model()
-                dimensions = int(self.config.extra.get("dimensions", 512))
-                started = time.monotonic()
-                print(
-                    "retrieval embedding: encode start",
-                    f"batch={len(cleaned)}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                vectors = model.encode(
+            backend = self._ensure_backend()
+            dimensions = int(self.config.extra.get("dimensions", 512))
+            started = time.monotonic()
+            print(
+                "retrieval embedding: encode start",
+                f"batch={len(cleaned)}",
+                file=sys.stderr,
+                flush=True,
+            )
+            with backend.lock:
+                vectors = backend.model.encode(
                     cleaned,
                     normalize_embeddings=True,
                     convert_to_numpy=True,
                     truncate_dim=dimensions,
                     show_progress_bar=False,
                 )
-                print(
-                    "retrieval embedding: encode done",
-                    f"batch={len(cleaned)}",
-                    f"elapsed={time.monotonic() - started:.1f}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
+            print(
+                "retrieval embedding: encode done",
+                f"batch={len(cleaned)}",
+                f"elapsed={time.monotonic() - started:.1f}s",
+                file=sys.stderr,
+                flush=True,
+            )
             return [[float(value) for value in row] for row in vectors]
         except Exception as exc:
             raise ModelBackendError(
@@ -90,3 +128,6 @@ class EmbeddingAdapter:
                 model_id=self.config.model_id,
                 cause=exc,
             ) from exc
+
+
+EmbeddingAdapter.embed._mmm_cached_embedding_model = True  # type: ignore[attr-defined]
