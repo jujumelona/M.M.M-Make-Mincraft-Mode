@@ -8,17 +8,18 @@ from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import qwen_runtime_transport_contract as qwen_runtime
 
 
-def _config(model_id: str, filename: str) -> SimpleNamespace:
+def _config(*, native_mtp: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
-        model_id=model_id,
+        model_id="vendor/arbitrary-runtime-model",
         extra={
-            "gguf_filename": filename,
-            "mmproj_filename": "mmproj-F16.gguf",
+            "runtime_contract": "qwen",
+            "mmproj_filename": "projector.gguf",
+            "native_mtp": native_mtp,
         },
     )
 
 
-def test_qwen_text_mtp_is_p1_but_media_baseline_keeps_parallel_policy(
+def test_registry_guarded_text_mtp_is_p1_but_media_baseline_keeps_parallel_policy(
     monkeypatch,
 ) -> None:
     seen: list[tuple[str, str, int]] = []
@@ -41,8 +42,6 @@ def test_qwen_text_mtp_is_p1_but_media_baseline_keeps_parallel_policy(
         _fingerprint=fingerprint,
         ServerVariant=runtime_tuning.ServerVariant,
     )
-    # Production order: multimodal is composed by the llama tuning pipeline first;
-    # the Qwen runtime guard is installed later by the Qwen agent family contract.
     multimodal._install_launch_policy(fake)
     qwen_runtime._install_mtp_single_slot_policy(fake)
 
@@ -52,30 +51,19 @@ def test_qwen_text_mtp_is_p1_but_media_baseline_keeps_parallel_policy(
         2,
         parallel=4,
     )
-    configs = (
-        _config(
-            "unsloth/Qwen3.5-9B-MTP-GGUF",
-            "Qwen3.5-9B-UD-Q4_K_XL.gguf",
-        ),
-        _config(
-            "unsloth/Qwen3.6-27B-MTP-GGUF",
-            "Qwen3.6-27B-UD-Q4_K_XL.gguf",
-        ),
-        _config(
-            "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
-            "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-        ),
-    )
+    config = _config(native_mtp=False)
 
     monkeypatch.setenv("MMM_LLAMA_PARALLEL", "4")
     monkeypatch.setenv(multimodal._ACTIVE_MEDIA_ENV, "1")
-    for config in configs:
-        fake._launch_selected("server", "model.gguf", config, speculative)
-        # Multimodal turns MTP into baseline, while the outer Qwen guard must not
-        # temporarily overwrite the operator/runtime baseline parallel policy.
-        assert seen[-1] == ("4", "none", 1)
+    fake._launch_selected("server", "model.gguf", config, speculative)
+    assert seen[-1] == ("4", "none", 1)
 
     monkeypatch.delenv(multimodal._ACTIVE_MEDIA_ENV, raising=False)
-    fake._launch_selected("server", "model.gguf", configs[1], speculative)
+    fake._launch_selected("server", "model.gguf", config, speculative)
     assert seen[-1] == ("1", "draft-mtp", 1)
     assert os.environ["MMM_LLAMA_PARALLEL"] == "4"
+
+
+def test_native_mtp_metadata_keeps_multimodal_speculation() -> None:
+    assert multimodal._requires_media_baseline(_config(native_mtp=False)) is True
+    assert multimodal._requires_media_baseline(_config(native_mtp=True)) is False
