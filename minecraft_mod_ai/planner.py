@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
 from dataclasses import replace
@@ -410,10 +411,23 @@ class LocalTransformersPlanner:
 class OpenAICompatiblePlanner:
     """Planner for an explicitly configured HTTPS chat-completions API."""
 
-    def __init__(self, *, base_url: str, model: str, api_key: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        timeout_seconds: float = 30.0,
+    ) -> None:
         base_url = base_url.strip().rstrip("/")
         model = model.strip()
         api_key = api_key.strip()
+        try:
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout_seconds must be a positive number.") from exc
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout_seconds must be a positive number.")
         if not base_url.startswith("https://"):
             raise ValueError("외부 AI API 주소는 https://로 시작해야 합니다.")
         if not model:
@@ -423,6 +437,7 @@ class OpenAICompatiblePlanner:
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
+        self.timeout_seconds = timeout
 
     def plan(self, prompt: str) -> Proposal:
         request_body = json.dumps(
@@ -446,7 +461,10 @@ class OpenAICompatiblePlanner:
             },
         )
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.timeout_seconds,
+            ) as response:
                 payload_bytes = response.read(2 * 1024 * 1024 + 1)
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
             raise RuntimeError("외부 AI API 호출에 실패했습니다.") from exc
