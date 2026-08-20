@@ -224,14 +224,20 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
 
 
 def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
-    """Use the persistent production pool while preserving injected HTTP transports."""
+    """Use the persistent pool without timing out a healthy long local decode."""
 
     endpoint = f"{server_url}/chat/completions"
     if httpx.post is not _DEFAULT_HTTPX_POST:
         return httpx.post(endpoint, json=payload, timeout=None)
     from ..llama_stream_efficiency_contract import _client
 
-    return _client(server_url).post(endpoint, json=payload)
+    # Tool-call turns use llama.cpp's non-streaming native response so the complete
+    # structured call arrives atomically. The shared client read timeout is an SSE
+    # idle timeout; applying it here turns a healthy >300 s decode into ReadTimeout
+    # because non-streaming responses emit no intermediate body bytes. Keep connect,
+    # write and pool acquisition bounded while allowing the local decode to finish.
+    timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+    return _client(server_url).post(endpoint, json=payload, timeout=timeout)
 
 
 def _bounded_response_body(response: Any, *, limit: int = 1600) -> str:
