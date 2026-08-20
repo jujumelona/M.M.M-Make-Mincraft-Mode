@@ -3,23 +3,26 @@ from __future__ import annotations
 """Make host-forced native tool choices executable, not advisory.
 
 Several production paths can require one exact native function call: writable source
-mutation, mandatory RAG retrieval, and structured decisions.  Historically each
-caller set ``tool_choice`` and then checked the model response independently while
-still exposing the rest of the current tool frontier.  A local model could therefore
-emit prose or another action and the caller would only discover the violation after a
-long generation round.
+mutation, mandatory RAG retrieval, and structured decisions. Historically each caller
+set ``tool_choice`` and then checked the model response independently while still
+exposing the rest of the current tool frontier. A local model could therefore emit
+prose or another action and the caller would only discover the violation after a long
+generation round.
 
-This contract sits at the model-adapter boundary.  Whenever the host names one exact
-function, the adapter receives only that schema.  A prose-only response gets one
-bounded protocol retry with the single-tool surface kept intact.  Callers retain
-their semantic checks, but they no longer have to reinvent transport enforcement.
+This contract sits at the model-adapter boundary. Whenever the host names one exact
+function, both the native schema surface and the injected capability context are
+reduced to that function. A prose-only response gets one bounded protocol retry using
+an alternate native ``required`` representation. Callers retain semantic checks, but
+they no longer reinvent transport enforcement.
 """
 
+import json
 from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
 _MARKER = "_mmm_forced_tool_execution_v1"
+_CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _RETRY_INSTRUCTION = (
     "The previous assistant turn did not satisfy the host-required native function "
     "call. Call the only available function exactly once now. Do not answer in prose."
@@ -46,6 +49,42 @@ def forced_tool_name(tool_choice: Any) -> str:
     return str(function.get("name", "")).strip()
 
 
+def _narrow_capability_context(
+    messages: Sequence[Mapping[str, Any]],
+    selected: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Keep textual routing guidance aligned with the one executable forced schema."""
+
+    from .agent_capability_context import build_agent_capability_context
+
+    narrowed: list[dict[str, Any]] = []
+    for message in messages:
+        copied = dict(message)
+        content = copied.get("content")
+        if (
+            str(copied.get("role", "")).strip() == "system"
+            and isinstance(content, str)
+            and content.startswith(_CAPABILITY_PREFIX)
+        ):
+            try:
+                payload = json.loads(content[len(_CAPABILITY_PREFIX) :])
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, Mapping):
+                stage = str(payload.get("stage", "")).strip()
+                model_role = str(
+                    payload.get("execution_model_role", payload.get("model_role", ""))
+                ).strip()
+                if stage:
+                    copied["content"] = build_agent_capability_context(
+                        stage,
+                        selected,
+                        model_role=model_role,
+                    )
+        narrowed.append(copied)
+    return tuple(narrowed)
+
+
 def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
     """Preserve the canonical request while reducing a forced turn to one schema."""
 
@@ -61,17 +100,20 @@ def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
             f"Host-forced tool {name!r} does not resolve to exactly one exposed schema."
         )
 
-    messages: Sequence[Mapping[str, Any]] = request.messages
+    messages: Sequence[Mapping[str, Any]] = _narrow_capability_context(
+        request.messages,
+        selected,
+    )
     tool_choice: Any = {
         "type": "function",
         "function": {"name": name},
     }
     if retry:
-        messages = (*tuple(request.messages), {"role": "system", "content": _RETRY_INSTRUCTION})
+        messages = (*tuple(messages), {"role": "system", "content": _RETRY_INSTRUCTION})
         # Some OpenAI-compatible native servers honor `required` more reliably than
-        # the named-choice object.  With exactly one schema exposed both forms have
-        # identical semantics, so the retry deliberately exercises the alternate
-        # protocol representation instead of repeating the same failed request.
+        # the named-choice object. With exactly one schema exposed both forms have
+        # identical semantics, so the retry deliberately changes protocol form rather
+        # than repeating the same failed request.
         tool_choice = "required"
 
     return replace(
@@ -127,6 +169,7 @@ def _install_adapter_class(cls: Any) -> None:
 
     setattr(generate_turn, _MARKER, True)
     generate_turn._mmm_forced_tool_single_surface = True
+    generate_turn._mmm_forced_tool_single_context = True
     generate_turn._mmm_forced_tool_bounded_retry = True
     cls.generate_turn = generate_turn
 
