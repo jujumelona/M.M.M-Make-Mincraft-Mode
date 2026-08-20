@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-"""Make host-forced native tool choices executable, not advisory.
+"""Make host-forced tool choices executable, not advisory.
 
-Several production paths can require one exact native function call: writable source
-mutation, mandatory RAG retrieval, and structured decisions. Historically each caller
-set ``tool_choice`` and then checked the model response independently while still
-exposing the rest of the current tool frontier. A local model could therefore emit
-prose or another action and the caller would only discover the violation after a long
-generation round.
+Several production paths can require one exact function call: writable source mutation,
+mandatory RAG retrieval, and structured decisions. Historically each caller set
+``tool_choice`` and then checked the model response independently while still exposing
+the rest of the current tool frontier. A model could therefore emit prose or another
+action and the caller would only discover the violation after a long generation round.
 
-This contract sits at the model-adapter boundary. Whenever the host names one exact
-function, both the native schema surface and the injected capability context are
-reduced to that function. The actual llama.cpp/OpenAI-compatible transport uses the
-native ``tool_choice='required'`` mode; exact identity is guaranteed by exposing one
-schema only. A prose-only response gets one bounded retry with an explicit execution
-instruction. Callers retain semantic checks, but no longer reinvent transport forcing.
+The local llama.cpp adapter now owns a grammar-free host JSON tool bridge directly, so
+this late contract must not wrap it again. For remote OpenAI-compatible adapters, exact
+host choices are still reduced to one visible function and native ``required`` forcing.
+Both paths preserve the same semantic invariant: one host-required action has one model-
+visible schema and cannot silently degrade into a prose-only implementation turn.
 """
 
 import json
@@ -25,8 +23,8 @@ from typing import Any, Mapping, Sequence
 _MARKER = "_mmm_forced_tool_execution_v1"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _RETRY_INSTRUCTION = (
-    "The previous assistant turn did not satisfy the host-required native function "
-    "call. Call the only available function exactly once now. Do not answer in prose."
+    "The previous assistant turn did not satisfy the host-required function call. "
+    "Call the only available function exactly once now. Do not answer in prose."
 )
 
 
@@ -87,7 +85,7 @@ def _narrow_capability_context(
 
 
 def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
-    """Preserve the canonical request while reducing a forced turn to one schema."""
+    """Reduce a remote forced turn to one schema without dropping request metadata."""
 
     from .model_adapters import ModelConfigurationError
 
@@ -108,10 +106,8 @@ def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
     if retry:
         messages = (*tuple(messages), {"role": "system", "content": _RETRY_INSTRUCTION})
 
-    # llama.cpp's native OpenAI-compatible forcing contract is `required`. Exact tool
-    # identity is represented structurally by exposing only the selected function.
-    # This also works for remote OpenAI-compatible adapters and avoids relying on
-    # provider-specific support for a named function-object tool_choice form.
+    # Remote OpenAI-compatible endpoints use their native required-tool transport.
+    # Exact identity is structural because only the selected schema remains visible.
     return replace(
         request,
         messages=messages,
@@ -126,7 +122,7 @@ def _contains_exact_call(turn: Any, name: str) -> bool:
     return len(calls) == 1 and str(getattr(calls[0], "name", "")).strip() == name
 
 
-def _install_adapter_class(cls: Any) -> None:
+def _install_remote_adapter_class(cls: Any) -> None:
     current = cls.generate_turn
     if getattr(current, _MARKER, False):
         return
@@ -158,7 +154,7 @@ def _install_adapter_class(cls: Any) -> None:
             for call in tuple(getattr(second, "tool_calls", ()) or ())
         ) or "<prose>"
         raise ModelConfigurationError(
-            "Native model violated the host-forced single-tool contract after the "
+            "Remote model violated the host-forced single-tool contract after the "
             f"bounded retry for {name!r}; first={first_calls}, retry={second_calls}."
         )
 
@@ -171,10 +167,14 @@ def _install_adapter_class(cls: Any) -> None:
 
 
 def install(*, llama_cpp_module: Any, openai_compatible_module: Any) -> None:
-    """Install one forced-tool transport contract on every native chat adapter."""
+    """Verify local host transport and install remote exact-tool forcing."""
 
-    _install_adapter_class(llama_cpp_module.LlamaCppAdapter)
-    _install_adapter_class(openai_compatible_module.OpenAICompatibleAdapter)
+    if not callable(getattr(llama_cpp_module, "_host_tool_completion", None)):
+        raise RuntimeError(
+            "LlamaCppAdapter must own the host JSON tool bridge directly; runtime "
+            "forced-tool wrapping is no longer supported."
+        )
+    _install_remote_adapter_class(openai_compatible_module.OpenAICompatibleAdapter)
 
 
 __all__ = ["forced_tool_name", "install"]
