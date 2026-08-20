@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Validate Qwen native tool transport and MTP runtime compatibility.
+"""Validate registry-declared native tool transport and MTP runtime compatibility.
 
 MMM exposes first-party MCP tools, reviewed external MCP tools, and temporary Skill
 execution through the same OpenAI/Jinja function-tool transport. The staged
@@ -8,13 +8,10 @@ llama.cpp tuner already keeps each baseline/MTP candidate server alive for a war
 and an exact-output decode probe. This contract reuses that live server for one tiny,
 deterministic function call before a candidate may participate in selection.
 
-Qwen MTP is also kept single-slot. Current llama.cpp/Unsloth guidance does not support
-``-np > 1`` with MTP, so the parallel refinement stage is skipped only when native
-``draft-mtp`` won, and the final text launch is defensively pinned to one slot. Media
-launches may replace MTP with baseline outside this contract and therefore retain the
-normal baseline parallel policy. Default draft-width searches are bounded to each
-production model's current upstream recommendation while explicit operator overrides
-remain authoritative.
+MTP is kept single-slot for runtime contracts that opt into this guard. Default draft
+widths are read from model_registry metadata and explicit operator overrides remain
+authoritative. No model id, version, parameter count, filename, context length, or
+quantization is interpreted by this module.
 """
 
 import hashlib
@@ -26,8 +23,6 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any, Iterator, Mapping
 
-from .qwen_model_profiles import qwen_family, qwen_registry_model
-
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
 _BENCHMARK_MARKER = "_mmm_qwen_tool_calibration_benchmark_v1"
@@ -37,11 +32,7 @@ _PARALLEL_STAGE_MARKER = "_mmm_qwen_mtp_single_slot_stage_v1"
 _LAUNCH_MARKER = "_mmm_qwen_mtp_single_slot_launch_v1"
 _FINGERPRINT_MARKER = "_mmm_qwen_mtp_single_slot_fingerprint_v1"
 _WIDTH_MARKER = "_mmm_qwen_recommended_mtp_widths_v1"
-_DEFAULT_MTP_WIDTHS = {
-    "qwen3.5-9b": "1,2,3,4,5,6",
-    "qwen3.6-27b": "1,2",
-    "qwen3.6-35b-a3b": "1,2",
-}
+_RUNTIME_CONTRACT = "qwen"
 _ACTIVE_BENCHMARK_CONFIG: ContextVar[Any | None] = ContextVar(
     "mmm_qwen_transport_benchmark_config",
     default=None,
@@ -52,26 +43,41 @@ _ACTIVE_CALIBRATION: ContextVar[tuple[Any, Any] | None] = ContextVar(
 )
 
 
-def _config_identity(config: Any) -> tuple[str, str]:
-    model_id = str(getattr(config, "model_id", ""))
+def _config_extra(config: Any) -> Mapping[str, Any]:
     extra = getattr(config, "extra", {})
-    filename = str(extra.get("gguf_filename", "")) if isinstance(extra, Mapping) else ""
-    return model_id, filename
+    return extra if isinstance(extra, Mapping) else {}
 
 
 def _family(config: Any) -> str | None:
-    model_id, filename = _config_identity(config)
-    return qwen_family(model_id, filename)
-
-
-def _registry_model(config: Any) -> str | None:
-    model_id, filename = _config_identity(config)
-    return qwen_registry_model(model_id, filename)
+    contract = str(_config_extra(config).get("runtime_contract", "")).strip().casefold()
+    return _RUNTIME_CONTRACT if contract == _RUNTIME_CONTRACT else None
 
 
 def _recommended_mtp_widths(config: Any) -> str | None:
-    model = _registry_model(config)
-    return _DEFAULT_MTP_WIDTHS.get(model) if model is not None else None
+    raw = _config_extra(config).get("mtp_widths")
+    if raw is None:
+        return None
+    values = (
+        [part.strip() for part in raw.split(",")]
+        if isinstance(raw, str)
+        else [str(part).strip() for part in raw]
+        if isinstance(raw, (list, tuple))
+        else []
+    )
+    normalized: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        try:
+            width = int(value)
+        except ValueError:
+            return None
+        if width <= 0:
+            return None
+        text = str(width)
+        if text not in normalized:
+            normalized.append(text)
+    return ",".join(normalized) or None
 
 
 def _mtp_variant(variant: Any) -> bool:
@@ -243,7 +249,7 @@ def _initial_calibration_variant(variant: Any) -> bool:
 
 
 def _install_mtp_single_slot_policy(autotune: Any) -> None:
-    """Prevent unsupported Qwen MTP + multi-slot tuning and final launches."""
+    """Prevent guarded MTP runtimes from using unsupported multi-slot tuning."""
 
     from . import llama_server_runtime_tuning as runtime_tuning
 
@@ -274,7 +280,7 @@ def _install_mtp_single_slot_policy(autotune: Any) -> None:
             if _family(config) is None or not _mtp_variant(selected):
                 return current_launch(binary, model_path, config, selected)
 
-            # Multimodal owns the MTP->baseline conversion for affected production
+            # Multimodal owns the MTP->baseline conversion for affected configured
             # profiles. Do not pin the outer scope to p1 before that conversion, or
             # the inner baseline launch loses its otherwise-valid parallel policy.
             if os.environ.get("MMM_LLAMA_MULTIMODAL_ACTIVE", "").strip() == "1":
@@ -313,7 +319,7 @@ def _install_mtp_single_slot_policy(autotune: Any) -> None:
 
 
 def _install_tool_equivalence_policy(autotune: Any) -> None:
-    """Reject a Qwen speculation candidate if its native tool transport is invalid."""
+    """Reject guarded speculation candidates with invalid native tool transport."""
 
     current_benchmark = getattr(autotune, "_benchmark", None)
     if not callable(current_benchmark):
