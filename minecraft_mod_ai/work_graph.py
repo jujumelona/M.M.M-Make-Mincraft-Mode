@@ -516,6 +516,22 @@ def run_named_checkpoint(ledger: DurableWorkLedger, checkpoint_id: str, *, stage
         ledger.fail_checkpoint(checkpoint_id, input_hash=input_hash, error=f'{type(exc).__name__}: {exc}')
         raise
 
+def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
+    members = payload.get('members')
+    if not isinstance(members, list):
+        return True
+    for member in members:
+        if not isinstance(member, dict):
+            return False
+        if str(member.get('kind', '')) != 'integration':
+            continue
+        config = member.get('config')
+        if not isinstance(config, dict):
+            return False
+        if str(config.get('integration_type', '')) != 'mmm_local_ai_sidecar':
+            return False
+    return True
+
 def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[str, Any]) -> WorkNode:
     kind = str(payload.get('kind', ''))
     gen_stage = str(payload.get('generation_stage', ''))
@@ -524,7 +540,7 @@ def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[s
     elif kind == 'asset-shard':
         res_class = 'image_gpu'
     elif kind == 'module-shard' and gen_stage in {'content', 'system', 'entity'}:
-        res_class = 'cpu_io'
+        res_class = 'llm' if gen_stage == 'content' and not _content_node_is_cpu_safe(payload) else 'cpu_io'
     elif kind == 'module-shard' and gen_stage == 'custom':
         res_class = 'llm'
     elif stage.startswith('validate:'):
@@ -536,6 +552,9 @@ def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[s
     normalized_dependencies = tuple(sorted(set(dependencies)))
     body = {'node_id': node_id, 'stage': stage, 'dependencies': normalized_dependencies, 'payload': payload_copy}
     return WorkNode(node_id=node_id, stage=stage, input_hash=_hash_json(body), dependencies=normalized_dependencies, payload=payload_copy, resource_class=res_class)
+
+_node._mmm_stage_parallel_generation_lanes = True  # type: ignore[attr-defined]
+_node._mmm_shared_write_commit_lane = True  # type: ignore[attr-defined]
 
 def _module_payload(module: ProductionModule) -> dict[str, Any]:
     return {'module_id': module.module_id, 'kind': module.kind, 'config': module.config, 'depends_on': list(module.depends_on), 'required_gates': list(module.required_gates)}
@@ -565,8 +584,16 @@ def _active_llm_slots() -> int:
     except ValueError:
         return 1
 
+def _pipeline_shard_size(name: str, default: int, upper: int) -> int:
+    raw = os.environ.get(name, '').strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(1, min(max(1, upper), value))
+
 def _module_shards(modules: Sequence[ProductionModule], *, policy: ScalePolicy) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
-    """Emit bounded dependency-ready waves while exposing safe LLM parallelism."""
+    """Emit bounded dependency-ready waves while exposing safe stage parallelism."""
     staged = [(module, _module_stage(module)) for module in modules]
     stage_counts: dict[str, int] = {}
     for _module, stage in staged:
@@ -578,7 +605,11 @@ def _module_shards(modules: Sequence[ProductionModule], *, policy: ScalePolicy) 
 
     def shard_size_for(stage: str) -> int:
         if stage == 'entity':
-            return max(1, int(policy.entity_shard_size))
+            return _pipeline_shard_size(
+                'MMM_ENTITY_PIPELINE_SHARD_SIZE',
+                2,
+                max(1, int(policy.entity_shard_size)),
+            )
         if stage == 'custom':
             count = max(1, stage_counts.get(stage, 1))
             slots = min(_active_llm_slots(), count)
@@ -664,6 +695,9 @@ def _module_shards(modules: Sequence[ProductionModule], *, policy: ScalePolicy) 
 
     if emitted != len(groups):
         raise WorkGraphError('Module shard dependency graph contains a cycle.')
+
+_module_shards._mmm_dependency_wave_shards = True  # type: ignore[attr-defined]
+_module_shards._mmm_entity_pipeline_granularity = True  # type: ignore[attr-defined]
 
 def _topological_modules(modules: Sequence[ProductionModule]) -> tuple[ProductionModule, ...]:
     import heapq
