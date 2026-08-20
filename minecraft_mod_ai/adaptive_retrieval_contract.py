@@ -63,7 +63,10 @@ def _install_router_loop(model_router_module: Any) -> None:
     if getattr(current, _INSTALL_MARKER, False):
         return
 
-    @wraps(current)
+    # This is a semantic replacement, not a delegating decorator: it deliberately
+    # does not call ``current``. Do not copy ``current.__dict__`` because that would
+    # falsely advertise inner _mmm_* contracts whose implementation is bypassed.
+    @wraps(current, updated=())
     def _generate_with_tools(
         self: Any,
         *,
