@@ -476,7 +476,10 @@ def _json_character_bytes(character: str) -> int:
 
 
 def _json_text_bytes(value: str) -> int:
-    return sum(_json_character_bytes(character) for character in value)
+    """Return exact UTF-8 byte length of one JSON string using the C encoder."""
+    if not isinstance(value, str):
+        raise TypeError("_json_text_bytes requires a string")
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8")) - 2
 
 
 def _system_prompt() -> str:

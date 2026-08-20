@@ -33,7 +33,14 @@ class WorkNode:
     resource_class: str = 'cpu_io'
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "node_id": self.node_id,
+            "stage": self.stage,
+            "input_hash": self.input_hash,
+            "dependencies": self.dependencies,
+            "payload": self.payload,
+            "resource_class": self.resource_class,
+        }
 
 @dataclass(frozen=True)
 class WorkGraphPlan:
@@ -60,6 +67,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
     """
     policy = policy or ScalePolicy.from_environment()
     proposal.validate(policy=policy)
+    proposal_hash = proposal.calculate_hash()
     selected_modules = tuple(proposal.modules) if modules is None else tuple(modules)
     for module in selected_modules:
         module.validate(policy=policy)
@@ -71,7 +79,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         if missing:
             raise WorkGraphError(f'Production work module {module.module_id} references missing dependencies: {sorted(missing)}')
     ordered = _topological_modules(selected_modules)
-    nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal.calculate_hash(), 'existing_input_sha256': proposal.existing_input_sha256})]
+    nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
     module_node: dict[str, str] = {}
     generated_nodes: list[str] = []
     for stage, members in _module_shards(ordered, policy=policy):
@@ -102,8 +110,8 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             nodes.append(_node(node_id, 'validate:quality', (quality_dependency,), {'kind': 'quality-validation', 'dimension_id': dimension_id, 'evidence_route_ref': dimension['evidence_route_ref'], 'contract_sha256': contract['contract_sha256']}))
             quality_nodes.append(node_id)
     nodes.append(_node('package-release', 'package', tuple(quality_nodes or ['runtime-playtest']), {'kind': 'release'}))
-    graph_body = {'schema_version': 'mmm/production-work-graph-v1', 'proposal_hash': proposal.calculate_hash(), 'nodes': [node.to_dict() for node in nodes]}
-    return WorkGraphPlan(schema_version='mmm/production-work-graph-v1', proposal_hash=proposal.calculate_hash(), graph_hash=_hash_json(graph_body), module_count=len(selected_modules), nodes=tuple(nodes))
+    graph_body = {'schema_version': 'mmm/production-work-graph-v1', 'proposal_hash': proposal_hash, 'nodes': [node.to_dict() for node in nodes]}
+    return WorkGraphPlan(schema_version='mmm/production-work-graph-v1', proposal_hash=proposal_hash, graph_hash=_hash_json(graph_body), module_count=len(selected_modules), nodes=tuple(nodes))
 
 class DurableWorkLedger:
     """SQLite-backed task/checkpoint ledger for resumable large production.
@@ -509,7 +517,7 @@ def _topological_modules(modules: Sequence[ProductionModule]) -> tuple[Productio
     while ready:
         node_id = heapq.heappop(ready)
         ordered.append(lookup[node_id])
-        for dependent in sorted(outgoing[node_id]):
+        for dependent in outgoing[node_id]:
             indegree[dependent] -= 1
             if indegree[dependent] == 0:
                 heapq.heappush(ready, dependent)

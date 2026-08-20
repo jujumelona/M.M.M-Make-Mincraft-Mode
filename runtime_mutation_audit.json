@@ -562,94 +562,6 @@
     },
     {
       "kind": "external_attribute_rebind",
-      "line": 79,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_platform_prefetch",
-      "target": "live.discover_game_versions"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 97,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_request_byte_fastpath",
-      "target": "game_design._json_text_bytes"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 151,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_proposal_validation_fastpath",
-      "target": "proposal_cls.validate"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 171,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_proposal_validation_fastpath",
-      "target": "complete_spec.complete_proposal_from_parts"
-    },
-    {
-      "kind": "loaded_namespace_rebind",
-      "line": 185,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_retarget_loaded_proposal_aliases",
-      "target": "namespace['complete_proposal_from_parts']"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 201,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_work_graph_fastpath",
-      "target": "node_cls.to_dict"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 229,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_work_graph_fastpath",
-      "target": "work_graph._topological_modules"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 243,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_work_graph_fastpath",
-      "target": "work_graph.build_production_work_plan"
-    },
-    {
-      "kind": "external_setattr",
-      "line": 249,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_work_graph_fastpath",
-      "target": "setattr(loaded, build_production_work_plan)"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 273,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_proposal_store_hash_fastpath",
-      "target": "complete_spec.CompleteProposal.calculate_hash"
-    },
-    {
-      "kind": "external_attribute_rebind",
-      "line": 287,
-      "metadata_only": false,
-      "path": "minecraft_mod_ai/colab_prefetch_bootstrap.py",
-      "scope": "_install_proposal_store_hash_fastpath",
-      "target": "proposal_store.complete_proposal_from_index"
-    },
-    {
-      "kind": "external_attribute_rebind",
       "line": 144,
       "metadata_only": false,
       "path": "minecraft_mod_ai/context_budget_preflight.py",
@@ -3124,7 +3036,6 @@
     "minecraft_mod_ai/coder_max_efficiency_contract.py": 2,
     "minecraft_mod_ai/coder_tool_route_integrity_contract.py": 3,
     "minecraft_mod_ai/colab_gpu_handoff_contract.py": 1,
-    "minecraft_mod_ai/colab_prefetch_bootstrap.py": 11,
     "minecraft_mod_ai/context_budget_preflight.py": 2,
     "minecraft_mod_ai/custom_generation_search_contract.py": 5,
     "minecraft_mod_ai/dependency_decode_monitor.py": 4,
@@ -3229,7 +3140,7 @@
     "minecraft_mod_ai/work_graph_mutation_contract.py": 2,
     "minecraft_mod_ai/work_graph_state_transition_contract.py": 8
   },
-  "behavioral_count": 387,
+  "behavioral_count": 376,
   "metadata": [
     {
       "kind": "external_attribute_rebind",

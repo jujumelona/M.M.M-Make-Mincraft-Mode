@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import urllib.request
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -95,7 +96,7 @@ def _maven_versions(path: str) -> tuple[str, ...]:
 
 
 @lru_cache(maxsize=1)
-def discover_game_versions() -> tuple[dict[str, Any], ...]:
+def _discover_game_versions() -> tuple[dict[str, Any], ...]:
     payload = _json(_META + "/v2/versions/game")
     if not isinstance(payload, list):
         raise PlatformDiscoveryError("Fabric Meta game-version response was not a list")
@@ -109,6 +110,69 @@ def discover_game_versions() -> tuple[dict[str, Any], ...]:
     if not result:
         raise PlatformDiscoveryError("Fabric Meta returned no Minecraft versions")
     return tuple(result)
+
+
+_GAME_VERSION_LOCK = threading.RLock()
+_GAME_VERSION_FUTURE: Future[tuple[dict[str, Any], ...]] | None = None
+_PLATFORM_WARMUP_STARTED = False
+
+
+def _start_game_version_prefetch() -> Future[tuple[dict[str, Any], ...]]:
+    global _GAME_VERSION_FUTURE
+    with _GAME_VERSION_LOCK:
+        future = _GAME_VERSION_FUTURE
+        if future is not None and not future.cancelled():
+            return future
+        future = Future()
+        _GAME_VERSION_FUTURE = future
+
+        def worker() -> None:
+            try:
+                future.set_result(_discover_game_versions())
+            except BaseException as exc:
+                future.set_exception(exc)
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="mmm_platform_prefetch",
+        ).start()
+        return future
+
+
+def discover_game_versions() -> tuple[dict[str, Any], ...]:
+    global _GAME_VERSION_FUTURE
+    future = _start_game_version_prefetch()
+    try:
+        return future.result()
+    except BaseException:
+        with _GAME_VERSION_LOCK:
+            if _GAME_VERSION_FUTURE is future:
+                _GAME_VERSION_FUTURE = None
+        raise
+
+
+def start_platform_prefetch() -> None:
+    """Warm official platform metadata without replacing discovery functions."""
+    global _PLATFORM_WARMUP_STARTED
+    _start_game_version_prefetch()
+    with _GAME_VERSION_LOCK:
+        if _PLATFORM_WARMUP_STARTED:
+            return
+        _PLATFORM_WARMUP_STARTED = True
+
+    def warm_catalog() -> None:
+        try:
+            _common_platform_metadata()
+            _stable_java_versions()
+        except BaseException:
+            return
+
+    threading.Thread(
+        target=warm_catalog,
+        daemon=True,
+        name="mmm_platform_catalog_prefetch",
+    ).start()
 
 
 def latest_stable_versions(limit: int = 6) -> tuple[str, ...]:

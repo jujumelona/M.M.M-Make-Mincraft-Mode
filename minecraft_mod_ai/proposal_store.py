@@ -171,7 +171,8 @@ def complete_proposal_from_index(raw: dict[str, Any], read_part: Callable[[str],
     if set(metadata) != expected_metadata:
         raise SpecValidationError('Complete proposal metadata fields are invalid.')
     proposal = CompleteProposal.from_dict({**metadata, 'base_proposal': base_proposal, 'game_design': game_design, 'modules': modules, 'assets': assets, 'acceptance_tests': acceptance_tests})
-    if raw['proposal_hash'] != proposal.calculate_hash():
+    actual_hash = proposal.approval_hash or proposal.calculate_hash()
+    if raw['proposal_hash'] != actual_hash:
         raise SpecValidationError('Complete proposal shard root hash is invalid.')
     return proposal
 
