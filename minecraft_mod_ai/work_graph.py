@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -123,6 +124,7 @@ class DurableWorkLedger:
     working without replaying successful nodes.
     """
     schema_version = 'mmm/durable-work-ledger-v1'
+    _sync_plan_temp_tables = ('affected_nodes', 'changed_nodes', 'desired_edges', 'desired_tasks')
 
     @classmethod
     def open_existing(cls, path: str | Path) -> 'DurableWorkLedger':
@@ -146,6 +148,11 @@ class DurableWorkLedger:
         self.graph_hash = graph_hash
         self._initialize()
 
+    @classmethod
+    def _drop_sync_plan_temp_tables(cls, connection: sqlite3.Connection) -> None:
+        for table_name in cls._sync_plan_temp_tables:
+            connection.execute(f'DROP TABLE IF EXISTS {table_name}')
+
     def sync_plan(self, plan: WorkGraphPlan) -> dict[str, Any]:
         if plan.proposal_hash != self.proposal_hash:
             raise WorkGraphError('Work graph proposal does not match the ledger.')
@@ -156,29 +163,37 @@ class DurableWorkLedger:
         if missing_dependencies:
             raise WorkGraphError(f'Work graph contains unknown dependencies: {missing_dependencies[:8]}')
         now = time.time()
-        with self._connect() as connection:
-            connection.execute('BEGIN IMMEDIATE')
-            stored_graph = self._meta(connection, 'graph_hash')
-            connection.execute('\n                CREATE TEMP TABLE desired_tasks(\n                    node_id TEXT PRIMARY KEY,\n                    stage TEXT NOT NULL,\n                    input_hash TEXT NOT NULL,\n                    payload_json TEXT NOT NULL\n                )\n                ')
-            connection.execute('\n                CREATE TEMP TABLE desired_edges(\n                    node_id TEXT NOT NULL,\n                    dependency_id TEXT NOT NULL,\n                    PRIMARY KEY(node_id, dependency_id)\n                )\n                ')
-            connection.execute('\n                CREATE TEMP TABLE changed_nodes(\n                    node_id TEXT PRIMARY KEY\n                )\n                ')
-            connection.executemany('\n                INSERT INTO desired_tasks(node_id, stage, input_hash, payload_json)\n                VALUES (?, ?, ?, ?)\n                ', ((node.node_id, node.stage, node.input_hash, canonical_json(node.payload)) for node in plan.nodes))
-            connection.executemany('\n                INSERT INTO desired_edges(node_id, dependency_id)\n                VALUES (?, ?)\n                ', ((node.node_id, dependency) for node in plan.nodes for dependency in node.dependencies))
-            connection.execute('\n                INSERT INTO changed_nodes(node_id)\n                SELECT desired.node_id\n                FROM desired_tasks AS desired\n                JOIN tasks AS current USING(node_id)\n                WHERE current.input_hash != desired.input_hash\n                ')
-            changed = tuple((str(row[0]) for row in connection.execute('SELECT node_id FROM changed_nodes ORDER BY node_id')))
-            pruned = tuple((str(row[0]) for row in connection.execute('\n                    SELECT current.node_id\n                    FROM tasks AS current\n                    WHERE NOT EXISTS (\n                        SELECT 1 FROM desired_tasks AS desired\n                        WHERE desired.node_id = current.node_id\n                    )\n                    ORDER BY current.node_id\n                    ')))
-            connection.execute('DELETE FROM edges')
-            connection.execute('\n                DELETE FROM tasks\n                WHERE NOT EXISTS (\n                    SELECT 1 FROM desired_tasks AS desired\n                    WHERE desired.node_id = tasks.node_id\n                )\n                ')
-            connection.execute('\n                INSERT INTO tasks(\n                    node_id, stage, input_hash, payload_json, state, updated_at\n                )\n                SELECT desired.node_id, desired.stage, desired.input_hash,\n                       desired.payload_json, ?, ?\n                FROM desired_tasks AS desired\n                WHERE NOT EXISTS (\n                    SELECT 1 FROM tasks AS current\n                    WHERE current.node_id = desired.node_id\n                )\n                ', (WorkState.PENDING.value, now))
-            connection.execute('\n                UPDATE tasks\n                SET stage = (\n                        SELECT desired.stage FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    ),\n                    input_hash = (\n                        SELECT desired.input_hash FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    ),\n                    payload_json = (\n                        SELECT desired.payload_json FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    )\n                WHERE EXISTS (\n                    SELECT 1 FROM desired_tasks AS desired\n                    WHERE desired.node_id = tasks.node_id\n                )\n                ')
-            connection.execute('\n                INSERT INTO edges(node_id, dependency_id)\n                SELECT node_id, dependency_id FROM desired_edges\n                ')
-            connection.execute('\n                CREATE TEMP TABLE affected_nodes AS\n                WITH RECURSIVE affected(node_id) AS (\n                    SELECT node_id FROM changed_nodes\n                    UNION\n                    SELECT edges.node_id\n                    FROM edges JOIN affected\n                      ON edges.dependency_id = affected.node_id\n                )\n                SELECT node_id FROM affected\n                ')
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = NULL, receipt_json = NULL,\n                    error = NULL, lease_owner = NULL, lease_until = NULL,\n                    updated_at = ?\n                WHERE EXISTS (\n                    SELECT 1 FROM affected_nodes\n                    WHERE affected_nodes.node_id = tasks.node_id\n                )\n                ', (WorkState.PENDING.value, now))
-            connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('graph_hash', ?)", (plan.graph_hash,))
-            connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('module_count', ?)", (str(plan.module_count),))
-            connection.commit()
+        connection = self._connect()
+        with connection:
+            self._drop_sync_plan_temp_tables(connection)
+        try:
+            with connection:
+                connection.execute('BEGIN IMMEDIATE')
+                stored_graph = self._meta(connection, 'graph_hash')
+                connection.execute('\n                    CREATE TEMP TABLE desired_tasks(\n                        node_id TEXT PRIMARY KEY,\n                        stage TEXT NOT NULL,\n                        input_hash TEXT NOT NULL,\n                        payload_json TEXT NOT NULL\n                    )\n                    ')
+                connection.execute('\n                    CREATE TEMP TABLE desired_edges(\n                        node_id TEXT NOT NULL,\n                        dependency_id TEXT NOT NULL,\n                        PRIMARY KEY(node_id, dependency_id)\n                    )\n                    ')
+                connection.execute('\n                    CREATE TEMP TABLE changed_nodes(\n                        node_id TEXT PRIMARY KEY\n                    )\n                    ')
+                connection.executemany('\n                    INSERT INTO desired_tasks(node_id, stage, input_hash, payload_json)\n                    VALUES (?, ?, ?, ?)\n                    ', ((node.node_id, node.stage, node.input_hash, canonical_json(node.payload)) for node in plan.nodes))
+                connection.executemany('\n                    INSERT INTO desired_edges(node_id, dependency_id)\n                    VALUES (?, ?)\n                    ', ((node.node_id, dependency) for node in plan.nodes for dependency in node.dependencies))
+                connection.execute('\n                    INSERT INTO changed_nodes(node_id)\n                    SELECT desired.node_id\n                    FROM desired_tasks AS desired\n                    JOIN tasks AS current USING(node_id)\n                    WHERE current.input_hash != desired.input_hash\n                    ')
+                changed = tuple((str(row[0]) for row in connection.execute('SELECT node_id FROM changed_nodes ORDER BY node_id')))
+                pruned = tuple((str(row[0]) for row in connection.execute('\n                        SELECT current.node_id\n                        FROM tasks AS current\n                        WHERE NOT EXISTS (\n                            SELECT 1 FROM desired_tasks AS desired\n                            WHERE desired.node_id = current.node_id\n                        )\n                        ORDER BY current.node_id\n                        ')))
+                connection.execute('DELETE FROM edges')
+                connection.execute('\n                    DELETE FROM tasks\n                    WHERE NOT EXISTS (\n                        SELECT 1 FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    )\n                    ')
+                connection.execute('\n                    INSERT INTO tasks(\n                        node_id, stage, input_hash, payload_json, state, updated_at\n                    )\n                    SELECT desired.node_id, desired.stage, desired.input_hash,\n                           desired.payload_json, ?, ?\n                    FROM desired_tasks AS desired\n                    WHERE NOT EXISTS (\n                        SELECT 1 FROM tasks AS current\n                        WHERE current.node_id = desired.node_id\n                    )\n                    ', (WorkState.PENDING.value, now))
+                connection.execute('\n                    UPDATE tasks\n                    SET stage = (\n                            SELECT desired.stage FROM desired_tasks AS desired\n                            WHERE desired.node_id = tasks.node_id\n                        ),\n                        input_hash = (\n                            SELECT desired.input_hash FROM desired_tasks AS desired\n                            WHERE desired.node_id = tasks.node_id\n                        ),\n                        payload_json = (\n                            SELECT desired.payload_json FROM desired_tasks AS desired\n                            WHERE desired.node_id = tasks.node_id\n                        )\n                    WHERE EXISTS (\n                        SELECT 1 FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    )\n                    ')
+                connection.execute('\n                    INSERT INTO edges(node_id, dependency_id)\n                    SELECT node_id, dependency_id FROM desired_edges\n                    ')
+                connection.execute('\n                    CREATE TEMP TABLE affected_nodes AS\n                    WITH RECURSIVE affected(node_id) AS (\n                        SELECT node_id FROM changed_nodes\n                        UNION\n                        SELECT edges.node_id\n                        FROM edges JOIN affected\n                          ON edges.dependency_id = affected.node_id\n                    )\n                    SELECT node_id FROM affected\n                    ')
+                connection.execute('\n                    UPDATE tasks\n                    SET state = ?, output_hash = NULL, receipt_json = NULL,\n                        error = NULL, lease_owner = NULL, lease_until = NULL,\n                        updated_at = ?\n                    WHERE EXISTS (\n                        SELECT 1 FROM affected_nodes\n                        WHERE affected_nodes.node_id = tasks.node_id\n                    )\n                    ', (WorkState.PENDING.value, now))
+                connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('graph_hash', ?)", (plan.graph_hash,))
+                connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('module_count', ?)", (str(plan.module_count),))
+        finally:
+            with connection:
+                self._drop_sync_plan_temp_tables(connection)
         self.graph_hash = plan.graph_hash
         return {'schema_version': 'mmm/work-plan-sync-v1', 'graph_hash': plan.graph_hash, 'previous_graph_hash': stored_graph, 'node_count': len(plan.nodes), 'invalidated_nodes': tuple(sorted(changed)), 'pruned_nodes': tuple(sorted(pruned))}
+
+    sync_plan._mmm_reusable_connection_sync_plan = True  # type: ignore[attr-defined]
 
     def claim_ready(self, worker_id: str, *, stages: Sequence[str]=(), lease_seconds: int=900) -> dict[str, Any] | None:
         if not worker_id.strip():
@@ -422,11 +437,30 @@ class DurableWorkLedger:
             connection.commit()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30)
-        connection.execute('PRAGMA foreign_keys = ON')
-        connection.execute('PRAGMA journal_mode = WAL')
-        connection.execute('PRAGMA synchronous = NORMAL')
+        local = getattr(self, '_mmm_sqlite_local', None)
+        if local is None:
+            local = threading.local()
+            setattr(self, '_mmm_sqlite_local', local)
+
+        connection = getattr(local, 'connection', None)
+        pid = getattr(local, 'pid', None)
+        if connection is not None and pid != os.getpid():
+            try:
+                connection.close()
+            except Exception:
+                pass
+            connection = None
+
+        if connection is None:
+            connection = sqlite3.connect(self.path, timeout=30)
+            connection.execute('PRAGMA foreign_keys = ON')
+            connection.execute('PRAGMA journal_mode = WAL')
+            connection.execute('PRAGMA synchronous = NORMAL')
+            local.connection = connection
+            local.pid = os.getpid()
         return connection
+
+    _connect._mmm_thread_local_connection = True  # type: ignore[attr-defined]
 
     @staticmethod
     def _meta(connection: sqlite3.Connection, key: str) -> str:
