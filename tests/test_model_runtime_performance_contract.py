@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import threading
 from types import SimpleNamespace
 
 from minecraft_mod_ai import complete_orchestrator_services
-from minecraft_mod_ai.image_runtime_residency import (
-    _finish_image_shard,
+from minecraft_mod_ai.model_adapters import image_diffusion as image_module
+from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
+from minecraft_mod_ai.model_adapters.image_diffusion import (
+    ImageDiffusionAdapter,
     _full_gpu_threshold_mb,
     _is_cuda_memory_pressure,
+    finish_image_shard,
 )
-from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
-from minecraft_mod_ai.model_adapters.image_diffusion import ImageDiffusionAdapter
 from minecraft_mod_ai.model_adapters.reranker import RerankerAdapter
 
 
@@ -74,20 +74,21 @@ def test_image_memory_fallback_only_matches_allocation_pressure() -> None:
 def test_image_pipeline_cache_is_released_after_shard_by_default(monkeypatch) -> None:
     monkeypatch.delenv("MMM_IMAGE_CACHE_ACROSS_SHARDS", raising=False)
     pipeline = _DummyPipeline()
-    runtime = SimpleNamespace(
-        _IMAGE_LOCK=threading.RLock(),
-        _IMAGE_PIPELINE=pipeline,
-        _IMAGE_PIPELINE_KEY=("model", "float16", "full_gpu"),
-        _IMAGE_PIPELINE_ON_GPU=True,
-    )
     released: list[bool] = []
-    base = SimpleNamespace(_release_cuda=lambda: released.append(True))
+    monkeypatch.setattr(image_module, "_IMAGE_PIPELINE", pipeline)
+    monkeypatch.setattr(
+        image_module,
+        "_IMAGE_PIPELINE_KEY",
+        ("model", "float16", "full_gpu"),
+    )
+    monkeypatch.setattr(image_module, "_IMAGE_PIPELINE_ON_GPU", True)
+    monkeypatch.setattr(image_module, "_release_cuda", lambda: released.append(True))
 
-    _finish_image_shard(runtime, base)
+    finish_image_shard()
 
-    assert runtime._IMAGE_PIPELINE is None
-    assert runtime._IMAGE_PIPELINE_KEY is None
-    assert runtime._IMAGE_PIPELINE_ON_GPU is False
+    assert image_module._IMAGE_PIPELINE is None
+    assert image_module._IMAGE_PIPELINE_KEY is None
+    assert image_module._IMAGE_PIPELINE_ON_GPU is False
     assert pipeline.moves == []
     assert released == [True]
 
@@ -95,19 +96,20 @@ def test_image_pipeline_cache_is_released_after_shard_by_default(monkeypatch) ->
 def test_image_pipeline_can_be_parked_between_shards_when_requested(monkeypatch) -> None:
     monkeypatch.setenv("MMM_IMAGE_CACHE_ACROSS_SHARDS", "1")
     pipeline = _DummyPipeline()
-    runtime = SimpleNamespace(
-        _IMAGE_LOCK=threading.RLock(),
-        _IMAGE_PIPELINE=pipeline,
-        _IMAGE_PIPELINE_KEY=("model", "float16", "full_gpu"),
-        _IMAGE_PIPELINE_ON_GPU=True,
-    )
     released: list[bool] = []
-    base = SimpleNamespace(_release_cuda=lambda: released.append(True))
+    monkeypatch.setattr(image_module, "_IMAGE_PIPELINE", pipeline)
+    monkeypatch.setattr(
+        image_module,
+        "_IMAGE_PIPELINE_KEY",
+        ("model", "float16", "full_gpu"),
+    )
+    monkeypatch.setattr(image_module, "_IMAGE_PIPELINE_ON_GPU", True)
+    monkeypatch.setattr(image_module, "_release_cuda", lambda: released.append(True))
 
-    _finish_image_shard(runtime, base)
+    finish_image_shard()
 
-    assert runtime._IMAGE_PIPELINE is pipeline
-    assert runtime._IMAGE_PIPELINE_KEY[-1] == "full_gpu"
-    assert runtime._IMAGE_PIPELINE_ON_GPU is False
+    assert image_module._IMAGE_PIPELINE is pipeline
+    assert image_module._IMAGE_PIPELINE_KEY[-1] == "full_gpu"
+    assert image_module._IMAGE_PIPELINE_ON_GPU is False
     assert pipeline.moves == ["cpu"]
     assert released == [True]
