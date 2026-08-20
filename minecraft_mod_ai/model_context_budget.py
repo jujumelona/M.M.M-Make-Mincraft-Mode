@@ -47,7 +47,7 @@ def _default_context_bytes() -> int:
 
 
 def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
-    """Return a conservative message-byte budget with output/tool space reserved."""
+    """Return a conservative message-byte budget with tool/output space reserved."""
 
     default = _default_context_bytes()
     try:
@@ -58,11 +58,18 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
     if max_context <= 0:
         return default
 
-    # Byte accounting is intentionally conservative for code/JSON-heavy Qwen turns.
+    adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
+    # Native llama-server production requests use max_tokens=-1. Reserving the
+    # registry max_new_tokens here would silently reintroduce the old 8K-style cap on
+    # the input side even though generation itself is unbounded. Keep only a fixed
+    # safety guard for EOS/tool completion and the actual tool-schema footprint.
+    reserved_output_tokens = 0 if adapter == "llama_cpp" else max_new_tokens
+
+    # Byte accounting is intentionally conservative for code/JSON-heavy turns.
     # Tool schemas consume the same server context but are not part of messages.
     available_input_tokens = max(
         2048,
-        max_context - max_new_tokens - _CONTEXT_TOKEN_GUARD,
+        max_context - reserved_output_tokens - _CONTEXT_TOKEN_GUARD,
     )
     context_bytes = available_input_tokens * _BYTES_PER_TOKEN_BUDGET
     tool_bytes = len(_canonical_bytes(tuple(tools))) if tools else 0
