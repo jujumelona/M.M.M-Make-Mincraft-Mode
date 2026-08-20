@@ -16,6 +16,7 @@ from .model_adapters import (
     ModelConfigurationError,
     OpenAICompatibleAdapter,
     RerankerAdapter,
+    ToolCall,
     TransformersMultimodalAdapter,
     TransformersTextAdapter,
 )
@@ -37,7 +38,8 @@ _ROLE_TOOL_STAGE = {
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
-_RAG_EVIDENCE_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
+_MANDATORY_CODE_RAG_TOOL = "search_code_rag"
+_RAG_EVIDENCE_TOOLS = frozenset({_MANDATORY_CODE_RAG_TOOL, "search_project_rag"})
 _EXTERNAL_RAG_CAPABILITIES = frozenset(
     {
         "mapping_resolution",
@@ -348,8 +350,6 @@ class ModelRouter:
         exposed_tools = frozenset(_tool_schema_names(request.tools))
         previous_exchange_state: str | None = None
         weak_fixed_point_seen = False
-        forced_rag_tool: str | None = None
-        forced_rag_attempts = 0
         rag_evidence_seen = False
         round_index = 0
         round_limit = _agent_tool_round_limit()
@@ -359,6 +359,119 @@ class ModelRouter:
             and exposed_tools & _RAG_EVIDENCE_TOOLS
         )
         reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
+
+        def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
+            route_metadata: dict[str, Any] = {
+                "skills": list(skills_for_tool(stage, call.name, model_role=role))
+            }
+            if call.name == "external_mcp_call":
+                capability = str(call.arguments.get("capability", "")).strip()
+                if capability:
+                    route_metadata["external_mcp_capability"] = capability
+            try:
+                if call.name not in exposed_tools:
+                    raise ModelConfigurationError(
+                        f"Agent attempted hidden tool {call.name!r} outside its "
+                        f"reviewed role routes for {role!r}/{stage!r}."
+                    )
+                scoped_call = getattr(runtime, "call_scoped", None)
+                if callable(scoped_call):
+                    result = scoped_call(
+                        stage,
+                        call.name,
+                        call.arguments,
+                        external_server_ids=reviewed_external_servers,
+                    )
+                elif call.name.startswith("external_mcp_"):
+                    raise ModelConfigurationError(
+                        "External MCP execution requires a role-scoped agent runtime."
+                    )
+                else:
+                    result = runtime.call(stage, call.name, call.arguments)
+                payload: Mapping[str, Any] = {
+                    "ok": True,
+                    "tool": call.name,
+                    **route_metadata,
+                    "result": result,
+                }
+            except Exception as exc:
+                payload = {
+                    "ok": False,
+                    "tool": call.name,
+                    **route_metadata,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            return call, payload
+
+        if require_rag:
+            if _MANDATORY_CODE_RAG_TOOL not in exposed_tools:
+                raise ModelConfigurationError(
+                    "Fresh production evidence requires the reviewed search_code_rag "
+                    "tool; search_project_rag cannot be host-forced without an explicit "
+                    "Minecraft version."
+                )
+            rag_arguments = {"query": _required_code_rag_query(messages)}
+            raw_rag_arguments = json.dumps(
+                rag_arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            required_rag_call = ToolCall(
+                id=(
+                    "host_rag_"
+                    + hashlib.sha256(raw_rag_arguments.encode("utf-8")).hexdigest()[:16]
+                ),
+                name=_MANDATORY_CODE_RAG_TOOL,
+                arguments=rag_arguments,
+                raw_arguments=raw_rag_arguments,
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": required_rag_call.id,
+                            "type": "function",
+                            "function": {
+                                "name": required_rag_call.name,
+                                "arguments": required_rag_call.raw_arguments,
+                            },
+                        }
+                    ],
+                }
+            )
+            _, required_rag_payload = execute(required_rag_call)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": required_rag_call.id,
+                    "name": required_rag_call.name,
+                    "content": json.dumps(
+                        required_rag_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                }
+            )
+            rag_evidence_seen = bool(
+                required_rag_payload.get("ok")
+                and _usable_rag_result(required_rag_payload.get("result"))
+            )
+            if not rag_evidence_seen:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "The host-required initial code RAG observation is not usable "
+                            "fresh evidence. Use its receipt/error to reformulate the query or "
+                            "use another reviewed evidence source before finalizing. Do not "
+                            "guess exact Minecraft/Fabric/mapping/dependency/Java API facts."
+                        ),
+                    }
+                )
+
         while True:
             if round_index >= round_limit:
                 if require_rag and not rag_evidence_seen:
@@ -399,22 +512,14 @@ class ModelRouter:
                     )
                 return final_content
 
-            tool_choice = request.tool_choice
-            parallel_tool_calls = request.parallel_tool_calls
-            if forced_rag_tool is not None:
-                tool_choice = {
-                    "type": "function",
-                    "function": {"name": forced_rag_tool},
-                }
-                parallel_tool_calls = False
             turn_request = GenerationRequest(
                 messages=messages,
                 media_paths=request.media_paths if round_index == 0 else (),
                 response_format=request.response_format,
                 response_schema=request.response_schema,
                 tools=request.tools,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
+                tool_choice=request.tool_choice,
+                parallel_tool_calls=request.parallel_tool_calls,
             )
             turn = adapter.generate_turn(turn_request)
             if not turn.tool_calls:
@@ -424,61 +529,11 @@ class ModelRouter:
                         "Tool-capable model returned an empty final response."
                     )
                 if require_rag and not rag_evidence_seen:
-                    if forced_rag_tool is None:
-                        forced_rag_tool = next(
-                            (
-                                name
-                                for name in ("search_code_rag", "search_project_rag")
-                                if name in exposed_tools
-                            ),
-                            None,
-                        )
-                        if forced_rag_tool is None:
-                            raise ModelConfigurationError(
-                                "Fresh RAG evidence is required but no reviewed RAG "
-                                "tool is exposed."
-                            )
-                        forced_rag_attempts = 0
-                    else:
-                        forced_rag_attempts += 1
-                        if forced_rag_attempts >= 2:
-                            raise ModelConfigurationError(
-                                "Production coder did not honor the host-forced RAG "
-                                f"tool choice {forced_rag_tool!r} after two bounded attempts."
-                            )
-                    messages.extend(
-                        [
-                            {"role": "assistant", "content": content},
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Fresh production evidence is mandatory. Call the "
-                                    f"host-required function {forced_rag_tool} exactly once now; "
-                                    "do not answer in prose. Form a concrete query for the current "
-                                    "implementation task. Inspect the retrieval receipt. If "
-                                    "result_count/coverage/relevance is weak or empty after the "
-                                    "tool returns, reformulate the query or use the other reviewed "
-                                    "evidence source. Do not guess exact Minecraft/Fabric/mapping/"
-                                    "dependency/Java API facts from memory."
-                                ),
-                            },
-                        ]
-                    )
-                    round_index += 1
-                    continue
-                return content
-            if forced_rag_tool is not None:
-                if (
-                    len(turn.tool_calls) != 1
-                    or turn.tool_calls[0].name != forced_rag_tool
-                ):
-                    called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
                     raise ModelConfigurationError(
-                        "Production coder violated host-forced RAG tool choice "
-                        f"{forced_rag_tool!r}; received {called}."
+                        "Production coder attempted to finalize without usable fresh RAG "
+                        "evidence after the host precondition and adaptive evidence loop."
                     )
-                forced_rag_tool = None
-                forced_rag_attempts = 0
+                return content
             messages.append(
                 {
                     "role": "assistant",
@@ -501,49 +556,6 @@ class ModelRouter:
                     ],
                 }
             )
-
-            def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
-                route_metadata: dict[str, Any] = {
-                    "skills": list(skills_for_tool(stage, call.name, model_role=role))
-                }
-                if call.name == "external_mcp_call":
-                    capability = str(call.arguments.get("capability", "")).strip()
-                    if capability:
-                        route_metadata["external_mcp_capability"] = capability
-                try:
-                    if call.name not in exposed_tools:
-                        raise ModelConfigurationError(
-                            f"Agent attempted hidden tool {call.name!r} outside its "
-                            f"reviewed role routes for {role!r}/{stage!r}."
-                        )
-                    scoped_call = getattr(runtime, "call_scoped", None)
-                    if callable(scoped_call):
-                        result = scoped_call(
-                            stage,
-                            call.name,
-                            call.arguments,
-                            external_server_ids=reviewed_external_servers,
-                        )
-                    elif call.name.startswith("external_mcp_"):
-                        raise ModelConfigurationError(
-                            "External MCP execution requires a role-scoped agent runtime."
-                        )
-                    else:
-                        result = runtime.call(stage, call.name, call.arguments)
-                    payload: Mapping[str, Any] = {
-                        "ok": True,
-                        "tool": call.name,
-                        **route_metadata,
-                        "result": result,
-                    }
-                except Exception as exc:
-                    payload = {
-                        "ok": False,
-                        "tool": call.name,
-                        **route_metadata,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                return call, payload
 
             calls = tuple(turn.tool_calls)
             executed = _execute_tool_waves(calls, execute)
@@ -875,6 +887,24 @@ def _execute_tool_waves(
         completed.append(execute(call))
     flush_reads()
     return tuple(completed)
+
+
+def _required_code_rag_query(messages: Sequence[Mapping[str, Any]]) -> str:
+    """Use the current user task as the deterministic host-owned retrieval query."""
+
+    for message in reversed(messages):
+        if str(message.get("role", "")).strip().lower() != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        query = " ".join(content.split())
+        if query:
+            return query
+    raise ModelConfigurationError(
+        "Fresh production evidence was requested but the generation request has no "
+        "non-empty user text to use as the host-owned code RAG query."
+    )
 
 
 def _external_rag_capability(arguments: Mapping[str, Any]) -> str:
