@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-"""Qwen-family request and agent policy for native llama.cpp tool loops.
+"""Registry-declared request and agent policy for llama.cpp tool loops.
 
-The MCP/tool surface is intentionally shared across model families. This module is a
-late, transparent decorator over the already-composed llama payload stack. Exact
-production Qwen models receive model/mode-specific sampling, while Qwen3.6 and
-Qwen3.8 autonomous agent continuations opt into thinking preservation and historical
-``reasoning_content`` restoration required by their hybrid-thinking templates.
+The MCP/tool surface is shared across model families. Runtime-specific behavior is
+selected exclusively from ``AdapterConfig.extra`` values loaded from model_registry;
+this module never infers a model version, size, repository id, context length, or
+sampling profile from a model name.
 """
 
 import hashlib
@@ -18,23 +17,37 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .model_adapters.base import GenerationRequest, GenerationResponse
-from .qwen_model_profiles import qwen_family, qwen_sampling_profile
 
 _MAX_REASONING_TRACES = 64
 _REASONING_TRACE_LOCK = threading.RLock()
 _INSTALLED = False
-_AGENT_THINKING_FAMILIES = frozenset({"qwen3.6", "qwen3.8"})
+_RUNTIME_CONTRACT = "qwen"
+_SAMPLING_MODES = frozenset({"general_thinking", "precise_coding", "non_thinking"})
 
 
-def _model_family(model_id: object, gguf_filename: object = "") -> str:
-    return qwen_family(model_id, gguf_filename) or "other"
-
-
-def _config_family(config: Any) -> str:
-    model_id = getattr(config, "model_id", "")
+def _config_extra(config: Any) -> Mapping[str, Any]:
     extra = getattr(config, "extra", {})
-    filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
-    return _model_family(model_id, filename)
+    return extra if isinstance(extra, Mapping) else {}
+
+
+def _uses_runtime_contract(config: Any) -> bool:
+    return str(_config_extra(config).get("runtime_contract", "")).strip().casefold() == _RUNTIME_CONTRACT
+
+
+def _agent_thinking_enabled(config: Any) -> bool:
+    return _uses_runtime_contract(config) and bool(_config_extra(config).get("agent_thinking", False))
+
+
+def _sampling_profile(config: Any, mode: str) -> dict[str, Any] | None:
+    if mode not in _SAMPLING_MODES:
+        raise ValueError(f"unsupported sampling mode: {mode!r}")
+    profiles = _config_extra(config).get("sampling_profiles")
+    if not isinstance(profiles, Mapping):
+        return None
+    raw = profiles.get(mode)
+    if not isinstance(raw, Mapping):
+        return None
+    return {str(key): value for key, value in raw.items()}
 
 
 def _forced_tool_choice(tool_choice: Any) -> bool:
@@ -68,7 +81,7 @@ def _qwen_agent_request(request: Any) -> bool:
 
 
 def _qwen_sampling_mode(role: object, request: Any) -> str | None:
-    """Map MMM request semantics onto Qwen's documented generation modes."""
+    """Map MMM request semantics onto registry-declared generation modes."""
 
     tools = getattr(request, "tools", ()) or ()
     if getattr(request, "response_format", None) == "json" and not tools:
@@ -86,15 +99,13 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
 def _apply_family_payload_policy(
     payload: dict[str, Any],
     *,
-    model_id: object,
-    gguf_filename: object = "",
+    config: Any,
     role: object = "",
     request: Any,
 ) -> dict[str, Any]:
-    """Apply Qwen hybrid-thinking/tool-loop semantics for supported families."""
+    """Apply registry-declared hybrid-thinking/tool-loop semantics."""
 
-    family = _model_family(model_id, gguf_filename)
-    if family not in _AGENT_THINKING_FAMILIES:
+    if not _agent_thinking_enabled(config):
         return payload
 
     mode = _qwen_sampling_mode(role, request)
@@ -102,26 +113,22 @@ def _apply_family_payload_policy(
     if mode is None and not agent_request:
         return payload
 
+    extra = _config_extra(config)
     if mode == "non_thinking":
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     else:
         payload.pop("reasoning_effort", None)
         template_kwargs: dict[str, Any] = {"enable_thinking": True}
-        if family == "qwen3.8":
-            # Qwen3.8-27B exposes low/medium/xhigh through its chat template. The
-            # production coding path optimizes for solution quality, so pin xhigh
-            # instead of relying on a server/template default that may change.
-            template_kwargs["reasoning_effort"] = "xhigh"
+        reasoning_effort = str(extra.get("thinking_reasoning_effort", "")).strip()
+        if reasoning_effort:
+            template_kwargs["reasoning_effort"] = reasoning_effort
         if agent_request:
-            # Preserve prior reasoning across tool-result continuations. This is
-            # important for Qwen3.8 nested/sequential tool use; the host still decides
-            # whether independent calls may execute in parallel.
             template_kwargs["preserve_thinking"] = True
         payload["chat_template_kwargs"] = template_kwargs
 
     if mode is not None:
-        sampling = qwen_sampling_profile(model_id, gguf_filename, mode=mode)
+        sampling = _sampling_profile(config, mode)
         if sampling is not None:
             payload.pop("repetition_penalty", None)
             payload.update(sampling)
@@ -242,7 +249,7 @@ def _remember_reasoning(adapter: Any, response: GenerationResponse) -> None:
 
 
 def install() -> None:
-    """Install Qwen hybrid-thinking agent policy exactly once."""
+    """Install registry-declared hybrid-thinking agent policy exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -258,12 +265,9 @@ def install() -> None:
         def server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             payload = current_payload(adapter, request)
             config = getattr(adapter, "config", None)
-            extra = getattr(config, "extra", {})
-            filename = extra.get("gguf_filename", "") if isinstance(extra, Mapping) else ""
             return _apply_family_payload_policy(
                 payload,
-                model_id=getattr(config, "model_id", ""),
-                gguf_filename=filename,
+                config=config,
                 role=getattr(config, "role", ""),
                 request=request,
             )
@@ -277,7 +281,7 @@ def install() -> None:
         @wraps(current_generate_turn)
         def generate_turn(self: Any, request: GenerationRequest) -> GenerationResponse:
             config = getattr(self, "config", None)
-            qwen_agent = _config_family(config) in _AGENT_THINKING_FAMILIES and _qwen_agent_request(request)
+            qwen_agent = _agent_thinking_enabled(config) and _qwen_agent_request(request)
             prepared = _inject_reasoning_history(self, request) if qwen_agent else request
             response = current_generate_turn(self, prepared)
             if qwen_agent:
@@ -290,7 +294,8 @@ def install() -> None:
     _INSTALLED = True
 
 
-# Backward-compatible private aliases for tests/extensions that imported the old names.
+# Backward-compatible private aliases for request-mode helpers only. Runtime/model
+# identity is intentionally no longer inferred from model names.
 _qwen36_agent_request = _qwen_agent_request
 _qwen36_sampling_mode = _qwen_sampling_mode
 
