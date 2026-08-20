@@ -111,15 +111,31 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_colab_drive_path(path: Path) -> bool:
+    resolved = path.expanduser().resolve()
+    drive_root = Path("/content/drive").resolve()
+    return resolved == drive_root or drive_root in resolved.parents
+
+
 def _complete_workspace_root(output_root: Path) -> Path:
     configured = os.environ.get("MMM_COMPLETE_WORKSPACE_ROOT", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
     resolved_output = output_root.expanduser().resolve()
-    drive_root = Path("/content/drive").resolve()
-    if resolved_output == drive_root or drive_root in resolved_output.parents:
+    if _is_colab_drive_path(resolved_output):
         return Path("/content/mmm-work").resolve()
     return resolved_output
+
+
+def _configure_persistent_autotune_cache(output_root: Path, model_profile: str) -> None:
+    if os.environ.get("MMM_LLAMA_AUTOTUNE_CACHE", "").strip():
+        return
+    resolved_output = output_root.expanduser().resolve()
+    if not _is_colab_drive_path(resolved_output):
+        return
+    profile_key = hashlib.sha256(model_profile.encode("utf-8")).hexdigest()[:16]
+    cache = resolved_output / ".cache" / "llama-autotune" / f"{profile_key}.json"
+    os.environ["MMM_LLAMA_AUTOTUNE_CACHE"] = str(cache)
 
 
 def _atomic_copy(source: Path, destination: Path) -> Path:
@@ -363,6 +379,7 @@ class CompleteModAISession:
         self.output_root = Path(output_root)
         self.workspace_root = _complete_workspace_root(self.output_root)
         self.model_profile = model_profile
+        _configure_persistent_autotune_cache(self.output_root, model_profile)
         self.fast_mode = fast_mode
         self.kv_cache_quant = kv_cache_quant
         os.environ["MMM_KV_CACHE_QUANT"] = kv_cache_quant
