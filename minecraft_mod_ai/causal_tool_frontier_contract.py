@@ -27,10 +27,22 @@ def _contains(value: str, markers: Sequence[str]) -> bool:
 
 
 def goals_for_query(query: str) -> tuple[str, ...]:
-    """Resolve one terminal target; preconditions supply intermediate states."""
+    """Resolve one terminal target; preconditions supply intermediate states.
+
+    Outcome verbs must outrank references to a transport or supporting capability.
+    A coder request such as "implement X using external MCP" is an implementation
+    goal; external MCP is only one possible means to reach it. Treating the means as
+    the terminal goal can strand the coder on an observation-only frontier.
+    """
 
     value = query.casefold()
-    external = ("external mcp", "mcp server", "capability", "외부 mcp")
+    external = (
+        "external mcp",
+        "external tool",
+        "mcp server",
+        "외부 mcp",
+        "외부 도구",
+    )
     runtime_verify = (
         "runtime assertion",
         "playtest verify",
@@ -107,8 +119,10 @@ def goals_for_query(query: str) -> tuple[str, ...]:
     )
     plan = ("plan", "planning", "계획", "플랜")
 
-    if _contains(value, external):
-        return ("external",)
+    # Specific terminal outcomes win over implementation means. Keep the historical
+    # runtime/release priorities, then prefer source-changing goals before external
+    # observation. This prevents a broad MCP/capability mention from hijacking a
+    # generation-stage coder turn.
     if _contains(value, runtime_verify):
         return ("runtime_verify",)
     if _contains(value, release):
@@ -119,6 +133,8 @@ def goals_for_query(query: str) -> tuple[str, ...]:
         return ("generate",)
     if _contains(value, act):
         return ("act",)
+    if _contains(value, external):
+        return ("external",)
     if _contains(value, verify):
         return ("verify",)
     if _contains(value, runtime):
