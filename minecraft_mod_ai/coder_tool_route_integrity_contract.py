@@ -4,7 +4,7 @@ from __future__ import annotations
 
 The small-model selector may expose only the first causal action, while the live
 causal adapter must retain the complete security-filtered tool surface so later
-observations can unlock source mutation.  This contract is deliberately installed
+observations can unlock source mutation. This contract is deliberately installed
 after the progress-aware retrieval loop: it composes both policies instead of
 allowing either late wrapper to replace the other.
 """
@@ -101,6 +101,46 @@ def _require_mutation_surface(
     )
 
 
+class _WritableProgressAdapter:
+    """Force one already-causal/legal next action until implementation reaches mutation."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    def generate_turn(self, request: Any) -> Any:
+        from .model_adapters import GenerationRequest, ModelConfigurationError
+
+        if not _is_implementation_request(request.messages):
+            return self.inner.generate_turn(request)
+        if not request.tools or request.tool_choice != "auto":
+            return self.inner.generate_turn(request)
+
+        names = tuple(_tool_name(schema) for schema in request.tools if _tool_name(schema))
+        if not names:
+            return self.inner.generate_turn(request)
+        mutation = next((name for name in names if name in _MUTATION_TOOLS), "")
+        chosen = mutation or names[0]
+        forced = GenerationRequest(
+            messages=request.messages,
+            media_paths=request.media_paths,
+            response_format=request.response_format,
+            response_schema=request.response_schema,
+            tools=request.tools,
+            tool_choice={"type": "function", "function": {"name": chosen}},
+            parallel_tool_calls=False,
+        )
+        turn = self.inner.generate_turn(forced)
+        if not turn.tool_calls or chosen not in {call.name for call in turn.tool_calls}:
+            raise ModelConfigurationError(
+                f"Writable coder did not execute required causal action {chosen!r}; "
+                "refusing a prose-only implementation turn."
+            )
+        return turn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
 def _run_with_dynamic_frontier(
     current: Any,
     router: Any,
@@ -133,7 +173,7 @@ def _run_with_dynamic_frontier(
     )
     execution_gate = FrontierExecutionGate()
     wrapped_adapter = CausalFrontierAdapter(
-        adapter,
+        _WritableProgressAdapter(adapter),
         stage=stage,
         role=role,
         require_fresh_evidence=bool(
@@ -178,7 +218,7 @@ def _install_implementation_goal_priority(causal_module: Any) -> None:
 
     @wraps(current)
     def goals_for_query(query: str) -> tuple[str, ...]:
-        # Host custom generation embeds evidence/tool metadata in the user JSON.  The
+        # Host custom generation embeds evidence/tool metadata in the user JSON. The
         # explicit phase is stronger terminal intent than incidental strings such as
         # "external MCP" appearing inside that metadata.
         if "implement_module" in str(query).casefold():
@@ -229,10 +269,12 @@ def install(
     generate_with_route_integrity._mmm_dynamic_causal_frontier = True
     generate_with_route_integrity._mmm_progress_aware_causal_composed = True
     generate_with_route_integrity._mmm_writable_coder_fail_closed = True
+    generate_with_route_integrity._mmm_writable_coder_progress_forced = True
     cls._generate_with_tools = generate_with_route_integrity
 
 
 __all__ = [
+    "_WritableProgressAdapter",
     "_is_implementation_request",
     "_require_mutation_surface",
     "_run_with_dynamic_frontier",
