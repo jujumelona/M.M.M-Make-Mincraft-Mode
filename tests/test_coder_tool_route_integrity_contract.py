@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +11,10 @@ from minecraft_mod_ai.causal_frontier_adapter import (
     CausalFrontierAdapter,
     remember_authorized_tools,
 )
-from minecraft_mod_ai.coder_tool_route_integrity_contract import _run_with_dynamic_frontier
+from minecraft_mod_ai.coder_tool_route_integrity_contract import (
+    _WritableProgressAdapter,
+    _run_with_dynamic_frontier,
+)
 from minecraft_mod_ai.model_adapters import GenerationRequest, ModelConfigurationError
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -62,6 +66,7 @@ def test_final_runtime_recomposes_progress_and_dynamic_causal_frontier() -> None
     assert getattr(method, "_mmm_progress_aware_causal_composed", False) is True
     assert getattr(method, "_mmm_dynamic_causal_frontier", False) is True
     assert getattr(method, "_mmm_writable_coder_fail_closed", False) is True
+    assert getattr(method, "_mmm_writable_coder_progress_forced", False) is True
 
 
 def test_tool_routing_query_ignores_external_mcp_system_boilerplate() -> None:
@@ -70,10 +75,10 @@ def test_tool_routing_query_ignores_external_mcp_system_boilerplate() -> None:
     assert "MMM capability routing supports external MCP" not in query
 
 
-def test_implement_phase_beats_incidental_external_mcp_metadata() -> None:
+def test_implement_phase_requires_source_edit_terminal_despite_external_metadata() -> None:
     query = small_agent._request_query(_implement_messages())
     assert "external MCP" in query
-    assert causal.goals_for_query(query) == ("act",)
+    assert causal.goals_for_query(query) == ("repair",)
 
 
 def test_initial_one_tool_frontier_recovers_complete_mutation_surface() -> None:
@@ -121,6 +126,58 @@ def test_initial_one_tool_frontier_recovers_complete_mutation_surface() -> None:
     assert "apply_source_patch" in captured["tools"]
     assert captured["stage"] == "generation"
     assert captured["role"] == "coder"
+
+
+def test_writable_progress_forces_visible_causal_action() -> None:
+    captured = {}
+
+    class Adapter:
+        def generate_turn(self, request):
+            captured["tool_choice"] = request.tool_choice
+            chosen = request.tool_choice["function"]["name"]
+            return SimpleNamespace(
+                tool_calls=(SimpleNamespace(name=chosen),),
+                content="",
+            )
+
+    wrapped = _WritableProgressAdapter(Adapter())
+    turn = wrapped.generate_turn(
+        GenerationRequest(
+            messages=_implement_messages(),
+            media_paths=(),
+            response_format="text",
+            response_schema=None,
+            tools=(_schema("apply_source_patch"),),
+            tool_choice="auto",
+            parallel_tool_calls=True,
+        )
+    )
+    assert captured["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "apply_source_patch"},
+    }
+    assert turn.tool_calls[0].name == "apply_source_patch"
+
+
+def test_writable_progress_rejects_prose_only_turn() -> None:
+    class Adapter:
+        def generate_turn(self, request):
+            del request
+            return SimpleNamespace(tool_calls=(), content="done")
+
+    wrapped = _WritableProgressAdapter(Adapter())
+    with pytest.raises(ModelConfigurationError, match="prose-only implementation turn"):
+        wrapped.generate_turn(
+            GenerationRequest(
+                messages=_implement_messages(),
+                media_paths=(),
+                response_format="text",
+                response_schema=None,
+                tools=(_schema("apply_source_patch"),),
+                tool_choice="auto",
+                parallel_tool_calls=True,
+            )
+        )
 
 
 def test_writable_coder_without_mutation_surface_fails_before_model_loop() -> None:
