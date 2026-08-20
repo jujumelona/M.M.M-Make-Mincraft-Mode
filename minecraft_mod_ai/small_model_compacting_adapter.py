@@ -4,6 +4,7 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any
 
+from .model_context_budget import fit_messages_to_context
 from .small_model_context_compaction import compact_messages
 
 
@@ -18,7 +19,15 @@ class CompactingAdapter:
         return getattr(self.inner, name)
 
     def generate_turn(self, request: Any) -> Any:
+        # Exchange compaction removes older history when possible. Context fitting then
+        # handles the first assistant/tool exchange too, where there is no older round
+        # for the historical compactor to replace.
         messages = compact_messages(request.messages)
+        messages = fit_messages_to_context(
+            messages,
+            config=getattr(self.inner, "config", None),
+            tools=getattr(request, "tools", ()) or (),
+        )
         if messages == tuple(request.messages):
             return self.inner.generate_turn(request)
 
