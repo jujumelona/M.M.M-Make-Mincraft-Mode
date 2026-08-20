@@ -25,10 +25,12 @@ def finalize_runtime() -> None:
         if _FINALIZED:
             return
 
+        from . import agent_tool_runtime
         from . import causal_tool_frontier_contract
         from . import model_router
         from . import parallel_runtime_contract
         from . import small_model_max_agent_contract
+        from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .generation_concurrency_safety import install as install_generation_safety
@@ -42,6 +44,7 @@ def finalize_runtime() -> None:
         # user-only query wrapper; the structured projection must own the final call.
         install_agent_mcp_transport_pool()
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
+        install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         install_route_integrity(
             model_router_module=model_router,
             small_model_module=small_model_max_agent_contract,
