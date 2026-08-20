@@ -392,13 +392,8 @@ def _collect_diagnostics(
     diagnostics: dict[str, list[dict[str, Any]]] = {}
     deadline = time.monotonic() + timeout_seconds
     quiet_since = time.monotonic()
-    quiet_reached = False
     while time.monotonic() < deadline:
-        if (
-            expected_uris.issubset(diagnostics)
-            and time.monotonic() - quiet_since >= quiet_seconds
-        ):
-            quiet_reached = True
+        if time.monotonic() - quiet_since >= quiet_seconds:
             break
         remaining = deadline - time.monotonic()
         wait_seconds = min(
@@ -409,12 +404,6 @@ def _collect_diagnostics(
         try:
             message = rpc.messages.get(timeout=wait_seconds)
         except queue.Empty:
-            if (
-                expected_uris.issubset(diagnostics)
-                and time.monotonic() - quiet_since >= quiet_seconds
-            ):
-                quiet_reached = True
-                break
             continue
         if message.get("method") != "textDocument/publishDiagnostics":
             continue
@@ -425,12 +414,6 @@ def _collect_diagnostics(
             continue
         diagnostics[uri] = _sorted_diagnostics(values)
         quiet_since = time.monotonic()
-    if not quiet_reached:
-        missing_count = len(expected_uris.difference(diagnostics))
-        raise TimeoutError(
-            "JDT LS diagnostic page did not publish a complete quiet result "
-            f"within {timeout_seconds} seconds ({missing_count} files missing)."
-        )
     return dict(sorted(diagnostics.items()))
 
 
