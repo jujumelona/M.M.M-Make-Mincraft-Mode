@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-import yaml
-
 from .config_paths import config_path
 from .model_adapters import AdapterConfig, ModelConfigurationError
+from .strict_yaml import safe_load_unique_keys
 
 
 LEGACY_REQUIRED_ROLES = frozenset(
@@ -42,7 +42,7 @@ ALLOWED_ADAPTERS = frozenset(
 )
 SUPPORTED_SCHEMAS = frozenset({"mmm/model-registry-v1", "mmm/model-registry-v2"})
 _REGISTRY_CACHE_LOCK = threading.RLock()
-_REGISTRY_SOURCE_CACHE: dict[tuple[str, int, int], tuple[str, dict[str, Any]]] = {}
+_REGISTRY_SOURCE_CACHE: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
 
 
 @dataclass(frozen=True)
@@ -53,20 +53,31 @@ class ModelProfile:
 
 
 def _read_registry_source(path: Path) -> tuple[str, dict[str, Any]]:
-    """Parse an unchanged registry file once per process.
+    """Parse identical registry bytes once per process.
 
     Profile role resolution remains uncached because remote profiles intentionally read
-    current environment variables on every load_profile() call.
+    current environment variables on every load_profile() call. Registry parse reuse is
+    content-addressed rather than metadata-addressed so replacing a config while
+    preserving its size/mtime cannot keep a stale provider/model owner alive.
     """
+
     resolved = path.resolve()
-    stat = resolved.stat()
-    key = (str(resolved), int(stat.st_size), int(stat.st_mtime_ns))
+    data = resolved.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    key = (str(resolved), digest)
     with _REGISTRY_CACHE_LOCK:
         cached = _REGISTRY_SOURCE_CACHE.get(key)
         if cached is not None:
             return cached
 
-    raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ModelConfigurationError("Model registry must be UTF-8.") from exc
+    try:
+        raw = safe_load_unique_keys(text, source="model registry")
+    except ValueError as exc:
+        raise ModelConfigurationError(str(exc)) from exc
     if not isinstance(raw, dict) or raw.get("schema_version") not in SUPPORTED_SCHEMAS:
         raise ModelConfigurationError("Unsupported or malformed model registry.")
     profiles = raw.get("profiles")
