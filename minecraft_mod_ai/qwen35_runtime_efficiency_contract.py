@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 
 _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
-_PAYLOAD_MARKER = "_mmm_qwen35_profile_output_default_v4"
+_PAYLOAD_MARKER = "_mmm_qwen35_profile_output_default_v5"
 _CACHE_MARKER = "_mmm_qwen35_skip_cold_cache_reuse_probe_v1"
 _KV_MARKER = "_mmm_qwen35_skip_main_kv_probe_v1"
 _PROBE_MARKER = "_mmm_qwen35_fast_primary_probe_v1"
@@ -15,6 +15,7 @@ _QWEN_ACTIVE_TUNING_ENV = "MMM_QWEN35_MTP_ACTIVE_TUNING"
 _FAST_MTP_WIDTHS = "2,4,6"
 _EXHAUSTIVE_MTP_WIDTHS = "1,2,3,4,5,6,8"
 _RESEARCH_NOTE_MAX_TOKENS = 2048
+_BOUNDED_SECTION_MAX_TOKENS = 2048
 
 
 def _is_qwen35_mtp(config: Any) -> bool:
@@ -74,12 +75,13 @@ def _research_note_request(request: Any) -> bool:
     return isinstance(properties, Mapping) and "research_note" in properties
 
 
-def _research_note_output_limit(
+def _bounded_output_limit(
     adapter: Any,
     payload: Mapping[str, Any],
     operator_limit: int | None,
+    schema_limit: int,
 ) -> int:
-    candidates = [_RESEARCH_NOTE_MAX_TOKENS]
+    candidates = [schema_limit]
     for value in (
         getattr(getattr(adapter, "config", None), "max_new_tokens", None),
         payload.get("max_tokens"),
@@ -92,6 +94,19 @@ def _research_note_output_limit(
         if parsed > 0:
             candidates.append(parsed)
     return max(1, min(candidates))
+
+
+def _research_note_output_limit(
+    adapter: Any,
+    payload: Mapping[str, Any],
+    operator_limit: int | None,
+) -> int:
+    return _bounded_output_limit(
+        adapter,
+        payload,
+        operator_limit,
+        _RESEARCH_NOTE_MAX_TOKENS,
+    )
 
 
 def _install_output_policy(hardware_policy: Any) -> None:
@@ -113,9 +128,15 @@ def _install_output_policy(hardware_policy: Any) -> None:
                     adapter, result, limit
                 )
             elif _bounded_section_request(request):
-                if limit is not None and limit > 0:
-                    current_max = max(1, int(result.get("max_tokens", limit) or limit))
-                    result["max_tokens"] = min(current_max, limit)
+                # Section synthesis is itself paginated. Keep each decode bounded even
+                # when the global operator policy requests unbounded output; -1 applies
+                # only to genuinely unbounded top-level turns, never a bounded page.
+                result["max_tokens"] = _bounded_output_limit(
+                    adapter,
+                    result,
+                    limit,
+                    _BOUNDED_SECTION_MAX_TOKENS,
+                )
             else:
                 if limit is None:
                     configured = getattr(getattr(adapter, "config", None), "max_new_tokens", None)
@@ -261,6 +282,7 @@ def install(autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
 
 
 __all__ = [
+    "_bounded_output_limit",
     "_fast_tuning_defaults",
     "_install_fast_probe_policy",
     "_output_token_limit",
