@@ -7,7 +7,7 @@ import pytest
 
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
 from minecraft_mod_ai.model_adapters import GenerationResponse, ModelConfigurationError, ToolCall
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_tool_calls
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_qwen_tool_markup
 from minecraft_mod_ai.model_router import ModelRouter
 
 
@@ -156,26 +156,32 @@ def test_external_bridge_tools_are_stage_scoped() -> None:
     assert ExternalAgentBridge.tool_schemas("release") == ()
 
 
-def test_llama_openai_tool_call_parser_accepts_json_arguments() -> None:
-    calls = _parse_tool_calls(
-        [
-            {
-                "id": "call_map",
-                "type": "function",
-                "function": {
-                    "name": "external_mcp_call",
-                    "arguments": (
-                        '{"capability":"mapping_resolution",'
-                        '"arguments":{"class_name":"Block"}}'
-                    ),
-                },
-            }
-        ]
+def test_llama_qwen_tool_markup_parser_accepts_schema_typed_arguments() -> None:
+    schemas = {
+        "external_mcp_call": {
+            "type": "object",
+            "properties": {
+                "capability": {"type": "string"},
+                "arguments": {"type": "object"},
+            },
+            "required": ["capability", "arguments"],
+            "additionalProperties": False,
+        }
+    }
+    text = (
+        "<tool_call><function=external_mcp_call>"
+        "<parameter=capability>mapping_resolution</parameter>"
+        '<parameter=arguments>{"class_name":"Block"}</parameter>'
+        "</function></tool_call>"
     )
+    visible, calls = _parse_qwen_tool_markup(text, schemas)
+    assert visible == ""
     assert len(calls) == 1
-    assert calls[0].id == "call_map"
     assert calls[0].name == "external_mcp_call"
-    assert calls[0].arguments["capability"] == "mapping_resolution"
+    assert calls[0].arguments == {
+        "capability": "mapping_resolution",
+        "arguments": {"class_name": "Block"},
+    }
 
 
 def test_agent_can_exceed_eight_tool_rounds_when_evidence_keeps_changing(monkeypatch) -> None:
