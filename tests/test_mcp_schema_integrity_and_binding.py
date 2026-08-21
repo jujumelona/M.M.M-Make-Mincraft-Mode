@@ -53,15 +53,19 @@ def test_raw_tools_list_rejects_non_object_root_schema() -> None:
 def _fake_modules():
     schema_a = _object_schema(query={"type": "string"})
     schema_b = _object_schema(symbol={"type": "string"})
+    live_schemas = {
+        "provider-a": schema_a,
+        "provider-b": schema_b,
+    }
     routes = [
         {
             "server": "provider-a",
-            "entry": {"status": "enabled", "schema": schema_a},
+            "entry": {"status": "enabled", "provider_key": "provider-a"},
             "route": {"tool": "search_a", "access": "read", "target_args": {}},
         },
         {
             "server": "provider-b",
-            "entry": {"status": "enabled", "schema": schema_b},
+            "entry": {"status": "enabled", "provider_key": "provider-b"},
             "route": {"tool": "search_b", "access": "read", "target_args": {}},
         },
     ]
@@ -95,6 +99,7 @@ def _fake_modules():
         def __init__(self):
             self.registry = Registry()
             self.calls: list[tuple[str, str, dict]] = []
+            self.live_schemas = live_schemas
 
         @staticmethod
         def _configured(entry):
@@ -171,18 +176,19 @@ def _fake_modules():
                 raise AssertionError("binding contract must own external_mcp_call")
             self.schema_queries += 1
             route = self._router.registry.routes("source_search")[0]
+            server = route["server"]
             return {
                 "schema_version": "test",
                 "capability": "source_search",
                 "stage": stage,
                 "target": target(payload),
-                "server": route["server"],
+                "server": server,
                 "tool": route["route"]["tool"],
-                "access": "read",
+                "access": route["route"].get("access", "read"),
                 "trust": "reviewed",
                 "target_args_injected_by_router": dict(route["route"].get("target_args", {})),
                 "description": "",
-                "input_schema": dict(route["entry"]["schema"]),
+                "input_schema": dict(self._router.live_schemas[server]),
                 "status": "PASS",
             }
 
@@ -197,7 +203,11 @@ def _fake_modules():
             return frozenset()
 
     async def provider_schema(entry, *, tool, env, url, timeout_seconds):
-        return {"description": "", "input_schema": dict(entry["schema"])}
+        provider_key = entry["provider_key"]
+        return {
+            "description": "",
+            "input_schema": dict(router.live_schemas[provider_key]),
+        }
 
     bridge_module = SimpleNamespace(
         ExternalAgentBridge=FakeBridge,
@@ -253,6 +263,28 @@ def test_schema_provider_remains_execution_provider_after_route_reorder() -> Non
 
 
 def test_schema_drift_invalidates_binding_before_provider_execution() -> None:
+    bridge_module, router, _ = _fake_modules()
+    bridge = bridge_module.ExternalAgentBridge()
+    bridge.call(
+        "generation",
+        "external_mcp_schema",
+        {"capability": "source_search"},
+    )
+    router.live_schemas["provider-a"] = _object_schema(path={"type": "string"})
+
+    with pytest.raises(
+        bridge_module.ExternalAgentBridgeError,
+        match="schema changed after discovery",
+    ):
+        bridge.call(
+            "generation",
+            "external_mcp_call",
+            {"capability": "source_search", "arguments": {"query": "x"}},
+        )
+    assert router.calls == []
+
+
+def test_route_access_drift_invalidates_binding_before_provider_execution() -> None:
     bridge_module, router, routes = _fake_modules()
     bridge = bridge_module.ExternalAgentBridge()
     bridge.call(
@@ -260,11 +292,33 @@ def test_schema_drift_invalidates_binding_before_provider_execution() -> None:
         "external_mcp_schema",
         {"capability": "source_search"},
     )
-    routes[0]["entry"]["schema"] = _object_schema(path={"type": "string"})
+    routes[0]["route"]["access"] = "admin"
 
     with pytest.raises(
         bridge_module.ExternalAgentBridgeError,
-        match="schema changed after discovery",
+        match="access changed after schema discovery",
+    ):
+        bridge.call(
+            "generation",
+            "external_mcp_call",
+            {"capability": "source_search", "arguments": {"query": "x"}},
+        )
+    assert router.calls == []
+
+
+def test_provider_configuration_drift_invalidates_binding_before_execution() -> None:
+    bridge_module, router, routes = _fake_modules()
+    bridge = bridge_module.ExternalAgentBridge()
+    bridge.call(
+        "generation",
+        "external_mcp_schema",
+        {"capability": "source_search"},
+    )
+    routes[0]["entry"]["command"] = ["different-provider-process"]
+
+    with pytest.raises(
+        bridge_module.ExternalAgentBridgeError,
+        match="provider/route identity changed after schema discovery",
     ):
         bridge.call(
             "generation",
