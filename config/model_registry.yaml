@@ -5,14 +5,14 @@ _shared_embedding: &embedding
   adapter: embedding
   device: cpu
   dimensions: 512
-  max_context: 8192
+  max_context: 2048
   max_new_tokens: 1
 
 _shared_reranker: &reranker
   model_id: Qwen/Qwen3-Reranker-0.6B
   adapter: reranker
   device: cpu
-  max_context: 8192
+  max_context: 2048
   max_new_tokens: 1
 
 _shared_image_gen: &image_gen
@@ -116,6 +116,7 @@ _qwen35_9b: &qwen35_9b
   runtime_contract: qwen
   request_policy: task_aware_sampling
   decode_hotpath: t4_mtp
+  runtime_context_default: 32768
   mtp_widths: "1,2,3,4,5,6"
   sampling_profiles:
     general_thinking:
