@@ -70,6 +70,7 @@ def _install_router_loop(model_router_module: Any) -> None:
     def _generate_with_tools(
         self: Any,
         *,
+        config: Any,
         adapter: Any,
         request: Any,
         runtime: Any,
@@ -80,6 +81,7 @@ def _install_router_loop(model_router_module: Any) -> None:
 
         return generate_with_tools(
             self,
+            config=config,
             adapter=adapter,
             request=request,
             runtime=runtime,

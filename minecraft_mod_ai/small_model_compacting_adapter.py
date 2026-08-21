@@ -63,9 +63,19 @@ def install(model_router_module: Any) -> None:
         return
 
     @wraps(current)
-    def generate_with_compaction(self, *, adapter, request, runtime, stage, role):
+    def generate_with_compaction(
+        self,
+        *,
+        config,
+        adapter,
+        request,
+        runtime,
+        stage,
+        role,
+    ):
         return current(
             self,
+            config=config,
             adapter=CompactingAdapter(adapter),
             request=request,
             runtime=runtime,

@@ -10,6 +10,7 @@ from .retrieval_progress import RetrievalDecision, RetrievalObservation, Retriev
 def generate_with_tools(
     router: Any,
     *,
+    config: Any,
     adapter: Any,
     request: GenerationRequest,
     runtime: Any,
@@ -74,6 +75,8 @@ def generate_with_tools(
                     "reviewed source mutation was applied; refusing a prose-only implementation."
                 )
             return _finalize_without_tools(
+                router,
+                config,
                 adapter,
                 request,
                 messages,
@@ -101,7 +104,8 @@ def generate_with_tools(
             prompt=getattr(request, "prompt", ""),
             metadata=getattr(request, "metadata", {}),
         )
-        turn = adapter.generate_turn(turn_request)
+        with router._generation_scope(config):
+            turn = adapter.generate_turn(turn_request)
 
         if not turn.tool_calls:
             content = turn.content.strip()
@@ -302,6 +306,8 @@ def generate_with_tools(
                 round_index += 1
                 continue
             return _finalize_without_tools(
+                router,
+                config,
                 adapter,
                 request,
                 messages,
@@ -325,6 +331,8 @@ def generate_with_tools(
 
 
 def _finalize_without_tools(
+    router: Any,
+    config: Any,
     adapter: Any,
     request: GenerationRequest,
     messages: list[dict[str, Any]],
@@ -344,7 +352,8 @@ def _finalize_without_tools(
         prompt=getattr(request, "prompt", ""),
         metadata=getattr(request, "metadata", {}),
     )
-    final_turn = adapter.generate_turn(final_request)
+    with router._generation_scope(config):
+        final_turn = adapter.generate_turn(final_request)
     if final_turn.tool_calls:
         raise ModelConfigurationError("Agent emitted tool calls after the host disabled tools.")
     content = final_turn.content.strip()

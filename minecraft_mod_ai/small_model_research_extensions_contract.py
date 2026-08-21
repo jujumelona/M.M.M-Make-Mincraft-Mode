@@ -10,27 +10,21 @@ This contract intentionally reuses the production owners that already exist in M
 * deterministic validators remain authoritative over model self-judgement.
 
 The extensions here only fill research-backed gaps around adaptive compute, procedural
-skill evolution, intent-routed experience retrieval, instruction projection, and
-executor-specific skill rendering. No model weights are trained or modified.
+skill evolution, intent-routed experience retrieval, and instruction projection.
+No model weights are trained or modified.
 """
 
 import json
 import os
 import re
 from collections import Counter
-from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 _INSTALLED = False
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
-_TEMPORARY_SKILL_PREFIX = "MMM TEMPORARY VERIFIED SKILL:\n"
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
-_MODEL_FAMILY: ContextVar[str] = ContextVar(
-    "mmm_small_model_executor_family",
-    default="generic",
-)
 _COMPLEX_MEMORY_MARKERS = (
     "multi-file",
     "multi file",
@@ -311,107 +305,6 @@ def _install_skill_evolution(trajectory_memory: Any, temporary_skill_contract: A
     temporary_skill_contract.synthesize_temporary_skill = evolved
 
 
-def _config_extra(config: Any) -> Mapping[str, Any]:
-    """Read executor policy only from registry-declared adapter metadata."""
-
-    if isinstance(config, Mapping):
-        raw_extra = config.get("extra")
-        return raw_extra if isinstance(raw_extra, Mapping) else config
-    raw_extra = getattr(config, "extra", None)
-    return raw_extra if isinstance(raw_extra, Mapping) else {}
-
-
-def _model_family(config: Any) -> str:
-    family = str(_config_extra(config).get("executor_skill_family", "")).strip().casefold()
-    return family if family in {"qwen3.5", "qwen3.6"} else "generic"
-
-
-def _compact_executor_skill(skill: Mapping[str, Any], family: str) -> dict[str, Any]:
-    """Render the same canonical Skill with an executor-appropriate prompt surface."""
-
-    if family not in {"qwen3.5", "qwen3.6"}:
-        return dict(skill)
-
-    keys = (
-        "schema_version",
-        "ephemeral",
-        "task_class",
-        "current_query_terms",
-        "procedural_hierarchy",
-        "proven_patterns",
-        "avoid_patterns",
-        "verifier_hints",
-        "memory_route",
-        "skill_relations",
-        "evolving_playbook",
-        "rule",
-    )
-    result = {key: skill[key] for key in keys if key in skill}
-    terms = result.get("current_query_terms")
-    if isinstance(terms, list):
-        result["current_query_terms"] = terms[:18 if family == "qwen3.5" else 28]
-
-    hierarchy = result.get("procedural_hierarchy")
-    if family == "qwen3.5" and isinstance(hierarchy, Mapping):
-        # Prefer concrete function/subtask motifs for the smaller executor; workflow
-        # provenance remains host-side in the canonical cached skill.
-        result["procedural_hierarchy"] = {
-            key: value
-            for key, value in hierarchy.items()
-            if key in {"function", "subtask"}
-        }
-
-    result["executor_rendering"] = {
-        "schema_version": "mmm/executor-skill-rendering-v1",
-        "family": family,
-        "canonical_skill_unchanged": True,
-    }
-    return result
-
-
-def _install_executor_skill_rendering(
-    model_router: Any,
-    temporary_skill_contract: Any,
-) -> None:
-    current_prepare = model_router.ModelRouter._prepare_generation_request
-    if not getattr(current_prepare, "_mmm_executor_skill_context_v1", False):
-
-        @wraps(current_prepare)
-        def prepare(
-            self: Any,
-            role: str,
-            messages: Sequence[Mapping[str, Any]],
-            **kwargs: Any,
-        ):
-            token = _MODEL_FAMILY.set(_model_family(kwargs.get("config")))
-            try:
-                return current_prepare(self, role, messages, **kwargs)
-            finally:
-                _MODEL_FAMILY.reset(token)
-
-        prepare._mmm_executor_skill_context_v1 = True  # type: ignore[attr-defined]
-        prepare.__wrapped__ = current_prepare  # type: ignore[attr-defined]
-        model_router.ModelRouter._prepare_generation_request = prepare
-
-    current_inject = temporary_skill_contract._inject
-    if getattr(current_inject, "_mmm_executor_skill_rendering_v1", False):
-        return
-
-    @wraps(current_inject)
-    def inject(
-        messages: Sequence[Mapping[str, Any]],
-        skill: Mapping[str, Any],
-    ):
-        return current_inject(
-            messages,
-            _compact_executor_skill(skill, _MODEL_FAMILY.get()),
-        )
-
-    inject._mmm_executor_skill_rendering_v1 = True  # type: ignore[attr-defined]
-    inject.__wrapped__ = current_inject  # type: ignore[attr-defined]
-    temporary_skill_contract._inject = inject
-
-
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -421,7 +314,6 @@ def install() -> None:
         agent_capability_context,
         agentic_research_game_design,
         central_intelligence_amplifier,
-        model_router,
         small_model_adaptive_compute,
         small_model_agent_policy,
         temporary_skill_contract,
@@ -439,7 +331,6 @@ def install() -> None:
     _install_instruction_projection(agent_capability_context)
     _install_intent_routed_memory(trajectory_memory)
     _install_skill_evolution(trajectory_memory, temporary_skill_contract)
-    _install_executor_skill_rendering(model_router, temporary_skill_contract)
     _INSTALLED = True
 
 

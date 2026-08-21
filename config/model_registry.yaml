@@ -43,7 +43,6 @@ _qwen36_35b: &qwen36_35b
   gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   runtime_contract: qwen
-  executor_skill_family: qwen3.6
   agent_thinking: true
   mtp_widths: "1,2"
   sampling_profiles:
@@ -115,7 +114,6 @@ _qwen35_9b: &qwen35_9b
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   runtime_contract: qwen
-  executor_skill_family: qwen3.5
   request_policy: task_aware_sampling
   decode_hotpath: t4_mtp
   mtp_widths: "1,2,3,4,5,6"

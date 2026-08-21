@@ -217,6 +217,7 @@ def _install_live_loop() -> None:
     def causal_tool_loop(
         self: Any,
         *,
+        config: Any,
         adapter: Any,
         request: Any,
         runtime: Any,
@@ -256,6 +257,7 @@ def _install_live_loop() -> None:
         try:
             return current_loop(
                 self,
+                config=config,
                 adapter=wrapped,
                 request=host_request,
                 runtime=_FrontierRuntimeProxy(runtime, execution_gate),
