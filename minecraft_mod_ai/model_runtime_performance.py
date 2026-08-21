@@ -1,11 +1,41 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Iterator, Sequence
 
 
 _GIB = 1024**3
 _MAX_RERANK_MICROBATCH = 32
+
+
+def _retrieval_cache_enabled() -> bool:
+    raw = os.environ.get("MMM_CPU_RETRIEVAL_CACHE", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _retrieval_result_cache_limit() -> int:
+    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "1024").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 1024
+    return max(1, min(16384, value))
+
+
+def _length_prefixed_digest(values: Sequence[str]) -> str:
+    """Return a collision-safe digest for an ordered sequence of UTF-8 strings."""
+
+    digest = hashlib.sha256()
+    for value in values:
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _text_digest(text: str) -> str:
+    return _length_prefixed_digest((text,))
 
 
 def _available_memory_bytes() -> int | None:
