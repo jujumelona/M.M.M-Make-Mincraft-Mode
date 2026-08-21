@@ -5,6 +5,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .runtime_contract_wrappers import has_contract_marker
+
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -19,7 +21,7 @@ def install(atomic_module: Any, orchestrator_module: Any) -> None:
 
     cls = orchestrator_module.CompleteProductionOrchestrator
     current = cls.execute
-    if getattr(current, "_mmm_atomic_execution_policy", False):
+    if has_contract_marker(current, "_mmm_atomic_execution_policy"):
         return
     base = getattr(current, "__wrapped__", current)
 
@@ -30,9 +32,6 @@ def install(atomic_module: Any, orchestrator_module: Any) -> None:
             if isinstance(proposal, orchestrator_module.CompleteProposal)
             else orchestrator_module.CompleteProposal.from_dict(proposal)
         )
-        # Preserve the original authority ordering: first validate the complete
-        # proposal and the exact user-supplied approval hash, then inspect bound
-        # external input, then enforce the final binary-only Atomic IR gate.
         supplied_approval = kwargs.get("approval_hash")
         parsed.approve(supplied_approval, policy=self.policy)
 
@@ -63,14 +62,7 @@ def install(atomic_module: Any, orchestrator_module: Any) -> None:
         options = kwargs.get("options")
         source_only = bool(getattr(options, "source_only", False))
         design = getattr(parsed, "game_design", {})
-        ir = (
-            design.get("_atomic_requirement_ir")
-            if isinstance(design, dict)
-            else None
-        )
-        # Source packages are non-release artifacts. Legacy/manual source-only
-        # workflows may omit the new IR, but if they carry one it must be valid.
-        # Any binary build path requires a complete current IR.
+        ir = design.get("_atomic_requirement_ir") if isinstance(design, dict) else None
         if ir is not None or not source_only:
             try:
                 atomic_module.validate_ir(parsed)
