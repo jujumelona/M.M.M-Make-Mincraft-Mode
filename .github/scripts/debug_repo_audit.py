@@ -137,8 +137,10 @@ def audit_marker_controlled_unwraps() -> list[str]:
     Default ``functools.wraps`` copies function ``__dict__`` metadata, so a direct
     ``getattr(current, '_mmm_*')`` cannot prove that ``current`` owns that contract.
     It is safe for simple "installed somewhere" idempotence, but unsafe when the same
-    function chooses a ``__wrapped__`` layer. Exact-layer decisions must use
-    ``owns_contract_marker``; installation checks can use ``has_contract_marker``.
+    function reads a ``__wrapped__`` layer. Assigning ``wrapper.__wrapped__ = current``
+    is metadata construction and is intentionally not considered an unwrap read.
+    Exact-layer decisions must use ``owns_contract_marker``; installation checks can
+    use ``has_contract_marker``.
     """
 
     errors: list[str] = []
@@ -158,7 +160,11 @@ def audit_marker_controlled_unwraps() -> list[str]:
                     marker_lookup = True
                 if name == "__wrapped__":
                     unwrap_lookup = True
-                if isinstance(node, ast.Attribute) and node.attr == "__wrapped__":
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "__wrapped__"
+                    and isinstance(node.ctx, ast.Load)
+                ):
                     unwrap_lookup = True
             if (
                 marker_lookup
