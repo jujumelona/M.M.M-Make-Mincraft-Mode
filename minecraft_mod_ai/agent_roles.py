@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
-import yaml
-
 from .config_paths import config_path
+from .strict_yaml import safe_load_unique_keys
 
 
 @dataclass(frozen=True)
@@ -17,11 +16,25 @@ class AgentRoleRoute:
     mcp_servers: tuple[str, ...]
 
 
-@lru_cache(maxsize=1)
 def load_agent_role_routes() -> tuple[AgentRoleRoute, ...]:
-    """Load the reviewed model-role -> Skill/MCP routing contract."""
+    """Load the reviewed model-role -> Skill/MCP routing contract.
 
-    raw = yaml.safe_load(config_path("agent_roles.yaml").read_text(encoding="utf-8"))
+    The file is tiny, so read its current bytes on every lookup and cache only parsing
+    by exact content. This keeps permission/routing changes visible in a long-lived
+    process while still avoiding repeated YAML construction for unchanged content.
+    """
+
+    path = config_path("agent_roles.yaml")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("MMM agent role routing contract must be UTF-8.") from exc
+    return _parse_agent_role_routes(text)
+
+
+@lru_cache(maxsize=8)
+def _parse_agent_role_routes(text: str) -> tuple[AgentRoleRoute, ...]:
+    raw = safe_load_unique_keys(text, source="agent role routing contract")
     if not isinstance(raw, dict) or raw.get("schema_version") != "mmm/agent-roles-v3":
         raise ValueError("Unsupported MMM agent role routing contract.")
     agents = raw.get("agents")
