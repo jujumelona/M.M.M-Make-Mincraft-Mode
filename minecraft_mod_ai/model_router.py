@@ -6,6 +6,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -502,12 +503,12 @@ class ModelRouter:
                         ),
                     },
                 ]
-                final_request = GenerationRequest(
-                    messages=final_messages,
+                final_request = replace(
+                    request,
+                    messages=tuple(final_messages),
                     media_paths=(),
-                    response_format=request.response_format,
-                    response_schema=request.response_schema,
                     tools=(),
+                    tool_validation_schemas=(),
                     tool_choice=None,
                     parallel_tool_calls=False,
                 )
@@ -525,14 +526,10 @@ class ModelRouter:
                     )
                 return final_content
 
-            turn_request = GenerationRequest(
-                messages=messages,
+            turn_request = replace(
+                request,
+                messages=tuple(messages),
                 media_paths=request.media_paths if round_index == 0 else (),
-                response_format=request.response_format,
-                response_schema=request.response_schema,
-                tools=request.tools,
-                tool_choice=request.tool_choice,
-                parallel_tool_calls=request.parallel_tool_calls,
             )
             with self._generation_scope(config):
                 turn = adapter.generate_turn(turn_request)
@@ -671,12 +668,12 @@ class ModelRouter:
                         ),
                     },
                 ]
-                final_request = GenerationRequest(
-                    messages=final_messages,
+                final_request = replace(
+                    request,
+                    messages=tuple(final_messages),
                     media_paths=(),
-                    response_format=request.response_format,
-                    response_schema=request.response_schema,
                     tools=(),
+                    tool_validation_schemas=(),
                     tool_choice=None,
                     parallel_tool_calls=False,
                 )
@@ -1051,14 +1048,21 @@ def _inject_system_context(
 def _tool_schema_names(
     tool_schemas: Sequence[Mapping[str, Any]],
 ) -> tuple[str, ...]:
-    names: set[str] = set()
+    names: list[str] = []
+    seen: set[str] = set()
     for schema in tool_schemas:
         function = schema.get("function")
         if not isinstance(function, Mapping):
-            continue
+            raise ModelConfigurationError("Tool schema lacks function metadata.")
         name = str(function.get("name", "")).strip()
-        if name:
-            names.add(name)
+        if not name:
+            raise ModelConfigurationError("Tool schema lacks a function name.")
+        if name in seen:
+            raise ModelConfigurationError(
+                f"Duplicate model tool schema name {name!r} cannot be collapsed."
+            )
+        seen.add(name)
+        names.append(name)
     return tuple(sorted(names))
 
 
