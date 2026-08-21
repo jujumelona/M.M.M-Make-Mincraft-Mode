@@ -108,6 +108,64 @@ def audit_internal_imports() -> list[str]:
     return errors
 
 
+def _marker_assignment(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets.extend(node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets.append(node.target)
+        for target in targets:
+            if isinstance(target, ast.Attribute) and target.attr.startswith("_mmm_"):
+                return True
+    return False
+
+
+def _is_default_wraps(decorator: ast.AST) -> bool:
+    if not isinstance(decorator, ast.Call):
+        return False
+    function = decorator.func
+    if isinstance(function, ast.Name):
+        is_wraps = function.id == "wraps"
+    elif isinstance(function, ast.Attribute):
+        is_wraps = function.attr == "wraps"
+    else:
+        is_wraps = False
+    if not is_wraps:
+        return False
+    return not any(keyword.arg == "updated" for keyword in decorator.keywords)
+
+
+def audit_contract_wrapper_metadata() -> list[str]:
+    """Reject runtime-owner files whose wrappers can inherit another owner's marker.
+
+    The default functools.wraps merges ``wrapped.__dict__`` into the outer wrapper.
+    MMM stores contract ownership in ``_mmm_*`` attributes, so that default silently
+    duplicates ownership markers across layers and makes later unwrapping/idempotence
+    checks target the wrong function. Marker-owning modules must use the shared
+    marker-safe contract wrapper (or explicitly disable ``updated``).
+    """
+
+    errors: list[str] = []
+    for path in sorted(PKG.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        if not _marker_assignment(tree):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if _is_default_wraps(decorator):
+                    errors.append(
+                        f"UNSAFE_CONTRACT_WRAPS {path.relative_to(ROOT)}:"
+                        f"{decorator.lineno}: use contract_wraps or wraps(..., updated=())"
+                    )
+    return errors
+
+
 def audit_bootstrap_owner_modules() -> list[str]:
     path = PKG / "runtime_bootstrap.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -203,6 +261,7 @@ def audit_workflow_definitions() -> list[str]:
 def main() -> int:
     errors = (
         audit_internal_imports()
+        + audit_contract_wrapper_metadata()
         + audit_bootstrap_owner_modules()
         + audit_tombstoned_owner_modules()
         + audit_workflow_definitions()
