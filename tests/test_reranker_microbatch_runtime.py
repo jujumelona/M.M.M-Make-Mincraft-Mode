@@ -143,6 +143,7 @@ def test_explicit_microbatch_override_is_honored_and_bounded(monkeypatch) -> Non
 def test_reranker_buckets_by_length_restores_order_and_reuses_backend_across_adapters(
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
     fake_transformers = SimpleNamespace(
         AutoModelForCausalLM=_FakeModel,
         AutoTokenizer=_FakeTokenizer,
