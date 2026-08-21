@@ -122,8 +122,9 @@ def test_initial_one_tool_frontier_recovers_complete_mutation_surface() -> None:
     remember_authorized_tools(complete, {"external_mcp_call": 0})
     captured = {}
 
-    def final_loop(router, *, adapter, request, runtime, stage, role):
+    def final_loop(router, *, config, adapter, request, runtime, stage, role):
         del router, runtime
+        captured["config"] = config
         captured["adapter"] = adapter
         captured["tools"] = tuple(
             item["function"]["name"] for item in request.tools
@@ -135,10 +136,12 @@ def test_initial_one_tool_frontier_recovers_complete_mutation_surface() -> None:
     class Router:
         _agent_require_fresh_evidence = True
 
+    config = object()
     try:
         result = _run_with_dynamic_frontier(
             final_loop,
             Router(),
+            config=config,
             adapter=object(),
             request=_request(initial),
             runtime=object(),
@@ -149,6 +152,7 @@ def test_initial_one_tool_frontier_recovers_complete_mutation_surface() -> None:
         remember_authorized_tools(())
 
     assert result == "ok"
+    assert captured["config"] is config
     assert isinstance(captured["adapter"], CausalFrontierAdapter)
     assert captured["tools"] == tuple(
         item["function"]["name"] for item in complete
@@ -342,9 +346,9 @@ def test_writable_coder_without_mutation_surface_fails_before_model_loop() -> No
     remember_authorized_tools(initial, {"external_mcp_call": 0})
     called = False
 
-    def must_not_run(router, *, adapter, request, runtime, stage, role):
+    def must_not_run(router, *, config, adapter, request, runtime, stage, role):
         nonlocal called
-        del router, adapter, request, runtime, stage, role
+        del router, config, adapter, request, runtime, stage, role
         called = True
         return "unreachable"
 
@@ -356,6 +360,7 @@ def test_writable_coder_without_mutation_surface_fails_before_model_loop() -> No
             _run_with_dynamic_frontier(
                 must_not_run,
                 Router(),
+                config=object(),
                 adapter=object(),
                 request=_request(initial),
                 runtime=object(),
