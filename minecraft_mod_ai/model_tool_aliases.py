@@ -7,9 +7,13 @@ first-party MCP tool, but it must not create a second authorization namespace.  
 canonical tool remains the sole owner of Skill, role and stage permission.
 """
 
-_TOOL_PERMISSION_ALIASES = {
-    "apply_source_edit": "apply_source_patch",
-}
+from types import MappingProxyType
+
+_TOOL_PERMISSION_ALIASES = MappingProxyType(
+    {
+        "apply_source_edit": "apply_source_patch",
+    }
+)
 
 
 def canonical_model_tool(name: str) -> str:
