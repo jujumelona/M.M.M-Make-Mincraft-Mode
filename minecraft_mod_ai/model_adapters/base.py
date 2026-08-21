@@ -90,7 +90,12 @@ class GenerationRequest:
     media_paths: tuple[Path, ...] = ()
     response_format: str = "text"
     response_schema: Mapping[str, Any] | None = None
+    # ``tools`` is the model-visible causal frontier. ``tool_validation_schemas``
+    # is the broader host-authorized surface used only to parse/validate stale tool
+    # references that may still exist in the transcript. Execution remains guarded
+    # by the current frontier; validation authority must never imply executability.
     tools: tuple[Mapping[str, Any] | ToolDefinition, ...] = ()
+    tool_validation_schemas: tuple[Mapping[str, Any] | ToolDefinition, ...] = ()
     tool_choice: str | Mapping[str, Any] | None = None
     parallel_tool_calls: bool = True
     task: str = ""
@@ -193,7 +198,7 @@ def quantization_config(config: AdapterConfig):
         return None
     if config.quantization != "bnb_4bit":
         raise ModelConfigurationError(
-            f"Unsupported quantization for {config.role}: {config.quantization!r}"
+            f"Unsupported quantization for {config.role}: {config.quantization!r}."
         )
     require_package("bitsandbytes", minimum="0.45.0")
     from transformers import BitsAndBytesConfig
