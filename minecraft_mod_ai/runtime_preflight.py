@@ -85,6 +85,73 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
+def _assert_tool_schema_contracts() -> None:
+    """Require every fail-closed schema/request boundary installed by finalization."""
+
+    from . import external_agent_bridge, external_mcp_router
+    from .agent_tool_runtime import AgentToolRuntime
+    from .model_adapters import llama_cpp_adapter
+
+    checks = (
+        (
+            "first-party raw tools/list integrity",
+            AgentToolRuntime._list_tools_async,
+            "_mmm_raw_mcp_schema_integrity_v1",
+        ),
+        (
+            "first-party schema child-environment binding",
+            AgentToolRuntime.tool_schemas,
+            "_mmm_mcp_schema_environment_v1",
+        ),
+        (
+            "external provider schema integrity",
+            external_agent_bridge._provider_schema,
+            "_mmm_external_provider_schema_integrity_v1",
+        ),
+        (
+            "external provider pre-call integrity",
+            external_mcp_router.ExternalMCPRouter._initialized_call,
+            "_mmm_external_provider_call_integrity_v1",
+        ),
+        (
+            "external schema-to-provider execution binding",
+            external_agent_bridge.ExternalAgentBridge.call,
+            "_mmm_external_mcp_schema_binding_v1",
+        ),
+        (
+            "external model-facing bound-call schema",
+            external_agent_bridge.ExternalAgentBridge.tool_schemas,
+            "_mmm_external_mcp_bound_schema_v1",
+        ),
+        (
+            "Qwen visible/authorized validation surface",
+            llama_cpp_adapter._qwen_tool_generation_response,
+            "_mmm_authorized_tool_validation_surface",
+        ),
+        (
+            "reasoning continuation request preservation",
+            llama_cpp_adapter._reasoning_continuation_request,
+            "_mmm_tool_validation_continuation",
+        ),
+    )
+    missing = [
+        label
+        for label, target, marker in checks
+        if getattr(target, marker, False) is not True
+    ]
+    router_class = external_mcp_router.ExternalMCPRouter
+    if (
+        getattr(router_class, "_mmm_external_mcp_bound_invoke_v1", False) is not True
+        or not callable(getattr(router_class, "invoke_bound", None))
+    ):
+        missing.append("exact external MCP bound-provider invocation")
+    if missing:
+        raise RuntimePreflightError(
+            "final tool/schema runtime is missing fail-closed contracts: "
+            + ", ".join(missing)
+        )
+
+
 def _assert_routing_intent_alignment() -> None:
     from .causal_frontier_adapter import _query as causal_query
     from .causal_tool_frontier_contract import goals_for_query
@@ -284,6 +351,7 @@ def run_runtime_preflight() -> None:
             return
         checks = (
             ("wrapper-chain", _assert_wrapper_chain),
+            ("tool-schema-contracts", _assert_tool_schema_contracts),
             ("routing-intent", _assert_routing_intent_alignment),
             ("generation-concurrency", _assert_generation_concurrency_guards),
             ("retrieval-model-residency", _assert_retrieval_model_residency),
