@@ -122,6 +122,9 @@ def test_multi_probe_lsh_bounds_dense_candidates_and_keeps_exact_neighbor(
             ),
         )
     connection.commit()
+    # Candidate lookup is query-only now. Reconciliation and the readiness marker
+    # belong to build/update setup, so establish that state before measuring lookup.
+    rag_perf._ensure_semantic_lsh(connection)
 
     query = [1.0] + [0.0] * (width - 1)
     rows = rag_perf._lsh_candidate_rows(connection, query, target=16, cap=128)
