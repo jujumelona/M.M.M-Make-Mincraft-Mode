@@ -7,15 +7,19 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import qwen35_runtime_efficiency_contract as contract
-from minecraft_mod_ai.custom_module_generator import _coder_project_context_budget
 from minecraft_mod_ai.model_registry import ModelRegistry
-from minecraft_mod_ai.scale_policy import ScalePolicy
+from minecraft_mod_ai.qwen35_mtp_hotpath_contract import _context_size
 
 
 def _config():
     return SimpleNamespace(
         model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        extra={
+            "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+            "runtime_contract": "qwen",
+            "decode_hotpath": "t4_mtp",
+            "mtp_widths": "1,2,3,4,5,6",
+        },
         max_new_tokens=8192,
     )
 
@@ -168,17 +172,15 @@ def test_fast_probe_skips_only_secondary_correctness_sentinel(monkeypatch) -> No
     assert calls == ["sentinel", "primary"]
 
 
-def test_qwen_context_override_is_shared_by_registry_and_host_budget(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
+def test_qwen_context_override_is_runtime_only_and_registry_capacity_stays_native(monkeypatch) -> None:
     registry = ModelRegistry()
     config = registry.role("t4_local", "coder")
-    router = SimpleNamespace(registry=registry, profile="t4_local")
-    policy = ScalePolicy(model_context_bytes=48 * 1024)
+    assert config.max_context == 262144
 
-    assert config.max_context == 16384
-    assert _coder_project_context_budget(router, policy, fast_mode=False) == 8192
+    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
+    assert _context_size(config) == 16384
+    assert registry.role("t4_local", "coder").max_context == 262144
 
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "131072")
-    config = registry.role("t4_local", "coder")
-    assert config.max_context == 131072
-    assert _coder_project_context_budget(router, policy, fast_mode=False) == 48 * 1024
+    assert _context_size(config) == 131072
+    assert registry.role("t4_local", "coder").max_context == 262144
