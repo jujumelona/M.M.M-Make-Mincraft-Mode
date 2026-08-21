@@ -23,7 +23,10 @@ def _server_variant(name: str) -> SimpleNamespace:
 
 
 def _qwen_config(model_id: str, gguf_filename: str = "") -> SimpleNamespace:
-    extra = {"mmproj_filename": "mmproj-F16.gguf"}
+    extra = {
+        "mmproj_filename": "mmproj-F16.gguf",
+        "runtime_contract": "qwen",
+    }
     if gguf_filename:
         extra["gguf_filename"] = gguf_filename
     return SimpleNamespace(model_id=model_id, extra=extra)
