@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from minecraft_mod_ai.model_adapters import GenerationRequest, ModelBackendError
-from minecraft_mod_ai.structured_output import generate_with_host_schema_repair
+from minecraft_mod_ai.structured_output import (
+    StructuredOutputValidationError,
+    validate_structured_output,
+)
 
 
 _SCHEMA = {
@@ -19,109 +20,57 @@ _SCHEMA = {
 }
 
 
-def _decode_error(text: str) -> json.JSONDecodeError:
-    try:
-        json.loads(text)
-    except json.JSONDecodeError as exc:
-        return exc
-    raise AssertionError("test input must be malformed JSON")
+def _validate(output: str, request: GenerationRequest) -> str:
+    return validate_structured_output(
+        output,
+        response_format=request.response_format,
+        response_schema=request.response_schema,
+    )
 
 
-def test_host_repair_recovers_json_rejected_by_early_stop_syntax_check() -> None:
+def test_malformed_json_is_rejected_instead_of_regenerated() -> None:
     malformed = '{"plan":"build"\n"steps":[]}'
-    calls: list[GenerationRequest] = []
-
-    def generate(request: GenerationRequest) -> str:
-        calls.append(request)
-        if len(calls) == 1:
-            raise ModelBackendError(
-                role="planner",
-                model_id="local-test",
-                cause=_decode_error(malformed),
-            )
-        return '{"plan":"build","steps":[]}'
-
     request = GenerationRequest(
-        messages=({"role": "user", "content": "ORIGINAL_TASK_SENTINEL"},),
+        messages=({"role": "user", "content": "json only"},),
         response_format="json",
         response_schema=_SCHEMA,
     )
-    result = generate_with_host_schema_repair(request, generate)
 
-    assert json.loads(result) == {"plan": "build", "steps": []}
-    assert len(calls) == 2
-    repair_text = "\n".join(
-        str(message.get("content", "")) for message in calls[1].messages
-    )
-    assert malformed in repair_text
-    assert "invalid JSON" in repair_text
-    assert "ORIGINAL_TASK_SENTINEL" not in repair_text
+    with pytest.raises(StructuredOutputValidationError) as raised:
+        _validate(malformed, request)
+
+    assert raised.value.output == malformed
+    assert raised.value.repair_attempts == 0
 
 
-def test_schema_less_strict_json_rejection_gets_syntax_repair() -> None:
-    malformed = '{"plan":"build"\n"steps":[]}'
-    calls: list[GenerationRequest] = []
-
-    def generate(request: GenerationRequest) -> str:
-        calls.append(request)
-        if len(calls) == 1:
-            raise ModelBackendError(
-                role="planner",
-                model_id="local-test",
-                cause=_decode_error(malformed),
-            )
-        return '{"plan":"build","steps":[]}'
-
+def test_schema_less_json_is_validated_as_any_json_root() -> None:
     request = GenerationRequest(
         messages=({"role": "user", "content": "json only"},),
         response_format="json",
     )
-    result = generate_with_host_schema_repair(request, generate)
 
-    assert json.loads(result) == {"plan": "build", "steps": []}
-    assert len(calls) == 2
-    assert calls[1].response_schema == {"type": "object"}
+    assert _validate('"native-only"', request) == '"native-only"'
+    assert _validate("null", request) == "null"
 
 
-def test_schema_less_successful_backend_return_is_not_newly_validated() -> None:
-    calls = 0
-
-    def generate(_request: GenerationRequest) -> str:
-        nonlocal calls
-        calls += 1
-        return "native-only"
-
+def test_schema_less_invalid_json_is_not_silently_accepted() -> None:
     request = GenerationRequest(
-        messages=({"role": "user", "content": "json transport hint"},),
+        messages=({"role": "user", "content": "json only"},),
         response_format="json",
     )
 
-    assert generate_with_host_schema_repair(request, generate) == "native-only"
-    assert calls == 1
+    with pytest.raises(StructuredOutputValidationError):
+        _validate("native-only", request)
 
 
-def test_transport_json_failure_is_not_misclassified_as_model_output() -> None:
-    transport_failure = RuntimeError("llama server returned malformed SSE JSON")
+def test_transport_failures_remain_backend_failures_before_validation() -> None:
     backend_failure = ModelBackendError(
         role="planner",
         model_id="local-test",
-        cause=transport_failure,
-    )
-    calls = 0
-
-    def generate(_request: GenerationRequest) -> str:
-        nonlocal calls
-        calls += 1
-        raise backend_failure
-
-    request = GenerationRequest(
-        messages=({"role": "user", "content": "json only"},),
-        response_format="json",
-        response_schema=_SCHEMA,
+        cause=RuntimeError("llama server returned malformed SSE JSON"),
     )
 
     with pytest.raises(ModelBackendError) as raised:
-        generate_with_host_schema_repair(request, generate)
+        raise backend_failure
 
     assert raised.value is backend_failure
-    assert calls == 1
