@@ -8,7 +8,8 @@ and retrieves again without changing model weights.
 """
 
 import math
-from typing import Any, Mapping, Sequence
+from collections.abc import Sequence
+from typing import Any, Mapping
 
 
 def _vector(value: Any) -> list[float]:
@@ -20,6 +21,24 @@ def _vector(value: Any) -> list[float]:
     return []
 
 
+def _embedding_rows(router: Any, texts: Sequence[str]) -> list[list[float]]:
+    """Embed text records as records, never as the characters of one string."""
+
+    cleaned = [str(text).strip() for text in texts if str(text).strip()]
+    if not cleaned:
+        return []
+    try:
+        raw = router.embed(cleaned)
+    except Exception:
+        return []
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        return []
+    rows = [_vector(row) for row in raw]
+    if len(rows) != len(cleaned) or any(not row for row in rows):
+        return []
+    return rows
+
+
 def _normalize(vector: Sequence[float]) -> list[float]:
     norm = math.sqrt(sum(float(item) * float(item) for item in vector))
     if norm <= 0.0:
@@ -28,17 +47,8 @@ def _normalize(vector: Sequence[float]) -> list[float]:
 
 
 def local_centroid(router: Any, texts: Sequence[str]) -> list[float]:
-    vectors: list[list[float]] = []
-    for text in texts[:8]:
-        if not text.strip():
-            continue
-        try:
-            value = router.embed(text)
-        except Exception:
-            continue
-        vector = _vector(value)
-        if vector:
-            vectors.append(_normalize(vector))
+    candidates = [str(text).strip() for text in texts[:8] if str(text).strip()]
+    vectors = [_normalize(row) for row in _embedding_rows(router, candidates)]
     if not vectors:
         return []
     width = min(len(item) for item in vectors)
@@ -46,18 +56,27 @@ def local_centroid(router: Any, texts: Sequence[str]) -> list[float]:
     return _normalize(centroid)
 
 
-def adapt_query_vector(router: Any, query: str, hit_texts: Sequence[str], *, alpha: float = 0.65) -> list[float]:
-    try:
-        query_vector = _vector(router.embed(query))
-    except Exception:
+def adapt_query_vector(
+    router: Any,
+    query: str,
+    hit_texts: Sequence[str],
+    *,
+    alpha: float = 0.65,
+) -> list[float]:
+    query_rows = _embedding_rows(router, [query])
+    if not query_rows:
         return []
+    query_vector = query_rows[0]
     centroid = local_centroid(router, hit_texts)
-    if not query_vector or not centroid:
+    if not centroid:
         return []
     width = min(len(query_vector), len(centroid))
     query_norm = _normalize(query_vector[:width])
     centroid = centroid[:width]
-    blended = [alpha * query_norm[index] + (1.0 - alpha) * centroid[index] for index in range(width)]
+    blended = [
+        alpha * query_norm[index] + (1.0 - alpha) * centroid[index]
+        for index in range(width)
+    ]
     return _normalize(blended)
 
 
@@ -77,4 +96,9 @@ def extract_hit_texts(result: Mapping[str, Any]) -> list[str]:
     return texts
 
 
-__all__ = ["adapt_query_vector", "extract_hit_texts", "local_centroid"]
+__all__ = [
+    "_embedding_rows",
+    "adapt_query_vector",
+    "extract_hit_texts",
+    "local_centroid",
+]
