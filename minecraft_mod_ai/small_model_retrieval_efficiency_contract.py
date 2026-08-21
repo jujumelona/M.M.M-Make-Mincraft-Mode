@@ -5,6 +5,7 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .custom_generation_research import _sanitized_messages
+from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:/-]{1,127}")
 _ANCHOR_WORDS = frozenset(
@@ -223,10 +224,10 @@ def _install_explicit_semantic_index_policy(production_tools_module: Any) -> Non
 
     cls = production_tools_module.ProductionToolService
     current = cls.index_project_rag
-    if getattr(current, "_mmm_explicit_semantic_index_policy", False):
+    if has_contract_marker(current, "_mmm_explicit_semantic_index_policy"):
         return
-    forced_semantic = bool(
-        getattr(current, "_mmm_small_model_semantic_repair_index", False)
+    forced_semantic = owns_contract_marker(
+        current, "_mmm_small_model_semantic_repair_index"
     )
     lexical_owner = getattr(current, "__wrapped__", current) if forced_semantic else current
 
@@ -264,9 +265,9 @@ def _install_pre_design_rag_cascade(pre_design_module: Any) -> None:
     """Use cheap exact/lexical evidence before spending CPU on dense reranking."""
 
     current = pre_design_module._search_code_index
-    if getattr(current, "_mmm_demand_driven_dense_pre_design", False):
+    if has_contract_marker(current, "_mmm_demand_driven_dense_pre_design"):
         return
-    hybrid = bool(getattr(current, "_mmm_small_model_hybrid_code_rag", False))
+    hybrid = owns_contract_marker(current, "_mmm_small_model_hybrid_code_rag")
     lexical_owner = getattr(current, "__wrapped__", current) if hybrid else current
 
     @wraps(current)
