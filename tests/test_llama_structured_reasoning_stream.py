@@ -75,8 +75,8 @@ def test_native_tool_request_keeps_server_parser_disabled() -> None:
     assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["temperature"] == 1.0
-    assert payload["top_p"] == 0.95
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
     assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
