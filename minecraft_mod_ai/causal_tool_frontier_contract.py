@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from .causal_frontier_adapter import (
     CausalFrontierAdapter,
     FrontierExecutionGate,
+    authorized_tool_preference,
     authorized_tools,
     clear_current_frontier,
     remember_authorized_tools,
@@ -172,7 +173,11 @@ def _lexical_preference(
     token_fn = getattr(owner, "_tokens", None)
     document_fn = getattr(owner, "_tool_document", None)
     if not callable(token_fn) or not callable(document_fn):
-        return {_name(schema): index for index, schema in enumerate(tool_schemas) if _name(schema)}
+        return {
+            _name(schema): index
+            for index, schema in enumerate(tool_schemas)
+            if _name(schema)
+        }
 
     query_tokens = set(token_fn(query))
     rows: list[tuple[float, int, str]] = []
@@ -265,17 +270,19 @@ def _install_live_loop() -> None:
     ) -> str:
         from .model_adapters import GenerationRequest
 
-        # `request.tools` is only the initial causal subset selected during canonical
-        # request preparation. Restore the complete already-authorized surface for the
-        # host loop so later observations can unlock different transitions. The
-        # adapter still shows at most 1-3 schemas on each actual model turn.
-        complete_surface = authorized_tools(request.tools)
+        # Capture authorization exactly once. Compatibility ContextVars are written by
+        # selector wrappers and can be overwritten by nested model/retrieval calls; a
+        # live coder loop must never let those nested calls replace its own security
+        # surface or preference ordering.
+        complete_surface = tuple(authorized_tools(request.tools))
+        complete_preference = dict(authorized_tool_preference())
         host_request = GenerationRequest(
             messages=request.messages,
             media_paths=request.media_paths,
             response_format=request.response_format,
             response_schema=request.response_schema,
             tools=complete_surface,
+            tool_validation_schemas=complete_surface,
             tool_choice="auto" if complete_surface else None,
             parallel_tool_calls=True if complete_surface else False,
         )
@@ -291,6 +298,8 @@ def _install_live_loop() -> None:
                 "MMM_CAUSAL_TOOL_FRONTIER_MAX", 3, minimum=1, maximum=3
             ),
             execution_gate=execution_gate,
+            authorized_surface=complete_surface,
+            preference=complete_preference,
         )
         clear_current_frontier()
         try:
