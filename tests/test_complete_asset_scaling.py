@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,11 @@ from minecraft_mod_ai.source_patch import sha256_file
 class _DeterministicImageRouter:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+
+    @contextmanager
+    def image_generation_session(self, role: str):
+        assert role == "image_generator"
+        yield
 
     def generate_image(
         self,
