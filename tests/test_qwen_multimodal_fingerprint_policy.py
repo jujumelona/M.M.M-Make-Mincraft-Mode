@@ -11,6 +11,7 @@ def _qwen_config() -> SimpleNamespace:
         extra={
             "gguf_filename": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
             "mmproj_filename": "mmproj-F16.gguf",
+            "runtime_contract": "qwen",
         },
     )
 
