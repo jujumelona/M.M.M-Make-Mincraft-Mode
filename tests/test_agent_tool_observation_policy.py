@@ -2,7 +2,23 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai.agent_tool_runtime import _bounded_result, _redact_text
+from minecraft_mod_ai.agent_tool_runtime import (
+    _bounded_result,
+    _normalize_tool_result,
+    _redact_text,
+    _result_byte_limit,
+)
+
+
+class _TextContent:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _RawToolResult:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.structuredContent = payload
+        self.content = (_TextContent(json.dumps(payload)),)
 
 
 def test_agent_observation_redacts_secrets_and_marks_untrusted() -> None:
@@ -32,6 +48,29 @@ def test_agent_observation_redacts_secrets_and_marks_untrusted() -> None:
     assert "super-secret-token" not in encoded
     assert "abcdefghijklmnopqrstuvwxyz" not in encoded
     assert "hunter2" not in encoded
+
+
+def test_mcp_mirrored_json_enters_transcript_once() -> None:
+    payload = {
+        "receipt": {
+            "result_count": 2,
+            "coverage_score": 0.9,
+            "relevance_score": 0.8,
+        },
+        "hits": [{"path": "Example.java", "line": 10}],
+    }
+
+    result = _normalize_tool_result(_RawToolResult(payload))
+
+    assert result["structured_content"] == payload
+    assert result["text"] == []
+    assert result["parsed_text"] is None
+
+
+def test_default_observation_page_is_small_for_local_agent_context(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_AGENT_OBSERVATION_BYTES", raising=False)
+
+    assert _result_byte_limit() == 16 * 1024
 
 
 def test_large_observation_preserves_rag_receipt(monkeypatch) -> None:
