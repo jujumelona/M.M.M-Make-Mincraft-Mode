@@ -8,7 +8,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 concurrency:
@@ -33,60 +33,6 @@ jobs:
           -f description='Temporary CI run locator'
           -f target_url="$RUN_URL"
       - uses: actions/checkout@v6
-      - name: Repair runtime wrapper ownership drift
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          route = Path("minecraft_mod_ai/coder_tool_route_integrity_contract.py")
-          text = route.read_text(encoding="utf-8")
-          replacements = (
-              (
-                  "    *,\n    adapter: Any,\n    request: Any,\n    runtime: Any,\n    stage: str,\n    role: str,\n) -> str:\n    \"\"\"Run the final tool loop",
-                  "    *,\n    config: Any,\n    adapter: Any,\n    request: Any,\n    runtime: Any,\n    stage: str,\n    role: str,\n) -> str:\n    \"\"\"Run the final tool loop",
-              ),
-              (
-                  "        return current(\n            router,\n            adapter=wrapped_adapter,",
-                  "        return current(\n            router,\n            config=config,\n            adapter=wrapped_adapter,",
-              ),
-              (
-                  "    def generate_with_route_integrity(\n        self: Any,\n        *,\n        adapter: Any,",
-                  "    def generate_with_route_integrity(\n        self: Any,\n        *,\n        config: Any,\n        adapter: Any,",
-              ),
-              (
-                  "            current,\n            self,\n            adapter=adapter,",
-                  "            current,\n            self,\n            config=config,\n            adapter=adapter,",
-              ),
-          )
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f"route-integrity migration anchor missing: {old[:80]!r}")
-              text = text.replace(old, new, 1)
-          route.write_text(text, encoding="utf-8")
-
-          test = Path("tests/test_runtime_bootstrap_clean.py")
-          text = test.read_text(encoding="utf-8")
-          old = "_LLAMA_PIPELINE = PACKAGE / 'llama_tuning_pipeline.py'\n_APPROVED_COMPOSERS = {_BOOTSTRAP, _LLAMA_PIPELINE}"
-          new = "_LLAMA_PIPELINE = PACKAGE / 'llama_tuning_pipeline.py'\n_FINALIZATION = PACKAGE / 'runtime_finalization.py'\n_APPROVED_COMPOSERS = {_BOOTSTRAP, _LLAMA_PIPELINE, _FINALIZATION}"
-          if old not in text:
-              raise SystemExit("runtime-finalization ownership migration anchor missing")
-          test.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
-          git diff --check
-          if git diff --quiet -- minecraft_mod_ai/coder_tool_route_integrity_contract.py tests/test_runtime_bootstrap_clean.py; then
-            exit 0
-          fi
-          git fetch origin main
-          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
-            echo "main advanced; latest main run will apply the migration"
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add minecraft_mod_ai/coder_tool_route_integrity_contract.py tests/test_runtime_bootstrap_clean.py
-          git commit -m 'fix(runtime): preserve tool-loop signature and finalizer ownership'
-          git push origin HEAD:main
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
