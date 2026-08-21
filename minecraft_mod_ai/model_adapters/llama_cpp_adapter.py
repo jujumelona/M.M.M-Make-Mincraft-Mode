@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
+import time
 from typing import Any, Mapping, Sequence
 
 import httpx
@@ -23,6 +26,8 @@ from .base import (
 
 
 _DEFAULT_HTTPX_POST = httpx.post
+_DEFAULT_COMPLETION_TIMEOUT_SECONDS = 600.0
+_DEFAULT_COMPLETION_HEARTBEAT_SECONDS = 15.0
 _REASONING_CONTINUATION = (
     "Continue from the reasoning above and complete this same assistant turn now. "
     "Call an available tool if evidence or an action is required; otherwise return "
@@ -680,16 +685,104 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
     return message
 
 
+def _positive_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive number") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive number")
+    return value
+
+
+def _payload_content_chars(payload: Mapping[str, Any]) -> int:
+    total = 0
+    messages = payload.get("messages", ())
+    if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+        return 0
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            total += len(content)
+        elif content is not None:
+            try:
+                total += len(json.dumps(content, ensure_ascii=False))
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
 def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
-    """Use the persistent pool without timing out a healthy long local decode."""
+    """POST one native completion with bounded idle time and visible liveness."""
 
     endpoint = f"{server_url}/chat/completions"
-    if httpx.post is not _DEFAULT_HTTPX_POST:
-        return httpx.post(endpoint, json=payload, timeout=None)
-    from ..llama_stream_efficiency_contract import _client
+    read_timeout = _positive_env_float(
+        "MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS",
+        _DEFAULT_COMPLETION_TIMEOUT_SECONDS,
+    )
+    heartbeat_seconds = _positive_env_float(
+        "MMM_LLAMA_COMPLETION_HEARTBEAT_SECONDS",
+        _DEFAULT_COMPLETION_HEARTBEAT_SECONDS,
+    )
+    started = time.monotonic()
+    stop = threading.Event()
+    input_chars = _payload_content_chars(payload)
+    max_tokens = payload.get("max_tokens", "?")
+    tool_count = len(payload.get("tools", ()) or ())
 
-    timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
-    return _client(server_url).post(endpoint, json=payload, timeout=timeout)
+    print(
+        "llama server: completion request",
+        f" input_chars={input_chars}",
+        f" max_tokens={max_tokens}",
+        f" tools={tool_count}",
+        f" read_timeout={read_timeout:.0f}s",
+        sep="",
+        flush=True,
+    )
+
+    def report_pending() -> None:
+        while not stop.wait(heartbeat_seconds):
+            print(
+                "llama server: completion pending",
+                f" elapsed={time.monotonic() - started:.1f}s",
+                f" input_chars={input_chars}",
+                f" max_tokens={max_tokens}",
+                f" tools={tool_count}",
+                sep="",
+                flush=True,
+            )
+
+    reporter = threading.Thread(
+        target=report_pending,
+        name="mmm-llama-completion-liveness",
+        daemon=True,
+    )
+    reporter.start()
+    timeout = httpx.Timeout(
+        connect=30.0,
+        read=read_timeout,
+        write=30.0,
+        pool=30.0,
+    )
+    try:
+        if httpx.post is not _DEFAULT_HTTPX_POST:
+            return httpx.post(endpoint, json=payload, timeout=timeout)
+        from ..llama_stream_efficiency_contract import _client
+
+        return _client(server_url).post(endpoint, json=payload, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            "native llama-server completion made no readable progress for "
+            f"{read_timeout:.0f}s"
+        ) from exc
+    finally:
+        stop.set()
+        reporter.join(timeout=0.2)
 
 
 def _bounded_response_body(response: Any, *, limit: int = 1600) -> str:
