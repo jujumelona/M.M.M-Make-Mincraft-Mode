@@ -5,6 +5,25 @@ from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationReques
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 
+_QWEN_PRECISE_PROFILE = {
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repeat_penalty": 1.0,
+}
+
+
+def _qwen_extra() -> dict[str, object]:
+    return {
+        "request_policy": "task_aware_sampling",
+        "sampling_profiles": {
+            "precise_coding": dict(_QWEN_PRECISE_PROFILE),
+        },
+    }
+
+
 def _tool_schema() -> dict[str, object]:
     return {
         "type": "function",
@@ -20,12 +39,13 @@ def _tool_schema() -> dict[str, object]:
     }
 
 
-def test_native_tool_payload_uses_llama_openai_fields_without_grammar() -> None:
+def test_native_tool_payload_keeps_server_peg_disabled() -> None:
     adapter = LlamaCppAdapter(
         AdapterConfig(
             role="coder_safe",
             adapter="llama_cpp",
             model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra=_qwen_extra(),
         )
     )
     request = GenerationRequest(
@@ -37,8 +57,9 @@ def test_native_tool_payload_uses_llama_openai_fields_without_grammar() -> None:
 
     payload = _server_payload(adapter, request)
 
+    assert request.tool_choice == "auto"
     assert payload["tools"] == [_tool_schema()]
-    assert payload["tool_choice"] == "auto"
+    assert payload["tool_choice"] == "none"
     assert payload["parallel_tool_calls"] is True
     assert "reasoning_effort" not in payload
     assert "chat_template_kwargs" not in payload
@@ -57,7 +78,7 @@ def test_native_tool_payload_uses_llama_openai_fields_without_grammar() -> None:
     assert "REVIEWED_TOOL_CATALOG" not in rendered
 
 
-def test_qwen35_tool_profile_is_model_scoped() -> None:
+def test_qwen35_tool_profile_is_registry_scoped() -> None:
     request = GenerationRequest(
         messages=({"role": "user", "content": "find evidence"},),
         tools=(_tool_schema(),),
@@ -67,6 +88,7 @@ def test_qwen35_tool_profile_is_model_scoped() -> None:
             role="coder_safe",
             adapter="llama_cpp",
             model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra=_qwen_extra(),
         )
     )
     generic = LlamaCppAdapter(

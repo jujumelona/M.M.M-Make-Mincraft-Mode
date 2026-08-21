@@ -6,7 +6,44 @@ from types import SimpleNamespace
 from minecraft_mod_ai.qwen35_request_policy import install
 
 
+_SAMPLING_PROFILES = {
+    "general_thinking": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repeat_penalty": 1.0,
+    },
+    "precise_coding": {
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
+    },
+    "non_thinking": {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repeat_penalty": 1.0,
+        "reasoning_effort": "none",
+    },
+}
+
+
 def _config(role: str = "planner", *, qwen: bool = True):
+    if qwen:
+        extra = {
+            "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+            "request_policy": "task_aware_sampling",
+            "sampling_profiles": _SAMPLING_PROFILES,
+        }
+    else:
+        extra = {"gguf_filename": "gemma-4-12b-it-qat-q4_0.gguf"}
     return SimpleNamespace(
         role=role,
         model_id=(
@@ -14,11 +51,7 @@ def _config(role: str = "planner", *, qwen: bool = True):
             if qwen
             else "google/gemma-4-12B-it-qat-q4_0-gguf"
         ),
-        extra=(
-            {"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"}
-            if qwen
-            else {"gguf_filename": "gemma-4-12b-it-qat-q4_0.gguf"}
-        ),
+        extra=extra,
     )
 
 
@@ -126,6 +159,20 @@ def test_tool_transport_does_not_disable_qwen_reasoning_by_itself() -> None:
     assert payload["top_p"] == 0.95
     assert "reasoning_effort" not in payload
     assert "chat_template_kwargs" not in payload
+
+
+def test_model_name_without_registry_policy_does_not_activate_qwen_policy() -> None:
+    _autotune_module, hardware = _install_isolated()
+    config = _config()
+    config.extra = {"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"}
+    adapter = SimpleNamespace(config=config)
+
+    payload = hardware._server_payload(adapter, _request())
+
+    assert payload["temperature"] == 0.0
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["thinking_budget_tokens"] == 0
 
 
 def test_non_qwen_payload_is_unchanged() -> None:

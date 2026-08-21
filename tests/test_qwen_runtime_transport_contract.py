@@ -11,12 +11,18 @@ from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import qwen_runtime_transport_contract as contract
 
 
-def _config(model_id: str) -> SimpleNamespace:
+def _config(model_id: str, *, qwen: bool = True) -> SimpleNamespace:
+    extra = {
+        "gguf_filename": f"{model_id.split('/')[-1]}.gguf",
+        "mtp_widths": "1,2",
+    }
+    if qwen:
+        extra["runtime_contract"] = "qwen"
     return SimpleNamespace(
         model_id=model_id,
         max_context=262144,
         max_new_tokens=8192,
-        extra={"gguf_filename": f"{model_id.split('/')[-1]}.gguf"},
+        extra=extra,
     )
 
 
@@ -328,7 +334,7 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
     fake._mmm_run_tuning_variant(
         "llama-server",
         "/tmp/model.gguf",
-        _config("other/model"),
+        _config("other/model", qwen=False),
         object(),
         runtime_tuning.ServerVariant("baseline"),
     )
@@ -342,6 +348,11 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
         ),
     )
     assert calls == 0
+
+
+def test_model_name_without_registry_contract_is_not_qwen_runtime() -> None:
+    config = _config("unsloth/Qwen3.6-27B-MTP-GGUF", qwen=False)
+    assert contract._family(config) is None
 
 
 def test_runtime_installs_zero_reload_tool_calibration_and_single_slot_mtp() -> None:
