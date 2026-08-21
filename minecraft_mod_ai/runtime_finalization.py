@@ -35,10 +35,12 @@ def finalize_runtime() -> None:
         from . import llama_server_autotune
         from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
+        from . import mcp_transport_pool
         from . import model_router
         from . import model_tool_aliases
         from . import parallel_runtime_contract
         from . import repository_grounding
+        from . import research_rag_performance
         from . import small_model_execution_extensions_contract
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
@@ -72,6 +74,10 @@ def finalize_runtime() -> None:
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .retrieval_cpu_budget_contract import install as install_retrieval_cpu_budget
         from .retrieval_model_residency import install as install_retrieval_residency
+        from .runtime_hot_path_contract import (
+            assert_installed as assert_runtime_hot_paths,
+            install as install_runtime_hot_paths,
+        )
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
@@ -103,6 +109,14 @@ def finalize_runtime() -> None:
         # owner per exact stage/target/access/provider scope so a simultaneous schema
         # refresh cannot replace the provider contract another request already saw.
         install_external_mcp_binding_concurrency(external_agent_bridge)
+        # Remove event-loop blocking queue backpressure, unrelated-provider global
+        # serialization, and query-time semantic-LSH reconciliation only after the
+        # safety/ownership contracts above have established the execution boundaries.
+        install_runtime_hot_paths(
+            mcp_transport_pool_module=mcp_transport_pool,
+            external_mcp_router_module=external_mcp_router,
+            research_rag_performance_module=research_rag_performance,
+        )
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         # Source files are repository state, not model output pages. Replace the old
@@ -195,6 +209,11 @@ def finalize_runtime() -> None:
         # Bootstrap's integrity stage runs before these late finalization wrappers are
         # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
         # fails before any retrieval/model work instead of surfacing during generation.
+        assert_runtime_hot_paths(
+            mcp_transport_pool_module=mcp_transport_pool,
+            external_mcp_router_module=external_mcp_router,
+            research_rag_performance_module=research_rag_performance,
+        )
         verify_installed_wrappers()
         # Exercise the exact first assistant + parallel 48 KiB tool-observation shape
         # that previously reached the server boundary before a second assistant turn.
