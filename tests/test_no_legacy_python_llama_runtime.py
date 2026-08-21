@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -13,8 +14,6 @@ def _forbidden_markers() -> tuple[str, ...]:
         "LLAMA_CPP_" + "PYTHON_VERSION",
         "llama_cpp_" + "python-",
         "abetlen/" + "llama-cpp-python",
-        "from llama_cpp" + " import",
-        "import " + "llama_cpp",
         "colab_" + "mtp_server",
         "mmm_llama_" + "mtp_server",
     )
@@ -35,6 +34,23 @@ def _production_files() -> list[Path]:
     return sorted(set(files))
 
 
+def _external_llama_python_imports(path: Path, text: str) -> list[str]:
+    if path.suffix != ".py":
+        return []
+    tree = ast.parse(text, filename=str(path))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "llama_cpp" or alias.name.startswith("llama_cpp."):
+                    found.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "llama_cpp" or module.startswith("llama_cpp."):
+                found.append(module)
+    return found
+
+
 def test_production_source_contains_no_legacy_python_llama_runtime() -> None:
     forbidden = _forbidden_markers()
     violations: list[str] = []
@@ -43,6 +59,8 @@ def test_production_source_contains_no_legacy_python_llama_runtime() -> None:
         for marker in forbidden:
             if marker in text:
                 violations.append(f"{path.relative_to(ROOT)}: {marker}")
+        for module in _external_llama_python_imports(path, text):
+            violations.append(f"{path.relative_to(ROOT)}: import {module}")
     assert violations == []
 
 
