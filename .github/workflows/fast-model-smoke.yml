@@ -8,20 +8,6 @@ on:
         required: false
         default: t4_quality
         type: string
-  push:
-    branches:
-      - main
-    paths:
-      - 'minecraft_mod_ai/model_smoke.py'
-      - 'minecraft_mod_ai/model_router.py'
-      - 'minecraft_mod_ai/model_registry.py'
-      - 'minecraft_mod_ai/model_adapters/**'
-      - 'minecraft_mod_ai/llama_*.py'
-      - 'minecraft_mod_ai/qwen*.py'
-      - 'minecraft_mod_ai/runtime_bootstrap.py'
-      - 'minecraft_mod_ai/config/model_registry.yaml'
-      - 'config/model_registry.yaml'
-      - '.github/workflows/fast-model-smoke.yml'
 
 permissions:
   contents: read
