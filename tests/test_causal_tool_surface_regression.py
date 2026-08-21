@@ -241,6 +241,108 @@ def test_live_causal_adapter_uses_frozen_authorized_surface() -> None:
     ] == ["apply_source_edit"]
 
 
+def test_live_causal_adapter_restores_context_dropped_by_core_turn_copy() -> None:
+    edit = _schema("apply_source_edit", {"path": {"type": "string"}})
+    forced = {
+        "type": "function",
+        "function": {"name": "apply_source_edit"},
+    }
+    template = GenerationRequest(
+        messages=({"role": "user", "content": "repair source"},),
+        response_format="json",
+        response_schema={"type": "object"},
+        tools=(edit,),
+        tool_validation_schemas=(edit,),
+        tool_choice=forced,
+        parallel_tool_calls=False,
+        task="repair-task",
+        prompt="repair-prompt",
+        metadata={"trace": "live-loop"},
+    )
+    # Mirrors an older ModelRouter copy constructor that carried only generation fields.
+    derived = GenerationRequest(
+        messages=({"role": "user", "content": "repair source"},),
+        response_format="json",
+        response_schema={"type": "object"},
+        tools=(edit,),
+        tool_choice=forced,
+        parallel_tool_calls=False,
+    )
+
+    class Inner:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate_turn(self, request):
+            self.requests.append(request)
+            return GenerationResponse(content="ok")
+
+    inner = Inner()
+    adapter = CausalFrontierAdapter(
+        inner,
+        stage="generation",
+        role="coder",
+        require_fresh_evidence=False,
+        authorized_surface=(edit,),
+        request_template=template,
+    )
+
+    assert adapter.generate_turn(derived).content == "ok"
+    sent = inner.requests[-1]
+    assert sent.task == "repair-task"
+    assert sent.prompt == "repair-prompt"
+    assert sent.metadata == {"trace": "live-loop"}
+    assert sent.tool_validation_schemas == (edit,)
+    assert sent.response_schema == {"type": "object"}
+
+
+def test_live_causal_adapter_final_synthesis_clears_tool_validation_only() -> None:
+    edit = _schema("apply_source_edit", {"path": {"type": "string"}})
+    template = GenerationRequest(
+        messages=({"role": "user", "content": "repair source"},),
+        tools=(edit,),
+        tool_validation_schemas=(edit,),
+        tool_choice="auto",
+        task="repair-task",
+        prompt="repair-prompt",
+        metadata={"trace": "final-synthesis"},
+    )
+    final_copy = GenerationRequest(
+        messages=({"role": "user", "content": "final answer"},),
+        tools=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    class Inner:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate_turn(self, request):
+            self.requests.append(request)
+            return GenerationResponse(content="done")
+
+    inner = Inner()
+    adapter = CausalFrontierAdapter(
+        inner,
+        stage="generation",
+        role="coder",
+        require_fresh_evidence=False,
+        authorized_surface=(edit,),
+        request_template=template,
+    )
+
+    assert adapter.generate_turn(final_copy).content == "done"
+    sent = inner.requests[-1]
+    assert sent.tools == ()
+    assert sent.tool_validation_schemas == ()
+    assert sent.tool_choice is None
+    assert sent.parallel_tool_calls is False
+    assert sent.task == "repair-task"
+    assert sent.prompt == "repair-prompt"
+    assert sent.metadata == {"trace": "final-synthesis"}
+
+
 def test_live_causal_adapter_stops_repeated_stale_authorized_call() -> None:
     visible = _schema("inspect_github_repository", {"repository": {"type": "string"}})
     edit = _schema(
