@@ -21,7 +21,7 @@ class _EmbeddingBackend:
 _BACKEND_CACHE_LOCK = threading.RLock()
 _BACKEND_CACHE: dict[tuple[str, str, str], _EmbeddingBackend] = {}
 _VECTOR_CACHE_LOCK = threading.RLock()
-_VECTOR_CACHE: OrderedDict[tuple[str, str, str, int, str], tuple[tuple[float, ...], ...]] = OrderedDict()
+_VECTOR_CACHE: OrderedDict[tuple[str, str, str, int, str], tuple[float, ...]] = OrderedDict()
 
 
 def _cache_enabled() -> bool:
@@ -30,31 +30,30 @@ def _cache_enabled() -> bool:
 
 
 def _result_cache_limit() -> int:
-    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "256").strip()
+    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "1024").strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 256
-    return max(1, min(4096, value))
+        value = 1024
+    return max(1, min(16384, value))
 
 
-def _texts_digest(texts: Sequence[str]) -> str:
+def _text_digest(text: str) -> str:
+    encoded = text.encode("utf-8")
     digest = hashlib.sha256()
-    for value in texts:
-        encoded = value.encode("utf-8")
-        digest.update(len(encoded).to_bytes(8, "big"))
-        digest.update(encoded)
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
     return digest.hexdigest()
 
 
 class EmbeddingAdapter:
-    """Sentence embedding adapter with shared CPU residency and exact-result reuse.
+    """Sentence embedding adapter with shared CPU residency and per-text reuse.
 
     Retrieval adapters are short-lived at the router boundary, so instance-only
     caching still reloads the same model on every RAG batch. The backend cache is
-    therefore owned here, next to the model lifecycle it controls. Exact repeated
-    batches are memoized as well so adjacent retrieval phases do not recompute the
-    same vectors on a CPU-only runtime.
+    therefore owned here, next to the model lifecycle it controls. Vector results
+    are memoized per normalized text instead of per batch so overlapping retrieval
+    batches never recompute texts that were already embedded on this runtime.
     """
 
     def __init__(self, config: AdapterConfig) -> None:
@@ -70,10 +69,10 @@ class EmbeddingAdapter:
 
     def _vector_cache_key(
         self,
-        texts: Sequence[str],
+        text: str,
         dimensions: int,
     ) -> tuple[str, str, str, int, str]:
-        return (*self._backend_key(), dimensions, _texts_digest(texts))
+        return (*self._backend_key(), dimensions, _text_digest(text))
 
     def _load_backend(self) -> _EmbeddingBackend:
         require_package("sentence-transformers", minimum="3.0.0")
@@ -134,19 +133,36 @@ class EmbeddingAdapter:
             raise ValueError("Embedding input must contain non-empty strings.")
 
         dimensions = int(self.config.extra.get("dimensions", 512))
-        cache_key = self._vector_cache_key(cleaned, dimensions)
-        if _cache_enabled():
+        cache_active = _cache_enabled()
+        vectors_by_text: dict[str, tuple[float, ...]] = {}
+        missing: list[str] = []
+        seen_missing: set[str] = set()
+
+        if cache_active:
             with _VECTOR_CACHE_LOCK:
-                cached = _VECTOR_CACHE.get(cache_key)
-                if cached is not None:
-                    _VECTOR_CACHE.move_to_end(cache_key)
-                    print(
-                        "retrieval embedding: encode cache hit",
-                        f"batch={len(cleaned)}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    return [list(row) for row in cached]
+                for text in cleaned:
+                    cache_key = self._vector_cache_key(text, dimensions)
+                    cached = _VECTOR_CACHE.get(cache_key)
+                    if cached is not None:
+                        _VECTOR_CACHE.move_to_end(cache_key)
+                        vectors_by_text[text] = cached
+                    elif text not in seen_missing:
+                        seen_missing.add(text)
+                        missing.append(text)
+        else:
+            for text in cleaned:
+                if text not in seen_missing:
+                    seen_missing.add(text)
+                    missing.append(text)
+
+        if not missing:
+            print(
+                "retrieval embedding: encode cache hit",
+                f"batch={len(cleaned)}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return [list(vectors_by_text[text]) for text in cleaned]
 
         try:
             backend = self._ensure_backend()
@@ -154,32 +170,55 @@ class EmbeddingAdapter:
             print(
                 "retrieval embedding: encode start",
                 f"batch={len(cleaned)}",
+                f"candidate_missing={len(missing)}",
                 file=sys.stderr,
                 flush=True,
             )
             with backend.lock:
+                if cache_active:
+                    with _VECTOR_CACHE_LOCK:
+                        still_missing: list[str] = []
+                        for text in missing:
+                            cache_key = self._vector_cache_key(text, dimensions)
+                            cached = _VECTOR_CACHE.get(cache_key)
+                            if cached is not None:
+                                _VECTOR_CACHE.move_to_end(cache_key)
+                                vectors_by_text[text] = cached
+                            else:
+                                still_missing.append(text)
+                    missing = still_missing
+                if not missing:
+                    return [list(vectors_by_text[text]) for text in cleaned]
                 vectors = backend.model.encode(
-                    cleaned,
+                    missing,
                     normalize_embeddings=True,
                     convert_to_numpy=True,
                     truncate_dim=dimensions,
                     show_progress_bar=False,
                 )
+            computed = tuple(tuple(float(value) for value in row) for row in vectors)
+            if len(computed) != len(missing):
+                raise RuntimeError("Embedding backend returned a different number of vectors than inputs.")
             print(
                 "retrieval embedding: encode done",
                 f"batch={len(cleaned)}",
+                f"computed={len(missing)}",
                 f"elapsed={time.monotonic() - started:.1f}s",
                 file=sys.stderr,
                 flush=True,
             )
-            result = tuple(tuple(float(value) for value in row) for row in vectors)
-            if _cache_enabled():
+            for text, vector in zip(missing, computed, strict=True):
+                vectors_by_text[text] = vector
+
+            if cache_active:
                 with _VECTOR_CACHE_LOCK:
-                    _VECTOR_CACHE[cache_key] = result
-                    _VECTOR_CACHE.move_to_end(cache_key)
+                    for text, vector in zip(missing, computed, strict=True):
+                        cache_key = self._vector_cache_key(text, dimensions)
+                        _VECTOR_CACHE[cache_key] = vector
+                        _VECTOR_CACHE.move_to_end(cache_key)
                     while len(_VECTOR_CACHE) > _result_cache_limit():
                         _VECTOR_CACHE.popitem(last=False)
-            return [list(row) for row in result]
+            return [list(vectors_by_text[text]) for text in cleaned]
         except Exception as exc:
             raise ModelBackendError(
                 role=self.config.role,

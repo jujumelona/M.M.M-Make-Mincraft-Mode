@@ -29,7 +29,7 @@ class _RerankerBackend:
 _BACKEND_CACHE_LOCK = threading.RLock()
 _BACKEND_CACHE: dict[tuple[str, str, str, str], _RerankerBackend] = {}
 _SCORE_CACHE_LOCK = threading.RLock()
-_SCORE_CACHE: OrderedDict[tuple[str, str, str, str, str], tuple[float, ...]] = OrderedDict()
+_SCORE_CACHE: OrderedDict[tuple[str, str, str, str, str, str], float] = OrderedDict()
 
 
 def _cache_enabled() -> bool:
@@ -38,17 +38,25 @@ def _cache_enabled() -> bool:
 
 
 def _result_cache_limit() -> int:
-    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "256").strip()
+    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "1024").strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 256
-    return max(1, min(4096, value))
+        value = 1024
+    return max(1, min(16384, value))
 
 
-def _score_digest(query: str, instruction: str, documents: Sequence[str]) -> str:
+def _text_digest(text: str) -> str:
+    encoded = text.encode("utf-8")
     digest = hashlib.sha256()
-    for value in (query, instruction, *documents):
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _request_digest(query: str, instruction: str) -> str:
+    digest = hashlib.sha256()
+    for value in (query, instruction):
         encoded = value.encode("utf-8")
         digest.update(len(encoded).to_bytes(8, "big"))
         digest.update(encoded)
@@ -56,14 +64,14 @@ def _score_digest(query: str, instruction: str, documents: Sequence[str]) -> str
 
 
 class RerankerAdapter:
-    """Instruction-aware Qwen reranker with native shared backend residency.
+    """Instruction-aware Qwen reranker with shared residency and per-document reuse.
 
     The router creates lightweight adapter objects per request. Keeping the model
     only on an adapter instance therefore causes repeated multi-gigabyte loads. A
     backend is cached by immutable model/runtime configuration and guarded by its
     own lock, so unrelated reranker profiles do not share one global serialization
-    point. Exact query/document reranks are also memoized because the agent may
-    revisit the same bounded candidate surface across adjacent causal-frontier turns.
+    point. Scores are cached per query/instruction/document tuple, which prevents
+    overlapping candidate batches from repeatedly scoring the same documents.
     """
 
     def __init__(self, config: AdapterConfig) -> None:
@@ -82,9 +90,13 @@ class RerankerAdapter:
         self,
         query: str,
         instruction: str,
-        documents: Sequence[str],
-    ) -> tuple[str, str, str, str, str]:
-        return (*self._backend_key(), _score_digest(query, instruction, documents))
+        document: str,
+    ) -> tuple[str, str, str, str, str, str]:
+        return (
+            *self._backend_key(),
+            _request_digest(query, instruction),
+            _text_digest(document),
+        )
 
     def _load_backend(self) -> _RerankerBackend:
         require_package("transformers", minimum="4.52.0")
@@ -155,32 +167,63 @@ class RerankerAdapter:
         if not query or not docs or any(not document for document in docs):
             raise ValueError("Reranker query and documents must be non-empty.")
 
-        cache_key = self._score_cache_key(query, instruction, docs)
-        if _cache_enabled():
+        cache_active = _cache_enabled()
+        scores_by_document: dict[str, float] = {}
+        missing: list[str] = []
+        seen_missing: set[str] = set()
+
+        if cache_active:
             with _SCORE_CACHE_LOCK:
-                cached = _SCORE_CACHE.get(cache_key)
-                if cached is not None:
-                    _SCORE_CACHE.move_to_end(cache_key)
-                    print(
-                        "retrieval reranker: score cache hit",
-                        f"documents={len(docs)}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    return list(cached)
+                for document in docs:
+                    cache_key = self._score_cache_key(query, instruction, document)
+                    cached = _SCORE_CACHE.get(cache_key)
+                    if cached is not None:
+                        _SCORE_CACHE.move_to_end(cache_key)
+                        scores_by_document[document] = cached
+                    elif document not in seen_missing:
+                        seen_missing.add(document)
+                        missing.append(document)
+        else:
+            for document in docs:
+                if document not in seen_missing:
+                    seen_missing.add(document)
+                    missing.append(document)
+
+        if not missing:
+            print(
+                "retrieval reranker: score cache hit",
+                f"documents={len(docs)}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return [scores_by_document[document] for document in docs]
 
         try:
             import torch
 
             backend = self._ensure_backend()
             with backend.lock:
+                if cache_active:
+                    with _SCORE_CACHE_LOCK:
+                        still_missing: list[str] = []
+                        for document in missing:
+                            cache_key = self._score_cache_key(query, instruction, document)
+                            cached = _SCORE_CACHE.get(cache_key)
+                            if cached is not None:
+                                _SCORE_CACHE.move_to_end(cache_key)
+                                scores_by_document[document] = cached
+                            else:
+                                still_missing.append(document)
+                    missing = still_missing
+                if not missing:
+                    return [scores_by_document[document] for document in docs]
                 prompts = [
                     (
                         f"<Instruct>: {instruction}\n"
                         f"<Query>: {query}\n"
                         f"<Document>: {document}"
                     )
-                    for document in docs
+                    for document in missing
                 ]
                 messages = [
                     [
@@ -206,6 +249,7 @@ class RerankerAdapter:
                 print(
                     "retrieval reranker: score start",
                     f"documents={len(docs)}",
+                    f"missing={len(missing)}",
                     f"microbatch={batch_size}",
                     file=sys.stderr,
                     flush=True,
@@ -236,21 +280,28 @@ class RerankerAdapter:
                         values[index] = float(value)
                 if any(value is None for value in values):
                     raise RuntimeError("Reranker did not score every document.")
+                computed = [float(value) for value in values if value is not None]
                 print(
                     "retrieval reranker: score done",
                     f"documents={len(docs)}",
+                    f"computed={len(missing)}",
                     f"elapsed={time.monotonic() - started:.1f}s",
                     file=sys.stderr,
                     flush=True,
                 )
-            result = tuple(float(value) for value in values if value is not None)
-            if _cache_enabled():
+
+            for document, value in zip(missing, computed, strict=True):
+                scores_by_document[document] = value
+
+            if cache_active:
                 with _SCORE_CACHE_LOCK:
-                    _SCORE_CACHE[cache_key] = result
-                    _SCORE_CACHE.move_to_end(cache_key)
+                    for document, value in zip(missing, computed, strict=True):
+                        cache_key = self._score_cache_key(query, instruction, document)
+                        _SCORE_CACHE[cache_key] = value
+                        _SCORE_CACHE.move_to_end(cache_key)
                     while len(_SCORE_CACHE) > _result_cache_limit():
                         _SCORE_CACHE.popitem(last=False)
-            return list(result)
+            return [scores_by_document[document] for document in docs]
         except Exception as exc:
             raise ModelBackendError(
                 role=self.config.role,
