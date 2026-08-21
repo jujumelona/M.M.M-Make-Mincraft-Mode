@@ -43,6 +43,7 @@ def finalize_runtime() -> None:
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_length_resilience import install as install_llama_length_resilience
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
+        from .llama_tool_output_budget import install as install_llama_tool_output_budget
         from .llama_unbounded_generation import install as install_llama_unbounded_generation
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter, openai_compatible
@@ -87,12 +88,15 @@ def finalize_runtime() -> None:
         # prompt cache. Drop the duplicate RAM arena only for those profiles, while
         # keeping the generic bounded cache reservation for non-MTP launches.
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
-        # llama.cpp n_predict/max_tokens=-1 is its native unlimited policy. Do not
-        # truncate ordinary source-edit/tool turns at a registry max_new_tokens value.
-        # Registry-declared Qwen T4/MTP pages retain their explicit bounded policy.
+        # Ordinary top-level llama.cpp turns may use the native unlimited prediction
+        # policy. Registry-declared Qwen T4/MTP pages retain their explicit bounds.
         install_llama_unbounded_generation(llama_server_hardware_policy)
-        # A remaining finish_reason='length' is then context pressure. Recover once by
-        # compacting large observations; never invent another output-token ceiling.
+        # Tool turns are semantic actions, not long-form generation. Install this after
+        # every unbounded/profile wrapper so a large RAG context cannot let a tool JSON
+        # decode consume the remaining model context before the action closes.
+        install_llama_tool_output_budget(llama_server_hardware_policy)
+        # A remaining finish_reason='length' is context pressure. Recover once by
+        # compacting observations while preserving the authoritative tool/page bound.
         install_llama_length_resilience(llama_cpp_adapter)
         # Bootstrap's integrity stage runs before these late finalization wrappers are
         # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
