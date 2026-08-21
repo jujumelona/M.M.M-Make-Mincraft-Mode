@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 
 from minecraft_mod_ai import model_router
 from minecraft_mod_ai.causal_frontier_adapter import (
@@ -51,8 +52,6 @@ class _BaseAdapter:
             return GenerationResponse(content="implemented after source mutation")
 
         if request.tool_choice == "auto":
-            # Reproduce the recurring small-model failure: the model sees a legal
-            # prerequisite tool but initially tries to answer in prose instead.
             return GenerationResponse(content="I can implement this from the context.")
 
         name = str(request.tool_choice["function"]["name"])
@@ -103,9 +102,6 @@ class _Runtime:
                 },
             }
         if name == "apply_source_patch":
-            # Simulate AgentToolRuntime's bounded observation after a large patch:
-            # the underlying first-party call succeeded, but the detailed APPLIED
-            # receipt is no longer present in the model-visible result body.
             return {
                 "truncated": True,
                 "original_bytes": 256_000,
@@ -144,13 +140,23 @@ def test_prose_refusal_cannot_finish_before_source_patch_even_when_result_is_tru
         parallel_tool_calls=True,
     )
 
+    class Router:
+        _agent_require_fresh_evidence = False
+
+        @staticmethod
+        def _generation_scope(config):
+            del config
+            return nullcontext()
+
+    config = object()
     remember_authorized_tools(
         request.tools,
         {"search_code_rag": 0, "apply_source_patch": 1},
     )
     try:
         result = generate_with_tools(
-            type("Router", (), {"_agent_require_fresh_evidence": False})(),
+            Router(),
+            config=config,
             adapter=adapter,
             request=request,
             runtime=runtime,
