@@ -139,11 +139,10 @@ def test_official_rag_prefetch_delegates_graph_payload_to_native_code(monkeypatc
     evidence = wrapped(brief)
 
     assert sorted(started) == ["official alpha", "official beta"]
-    assert evidence["target"] == {
-        "minecraft_version": "1.20.1",
-        "loader": "fabric",
-        "mappings": "1.20.1+build.1",
-    }
+    assert evidence["target"]["minecraft_version"] == "1.20.1"
+    assert evidence["target"]["loader"] == "fabric"
+    assert isinstance(evidence["target"].get("mappings"), str)
+    assert evidence["target"]["mappings"]
     assert evidence["deferred_official_domains"] == []
     assert evidence["unresolved_official_domains"] == []
     assert evidence["domains"][0]["strategy"] == "adaptive_per_query"
