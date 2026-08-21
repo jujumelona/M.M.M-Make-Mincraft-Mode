@@ -3,14 +3,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from minecraft_mod_ai import production_tools
-from minecraft_mod_ai.repair_engine import RepairEngine, _ACTIVE_REPAIR_PROJECT_INDEX
-
-
-class _Index:
-    @staticmethod
-    def manifest_receipt() -> dict:
-        return {"sha256": "sha256:" + "1" * 64}
+from minecraft_mod_ai.platform_repair_target_contract import _ACTIVE_REPAIR_TARGET
+from minecraft_mod_ai.repair_engine import RepairEngine
 
 
 class _Router:
@@ -38,48 +32,39 @@ class _Router:
         )
 
 
-class _ToolService:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def index_project_rag(self, *args, **kwargs):
-        return {"status": "PASS"}
-
-
-def test_repair_model_can_retrieve_but_cannot_own_source_writes(tmp_path, monkeypatch) -> None:
-    root = tmp_path / "project"
-    (root / ".minecraft_ai").mkdir(parents=True)
-    (root / ".minecraft_ai" / "platform-lock.json").write_text(
-        json.dumps(
-            {
-                "minecraft_version": "1.21.1",
-                "loader": "fabric",
-                "yarn_mappings": "1.21.1+build.3",
-                "java_version": "21",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(production_tools, "ProductionToolService", _ToolService)
-
+def test_repair_model_returns_inert_patch_proposals_without_source_tools() -> None:
     router = _Router()
     engine = RepairEngine.__new__(RepairEngine)
     engine.router = router
     engine.policy = SimpleNamespace(max_patch_bytes=64 * 1024)
+    target = SimpleNamespace(
+        minecraft_version="1.21.1",
+        loader="fabric",
+        yarn_mappings="1.21.1+build.3",
+        java_version="21",
+        fabric_loader="0.16.10",
+        fabric_api="0.115.0+1.21.1",
+        fabric_loom="1.9-SNAPSHOT",
+        gradle="8.12",
+    )
 
-    token = _ACTIVE_REPAIR_PROJECT_INDEX.set((root, _Index()))
+    token = _ACTIVE_REPAIR_TARGET.set(target)
     try:
         operations = engine._request_patch(
             {"passed": False, "diagnostics": {}, "build": {"status": "FAIL"}},
             {"manifest": {}, "relevant": []},
         )
     finally:
-        _ACTIVE_REPAIR_PROJECT_INDEX.reset(token)
+        _ACTIVE_REPAIR_TARGET.reset(token)
 
     assert operations[0]["operation"] == "create"
     assert len(router.calls) == 1
-    role, _messages, kwargs = router.calls[0]
-    assert role == "coder_safe"
-    assert kwargs["tool_stage"] == "quality"
+    role, messages, kwargs = router.calls[0]
+    assert role == "coder"
     assert kwargs["response_format"] == "json"
-    assert router.bound == (root.parent, True)
+    assert kwargs["enable_tools"] is False
+    assert "tool_stage" not in kwargs
+    assert router.bound is None
+    prompt = json.loads(messages[-1]["content"])
+    assert prompt["target"]["minecraft_version"] == "1.21.1"
+    assert prompt["target"]["mappings"] == "1.21.1+build.3"
