@@ -47,19 +47,22 @@ jobs:
               adaptive.write_text(adaptive_text.replace(old_active, new_active), encoding="utf-8")
 
           scaling = Path("minecraft_mod_ai/inference_time_scaling.py")
-          scaling_text = scaling.read_text(encoding="utf-8")
-          old_guard = '''            # max_efficiency_runtime_contract uses this ContextVar to stop nested
-          # candidate search inside an already isolated candidate.
-          try:
-              from .max_efficiency_runtime_contract import _FORCE_SINGLE_CUSTOM_SEARCH
-
-              if _FORCE_SINGLE_CUSTOM_SEARCH.get():
-                  return 1
-          except Exception:
-              pass
-          '''
-          if old_guard in scaling_text:
-              scaling.write_text(scaling_text.replace(old_guard, ""), encoding="utf-8")
+          lines = scaling.read_text(encoding="utf-8").splitlines(keepends=True)
+          marker = "# max_efficiency_runtime_contract uses this ContextVar to stop nested"
+          start = next((index for index, line in enumerate(lines) if marker in line), None)
+          if start is not None:
+              end = next(
+                  (
+                      index
+                      for index in range(start, min(len(lines), start + 16))
+                      if lines[index].strip() == "pass"
+                  ),
+                  None,
+              )
+              if end is None:
+                  raise SystemExit("stale max-efficiency guard terminator was not found")
+              del lines[start : end + 1]
+              scaling.write_text("".join(lines), encoding="utf-8")
 
           for path in (adaptive, scaling):
               if "max_efficiency_runtime_contract" in path.read_text(encoding="utf-8"):
