@@ -97,7 +97,7 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert payload["temperature"] == 0.7
     assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
-    assert payload["min_p"] == 0.0
+    assert "min_p" not in payload
     assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
 
