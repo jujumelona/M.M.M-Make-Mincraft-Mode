@@ -3,9 +3,13 @@ from __future__ import annotations
 """Bounded real-hardware tuning for llama-server kernel/runtime axes.
 
 This module deliberately does not replace the existing MTP, ubatch, parallel, or
-request-cache tuners.  It runs first on a cold managed server, chooses the fastest
+request-cache tuners. It runs first on a cold managed server, chooses the fastest
 verified Flash-Attention / logical-batch / K,V-cache configuration, then lets the
 existing staged tuner optimize the remaining axes on top of that winner.
+
+Kernel tuning is an optional optimizer. A failed synthetic kernel baseline must never
+turn a model that can run with the canonical llama-server configuration into a backend
+failure; in that case the native canonical launch remains authoritative.
 """
 
 import hashlib
@@ -23,6 +27,7 @@ _SCHEMA = "mmm/llama-kernel-autotune-v1"
 _LOCK = threading.RLock()
 _ALLOWED_FLASH = ("auto", "on", "off")
 _ALLOWED_KV = ("q4_0", "q8_0", "f16")
+_BYPASS_ENV = "MMM_LLAMA_KERNEL_BYPASS"
 
 
 @dataclass(frozen=True)
@@ -171,7 +176,7 @@ def _apply_active(config: KernelConfig) -> None:
     os.environ["MMM_LLAMA_ACTIVE_BATCH"] = str(config.batch)
     os.environ["MMM_LLAMA_ACTIVE_CACHE_TYPE_K"] = config.cache_type_k
     os.environ["MMM_LLAMA_ACTIVE_CACHE_TYPE_V"] = config.cache_type_v
-    # The legacy KV tuner uses this as its already-tuned sentinel.  Independent K/V
+    # The legacy KV tuner uses this as its already-tuned sentinel. Independent K/V
     # remain authoritative through the base-args wrapper below.
     os.environ["MMM_LLAMA_ACTIVE_KV_CACHE"] = config.cache_type_k
 
@@ -199,6 +204,19 @@ def _temporary_server_env(config: KernelConfig) -> Iterator[None]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+@contextmanager
+def _temporary_kernel_bypass() -> Iterator[None]:
+    old = os.environ.get(_BYPASS_ENV)
+    try:
+        os.environ[_BYPASS_ENV] = "1"
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_BYPASS_ENV, None)
+        else:
+            os.environ[_BYPASS_ENV] = old
 
 
 def _score(probe: KernelProbe, baseline: KernelProbe) -> float:
@@ -372,7 +390,13 @@ def _benchmark(autotune: Any, binary: str, model_path: str, model_config: Any, r
     )
     probes.append(current)
     if not current.ok or current.predicted_tps <= 0:
-        raise RuntimeError("baseline llama kernel configuration failed")
+        detail = current.error.strip() or "probe returned no usable throughput"
+        raise RuntimeError(
+            "baseline llama kernel configuration failed: "
+            f"fa={current_config.flash_attn} batch={current_config.batch} "
+            f"kv={current_config.cache_type_k}/{current_config.cache_type_v}; "
+            f"{detail}"
+        )
 
     flash_probes: list[KernelProbe] = [current]
     for value in _flash_candidates(current_config.flash_attn):
@@ -418,6 +442,8 @@ def install(autotune: Any, runtime_tuning: Any) -> None:
 
         @wraps(current_base)
         def kernel_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+            if os.environ.get(_BYPASS_ENV, "").strip() == "1":
+                return list(current_base(binary, model_path, config, port))
             args = list(current_base(binary, model_path, config, port))
             baseline = _baseline_config()
             active = _active_config(baseline)
@@ -501,9 +527,22 @@ def install(autotune: Any, runtime_tuning: Any) -> None:
                 fp = _fingerprint(autotune, config, binary, model_path, hardware)
                 selected = _load(autotune, fp)
                 if selected is None:
-                    selected, probes = _benchmark(
-                        autotune, binary, model_path, config, request, hardware
-                    )
+                    try:
+                        selected, probes = _benchmark(
+                            autotune, binary, model_path, config, request, hardware
+                        )
+                    except Exception as exc:
+                        # Kernel search is an optional optimization layer. Retry the
+                        # canonical native owner with this layer physically bypassed;
+                        # if the model/server is genuinely unusable, that canonical
+                        # owner will surface its real launch error instead.
+                        print(
+                            "native llama-server: kernel autotune skipped; canonical baseline",
+                            f" reason={type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        with _temporary_kernel_bypass():
+                            return current_ensure(config, request)
                     _save(autotune, fp, selected, probes)
                     print(
                         "native llama-server: kernel autotune selected",
