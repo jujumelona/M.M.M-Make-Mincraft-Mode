@@ -17,7 +17,12 @@ from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
 def _qwen_config():
     return SimpleNamespace(
         model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        extra={
+            "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+            "runtime_contract": "qwen",
+            "decode_hotpath": "t4_mtp",
+            "mtp_widths": "1,2,3,4,5,6",
+        },
         max_context=262144,
     )
 
