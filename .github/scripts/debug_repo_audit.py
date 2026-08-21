@@ -136,14 +136,76 @@ def _nodes_call_named(nodes: list[ast.AST], name: str) -> bool:
     return False
 
 
+def _contains_marker_getattr(node: ast.AST) -> bool:
+    return any(
+        isinstance(name, str) and name.startswith("_mmm_")
+        for name in (_getattr_name(item) for item in ast.walk(node))
+    )
+
+
+def _contains_unwrap_read(node: ast.AST) -> bool:
+    for item in ast.walk(node):
+        if _getattr_name(item) == "__wrapped__":
+            return True
+        if (
+            isinstance(item, ast.Attribute)
+            and item.attr == "__wrapped__"
+            and isinstance(item.ctx, ast.Load)
+        ):
+            return True
+    return False
+
+
+def _all_marker_tests_conservatively_preserve_outer(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """Recognize marker-copy-safe branches without hard-coded file exceptions.
+
+    An inherited truthy marker is dangerous when it *causes* an unwrap. It is
+    conservative when the truthy branch preserves the current outer callable and only
+    the false branch unwraps. In that shape copied metadata can suppress an unwrap but
+    cannot skip an outer safety contract. Other marker/unwrap data flows remain subject
+    to the strict ownership audit.
+    """
+
+    nodes = _local_function_nodes(function)
+    marker_lookups = sum(
+        1
+        for node in nodes
+        if isinstance(_getattr_name(node), str)
+        and str(_getattr_name(node)).startswith("_mmm_")
+    )
+    if marker_lookups == 0:
+        return False
+
+    conservative_lookups = 0
+    for node in nodes:
+        if not isinstance(node, ast.If) or not _contains_marker_getattr(node.test):
+            continue
+        marker_count = sum(
+            1
+            for item in ast.walk(node.test)
+            if isinstance(_getattr_name(item), str)
+            and str(_getattr_name(item)).startswith("_mmm_")
+        )
+        if marker_count == 0:
+            continue
+        body_unwrap = any(_contains_unwrap_read(item) for item in node.body)
+        else_unwrap = any(_contains_unwrap_read(item) for item in node.orelse)
+        if body_unwrap or not else_unwrap:
+            return False
+        conservative_lookups += marker_count
+    return conservative_lookups == marker_lookups
+
+
 def audit_marker_controlled_unwraps() -> list[str]:
     """Reject inherited marker tests that can choose the wrong wrapped layer.
 
     Default ``functools.wraps`` copies function ``__dict__`` metadata, so direct
-    ``getattr(current, '_mmm_*')`` cannot establish exact ownership. Simple
-    installation/idempotence checks may still use inherited visibility, but any
-    function that also *reads* ``__wrapped__`` must make ownership explicit through
-    ``owns_contract_marker``. Nested wrapper definitions are audited independently.
+    ``getattr(current, '_mmm_*')`` cannot establish exact ownership. Marker=true paths
+    that can unwrap must use ``owns_contract_marker``. A marker=true branch that keeps
+    the outer callable while only marker=false unwraps is conservative under copied
+    metadata and is not an unsafe owner bypass. Nested functions are audited separately.
     """
 
     errors: list[str] = []
@@ -174,6 +236,7 @@ def audit_marker_controlled_unwraps() -> list[str]:
                 marker_lookup
                 and unwrap_lookup
                 and not _nodes_call_named(nodes, "owns_contract_marker")
+                and not _all_marker_tests_conservatively_preserve_outer(function)
             ):
                 errors.append(
                     f"UNSAFE_MARKER_CONTROLLED_UNWRAP {path.relative_to(ROOT)}:"
