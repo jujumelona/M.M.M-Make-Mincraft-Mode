@@ -335,7 +335,9 @@ def test_host_owned_grounding_satisfies_baseline_without_forced_rag(monkeypatch)
     assert result == "implemented from host grounding"
     assert runtime.calls == []
     assert len(adapter.requests) == 1
-    assert adapter.requests[0].tool_choice == "auto"
+    assert adapter.requests[0].tools == ()
+    assert adapter.requests[0].tool_choice is None
+    assert adapter.requests[0].parallel_tool_calls is False
 
 
 def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> None:
