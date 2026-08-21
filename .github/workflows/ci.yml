@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: ci-audit-v9-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
@@ -20,6 +21,17 @@ jobs:
     timeout-minutes: 30
     name: Static and packaging audit
     steps:
+      - name: Publish diagnostic run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          gh api --method POST
+          "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
+          -f state=pending
+          -f context='ci/run-locator'
+          -f description='Temporary CI run locator'
+          -f target_url="$RUN_URL"
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
