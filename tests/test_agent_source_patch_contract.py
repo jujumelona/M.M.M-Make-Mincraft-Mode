@@ -10,6 +10,7 @@ from minecraft_mod_ai.agent_tool_runtime import (
     _MODEL_SOURCE_PATCH_SCHEMA,
     _materialize_model_source_patch,
 )
+from minecraft_mod_ai.mcp_schema_integrity_contract import ensure_schema_environment
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
 
@@ -22,6 +23,10 @@ def _project(workspace, name: str = "demo"):
 
 def _capture_first_party_payload(runtime, monkeypatch):
     captured = {}
+    # Production caches are now owned by the exact MCP child environment. Establish
+    # that identity before intentionally priming this unit-test cache; otherwise the
+    # fail-closed runtime correctly invalidates this synthetic pre-owner cache.
+    ensure_schema_environment(runtime, "generation")
     runtime._schema_cache["generation"] = ()
     runtime._allowed_tool_cache["generation"] = frozenset({"apply_source_patch"})
 
