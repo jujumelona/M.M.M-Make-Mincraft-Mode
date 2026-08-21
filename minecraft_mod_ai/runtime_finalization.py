@@ -27,6 +27,7 @@ def finalize_runtime() -> None:
 
         from . import agent_capability_context
         from . import agent_tool_runtime
+        from . import agentic_pre_design_rag
         from . import causal_tool_frontier_contract
         from . import llama_server_autotune
         from . import llama_server_hardware_policy
@@ -34,6 +35,7 @@ def finalize_runtime() -> None:
         from . import model_router
         from . import model_tool_aliases
         from . import parallel_runtime_contract
+        from . import repository_grounding
         from . import small_model_execution_extensions_contract
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
@@ -55,6 +57,7 @@ def finalize_runtime() -> None:
         from .model_adapters import llama_cpp_adapter, openai_compatible
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
+        from .retrieval_cpu_budget_contract import install as install_retrieval_cpu_budget
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
@@ -99,6 +102,10 @@ def finalize_runtime() -> None:
         # structural preflight so a fresh process cannot silently regress to per-call
         # CPU model construction.
         install_retrieval_residency(model_router_module=model_router)
+        # Baseline repository observation and pre-design code search are host-local
+        # lexical/graph work. Do not silently load CPU embedding/reranker models merely
+        # because the registry exposes them; dense escalation is explicit opt-in.
+        install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
         # Bootstrap installs an early compactor, but adaptive retrieval later replaces
         # the tool loop instead of delegating through that old callable. Re-bind the
         # compactor here, after every loop owner, so it is on the executable path.
