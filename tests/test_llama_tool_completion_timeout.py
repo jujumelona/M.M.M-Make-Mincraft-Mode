@@ -18,13 +18,14 @@ class _RecordingClient:
         return self.response
 
 
-def test_native_tool_completion_does_not_inherit_sse_read_deadline(monkeypatch) -> None:
+def test_native_tool_completion_has_bounded_idle_read_timeout(monkeypatch) -> None:
     client = _RecordingClient()
     monkeypatch.setattr(
         llama_stream_efficiency_contract,
         "_client",
         lambda _server_url: client,
     )
+    monkeypatch.delenv("MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS", raising=False)
 
     response = llama_cpp_adapter._post_completion(
         "http://127.0.0.1:8080",
@@ -33,7 +34,25 @@ def test_native_tool_completion_does_not_inherit_sse_read_deadline(monkeypatch) 
 
     assert response is client.response
     assert client.timeout is not None
-    assert client.timeout.read is None
+    assert client.timeout.read == 600.0
     assert client.timeout.connect == 30.0
     assert client.timeout.write == 30.0
     assert client.timeout.pool == 30.0
+
+
+def test_native_tool_completion_honors_explicit_idle_timeout(monkeypatch) -> None:
+    client = _RecordingClient()
+    monkeypatch.setattr(
+        llama_stream_efficiency_contract,
+        "_client",
+        lambda _server_url: client,
+    )
+    monkeypatch.setenv("MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS", "75")
+
+    llama_cpp_adapter._post_completion(
+        "http://127.0.0.1:8080",
+        {"messages": []},
+    )
+
+    assert client.timeout is not None
+    assert client.timeout.read == 75.0
