@@ -13,9 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterable
 
-_SCHEMA_VERSION = "mmm/llama-server-autotune-v8-unified-e2e-parallel-context"
+_SCHEMA_VERSION = "mmm/llama-server-autotune-v9-bounded-validated-parallel-context"
 _INSTALL_LOCK = threading.RLock()
 _MIB = 1024 * 1024
+_MAX_PARALLEL = 8
 _MAX_TOTAL_CONTEXT = 2_147_483_647
 _STARTUP_LOG_LIMIT = 64 * 1024
 
@@ -111,14 +112,10 @@ def _startup_log_tail(process: Any) -> str:
     else:
         marker = "none"
     digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
-    # Never put raw stderr into an exception: startup logs can contain tokens,
-    # credentials or private filesystem paths. Only an allowlisted marker and
-    # a bounded-content digest leave this module.
     return f"resource_marker={marker} stderr_sha256={digest} captured_chars={len(raw)}"
 
 
 def _performance_mode() -> str:
-    """Return the canonical operator objective, with notebook mode taking priority."""
     raw = os.environ.get("MMM_PERFORMANCE_MODE", "").strip().lower()
     if not raw:
         raw = os.environ.get("MMM_LLAMA_TUNING_OBJECTIVE", "auto").strip().lower()
@@ -196,7 +193,6 @@ def _setup_receipt() -> Any:
 
 
 def _runtime_resources() -> RuntimeResources:
-    """Probe live resources; setup-receipt values are only a resilient fallback."""
     receipt = _setup_receipt()
     gpu_free = 0
     gpu_total = 0
@@ -258,11 +254,17 @@ def _runtime_resources() -> RuntimeResources:
     return RuntimeResources(gpu_free, gpu_total, ram_available, cpu_count)
 
 
-def _is_qwen35_mtp_config(config: Any) -> bool:
-    model_id = str(getattr(config, "model_id", "")).lower()
+def _config_extra(config: Any) -> dict[str, Any]:
     extra = getattr(config, "extra", {})
-    filename = str(extra.get("gguf_filename", "")).lower() if isinstance(extra, dict) else ""
-    return "qwen3.5" in f"{model_id} {filename}" and "mtp" in f"{model_id} {filename}"
+    return dict(extra) if isinstance(extra, dict) else {}
+
+
+def _is_qwen35_mtp_config(config: Any) -> bool:
+    extra = _config_extra(config)
+    return (
+        str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
+        and str(extra.get("decode_hotpath", "")).strip().casefold() == "t4_mtp"
+    )
 
 
 def _per_request_context(config: Any) -> int:
@@ -281,9 +283,23 @@ def _per_request_context(config: Any) -> int:
             raise ValueError(f"{name} must be a non-negative integer") from exc
         if value < 0:
             raise ValueError(f"{name} must be a non-negative integer")
-        if value == 0:
-            continue
-        return value
+        if value > 0:
+            return value
+
+    runtime_default = _config_extra(config).get("runtime_context_default")
+    if runtime_default is not None:
+        try:
+            value = int(runtime_default)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("runtime_context_default must be a positive integer") from exc
+        if value <= 0:
+            raise ValueError("runtime_context_default must be a positive integer")
+        try:
+            capacity = int(getattr(config, "max_context", 0) or 0)
+        except (TypeError, ValueError):
+            capacity = 0
+        return min(value, capacity) if capacity > 0 else value
+
     try:
         return max(0, int(getattr(config, "max_context", 0) or 0))
     except (TypeError, ValueError):
@@ -292,6 +308,10 @@ def _per_request_context(config: Any) -> int:
 
 def _total_context(per_request: int, slots: int) -> int:
     slots = max(1, int(slots))
+    if slots > _MAX_PARALLEL:
+        raise RuntimeError(
+            f"llama-server parallel slots {slots} exceeds supported maximum {_MAX_PARALLEL}"
+        )
     if per_request <= 0 and slots > 1:
         raise RuntimeError(
             "parallel llama-server requires a positive per-request context so slots do not share an unknown context"
@@ -333,9 +353,6 @@ def _kv_bytes_per_token() -> int:
     cache_v = os.environ.get(
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_V", os.environ.get("MMM_KV_CACHE_QUANT", "q4_0")
     ).strip().lower()
-    # Qwen3.5-9B: 40 layers × 8 KV heads × 128 head_dim
-    # q8_0: 40×8×128×1 = 40,960 bytes/token per K or V half
-    # q4_0: ~half of q8_0, f16: ~double of q8_0
     per_half = {"q4_0": 24 * 1024, "q8_0": 40 * 1024, "f16": 80 * 1024}
     return per_half.get(cache_k, 40 * 1024) + per_half.get(cache_v, 40 * 1024)
 
@@ -356,6 +373,8 @@ def _parallel_resource_feasible(
     resources: RuntimeResources,
 ) -> bool:
     slots = max(1, int(slots))
+    if slots > _MAX_PARALLEL:
+        return False
     if slots == 1:
         return True
     context = _per_request_context(config)
@@ -368,11 +387,7 @@ def _parallel_resource_feasible(
     ram_avail = resources.ram_available_bytes or (12 * _MIB * 1024)
     if not gpu_free or not ram_avail:
         return False
-    gpu_required = (
-        int(model_bytes * 1.05)
-        + total_context * _kv_bytes_per_token()
-        + 512 * _MIB
-    )
+    gpu_required = int(model_bytes * 1.05) + total_context * _kv_bytes_per_token() + 512 * _MIB
     ram_required = int(model_bytes * 0.30) + (512 + 256 * slots) * _MIB
     return bool(
         gpu_required <= int(gpu_free * 0.95)
@@ -453,13 +468,13 @@ def _selection_inputs(config: Any) -> dict[str, Any]:
         "MMM_QWEN35_MTP_TUNING",
         "MMM_QWEN35_MTP_HOTPATH",
     )
-    extra = getattr(config, "extra", {})
+    extra = _config_extra(config)
     return {
         "performance_mode": _performance_mode(),
         "parallel_target": _parallel_target(),
         "context_per_slot": _per_request_context(config),
         "model_id": str(getattr(config, "model_id", "")),
-        "gguf_filename": str(extra.get("gguf_filename", "")) if isinstance(extra, dict) else "",
+        "gguf_filename": str(extra.get("gguf_filename", "")),
         "max_new_tokens": int(getattr(config, "max_new_tokens", 0) or 0),
         "cache_ram_mib": _cache_ram_mib(),
         "env": {name: os.environ.get(name, "") for name in tracked_env},
@@ -558,8 +573,10 @@ def _cache_reuse_candidates() -> tuple[int, ...]:
 def _parallel_target() -> int:
     explicit = os.environ.get("MMM_LLAMA_CONCURRENT_REQUESTS", "").strip()
     if explicit:
-        return _env_int("MMM_LLAMA_CONCURRENT_REQUESTS", 1, minimum=1, maximum=32)
-    return 1 if _performance_mode() == "latency" else 16
+        return _env_int(
+            "MMM_LLAMA_CONCURRENT_REQUESTS", 1, minimum=1, maximum=_MAX_PARALLEL
+        )
+    return 1 if _performance_mode() == "latency" else _MAX_PARALLEL
 
 
 def _explicit_parallel() -> int | None:
@@ -570,7 +587,7 @@ def _explicit_parallel() -> int | None:
         value = int(raw)
     except ValueError as exc:
         raise ValueError("MMM_LLAMA_PARALLEL must be an integer") from exc
-    return max(1, min(32, value))
+    return max(1, min(_MAX_PARALLEL, value))
 
 
 def _parallel_candidates(
@@ -585,25 +602,18 @@ def _parallel_candidates(
     target = _parallel_target()
     if _performance_mode() == "latency" and not explicit_concurrency:
         return (1,)
-    values = [1]
-    for value in (2, 4):
-        if value <= target:
-            values.append(value)
-    if target not in values:
-        values.append(target)
-    values = sorted(set(values))
-    # Exact operator concurrency remains authoritative. Automatic expansion only
-    # probes candidates that can conservatively fit before llama-server validates them.
+    values = tuple(value for value in (1, 2, 4, 8) if value <= target)
     if explicit_concurrency:
-        return tuple(values)
+        return values or (1,)
     if config is None:
         return (1,)
     snapshot = resources or _runtime_resources()
-    return tuple(
+    feasible = tuple(
         value
         for value in values
         if _parallel_resource_feasible(value, config, model_path, snapshot)
     )
+    return feasible or (1,)
 
 
 def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:
@@ -625,7 +635,9 @@ def _candidate_variants(autotune_module: Any) -> tuple[ServerVariant, ...]:
     if confidence_p_min > 0:
         for width in confidence_widths:
             candidate = ServerVariant(
-                f"mtp-{width}|pm{confidence_p_min:g}", "draft-mtp", width,
+                f"mtp-{width}|pm{confidence_p_min:g}",
+                "draft-mtp",
+                width,
                 draft_p_min=confidence_p_min,
             )
             if all(
@@ -663,7 +675,12 @@ def _candidate_variants_for_config(autotune_module: Any, config: Any) -> tuple[S
 
 
 def _eligible(probe: Any, baseline: Any) -> bool:
-    return bool(getattr(probe, "ok", False)) and str(getattr(probe, "output_sha256", "")) == str(getattr(baseline, "output_sha256", "")) and float(getattr(probe, "predicted_tps", 0.0)) > 0
+    return (
+        bool(getattr(probe, "ok", False))
+        and str(getattr(probe, "output_sha256", ""))
+        == str(getattr(baseline, "output_sha256", ""))
+        and float(getattr(probe, "predicted_tps", 0.0)) > 0
+    )
 
 
 def _balanced_score(probe: Any, baseline: Any) -> float:
@@ -682,7 +699,14 @@ def _select_probe(probes: list[Any], *, balanced: bool, minimum_gain: float) -> 
     if not getattr(baseline, "ok", False) or float(getattr(baseline, "predicted_tps", 0.0)) <= 0:
         return None
     valid = [baseline] + [probe for probe in probes[1:] if _eligible(probe, baseline)]
-    score = (lambda probe: _balanced_score(probe, baseline)) if balanced else (lambda probe: float(getattr(probe, "predicted_tps", 0.0)) / max(1e-9, float(getattr(baseline, "predicted_tps", 0.0))))
+    score = (
+        (lambda probe: _balanced_score(probe, baseline))
+        if balanced
+        else (
+            lambda probe: float(getattr(probe, "predicted_tps", 0.0))
+            / max(1e-9, float(getattr(baseline, "predicted_tps", 0.0)))
+        )
+    )
     best = max(valid, key=score)
     return best if best is baseline or score(best) >= max(1.0, minimum_gain) else baseline
 
@@ -690,23 +714,30 @@ def _select_probe(probes: list[Any], *, balanced: bool, minimum_gain: float) -> 
 def _select_parallel_probe(
     reference: Any, probes: Iterable[Any], *, minimum_gain: float
 ) -> Any:
-    """Compare only like-for-like aggregate short+medium E2E measurements."""
     eligible = [probe for probe in probes if _eligible(probe, reference)]
     if not eligible:
         return reference
     best = max(eligible, key=lambda probe: float(getattr(probe, "predicted_tps", 0.0)))
-    required = float(getattr(reference, "predicted_tps", 0.0)) * max(
-        1.0, minimum_gain
-    )
+    required = float(getattr(reference, "predicted_tps", 0.0)) * max(1.0, minimum_gain)
     return best if float(getattr(best, "predicted_tps", 0.0)) >= required else reference
 
 
-def _parallel_probe(autotune_module: Any, base_url: str, request: Any, *, max_tokens: int, variant: ServerVariant, concurrency: int) -> Any:
+def _parallel_probe(
+    autotune_module: Any,
+    base_url: str,
+    request: Any,
+    *,
+    max_tokens: int,
+    variant: ServerVariant,
+    concurrency: int,
+) -> Any:
     started = time.perf_counter()
     try:
         rounds: list[list[Any]] = []
         for probe_request in (request, _medium_prefill_request(request)):
-            with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe") as pool:
+            with ThreadPoolExecutor(
+                max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe"
+            ) as pool:
                 values = [
                     future.result()
                     for future in [
@@ -746,9 +777,26 @@ def _parallel_probe(autotune_module: Any, base_url: str, request: Any, *, max_to
         combined_output_sha256 = hashlib.sha256(
             json.dumps(round_hashes, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        return autotune_module.ProbeResult(variant=variant, ok=tokens > 0 and elapsed > 0, output_sha256=combined_output_sha256, predicted_tokens=tokens, predicted_tps=(tokens / elapsed if elapsed > 0 else 0.0), prompt_tps=(sum(prompt_values) / len(prompt_values) if prompt_values else 0.0), elapsed_seconds=elapsed)
+        return autotune_module.ProbeResult(
+            variant=variant,
+            ok=tokens > 0 and elapsed > 0,
+            output_sha256=combined_output_sha256,
+            predicted_tokens=tokens,
+            predicted_tps=(tokens / elapsed if elapsed > 0 else 0.0),
+            prompt_tps=(sum(prompt_values) / len(prompt_values) if prompt_values else 0.0),
+            elapsed_seconds=elapsed,
+        )
     except Exception as exc:
-        return autotune_module.ProbeResult(variant=variant, ok=False, output_sha256="", predicted_tokens=0, predicted_tps=0.0, prompt_tps=0.0, elapsed_seconds=time.perf_counter() - started, error=f"{type(exc).__name__}: {exc}")
+        return autotune_module.ProbeResult(
+            variant=variant,
+            ok=False,
+            output_sha256="",
+            predicted_tokens=0,
+            predicted_tps=0.0,
+            prompt_tps=0.0,
+            elapsed_seconds=time.perf_counter() - started,
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _run_parallel_stage(
@@ -786,8 +834,7 @@ def _run_parallel_stage(
     ) <= 0:
         if forced_parallel is not None and forced_parallel > 1:
             raise RuntimeError(
-                f"explicit MMM_LLAMA_PARALLEL={forced_parallel} could not validate "
-                "the p1 exact-output reference"
+                f"explicit MMM_LLAMA_PARALLEL={forced_parallel} could not validate the p1 exact-output reference"
             )
         return selected, None, p1_probe, tuple(measured)
     candidates: list[Any] = []
@@ -808,9 +855,7 @@ def _run_parallel_stage(
         )
         measured.append(probe)
         candidates.append(probe)
-    winner = _select_parallel_probe(
-        p1_probe, candidates, minimum_gain=minimum_gain
-    )
+    winner = _select_parallel_probe(p1_probe, candidates, minimum_gain=minimum_gain)
     if forced_parallel is not None and forced_parallel > 1:
         forced = next(
             (
@@ -831,7 +876,6 @@ def _run_parallel_stage(
 
 
 def install(autotune_module: Any) -> None:
-    """Install compile-free adaptive staged tuning over verified native llama-server."""
     with _INSTALL_LOCK:
         if getattr(autotune_module, "_mmm_runtime_tuning_installed", False):
             return
@@ -840,10 +884,12 @@ def install(autotune_module: Any) -> None:
 
         def candidate_variants() -> tuple[ServerVariant, ...]:
             return _candidate_variants(autotune_module)
+
         candidate_variants._mmm_mtp_ngram_autotune = True
         autotune_module._candidate_variants = candidate_variants
 
         current_base = autotune_module._base_args
+
         @wraps(current_base)
         def tuned_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
             args = list(current_base(binary, model_path, config, port))
@@ -852,24 +898,37 @@ def install(autotune_module: Any) -> None:
                 args.append("--cache-prompt")
             _replace_option(args, ("--cache-ram",), str(_cache_ram_mib()))
             return args
-        for tag in ("_mmm_auto_gpu_layers", "_mmm_single_decode_slot", "_mmm_native_telemetry_endpoints"):
+
+        for tag in (
+            "_mmm_auto_gpu_layers",
+            "_mmm_single_decode_slot",
+            "_mmm_native_telemetry_endpoints",
+        ):
             if getattr(current_base, tag, False):
                 setattr(tuned_base_args, tag, True)
         tuned_base_args._mmm_load_mode_auto = True
         autotune_module._base_args = tuned_base_args
 
         current_variant_args = autotune_module._variant_args
+
         @wraps(current_variant_args)
         def tuned_variant_args(variant: ServerVariant) -> list[str]:
             if variant.spec_type.startswith("ngram-"):
                 return ["--spec-type", variant.spec_type]
             return current_variant_args(variant)
+
         if getattr(current_variant_args, "_mmm_auto_draft_layers", False):
             tuned_variant_args._mmm_auto_draft_layers = True
         tuned_variant_args._mmm_ngram_speculation = True
         autotune_module._variant_args = tuned_variant_args
 
-        def start_server(binary: str, model_path: str, config: Any, variant: ServerVariant, port: int) -> subprocess.Popen[bytes]:
+        def start_server(
+            binary: str,
+            model_path: str,
+            config: Any,
+            variant: ServerVariant,
+            port: int,
+        ) -> subprocess.Popen[bytes]:
             debug = autotune_module._env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
             args = list(autotune_module._base_args(binary, model_path, config, port))
             native_context = any(
@@ -878,7 +937,7 @@ def install(autotune_module: Any) -> None:
                 and args[args.index(name) + 1] == "0"
                 for name in ("--ctx-size", "-c")
             )
-            slots = max(1, variant.parallel)
+            slots = max(1, int(variant.parallel))
             per_request_context = _context_from_args(args, config)
             total_context = _total_context(per_request_context, slots)
             if slots > 1 or not native_context:
@@ -891,8 +950,6 @@ def install(autotune_module: Any) -> None:
                     args.append("--cont-batching")
                 if "--kv-unified" not in args and "-kvu" not in args:
                     args.append("--kv-unified")
-            # Qwen's measured hot path deliberately removes --cache-prompt. Do not
-            # leave an inert 1 GiB prompt-cache reservation behind in that path.
             if "--cache-prompt" not in args:
                 _remove_option(args, ("--cache-ram",), takes_value=True)
             _remove_option(args, ("--cache-reuse",), takes_value=True)
@@ -907,11 +964,13 @@ def install(autotune_module: Any) -> None:
             if not debug:
                 _attach_startup_log(process)
             return process
+
         start_server._mmm_staged_runtime_tuning = True
         autotune_module._start_server = start_server
 
         current_wait_ready = getattr(autotune_module, "_wait_ready", None)
         if callable(current_wait_ready):
+
             @wraps(current_wait_ready)
             def wait_ready(process: Any, port: int) -> str:
                 try:
@@ -928,6 +987,7 @@ def install(autotune_module: Any) -> None:
             autotune_module._wait_ready = wait_ready
 
         current_fingerprint = autotune_module._fingerprint
+
         @wraps(current_fingerprint)
         def tuning_fingerprint(config: Any, binary: str, model_path: str) -> str:
             resources = _runtime_resources()
@@ -959,24 +1019,56 @@ def install(autotune_module: Any) -> None:
                 },
                 "prompt_cache": prompt_cache_enabled,
                 "cache_ram_mib": _cache_ram_mib() if prompt_cache_enabled else 0,
-                "search": "resource-feasible-p1-p2-p4+adaptive-joint-mtp+ubatch",
+                "search": "resource-feasible-p1-p2-p4-p8+adaptive-joint-mtp+ubatch",
             }
-            return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            return hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+
         if getattr(current_fingerprint, "_mmm_stable_model_signature", False):
             tuning_fingerprint._mmm_stable_model_signature = True
         tuning_fingerprint._mmm_runtime_tuning_fingerprint = True
         autotune_module._fingerprint = tuning_fingerprint
 
-        def run_variant(binary: str, model_path: str, config: Any, benchmark_request: Any, variant: ServerVariant, *, probe_tokens: int, parallel_probe: bool = False, concurrency: int = 1, propagate_resource_failure: bool = False) -> Any:
-            port = autotune_module._free_port(autotune_module._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910))
+        def run_variant(
+            binary: str,
+            model_path: str,
+            config: Any,
+            benchmark_request: Any,
+            variant: ServerVariant,
+            *,
+            probe_tokens: int,
+            parallel_probe: bool = False,
+            concurrency: int = 1,
+            propagate_resource_failure: bool = False,
+        ) -> Any:
+            port = autotune_module._free_port(
+                autotune_module._env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
+            )
             process = None
             try:
-                process = autotune_module._start_server(binary, model_path, config, variant, port)
+                process = autotune_module._start_server(
+                    binary, model_path, config, variant, port
+                )
                 url = autotune_module._wait_ready(process, port)
-                autotune_module._probe_server(url, benchmark_request, max_tokens=1, variant=variant)
+                autotune_module._probe_server(
+                    url, benchmark_request, max_tokens=1, variant=variant
+                )
                 if parallel_probe:
-                    return _parallel_probe(autotune_module, url, benchmark_request, max_tokens=probe_tokens, variant=variant, concurrency=concurrency)
-                return autotune_module._probe_server(url, benchmark_request, max_tokens=probe_tokens, variant=variant)
+                    return _parallel_probe(
+                        autotune_module,
+                        url,
+                        benchmark_request,
+                        max_tokens=probe_tokens,
+                        variant=variant,
+                        concurrency=concurrency,
+                    )
+                return autotune_module._probe_server(
+                    url,
+                    benchmark_request,
+                    max_tokens=probe_tokens,
+                    variant=variant,
+                )
             except Exception as exc:
                 failure = f"{type(exc).__name__}: {exc}"
                 if propagate_resource_failure and _recoverable_resource_failure(
@@ -987,20 +1079,45 @@ def install(autotune_module: Any) -> None:
                     resources=_runtime_resources(),
                 ):
                     raise RecoverableResourceLaunchError(
-                        "native llama-server tuning probe hit a transient resource "
-                        "failure (resource_marker=out_of_memory_or_resource_exit)"
+                        "native llama-server tuning probe hit a transient resource failure "
+                        "(resource_marker=out_of_memory_or_resource_exit)"
                     ) from exc
-                return autotune_module.ProbeResult(variant=variant, ok=False, output_sha256="", predicted_tokens=0, predicted_tps=0.0, prompt_tps=0.0, elapsed_seconds=0.0, error=f"{type(exc).__name__}: {exc}")
+                return autotune_module.ProbeResult(
+                    variant=variant,
+                    ok=False,
+                    output_sha256="",
+                    predicted_tokens=0,
+                    predicted_tps=0.0,
+                    prompt_tps=0.0,
+                    elapsed_seconds=0.0,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             finally:
                 autotune_module._stop_server(process)
+
         autotune_module._mmm_run_tuning_variant = run_variant
         run_variant._mmm_resource_failure_propagation = True
 
-        def benchmark(binary: str, model_path: str, config: Any, request: Any, fingerprint: str) -> Any | None:
+        def benchmark(
+            binary: str,
+            model_path: str,
+            config: Any,
+            request: Any,
+            fingerprint: str,
+        ) -> Any | None:
             benchmark_request = autotune_module._compact_benchmark_request(request)
-            probe_tokens = min(int(config.max_new_tokens), autotune_module._env_int("MMM_LLAMA_AUTOTUNE_TOKENS", autotune_module._BENCHMARK_OUTPUT_TOKENS))
+            probe_tokens = min(
+                int(config.max_new_tokens),
+                autotune_module._env_int(
+                    "MMM_LLAMA_AUTOTUNE_TOKENS",
+                    autotune_module._BENCHMARK_OUTPUT_TOKENS,
+                ),
+            )
             stage_gain = autotune_module._env_float("MMM_LLAMA_STAGE_MIN_GAIN", 1.01)
-            spec_gain = max(stage_gain, autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.01))
+            spec_gain = max(
+                stage_gain,
+                autotune_module._env_float("MMM_LLAMA_AUTOTUNE_MIN_SPEEDUP", 1.01),
+            )
             probes: list[Any] = []
             values = _candidate_variants_for_config(autotune_module, config)
             baseline_variant = next(value for value in values if value.spec_type == "none")
@@ -1014,35 +1131,80 @@ def install(autotune_module: Any) -> None:
                 propagate_resource_failure=True,
             )
             probes.append(baseline)
-            if not getattr(baseline, "ok", False) or float(getattr(baseline, "predicted_tps", 0.0)) <= 0:
+            if not getattr(baseline, "ok", False) or float(
+                getattr(baseline, "predicted_tps", 0.0)
+            ) <= 0:
                 return None
 
             mtp_values = [value for value in values if value.spec_type == "draft-mtp"]
-            ngram_values = [value for value in values if value.spec_type.startswith("ngram-")]
+            ngram_values = [
+                value for value in values if value.spec_type.startswith("ngram-")
+            ]
             primary = mtp_values if _model_supports_mtp(config) else ngram_values
             primary_probes = [baseline]
             for variant in primary:
-                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
+                probe = run_variant(
+                    binary,
+                    model_path,
+                    config,
+                    benchmark_request,
+                    variant,
+                    probe_tokens=probe_tokens,
+                )
                 probes.append(probe)
                 primary_probes.append(probe)
-            spec = _select_probe(primary_probes, balanced=False, minimum_gain=spec_gain) or baseline
+            spec = (
+                _select_probe(
+                    primary_probes, balanced=False, minimum_gain=spec_gain
+                )
+                or baseline
+            )
 
-            # MTP-capable Qwen models do not pay for ngram probes when native MTP wins.
             if _model_supports_mtp(config) and spec is baseline and ngram_values:
                 fallback_probes = [baseline]
                 for variant in ngram_values:
-                    probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
+                    probe = run_variant(
+                        binary,
+                        model_path,
+                        config,
+                        benchmark_request,
+                        variant,
+                        probe_tokens=probe_tokens,
+                    )
                     probes.append(probe)
                     fallback_probes.append(probe)
-                spec = _select_probe(fallback_probes, balanced=False, minimum_gain=spec_gain) or baseline
+                spec = (
+                    _select_probe(
+                        fallback_probes, balanced=False, minimum_gain=spec_gain
+                    )
+                    or baseline
+                )
 
-            selected = replace(spec.variant, ubatch=min(autotune_module._env_int("MMM_LLAMA_BATCH", 2048), autotune_module._env_int("MMM_LLAMA_UBATCH", 512)))
+            selected = replace(
+                spec.variant,
+                ubatch=min(
+                    autotune_module._env_int("MMM_LLAMA_BATCH", 2048),
+                    autotune_module._env_int("MMM_LLAMA_UBATCH", 512),
+                ),
+            )
             final_probe = spec
             base_ubatch = selected.ubatch
-            # Every ubatch candidate is independent: a local dip must not hide a faster later setting.
-            for value in sorted((v for v in _ubatch_candidates(autotune_module) if v != base_ubatch)):
-                variant = replace(selected, name=f"{selected.name.split('|ub', 1)[0]}|ub{value}", ubatch=value)
-                probe = run_variant(binary, model_path, config, benchmark_request, variant, probe_tokens=probe_tokens)
+            for value in sorted(
+                v for v in _ubatch_candidates(autotune_module) if v != base_ubatch
+            ):
+                variant = replace(
+                    selected,
+                    name=f"{selected.name.split('|ub', 1)[0]}|ub{value}",
+                    ubatch=value,
+                )
+                probe = run_variant(
+                    binary,
+                    model_path,
+                    config,
+                    benchmark_request,
+                    variant,
+                    probe_tokens=probe_tokens,
+                )
                 probes.append(probe)
                 if not _eligible(probe, baseline):
                     continue
@@ -1072,7 +1234,14 @@ def install(autotune_module: Any) -> None:
 
             baseline_tps = float(getattr(decision_baseline, "predicted_tps", 0.0))
             selected_tps = float(getattr(final_probe, "predicted_tps", 0.0))
-            return autotune_module.AutotuneDecision(fingerprint=fingerprint, selected=selected, baseline_tps=baseline_tps, selected_tps=selected_tps, speedup=(selected_tps / baseline_tps if baseline_tps > 0 else 1.0), probes=tuple(probes))
+            return autotune_module.AutotuneDecision(
+                fingerprint=fingerprint,
+                selected=selected,
+                baseline_tps=baseline_tps,
+                selected_tps=selected_tps,
+                speedup=(selected_tps / baseline_tps if baseline_tps > 0 else 1.0),
+                probes=tuple(probes),
+            )
 
         benchmark._mmm_staged_runtime_tuning = True
         benchmark._mmm_model_eligible_speculation = True
@@ -1082,38 +1251,39 @@ def install(autotune_module: Any) -> None:
         autotune_module._benchmark = benchmark
 
         current_launch = autotune_module._launch_selected
+
         @wraps(current_launch)
-        def launch_selected(binary: str, model_path: str, config: Any, selected: ServerVariant) -> str:
+        def launch_selected(
+            binary: str, model_path: str, config: Any, selected: ServerVariant
+        ) -> str:
             explicit_parallel = _explicit_parallel()
-            resources = _runtime_resources()
             requested_slots = (
                 explicit_parallel
                 if explicit_parallel is not None
                 else max(1, int(getattr(selected, "parallel", 1) or 1))
             )
-            if explicit_parallel is None:
-                gpu_bytes = resources.gpu_total_bytes or resources.gpu_free_bytes
-                if gpu_bytes:
-                    model_bytes = _model_size(model_path) or int(6.14 * _MIB * 1024)
-                    available_kv = max(0, int(gpu_bytes * 0.98) - int(model_bytes * 1.02) - 400 * _MIB)
-                    kv_per_slot = _per_request_context(config) * _kv_bytes_per_token()
-                    if kv_per_slot > 0:
-                        calc_slots = max(1, int(available_kv // kv_per_slot))
-                        requested_slots = max(requested_slots, calc_slots)
+            if requested_slots > _MAX_PARALLEL:
+                raise RuntimeError(
+                    f"llama-server parallel slots {requested_slots} exceeds supported maximum {_MAX_PARALLEL}"
+                )
             exact_parallel = explicit_parallel is not None
-            attempts: list[int] = []
-            for s in range(requested_slots, 0, -1):
-                if exact_parallel and s != requested_slots:
-                    continue
-                attempts.append(s)
-            if not attempts:
-                attempts = [1]
+            if exact_parallel:
+                attempts = [requested_slots]
+            else:
+                attempts = [requested_slots]
+                attempts.extend(
+                    value
+                    for value in (8, 4, 2, 1)
+                    if value < requested_slots and value not in attempts
+                )
 
             failures: list[str] = []
             active = selected
             url = ""
             for slots in attempts:
-                root_name = str(getattr(selected, "name", "baseline")).split("|p", 1)[0]
+                root_name = str(getattr(selected, "name", "baseline")).split(
+                    "|p", 1
+                )[0]
                 active = replace(
                     selected,
                     name=root_name if slots == 1 else f"{root_name}|p{slots}",
@@ -1160,6 +1330,7 @@ def install(autotune_module: Any) -> None:
                 and os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1").strip().lower()
                 not in {"0", "false", "no", "off"}
             )
+            resources = _runtime_resources()
             receipt = {
                 "schema_version": "mmm/llama-runtime-receipt-v1",
                 "performance_mode": _performance_mode(),
@@ -1181,7 +1352,9 @@ def install(autotune_module: Any) -> None:
                 _selection_inputs(config)
             )
             receipt["selection_sha256"] = _json_fingerprint(receipt)
-            encoded_receipt = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            encoded_receipt = json.dumps(
+                receipt, sort_keys=True, separators=(",", ":")
+            )
             os.environ["MMM_LLAMA_RUNTIME_RECEIPT"] = encoded_receipt
             autotune_module._MMM_LLAMA_RUNTIME_RECEIPT = receipt
             os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(slots)
@@ -1198,6 +1371,7 @@ def install(autotune_module: Any) -> None:
                 flush=True,
             )
             return url
+
         launch_selected._mmm_exports_active_runtime = True
         autotune_module._launch_selected = launch_selected
 
@@ -1240,9 +1414,6 @@ def install(autotune_module: Any) -> None:
                 if receipt_sha == expected:
                     return current_ensure(config, request)
 
-                # The lifecycle lock keeps this exact owner snapshot current through
-                # shutdown and replacement. A second stale observer waits, then sees
-                # and reuses the healthy matching replacement instead of killing it.
                 if owner_snapshot != (
                     getattr(autotune_module, "_MANAGED_PROCESS", None),
                     getattr(autotune_module, "_MANAGED_KEY", None),
@@ -1251,12 +1422,13 @@ def install(autotune_module: Any) -> None:
                 ):
                     return current_ensure(config, request)
                 autotune_module._shutdown_managed_server()
-                if os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/") == managed_url:
+                if (
+                    os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
+                    == managed_url
+                ):
                     os.environ.pop("LLAMA_SERVER_URL", None)
                 os.environ.pop("MMM_LLAMA_RUNTIME_RECEIPT", None)
                 autotune_module._MMM_LLAMA_RUNTIME_RECEIPT = None
-                # Re-enter the final composed ensure chain after shutdown so outer
-                # Qwen/KV/kernel policies also participate in the new cold selection.
                 return autotune_module.ensure_tuned_server(config, request)
 
         ensure_current_runtime._mmm_refreshes_stale_runtime_selection = True
