@@ -42,6 +42,7 @@ def finalize_runtime() -> None:
         from .context_budget_preflight import run_context_budget_preflight
         from .forced_tool_execution_contract import install as install_forced_tool_execution
         from .generation_concurrency_safety import install as install_generation_safety
+        from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_length_resilience import install as install_llama_length_resilience
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_server_response_resilience import (
@@ -108,13 +109,18 @@ def finalize_runtime() -> None:
         # Parse stale but host-authorized tool names against the complete authorized
         # surface; execution remains restricted by the per-turn causal visibility gate.
         install_tool_validation_surface()
+        # llama.cpp reports both output-cap exhaustion and context pressure as
+        # finish_reason='length'. Classify them before resilience wrappers are bound so
+        # only genuine context pressure triggers observation compaction/retry.
+        install_llama_finish_reason(llama_cpp_adapter)
         # A transient local inference failure occurs before any semantic turn reaches
         # ModelRouter, so exactly one transport retry cannot duplicate a tool action.
         # Install this inside length recovery: 5xx/connection recovery happens first,
         # while genuine finish_reason=length still follows the compaction path below.
         install_llama_server_response_resilience(llama_cpp_adapter)
-        # A remaining finish_reason='length' is context pressure. Recover once by
-        # compacting observations while preserving the authoritative tool/page bound.
+        # A remaining context-pressure length stop recovers once by compacting tool
+        # observations. Output-cap exhaustion is deliberately not retried here; the
+        # bounded source-edit ACI splits that work across ordinary agent turns.
         install_llama_length_resilience(llama_cpp_adapter)
         # Bootstrap's integrity stage runs before these late finalization wrappers are
         # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
