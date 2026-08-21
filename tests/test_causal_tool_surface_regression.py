@@ -8,7 +8,12 @@ from minecraft_mod_ai.causal_frontier_adapter import (
     remember_authorized_tools,
 )
 from minecraft_mod_ai.causal_tool_frontier_contract import _FrontierRuntimeProxy
-from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse
+from minecraft_mod_ai.model_adapters import (
+    GenerationRequest,
+    GenerationResponse,
+    ModelConfigurationError,
+    ToolCall,
+)
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.small_model_hybrid_search_contract import _modes
 from minecraft_mod_ai.tool_validation_surface_contract import install as install_tool_validation_surface
@@ -135,6 +140,50 @@ def test_live_causal_adapter_uses_frozen_authorized_surface() -> None:
     assert [
         item["function"]["name"] for item in sent.tool_validation_schemas
     ] == ["apply_source_edit"]
+
+
+def test_live_causal_adapter_stops_repeated_stale_authorized_call() -> None:
+    visible = _schema("inspect_github_repository", {"repository": {"type": "string"}})
+    edit = _schema(
+        "apply_source_edit",
+        {
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+    )
+    stale_call = ToolCall(
+        id="stale-edit",
+        name="apply_source_edit",
+        arguments={"path": "src/Main.java", "content": "class Main {}"},
+        raw_arguments='{"path":"src/Main.java","content":"class Main {}"}',
+    )
+
+    class Inner:
+        def generate_turn(self, request):
+            return GenerationResponse(tool_calls=(stale_call,))
+
+    adapter = CausalFrontierAdapter(
+        Inner(),
+        stage="generation",
+        role="coder",
+        require_fresh_evidence=False,
+        authorized_surface=(visible, edit),
+    )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "repair source"},),
+        tools=(visible, edit),
+        tool_choice={
+            "type": "function",
+            "function": {"name": "inspect_github_repository"},
+        },
+    )
+
+    assert adapter.generate_turn(request).tool_calls == (stale_call,)
+    with pytest.raises(
+        ModelConfigurationError,
+        match="repeated stale authorized tool calls without causal frontier progress",
+    ):
+        adapter.generate_turn(request)
 
 
 def test_generic_code_rag_escalates_from_lexical_only() -> None:
