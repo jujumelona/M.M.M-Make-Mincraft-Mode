@@ -108,49 +108,37 @@ def audit_internal_imports() -> list[str]:
     return errors
 
 
-def _marker_owner_names(tree: ast.AST) -> set[str]:
-    """Return local wrapper names that are explicitly assigned an MMM marker."""
-
-    owners: set[str] = set()
-    for node in ast.walk(tree):
-        targets: list[ast.AST] = []
-        if isinstance(node, ast.Assign):
-            targets.extend(node.targets)
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
-            targets.append(node.target)
-        for target in targets:
-            if (
-                isinstance(target, ast.Attribute)
-                and target.attr.startswith("_mmm_")
-                and isinstance(target.value, ast.Name)
-            ):
-                owners.add(target.value.id)
-    return owners
+def _getattr_name(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    if not isinstance(node.func, ast.Name) or node.func.id != "getattr":
+        return None
+    if len(node.args) < 2:
+        return None
+    name = node.args[1]
+    return name.value if isinstance(name, ast.Constant) and isinstance(name.value, str) else None
 
 
-def _is_default_wraps(decorator: ast.AST) -> bool:
-    if not isinstance(decorator, ast.Call):
-        return False
-    function = decorator.func
-    if isinstance(function, ast.Name):
-        is_wraps = function.id == "wraps"
-    elif isinstance(function, ast.Attribute):
-        is_wraps = function.attr == "wraps"
-    else:
-        is_wraps = False
-    if not is_wraps:
-        return False
-    return not any(keyword.arg == "updated" for keyword in decorator.keywords)
+def _calls_named(node: ast.AST, name: str) -> bool:
+    for item in ast.walk(node):
+        if not isinstance(item, ast.Call):
+            continue
+        fn = item.func
+        if isinstance(fn, ast.Name) and fn.id == name:
+            return True
+        if isinstance(fn, ast.Attribute) and fn.attr == name:
+            return True
+    return False
 
 
-def audit_contract_wrapper_metadata() -> list[str]:
-    """Reject wrappers that both own a runtime marker and copy inner markers.
+def audit_marker_controlled_unwraps() -> list[str]:
+    """Reject legacy marker tests that are coupled to ``__wrapped__`` selection.
 
-    The default functools.wraps merges ``wrapped.__dict__`` into the outer wrapper.
-    MMM stores contract ownership in ``_mmm_*`` attributes, so a marker-owning wrapper
-    must use the shared marker-safe contract wrapper (or explicitly disable
-    ``updated``). Plain helper decorators in the same file are not contract owners and
-    are intentionally ignored.
+    Default ``functools.wraps`` copies function ``__dict__`` metadata, so a direct
+    ``getattr(current, '_mmm_*')`` cannot prove that ``current`` owns that contract.
+    It is safe for simple "installed somewhere" idempotence, but unsafe when the same
+    function chooses a ``__wrapped__`` layer. Exact-layer decisions must use
+    ``owns_contract_marker``; installation checks can use ``has_contract_marker``.
     """
 
     errors: list[str] = []
@@ -159,21 +147,28 @@ def audit_contract_wrapper_metadata() -> list[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
-        marker_owners = _marker_owner_names(tree)
-        if not marker_owners:
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if node.name not in marker_owners:
-                continue
-            for decorator in node.decorator_list:
-                if _is_default_wraps(decorator):
-                    errors.append(
-                        f"UNSAFE_CONTRACT_WRAPS {path.relative_to(ROOT)}:"
-                        f"{decorator.lineno}: {node.name} owns _mmm_* metadata; "
-                        "use contract_wraps or wraps(..., updated=())"
-                    )
+            marker_lookup = False
+            unwrap_lookup = False
+            for node in ast.walk(function):
+                name = _getattr_name(node)
+                if isinstance(name, str) and name.startswith("_mmm_"):
+                    marker_lookup = True
+                if name == "__wrapped__":
+                    unwrap_lookup = True
+                if isinstance(node, ast.Attribute) and node.attr == "__wrapped__":
+                    unwrap_lookup = True
+            if (
+                marker_lookup
+                and unwrap_lookup
+                and not _calls_named(function, "owns_contract_marker")
+            ):
+                errors.append(
+                    f"UNSAFE_MARKER_CONTROLLED_UNWRAP {path.relative_to(ROOT)}:"
+                    f"{function.lineno}: {function.name} must use owns_contract_marker"
+                )
     return errors
 
 
@@ -272,7 +267,7 @@ def audit_workflow_definitions() -> list[str]:
 def main() -> int:
     errors = (
         audit_internal_imports()
-        + audit_contract_wrapper_metadata()
+        + audit_marker_controlled_unwraps()
         + audit_bootstrap_owner_modules()
         + audit_tombstoned_owner_modules()
         + audit_workflow_definitions()
