@@ -22,8 +22,11 @@ def _unit(path: str, package: str, imports=(), types=()):
 def test_repocoder_has_no_legacy_fixed_round_override(monkeypatch) -> None:
     assert not hasattr(reuse, "_round_budget")
     assert not hasattr(reuse, "_bounded_evolution_state_budget")
+    assert not hasattr(custom_search, "_evolution_state_budget")
     monkeypatch.setenv("MMM_CODE_RESEARCH_EVOLUTION_STATES", "8")
-    assert custom_search._evolution_state_budget() == 8
+    # Retired fixed-round environment knobs must not silently recreate a bounded
+    # control path after the search contract moved to progress/fixed-point stopping.
+    assert not hasattr(custom_search, "_evolution_state_budget")
 
 
 def test_dependency_query_prioritizes_direct_reverse_and_build_neighbors() -> None:
