@@ -96,9 +96,10 @@ def test_router_filters_manifest_and_invocation_to_role_server_scope(tmp_path, m
     assert denied["attempts"] == []
 
 
-def test_bridge_schema_binding_isolated_by_server_scope_and_live_refreshed(monkeypatch) -> None:
+def test_bridge_schema_binding_isolated_by_server_scope_and_owner_reused(monkeypatch) -> None:
     bridge = ExternalAgentBridge()
-    seen: list[frozenset[str]] = []
+    selected: list[frozenset[str]] = []
+    revalidated: list[str] = []
 
     class ScopeRegistry:
         def routes(self, capability, **kwargs):
@@ -141,7 +142,7 @@ def test_bridge_schema_binding_isolated_by_server_scope_and_live_refreshed(monke
 
     async def fake_describe(stage, capability, target, max_access, allowed_server_ids):
         scope = frozenset(allowed_server_ids or ())
-        seen.append(scope)
+        selected.append(scope)
         server = sorted(scope)[0]
         return {
             "schema_version": "fixture/external-mcp-schema-v1",
@@ -162,7 +163,22 @@ def test_bridge_schema_binding_isolated_by_server_scope_and_live_refreshed(monke
             "status": "PASS",
         }
 
+    async def fake_provider_schema(entry, *, tool, env, url, timeout_seconds):
+        revalidated.append(tool)
+        return {
+            "description": "fixture lookup",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        }
+
     monkeypatch.setattr(bridge, "_describe_async", fake_describe)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.external_agent_bridge._provider_schema",
+        fake_provider_schema,
+    )
     one = bridge.call(
         "generation",
         SCHEMA_TOOL,
@@ -184,13 +200,10 @@ def test_bridge_schema_binding_isolated_by_server_scope_and_live_refreshed(monke
     assert one["server"] == "provider-a"
     assert two["server"] == "provider-b"
     assert again == one
-    # Explicit schema discovery is intentionally live. Scope partitioning prevents
-    # cross-role reuse; repeating the same scope still refreshes provider ownership.
-    assert seen == [
-        frozenset({"provider-a"}),
-        frozenset({"provider-b"}),
-        frozenset({"provider-a"}),
-    ]
+    # Different authorization scopes select independently. Repeating the same scope
+    # must retain the already-reviewed owner and only live-revalidate its schema.
+    assert selected == [frozenset({"provider-a"}), frozenset({"provider-b"})]
+    assert revalidated == ["provider-a-lookup"]
 
 
 def test_agent_runtime_propagates_exact_external_server_scope(tmp_path, monkeypatch) -> None:
