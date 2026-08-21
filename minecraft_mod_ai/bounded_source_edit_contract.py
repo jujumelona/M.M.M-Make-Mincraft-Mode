@@ -13,6 +13,7 @@ replacement. This contract changes only the model-facing action representation.
 """
 
 import hashlib
+from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -22,6 +23,14 @@ _MAX_OLD_TEXT_BYTES = 4 * 1024
 _MAX_NEW_TEXT_BYTES = 8 * 1024
 _MAX_ACTION_TEXT_BYTES = 20 * 1024
 _MARKER = "_mmm_bounded_source_edit_aci_v1"
+_SCHEMA_MARKER = "_mmm_bounded_source_edit_schema_projection_v1"
+_MODEL_DESCRIPTION = (
+    "Apply a small exact-span source/resource edit. Retrieve or localize the current "
+    "target first; existing files use unique old_text -> new_text replacements. Do not "
+    "reproduce complete existing files. The host derives the bound project root, exact "
+    "SHA-256 precondition and transactional patch. If more work remains, observe this "
+    "receipt and continue with another bounded edit turn."
+)
 
 BOUNDED_SOURCE_EDIT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -244,7 +253,7 @@ def materialize_bounded_source_edit(
 
 
 def install(runtime_module: Any) -> None:
-    """Install the bounded ACI without adding another callable wrapper layer."""
+    """Install one explicit model-facing ACI over the canonical host patch tool."""
 
     if bool(getattr(runtime_module, _MARKER, False)):
         return
@@ -255,6 +264,29 @@ def install(runtime_module: Any) -> None:
         return materialize_bounded_source_edit(runtime_module, workspace_root, payload)
 
     runtime_module._materialize_model_source_patch = materialize
+
+    current_schemas = runtime_module.AgentToolRuntime.tool_schemas
+    if not bool(getattr(current_schemas, _SCHEMA_MARKER, False)):
+        @wraps(current_schemas)
+        def tool_schemas(self: Any, stage: str):
+            rows = current_schemas(self, stage)
+            projected: list[dict[str, Any]] = []
+            for row in rows:
+                copied = dict(row)
+                function = copied.get("function")
+                if not isinstance(function, Mapping) or str(function.get("name", "")) != "apply_source_patch":
+                    projected.append(copied)
+                    continue
+                patched_function = dict(function)
+                patched_function["description"] = _MODEL_DESCRIPTION
+                patched_function["parameters"] = BOUNDED_SOURCE_EDIT_SCHEMA
+                copied["function"] = patched_function
+                projected.append(copied)
+            return tuple(projected)
+
+        setattr(tool_schemas, _SCHEMA_MARKER, True)
+        runtime_module.AgentToolRuntime.tool_schemas = tool_schemas
+
     setattr(runtime_module, _MARKER, True)
 
 
