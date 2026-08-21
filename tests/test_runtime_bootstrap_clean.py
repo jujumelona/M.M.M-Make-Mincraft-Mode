@@ -5,7 +5,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'minecraft_mod_ai'
 _BOOTSTRAP = PACKAGE / 'runtime_bootstrap.py'
 _LLAMA_PIPELINE = PACKAGE / 'llama_tuning_pipeline.py'
-_APPROVED_COMPOSERS = {_BOOTSTRAP, _LLAMA_PIPELINE}
+_FINALIZATION = PACKAGE / 'runtime_finalization.py'
+_APPROVED_COMPOSERS = {_BOOTSTRAP, _LLAMA_PIPELINE, _FINALIZATION}
 
 def _text(name: str) -> str:
     return (PACKAGE / name).read_text(encoding='utf-8')

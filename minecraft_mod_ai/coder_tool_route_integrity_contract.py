@@ -370,6 +370,7 @@ def _run_with_dynamic_frontier(
     current: Any,
     router: Any,
     *,
+    config: Any,
     adapter: Any,
     request: Any,
     runtime: Any,
@@ -414,6 +415,7 @@ def _run_with_dynamic_frontier(
     try:
         return current(
             router,
+            config=config,
             adapter=wrapped_adapter,
             request=host_request,
             runtime=_FrontierRuntimeProxy(runtime, execution_gate),
@@ -480,6 +482,7 @@ def install(
     def generate_with_route_integrity(
         self: Any,
         *,
+        config: Any,
         adapter: Any,
         request: Any,
         runtime: Any,
@@ -489,6 +492,7 @@ def install(
         return _run_with_dynamic_frontier(
             current,
             self,
+            config=config,
             adapter=adapter,
             request=request,
             runtime=runtime,
