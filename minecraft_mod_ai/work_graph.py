@@ -252,9 +252,22 @@ class DurableWorkLedger:
     def fail(self, node_id: str, error: str, *, input_required: bool=False) -> dict[str, Any]:
         state = WorkState.INPUT_REQUIRED if input_required else WorkState.FAILED
         with self._connect() as connection:
-            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ?\n                ', (state.value, error[:16384], time.time(), node_id))
+            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ? AND state != ?\n                ', (
+                    state.value,
+                    error[:16384],
+                    time.time(),
+                    node_id,
+                    WorkState.CANCELLED.value,
+                ))
             if cursor.rowcount == 0:
-                raise WorkGraphError(f'Unknown work node: {node_id}')
+                row = connection.execute(
+                    'SELECT state FROM tasks WHERE node_id = ?',
+                    (node_id,),
+                ).fetchone()
+                if row is None:
+                    raise WorkGraphError(f'Unknown work node: {node_id}')
+                if row[0] != WorkState.CANCELLED.value:
+                    raise WorkGraphError(f'Work node {node_id} changed while failing: {row[0]}')
             connection.commit()
         return self.task(node_id)
 
