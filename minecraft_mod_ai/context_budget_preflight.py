@@ -32,7 +32,7 @@ def run_context_budget_preflight() -> None:
     if (
         getattr(
             llama_server_hardware_policy._server_payload,
-            "_mmm_unbounded_llama_completion_v1",
+            "_mmm_unbounded_llama_completion_v2",
             False,
         )
         is not True
