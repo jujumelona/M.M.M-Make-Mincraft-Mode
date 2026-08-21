@@ -70,7 +70,7 @@ def test_freeform_text_keeps_model_default_reasoning() -> None:
     assert "chat_template_kwargs" not in payload
 
 
-def test_native_tool_transport_is_forwarded_by_canonical_payload_builder() -> None:
+def test_native_tool_transport_keeps_server_parser_disabled() -> None:
     tool = {
         "type": "function",
         "function": {
@@ -86,7 +86,7 @@ def test_native_tool_transport_is_forwarded_by_canonical_payload_builder() -> No
     payload = llama_server_hardware_policy._server_payload(_adapter(), request)
 
     assert payload["tools"] == [tool]
-    assert payload["tool_choice"] == "auto"
+    assert payload["tool_choice"] == "none"
     assert payload["parallel_tool_calls"] is True
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
