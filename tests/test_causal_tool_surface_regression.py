@@ -186,7 +186,11 @@ def test_live_causal_adapter_stops_repeated_stale_authorized_call() -> None:
         adapter.generate_turn(request)
 
 
-def test_generic_code_rag_escalates_from_lexical_only() -> None:
+def test_generic_code_rag_dense_escalation_is_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+    assert _modes("semantic", False, False) == ((False, False, "lexical"),)
+
+    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
     modes = _modes("semantic", False, False)
     assert modes[0] == (False, False, "lexical")
     assert modes[1] == (False, True, "lexical+rerank")
