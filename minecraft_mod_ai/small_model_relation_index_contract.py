@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from functools import wraps
 from pathlib import Path
 from threading import RLock
 from typing import Any, Sequence
 
+from .model_adapters.base import ModelBackendError, ModelConfigurationError
+from .runtime_contract_wrappers import contract_wraps, owns_contract_marker
 from .small_model_rag_relations import derive_relations
 
 _REUSE_LOCK = RLock()
@@ -153,16 +154,19 @@ def _existing_snapshot_result(
 def install(production_tools_module: Any) -> None:
     cls = production_tools_module.ProductionToolService
     current = cls.index_project_rag
-    if getattr(current, "_mmm_dependency_relations", False):
+    if owns_contract_marker(current, "_mmm_dependency_relations"):
         return
-    # small_model_max_agent wraps the parallel-safe canonical indexer and forces
-    # semantic=True for project-local repair indexes. Its __wrapped__ target is the
-    # already-reviewed parallel-safe lexical implementation, so this contract can
-    # deliberately bypass only that one expensive semantic override while retaining
-    # relation derivation, exact-snapshot reuse, and the underlying build lock.
-    fallback = getattr(current, "__wrapped__", None)
 
-    @wraps(current)
+    # The max-agent layer historically forced semantic=True for repair indexes. When
+    # that exact layer is immediately inside us, its __wrapped__ target is the
+    # reviewed parallel-safe canonical lexical indexer. Do not infer this ownership
+    # from inherited attributes: contract markers belong to one wrapper layer only.
+    semantic_forcer = owns_contract_marker(
+        current, "_mmm_small_model_semantic_repair_index"
+    )
+    lexical_owner = getattr(current, "__wrapped__", None) if semantic_forcer else None
+
+    @contract_wraps(current)
     def indexed(
         self: Any,
         roots: Sequence[str],
@@ -187,10 +191,10 @@ def install(production_tools_module: Any) -> None:
 
         # Caller intent wins. A normal repair index is lexical+graph and must not
         # silently instantiate the 0.6B CPU embedding model. Explicit semantic=True
-        # still goes through the full semantic owner unchanged.
-        if repair_like and not semantic and callable(fallback):
+        # still goes through the semantic owner unchanged.
+        if repair_like and not semantic and callable(lexical_owner):
             result = dict(
-                fallback(
+                lexical_owner(
                     self,
                     roots,
                     index_path=index_path,
@@ -211,11 +215,14 @@ def install(production_tools_module: Any) -> None:
                     semantic=semantic,
                 )
             )
-        except Exception:
-            if not callable(fallback) or not repair_like:
+        except (ModelBackendError, ModelConfigurationError):
+            # Model availability/configuration may degrade a repair index to lexical
+            # evidence. Programming, storage, metadata, and contract errors must not
+            # be hidden behind this fallback.
+            if not callable(lexical_owner) or not repair_like:
                 raise
             result = dict(
-                fallback(
+                lexical_owner(
                     self,
                     roots,
                     index_path=index_path,
@@ -229,11 +236,6 @@ def install(production_tools_module: Any) -> None:
 
     indexed._mmm_dependency_relations = True  # type: ignore[attr-defined]
     indexed._mmm_exact_snapshot_reuse = True  # type: ignore[attr-defined]
-    # @wraps copies marker attributes from the wrapped semantic-forcing function.
-    # Remove that inherited marker: this wrapper now owns the repair semantic policy
-    # and downstream efficiency layers must not try to unwrap it again.
-    indexed.__dict__.pop("_mmm_small_model_semantic_repair_index", None)
-    indexed.__wrapped__ = current  # type: ignore[attr-defined]
     cls.index_project_rag = indexed
 
 
