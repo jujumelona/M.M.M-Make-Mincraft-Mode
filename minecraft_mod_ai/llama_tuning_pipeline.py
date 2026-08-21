@@ -9,6 +9,8 @@ multiple installation.
 """
 
 import os
+import threading
+import time
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable
@@ -21,9 +23,63 @@ from .runtime_contract_composer import (
 )
 
 
-_TUNING_PIPELINE_VERSION = 34
+_TUNING_PIPELINE_VERSION = 35
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
 _RUNTIME_TYPE_OWNER_MARKER = "_mmm_runtime_tuning_type_owner"
+_AUTOTUNE_LIVENESS_MARKER = "_mmm_autotune_wall_clock_guard_v1"
+_AUTOTUNE_DEADLINE_LOCK = threading.RLock()
+_AUTOTUNE_DEADLINE: float | None = None
+
+
+def _bounded_seconds(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def _autotune_wall_seconds() -> float:
+    return _bounded_seconds(
+        "MMM_LLAMA_AUTOTUNE_MAX_SECONDS", 300.0, minimum=30.0, maximum=1800.0
+    )
+
+
+def _autotune_step_seconds() -> int:
+    return int(
+        _bounded_seconds(
+            "MMM_LLAMA_AUTOTUNE_STEP_TIMEOUT_SECONDS",
+            90.0,
+            minimum=10.0,
+            maximum=300.0,
+        )
+    )
+
+
+def _remaining_autotune_seconds() -> float | None:
+    with _AUTOTUNE_DEADLINE_LOCK:
+        deadline = _AUTOTUNE_DEADLINE
+    if deadline is None:
+        return None
+    return deadline - time.monotonic()
+
+
+def _require_autotune_budget() -> None:
+    remaining = _remaining_autotune_seconds()
+    if remaining is not None and remaining <= 0:
+        raise RuntimeError(
+            "llama-server autotune wall-clock budget exhausted; refusing another tuning step"
+        )
+
+
+def _restore_env(name: str, previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
 
 
 @dataclass(frozen=True)
@@ -136,6 +192,65 @@ class NativeLlamaTuningPipeline:
         setattr(profile_context, _PROFILE_CONTEXT_MARKER, True)
         self.autotune._base_args = profile_context
 
+    def _install_autotune_liveness_guard(self) -> None:
+        """Bound the complete native tuning search and every expensive probe step."""
+        current_benchmark = getattr(self.autotune, "_benchmark", None)
+        current_start_server = getattr(self.autotune, "_start_server", None)
+        current_probe_server = getattr(self.autotune, "_probe_server", None)
+        if not all(callable(value) for value in (current_benchmark, current_start_server, current_probe_server)):
+            raise RuntimeError("native llama autotune liveness guard requires benchmark/start/probe owners")
+        if getattr(current_benchmark, _AUTOTUNE_LIVENESS_MARKER, False):
+            return
+
+        @wraps(current_start_server)
+        def bounded_start_server(*args: Any, **kwargs: Any) -> Any:
+            _require_autotune_budget()
+            return current_start_server(*args, **kwargs)
+
+        @wraps(current_probe_server)
+        def bounded_probe_server(*args: Any, **kwargs: Any) -> Any:
+            _require_autotune_budget()
+            return current_probe_server(*args, **kwargs)
+
+        @wraps(current_benchmark)
+        def bounded_benchmark(*args: Any, **kwargs: Any) -> Any:
+            global _AUTOTUNE_DEADLINE
+            wall_seconds = _autotune_wall_seconds()
+            step_seconds = min(_autotune_step_seconds(), max(10, int(wall_seconds)))
+            previous_start_timeout = os.environ.get("MMM_LLAMA_SERVER_START_TIMEOUT")
+            previous_probe_timeout = os.environ.get("MMM_LLAMA_AUTOTUNE_REQUEST_TIMEOUT")
+            with _AUTOTUNE_DEADLINE_LOCK:
+                previous_deadline = _AUTOTUNE_DEADLINE
+                _AUTOTUNE_DEADLINE = time.monotonic() + wall_seconds
+            try:
+                current_start = int(previous_start_timeout) if previous_start_timeout else step_seconds
+            except ValueError:
+                current_start = step_seconds
+            try:
+                current_probe = int(previous_probe_timeout) if previous_probe_timeout else step_seconds
+            except ValueError:
+                current_probe = step_seconds
+            os.environ["MMM_LLAMA_SERVER_START_TIMEOUT"] = str(
+                max(1, min(step_seconds, current_start))
+            )
+            os.environ["MMM_LLAMA_AUTOTUNE_REQUEST_TIMEOUT"] = str(
+                max(1, min(step_seconds, current_probe))
+            )
+            try:
+                return current_benchmark(*args, **kwargs)
+            finally:
+                _restore_env("MMM_LLAMA_SERVER_START_TIMEOUT", previous_start_timeout)
+                _restore_env("MMM_LLAMA_AUTOTUNE_REQUEST_TIMEOUT", previous_probe_timeout)
+                with _AUTOTUNE_DEADLINE_LOCK:
+                    _AUTOTUNE_DEADLINE = previous_deadline
+
+        setattr(bounded_benchmark, _AUTOTUNE_LIVENESS_MARKER, True)
+        bounded_start_server._mmm_autotune_budget_guard = True
+        bounded_probe_server._mmm_autotune_budget_guard = True
+        self.autotune._start_server = bounded_start_server
+        self.autotune._probe_server = bounded_probe_server
+        self.autotune._benchmark = bounded_benchmark
+
     def stages(self) -> tuple[TuningStage, ...]:
         from . import agentic_optimization_contract, repair_engine
         from .llama_cache_reuse_efficiency_contract import install as install_cache_reuse
@@ -191,6 +306,10 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning._ubatch_candidates = original_ubatch_candidates
             install_vram_parallel(self.runtime_tuning)
 
+        def install_multimodal_stage() -> None:
+            install_multimodal(self.autotune, self.hardware_policy)
+            self._install_autotune_liveness_guard()
+
         return (
             TuningStage("runtime-types", self._install_runtime_type_ownership),
             TuningStage("hardware", install_hardware_stage),
@@ -210,10 +329,7 @@ class NativeLlamaTuningPipeline:
             TuningStage("decode-speed", install_decode_speed_stage),
             TuningStage("kernel-autotune", install_kernel_stage),
             TuningStage("qwen-transport", install_qwen_runtime_transport),
-            TuningStage(
-                "multimodal",
-                lambda: install_multimodal(self.autotune, self.hardware_policy),
-            ),
+            TuningStage("multimodal", install_multimodal_stage),
         )
 
     def _callable_boundaries(self):
