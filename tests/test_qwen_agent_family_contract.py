@@ -120,7 +120,8 @@ def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
 
     assert enabled["chat_template_kwargs"]["preserve_thinking"] is True
     assert enabled["temperature"] == 0.23
-    assert "chat_template_kwargs" not in disabled
+    assert disabled["chat_template_kwargs"] == {"enable_thinking": False}
+    assert disabled["reasoning_effort"] == "none"
 
 
 def test_registry_reasoning_effort_is_forwarded_without_version_branch() -> None:
@@ -139,7 +140,7 @@ def test_registry_reasoning_effort_is_forwarded_without_version_branch() -> None
 
 def test_family_wrapper_preserves_existing_payload_contract_markers() -> None:
     assert getattr(hardware._server_payload, "_mmm_active_cache_reuse", False)
-    assert getattr(hardware._server_payload, "_mmm_qwen35_request_policy_v2", False)
+    assert not getattr(hardware._server_payload, "_mmm_qwen35_request_policy_v2", False)
     assert getattr(hardware._server_payload, "_mmm_qwen_family_agent_policy", False)
 
 
