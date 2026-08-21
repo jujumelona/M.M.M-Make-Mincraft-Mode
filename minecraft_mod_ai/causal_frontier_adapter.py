@@ -335,12 +335,16 @@ class CausalFrontierAdapter:
         # coder turn's security-filtered authorization or query preference.
         self.authorized_surface = tuple(authorized_surface)
         self.preference = dict(preference or {})
+        self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
     def _publish_frontier(self, names: Sequence[str]) -> None:
         normalized = tuple(str(name) for name in names)
         _CURRENT_FRONTIER_NAMES.set(normalized)
         if self.execution_gate is not None:
             self.execution_gate.set_visible(normalized)
+
+    def _reset_stale_guard(self) -> None:
+        self._last_stale_frontier = None
 
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
@@ -351,11 +355,13 @@ class CausalFrontierAdapter:
         # round; never resurrect the broader authorization ContextVar on that turn.
         if not request.tools and request.tool_choice is None:
             self._publish_frontier(())
+            self._reset_stale_guard()
             return self.inner.generate_turn(request)
 
         candidates = self.authorized_surface or authorized_tools(request.tools)
         if not candidates:
             self._publish_frontier(())
+            self._reset_stale_guard()
             return self.inner.generate_turn(request)
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         forced_name = _forced_tool_name(request.tool_choice)
@@ -396,7 +402,8 @@ class CausalFrontierAdapter:
             selected = tuple(by_name[name] for name in names if name in by_name)
             tool_choice = "auto" if selected else None
             parallel_tool_calls = True if selected else False
-        self._publish_frontier(tuple(_name(schema) for schema in selected))
+        selected_names = tuple(_name(schema) for schema in selected)
+        self._publish_frontier(selected_names)
 
         # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
         # owned by upstream contracts (including future additions) while changing only
@@ -425,7 +432,29 @@ class CausalFrontierAdapter:
             f"tools={','.join(names)}",
             flush=True,
         )
-        return self.inner.generate_turn(rebuilt)
+        turn = self.inner.generate_turn(rebuilt)
+        stale_names = tuple(
+            sorted(
+                {
+                    str(call.name)
+                    for call in getattr(turn, "tool_calls", ())
+                    if str(call.name) in by_name and str(call.name) not in selected_names
+                }
+            )
+        )
+        if not stale_names:
+            self._reset_stale_guard()
+            return turn
+
+        fingerprint = (selected_names, stale_names)
+        if fingerprint == self._last_stale_frontier:
+            raise ModelConfigurationError(
+                "Model repeated stale authorized tool calls without causal frontier "
+                f"progress: stale={','.join(stale_names)} "
+                f"visible={','.join(selected_names)}"
+            )
+        self._last_stale_frontier = fingerprint
+        return turn
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
