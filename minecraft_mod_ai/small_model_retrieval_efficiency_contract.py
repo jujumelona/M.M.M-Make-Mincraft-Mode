@@ -4,6 +4,8 @@ import re
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
+from .custom_generation_research import _sanitized_messages
+
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:/-]{1,127}")
 _ANCHOR_WORDS = frozenset(
     {"api", "contract", "dependency", "implements", "interface", "register", "required", "schema"}
@@ -179,7 +181,7 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
             repair_failure and not _needs_retrieval_repair(messages)
         )
         if use_current_evidence_only:
-            sanitized = custom_generation_search_module._sanitized_messages(
+            sanitized = _sanitized_messages(
                 messages,
                 minecraft_version=self._minecraft_version,
                 loader=self._loader,
