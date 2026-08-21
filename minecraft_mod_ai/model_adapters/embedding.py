@@ -65,10 +65,15 @@ class EmbeddingAdapter:
             file=sys.stderr,
             flush=True,
         )
-        backend = _EmbeddingBackend(SentenceTransformer(model_id, **options))
+        model = SentenceTransformer(model_id, **options)
+        configured_context = max(1, int(self.config.max_context))
+        current_context = int(getattr(model, "max_seq_length", configured_context) or configured_context)
+        model.max_seq_length = min(current_context, configured_context)
+        backend = _EmbeddingBackend(model)
         print(
             "retrieval embedding: model load done",
             f"elapsed={time.monotonic() - started:.1f}s",
+            f"max_seq_length={model.max_seq_length}",
             file=sys.stderr,
             flush=True,
         )
