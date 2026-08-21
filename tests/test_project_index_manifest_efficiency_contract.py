@@ -70,7 +70,7 @@ def test_relevance_order_is_cached_until_index_changes(tmp_path: Path) -> None:
     assert getattr(ProjectIndex._ranked_files, "_mmm_cached_relevance_order", False)
 
     first = index._ranked_files(query_tokens={"generated"}, explicit=set())
-    cache = getattr(index, "_mmm_ranked_files_cache")
+    cache = index._ranked_files_cache
     assert len(cache) == 1
     second = index._ranked_files(query_tokens={"generated"}, explicit=set())
     assert second == first
@@ -82,11 +82,11 @@ def test_relevance_order_is_cached_until_index_changes(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     index.update_files((changed,))
-    assert not hasattr(index, "_mmm_ranked_files_cache")
+    assert index._ranked_files_cache == {}
 
     refreshed = index._ranked_files(query_tokens={"generated"}, explicit=set())
     assert refreshed
-    assert len(getattr(index, "_mmm_ranked_files_cache")) == 1
+    assert len(index._ranked_files_cache) == 1
 
 
 def test_same_process_exact_snapshot_is_zero_write_fast_path(
