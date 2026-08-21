@@ -11,9 +11,6 @@ ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "minecraft_mod_ai"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# These owners were intentionally retired after their responsibility moved elsewhere.
-# Recreating them would reintroduce the exact split-ownership/stale-import failures that
-# this audit exists to prevent.
 TOMBSTONED_OWNER_MODULES = (
     "minecraft_mod_ai/colab_mtp_server.py",
     "minecraft_mod_ai/execution_efficiency_contract.py",
@@ -22,8 +19,6 @@ TOMBSTONED_OWNER_MODULES = (
     "minecraft_mod_ai/scheduler_connection_reuse_contract.py",
 )
 
-# Direct-main development must not use self-deleting patch workflows. They race with
-# normal commits and, when malformed, can create a failure on every subsequent push.
 _TRANSIENT_WORKFLOW_MARKERS = (
     "one-time",
     "one_time",
@@ -87,8 +82,6 @@ def audit_internal_imports() -> list[str]:
                     f"{'.'.join(target)}"
                 )
                 continue
-            # `from . import foo` imports a sibling module in runtime bootstrap-style
-            # composition. Check aliases that clearly correspond to a live module.
             if node.level and node.module is None:
                 package = _current_package(path)
                 up = node.level - 1
@@ -97,8 +90,6 @@ def audit_internal_imports() -> list[str]:
                     candidate = [*base, alias.name]
                     candidate_file = PKG.joinpath(*candidate[1:]).with_suffix(".py")
                     candidate_pkg = PKG.joinpath(*candidate[1:], "__init__.py")
-                    # Only flag module-shaped names. Uppercase/public attributes are not
-                    # interpreted as sibling modules.
                     if alias.name.islower() and "_" in alias.name:
                         if not candidate_file.is_file() and not candidate_pkg.is_file():
                             errors.append(
@@ -119,8 +110,22 @@ def _getattr_name(node: ast.AST) -> str | None:
     return name.value if isinstance(name, ast.Constant) and isinstance(name.value, str) else None
 
 
-def _calls_named(node: ast.AST, name: str) -> bool:
-    for item in ast.walk(node):
+def _local_function_nodes(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
+    """Walk one function body without attributing nested functions to its owner."""
+
+    nodes: list[ast.AST] = []
+    stack: list[ast.AST] = list(reversed(function.body))
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        stack.extend(reversed(list(ast.iter_child_nodes(node))))
+    return nodes
+
+
+def _nodes_call_named(nodes: list[ast.AST], name: str) -> bool:
+    for item in nodes:
         if not isinstance(item, ast.Call):
             continue
         fn = item.func
@@ -132,15 +137,13 @@ def _calls_named(node: ast.AST, name: str) -> bool:
 
 
 def audit_marker_controlled_unwraps() -> list[str]:
-    """Reject legacy marker tests that are coupled to ``__wrapped__`` selection.
+    """Reject inherited marker tests that can choose the wrong wrapped layer.
 
-    Default ``functools.wraps`` copies function ``__dict__`` metadata, so a direct
-    ``getattr(current, '_mmm_*')`` cannot prove that ``current`` owns that contract.
-    It is safe for simple "installed somewhere" idempotence, but unsafe when the same
-    function reads a ``__wrapped__`` layer. Assigning ``wrapper.__wrapped__ = current``
-    is metadata construction and is intentionally not considered an unwrap read.
-    Exact-layer decisions must use ``owns_contract_marker``; installation checks can
-    use ``has_contract_marker``.
+    Default ``functools.wraps`` copies function ``__dict__`` metadata, so direct
+    ``getattr(current, '_mmm_*')`` cannot establish exact ownership. Simple
+    installation/idempotence checks may still use inherited visibility, but any
+    function that also *reads* ``__wrapped__`` must make ownership explicit through
+    ``owns_contract_marker``. Nested wrapper definitions are audited independently.
     """
 
     errors: list[str] = []
@@ -152,9 +155,10 @@ def audit_marker_controlled_unwraps() -> list[str]:
         for function in ast.walk(tree):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            nodes = _local_function_nodes(function)
             marker_lookup = False
             unwrap_lookup = False
-            for node in ast.walk(function):
+            for node in nodes:
                 name = _getattr_name(node)
                 if isinstance(name, str) and name.startswith("_mmm_"):
                     marker_lookup = True
@@ -169,7 +173,7 @@ def audit_marker_controlled_unwraps() -> list[str]:
             if (
                 marker_lookup
                 and unwrap_lookup
-                and not _calls_named(function, "owns_contract_marker")
+                and not _nodes_call_named(nodes, "owns_contract_marker")
             ):
                 errors.append(
                     f"UNSAFE_MARKER_CONTROLLED_UNWRAP {path.relative_to(ROOT)}:"
@@ -197,9 +201,7 @@ def audit_bootstrap_owner_modules() -> list[str]:
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id.startswith("install_"):
                 called_installers[node.func.id] += 1
-    missing_calls = sorted(
-        name for name in installer_aliases if called_installers[name] == 0
-    )
+    missing_calls = sorted(name for name in installer_aliases if called_installers[name] == 0)
     if missing_calls:
         errors.append("BOOTSTRAP_IMPORTED_NOT_CALLED " + ",".join(missing_calls))
     duplicate_calls = sorted(
@@ -246,7 +248,6 @@ def audit_workflow_definitions() -> list[str]:
         normalized_name = path.stem.casefold()
         if any(marker in normalized_name for marker in _TRANSIENT_WORKFLOW_MARKERS):
             errors.append(f"TRANSIENT_WORKFLOW_FORBIDDEN {relative}")
-
         try:
             node = yaml.compose(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as exc:
@@ -256,11 +257,9 @@ def audit_workflow_definitions() -> list[str]:
                 location = f":{mark.line + 1}:{mark.column + 1}"
             errors.append(f"WORKFLOW_YAML_INVALID {relative}{location}: {exc}")
             continue
-
         if node is None or not isinstance(node, yaml.MappingNode):
             errors.append(f"WORKFLOW_ROOT_NOT_MAPPING {relative}")
             continue
-
         top = _top_level_mapping(node)
         if "on" not in top:
             errors.append(f"WORKFLOW_MISSING_ON {relative}")
