@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import os
 import sys
 import threading
 import time
@@ -9,6 +7,11 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
+from ..model_runtime_performance import (
+    _retrieval_cache_enabled as _cache_enabled,
+    _retrieval_result_cache_limit as _result_cache_limit,
+    _text_digest,
+)
 from .base import AdapterConfig, ModelBackendError, require_package
 
 
@@ -22,28 +25,6 @@ _BACKEND_CACHE_LOCK = threading.RLock()
 _BACKEND_CACHE: dict[tuple[str, str, str], _EmbeddingBackend] = {}
 _VECTOR_CACHE_LOCK = threading.RLock()
 _VECTOR_CACHE: OrderedDict[tuple[str, str, str, int, str], tuple[float, ...]] = OrderedDict()
-
-
-def _cache_enabled() -> bool:
-    raw = os.environ.get("MMM_CPU_RETRIEVAL_CACHE", "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
-
-
-def _result_cache_limit() -> int:
-    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "1024").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = 1024
-    return max(1, min(16384, value))
-
-
-def _text_digest(text: str) -> str:
-    encoded = text.encode("utf-8")
-    digest = hashlib.sha256()
-    digest.update(len(encoded).to_bytes(8, "big"))
-    digest.update(encoded)
-    return digest.hexdigest()
 
 
 class EmbeddingAdapter:
