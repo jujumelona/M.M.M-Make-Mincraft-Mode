@@ -9,6 +9,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .runtime_contract_wrappers import owns_contract_marker
 
 _DECISION_STORE_SCHEMA = "mmm/llama-server-autotune-store-v1"
 _DECISION_STORE_LIMIT = 32
@@ -161,7 +162,7 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         return
 
     probe = autotune_module._probe_server
-    if getattr(probe, "_mmm_correctness_sentinel", False):
+    if owns_contract_marker(probe, "_mmm_correctness_sentinel"):
         underlying = getattr(probe, "__wrapped__", None)
         if underlying is not None:
             autotune_module._probe_server = underlying
