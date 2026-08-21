@@ -197,6 +197,100 @@ def _install_structural_repair_bypass(custom_generation_search_module: Any) -> N
     cls.generate_text = generate_text
 
 
+def _retrieval_receipt_is_strong(value: Any, *, threshold: float = 0.65) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    receipt = value.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return False
+    try:
+        count = int(receipt.get("result_count", 0) or 0)
+        coverage = float(receipt.get("coverage_score", 0.0) or 0.0)
+        relevance = float(receipt.get("relevance_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return count > 0 and coverage >= threshold and relevance > 0.0
+
+
+def _install_explicit_semantic_index_policy(production_tools_module: Any) -> None:
+    """Never turn a caller's lexical repair index into a hidden CPU dense build.
+
+    The small-agent wrapper historically forced ``semantic=True`` for every project-local
+    repair. On the default profile the embedding model is CPU-bound, so even a tiny project
+    paid the full dense-index cost before the coder could inspect one source file. Explicit
+    semantic requests remain untouched; only the implicit override is removed.
+    """
+
+    cls = production_tools_module.ProductionToolService
+    current = cls.index_project_rag
+    if getattr(current, "_mmm_explicit_semantic_index_policy", False):
+        return
+    forced_semantic = bool(
+        getattr(current, "_mmm_small_model_semantic_repair_index", False)
+    )
+    lexical_owner = getattr(current, "__wrapped__", current) if forced_semantic else current
+
+    @wraps(current)
+    def index_project_rag(
+        self: Any,
+        roots: Sequence[str],
+        *,
+        index_path: str = "rag/project-index.json",
+        metadata: dict[str, Any],
+        semantic: bool = False,
+    ):
+        if semantic or not forced_semantic:
+            return current(
+                self,
+                roots,
+                index_path=index_path,
+                metadata=metadata,
+                semantic=semantic,
+            )
+        return lexical_owner(
+            self,
+            roots,
+            index_path=index_path,
+            metadata=metadata,
+            semantic=False,
+        )
+
+    index_project_rag._mmm_explicit_semantic_index_policy = True  # type: ignore[attr-defined]
+    index_project_rag.__wrapped__ = current  # type: ignore[attr-defined]
+    cls.index_project_rag = index_project_rag
+
+
+def _install_pre_design_rag_cascade(pre_design_module: Any) -> None:
+    """Use cheap exact/lexical evidence before spending CPU on dense reranking."""
+
+    current = pre_design_module._search_code_index
+    if getattr(current, "_mmm_demand_driven_dense_pre_design", False):
+        return
+    hybrid = bool(getattr(current, "_mmm_small_model_hybrid_code_rag", False))
+    lexical_owner = getattr(current, "__wrapped__", current) if hybrid else current
+
+    @wraps(current)
+    def search_code_index(index_path: Any, query: str) -> dict[str, Any]:
+        lexical = lexical_owner(index_path, query)
+        if _retrieval_receipt_is_strong(lexical):
+            value = dict(lexical)
+            value["retrieval_mode"] = "lexical-strong-no-dense-work"
+            value["dense_work_skipped"] = True
+            return value
+        if not hybrid:
+            return lexical
+        dense = current(index_path, query)
+        if isinstance(dense, Mapping):
+            value = dict(dense)
+            value["dense_work_skipped"] = False
+            return value
+        return dense
+
+    search_code_index._mmm_demand_driven_dense_pre_design = True  # type: ignore[attr-defined]
+    search_code_index.__wrapped__ = current  # type: ignore[attr-defined]
+    pre_design_module._search_code_index = search_code_index
+
+
 def _incoming_relation_hits(
     rag_index_module: Any,
     connection: Any,
@@ -347,10 +441,18 @@ def _install_bidirectional_relation_search(rag_index_module: Any) -> None:
 
 
 def install() -> None:
-    from . import custom_generation_search_contract, custom_module_generator, rag_index
+    from . import (
+        agentic_pre_design_rag,
+        custom_generation_search_contract,
+        custom_module_generator,
+        production_tools,
+        rag_index,
+    )
 
     _install_anchor_compaction(custom_module_generator)
     _install_structural_repair_bypass(custom_generation_search_contract)
+    _install_explicit_semantic_index_policy(production_tools)
+    _install_pre_design_rag_cascade(agentic_pre_design_rag)
     _install_bidirectional_relation_search(rag_index)
 
 
