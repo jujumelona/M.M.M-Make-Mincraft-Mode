@@ -23,8 +23,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .qwen_model_profiles import qwen_family
-
 _INSTALLED = False
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _TEMPORARY_SKILL_PREFIX = "MMM TEMPORARY VERIFIED SKILL:\n"
@@ -313,19 +311,19 @@ def _install_skill_evolution(trajectory_memory: Any, temporary_skill_contract: A
     temporary_skill_contract.synthesize_temporary_skill = evolved
 
 
-def _model_family(config: Any) -> str:
-    values: list[str] = []
+def _config_extra(config: Any) -> Mapping[str, Any]:
+    """Read executor policy only from registry-declared adapter metadata."""
+
     if isinstance(config, Mapping):
-        values.extend(
-            str(config.get(key, ""))
-            for key in ("model_id", "model", "repo_id", "name", "path")
-        )
-    else:
-        values.extend(
-            str(getattr(config, key, ""))
-            for key in ("model_id", "model", "repo_id", "name", "path")
-        )
-    return qwen_family(" ".join(values)) or "generic"
+        raw_extra = config.get("extra")
+        return raw_extra if isinstance(raw_extra, Mapping) else config
+    raw_extra = getattr(config, "extra", None)
+    return raw_extra if isinstance(raw_extra, Mapping) else {}
+
+
+def _model_family(config: Any) -> str:
+    family = str(_config_extra(config).get("executor_skill_family", "")).strip().casefold()
+    return family if family in {"qwen3.5", "qwen3.6"} else "generic"
 
 
 def _compact_executor_skill(skill: Mapping[str, Any], family: str) -> dict[str, Any]:

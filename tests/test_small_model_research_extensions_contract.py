@@ -58,12 +58,31 @@ def test_instruction_projection_keeps_only_frontier_skills() -> None:
     assert receipt["policy"] == "prompt_projection_only_authorization_unchanged"
 
 
-def test_model_family_reuses_central_three_model_classification() -> None:
-    assert _model_family(SimpleNamespace(model_id="unsloth/Qwen3.5-9B-MTP-GGUF")) == "qwen3.5"
-    assert _model_family(SimpleNamespace(model_id="unsloth/Qwen3.6-27B-MTP-GGUF")) == "qwen3.6"
-    assert _model_family(SimpleNamespace(model_id="unsloth/Qwen3.6-35B-A3B-MTP-GGUF")) == "qwen3.6"
-    assert _model_family({"path": "/models/qwen_3.6_27b.gguf"}) == "qwen3.6"
-    assert _model_family(SimpleNamespace(model_id="other/model")) == "generic"
+def test_model_family_uses_registry_declared_executor_policy() -> None:
+    assert _model_family(
+        SimpleNamespace(
+            model_id="other/model",
+            extra={"executor_skill_family": "qwen3.5"},
+        )
+    ) == "qwen3.5"
+    assert _model_family(
+        SimpleNamespace(
+            model_id="other/model",
+            extra={"executor_skill_family": "QWEN3.6"},
+        )
+    ) == "qwen3.6"
+    assert _model_family(
+        {"executor_skill_family": "qwen3.6", "path": "/models/anything.gguf"}
+    ) == "qwen3.6"
+
+    # Model identity must not be inferred from repository ids or filenames. Runtime
+    # behavior is owned by registry-declared adapter policy.
+    assert _model_family(
+        SimpleNamespace(model_id="unsloth/Qwen3.5-9B-MTP-GGUF")
+    ) == "generic"
+    assert _model_family(
+        SimpleNamespace(extra={"executor_skill_family": "unknown"})
+    ) == "generic"
 
 
 def test_executor_skill_rendering_is_compact_without_mutating_canonical() -> None:
