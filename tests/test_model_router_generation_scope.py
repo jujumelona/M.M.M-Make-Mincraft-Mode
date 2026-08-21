@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-from minecraft_mod_ai.model_adapters import GenerationResponse
+from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
 
 
@@ -49,6 +49,7 @@ class _Runtime:
     def call(self, stage: str, name: str, arguments):
         assert stage == "generation"
         assert name == "search_code_rag"
+        assert arguments == {"query": "repair the registry"}
         assert self.active[0] == 0
         self.events.append("rag")
         return {"hits": [{"path": "Example.java", "line": 1}]}
@@ -58,10 +59,22 @@ class _Adapter:
     def __init__(self, events: list[str], active: list[int]) -> None:
         self.events = events
         self.active = active
+        self.calls = 0
 
     def generate_turn(self, request):
         assert self.active[0] == 1
         self.events.append("decode")
+        self.calls += 1
+        if self.calls == 1:
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="rag-1",
+                        name="search_code_rag",
+                        arguments={"query": "repair the registry"},
+                    ),
+                )
+            )
         return GenerationResponse(content="done")
 
     def generate(self, request):  # pragma: no cover - tool path must use generate_turn
@@ -107,4 +120,12 @@ def test_host_rag_runs_outside_gpu_generation_scope(monkeypatch) -> None:
 
     assert result == "done"
     assert active == [0]
-    assert events == ["rag", "scope_enter", "decode", "scope_exit"]
+    assert events == [
+        "scope_enter",
+        "decode",
+        "scope_exit",
+        "rag",
+        "scope_enter",
+        "decode",
+        "scope_exit",
+    ]
