@@ -67,7 +67,7 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     transport ``tool_choice=none`` so llama.cpp never activates PEG-native tool
     parsing. The request's semantic tool-choice contract remains host-owned and is
     validated after Qwen markup parsing. JSON syntax/schema validation for ordinary
-    structured output is likewise host-owned, so no sampler grammar is sent.
+    structured output is router-owned, so no sampler grammar is sent.
     """
 
     payload: dict[str, Any] = {
@@ -95,7 +95,7 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             payload["presence_penalty"] = 1.5
     elif getattr(request, "response_format", None) == "json":
         # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
-        # JSON decoding, schema validation, and isolated repair are host-owned.
+        # Final JSON syntax and schema validation belong to ModelRouter.
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
@@ -502,7 +502,6 @@ def install(autotune_module: Any) -> None:
     """Bind local GGUF inference exclusively to managed native llama-server."""
 
     from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
-    from .structured_output import generate_with_host_schema_repair
 
     original_server_binary = autotune_module._server_binary
     if not getattr(original_server_binary, "_mmm_native_bootstrap", False):
@@ -646,11 +645,7 @@ def install(autotune_module: Any) -> None:
                 raise RuntimeError(
                     "native llama-server is required but could not be started"
                 )
-
-            def generate_once(value: Any) -> str:
-                return _strict_server_generate(self, value, explicit)
-
-            return generate_with_host_schema_repair(request, generate_once)
+            return _strict_server_generate(self, request, explicit)
 
         strict_selected_server_generate._mmm_explicit_server_strict = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate = strict_selected_server_generate

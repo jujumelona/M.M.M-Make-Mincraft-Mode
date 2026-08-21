@@ -26,6 +26,7 @@ from .model_concurrency import (
     active_llama_parallelism,
 )
 from .model_registry import ModelRegistry
+from .structured_output import validate_structured_output
 
 
 _GPU_EXCLUSIVE_LOCK = ReentrantReadWriteLock()
@@ -213,7 +214,7 @@ class ModelRouter:
                 "agent tools are disabled or no eligible tools are exposed."
             )
         if runtime is not None and tools:
-            return self._generate_with_tools(
+            content = self._generate_with_tools(
                 config=config,
                 adapter=adapter,
                 request=request,
@@ -221,8 +222,14 @@ class ModelRouter:
                 stage=stage,
                 role=role,
             )
-        with self._generation_scope(config):
-            return adapter.generate(request)
+        else:
+            with self._generation_scope(config):
+                content = adapter.generate(request)
+        return validate_structured_output(
+            content,
+            response_format=request.response_format,
+            response_schema=request.response_schema,
+        )
 
     def generate_tool_decision(
         self,
