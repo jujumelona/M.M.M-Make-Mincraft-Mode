@@ -17,6 +17,7 @@ from .skill_catalog import (
     SkillContract,
     compile_skill_catalog,
 )
+from .tool_validation_surface_contract import _assert_unique_schema_names
 
 
 _EXTERNAL_AGENT_TOOLS = frozenset(
@@ -97,10 +98,15 @@ def filter_tool_schemas_for_role(
     are evaluated against ResearchAgent through :func:`_policy_model_role`.
     """
 
+    surface = tuple(tool_schemas)
+    _assert_unique_schema_names(
+        surface,
+        surface=f"role-filter:{stage.strip().lower()}:{model_role.strip()}",
+    )
     policy_role = _policy_model_role(stage, model_role)
     role_routes = routes_for_model_role(policy_role)
     if not role_routes:
-        return tuple(tool_schemas)
+        return surface
 
     allowed = {
         tool
@@ -112,7 +118,7 @@ def filter_tool_schemas_for_role(
 
     selected_stage = stage.strip().lower()
     result: list[Mapping[str, Any]] = []
-    for schema in tool_schemas:
+    for schema in surface:
         name = _schema_tool_name(schema)
         if not name:
             continue
@@ -311,13 +317,13 @@ def _schema_tool_name(schema: Mapping[str, Any]) -> str:
 
 
 def _tool_names(tool_schemas: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    surface = tuple(tool_schemas)
+    _assert_unique_schema_names(surface, surface="agent-capability-context")
     return tuple(
         sorted(
-            {
-                name
-                for schema in tool_schemas
-                if (name := _schema_tool_name(schema))
-            }
+            name
+            for schema in surface
+            if (name := _schema_tool_name(schema))
         )
     )
 
