@@ -350,9 +350,6 @@ def install_parallel_core(agentic_module: Any) -> None:
                                 trace_metadata=trace_metadata,
                             )
                         except Exception as exc:
-                            # This path already ran on the caller thread. Replaying the same
-                            # expensive domain cannot recover a parallelism failure, and lower
-                            # transport layers own exact backend restart/retry semantics.
                             indexed_notes[index] = _failed_domain_note(
                                 domains[index],
                                 exc,
@@ -365,9 +362,6 @@ def install_parallel_core(agentic_module: Any) -> None:
                     ) as pool:
                         futures = {}
                         for index in wave:
-                            # ContextVar state is per request. Copy it into each worker so the
-                            # forced-RAG receipt remains isolated even when domain specialists
-                            # execute concurrently on the same shared production router.
                             context = copy_context()
                             future = pool.submit(
                                 context.run,
@@ -384,10 +378,6 @@ def install_parallel_core(agentic_module: Any) -> None:
                             try:
                                 indexed_notes[index] = future.result()
                             except Exception as exc:
-                                # Only transient transport/concurrency failures benefit from
-                                # replaying once on the caller thread. Validation/programming/
-                                # semantic failures are deterministic and must not duplicate a
-                                # full research+synthesis domain call.
                                 if _retryable_parallel_research_failure(exc):
                                     retry_domains[index] = exc
                                 else:
@@ -397,9 +387,6 @@ def install_parallel_core(agentic_module: Any) -> None:
                                         parallel=True,
                                     )
 
-                # A dependent wave cannot start until every predecessor either completed or
-                # produced a strict terminal failure note. Only transient parallel failures
-                # receive one serial recovery attempt.
                 for index in sorted(retry_domains):
                     domain = domains[index]
                     parallel_exc = retry_domains[index]
@@ -513,12 +500,7 @@ def install_parallel_core(agentic_module: Any) -> None:
 
 
 def install(agentic_module: Any) -> None:
-    """Amplify weak central planning with host-owned ensemble and verification.
-
-    Model-generated committee text is never execution authority. The unchanged user request
-    remains authoritative; council/debate/audit outputs are advisory evidence that exposes
-    omissions before the validated planner commits to a design.
-    """
+    """Amplify weak central planning with host-owned ensemble and verification."""
 
     current_collect = agentic_module.collect_pre_design_research
     if not getattr(current_collect, _MARKER, False):
@@ -1241,20 +1223,15 @@ def _research_domain_worker_count(router: Any, width: int) -> int:
     active = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip()
     if active:
         try:
-            from .llama_parallel_runtime_contract import _planner_parallel_capacity
             from .llama_vram_parallel_policy import validated_active_parallelism
 
             validated = validated_active_parallelism()
             if validated <= 1:
                 return 1
-            return _planner_parallel_capacity(router, min(requested, validated))
+            return min(requested, validated)
         except Exception:
             return 1
 
-    # Pre-design is commonly the first model stage, before managed llama autotuning has
-    # published a receipt. Queue only a small native-local candidate pool. ModelRouter's
-    # dynamic gate starts at p1, then releases more queued calls only after the first request
-    # publishes the managed p2/p4 runtime state.
     try:
         config = router.registry.role(router.profile, "planner")
     except Exception:
