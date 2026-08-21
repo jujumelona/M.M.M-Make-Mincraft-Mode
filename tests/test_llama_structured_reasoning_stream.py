@@ -39,10 +39,10 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
-    assert payload["max_tokens"] == 8192
+    assert payload["max_tokens"] == -1
 
 
-def test_native_tool_request_is_forwarded_to_llama_template() -> None:
+def test_native_tool_request_keeps_server_parser_disabled() -> None:
     tool = {
         "type": "function",
         "function": {
@@ -68,13 +68,13 @@ def test_native_tool_request_is_forwarded_to_llama_template() -> None:
     )
 
     assert payload["tools"] == [tool]
-    assert payload["tool_choice"] == "auto"
+    assert payload["tool_choice"] == "none"
     assert payload["parallel_tool_calls"] is True
     assert "response_format" not in payload
     assert "json_schema" not in payload
     assert "grammar" not in payload
-    assert "reasoning_effort" not in payload
-    assert "chat_template_kwargs" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["temperature"] == 1.0
     assert payload["top_p"] == 0.95
     assert payload["top_k"] == 20
