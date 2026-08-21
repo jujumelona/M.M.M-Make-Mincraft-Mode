@@ -4,10 +4,16 @@ from __future__ import annotations
 
 The model-facing tool surface is only trustworthy if the raw MCP ``tools/list``
 response has one owner per name and every callable tool exposes an object input
-schema.  Do not repair malformed provider schemas into permissive empty objects:
+schema. Do not repair malformed provider schemas into permissive empty objects:
 that would make parser validation weaker than the tool that actually executes.
+
+First-party schema caches are also bound to the exact child-process environment.
+A stage-only cache is unsafe because the MCP server can expose a different surface
+when feature/configuration environment variables change during a long-lived host.
 """
 
+import hashlib
+import json
 from functools import wraps
 from typing import Any, Mapping
 
@@ -16,8 +22,10 @@ import anyio
 from .mcp_stdio_support import open_mcp_stdio_errlog
 
 _RAW_LIST_MARKER = "_mmm_raw_mcp_schema_integrity_v1"
+_SCHEMA_ENV_MARKER = "_mmm_mcp_schema_environment_v1"
 _EXTERNAL_SCHEMA_MARKER = "_mmm_external_provider_schema_integrity_v1"
 _EXTERNAL_CALL_MARKER = "_mmm_external_provider_call_integrity_v1"
+_SCHEMA_ENV_ATTR = "_mmm_schema_environment_sha256"
 
 
 class MCPSchemaIntegrityError(RuntimeError):
@@ -71,6 +79,41 @@ def validate_raw_tool_rows(
     return tuple(result)
 
 
+def _environment_fingerprint(env: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        sorted((str(key), str(value)) for key, value in env.items()),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def ensure_schema_environment(runtime: Any, stage: str) -> str:
+    """Bind one runtime's stage cache to the exact MCP child environment.
+
+    Only a SHA-256 is retained. Environment values (which may include credentials)
+    are never copied into a second long-lived cache structure.
+    """
+
+    selected = runtime._stage(stage)
+    fingerprint = _environment_fingerprint(runtime._child_env(selected))
+    with runtime._lock:
+        fingerprints = getattr(runtime, _SCHEMA_ENV_ATTR, None)
+        if fingerprints is None:
+            fingerprints = {}
+            setattr(runtime, _SCHEMA_ENV_ATTR, fingerprints)
+        previous = fingerprints.get(selected)
+        cache_present = (
+            selected in runtime._schema_cache
+            or selected in runtime._allowed_tool_cache
+        )
+        if previous != fingerprint and (previous is not None or cache_present):
+            runtime._schema_cache.pop(selected, None)
+            runtime._allowed_tool_cache.pop(selected, None)
+        fingerprints[selected] = fingerprint
+    return fingerprint
+
+
 def _listed_tool_rows(listed: Any, *, jsonable: Any) -> tuple[dict[str, Any], ...]:
     rows: list[dict[str, Any]] = []
     for item in getattr(listed, "tools", ()) or ():
@@ -122,7 +165,9 @@ def install(
 ) -> None:
     """Install raw first-party and external-provider schema integrity checks."""
 
-    current_list = agent_tool_runtime_module.AgentToolRuntime._list_tools_async
+    runtime_class = agent_tool_runtime_module.AgentToolRuntime
+
+    current_list = runtime_class._list_tools_async
     if not bool(getattr(current_list, _RAW_LIST_MARKER, False)):
 
         @wraps(current_list)
@@ -138,7 +183,19 @@ def install(
 
         setattr(list_tools_async, _RAW_LIST_MARKER, True)
         list_tools_async.__wrapped__ = current_list  # type: ignore[attr-defined]
-        agent_tool_runtime_module.AgentToolRuntime._list_tools_async = list_tools_async
+        runtime_class._list_tools_async = list_tools_async
+
+    current_tool_schemas = runtime_class.tool_schemas
+    if not bool(getattr(current_tool_schemas, _SCHEMA_ENV_MARKER, False)):
+
+        @wraps(current_tool_schemas)
+        def tool_schemas(self: Any, stage: str):
+            ensure_schema_environment(self, stage)
+            return current_tool_schemas(self, stage)
+
+        setattr(tool_schemas, _SCHEMA_ENV_MARKER, True)
+        tool_schemas.__wrapped__ = current_tool_schemas  # type: ignore[attr-defined]
+        runtime_class.tool_schemas = tool_schemas
 
     current_provider_schema = external_agent_bridge_module._provider_schema
     if not bool(getattr(current_provider_schema, _EXTERNAL_SCHEMA_MARKER, False)):
@@ -252,6 +309,7 @@ def install(
 
 __all__ = [
     "MCPSchemaIntegrityError",
+    "ensure_schema_environment",
     "install",
     "validate_input_schema",
     "validate_raw_tool_rows",
