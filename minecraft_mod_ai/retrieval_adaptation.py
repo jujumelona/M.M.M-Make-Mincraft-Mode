@@ -22,21 +22,44 @@ def _vector(value: Any) -> list[float]:
 
 
 def _embedding_rows(router: Any, texts: Sequence[str]) -> list[list[float]]:
-    """Embed text records as records, never as the characters of one string."""
+    """Embed records in one batch, with compatibility for legacy scalar adapters.
+
+    Production ``ModelRouter.embed`` is a ``Sequence[str] -> list[list[float]]`` API.
+    Batching is the authoritative path and prevents a string from being interpreted
+    as a sequence of characters. A few lightweight/legacy adapters expose the older
+    scalar ``str -> list[float]`` shape; only when the batch contract is unavailable
+    do we fall back to one scalar call per record.
+    """
 
     cleaned = [str(text).strip() for text in texts if str(text).strip()]
     if not cleaned:
         return []
+
+    raw: Any = None
     try:
         raw = router.embed(cleaned)
     except Exception:
-        return []
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-        return []
-    rows = [_vector(row) for row in raw]
-    if len(rows) != len(cleaned) or any(not row for row in rows):
-        return []
-    return rows
+        raw = None
+
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        rows = [_vector(row) for row in raw]
+        if len(rows) == len(cleaned) and all(rows):
+            return rows
+        if len(cleaned) == 1:
+            scalar = _vector(raw)
+            if scalar:
+                return [scalar]
+
+    legacy_rows: list[list[float]] = []
+    for text in cleaned:
+        try:
+            row = _vector(router.embed(text))
+        except Exception:
+            return []
+        if not row:
+            return []
+        legacy_rows.append(row)
+    return legacy_rows
 
 
 def _normalize(vector: Sequence[float]) -> list[float]:
