@@ -15,6 +15,7 @@ from ..model_runtime_performance import (
     _retrieval_result_cache_limit as _result_cache_limit,
     _text_digest,
 )
+from ..retrieval_cpu_budget_contract import require_dense_retrieval_device
 from .base import AdapterConfig, ModelBackendError, require_package, torch_dtype
 
 
@@ -86,10 +87,16 @@ class RerankerAdapter:
         }
 
     def _load_backend(self) -> _RerankerBackend:
+        model_id, device, dtype_name, revision = self._backend_key()
+        require_dense_retrieval_device(
+            device,
+            role=self.config.role,
+            model_id=model_id,
+            backend="reranker",
+        )
         require_package("transformers", minimum="4.52.0")
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        model_id, device, dtype_name, revision = self._backend_key()
         tokenizer_options: dict[str, Any] = {"padding_side": "left"}
         model_options: dict[str, Any] = {
             "torch_dtype": torch_dtype(dtype_name),
