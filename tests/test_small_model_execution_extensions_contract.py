@@ -6,6 +6,7 @@ import pytest
 
 from minecraft_mod_ai import agent_tool_runtime
 from minecraft_mod_ai.small_model_execution_extensions_contract import (
+    _SOURCE_EDIT_SCHEMA,
     _compose_skills,
     _materialize_model_source_edit,
 )
@@ -32,7 +33,17 @@ def _skill(identity: str, *, requires=(), provides=(), confidence=1.0):
     }
 
 
-def test_partial_source_edit_coalesces_exact_edits_and_host_hash(tmp_path) -> None:
+def test_source_edit_schema_is_scalar_and_bounded() -> None:
+    assert _SOURCE_EDIT_SCHEMA["required"] == ["operation", "path"]
+    properties = _SOURCE_EDIT_SCHEMA["properties"]
+    assert "edits" not in properties
+    assert all(value.get("type") != "array" for value in properties.values())
+    assert properties["path"]["maxLength"] <= 512
+    assert properties["old"]["maxLength"] <= 4096
+    assert properties["new"]["maxLength"] <= 8192
+
+
+def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
@@ -43,20 +54,10 @@ def test_partial_source_edit_coalesces_exact_edits_and_host_hash(tmp_path) -> No
         agent_tool_runtime,
         workspace,
         {
-            "edits": [
-                {
-                    "operation": "replace_exact",
-                    "path": "src/main/java/example/Example.java",
-                    "old": "oldValue",
-                    "new": "newValue",
-                },
-                {
-                    "operation": "insert_before",
-                    "path": "src/main/java/example/Example.java",
-                    "anchor": "}\n",
-                    "content": "    void run() {}\n",
-                },
-            ]
+            "operation": "replace_exact",
+            "path": "src/main/java/example/Example.java",
+            "old": "oldValue",
+            "new": "newValue",
         },
     )
 
@@ -65,10 +66,47 @@ def test_partial_source_edit_coalesces_exact_edits_and_host_hash(tmp_path) -> No
     operation = payload["operations"][0]
     assert operation["operation"] == "edit"
     assert operation["expected_sha256"] == "sha256:" + hashlib.sha256(old.encode()).hexdigest()
-    assert len(operation["replacements"]) == 2
+    assert operation["replacements"] == [
+        {"old": "oldValue", "new": "newValue", "count": 1}
+    ]
 
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
     assert receipt["status"] == "APPLIED"
+    assert source.read_text(encoding="utf-8") == (
+        "final class Example {\n    int newValue;\n}\n"
+    )
+
+
+def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    source.write_text("final class Example {\n    int oldValue;\n}\n", encoding="utf-8")
+
+    first = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "replace_exact",
+            "path": "src/main/java/example/Example.java",
+            "old": "oldValue",
+            "new": "newValue",
+        },
+    )
+    TransactionalSourcePatcher(project).apply(first["operations"])
+
+    second = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "insert_before",
+            "path": "src/main/java/example/Example.java",
+            "anchor": "}\n",
+            "content": "    void run() {}\n",
+        },
+    )
+    TransactionalSourcePatcher(project).apply(second["operations"])
+
     assert source.read_text(encoding="utf-8") == (
         "final class Example {\n    int newValue;\n    void run() {}\n}\n"
     )
@@ -86,17 +124,32 @@ def test_partial_source_edit_rejects_ambiguous_anchor_without_mutation(tmp_path)
             agent_tool_runtime,
             workspace,
             {
-                "edits": [
-                    {
-                        "operation": "insert_after",
-                        "path": "src/main/java/example/Example.java",
-                        "anchor": "token",
-                        "content": "!",
-                    }
-                ]
+                "operation": "insert_after",
+                "path": "src/main/java/example/Example.java",
+                "anchor": "token",
+                "content": "!",
             },
         )
     assert source.read_text(encoding="utf-8") == before
+
+
+def test_partial_source_edit_rejects_oversized_payload(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    source.write_text("token\n", encoding="utf-8")
+
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="limit|turn limit"):
+        _materialize_model_source_edit(
+            agent_tool_runtime,
+            workspace,
+            {
+                "operation": "insert_after",
+                "path": "src/main/java/example/Example.java",
+                "anchor": "token",
+                "content": "x" * 20_000,
+            },
+        )
 
 
 def test_ordered_skill_composition_adds_provider_before_consumer() -> None:
