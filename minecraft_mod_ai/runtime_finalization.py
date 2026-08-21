@@ -29,6 +29,8 @@ def finalize_runtime() -> None:
         from . import agent_tool_runtime
         from . import agentic_pre_design_rag
         from . import causal_tool_frontier_contract
+        from . import external_agent_bridge
+        from . import external_mcp_router
         from . import llama_server_autotune
         from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
@@ -47,6 +49,7 @@ def finalize_runtime() -> None:
         from .causal_stale_tool_recovery_contract import install as install_stale_tool_recovery
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .context_budget_preflight import run_context_budget_preflight
+        from .external_mcp_binding_contract import install as install_external_mcp_binding
         from .forced_tool_execution_contract import install as install_forced_tool_execution
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_finish_reason_contract import install as install_llama_finish_reason
@@ -57,6 +60,7 @@ def finalize_runtime() -> None:
         )
         from .llama_tool_output_budget import install as install_llama_tool_output_budget
         from .llama_unbounded_generation import install as install_llama_unbounded_generation
+        from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter, openai_compatible
         from .model_prefetch_resilience import install as install_prefetch_resilience
@@ -79,6 +83,17 @@ def finalize_runtime() -> None:
         # comes after route integrity because route integrity also installs a legacy
         # user-only query wrapper; the structured projection must own the final call.
         install_agent_mcp_transport_pool()
+        # Raw tools/list is the source contract for both the first-party MCP server and
+        # reviewed external providers. Reject duplicate names and malformed/non-object
+        # input schemas before any model-facing layer can normalize them into a weaker
+        # permissive shape. Then bind external schema discovery to the exact provider
+        # that executes it so route failover cannot swap schema A for provider B.
+        install_mcp_schema_integrity(
+            agent_tool_runtime,
+            external_agent_bridge,
+            external_mcp_router,
+        )
+        install_external_mcp_binding(external_agent_bridge, external_mcp_router)
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         # Source files are repository state, not model output pages. Replace the old
