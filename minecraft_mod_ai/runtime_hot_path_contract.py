@@ -31,6 +31,7 @@ _RAG_MARKER = "_mmm_rag_lsh_query_ready_v1"
 _LSH_STATE_TABLE = "mmm_semantic_lsh_state"
 _LSH_STATE_KEY = "ready"
 _LSH_STATE_VERSION = "v1"
+_SQLITE_MAGIC = b"SQLite format 3\x00"
 
 
 async def _submit_without_blocking_loop(worker: Any, request: Any) -> None:
@@ -158,6 +159,16 @@ def _install_parallel_external_provider(external_mcp_router_module: Any) -> None
     router_class._call_provider = call_provider
 
 
+def _is_sqlite_file(target: Path) -> bool:
+    """Recognize an existing SQLite index without importing another module's private helper."""
+
+    try:
+        with target.open("rb") as input_file:
+            return input_file.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
+    except OSError:
+        return False
+
+
 def _lsh_table_ready(module: Any, connection: sqlite3.Connection) -> bool:
     if not module.table_exists(connection, "mmm_semantic_lsh"):
         return False
@@ -189,7 +200,7 @@ def _publish_lsh_ready(connection: sqlite3.Connection) -> None:
 
 
 def _invalidate_lsh_ready(module: Any, target: Path) -> None:
-    if not target.is_file() or not module._is_sqlite(target):
+    if not target.is_file() or not _is_sqlite_file(target):
         return
     try:
         with sqlite3.connect(str(target), timeout=30.0) as connection:
@@ -199,10 +210,11 @@ def _invalidate_lsh_ready(module: Any, target: Path) -> None:
                     (_LSH_STATE_KEY,),
                 )
                 connection.commit()
-    except sqlite3.Error:
-        # Failure to invalidate a performance marker must not damage the canonical
-        # index. The subsequent build/search correctness paths remain authoritative.
-        return
+    except sqlite3.Error as exc:
+        # Never mutate a semantic index while an old ready marker may still be
+        # visible. A failed invalidation therefore blocks the build rather than
+        # permitting stale side-index candidates during concurrent search.
+        raise RuntimeError("cannot invalidate semantic LSH ready marker") from exc
 
 
 def _install_rag_lsh_ready_contract(research_rag_performance_module: Any) -> None:
@@ -241,7 +253,7 @@ def _install_rag_lsh_ready_contract(research_rag_performance_module: Any) -> Non
             semantic=semantic,
             max_files=max_files,
         )
-        if semantic and target.is_file() and module._is_sqlite(target):
+        if semantic and target.is_file() and _is_sqlite_file(target):
             try:
                 with sqlite3.connect(str(target), timeout=30.0) as connection:
                     if not _lsh_table_ready(module, connection):
