@@ -9,7 +9,6 @@ import pytest
 
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.llama_server_hardware_policy as llama_hardware
-import minecraft_mod_ai.max_efficiency_runtime_contract as max_efficiency
 import minecraft_mod_ai.performance_final_contract as performance
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 from minecraft_mod_ai.model_registry import ModelRegistry
@@ -58,7 +57,7 @@ def test_candidate_receipts_use_prefixed_hashes_and_validate_after_state(tmp_pat
             ]
         }
     }
-    capture = max_efficiency._candidate_patch_capture(
+    capture = custom_search._candidate_patch_capture(
         base_root=base, candidate_root=candidate, result=result
     )
     assert capture["operations"][0]["expected_sha256"] == _sha(b"old")
@@ -66,7 +65,7 @@ def test_candidate_receipts_use_prefixed_hashes_and_validate_after_state(tmp_pat
 
     (candidate / "delete.txt").write_text("still here", encoding="utf-8")
     with pytest.raises(RuntimeError, match="delete output still exists"):
-        max_efficiency._candidate_patch_capture(
+        custom_search._candidate_patch_capture(
             base_root=base, candidate_root=candidate, result=result
         )
 
@@ -91,7 +90,7 @@ def test_candidate_after_hash_mismatch_fails_closed(tmp_path: Path) -> None:
         }
     }
     with pytest.raises(RuntimeError, match="after hash drifted"):
-        max_efficiency._candidate_patch_capture(
+        custom_search._candidate_patch_capture(
             base_root=base, candidate_root=candidate, result=result
         )
 
@@ -100,10 +99,10 @@ def test_parallel_candidate_workspaces_and_model_routers_are_isolated(tmp_path: 
     base = tmp_path / "base"
     base.mkdir()
     (base / "A.java").write_text("class A {}", encoding="utf-8")
-    left_root = max_efficiency._clone_candidate_snapshot(
+    left_root = custom_search._clone_candidate_snapshot(
         base, candidate_index=0, performance_module=performance
     )
-    right_root = max_efficiency._clone_candidate_snapshot(
+    right_root = custom_search._clone_candidate_snapshot(
         base, candidate_index=1, performance_module=performance
     )
     try:
