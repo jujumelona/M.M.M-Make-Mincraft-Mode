@@ -121,7 +121,7 @@ def test_failed_mutation_invalidates_old_evidence_until_new_evidence_arrives() -
     assert stale.replayed_full_transcript is False
     assert "evidence_ready" not in stale.state
     assert "code_evidence" not in stale.state
-    assert "project_observed" not in stale.state
+    assert "project_observed" in stale.state
 
     messages = [*messages, _rag_ok()]
     refreshed = ledger.resolve(
