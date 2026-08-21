@@ -41,6 +41,7 @@ def finalize_runtime() -> None:
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
         from .bounded_source_edit_contract import install as install_bounded_source_edit
+        from .causal_stale_tool_recovery_contract import install as install_stale_tool_recovery
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .context_budget_preflight import run_context_budget_preflight
         from .forced_tool_execution_contract import install as install_forced_tool_execution
@@ -93,6 +94,11 @@ def finalize_runtime() -> None:
             small_model_module=small_model_max_agent_contract,
             causal_module=causal_tool_frontier_contract,
         )
+        # A stale but authorized action is parser-valid yet not executable on a later
+        # causal frontier. Consume it before the core loop and force one legal frontier
+        # correction rather than manufacturing a failed tool observation and crashing
+        # when the model repeats the stale action.
+        install_stale_tool_recovery(causal_tool_frontier_contract)
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
         # Local llama.cpp tool-choice validation is adapter-owned. Only remote
