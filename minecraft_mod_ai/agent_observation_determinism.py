@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-"""Canonicalize unordered host values before they enter agent transcripts."""
+"""Canonicalize and compact host observations before they enter agent transcripts."""
 
 import json
 from functools import wraps
 from typing import Any
+
+_DEFAULT_MODEL_OBSERVATION_BYTES = 16 * 1024
 
 
 def _sort_key(value: Any) -> str:
@@ -17,7 +19,50 @@ def _sort_key(value: Any) -> str:
     )
 
 
+def _dedupe_normalized_result(result: Any) -> Any:
+    """Keep one semantic copy when MCP mirrors JSON across result channels."""
+
+    if not isinstance(result, dict):
+        return result
+    compact = dict(result)
+    structured = compact.get("structured_content")
+    parsed = compact.get("parsed_text")
+    texts = compact.get("text")
+
+    if parsed is not None and isinstance(texts, list) and len(texts) == 1:
+        try:
+            text_value = json.loads(texts[0])
+        except (json.JSONDecodeError, TypeError):
+            text_value = object()
+        if text_value == parsed:
+            compact["text"] = []
+
+    if parsed is not None and structured == parsed:
+        compact["parsed_text"] = None
+
+    return compact
+
+
 def install(*, agent_tool_runtime_module: Any) -> None:
+    # A 48 KiB single observation can dominate a 32K-token local-model slot before
+    # message compaction even runs. Keep the default model observation page small;
+    # callers that genuinely need a larger page can still opt in through the existing
+    # MMM_AGENT_OBSERVATION_BYTES environment override.
+    agent_tool_runtime_module._DEFAULT_MAX_TOOL_RESULT_BYTES = (
+        _DEFAULT_MODEL_OBSERVATION_BYTES
+    )
+
+    current_normalize = agent_tool_runtime_module._normalize_tool_result
+    if not getattr(current_normalize, "_mmm_duplicate_channels_compacted", False):
+
+        @wraps(current_normalize)
+        def normalize(raw: Any) -> Any:
+            return _dedupe_normalized_result(current_normalize(raw))
+
+        normalize._mmm_duplicate_channels_compacted = True  # type: ignore[attr-defined]
+        normalize.__wrapped__ = current_normalize  # type: ignore[attr-defined]
+        agent_tool_runtime_module._normalize_tool_result = normalize
+
     current_jsonable = agent_tool_runtime_module._jsonable
     if not getattr(current_jsonable, "_mmm_unordered_canonical", False):
 
