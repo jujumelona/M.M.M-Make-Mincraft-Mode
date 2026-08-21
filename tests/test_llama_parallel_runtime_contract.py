@@ -66,11 +66,11 @@ class _ToolAwareAdapter:
 
     def generate_turn(self, request):
         self.turn_requests.append(request)
-        return SimpleNamespace(content="tool-aware", tool_calls=())
+        return SimpleNamespace(content='{"status":"tool-aware"}', tool_calls=())
 
     def generate(self, request):
         self.generate_requests.append(request)
-        return "plain"
+        return '{"game_design":{}}'
 
 
 def test_parallel_runtime_contract_is_installed() -> None:
@@ -113,7 +113,7 @@ def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier
         enable_tools=True,
     )
 
-    assert tool_result == "tool-aware"
+    assert tool_result == '{"status":"tool-aware"}'
     assert len(adapter.turn_requests) == 1
     request = adapter.turn_requests[0]
     exposed_names = {str(tool["function"]["name"]) for tool in request.tools}
@@ -163,7 +163,7 @@ def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier
         tool_stage="generation",
         enable_tools=False,
     )
-    assert plain_result == "plain"
+    assert plain_result == '{"game_design":{}}'
     assert len(adapter.generate_requests) == 1
     assert adapter.generate_requests[0].response_schema == schema
 
