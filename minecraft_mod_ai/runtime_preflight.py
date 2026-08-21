@@ -119,6 +119,11 @@ def _assert_tool_schema_contracts() -> None:
             "_mmm_external_mcp_schema_binding_v1",
         ),
         (
+            "external same-scope schema binding serialization",
+            external_agent_bridge.ExternalAgentBridge.call,
+            "_mmm_external_mcp_scope_serialization_v1",
+        ),
+        (
             "external model-facing bound-call schema",
             external_agent_bridge.ExternalAgentBridge.tool_schemas,
             "_mmm_external_mcp_bound_schema_v1",
