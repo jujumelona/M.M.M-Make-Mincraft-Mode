@@ -31,6 +31,7 @@ def finalize_runtime() -> None:
         from . import causal_tool_frontier_contract
         from . import external_agent_bridge
         from . import external_mcp_router
+        from . import external_procedural_skill_contract
         from . import llama_server_autotune
         from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
@@ -68,6 +69,7 @@ def finalize_runtime() -> None:
         from .model_adapters import llama_cpp_adapter, openai_compatible
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
+        from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .retrieval_cpu_budget_contract import install as install_retrieval_cpu_budget
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
@@ -116,6 +118,10 @@ def finalize_runtime() -> None:
             small_model_execution_extensions_contract,
             agent_tool_runtime,
         )
+        # Procedural skill IDs are content commitments. Persistent JSONL is mutable, so
+        # reject rows whose current content no longer hashes to their declared skill_id
+        # before dependency composition can collapse identities in a dict.
+        install_procedural_skill_identity(external_procedural_skill_contract)
         # Schema producers may be layered, but ownership is singular at the final
         # runtime boundary. Validate the composed surface before AgentToolRuntime can
         # cache it or dispatch by name, and pin the two source-write projections to
