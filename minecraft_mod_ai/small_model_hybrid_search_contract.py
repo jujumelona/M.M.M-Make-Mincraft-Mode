@@ -9,7 +9,11 @@ from typing import Any, Mapping
 
 from .centroid_vector_rag import direct_centroid_vector_search
 from .model_router import ModelRouter
-from .retrieval_adaptation import adapt_query_vector, extract_hit_texts
+from .retrieval_adaptation import (
+    _embedding_rows,
+    adapt_query_vector,
+    extract_hit_texts,
+)
 
 _SYMBOL = re.compile(r"\b(?:[A-Z][A-Za-z0-9_]{2,}|[a-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]+\.(?:java|json|gradle|kts))\b")
 _MC_VERSION = re.compile(r"(?<![0-9])(?:1\.)?[0-9]{1,2}(?:\.[0-9]{1,3}){1,2}(?![0-9])")
@@ -98,7 +102,8 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
     vector = adapt_query_vector(router, query, texts)
     if not vector or not texts:
         return ""
-    candidates: list[tuple[float, str]] = []
+
+    tokens: list[str] = []
     seen: set[str] = set()
     for text in texts:
         for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.$:/-]{2,96}", text):
@@ -106,20 +111,20 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
             if lowered in seen:
                 continue
             seen.add(lowered)
-            try:
-                embedded = router.embed(token)
-                values = [float(item) for item in embedded]
-            except Exception:
-                continue
-            width = min(len(vector), len(values))
-            if not width:
-                continue
-            dot = sum(vector[index] * values[index] for index in range(width))
-            candidates.append((dot, token))
-            if len(candidates) >= 96:
+            tokens.append(token)
+            if len(tokens) >= 96:
                 break
-        if len(candidates) >= 96:
+        if len(tokens) >= 96:
             break
+
+    rows = _embedding_rows(router, tokens)
+    candidates: list[tuple[float, str]] = []
+    for token, values in zip(tokens, rows, strict=False):
+        width = min(len(vector), len(values))
+        if not width:
+            continue
+        dot = sum(vector[index] * values[index] for index in range(width))
+        candidates.append((dot, token))
     candidates.sort(key=lambda item: (-item[0], item[1].casefold()))
     return " ".join(token for _score, token in candidates[:8])
 
