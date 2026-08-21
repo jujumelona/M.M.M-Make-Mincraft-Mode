@@ -123,7 +123,7 @@ def test_llama_runtime_types_are_owned_before_any_tuning_wrapper() -> None:
     runtime = source.index('TuningStage("runtime"')
 
     assert runtime_types < hardware < runtime
-    assert "_TUNING_PIPELINE_VERSION = 34" in source
+    assert "_TUNING_PIPELINE_VERSION = 35" in source
     assert "_install_runtime_type_ownership" in source
     assert "_mmm_runtime_tuning_type_owner" in source
     assert '"autotune.server_variant"' in source
