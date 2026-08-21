@@ -62,7 +62,7 @@ def test_worker_completion_cannot_turn_cancellation_into_failure(tmp_path) -> No
         ledger.cancel_run(reason="stop now")
         return "late result"
 
-    with pytest.raises(WorkGraphError, match="is not running: cancelled"):
+    with pytest.raises(WorkGraphError, match="cannot succeed from state cancelled"):
         run_checkpoint(
             ledger,
             "work",
