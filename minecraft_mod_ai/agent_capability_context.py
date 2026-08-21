@@ -5,13 +5,13 @@ import os
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
+from . import model_tool_aliases as _model_tool_aliases
 from .agent_roles import (
     mcp_servers_for_model_role,
     routes_for_model_role,
     skills_for_model_role,
 )
 from .external_mcp_router import ExternalMCPRouter
-from .model_tool_aliases import canonical_model_tool
 from .skill_catalog import (
     REVIEWED_TOOL_STAGES,
     SkillContract,
@@ -80,7 +80,7 @@ def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]
 
 
 def _reviewed_stage_for_model_tool(name: str, stage: str) -> bool:
-    canonical = canonical_model_tool(name)
+    canonical = _model_tool_aliases.canonical_model_tool(name)
     return stage in REVIEWED_TOOL_STAGES.get(canonical, frozenset())
 
 
@@ -120,7 +120,7 @@ def filter_tool_schemas_for_role(
             if name in allowed:
                 result.append(schema)
             continue
-        canonical = canonical_model_tool(name)
+        canonical = _model_tool_aliases.canonical_model_tool(name)
         if canonical not in allowed:
             continue
         if not _reviewed_stage_for_model_tool(name, selected_stage):
@@ -141,7 +141,7 @@ def skills_for_tool(
     selected_stage = stage.strip().lower()
     if not selected_tool or selected_tool in _EXTERNAL_AGENT_TOOLS:
         return ()
-    canonical = canonical_model_tool(selected_tool)
+    canonical = _model_tool_aliases.canonical_model_tool(selected_tool)
     if selected_stage not in REVIEWED_TOOL_STAGES.get(canonical, frozenset()):
         return ()
     policy_role = _policy_model_role(selected_stage, model_role)
@@ -186,12 +186,12 @@ def build_agent_capability_context(
             for name in sorted(exposed_tools)
             if (
                 name not in _EXTERNAL_AGENT_TOOLS
-                and canonical_model_tool(name) in stage_tool_set
+                and _model_tool_aliases.canonical_model_tool(name) in stage_tool_set
                 and _reviewed_stage_for_model_tool(name, selected)
             )
         )
         represented_permissions = frozenset(
-            canonical_model_tool(name) for name in model_tools
+            _model_tool_aliases.canonical_model_tool(name) for name in model_tools
         )
         host_tools = tuple(
             tool for tool in stage_tools if tool not in represented_permissions
