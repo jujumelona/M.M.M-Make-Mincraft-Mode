@@ -62,14 +62,14 @@ class _RecordingAdapter:
         )
 
 
-def test_direct_repair_frontier_exposes_patch_and_edit() -> None:
+def test_direct_repair_frontier_prefers_minimum_cost_edit() -> None:
     frontier = executable_frontier(
         (_tool("apply_source_edit"), _tool("apply_source_patch")),
         state=frozenset({"workspace_bound", "project_observed", "evidence_ready"}),
         goals=("repair",),
     )
 
-    assert set(frontier) == {"apply_source_edit", "apply_source_patch"}
+    assert frontier == ("apply_source_edit",)
 
 
 def test_writable_coder_prefers_hardened_patch_over_schema_order() -> None:
