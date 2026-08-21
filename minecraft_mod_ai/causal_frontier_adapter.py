@@ -212,6 +212,38 @@ def _with_capability_context(
     return tuple(copied)
 
 
+def _restore_derived_request(template: Any, derived: Any) -> Any:
+    """Restore fields accidentally dropped by an older request-copy constructor.
+
+    The live loop owns messages/media plus the current tool-control fields. Everything
+    else belongs to the original host request and must survive every derived turn. A
+    no-tool request is an explicit final-synthesis control signal, so parse-only tool
+    authority is cleared there rather than resurrected from the template.
+    """
+
+    finalizing = not tuple(getattr(derived, "tools", ()) or ()) and getattr(
+        derived, "tool_choice", None
+    ) is None
+    validation = ()
+    if not finalizing:
+        validation = tuple(
+            getattr(derived, "tool_validation_schemas", ())
+            or getattr(template, "tool_validation_schemas", ())
+            or ()
+        )
+    return replace(
+        template,
+        messages=derived.messages,
+        media_paths=derived.media_paths,
+        response_format=derived.response_format,
+        response_schema=derived.response_schema,
+        tools=derived.tools,
+        tool_validation_schemas=validation,
+        tool_choice=derived.tool_choice,
+        parallel_tool_calls=derived.parallel_tool_calls,
+    )
+
+
 class CausalFrontierAdapter:
     """Delegate adapter that recalculates the next executable edge every turn."""
 
@@ -226,6 +258,7 @@ class CausalFrontierAdapter:
         execution_gate: FrontierExecutionGate | None = None,
         authorized_surface: Sequence[Mapping[str, Any]] = (),
         preference: Mapping[str, int] | None = None,
+        request_template: Any | None = None,
     ) -> None:
         self.inner = inner
         self.stage = stage
@@ -233,6 +266,7 @@ class CausalFrontierAdapter:
         self.require_fresh_evidence = require_fresh_evidence
         self.frontier_limit = max(1, min(int(frontier_limit), 3))
         self.execution_gate = execution_gate
+        self.request_template = request_template
         # Freeze these once for the whole live tool loop. Nested model/retrieval calls
         # may update the compatibility ContextVars, but they must never replace this
         # coder turn's security-filtered authorization or query preference.
@@ -255,6 +289,9 @@ class CausalFrontierAdapter:
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
         from .model_adapters import ModelConfigurationError
+
+        if self.request_template is not None:
+            request = _restore_derived_request(self.request_template, request)
 
         # The core loop intentionally emits an explicit tools=() request for
         # fixed-point/final synthesis. That is a control signal, not a new planning
