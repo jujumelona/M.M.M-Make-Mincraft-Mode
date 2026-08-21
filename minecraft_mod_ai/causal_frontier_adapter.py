@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from .causal_state_ledger import CausalStateLedger
 from .causal_tool_graph import executable_frontier
+from .tool_validation_surface_contract import _assert_unique_schema_names
 
 _AUTHORIZED_TOOLS: ContextVar[tuple[Mapping[str, Any], ...]] = ContextVar(
     "mmm_causal_authorized_tools", default=()
@@ -65,7 +66,9 @@ def remember_authorized_tools(
 ) -> None:
     """Remember the security-filtered surface and query-specific tie-break order."""
 
-    _AUTHORIZED_TOOLS.set(tuple(tools))
+    surface = tuple(tools)
+    _assert_unique_schema_names(surface, surface="causal-authorized")
+    _AUTHORIZED_TOOLS.set(surface)
     if preference is not None:
         _AUTHORIZED_PREFERENCE.set(
             tuple(
@@ -79,7 +82,9 @@ def remember_authorized_tools(
 
 def authorized_tools(fallback: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
     value = _AUTHORIZED_TOOLS.get()
-    return value or tuple(fallback)
+    surface = value or tuple(fallback)
+    _assert_unique_schema_names(surface, surface="causal-authorized")
+    return surface
 
 
 def authorized_tool_preference() -> dict[str, int]:
@@ -231,7 +236,9 @@ class CausalFrontierAdapter:
         # Freeze these once for the whole live tool loop. Nested model/retrieval calls
         # may update the compatibility ContextVars, but they must never replace this
         # coder turn's security-filtered authorization or query preference.
-        self.authorized_surface = tuple(authorized_surface)
+        surface = tuple(authorized_surface)
+        _assert_unique_schema_names(surface, surface="causal-authorized")
+        self.authorized_surface = surface
         self.preference = dict(preference or {})
         self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
         self._state_ledger = CausalStateLedger()
@@ -262,6 +269,7 @@ class CausalFrontierAdapter:
             self._publish_frontier(())
             self._reset_stale_guard()
             return self.inner.generate_turn(request)
+        _assert_unique_schema_names(candidates, surface="causal-candidate")
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         forced_name = _forced_tool_name(request.tool_choice)
         if forced_name:
