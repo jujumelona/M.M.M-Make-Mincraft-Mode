@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import httpx
@@ -637,14 +638,10 @@ def _reasoning_continuation_request(
             {"role": "user", "content": _REASONING_CONTINUATION},
         ]
     )
-    return GenerationRequest(
+    return replace(
+        request,
         messages=tuple(messages),
         media_paths=(),
-        response_format=request.response_format,
-        response_schema=request.response_schema,
-        tools=request.tools,
-        tool_choice=request.tool_choice,
-        parallel_tool_calls=request.parallel_tool_calls,
     )
 
 
