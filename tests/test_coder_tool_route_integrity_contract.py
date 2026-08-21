@@ -107,7 +107,7 @@ def test_tool_routing_query_ignores_external_mcp_system_boilerplate() -> None:
 
 def test_implement_phase_requires_source_edit_terminal_despite_external_metadata() -> None:
     query = small_agent._request_query(_implement_messages())
-    assert "external MCP" in query
+    assert "external MCP" not in query
     assert causal.goals_for_query(query) == ("repair",)
 
 
