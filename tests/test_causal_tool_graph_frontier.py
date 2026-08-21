@@ -63,6 +63,41 @@ def test_frontier_collects_equal_first_steps_without_per_candidate_search(monkey
     ) == ("beta", "alpha")
 
 
+def test_equal_repair_paths_prefer_goal_support_over_lexical_rank(monkeypatch) -> None:
+    transitions = {
+        "inspect_external": _transition(
+            "inspect_external",
+            requires={"workspace_bound"},
+            effects={"ecosystem_evidence", "evidence_ready"},
+        ),
+        "search_local": _transition(
+            "search_local",
+            requires={"workspace_bound"},
+            effects={"project_observed", "code_evidence", "evidence_ready"},
+        ),
+        "repair_from_external": _transition(
+            "repair_from_external",
+            requires={"evidence_ready"},
+            effects={"repaired"},
+        ),
+        "repair_from_local": _transition(
+            "repair_from_local",
+            requires={"project_observed", "evidence_ready"},
+            effects={"repaired"},
+        ),
+    }
+    monkeypatch.setattr(graph, "_transitions", lambda _schemas: transitions)
+
+    assert graph.executable_frontier(
+        (),
+        state=frozenset({"workspace_bound"}),
+        goals=("repair",),
+        limit=1,
+        max_depth=2,
+        preference={"inspect_external": 0, "search_local": 1},
+    ) == ("search_local",)
+
+
 def test_external_goal_without_executable_path_does_not_recurse(monkeypatch) -> None:
     transitions = {
         "external_mcp_call": _transition(
