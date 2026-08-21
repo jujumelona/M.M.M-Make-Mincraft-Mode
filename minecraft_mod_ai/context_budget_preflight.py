@@ -40,10 +40,23 @@ def run_context_budget_preflight() -> None:
         raise ContextBudgetPreflightError(
             "llama-server payload is missing the native unbounded completion policy"
         )
+    if (
+        getattr(
+            llama_server_hardware_policy._server_payload,
+            "_mmm_llama_tool_output_budget_v1",
+            False,
+        )
+        is not True
+    ):
+        raise ContextBudgetPreflightError(
+            "llama-server payload is missing the bounded native tool-output policy"
+        )
+
+    synthetic_adapter = SimpleNamespace(
+        config=SimpleNamespace(max_new_tokens=8192, model_id="synthetic")
+    )
     synthetic_payload = llama_server_hardware_policy._server_payload(
-        SimpleNamespace(
-            config=SimpleNamespace(max_new_tokens=8192, model_id="synthetic")
-        ),
+        synthetic_adapter,
         SimpleNamespace(
             messages=({"role": "user", "content": "test"},),
             tools=(),
@@ -55,10 +68,23 @@ def run_context_budget_preflight() -> None:
             "llama-server production payload is still capped by max_new_tokens"
         )
 
+    synthetic_tool_payload = llama_server_hardware_policy._server_payload(
+        synthetic_adapter,
+        SimpleNamespace(
+            messages=({"role": "user", "content": "edit"},),
+            tools=({"type": "function", "function": {"name": "apply_source_edit"}},),
+            response_format="json",
+        ),
+    )
+    if synthetic_tool_payload.get("max_tokens") != 4096:
+        raise ContextBudgetPreflightError(
+            "llama-server tool payload is not protected by the bounded output budget"
+        )
+
     if (
         getattr(
             llama_cpp_adapter._completion_message,
-            "_mmm_bounded_length_recovery_v1",
+            "_mmm_bounded_length_recovery_v2",
             False,
         )
         is not True
