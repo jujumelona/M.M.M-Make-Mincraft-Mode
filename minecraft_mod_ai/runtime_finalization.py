@@ -45,6 +45,7 @@ def finalize_runtime() -> None:
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
+        from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_compacting_adapter import install as install_small_model_compaction
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
@@ -78,6 +79,10 @@ def finalize_runtime() -> None:
         # A remaining finish_reason='length' is then context pressure. Recover once by
         # compacting large observations; never invent another output-token ceiling.
         install_llama_length_resilience(llama_cpp_adapter)
+        # Bootstrap's integrity stage runs before these late finalization wrappers are
+        # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
+        # fails before any retrieval/model work instead of surfacing during generation.
+        verify_installed_wrappers()
         # Exercise the exact first assistant + parallel 48 KiB tool-observation shape
         # that previously reached the server boundary before a second assistant turn.
         run_context_budget_preflight()
