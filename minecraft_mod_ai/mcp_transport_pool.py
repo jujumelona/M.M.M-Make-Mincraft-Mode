@@ -124,25 +124,16 @@ async def _stdio_session(
             args=["-m", "minecraft_mod_ai.mcp_server"],
             env=dict(env),
         )
-        # stdio_client() and ClientSession() own long-lived AnyIO task-group cancel
-        # scopes. They must remain the current outer scopes until their matching
-        # __aexit__ calls. Wrapping __aenter__ in fail_after() would close the
-        # timeout scope first and violate AnyIO's strict LIFO cancel-scope stack.
         read_stream, write_stream = await stack.enter_async_context(
             stdio_client(params, errlog=errlog)
         )
         session = await stack.enter_async_context(
             ClientSession(read_stream, write_stream)
         )
-        # Initialization is a bounded operation that completes before this timeout
-        # scope exits, so it is safe to time independently of the pooled lifetime.
         with anyio.fail_after(timeout_seconds):
             await session.initialize()
         yield session
     finally:
-        # Close the persistent MCP contexts directly in the same worker task and in
-        # AsyncExitStack LIFO order. An extra move_on_after() scope here would again
-        # sit above the MCP task-group scopes and make their __aexit__ invalid.
         await stack.aclose()
 
 
@@ -181,9 +172,6 @@ class _SessionWorker:
             self._pending += 1
 
     def submit(self, request: _TransportRequest) -> None:
-        # The pool reserves before returning this worker so simultaneous dispatchers
-        # cannot all observe the same stale pending count. Cancellation/failure then
-        # releases that reservation through the future callback exactly once.
         request.result.add_done_callback(lambda _future: self._release_pending())
         try:
             self._ensure_started()
@@ -266,6 +254,11 @@ class _SessionWorker:
                 request = await self._queue.get()
                 if request is None:
                     return
+                # A caller can cancel after enqueue while this worker is still busy.
+                # Never turn an already-cancelled queued request into a late write or
+                # other side effect that the caller has been told will not complete.
+                if request.result.cancelled():
+                    continue
                 try:
                     requested_env = dict(request.env)
                     opened_now = False
@@ -321,10 +314,6 @@ class _SessionWorker:
                 except BaseException as exc:
                     if not request.result.done():
                         request.result.set_exception(exc)
-                    # Transport-level exceptions or a schema mismatch may leave this
-                    # worker incompatible with the runtime's canonical tool surface.
-                    # Invalidate the slot so a future runtime/session must re-establish
-                    # the contract instead of executing against stale ownership.
                     if context is not None:
                         try:
                             await context.__aexit__(
