@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Bounded recovery for llama.cpp ``finish_reason='length'`` responses.
 
-Production llama.cpp requests use the server's native unlimited prediction budget
-(``max_tokens=-1``). Therefore a remaining ``length`` stop is treated as a real
-prompt/context-pressure event, not as a reason to invent another output-token ceiling.
-Recovery is exactly one retry after compacting large tool observations.
+A ``length`` stop is treated as prompt/context pressure. Recovery is exactly one retry
+after compacting large tool observations, while preserving the request's authoritative
+output-token policy. In particular, bounded tool/section turns must never be widened to
+``max_tokens=-1`` during recovery.
 """
 
 import json
@@ -15,7 +15,7 @@ from typing import Any, Mapping
 
 from .model_context_budget import emergency_fit_messages
 
-_MARKER = "_mmm_bounded_length_recovery_v1"
+_MARKER = "_mmm_bounded_length_recovery_v2"
 _LENGTH_ERROR_FRAGMENT = "reached its model/server context boundary before the assistant turn completed"
 
 
@@ -64,15 +64,15 @@ def install(llama_cpp_module: Any) -> None:
 
             retry_payload = dict(payload)
             retry_payload["messages"] = [dict(message) for message in fitted_messages]
-            # Keep llama.cpp's native unlimited generation policy. Do not replace one
-            # arbitrary max_tokens cap with another during recovery.
-            retry_payload["max_tokens"] = -1
+            # Preserve the authoritative max_tokens value from the original request.
+            # Replacing a bounded tool/page decode with -1 can consume the remaining
+            # context before the assistant finishes its semantic action.
 
             # stderr is mandatory: MCP stdio reserves stdout for JSON-RPC frames.
             print(
                 "llama length recovery: retrying once",
                 f" message_bytes={before_bytes}->{after_bytes}",
-                " max_tokens=-1",
+                f" max_tokens={retry_payload.get('max_tokens', 'model-default')}",
                 file=sys.stderr,
                 flush=True,
             )
