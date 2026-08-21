@@ -8,14 +8,14 @@ available without loading those models. Dense retrieval remains available only w
 operator explicitly sets ``MMM_RAG_ENABLE_CPU_DENSE=1``.
 
 This policy is revalidated against the *current executable owners* every time install
-runs.  Module-level installation markers are not sufficient because later runtime
+runs. Module-level installation markers are not sufficient because later runtime
 composition can legitimately replace a search wrapper while leaving an old marker
 behind.
 """
 
 import os
 from functools import wraps
-from typing import Any
+from typing import Any, Sequence
 
 _MARKER = "_mmm_retrieval_cpu_budget_v2"
 _HYBRID_MARKER = "_mmm_small_model_hybrid_code_rag"
@@ -72,7 +72,7 @@ def _lexical_pre_design_owner(current: Any) -> Any:
 def _install_live_hybrid_budget(hybrid_module: Any) -> None:
     """Prevent live ``search_code_rag`` from escalating into CPU dense work.
 
-    Check function ownership rather than a sticky module marker.  If another composer
+    Check function ownership rather than a sticky module marker. If another composer
     replaced ``_modes`` or centroid adaptation after an earlier install, this function
     binds the policy to the new executable owner instead of incorrectly returning early.
     """
@@ -108,9 +108,20 @@ def _install_live_hybrid_budget(hybrid_module: Any) -> None:
         original_adapt_query_vector = current_adapt
 
         @wraps(original_adapt_query_vector)
-        def budgeted_adapt_query_vector(router: Any, query: str, texts: Any):
+        def budgeted_adapt_query_vector(
+            router: Any,
+            query: str,
+            hit_texts: Sequence[str],
+            *,
+            alpha: float = 0.65,
+        ) -> list[float]:
             if _dense_opted_in():
-                return original_adapt_query_vector(router, query, texts)
+                return original_adapt_query_vector(
+                    router,
+                    query,
+                    hit_texts,
+                    alpha=alpha,
+                )
             return []
 
         setattr(budgeted_adapt_query_vector, _HYBRID_BUDGET_MARKER, True)
