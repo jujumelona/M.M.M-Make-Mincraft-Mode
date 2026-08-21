@@ -12,6 +12,7 @@ from minecraft_mod_ai.external_agent_bridge import (
 )
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry
 from minecraft_mod_ai.external_mcp_router import ExternalMCPRouter
+from minecraft_mod_ai.mcp_schema_integrity_contract import ensure_schema_environment
 from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -95,14 +96,71 @@ def test_router_filters_manifest_and_invocation_to_role_server_scope(tmp_path, m
     assert denied["attempts"] == []
 
 
-def test_bridge_schema_cache_isolated_by_server_scope(monkeypatch) -> None:
+def test_bridge_schema_binding_isolated_by_server_scope_and_live_refreshed(monkeypatch) -> None:
     bridge = ExternalAgentBridge()
     seen: list[frozenset[str]] = []
+
+    class ScopeRegistry:
+        def routes(self, capability, **kwargs):
+            assert capability == "source_search"
+            return [
+                {
+                    "server": server,
+                    "entry": {
+                        "status": "enabled",
+                        "transport": "stdio",
+                        "command": [server],
+                        "trust": "test",
+                    },
+                    "route": {
+                        "tool": f"{server}-lookup",
+                        "access": "read",
+                        "target_args": {},
+                    },
+                }
+                for server in ("provider-a", "provider-b")
+            ]
+
+    class ScopeRouter:
+        def __init__(self) -> None:
+            self.registry = ScopeRegistry()
+
+        @staticmethod
+        def _configured(entry):
+            return entry.get("status") == "enabled"
+
+        @staticmethod
+        def _child_env(entry):
+            return {}
+
+        @staticmethod
+        def _server_url(entry):
+            return ""
+
+    bridge._router = ScopeRouter()
 
     async def fake_describe(stage, capability, target, max_access, allowed_server_ids):
         scope = frozenset(allowed_server_ids or ())
         seen.append(scope)
-        return {"server": sorted(scope)[0], "status": "PASS"}
+        server = sorted(scope)[0]
+        return {
+            "schema_version": "fixture/external-mcp-schema-v1",
+            "capability": capability,
+            "stage": stage,
+            "target": dict(target),
+            "server": server,
+            "tool": f"{server}-lookup",
+            "access": max_access,
+            "trust": "test",
+            "target_args_injected_by_router": {},
+            "description": "fixture lookup",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            "status": "PASS",
+        }
 
     monkeypatch.setattr(bridge, "_describe_async", fake_describe)
     one = bridge.call(
@@ -126,11 +184,18 @@ def test_bridge_schema_cache_isolated_by_server_scope(monkeypatch) -> None:
     assert one["server"] == "provider-a"
     assert two["server"] == "provider-b"
     assert again == one
-    assert seen == [frozenset({"provider-a"}), frozenset({"provider-b"})]
+    # Explicit schema discovery is intentionally live. Scope partitioning prevents
+    # cross-role reuse; repeating the same scope still refreshes provider ownership.
+    assert seen == [
+        frozenset({"provider-a"}),
+        frozenset({"provider-b"}),
+        frozenset({"provider-a"}),
+    ]
 
 
 def test_agent_runtime_propagates_exact_external_server_scope(tmp_path, monkeypatch) -> None:
     runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
+    ensure_schema_environment(runtime, "generation")
     runtime._schema_cache["generation"] = tuple(
         ExternalAgentBridge.tool_schemas("generation")
     )
