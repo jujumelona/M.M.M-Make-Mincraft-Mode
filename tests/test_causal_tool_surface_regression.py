@@ -75,6 +75,47 @@ def test_hidden_authorized_qwen_tool_is_parseable_but_not_executable() -> None:
         proxy.call("generation", "apply_source_edit", {"path": "src/Main.java"})
 
 
+def test_visible_schema_wins_over_stale_authorized_schema_for_same_tool() -> None:
+    install_tool_validation_surface()
+    visible_edit = _schema(
+        "apply_source_edit",
+        {
+            "operation": {
+                "type": "string",
+                "enum": ["replace_exact", "insert_before", "insert_after"],
+            },
+            "path": {"type": "string"},
+        },
+    )
+    stale_host_edit = _schema(
+        "apply_source_edit",
+        {
+            "operation": {
+                "type": "string",
+                "enum": ["create", "replace", "edit"],
+            },
+            "path": {"type": "string"},
+        },
+    )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "repair it"},),
+        tools=(visible_edit,),
+        tool_validation_schemas=(stale_host_edit,),
+        tool_choice="auto",
+    )
+    message = {
+        "content": (
+            "<tool_call><function=apply_source_edit>"
+            "<parameter=operation>replace_exact</parameter>"
+            "<parameter=path>src/main/java/example/Main.java</parameter>"
+            "</function></tool_call>"
+        )
+    }
+
+    response = llama_cpp_adapter._qwen_tool_generation_response(message, request)
+    assert response.tool_calls[0].arguments["operation"] == "replace_exact"
+
+
 def test_truly_unauthorized_qwen_tool_still_fails_validation() -> None:
     install_tool_validation_surface()
     visible = _schema("inspect_github_repository", {"repository": {"type": "string"}})
