@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 
 import minecraft_mod_ai.colab_prefetch_bootstrap as bootstrap
@@ -39,26 +38,8 @@ def test_colab_worker_defaults_separate_io_and_cpu_budgets(monkeypatch) -> None:
     assert bootstrap._colab_worker_defaults() == (8, 4)
 
 
-def test_proposal_alias_retarget_never_introspects_foreign_lazy_modules(
-    monkeypatch,
-) -> None:
-    accesses: list[str] = []
-
-    class ForeignLazyModule:
-        def __getattr__(self, name: str):
-            accesses.append(name)
-            raise AssertionError("foreign lazy module must not be imported")
-
-    current = object()
-    replacement = object()
-    internal = SimpleNamespace(complete_proposal_from_parts=current)
-    monkeypatch.setitem(sys.modules, "transformers.lazy_test", ForeignLazyModule())
-    monkeypatch.setitem(sys.modules, "minecraft_mod_ai._proposal_alias_test", internal)
-
-    bootstrap._retarget_loaded_proposal_aliases(current, replacement)
-
-    assert internal.complete_proposal_from_parts is replacement
-    assert accesses == []
+def test_deleted_proposal_alias_migration_stays_retired() -> None:
+    assert not hasattr(bootstrap, "_retarget_loaded_proposal_aliases")
 
 
 def test_colab_bootstrap_preserves_explicit_worker_overrides(monkeypatch) -> None:
