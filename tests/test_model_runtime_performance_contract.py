@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai.model_adapters import image_diffusion as image_module
 from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
 from minecraft_mod_ai.model_adapters.image_diffusion import (
@@ -12,6 +11,7 @@ from minecraft_mod_ai.model_adapters.image_diffusion import (
     finish_image_shard,
 )
 from minecraft_mod_ai.model_adapters.reranker import RerankerAdapter
+from minecraft_mod_ai.model_router import ModelRouter
 
 
 class _DummyPipeline:
@@ -44,11 +44,7 @@ def test_expensive_non_llm_runtime_reuse_contract_is_installed() -> None:
         "_mmm_cached_reranker_model",
         False,
     )
-    assert getattr(
-        complete_orchestrator_services.generate_assets,
-        "_mmm_adaptive_image_gpu_session",
-        False,
-    )
+    assert callable(getattr(ModelRouter, "image_generation_session", None))
 
 
 def test_image_full_gpu_threshold_keeps_headroom_above_preflight(
