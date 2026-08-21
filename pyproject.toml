@@ -55,6 +55,11 @@ image = [
   "sentencepiece>=0.2,<1",
   "transformers>=4.56.0",
 ]
+# These named capability groups are requested by the Colab runtime setup but add no
+# separate Python packages: speech is remote/provider configured and production audio
+# is generated through the existing runtime/tool stack.
+speech = []
+production-audio = []
 # The current mmm-training command records/exports trace data and does not import
 # PEFT. Keep the named extra for compatibility without resolving an unused stack.
 training = []

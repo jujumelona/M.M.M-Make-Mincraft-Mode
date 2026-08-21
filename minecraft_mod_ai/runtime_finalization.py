@@ -61,13 +61,9 @@ def finalize_runtime() -> None:
         )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
-        # Every exact host-required native action now shares one transport contract.
-        # Mutation, mandatory RAG, and structured decisions all reduce to one visible
-        # function before the model request is sent, with one bounded protocol retry.
-        install_forced_tool_execution(
-            llama_cpp_module=llama_cpp_adapter,
-            openai_compatible_module=openai_compatible,
-        )
+        # Local llama.cpp tool-choice validation is adapter-owned. Only remote
+        # OpenAI-compatible transport still needs this late exact-tool wrapper.
+        install_forced_tool_execution(openai_compatible_module=openai_compatible)
         # RAG build/search may call embed/rerank repeatedly. Install this before the
         # structural preflight so a fresh process cannot silently regress to per-call
         # CPU model construction.

@@ -8,11 +8,11 @@ mandatory RAG retrieval, and structured decisions. Historically each caller set
 the rest of the current tool frontier. A model could therefore emit prose or another
 action and the caller would only discover the violation after a long generation round.
 
-The local llama.cpp adapter now owns a grammar-free host JSON tool bridge directly, so
-this late contract must not wrap it again. For remote OpenAI-compatible adapters, exact
-host choices are still reduced to one visible function and native ``required`` forcing.
-Both paths preserve the same semantic invariant: one host-required action has one model-
-visible schema and cannot silently degrade into a prose-only implementation turn.
+The local llama.cpp adapter owns and validates its host-side tool transport directly.
+This late contract only handles remote OpenAI-compatible adapters, where exact host
+choices are reduced to one visible function and native ``required`` forcing. Keeping
+those ownership boundaries separate avoids coupling runtime finalization to private
+implementation helpers inside the local adapter.
 """
 
 import json
@@ -166,14 +166,9 @@ def _install_remote_adapter_class(cls: Any) -> None:
     cls.generate_turn = generate_turn
 
 
-def install(*, llama_cpp_module: Any, openai_compatible_module: Any) -> None:
-    """Verify local host transport and install remote exact-tool forcing."""
+def install(*, openai_compatible_module: Any) -> None:
+    """Install exact-tool forcing only where transport ownership is still remote."""
 
-    if not callable(getattr(llama_cpp_module, "_host_tool_completion", None)):
-        raise RuntimeError(
-            "LlamaCppAdapter must own the host JSON tool bridge directly; runtime "
-            "forced-tool wrapping is no longer supported."
-        )
     _install_remote_adapter_class(openai_compatible_module.OpenAICompatibleAdapter)
 
 
