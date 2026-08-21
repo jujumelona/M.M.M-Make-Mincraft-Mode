@@ -108,7 +108,10 @@ def audit_internal_imports() -> list[str]:
     return errors
 
 
-def _marker_assignment(tree: ast.AST) -> bool:
+def _marker_owner_names(tree: ast.AST) -> set[str]:
+    """Return local wrapper names that are explicitly assigned an MMM marker."""
+
+    owners: set[str] = set()
     for node in ast.walk(tree):
         targets: list[ast.AST] = []
         if isinstance(node, ast.Assign):
@@ -116,9 +119,13 @@ def _marker_assignment(tree: ast.AST) -> bool:
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             targets.append(node.target)
         for target in targets:
-            if isinstance(target, ast.Attribute) and target.attr.startswith("_mmm_"):
-                return True
-    return False
+            if (
+                isinstance(target, ast.Attribute)
+                and target.attr.startswith("_mmm_")
+                and isinstance(target.value, ast.Name)
+            ):
+                owners.add(target.value.id)
+    return owners
 
 
 def _is_default_wraps(decorator: ast.AST) -> bool:
@@ -137,13 +144,13 @@ def _is_default_wraps(decorator: ast.AST) -> bool:
 
 
 def audit_contract_wrapper_metadata() -> list[str]:
-    """Reject runtime-owner files whose wrappers can inherit another owner's marker.
+    """Reject wrappers that both own a runtime marker and copy inner markers.
 
     The default functools.wraps merges ``wrapped.__dict__`` into the outer wrapper.
-    MMM stores contract ownership in ``_mmm_*`` attributes, so that default silently
-    duplicates ownership markers across layers and makes later unwrapping/idempotence
-    checks target the wrong function. Marker-owning modules must use the shared
-    marker-safe contract wrapper (or explicitly disable ``updated``).
+    MMM stores contract ownership in ``_mmm_*`` attributes, so a marker-owning wrapper
+    must use the shared marker-safe contract wrapper (or explicitly disable
+    ``updated``). Plain helper decorators in the same file are not contract owners and
+    are intentionally ignored.
     """
 
     errors: list[str] = []
@@ -152,16 +159,20 @@ def audit_contract_wrapper_metadata() -> list[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
-        if not _marker_assignment(tree):
+        marker_owners = _marker_owner_names(tree)
+        if not marker_owners:
             continue
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name not in marker_owners:
                 continue
             for decorator in node.decorator_list:
                 if _is_default_wraps(decorator):
                     errors.append(
                         f"UNSAFE_CONTRACT_WRAPS {path.relative_to(ROOT)}:"
-                        f"{decorator.lineno}: use contract_wraps or wraps(..., updated=())"
+                        f"{decorator.lineno}: {node.name} owns _mmm_* metadata; "
+                        "use contract_wraps or wraps(..., updated=())"
                     )
     return errors
 
