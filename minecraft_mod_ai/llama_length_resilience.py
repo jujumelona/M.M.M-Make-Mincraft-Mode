@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Bounded recovery for llama.cpp ``finish_reason='length'`` responses.
 
-A ``length`` stop is treated as prompt/context pressure. Recovery is exactly one retry
-after compacting large tool observations, while preserving the request's authoritative
-output-token policy. In particular, bounded tool/section turns must never be widened to
-``max_tokens=-1`` during recovery.
+A ``length`` stop can mean prompt/context pressure or exhaustion of the bounded output
+allowance. Recovery is exactly one retry after compacting large tool observations,
+while preserving the request's authoritative positive output-token policy. The retry
+message budget is deliberately tighter than the normal first-pass budget so a 32K T4
+slot still has room for the full coder tool decode.
 """
 
 import json
@@ -17,6 +18,7 @@ from .model_context_budget import emergency_fit_messages
 
 _MARKER = "_mmm_bounded_length_recovery_v2"
 _LENGTH_ERROR_FRAGMENT = "reached its model/server context boundary before the assistant turn completed"
+_LENGTH_RETRY_MESSAGE_BYTES = 32 * 1024
 
 
 def _payload_bytes(messages: Any) -> int:
@@ -55,7 +57,7 @@ def install(llama_cpp_module: Any) -> None:
             original_messages = tuple(payload.get("messages", ()) or ())
             fitted_messages = emergency_fit_messages(
                 original_messages,
-                budget_bytes=40 * 1024,
+                budget_bytes=_LENGTH_RETRY_MESSAGE_BYTES,
             )
             before_bytes = _payload_bytes(original_messages)
             after_bytes = _payload_bytes(fitted_messages)
@@ -64,9 +66,9 @@ def install(llama_cpp_module: Any) -> None:
 
             retry_payload = dict(payload)
             retry_payload["messages"] = [dict(message) for message in fitted_messages]
-            # Preserve the authoritative max_tokens value from the original request.
-            # Replacing a bounded tool/page decode with -1 can consume the remaining
-            # context before the assistant finishes its semantic action.
+            # Preserve the authoritative tool/page bound. Input fitting now reserves
+            # this exact decode allowance against the live server context, so recovery
+            # only needs to reclaim prompt space rather than mutate output policy.
 
             # stderr is mandatory: MCP stdio reserves stdout for JSON-RPC frames.
             print(
