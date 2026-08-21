@@ -64,6 +64,9 @@ def _restore_env(name: str, previous: str | None) -> None:
 
 
 def _bounded_section_request(request: Any) -> bool:
+    section_purpose = str(getattr(request, "section_purpose", "") or "").strip()
+    if section_purpose:
+        return True
     schema = getattr(request, "response_schema", None)
     properties = schema.get("properties") if isinstance(schema, Mapping) else None
     return isinstance(properties, Mapping) and "section" in properties
