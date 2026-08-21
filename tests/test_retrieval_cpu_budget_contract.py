@@ -3,7 +3,12 @@ from __future__ import annotations
 from functools import wraps
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import retrieval_cpu_budget_contract as policy
+from minecraft_mod_ai.model_adapters import embedding as embedding_module
+from minecraft_mod_ai.model_adapters import reranker as reranker_module
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, ModelConfigurationError
 
 
 class _Explorer:
@@ -31,6 +36,16 @@ def _wrapped_search_chain():
 
     demand_driven._mmm_demand_driven_dense_pre_design = True  # type: ignore[attr-defined]
     return lexical, demand_driven
+
+
+def _retrieval_config(*, role: str, adapter: str, model_id: str) -> AdapterConfig:
+    return AdapterConfig(
+        role=role,
+        adapter=adapter,
+        model_id=model_id,
+        max_context=512,
+        extra={"device": "cpu"},
+    )
 
 
 def test_repository_grounding_never_implicitly_loads_dense_models() -> None:
@@ -79,3 +94,41 @@ def test_explicit_dense_opt_in_preserves_existing_paths(monkeypatch) -> None:
 
     assert repository_grounding._explore_with_degraded_fallback is grounding_owner
     assert pre_design._search_code_index is current
+
+
+def test_embedding_loader_fails_closed_before_dependency_or_model_load(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+    monkeypatch.setattr(
+        embedding_module,
+        "require_package",
+        lambda *args, **kwargs: pytest.fail("embedding dependency check must not run"),
+    )
+    adapter = embedding_module.EmbeddingAdapter(
+        _retrieval_config(
+            role="retrieval_embedding",
+            adapter="embedding",
+            model_id="Qwen/Qwen3-Embedding-0.6B",
+        )
+    )
+
+    with pytest.raises(ModelConfigurationError, match="MMM_RAG_ENABLE_CPU_DENSE=1"):
+        adapter._load_backend()
+
+
+def test_reranker_loader_fails_closed_before_dependency_or_model_load(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+    monkeypatch.setattr(
+        reranker_module,
+        "require_package",
+        lambda *args, **kwargs: pytest.fail("reranker dependency check must not run"),
+    )
+    adapter = reranker_module.RerankerAdapter(
+        _retrieval_config(
+            role="retrieval_reranker",
+            adapter="reranker",
+            model_id="Qwen/Qwen3-Reranker-0.6B",
+        )
+    )
+
+    with pytest.raises(ModelConfigurationError, match="MMM_RAG_ENABLE_CPU_DENSE=1"):
+        adapter._load_backend()
