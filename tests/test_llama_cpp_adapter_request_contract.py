@@ -99,7 +99,7 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert payload["top_k"] == 20
     assert "min_p" not in payload
     assert payload["presence_penalty"] == 1.5
-    assert payload["repeat_penalty"] == 1.0
+    assert "repeat_penalty" not in payload
 
 
 def test_generate_turn_rejects_server_parsed_openai_tool_calls(monkeypatch) -> None:
