@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -26,11 +28,31 @@ class _RerankerBackend:
 
 _BACKEND_CACHE_LOCK = threading.RLock()
 _BACKEND_CACHE: dict[tuple[str, str, str, str], _RerankerBackend] = {}
+_SCORE_CACHE_LOCK = threading.RLock()
+_SCORE_CACHE: OrderedDict[tuple[str, str, str, str, str], tuple[float, ...]] = OrderedDict()
 
 
 def _cache_enabled() -> bool:
     raw = os.environ.get("MMM_CPU_RETRIEVAL_CACHE", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def _result_cache_limit() -> int:
+    raw = os.environ.get("MMM_CPU_RETRIEVAL_RESULT_CACHE_ENTRIES", "256").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 256
+    return max(1, min(4096, value))
+
+
+def _score_digest(query: str, instruction: str, documents: Sequence[str]) -> str:
+    digest = hashlib.sha256()
+    for value in (query, instruction, *documents):
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
 
 
 class RerankerAdapter:
@@ -40,7 +62,8 @@ class RerankerAdapter:
     only on an adapter instance therefore causes repeated multi-gigabyte loads. A
     backend is cached by immutable model/runtime configuration and guarded by its
     own lock, so unrelated reranker profiles do not share one global serialization
-    point.
+    point. Exact query/document reranks are also memoized because the agent may
+    revisit the same bounded candidate surface across adjacent causal-frontier turns.
     """
 
     def __init__(self, config: AdapterConfig) -> None:
@@ -54,6 +77,14 @@ class RerankerAdapter:
             self.config.torch_dtype,
             str(self.config.extra.get("revision", "")).strip(),
         )
+
+    def _score_cache_key(
+        self,
+        query: str,
+        instruction: str,
+        documents: Sequence[str],
+    ) -> tuple[str, str, str, str, str]:
+        return (*self._backend_key(), _score_digest(query, instruction, documents))
 
     def _load_backend(self) -> _RerankerBackend:
         require_package("transformers", minimum="4.52.0")
@@ -123,6 +154,20 @@ class RerankerAdapter:
         docs = [str(document).strip() for document in documents]
         if not query or not docs or any(not document for document in docs):
             raise ValueError("Reranker query and documents must be non-empty.")
+
+        cache_key = self._score_cache_key(query, instruction, docs)
+        if _cache_enabled():
+            with _SCORE_CACHE_LOCK:
+                cached = _SCORE_CACHE.get(cache_key)
+                if cached is not None:
+                    _SCORE_CACHE.move_to_end(cache_key)
+                    print(
+                        "retrieval reranker: score cache hit",
+                        f"documents={len(docs)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return list(cached)
 
         try:
             import torch
@@ -198,7 +243,14 @@ class RerankerAdapter:
                     file=sys.stderr,
                     flush=True,
                 )
-            return [float(value) for value in values if value is not None]
+            result = tuple(float(value) for value in values if value is not None)
+            if _cache_enabled():
+                with _SCORE_CACHE_LOCK:
+                    _SCORE_CACHE[cache_key] = result
+                    _SCORE_CACHE.move_to_end(cache_key)
+                    while len(_SCORE_CACHE) > _result_cache_limit():
+                        _SCORE_CACHE.popitem(last=False)
+            return list(result)
         except Exception as exc:
             raise ModelBackendError(
                 role=self.config.role,
