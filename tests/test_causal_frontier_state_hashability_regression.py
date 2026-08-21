@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from minecraft_mod_ai import causal_frontier_adapter as frontier_module
+from minecraft_mod_ai import causal_state_ledger as ledger_module
 from minecraft_mod_ai.causal_frontier_adapter import CausalFrontierAdapter
 from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse
 
@@ -48,12 +49,12 @@ def test_per_turn_frontier_freezes_runtime_state_before_graph_search(monkeypatch
     monkeypatch.setattr(frontier_module, "authorized_tools", lambda fallback: tuple(fallback))
     monkeypatch.setattr(frontier_module, "executable_frontier", fake_frontier)
     monkeypatch.setattr(
-        frontier_module,
+        ledger_module,
         "verified_state_from_messages",
         lambda *args, **kwargs: frozenset({"workspace_bound"}),
     )
     monkeypatch.setattr(
-        frontier_module,
+        ledger_module,
         "host_baseline_causal_facts",
         lambda messages: {"workspace_bound"},
     )
