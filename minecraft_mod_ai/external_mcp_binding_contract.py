@@ -11,6 +11,7 @@ and invokes exactly that reviewed server/tool pair.  Provider/schema drift requi
 an explicit schema refresh instead of silent failover.
 """
 
+import copy
 import hashlib
 import json
 from functools import wraps
@@ -20,6 +21,7 @@ from .mcp_schema_integrity_contract import validate_input_schema
 
 _MARKER = "_mmm_external_mcp_schema_binding_v1"
 _ROUTER_MARKER = "_mmm_external_mcp_bound_invoke_v1"
+_TOOL_SCHEMA_MARKER = "_mmm_external_mcp_bound_schema_v1"
 _BINDINGS_ATTR = "_mmm_external_schema_bindings"
 
 
@@ -83,6 +85,25 @@ def _schema_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         if name in payload:
             result[name] = payload[name]
     return result
+
+
+def _run_live_provider_schema(
+    bridge: Any,
+    bridge_module: Any,
+    router: Any,
+    route: Mapping[str, Any],
+    binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    async def read_live() -> dict[str, Any]:
+        return await bridge_module._provider_schema(
+            route["entry"],
+            tool=binding["tool"],
+            env=router._child_env(route["entry"]),
+            url=router._server_url(route["entry"]),
+            timeout_seconds=min(bridge.timeout_seconds, 120.0),
+        )
+
+    return bridge._run_async(read_live)
 
 
 def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) -> None:
@@ -193,6 +214,33 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
         setattr(router_class, _ROUTER_MARKER, True)
 
     bridge_class = external_agent_bridge_module.ExternalAgentBridge
+
+    current_tool_schemas = bridge_class.tool_schemas
+    if not bool(getattr(current_tool_schemas, _TOOL_SCHEMA_MARKER, False)):
+
+        @wraps(current_tool_schemas)
+        def tool_schemas(stage: str):
+            rows = copy.deepcopy(tuple(current_tool_schemas(stage)))
+            for row in rows:
+                function = row.get("function", {})
+                if function.get("name") != external_agent_bridge_module.CALL_TOOL:
+                    continue
+                parameters = function.get("parameters", {})
+                properties = parameters.get("properties", {})
+                corroborate = properties.get("corroborate")
+                if isinstance(corroborate, dict):
+                    corroborate["maximum"] = 1
+                    corroborate["default"] = 1
+                    corroborate["description"] = (
+                        "Schema-bound calls execute exactly the provider/tool contract "
+                        "validated by external_mcp_schema."
+                    )
+            return rows
+
+        setattr(tool_schemas, _TOOL_SCHEMA_MARKER, True)
+        tool_schemas.__wrapped__ = current_tool_schemas  # type: ignore[attr-defined]
+        bridge_class.tool_schemas = staticmethod(tool_schemas)
+
     current = bridge_class.call
     if bool(getattr(current, _MARKER, False)):
         return
@@ -214,8 +262,8 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
             payload=payload,
             allowed_server_ids=allowed_server_ids,
         )
-        # The core bridge caches schema results indefinitely.  A schema query is a
-        # live contract boundary, so bypass any stale cache before selecting an owner.
+        # The core bridge caches schema results indefinitely. A schema query is a
+        # live contract boundary, so bypass stale cache before selecting an owner.
         with self._lock:
             self._schema_cache.pop(key, None)
         result = current(
@@ -345,15 +393,9 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 "arguments must be an object"
             )
         corroborate = payload.get("corroborate", 1)
-        if type(corroborate) is not int or not 1 <= corroborate <= 4:
+        if type(corroborate) is not int or corroborate != 1:
             raise external_agent_bridge_module.ExternalAgentBridgeError(
-                "corroborate must be an integer from 1 to 4"
-            )
-        if corroborate != 1:
-            raise external_agent_bridge_module.ExternalAgentBridgeError(
-                "Schema-bound external MCP execution requires corroborate=1; "
-                "cross-provider corroboration must discover and validate each provider schema "
-                "explicitly instead of silently sharing one provider's contract."
+                "corroborate must be exactly 1 for schema-bound external MCP execution"
             )
         disposable_runtime = payload.get("disposable_runtime", False)
         if type(disposable_runtime) is not bool:
@@ -407,13 +449,12 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 allowed_server_ids=allowed,
                 binding=binding,
             )
-            live = self._run_async(
-                external_agent_bridge_module._provider_schema,
-                route["entry"],
-                tool=binding["tool"],
-                env=router._child_env(route["entry"]),
-                url=router._server_url(route["entry"]),
-                timeout_seconds=min(self.timeout_seconds, 120.0),
+            live = _run_live_provider_schema(
+                self,
+                external_agent_bridge_module,
+                router,
+                route,
+                binding,
             )
             live_schema = validate_input_schema(
                 live.get("input_schema"),
