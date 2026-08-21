@@ -40,7 +40,10 @@ def finalize_runtime() -> None:
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
-        from .bounded_source_edit_contract import install as install_bounded_source_edit
+        from .bounded_source_edit_contract import (
+            BOUNDED_SOURCE_EDIT_SCHEMA,
+            install as install_bounded_source_edit,
+        )
         from .causal_stale_tool_recovery_contract import install as install_stale_tool_recovery
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .context_budget_preflight import run_context_budget_preflight
@@ -65,8 +68,10 @@ def finalize_runtime() -> None:
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_compacting_adapter import install as install_small_model_compaction
         from .source_edit_scalar_protocol_contract import (
+            SOURCE_EDIT_SCHEMA,
             install as install_scalar_source_edit_protocol,
         )
+        from .tool_schema_ownership_contract import install as install_tool_schema_ownership
         from .tool_validation_surface_contract import install as install_tool_validation_surface
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
@@ -88,6 +93,18 @@ def finalize_runtime() -> None:
         install_scalar_source_edit_protocol(
             small_model_execution_extensions_contract,
             agent_tool_runtime,
+        )
+        # Schema producers may be layered, but ownership is singular at the final
+        # runtime boundary. Validate the composed surface before AgentToolRuntime can
+        # cache it or dispatch by name, and pin the two source-write projections to
+        # their final model-facing contracts so wrapper order cannot silently regress
+        # them to an older host/raw schema.
+        install_tool_schema_ownership(
+            agent_tool_runtime,
+            expected_parameters={
+                "apply_source_patch": BOUNDED_SOURCE_EDIT_SCHEMA,
+                "apply_source_edit": SOURCE_EDIT_SCHEMA,
+            },
         )
         install_route_integrity(
             model_router_module=model_router,
