@@ -90,9 +90,12 @@ def test_independent_read_tools_execute_in_parallel(monkeypatch) -> None:
     active = 0
     max_active = 0
 
+    # Both reads are equal-cost first steps for the observe frontier. This proves the
+    # executor still overlaps independent reads without requiring the causal planner
+    # to expose a redundant, non-minimal retrieval route merely for the test.
     class Runtime:
         def tool_schemas(self, stage):
-            return (_schema("search_code_rag"), _schema("search_project_rag"))
+            return (_schema("search_code_rag"), _schema("java_workspace_symbols"))
 
         def call(self, stage, name, arguments):
             nonlocal active, max_active
@@ -111,6 +114,9 @@ def test_independent_read_tools_execute_in_parallel(monkeypatch) -> None:
         def generate_turn(self, request):
             self.count += 1
             if self.count == 1:
+                assert {
+                    item["function"]["name"] for item in request.tools
+                } == {"search_code_rag", "java_workspace_symbols"}
                 return GenerationResponse(tool_calls=(
                     ToolCall(
                         id="a",
@@ -120,7 +126,7 @@ def test_independent_read_tools_execute_in_parallel(monkeypatch) -> None:
                     ),
                     ToolCall(
                         id="b",
-                        name="search_project_rag",
+                        name="java_workspace_symbols",
                         arguments={"query": "b"},
                         raw_arguments='{"query":"b"}',
                     ),
