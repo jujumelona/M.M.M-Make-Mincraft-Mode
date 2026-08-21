@@ -17,9 +17,8 @@ def test_dependency_route_escalates_cost_only_after_cheap_graph_pass() -> None:
     assert modes[2] == (True, True, "semantic+rerank+relations")
 
 
-def test_free_semantic_queries_keep_semantic_first() -> None:
-    assert _modes("semantic", False, False)[0] == (
-        True,
-        True,
-        "semantic+rerank",
-    )
+def test_free_semantic_queries_escalate_only_after_cheap_search() -> None:
+    modes = _modes("semantic", False, False)
+    assert modes[0] == (False, False, "lexical")
+    assert modes[1] == (False, True, "lexical+rerank")
+    assert modes[2] == (True, True, "semantic+rerank")
