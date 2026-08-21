@@ -536,7 +536,7 @@ def _harden_test_time_scaling() -> None:
         if mode != "auto":
             return mode
         try:
-            from .max_efficiency_runtime_contract import _active_parallelism
+            from .llama_parallel_runtime_contract import _active_parallelism
 
             slots = int(_active_parallelism())
         except Exception:

@@ -148,15 +148,6 @@ def _install_search_width(generation_search: Any, repair_search: Any) -> None:
 
         @wraps(current_width)
         def width(module: Any) -> int:
-            # max_efficiency_runtime_contract uses this ContextVar to stop nested
-            # candidate search inside an already isolated candidate.
-            try:
-                from .max_efficiency_runtime_contract import _FORCE_SINGLE_CUSTOM_SEARCH
-
-                if _FORCE_SINGLE_CUSTOM_SEARCH.get():
-                    return 1
-            except Exception:
-                pass
             base = int(current_width(module))
             mode = _scaling_mode()
             if mode == "off":
