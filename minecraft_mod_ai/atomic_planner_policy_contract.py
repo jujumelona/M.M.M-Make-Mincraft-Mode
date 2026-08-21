@@ -4,6 +4,8 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any
 
+from .runtime_contract_wrappers import has_contract_marker
+
 
 def _reviewer_capable(router: Any) -> bool:
     registry = getattr(router, "registry", None)
@@ -28,7 +30,7 @@ def install(atomic_module: Any, complete_planner_module: Any) -> None:
 
     cls = complete_planner_module.CompleteGameDesignPlanner
     current = cls.plan
-    if getattr(current, "_mmm_atomic_planner_policy", False):
+    if has_contract_marker(current, "_mmm_atomic_planner_policy"):
         return
     base = getattr(current, "__wrapped__", current)
 
