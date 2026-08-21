@@ -3,9 +3,9 @@ from __future__ import annotations
 """Context-budget fitting for tool-capable small/local model turns.
 
 The ordinary history compactor is exchange-oriented: it can replace older assistant
-rounds with a recoverable ledger.  The first tool round is different because there is
-no *older* assistant exchange to drop yet.  Large RAG/LSP observations can therefore
-fill the server context before the second assistant turn.  This module handles that
+rounds with a recoverable ledger. The first tool round is different because there is
+no *older* assistant exchange to drop yet. Large RAG/LSP observations can therefore
+fill the server context before the second assistant turn. This module handles that
 first-round boundary by archiving exact tool observations and keeping a bounded,
 recoverable evidence preview in the protocol-preserving tool message.
 """
@@ -46,12 +46,30 @@ def _default_context_bytes() -> int:
     return max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, value))
 
 
+def _effective_context_tokens(config: Any) -> int:
+    """Return the context of the runtime slot that will actually serve the request."""
+
+    adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
+    if adapter == "llama_cpp":
+        # Keep prompt fitting and llama-server launch on one context policy. Qwen3.5
+        # advertises a 262K model capacity but the T4 runtime intentionally launches a
+        # 32K slot; using the registry maximum here lets oversized prompts bypass the
+        # compactor and fail only after an expensive decode has started.
+        from .llama_server_runtime_tuning import _per_request_context
+
+        return max(0, int(_per_request_context(config)))
+    try:
+        return max(0, int(getattr(config, "max_context", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
     """Return a conservative message-byte budget with tool/output space reserved."""
 
     default = _default_context_bytes()
     try:
-        max_context = max(0, int(getattr(config, "max_context", 0) or 0))
+        max_context = _effective_context_tokens(config)
         max_new_tokens = max(0, int(getattr(config, "max_new_tokens", 0) or 0))
     except (TypeError, ValueError):
         return default
@@ -59,11 +77,17 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
         return default
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
-    # Native llama-server production requests use max_tokens=-1. Reserving the
-    # registry max_new_tokens here would silently reintroduce the old 8K-style cap on
-    # the input side even though generation itself is unbounded. Keep only a fixed
-    # safety guard for EOS/tool completion and the actual tool-schema footprint.
-    reserved_output_tokens = 0 if adapter == "llama_cpp" else max_new_tokens
+    if adapter == "llama_cpp" and tools:
+        # Native text turns may use unlimited prediction, but tool turns are explicitly
+        # bounded. Reserve the exact same positive tool budget that the final server
+        # payload will receive so input compaction cannot consume its decode headroom.
+        from .llama_tool_output_budget import tool_output_budget
+
+        reserved_output_tokens = tool_output_budget(config)
+    elif adapter == "llama_cpp":
+        reserved_output_tokens = 0
+    else:
+        reserved_output_tokens = max_new_tokens
 
     # Byte accounting is intentionally conservative for code/JSON-heavy turns.
     # Tool schemas consume the same server context but are not part of messages.
@@ -170,7 +194,7 @@ def _compact_tool_messages(
         original = dict(values[index])
         archive = _archive_transcript((original,))
         if not bool(archive.get("available")):
-            # Keep the research contract lossless.  A failed archive must never be
+            # Keep the research contract lossless. A failed archive must never be
             # disguised as successful context compaction.
             continue
         replacement = dict(original)
