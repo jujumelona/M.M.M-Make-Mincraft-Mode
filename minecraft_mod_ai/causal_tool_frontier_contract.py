@@ -300,6 +300,7 @@ def _install_live_loop() -> None:
             execution_gate=execution_gate,
             authorized_surface=complete_surface,
             preference=complete_preference,
+            request_template=host_request,
         )
         clear_current_frontier()
         try:
