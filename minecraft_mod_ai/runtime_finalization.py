@@ -57,6 +57,7 @@ def finalize_runtime() -> None:
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_compacting_adapter import install as install_small_model_compaction
+        from .tool_validation_surface_contract import install as install_tool_validation_surface
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
         # retrieval replaces ModelRouter._generate_with_tools late. Structured intent
@@ -98,6 +99,9 @@ def finalize_runtime() -> None:
         # every unbounded/profile wrapper so a large RAG context cannot let a tool JSON
         # decode consume the remaining model context before the action closes.
         install_llama_tool_output_budget(llama_server_hardware_policy)
+        # Parse stale but host-authorized tool names against the complete authorized
+        # surface; execution remains restricted by the per-turn causal visibility gate.
+        install_tool_validation_surface()
         # A transient local inference failure occurs before any semantic turn reaches
         # ModelRouter, so exactly one transport retry cannot duplicate a tool action.
         # Install this inside length recovery: 5xx/connection recovery happens first,
