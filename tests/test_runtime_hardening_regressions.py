@@ -163,15 +163,15 @@ def test_custom_search_propagates_keyboard_interrupt(monkeypatch, tmp_path: Path
             self._cached_root = None
 
         def generate(self, *_args, **_kwargs):
-            raise AssertionError("capture stub should own this test")
+            return {"unreachable": True}
 
     fake_module = SimpleNamespace(CustomModuleGenerator=Generator)
     monkeypatch.setattr(custom_search, "_width", lambda _module: 2)
 
-    def capture(*_args, **_kwargs):
+    def interrupt(*_args, **_kwargs):
         raise KeyboardInterrupt()
 
-    monkeypatch.setattr(custom_search, "_capture_candidate", capture)
+    monkeypatch.setattr(custom_search, "_run_single_with_research", interrupt)
     custom_search.install(fake_module)
     with pytest.raises(KeyboardInterrupt):
         Generator().generate(tmp_path, module=SimpleNamespace())
@@ -184,16 +184,21 @@ def test_t4_aliases_resolve_to_actual_qwen35_9b() -> None:
             planner = registry.role(profile, "planner")
             assert planner.model_id == "unsloth/Qwen3.5-9B-MTP-GGUF"
             assert planner.extra["gguf_filename"] == "Qwen3.5-9B-UD-Q4_K_XL.gguf"
+            assert planner.extra["runtime_context_default"] == 32768
             assert planner.max_context == 262144
 
 
-def test_bounded_section_budget_does_not_cap_paginated_qwen_json(monkeypatch) -> None:
+def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_BOUNDED_SECTION_MAX_TOKENS", raising=False)
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     adapter = SimpleNamespace(
         config=SimpleNamespace(
             model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+            extra={
+                "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+                "runtime_contract": "qwen",
+                "decode_hotpath": "t4_mtp",
+            },
             max_new_tokens=8192,
         )
     )
