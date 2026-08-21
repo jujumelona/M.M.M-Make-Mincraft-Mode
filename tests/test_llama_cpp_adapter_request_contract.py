@@ -88,12 +88,12 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert turn.content == '{"game_design":{}}'
     payload = captured["payload"]
     assert payload["tools"] == [_tool()]
-    assert payload["tool_choice"] == "auto"
+    assert payload["tool_choice"] == "none"
     assert payload["parallel_tool_calls"] is True
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
-    assert "reasoning_effort" not in payload
-    assert "chat_template_kwargs" not in payload
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["temperature"] == 1.0
     assert payload["top_p"] == 0.95
     assert payload["top_k"] == 20
@@ -102,7 +102,7 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert payload["repeat_penalty"] == 1.0
 
 
-def test_generate_turn_parses_native_openai_tool_calls(monkeypatch) -> None:
+def test_generate_turn_rejects_server_parsed_openai_tool_calls(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
@@ -138,18 +138,10 @@ def test_generate_turn_parses_native_openai_tool_calls(monkeypatch) -> None:
         parallel_tool_calls=True,
     )
 
-    turn = _adapter().generate_turn(request)
-    assert turn.content == ""
-    assert len(turn.tool_calls) == 1
-    assert turn.tool_calls[0].id == "call_7"
-    assert turn.tool_calls[0].name == "lookup"
-    assert turn.tool_calls[0].arguments == {"q": "x"}
+    with pytest.raises(ModelBackendError, match="server-parsed tool_calls"):
+        _adapter().generate_turn(request)
     assert captured["payload"]["tools"] == [_tool()]
-    rendered = "\n".join(
-        str(message.get("content", ""))
-        for message in captured["payload"]["messages"]
-    )
-    assert "mmm/host-tool-envelope" not in rendered
+    assert captured["payload"]["tool_choice"] == "none"
 
 
 def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatch) -> None:
@@ -171,17 +163,12 @@ def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatc
             payload={
                 "choices": [{
                     "message": {
-                        "content": "",
-                        "tool_calls": [{
-                            "id": "call_evidence",
-                            "type": "function",
-                            "function": {
-                                "name": "lookup",
-                                "arguments": '{"q":"exact api"}',
-                            },
-                        }],
-                    },
-                    "finish_reason": "tool_calls",
+                        "content": (
+                            "<tool_call><function=lookup>"
+                            "<parameter=q>exact api</parameter>"
+                            "</function></tool_call>"
+                        ),
+                    }
                 }]
             },
         ),
@@ -204,6 +191,7 @@ def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatc
     assert len(payloads) == 2
     assert len(turn.tool_calls) == 1
     assert turn.tool_calls[0].name == "lookup"
+    assert turn.tool_calls[0].arguments == {"q": "exact api"}
     assert turn.reasoning_content == "I need exact evidence before answering."
     continuation_messages = payloads[1]["messages"]
     assert continuation_messages[-2]["role"] == "assistant"
@@ -211,6 +199,7 @@ def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatc
     assert continuation_messages[-1]["role"] == "user"
     assert "Do not return another reasoning-only response" in continuation_messages[-1]["content"]
     assert payloads[1]["tools"] == [_tool()]
+    assert payloads[1]["tool_choice"] == "none"
 
 
 def test_repeated_reasoning_only_turn_fails_closed_after_one_continuation(monkeypatch) -> None:
@@ -243,7 +232,7 @@ def test_repeated_reasoning_only_turn_fails_closed_after_one_continuation(monkey
         )
 
     assert calls == 2
-    assert "reasoning-only continuation without a semantic action" in str(caught.value)
+    assert "reasoning-only tool continuation without a semantic action" in str(caught.value)
 
 
 def test_fully_empty_native_turn_still_fails_immediately(monkeypatch) -> None:
@@ -269,7 +258,7 @@ def test_fully_empty_native_turn_still_fails_immediately(monkeypatch) -> None:
         )
 
     assert calls == 1
-    assert "neither visible content, reasoning, nor tool calls" in str(caught.value)
+    assert "neither visible content, reasoning, nor Qwen tool calls" in str(caught.value)
 
 
 def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatch) -> None:
