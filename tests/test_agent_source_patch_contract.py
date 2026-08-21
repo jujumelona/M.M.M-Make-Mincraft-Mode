@@ -38,12 +38,19 @@ def _capture_first_party_payload(runtime, monkeypatch):
     return captured
 
 
-def test_model_source_patch_schema_exposes_only_files_and_content() -> None:
+def test_model_source_patch_schema_exposes_only_bounded_anchored_edits() -> None:
     assert _MODEL_SOURCE_PATCH_SCHEMA["required"] == ["files"]
     assert set(_MODEL_SOURCE_PATCH_SCHEMA["properties"]) == {"files"}
-    file_schema = _MODEL_SOURCE_PATCH_SCHEMA["properties"]["files"]["items"]
-    assert file_schema["required"] == ["path", "content"]
-    assert set(file_schema["properties"]) == {"path", "content"}
+    files = _MODEL_SOURCE_PATCH_SCHEMA["properties"]["files"]
+    assert files["maxItems"] == 4
+    file_schema = files["items"]
+    assert file_schema["required"] == ["path", "edits"]
+    assert set(file_schema["properties"]) == {"path", "edits"}
+    edits = file_schema["properties"]["edits"]
+    assert edits["maxItems"] == 8
+    assert edits["items"]["required"] == ["old_text", "new_text"]
+    assert set(edits["items"]["properties"]) == {"old_text", "new_text"}
+    assert "content" not in file_schema["properties"]
     assert "operation" not in file_schema["properties"]
     assert "expected_sha256" not in file_schema["properties"]
     assert "project_root" not in _MODEL_SOURCE_PATCH_SCHEMA["properties"]
@@ -107,7 +114,12 @@ def test_model_scoped_call_materializes_host_patch_metadata(monkeypatch, tmp_pat
             "files": [
                 {
                     "path": "src/main/java/example/Example.java",
-                    "content": "package example;\nfinal class Example {}\n",
+                    "edits": [
+                        {
+                            "old_text": "",
+                            "new_text": "package example;\nfinal class Example {}\n",
+                        }
+                    ],
                 }
             ]
         },
@@ -127,7 +139,7 @@ def test_model_scoped_call_materializes_host_patch_metadata(monkeypatch, tmp_pat
     ]
 
 
-def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> None:
+def test_host_resolves_project_and_applies_unique_span_with_exact_sha(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
@@ -142,7 +154,12 @@ def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> No
             "files": [
                 {
                     "path": "src/main/java/example/Example.java",
-                    "content": updated,
+                    "edits": [
+                        {
+                            "old_text": "final class Example {}",
+                            "new_text": "final class Example { int value = 1; }",
+                        }
+                    ],
                 }
             ],
         },
@@ -163,7 +180,34 @@ def test_host_resolves_project_and_derives_replace_and_exact_sha(tmp_path) -> No
     assert source.read_text(encoding="utf-8") == updated
 
 
-def test_host_derives_create_without_model_patch_metadata(tmp_path) -> None:
+def test_multiple_micro_edits_are_applied_sequentially(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("final class Example {\n    int a = 1;\n}\n", encoding="utf-8")
+
+    payload = _materialize_model_source_patch(
+        workspace,
+        {
+            "files": [
+                {
+                    "path": "src/main/java/example/Example.java",
+                    "edits": [
+                        {"old_text": "int a = 1;", "new_text": "int a = 2;"},
+                        {"old_text": "int a = 2;", "new_text": "int value = 2;"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert payload["operations"][0]["content"] == (
+        "final class Example {\n    int value = 2;\n}\n"
+    )
+
+
+def test_host_derives_create_from_one_empty_anchor(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     _project(workspace)
 
@@ -173,13 +217,17 @@ def test_host_derives_create_without_model_patch_metadata(tmp_path) -> None:
             "files": [
                 {
                     "path": "src/main/resources/assets/demo/lang/en_us.json",
-                    "content": '{"item.demo.example":"Example"}\n',
+                    "edits": [
+                        {
+                            "old_text": "",
+                            "new_text": '{"item.demo.example":"Example"}\n',
+                        }
+                    ],
                 }
             ],
         },
     )
 
-    assert payload["project_root"] == "demo"
     assert payload["operations"] == [
         {
             "operation": "create",
@@ -187,6 +235,45 @@ def test_host_derives_create_without_model_patch_metadata(tmp_path) -> None:
             "content": '{"item.demo.example":"Example"}\n',
         }
     ]
+
+
+def test_existing_file_requires_one_exact_unique_anchor(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("int value;\nint value;\n", encoding="utf-8")
+
+    with pytest.raises(AgentToolRuntimeError, match="matched 2 times"):
+        _materialize_model_source_patch(
+            workspace,
+            {
+                "files": [
+                    {
+                        "path": "src/main/java/example/Example.java",
+                        "edits": [{"old_text": "int value;", "new_text": "int count;"}],
+                    }
+                ]
+            },
+        )
+
+
+def test_model_action_size_is_bounded_instead_of_consuming_decode_context(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    _project(workspace)
+
+    with pytest.raises(AgentToolRuntimeError, match="new_text exceeds"):
+        _materialize_model_source_patch(
+            workspace,
+            {
+                "files": [
+                    {
+                        "path": "src/main/java/example/Huge.java",
+                        "edits": [{"old_text": "", "new_text": "x" * (8 * 1024 + 1)}],
+                    }
+                ]
+            },
+        )
 
 
 def test_model_source_patch_cannot_target_gradle_or_build_infrastructure(tmp_path) -> None:
@@ -200,7 +287,12 @@ def test_model_source_patch_cannot_target_gradle_or_build_infrastructure(tmp_pat
                 "files": [
                     {
                         "path": "gradle/wrapper/gradle-wrapper.properties",
-                        "content": "distributionUrl=should-never-be-model-owned\n",
+                        "edits": [
+                            {
+                                "old_text": "",
+                                "new_text": "distributionUrl=should-never-be-model-owned\n",
+                            }
+                        ],
                     }
                 ],
             },
@@ -219,7 +311,7 @@ def test_model_cannot_choose_project_root_or_smuggle_patch_fields(tmp_path) -> N
                 "files": [
                     {
                         "path": "src/main/java/example/Example.java",
-                        "content": "final class Example {}\n",
+                        "edits": [{"old_text": "", "new_text": "final class Example {}\n"}],
                     }
                 ],
                 "operations": [],
@@ -239,7 +331,7 @@ def test_host_refuses_ambiguous_project_root_instead_of_asking_model(tmp_path) -
                 "files": [
                     {
                         "path": "src/main/java/example/Example.java",
-                        "content": "final class Example {}\n",
+                        "edits": [{"old_text": "", "new_text": "final class Example {}\n"}],
                     }
                 ]
             },
