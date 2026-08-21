@@ -25,12 +25,14 @@ def finalize_runtime() -> None:
         if _FINALIZED:
             return
 
+        from . import agent_capability_context
         from . import agent_tool_runtime
         from . import causal_tool_frontier_contract
         from . import llama_server_autotune
         from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
         from . import model_router
+        from . import model_tool_aliases
         from . import parallel_runtime_contract
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
@@ -45,6 +47,7 @@ def finalize_runtime() -> None:
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter, openai_compatible
         from .model_prefetch_resilience import install as install_prefetch_resilience
+        from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
@@ -76,6 +79,10 @@ def finalize_runtime() -> None:
         # the tool loop instead of delegating through that old callable. Re-bind the
         # compactor here, after every loop owner, so it is on the executable path.
         install_small_model_compaction(model_router)
+        # Alias ACIs share one reviewed permission namespace with their canonical tool.
+        # Normalize before the already-composed Skill permission stack so late wrapper
+        # rebinding cannot make an alias report a narrower authorization set.
+        install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         # MTP-capable llama.cpp profiles already reuse prompt state through the native
         # prompt cache. Drop the duplicate RAM arena only for those profiles, while
         # keeping the generic bounded cache reservation for non-MTP launches.
