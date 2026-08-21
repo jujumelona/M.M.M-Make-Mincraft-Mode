@@ -75,7 +75,7 @@ def test_causal_frontier_advances_only_after_verified_observations() -> None:
         goals=("repair",),
         limit=3,
         preference={"inspect_existing_mod": 0, "search_code_rag": 1},
-    ) == ("inspect_existing_mod", "search_code_rag")
+    ) == ("search_code_rag",)
 
     after_inspect = verified_state_from_messages(
         [{"role": "tool", "name": "inspect_existing_mod", "content": '{"ok":true}'}],
@@ -178,11 +178,7 @@ def test_semantic_rank_only_breaks_ties_between_equal_minimum_causal_paths() -> 
         max_depth=8,
         preference=preference,
     )
-    assert frontier == (
-        "inspect_existing_mod",
-        "search_code_rag",
-        "search_project_rag",
-    )
+    assert frontier == ("search_code_rag",)
     assert "generate_fabric_project" not in frontier
     repair_path = shortest_causal_path(tools, state=state, goals=("repair",), max_depth=8)
     assert repair_path[-1] == "apply_source_patch"
@@ -201,8 +197,38 @@ def test_external_mcp_frontier_allows_direct_call_when_arguments_are_known() -> 
     assert 1 <= len(frontier) <= 3
     assert "external_mcp_call" in frontier
 
-    after_call = verified_state_from_messages(
+    transport_only = verified_state_from_messages(
         [{"role": "tool", "name": "external_mcp_call", "content": '{"ok":true}'}],
+        tools,
+        require_fresh_evidence=True,
+    )
+    assert "external_observation" not in transport_only
+    assert "evidence_ready" not in transport_only
+
+    bundle = {
+        "ok": True,
+        "result": {
+            "schema_version": "mmm/external-mcp-evidence-bundle-v1",
+            "status": "PASS",
+            "required_corroboration": 1,
+            "evidence": [
+                {
+                    "schema_version": "mmm/external-mcp-call-receipt-v1",
+                    "status": "PASS",
+                    "access": "read",
+                    "result": {"structured": {"symbol": "Block"}},
+                }
+            ],
+        },
+    }
+    after_call = verified_state_from_messages(
+        [
+            {
+                "role": "tool",
+                "name": "external_mcp_call",
+                "content": json.dumps(bundle),
+            }
+        ],
         tools,
         require_fresh_evidence=True,
     )
