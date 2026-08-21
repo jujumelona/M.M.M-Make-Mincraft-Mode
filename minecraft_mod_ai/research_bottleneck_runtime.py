@@ -13,7 +13,6 @@ import sys
 import weakref
 from functools import wraps
 from pathlib import Path
-from typing import Any
 
 
 def _restore_complete_plan_collection_pages() -> None:

@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 from contextlib import redirect_stdout
-from typing import Any, Mapping
+from typing import Any
 
 _PREFLIGHT_LOCK = threading.RLock()
 _PREFLIGHT_DONE = False
