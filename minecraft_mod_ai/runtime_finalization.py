@@ -49,6 +49,9 @@ def finalize_runtime() -> None:
         from .causal_stale_tool_recovery_contract import install as install_stale_tool_recovery
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .context_budget_preflight import run_context_budget_preflight
+        from .external_mcp_binding_concurrency_contract import (
+            install as install_external_mcp_binding_concurrency,
+        )
         from .external_mcp_binding_contract import install as install_external_mcp_binding
         from .forced_tool_execution_contract import install as install_forced_tool_execution
         from .generation_concurrency_safety import install as install_generation_safety
@@ -94,6 +97,10 @@ def finalize_runtime() -> None:
             external_mcp_router,
         )
         install_external_mcp_binding(external_agent_bridge, external_mcp_router)
+        # The bridge is shared across concurrent model agents. Keep one reviewed schema
+        # owner per exact stage/target/access/provider scope so a simultaneous schema
+        # refresh cannot replace the provider contract another request already saw.
+        install_external_mcp_binding_concurrency(external_agent_bridge)
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         # Source files are repository state, not model output pages. Replace the old
