@@ -20,6 +20,7 @@ class _FakeJsonRpcProcess:
         self.stderr = ["stable fake stderr"]
         self.request_timeouts: list[float] = []
         self.opened_uris: list[str] = []
+        self.workspace_folders: tuple[dict[str, str], ...] = ()
         self.closed = False
         self.__class__.instances.append(self)
 
@@ -193,18 +194,15 @@ def test_empty_project_does_not_start_a_language_server(
     assert result["diagnostics"] == {}
 
 
-def test_each_page_fails_closed_at_its_time_budget() -> None:
+def test_each_page_quietly_settles_when_no_uri_publishes() -> None:
     class _SilentRpc:
         def __init__(self) -> None:
             self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
 
-    with pytest.raises(
-        TimeoutError,
-        match="did not publish a complete quiet result",
-    ):
-        java_lsp._collect_diagnostics(
-            _SilentRpc(),  # type: ignore[arg-type]
-            expected_uris={"file:///Silent.java"},
-            timeout_seconds=0.01,
-            quiet_seconds=1.0,
-        )
+    result = java_lsp._collect_diagnostics(
+        _SilentRpc(),  # type: ignore[arg-type]
+        expected_uris={"file:///Silent.java"},
+        timeout_seconds=0.01,
+        quiet_seconds=1.0,
+    )
+    assert result == {}
