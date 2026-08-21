@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sys
-from functools import wraps
 from typing import Any, Mapping, Sequence
+
+from .runtime_contract_wrappers import contract_wraps, owns_contract_marker
 
 _CORE = ("inspect_existing_mod", "search_project_rag", "search_code_rag")
 _EXTERNAL = ("external_mcp_capabilities", "external_mcp_schema", "external_mcp_call")
@@ -18,10 +19,10 @@ def install(max_agent_owner: Any) -> None:
     if not hasattr(module, "select_tool_schemas"):
         module = sys.modules[str(getattr(max_agent_owner, "__module__", ""))]
     current = module.select_tool_schemas
-    if getattr(current, "_mmm_required_tool_guard", False):
+    if owns_contract_marker(current, "_mmm_required_tool_guard"):
         return
 
-    @wraps(current)
+    @contract_wraps(current)
     def guarded(
         router: Any,
         *,
@@ -68,7 +69,6 @@ def install(max_agent_owner: Any) -> None:
         return tuple(chosen)
 
     guarded._mmm_required_tool_guard = True  # type: ignore[attr-defined]
-    guarded.__wrapped__ = current  # type: ignore[attr-defined]
     module.select_tool_schemas = guarded
 
 
