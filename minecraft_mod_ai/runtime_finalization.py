@@ -34,6 +34,7 @@ def finalize_runtime() -> None:
         from . import model_router
         from . import model_tool_aliases
         from . import parallel_runtime_contract
+        from . import small_model_execution_extensions_contract
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
@@ -59,6 +60,9 @@ def finalize_runtime() -> None:
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_compacting_adapter import install as install_small_model_compaction
+        from .source_edit_scalar_protocol_contract import (
+            install as install_scalar_source_edit_protocol,
+        )
         from .tool_validation_surface_contract import install as install_tool_validation_surface
 
         # Order is semantic. Route integrity must come after bootstrap because adaptive
@@ -73,6 +77,14 @@ def finalize_runtime() -> None:
         # instance can cache the generation schema. The host still materializes the
         # canonical SHA-bound transactional patch immediately before execution.
         install_bounded_source_edit(agent_tool_runtime)
+        # The small-model extension historically exposed one nested array<object> of
+        # up to dozens of edits. Besides encouraging oversized actions, that shape is
+        # fragile on tagged Qwen tool transports. Freeze the final model-facing ACI to
+        # one scalar exact edit per turn before any runtime instance caches schemas.
+        install_scalar_source_edit_protocol(
+            small_model_execution_extensions_contract,
+            agent_tool_runtime,
+        )
         install_route_integrity(
             model_router_module=model_router,
             small_model_module=small_model_max_agent_contract,
