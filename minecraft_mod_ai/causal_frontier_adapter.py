@@ -31,6 +31,38 @@ _INTENT_FIELDS = (
     "query",
     "instruction",
 )
+_SOURCE_MUTATION_NAMES = frozenset(
+    {
+        "apply_source_patch",
+        "apply_source_edit",
+        "apply_java_operations",
+        "repair_project",
+    }
+)
+_MUTATION_FAILURE_STATUSES = frozenset(
+    {
+        "FAIL",
+        "FAILED",
+        "ERROR",
+        "UNAVAILABLE",
+        "PARTIAL",
+        "BLOCKED",
+        "INVALID",
+        "REJECTED",
+        "CANCELLED",
+        "CANCELED",
+        "TIMEOUT",
+    }
+)
+_STALE_EVIDENCE_FACTS = frozenset(
+    {
+        "code_evidence",
+        "project_evidence",
+        "ecosystem_evidence",
+        "external_observation",
+        "evidence_ready",
+    }
+)
 
 
 class FrontierExecutionGate:
@@ -110,6 +142,76 @@ def _forced_tool_name(tool_choice: Any) -> str:
     if not isinstance(function, Mapping):
         return ""
     return str(function.get("name", "")).strip()
+
+
+def _tool_payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    content = message.get("content")
+    if isinstance(content, Mapping):
+        return content
+    if not isinstance(content, str) or not content.strip():
+        return None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _has_semantic_failure(payload: Mapping[str, Any]) -> bool:
+    root = payload.get("result", payload)
+    if not isinstance(root, Mapping):
+        return False
+    results: list[Mapping[str, Any]] = [root]
+    for key in ("structured_content", "structured", "parsed_text"):
+        nested = root.get(key)
+        if isinstance(nested, Mapping):
+            results.append(nested)
+    return any(
+        str(result.get("status", "")).strip().upper() in _MUTATION_FAILURE_STATUSES
+        for result in results
+    )
+
+
+def _latest_failed_source_mutation(
+    messages: Sequence[Mapping[str, Any]],
+) -> int | None:
+    """Return the most recent failed source-mutation observation in the transcript."""
+
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if str(message.get("role", "")).strip().casefold() != "tool":
+            continue
+        if str(message.get("name", "")).strip() not in _SOURCE_MUTATION_NAMES:
+            continue
+        payload = _tool_payload(message)
+        if payload is None:
+            continue
+        if payload.get("ok") is not True or _has_semantic_failure(payload):
+            return index
+    return None
+
+
+def _failed_mutation_needs_evidence_refresh(
+    messages: Sequence[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Invalidate only evidence older than the latest failed source mutation.
+
+    A failed edit means the evidence that justified that exact mutation did not produce
+    a valid host-side change. Reusing it pins the planner on the same mutation-only
+    frontier. Evidence successfully observed after the failure starts a new repair
+    epoch and makes mutation legal again.
+    """
+
+    failed_at = _latest_failed_source_mutation(messages)
+    if failed_at is None:
+        return False
+    refreshed = verified_state_from_messages(
+        messages[failed_at + 1 :],
+        candidates,
+        require_fresh_evidence=True,
+    )
+    return "evidence_ready" not in refreshed
 
 
 def _structured_intent(payload: Mapping[str, Any]) -> str:
@@ -271,6 +373,8 @@ class CausalFrontierAdapter:
                 )
             )
             state_facts.update(host_baseline_causal_facts(request.messages))
+            if _failed_mutation_needs_evidence_refresh(request.messages, candidates):
+                state_facts.difference_update(_STALE_EVIDENCE_FACTS)
             state = frozenset(state_facts)
             query = _query(request.messages)
             goals = tuple(goals_for_query(query))
