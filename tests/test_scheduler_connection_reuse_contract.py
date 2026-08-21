@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import work_graph
-from minecraft_mod_ai.scheduler_connection_reuse_contract import (
-    install as install_connection_reuse,
-)
 from minecraft_mod_ai.scheduler_parallel_safety_contract import install as install_scheduler
 
 
@@ -39,10 +36,9 @@ def _install_runtime_owners() -> None:
         fromlist=["CompleteProductionOrchestrator"],
     )
     install_scheduler(work_graph_module=work_graph, orchestrator_module=orchestrator)
-    install_connection_reuse(work_graph)
 
 
-def test_connection_reuse_contract_leaves_task_and_claim_hot_paths_unwrapped() -> None:
+def test_connection_reuse_is_native_and_leaves_task_and_claim_hot_paths_unwrapped() -> None:
     _install_runtime_owners()
     assert not getattr(
         work_graph.DurableWorkLedger.task,
@@ -102,6 +98,5 @@ def test_sync_plan_temp_tables_are_cleaned_on_reused_connection(tmp_path) -> Non
         "desired_tasks",
     }
 
-    # Reusing the same thread-local connection must still allow another exact sync.
     ledger.sync_plan(_plan())
     assert ledger.task("generate-b")["state"] == "pending"
