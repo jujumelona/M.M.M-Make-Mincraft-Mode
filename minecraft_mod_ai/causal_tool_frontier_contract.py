@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
@@ -268,19 +269,18 @@ def _install_live_loop() -> None:
         stage: str,
         role: str,
     ) -> str:
-        from .model_adapters import GenerationRequest
-
         # Capture authorization exactly once. Compatibility ContextVars are written by
         # selector wrappers and can be overwritten by nested model/retrieval calls; a
         # live coder loop must never let those nested calls replace its own security
         # surface or preference ordering.
         complete_surface = tuple(authorized_tools(request.tools))
         complete_preference = dict(authorized_tool_preference())
-        host_request = GenerationRequest(
-            messages=request.messages,
-            media_paths=request.media_paths,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
+        # Preserve every upstream request field. This wrapper owns only the broader
+        # causal authorization/validation surface and tool-choice policy; reconstructing
+        # GenerationRequest manually would silently reset metadata/task/prompt and any
+        # future contract field added by another layer.
+        host_request = replace(
+            request,
             tools=complete_surface,
             tool_validation_schemas=complete_surface,
             tool_choice="auto" if complete_surface else None,
