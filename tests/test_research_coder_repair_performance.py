@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai import custom_generation_search_contract as custom_search
+from minecraft_mod_ai import custom_generation_research as custom_research
 from minecraft_mod_ai import research_code_context
 from minecraft_mod_ai import research_code_context_performance as context_performance
 from minecraft_mod_ai import research_coder_repair_reuse as reuse
@@ -71,14 +71,14 @@ def test_runtime_wires_single_coder_repair_reuse_owner_without_round_override() 
     assert getattr(CustomModuleGenerator.generate, reuse._MARKER, False)
     assert getattr(RepairEngine._context, reuse._MARKER, False)
     assert getattr(RepairEngine._context, "_mmm_narrow_diagnostic_repair_rag", False)
-    assert custom_search._evolution_state_budget.__module__.endswith(
-        "custom_generation_search_contract"
+    assert custom_research._evolution_state_budget.__module__.endswith(
+        "custom_generation_research"
     )
 
 
 def test_native_evolution_state_budget_is_not_forced_to_two(monkeypatch) -> None:
     monkeypatch.setenv("MMM_CODE_RESEARCH_EVOLUTION_STATES", "8")
-    assert custom_search._evolution_state_budget() == 8
+    assert custom_research._evolution_state_budget() == 8
 
 
 def test_repository_research_exposes_eight_weighted_signals_plus_quality_gate() -> None:
