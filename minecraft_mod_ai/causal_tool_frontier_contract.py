@@ -154,6 +154,45 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, value))
 
 
+def _lexical_preference(
+    owner: Any,
+    query: str,
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """Rank already-authorized tools without invoking an embedding/reranker model.
+
+    Causal legality and graph path cost decide which transitions can run. Query
+    relevance is only a tie-breaker, so paying a 0.6B CPU reranker over 12-16 tool
+    schemas before the causal frontier removes most of them is pure scheduling waste.
+    Reuse the max-agent selector's deterministic tokenization/document projection and
+    keep the expensive reranker for actual evidence retrieval where it can affect
+    answer quality.
+    """
+
+    token_fn = getattr(owner, "_tokens", None)
+    document_fn = getattr(owner, "_tool_document", None)
+    if not callable(token_fn) or not callable(document_fn):
+        return {_name(schema): index for index, schema in enumerate(tool_schemas) if _name(schema)}
+
+    query_tokens = set(token_fn(query))
+    rows: list[tuple[float, int, str]] = []
+    for index, schema in enumerate(tool_schemas):
+        name = _name(schema)
+        if not name:
+            continue
+        document = str(document_fn(schema))
+        document_tokens = set(token_fn(document))
+        name_tokens = set(token_fn(name.replace("_", " ")))
+        score = 0.0
+        if query_tokens and document_tokens:
+            score += len(query_tokens & document_tokens) / max(1, len(query_tokens))
+        if query_tokens and name_tokens:
+            score += 2.5 * len(query_tokens & name_tokens) / max(1, len(name_tokens))
+        rows.append((-score, index, name))
+    rows.sort()
+    return {name: rank for rank, (_score, _index, name) in enumerate(rows)}
+
+
 class _FrontierRuntimeProxy:
     """Enforce the exact schemas shown on the current model turn.
 
@@ -289,23 +328,18 @@ def install(max_agent_owner: Any) -> None:
             tool_schemas: Sequence[Mapping[str, Any]],
             require_fresh_evidence: bool = False,
         ) -> tuple[Mapping[str, Any], ...]:
+            del router  # Causal tool exposure is host-computable; no model scoring needed.
             available = tuple(tool_schemas)
             remember_authorized_tools(available, {})
             if not available:
                 return ()
 
-            # The prior selector supplies query relevance only. Causal legality and
-            # minimum total path cost are computed over the COMPLETE authorized set.
-            ranked = tuple(
-                current(
-                    router,
-                    role=role,
-                    query=query,
-                    tool_schemas=available,
-                    require_fresh_evidence=require_fresh_evidence,
-                )
-            )
-            rank = {_name(schema): index for index, schema in enumerate(ranked)}
+            # Compute the legal next-action set before any expensive model work. The
+            # old path called the CPU reranker on a 12-16 schema shortlist just to
+            # obtain a tie-break preference, then discarded almost all of that work
+            # through the causal graph. A deterministic lexical preference preserves
+            # query relevance while causal path cost remains authoritative.
+            rank = _lexical_preference(module, query, available)
             remember_authorized_tools(available, rank)
             state = infer_verified_state(
                 query=query,
@@ -338,6 +372,7 @@ def install(max_agent_owner: Any) -> None:
             return result
 
         causal_frontier._mmm_causal_tool_frontier = True  # type: ignore[attr-defined]
+        causal_frontier._mmm_no_model_tool_rerank = True  # type: ignore[attr-defined]
         causal_frontier.__wrapped__ = current  # type: ignore[attr-defined]
         module.select_tool_schemas = causal_frontier
 
