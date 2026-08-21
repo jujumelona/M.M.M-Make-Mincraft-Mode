@@ -58,7 +58,7 @@ def test_auto_mode_probes_p1_p2_p4_only_when_resources_fit(monkeypatch) -> None:
 
     assert runtime._performance_mode() == "auto"
     assert runtime._parallel_candidates(_config(), "model.gguf", fit) == (1, 2, 4)
-    assert runtime._parallel_candidates(_config(), "model.gguf", tighter) == (1, 2)
+    assert runtime._parallel_candidates(_config(), "model.gguf", tighter) == (1,)
     assert runtime._parallel_candidates(
         _config(), "model.gguf", runtime.RuntimeResources()
     ) == (1,)
@@ -148,7 +148,7 @@ def test_native_start_scales_total_context_per_slot_and_bounds_cache_ram(
     assert "--kv-unified" in args
 
 
-def test_qwen_hotpath_does_not_reenable_or_reserve_prompt_cache(monkeypatch) -> None:
+def test_qwen_hotpath_reuses_prompt_cache_without_reserving_cache_ram(monkeypatch) -> None:
     _clear_parallel_env(monkeypatch)
     seen: dict[str, list[str]] = {}
 
@@ -170,7 +170,7 @@ def test_qwen_hotpath_does_not_reenable_or_reserve_prompt_cache(monkeypatch) -> 
         runtime.ServerVariant("baseline"),
         8910,
     )
-    assert "--cache-prompt" not in seen["args"]
+    assert "--cache-prompt" in seen["args"]
     assert "--cache-ram" not in seen["args"]
 
 
