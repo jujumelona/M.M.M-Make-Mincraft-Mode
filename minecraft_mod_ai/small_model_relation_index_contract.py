@@ -8,7 +8,11 @@ from threading import RLock
 from typing import Any, Sequence
 
 from .model_adapters.base import ModelBackendError, ModelConfigurationError
-from .runtime_contract_wrappers import contract_wraps, owns_contract_marker
+from .runtime_contract_wrappers import (
+    contract_wraps,
+    has_contract_marker,
+    owns_contract_marker,
+)
 from .small_model_rag_relations import derive_relations
 
 _REUSE_LOCK = RLock()
@@ -154,13 +158,13 @@ def _existing_snapshot_result(
 def install(production_tools_module: Any) -> None:
     cls = production_tools_module.ProductionToolService
     current = cls.index_project_rag
-    if owns_contract_marker(current, "_mmm_dependency_relations"):
+    if has_contract_marker(current, "_mmm_dependency_relations"):
         return
 
     # The max-agent layer historically forced semantic=True for repair indexes. When
     # that exact layer is immediately inside us, its __wrapped__ target is the
-    # reviewed parallel-safe canonical lexical indexer. Do not infer this ownership
-    # from inherited attributes: contract markers belong to one wrapper layer only.
+    # reviewed parallel-safe canonical lexical indexer. Effective ownership is used
+    # here because legacy functools.wraps may have copied this marker outward.
     semantic_forcer = owns_contract_marker(
         current, "_mmm_small_model_semantic_repair_index"
     )
