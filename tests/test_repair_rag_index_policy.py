@@ -27,6 +27,7 @@ def test_repair_index_stays_lexical_even_if_legacy_wrapper_requests_semantic(mon
         return {"semantic_embeddings": semantic}
 
     monkeypatch.delenv("MMM_RAG_EAGER_REPAIR_SEMANTIC", raising=False)
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
     monkeypatch.setattr(production_tools, "ModelRouter", ForbiddenRouter)
     monkeypatch.setattr(production_tools.ProjectRAGIndex, "build", build)
 
@@ -40,12 +41,43 @@ def test_repair_index_stays_lexical_even_if_legacy_wrapper_requests_semantic(mon
     assert captured == {"router": None, "semantic": False}
 
 
-def test_eager_repair_semantic_index_is_explicit_operator_opt_in(monkeypatch, tmp_path) -> None:
+def test_repair_specific_dense_flag_alone_does_not_bypass_global_cpu_budget(monkeypatch, tmp_path) -> None:
+    project = _project(tmp_path)
+    service = production_tools.ProductionToolService(workspace_root=tmp_path, profile="test")
+    captured = {}
+
+    class ForbiddenRouter:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("global CPU dense consent is still required")
+
+    def build(self, roots, *, metadata, router=None, semantic=False, max_files=None):
+        del self, roots, metadata, max_files
+        captured["router"] = router
+        captured["semantic"] = semantic
+        return {"semantic_embeddings": semantic}
+
+    monkeypatch.setenv("MMM_RAG_EAGER_REPAIR_SEMANTIC", "1")
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+    monkeypatch.setattr(production_tools, "ModelRouter", ForbiddenRouter)
+    monkeypatch.setattr(production_tools.ProjectRAGIndex, "build", build)
+
+    result = service.index_project_rag(
+        [str(project.relative_to(tmp_path))],
+        metadata={"source_commit": "sha256:test", "license": "project-local"},
+        semantic=True,
+    )
+
+    assert result == {"semantic_embeddings": False}
+    assert captured == {"router": None, "semantic": False}
+
+
+def test_eager_repair_semantic_index_requires_both_explicit_opt_ins(monkeypatch, tmp_path) -> None:
     project = _project(tmp_path)
     service = production_tools.ProductionToolService(workspace_root=tmp_path, profile="test")
     sentinel = object()
     captured = {}
 
+    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
     monkeypatch.setenv("MMM_RAG_EAGER_REPAIR_SEMANTIC", "1")
     monkeypatch.setattr(production_tools, "ModelRouter", lambda **_kwargs: sentinel)
 
