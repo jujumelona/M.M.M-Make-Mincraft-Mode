@@ -8,6 +8,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
+
 _MARKER = "_mmm_coder_max_efficiency_v1"
 _RESEARCH_SINGLEFLIGHT_MARKER = "_mmm_research_initial_bundle_singleflight_v1"
 _RESEARCH_STRIPES = tuple(threading.Lock() for _ in range(32))
@@ -35,9 +37,6 @@ def _install_research_singleflight(research_module: Any) -> None:
             return current(self)
         cache_key = str(self._initial_cache_key())
         with _research_lock(cache_key):
-            # The wrapped implementation re-checks the shared content-addressed
-            # cache. Only the first identical candidate performs retrieval; the
-            # remaining candidates restore that state instead of duplicating work.
             return current(self)
 
     setattr(initial_bundle, _RESEARCH_SINGLEFLIGHT_MARKER, True)
@@ -58,13 +57,9 @@ def _clone_candidate_roots(
     *,
     count: int,
 ) -> list[Path]:
-    """Clone one immutable source snapshot, then fork all candidate workspaces from it."""
-
     base_snapshot = performance_module._acquire_wave_source_snapshot(root)
     roots: list[Path] = []
     try:
-        # Reflink/copy-on-write is owned by performance_final_contract. Cloning from
-        # one frozen base avoids rescanning the moving live tree once per candidate.
         for _ in range(count):
             roots.append(performance_module._clone_wave_workspace(base_snapshot, root))
         return roots
@@ -186,9 +181,6 @@ def _commit_winner(
 
     from .project_write_lock import project_write_lock
 
-    # Reuse the existing staged three-way commit path. This keeps concurrent live
-    # changes instead of failing merely because a candidate was generated from an
-    # earlier source snapshot.
     with project_write_lock(root):
         return performance_module._commit_staged_operations(
             live_root=root,
@@ -295,11 +287,11 @@ def install_coder_max_efficiency() -> None:
     _install_research_singleflight(research_module)
 
     current = CustomModuleGenerator.generate
-    if getattr(current, _MARKER, False):
+    if has_contract_marker(current, _MARKER):
         return
     single_generate = getattr(current, "__wrapped__", None)
     if not (
-        getattr(current, "_mmm_research_generation_search", False)
+        owns_contract_marker(current, "_mmm_research_generation_search")
         and callable(single_generate)
     ):
         raise RuntimeError(
