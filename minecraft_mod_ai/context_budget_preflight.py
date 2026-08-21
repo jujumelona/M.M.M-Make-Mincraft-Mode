@@ -3,6 +3,7 @@ from __future__ import annotations
 """Model-free regression checks for context-window resilience."""
 
 import json
+import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -76,9 +77,9 @@ def run_context_budget_preflight() -> None:
             response_format="json",
         ),
     )
-    if synthetic_tool_payload.get("max_tokens") != 4096:
+    if synthetic_tool_payload.get("max_tokens") != 8192:
         raise ContextBudgetPreflightError(
-            "llama-server tool payload is not protected by the bounded output budget"
+            "llama-server tool payload does not retain the configured coder output budget"
         )
 
     if (
@@ -142,24 +143,33 @@ def run_context_budget_preflight() -> None:
     )
     config = SimpleNamespace(
         adapter="llama_cpp",
-        max_context=32768,
+        max_context=262144,
         max_new_tokens=8192,
+        extra={
+            "runtime_contract": "qwen",
+            "decode_hotpath": "t4_mtp",
+            "runtime_context_default": 32768,
+        },
     )
     tools = (
         {"type": "function", "function": {"name": "apply_source_edit"}},
     )
-    budget = request_message_budget(config, tools)
-    legacy_reserved_budget = request_message_budget(
-        SimpleNamespace(
-            adapter="transformers_text",
-            max_context=32768,
-            max_new_tokens=8192,
-        ),
-        tools,
-    )
-    if budget <= legacy_reserved_budget:
+
+    # Exercise the repository default rather than an operator's explicit runtime
+    # override. The production function itself still honors both environment knobs.
+    previous_qwen_ctx = os.environ.pop("MMM_QWEN35_MTP_CTX", None)
+    previous_server_ctx = os.environ.pop("MMM_LLAMA_SERVER_CTX", None)
+    try:
+        budget = request_message_budget(config, tools)
+    finally:
+        if previous_qwen_ctx is not None:
+            os.environ["MMM_QWEN35_MTP_CTX"] = previous_qwen_ctx
+        if previous_server_ctx is not None:
+            os.environ["MMM_LLAMA_SERVER_CTX"] = previous_server_ctx
+
+    if budget >= 64 * 1024:
         raise ContextBudgetPreflightError(
-            "llama input budget still reserves the registry max_new_tokens value"
+            "llama input budget is using model capacity instead of the 32K runtime slot"
         )
     if _encoded_size(messages) <= budget:
         raise ContextBudgetPreflightError(
