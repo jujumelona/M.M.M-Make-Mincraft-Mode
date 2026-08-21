@@ -593,10 +593,12 @@ def executable_frontier(
             limit=limit,
         )
 
+    support = _support_facts(target_goals).difference(state)
     rank = preference or {}
     fallback_rank = len(rank) + len(equally_minimal) + 1
     equally_minimal.sort(
         key=lambda name: (
+            -len(transitions[name].effects.difference(state).intersection(support)),
             int(rank.get(name, fallback_rank)),
             transitions[name].cost,
             name,
