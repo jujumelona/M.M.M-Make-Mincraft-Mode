@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Final output-budget guard for native llama.cpp tool turns.
+"""Bounded output policy for native llama.cpp tool turns.
 
-Tool-capable turns only need enough output to emit a semantic action or a compact
-host-parsed tool payload. Letting them inherit ``max_tokens=-1`` can consume the
-remaining context window before the action closes, especially after large RAG/tool
-observations. Top-level text generation remains governed by the existing model policy.
+Tool calls must remain bounded, but source-edit actions can legitimately need several
+thousand tokens of structured payload.  The bound therefore follows the configured
+model output budget (up to a hard host cap) instead of forcing every tool action into
+an arbitrary 4K decode.  Input fitting reserves this same budget so increasing the
+tool allowance cannot steal space from the runtime context window.
 """
 
 import os
@@ -13,7 +14,7 @@ from functools import wraps
 from typing import Any, Mapping
 
 _MARKER = "_mmm_llama_tool_output_budget_v1"
-_DEFAULT_TOOL_MAX_TOKENS = 4096
+_DEFAULT_TOOL_MAX_TOKENS = 8192
 _MAX_TOOL_MAX_TOKENS = 16384
 
 
@@ -30,21 +31,30 @@ def _tool_max_tokens() -> int:
     return min(value, _MAX_TOOL_MAX_TOKENS)
 
 
+def tool_output_budget(config: Any) -> int:
+    """Return the authoritative positive output reserve for one tool turn."""
+
+    limit = _tool_max_tokens()
+    try:
+        configured = int(getattr(config, "max_new_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        configured = 0
+    if configured > 0:
+        limit = min(limit, configured)
+    return max(1, limit)
+
+
 def _bounded_tool_limit(
     adapter: Any,
     payload: Mapping[str, Any],
 ) -> int:
-    candidates = [_tool_max_tokens()]
-    for value in (
-        getattr(getattr(adapter, "config", None), "max_new_tokens", None),
-        payload.get("max_tokens"),
-    ):
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            continue
-        if parsed > 0:
-            candidates.append(parsed)
+    candidates = [tool_output_budget(getattr(adapter, "config", None))]
+    try:
+        payload_limit = int(payload.get("max_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        payload_limit = 0
+    if payload_limit > 0:
+        candidates.append(payload_limit)
     return max(1, min(candidates))
 
 
@@ -66,4 +76,9 @@ def install(hardware_module: Any) -> None:
     hardware_module._server_payload = bounded_tool_payload
 
 
-__all__ = ["_bounded_tool_limit", "_tool_max_tokens", "install"]
+__all__ = [
+    "_bounded_tool_limit",
+    "_tool_max_tokens",
+    "install",
+    "tool_output_budget",
+]
