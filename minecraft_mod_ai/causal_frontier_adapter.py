@@ -321,6 +321,8 @@ class CausalFrontierAdapter:
         require_fresh_evidence: bool,
         frontier_limit: int = 3,
         execution_gate: FrontierExecutionGate | None = None,
+        authorized_surface: Sequence[Mapping[str, Any]] = (),
+        preference: Mapping[str, int] | None = None,
     ) -> None:
         self.inner = inner
         self.stage = stage
@@ -328,6 +330,11 @@ class CausalFrontierAdapter:
         self.require_fresh_evidence = require_fresh_evidence
         self.frontier_limit = max(1, min(int(frontier_limit), 3))
         self.execution_gate = execution_gate
+        # Freeze these once for the whole live tool loop. Nested model/retrieval calls
+        # may update the compatibility ContextVars, but they must never replace this
+        # coder turn's security-filtered authorization or query preference.
+        self.authorized_surface = tuple(authorized_surface)
+        self.preference = dict(preference or {})
 
     def _publish_frontier(self, names: Sequence[str]) -> None:
         normalized = tuple(str(name) for name in names)
@@ -346,7 +353,7 @@ class CausalFrontierAdapter:
             self._publish_frontier(())
             return self.inner.generate_turn(request)
 
-        candidates = authorized_tools(request.tools)
+        candidates = self.authorized_surface or authorized_tools(request.tools)
         if not candidates:
             self._publish_frontier(())
             return self.inner.generate_turn(request)
@@ -384,7 +391,7 @@ class CausalFrontierAdapter:
                 goals=goals,
                 limit=self.frontier_limit,
                 max_depth=8,
-                preference=authorized_tool_preference(),
+                preference=self.preference or authorized_tool_preference(),
             )
             selected = tuple(by_name[name] for name in names if name in by_name)
             tool_choice = "auto" if selected else None
@@ -393,7 +400,10 @@ class CausalFrontierAdapter:
 
         # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
         # owned by upstream contracts (including future additions) while changing only
-        # the per-turn causal surface and injected capability context.
+        # the per-turn causal surface and injected capability context. The broader
+        # validation surface lets a transport parser understand a stale but authorized
+        # tool reference; FrontierExecutionGate still rejects execution unless that
+        # tool is present in ``selected`` on this exact turn.
         rebuilt = replace(
             request,
             messages=_with_capability_context(
@@ -403,6 +413,7 @@ class CausalFrontierAdapter:
                 tools=selected,
             ),
             tools=selected,
+            tool_validation_schemas=candidates,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
         )
