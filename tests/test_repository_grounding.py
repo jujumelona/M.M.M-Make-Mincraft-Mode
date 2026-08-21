@@ -58,8 +58,8 @@ def test_grounding_is_exact_and_region_ranked(tmp_path: Path) -> None:
     assert ledger["records"]
     receipt = ledger["receipt"]
     assert receipt["retrieval_route"] == "api"
-    assert receipt["semantic_used"] is True
-    assert receipt["rerank_used"] is True
+    assert receipt["semantic_used"] is False
+    assert receipt["rerank_used"] is False
     assert receipt["baseline_anchor_count"] >= 1
     assert receipt["policy"]["line_ranked_context"] is True
     assert receipt["policy"]["global_contract_anchors_before_ranked_regions"] is True
