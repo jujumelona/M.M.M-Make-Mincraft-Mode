@@ -21,8 +21,25 @@ from .scalable_pipeline import ScalableMinecraftModPipeline
 from .spec import Proposal
 
 
+_HASH_CHUNK_SIZE = 1024 * 1024
+_SUCCESS_STATUSES = frozenset({"VERIFIED", "SOURCE_READY"})
+_COMPLETE_SCHEMA_VERSIONS = frozenset(
+    {"mmm/complete-proposal-v1", "mmm/complete-proposal-v2"}
+)
+
+
 def _json_dump(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _sha256_file(path: Path) -> str:
+    """Hash a file without materializing the whole payload in memory."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(_HASH_CHUNK_SIZE), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -129,6 +146,33 @@ def _read_json(path: Path) -> dict:
     return raw
 
 
+def _read_playtest_actions(path: Path | None) -> list[dict]:
+    if path is None:
+        return []
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, list):
+        raise ValueError("playtest-actions must be a JSON list.")
+    if any(not isinstance(item, dict) for item in value):
+        raise ValueError("Every playtest action must be a JSON object.")
+    return value
+
+
+def _proposal_validation_result(raw: dict) -> dict[str, object]:
+    if raw.get("schema_version") in _COMPLETE_SCHEMA_VERSIONS:
+        proposal = CompleteProposal.from_dict(raw)
+        kind = "complete"
+    else:
+        proposal = Proposal.from_dict(raw)
+        kind = "slice"
+    approval_hash = proposal.calculate_hash()
+    return {
+        "status": "PASS",
+        "kind": kind,
+        "approval_hash": approval_hash,
+        "stored_hash_matches": proposal.approval_hash == approval_hash,
+    }
+
+
 def _render_complete_result(result: object) -> str:
     status = str(getattr(result, "status", "UNKNOWN"))
     project_root = str(getattr(result, "project_root", ""))
@@ -154,11 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
-            existing_hash = ""
-            if args.existing_zip:
-                existing_hash = "sha256:" + hashlib.sha256(
-                    args.existing_zip.read_bytes()
-                ).hexdigest()
+            existing_hash = _sha256_file(args.existing_zip) if args.existing_zip else ""
             proposal = CompleteGameDesignPlanner(
                 ModelRouter(profile=args.profile)
             ).plan(
@@ -185,23 +225,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "execute":
-            proposal = CompleteProposal.from_dict(
-                _read_json(args.proposal)
-            )
-            actions: list[dict] = []
-            if args.playtest_actions:
-                value = json.loads(
-                    args.playtest_actions.read_text(encoding="utf-8")
-                )
-                if not isinstance(value, list):
-                    raise ValueError(
-                        "playtest-actions must be a JSON list."
-                    )
-                if any(not isinstance(item, dict) for item in value):
-                    raise ValueError(
-                        "Every playtest action must be a JSON object."
-                    )
-                actions = value
+            proposal = CompleteProposal.from_dict(_read_json(args.proposal))
+            actions = _read_playtest_actions(args.playtest_actions)
             options = CompleteExecutionOptions(
                 source_only=args.source_only,
                 run_jdt=not args.skip_jdt,
@@ -235,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(_json_dump(result.to_dict()) + "\n")
             else:
                 sys.stdout.write(_render_complete_result(result) + "\n")
-            return 0 if result.status in {"VERIFIED", "SOURCE_READY"} else 1
+            return 0 if result.status in _SUCCESS_STATUSES else 1
 
         if args.command == "plan-slice":
             planner = (
@@ -243,9 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.backend == "local"
                 else HeuristicPlanner()
             )
-            proposal = ScalableMinecraftModPipeline(
-                planner=planner
-            ).plan(
+            proposal = ScalableMinecraftModPipeline(planner=planner).plan(
                 args.prompt,
                 existing_input=args.existing_zip,
             )
@@ -267,47 +290,22 @@ def main(argv: list[str] | None = None) -> int:
                 existing_input=args.existing_zip,
             )
             sys.stdout.write(_json_dump(result.to_dict()) + "\n")
-            return 0 if result.status in {"VERIFIED", "SOURCE_READY"} else 1
+            return 0 if result.status in _SUCCESS_STATUSES else 1
 
         if args.command == "inspect-existing":
             sys.stdout.write(
                 _json_dump(
-                    inspect_existing_project_archive(
-                        args.archive
-                    ).to_dict()
+                    inspect_existing_project_archive(args.archive).to_dict()
                 )
                 + "\n"
             )
             return 0
 
         if args.command == "validate-proposal":
-            raw = _read_json(args.proposal)
-            if raw.get("schema_version") in {
-                "mmm/complete-proposal-v1",
-                "mmm/complete-proposal-v2",
-            }:
-                proposal = CompleteProposal.from_dict(raw)
-                result = {
-                    "status": "PASS",
-                    "kind": "complete",
-                    "approval_hash": proposal.calculate_hash(),
-                    "stored_hash_matches": (
-                        proposal.approval_hash
-                        == proposal.calculate_hash()
-                    ),
-                }
-            else:
-                proposal = Proposal.from_dict(raw)
-                result = {
-                    "status": "PASS",
-                    "kind": "slice",
-                    "approval_hash": proposal.calculate_hash(),
-                    "stored_hash_matches": (
-                        proposal.approval_hash
-                        == proposal.calculate_hash()
-                    ),
-                }
-            sys.stdout.write(_json_dump(result) + "\n")
+            sys.stdout.write(
+                _json_dump(_proposal_validation_result(_read_json(args.proposal)))
+                + "\n"
+            )
             return 0
 
         if args.command == "ui":
