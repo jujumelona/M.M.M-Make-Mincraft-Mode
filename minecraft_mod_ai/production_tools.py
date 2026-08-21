@@ -41,8 +41,13 @@ class ProductionToolService:
             bool(metadata.get('source_commit'))
             and str(metadata.get('license', '')) == 'project-local'
         )
+        global_cpu_dense = os.environ.get('MMM_RAG_ENABLE_CPU_DENSE', '').strip() == '1'
         eager_repair_semantic = os.environ.get('MMM_RAG_EAGER_REPAIR_SEMANTIC', '').strip() == '1'
-        effective_semantic = bool(semantic and (not repair_like or eager_repair_semantic))
+        effective_semantic = bool(
+            semantic
+            and global_cpu_dense
+            and (not repair_like or eager_repair_semantic)
+        )
         router = ModelRouter(profile=self.profile) if effective_semantic else None
         return ProjectRAGIndex(target).build(
             resolved,
