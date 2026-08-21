@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_length_resilience
 from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
+from minecraft_mod_ai.llama_tool_output_budget import tool_output_budget
 
 
 def _tool() -> dict[str, object]:
@@ -17,7 +18,7 @@ def _tool() -> dict[str, object]:
     }
 
 
-def test_fully_composed_qwen_tool_turn_stays_bounded_when_global_output_is_unlimited(
+def test_fully_composed_qwen_tool_turn_uses_configured_coder_budget(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
@@ -44,7 +45,15 @@ def test_fully_composed_qwen_tool_turn_stays_bounded_when_global_output_is_unlim
 
     payload = hardware_policy._server_payload(adapter, request)
 
-    assert payload["max_tokens"] == 4096
+    assert tool_output_budget(adapter.config) == 8192
+    assert payload["max_tokens"] == 8192
+
+
+def test_tool_output_override_remains_hard_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_TOOL_MAX_TOKENS", "999999")
+    config = SimpleNamespace(max_new_tokens=32768)
+
+    assert tool_output_budget(config) == 16384
 
 
 def test_length_recovery_preserves_bounded_tool_output_budget(monkeypatch) -> None:
@@ -74,12 +83,12 @@ def test_length_recovery_preserves_bounded_tool_output_budget(monkeypatch) -> No
                 {"role": "user", "content": "x" * 50_000},
                 {"role": "tool", "content": "y" * 10_000},
             ],
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "tools": [_tool()],
         },
     )
 
     assert result == {"content": "ok"}
     assert len(attempts) == 2
-    assert attempts[1]["max_tokens"] == 4096
+    assert attempts[1]["max_tokens"] == 8192
     assert len(str(attempts[1]["messages"])) < len(str(attempts[0]["messages"]))
