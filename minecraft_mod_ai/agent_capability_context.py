@@ -142,8 +142,6 @@ def skills_for_tool(
     if not selected_tool or selected_tool in _EXTERNAL_AGENT_TOOLS:
         return ()
     canonical = _model_tool_aliases.canonical_model_tool(selected_tool)
-    if canonical != selected_tool:
-        return skills_for_tool(selected_stage, canonical, model_role=model_role)
     if selected_stage not in REVIEWED_TOOL_STAGES.get(canonical, frozenset()):
         return ()
     policy_role = _policy_model_role(selected_stage, model_role)
