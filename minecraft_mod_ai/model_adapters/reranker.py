@@ -86,17 +86,26 @@ class RerankerAdapter:
             str(self.config.extra.get("revision", "")).strip(),
         )
 
-    def _score_cache_key(
+    def _score_cache_keys(
         self,
         query: str,
         instruction: str,
-        document: str,
-    ) -> tuple[str, str, str, str, str, str]:
-        return (
-            *self._backend_key(),
+        documents: Sequence[str],
+    ) -> dict[str, tuple[str, str, str, str, str, str]]:
+        """Build request and document cache commitments once per score call."""
+
+        model_id, device, dtype_name, revision = self._backend_key()
+        prefix = (
+            model_id,
+            device,
+            dtype_name,
+            revision,
             _request_digest(query, instruction),
-            _text_digest(document),
         )
+        return {
+            document: (*prefix, _text_digest(document))
+            for document in dict.fromkeys(documents)
+        }
 
     def _load_backend(self) -> _RerankerBackend:
         require_package("transformers", minimum="4.52.0")
@@ -168,6 +177,9 @@ class RerankerAdapter:
             raise ValueError("Reranker query and documents must be non-empty.")
 
         cache_active = _cache_enabled()
+        cache_keys = (
+            self._score_cache_keys(query, instruction, docs) if cache_active else {}
+        )
         scores_by_document: dict[str, float] = {}
         missing: list[str] = []
         seen_missing: set[str] = set()
@@ -175,7 +187,7 @@ class RerankerAdapter:
         if cache_active:
             with _SCORE_CACHE_LOCK:
                 for document in docs:
-                    cache_key = self._score_cache_key(query, instruction, document)
+                    cache_key = cache_keys[document]
                     cached = _SCORE_CACHE.get(cache_key)
                     if cached is not None:
                         _SCORE_CACHE.move_to_end(cache_key)
@@ -207,7 +219,7 @@ class RerankerAdapter:
                     with _SCORE_CACHE_LOCK:
                         still_missing: list[str] = []
                         for document in missing:
-                            cache_key = self._score_cache_key(query, instruction, document)
+                            cache_key = cache_keys[document]
                             cached = _SCORE_CACHE.get(cache_key)
                             if cached is not None:
                                 _SCORE_CACHE.move_to_end(cache_key)
@@ -296,7 +308,7 @@ class RerankerAdapter:
             if cache_active:
                 with _SCORE_CACHE_LOCK:
                     for document, value in zip(missing, computed, strict=True):
-                        cache_key = self._score_cache_key(query, instruction, document)
+                        cache_key = cache_keys[document]
                         _SCORE_CACHE[cache_key] = value
                         _SCORE_CACHE.move_to_end(cache_key)
                     while len(_SCORE_CACHE) > _result_cache_limit():
