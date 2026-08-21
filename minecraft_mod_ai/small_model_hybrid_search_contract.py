@@ -90,9 +90,14 @@ def _modes(route: str, caller_semantic: bool, caller_rerank: bool):
             (True, True, "semantic+rerank+global-relations"),
             (caller_semantic, caller_rerank, "caller-fallback"),
         )
+    # Generic repair queries are the hottest path on CPU-backed Colab profiles.
+    # Exact lexical evidence is cheap and often already sufficient; do not load the
+    # 0.6B reranker/embedding models merely because the query lacks an explicit
+    # symbol. Escalate only after objective retrieval quality remains weak.
     return (
-        (True, True, "semantic+rerank"),
+        (False, False, "lexical"),
         (False, True, "lexical+rerank"),
+        (True, True, "semantic+rerank"),
         (caller_semantic, caller_rerank, "caller-fallback"),
     )
 
