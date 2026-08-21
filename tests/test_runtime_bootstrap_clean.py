@@ -89,7 +89,7 @@ def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     order = ('TuningStage("hardware"', 'TuningStage(\n                "efficiency"', 'TuningStage("runtime"', 'TuningStage(\n                "cache-reuse"', 'TuningStage("decode-speed"')
     positions = [source.index(marker) for marker in order]
     assert positions == sorted(positions)
-    transport_order = ('TuningStage("kernel-autotune"', 'TuningStage("qwen-transport"', 'TuningStage(\n                "multimodal"')
+    transport_order = ('TuningStage("kernel-autotune"', 'TuningStage("qwen-transport"', 'TuningStage("multimodal"')
     transport_positions = [source.index(marker) for marker in transport_order]
     assert transport_positions == sorted(transport_positions)
     decode_order = ('install_decode_speed(', 'install_qwen35_hotpath(', 'install_qwen35_runtime_efficiency(', 'install_single_stream_agentic_policy(')
