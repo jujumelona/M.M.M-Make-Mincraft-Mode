@@ -322,6 +322,8 @@ def _install_live_loop() -> None:
 
 
 def install(max_agent_owner: Any) -> None:
+    from .tool_validation_surface_contract import install as install_tool_validation_surface
+
     module = max_agent_owner
     if not hasattr(module, "select_tool_schemas"):
         module = sys.modules[str(getattr(max_agent_owner, "__module__", ""))]
@@ -385,6 +387,7 @@ def install(max_agent_owner: Any) -> None:
         causal_frontier.__wrapped__ = current  # type: ignore[attr-defined]
         module.select_tool_schemas = causal_frontier
 
+    install_tool_validation_surface()
     _install_live_loop()
 
 
