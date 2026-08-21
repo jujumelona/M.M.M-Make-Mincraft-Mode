@@ -9,6 +9,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
+
 
 def _active_parallel_slots() -> int:
     raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
@@ -88,7 +90,7 @@ def _parallel_workers(router: Any, width: int, config: Any | None) -> int:
 def _install_parallel_repair_search(agentic_module: Any) -> None:
     """Parallelize repair candidates while committing only one verified winner."""
     current_installer = agentic_module._install_repair_search_and_memory
-    if getattr(current_installer, "_mmm_parallel_repair_candidate_installer", False):
+    if has_contract_marker(current_installer, "_mmm_parallel_repair_candidate_installer"):
         return
 
     @wraps(current_installer)
@@ -96,9 +98,9 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
         current_installer(repair_module)
         cls = repair_module.RepairEngine
         search = cls._request_patch
-        if getattr(search, "_mmm_parallel_repair_search", False):
+        if has_contract_marker(search, "_mmm_parallel_repair_search"):
             return
-        if not getattr(search, "_mmm_verifier_repair_search", False):
+        if not owns_contract_marker(search, "_mmm_verifier_repair_search"):
             return
         base = getattr(search, "__wrapped__", None)
         if base is None:
