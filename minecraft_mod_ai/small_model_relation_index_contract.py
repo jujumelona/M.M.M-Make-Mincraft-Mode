@@ -155,6 +155,11 @@ def install(production_tools_module: Any) -> None:
     current = cls.index_project_rag
     if getattr(current, "_mmm_dependency_relations", False):
         return
+    # small_model_max_agent wraps the parallel-safe canonical indexer and forces
+    # semantic=True for project-local repair indexes. Its __wrapped__ target is the
+    # already-reviewed parallel-safe lexical implementation, so this contract can
+    # deliberately bypass only that one expensive semantic override while retaining
+    # relation derivation, exact-snapshot reuse, and the underlying build lock.
     fallback = getattr(current, "__wrapped__", None)
 
     @wraps(current)
@@ -176,6 +181,26 @@ def install(production_tools_module: Any) -> None:
         if relations:
             enriched["relations"] = relations
             enriched["relation_count"] = len(relations)
+        repair_like = bool(enriched.get("source_commit")) and str(
+            enriched.get("license", "")
+        ) == "project-local"
+
+        # Caller intent wins. A normal repair index is lexical+graph and must not
+        # silently instantiate the 0.6B CPU embedding model. Explicit semantic=True
+        # still goes through the full semantic owner unchanged.
+        if repair_like and not semantic and callable(fallback):
+            result = dict(
+                fallback(
+                    self,
+                    roots,
+                    index_path=index_path,
+                    metadata=enriched,
+                    semantic=False,
+                )
+            )
+            _cache_put(target, metadata, False, result)
+            return result
+
         try:
             result = dict(
                 current(
@@ -187,9 +212,6 @@ def install(production_tools_module: Any) -> None:
                 )
             )
         except Exception:
-            repair_like = bool(enriched.get("source_commit")) and str(
-                enriched.get("license", "")
-            ) == "project-local"
             if not callable(fallback) or not repair_like:
                 raise
             result = dict(
@@ -207,6 +229,10 @@ def install(production_tools_module: Any) -> None:
 
     indexed._mmm_dependency_relations = True  # type: ignore[attr-defined]
     indexed._mmm_exact_snapshot_reuse = True  # type: ignore[attr-defined]
+    # @wraps copies marker attributes from the wrapped semantic-forcing function.
+    # Remove that inherited marker: this wrapper now owns the repair semantic policy
+    # and downstream efficiency layers must not try to unwrap it again.
+    indexed.__dict__.pop("_mmm_small_model_semantic_repair_index", None)
     indexed.__wrapped__ = current  # type: ignore[attr-defined]
     cls.index_project_rag = indexed
 
