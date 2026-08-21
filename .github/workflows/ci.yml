@@ -8,7 +8,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 concurrency:
@@ -33,54 +33,6 @@ jobs:
           -f description='Temporary CI run locator'
           -f target_url="$RUN_URL"
       - uses: actions/checkout@v6
-      - name: Migrate stale max-efficiency references
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          adaptive = Path("minecraft_mod_ai/adaptive_execution_hardening.py")
-          adaptive_text = adaptive.read_text(encoding="utf-8")
-          old_active = "from .max_efficiency_runtime_contract import _active_parallelism"
-          new_active = "from .llama_parallel_runtime_contract import _active_parallelism"
-          if old_active in adaptive_text:
-              adaptive.write_text(adaptive_text.replace(old_active, new_active), encoding="utf-8")
-
-          scaling = Path("minecraft_mod_ai/inference_time_scaling.py")
-          lines = scaling.read_text(encoding="utf-8").splitlines(keepends=True)
-          marker = "# max_efficiency_runtime_contract uses this ContextVar to stop nested"
-          start = next((index for index, line in enumerate(lines) if marker in line), None)
-          if start is not None:
-              end = next(
-                  (
-                      index
-                      for index in range(start, min(len(lines), start + 16))
-                      if lines[index].strip() == "pass"
-                  ),
-                  None,
-              )
-              if end is None:
-                  raise SystemExit("stale max-efficiency guard terminator was not found")
-              del lines[start : end + 1]
-              scaling.write_text("".join(lines), encoding="utf-8")
-
-          for path in (adaptive, scaling):
-              if "max_efficiency_runtime_contract" in path.read_text(encoding="utf-8"):
-                  raise SystemExit(f"stale max-efficiency reference remains in {path}")
-          PY
-          if git diff --quiet -- minecraft_mod_ai/adaptive_execution_hardening.py minecraft_mod_ai/inference_time_scaling.py; then
-            exit 0
-          fi
-          git fetch origin main
-          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
-            echo "main advanced; latest main run will apply the migration"
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add minecraft_mod_ai/adaptive_execution_hardening.py minecraft_mod_ai/inference_time_scaling.py
-          git commit -m 'fix(runtime): remove stale max-efficiency imports'
-          git push origin HEAD:main
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
