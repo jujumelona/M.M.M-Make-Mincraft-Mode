@@ -80,7 +80,7 @@ def test_native_tool_request_keeps_server_parser_disabled() -> None:
     assert payload["top_k"] == 20
     assert "min_p" not in payload
     assert payload["presence_penalty"] == 1.5
-    assert payload["repeat_penalty"] == 1.0
+    assert "repeat_penalty" not in payload
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
