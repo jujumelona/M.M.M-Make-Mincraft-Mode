@@ -28,6 +28,33 @@ def _dense_opted_in() -> bool:
     return os.environ.get(_DENSE_OPT_IN, "").strip() == "1"
 
 
+def require_dense_retrieval_device(
+    device: Any,
+    *,
+    role: str,
+    model_id: str,
+    backend: str,
+) -> None:
+    """Fail closed at the model-loader boundary for implicit CPU dense retrieval.
+
+    Higher-level routing guards are scheduling optimizations, not a security boundary:
+    pre-design/research code can legitimately reach an adapter through a different
+    owner. Every dense retrieval model loader therefore rechecks the same explicit
+    opt-in immediately before importing or constructing heavyweight model state.
+    """
+
+    selected = str(device or "cpu").strip().casefold()
+    if not selected.startswith("cpu") or _dense_opted_in():
+        return
+
+    from .model_adapters.base import ModelConfigurationError
+
+    raise ModelConfigurationError(
+        f"CPU dense retrieval {backend} loading is disabled for role={role!r}, "
+        f"model={model_id!r}. Set {_DENSE_OPT_IN}=1 to opt in explicitly."
+    )
+
+
 def _lexical_repository_exploration(
     explorer: Any,
     query: str,
@@ -211,4 +238,5 @@ __all__ = [
     "_install_live_hybrid_budget",
     "_install_production_tool_budget",
     "install",
+    "require_dense_retrieval_device",
 ]
