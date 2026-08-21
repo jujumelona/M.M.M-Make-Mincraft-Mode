@@ -12,6 +12,10 @@ The current model-visible schema is authoritative for every tool that is visible
 this turn. The broader authorized surface contributes only names that are absent from
 the visible frontier. This prevents a stale/raw host schema for the same tool name from
 replacing the exact schema that was shown to the model.
+
+Each individual surface must also have exactly one schema owner per tool name. Silent
+last-writer-wins behavior is unsafe here: a duplicate name can otherwise select a
+schema according to wrapper/dict order rather than according to the causal frontier.
 """
 
 from dataclasses import replace
@@ -32,12 +36,33 @@ def _tool_name(schema: Any) -> str:
     return str(function.get("name", "")).strip()
 
 
+def _assert_unique_schema_names(
+    schemas: Sequence[Any],
+    *,
+    surface: str,
+) -> None:
+    """Reject ambiguous same-name ownership inside one schema surface."""
+
+    seen: set[str] = set()
+    for schema in schemas:
+        name = _tool_name(schema)
+        if not name:
+            continue
+        if name in seen:
+            raise RuntimeError(
+                f"duplicate tool schema name {name!r} in {surface} surface"
+            )
+        seen.add(name)
+
+
 def _validation_surface(
     visible: Sequence[Any],
     authorized: Sequence[Any],
 ) -> tuple[Any, ...]:
     """Merge parse-only schemas without overriding schemas shown this turn."""
 
+    _assert_unique_schema_names(visible, surface="model-visible")
+    _assert_unique_schema_names(authorized, surface="authorized-validation")
     result = list(visible)
     visible_names = {
         name
@@ -69,6 +94,8 @@ def install() -> None:
                     request,
                     tools=_validation_surface(visible, validation),
                 )
+            else:
+                _assert_unique_schema_names(visible, surface="model-visible")
             return current_parse(message, request)
 
         setattr(parse_with_authorized_surface, _PARSE_MARKER, True)
@@ -80,12 +107,15 @@ def install() -> None:
         @contract_wraps(current_continuation)
         def continuation_with_authorized_surface(request: Any, reasoning: str):
             continued = current_continuation(request, reasoning)
-            validation = tuple(
-                getattr(request, "tool_validation_schemas", ()) or ()
+            # The underlying continuation owns only transcript advancement and dropping
+            # already-consumed media. Start from the original request so parse-only
+            # schemas, metadata, task/prompt context, and future request fields cannot
+            # disappear merely because an older constructor omitted them.
+            return replace(
+                request,
+                messages=continued.messages,
+                media_paths=continued.media_paths,
             )
-            if not validation:
-                return continued
-            return replace(continued, tool_validation_schemas=validation)
 
         setattr(continuation_with_authorized_surface, _CONTINUATION_MARKER, True)
         llama_cpp_adapter._reasoning_continuation_request = (
@@ -93,4 +123,8 @@ def install() -> None:
         )
 
 
-__all__ = ["_validation_surface", "install"]
+__all__ = [
+    "_assert_unique_schema_names",
+    "_validation_surface",
+    "install",
+]
