@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from dataclasses import asdict
 from functools import cached_property
 from pathlib import Path
@@ -36,8 +37,19 @@ class ProductionToolService:
     def index_project_rag(self, roots: Sequence[str], *, index_path: str='rag/project-index.json', metadata: dict[str, Any], semantic: bool=False) -> dict[str, Any]:
         resolved = [str(self._existing_path(root)) for root in roots]
         target = self._replaceable_file(index_path)
-        router = ModelRouter(profile=self.profile) if semantic else None
-        return ProjectRAGIndex(target).build(resolved, metadata=metadata, router=router, semantic=semantic)
+        repair_like = (
+            bool(metadata.get('source_commit'))
+            and str(metadata.get('license', '')) == 'project-local'
+        )
+        eager_repair_semantic = os.environ.get('MMM_RAG_EAGER_REPAIR_SEMANTIC', '').strip() == '1'
+        effective_semantic = bool(semantic and (not repair_like or eager_repair_semantic))
+        router = ModelRouter(profile=self.profile) if effective_semantic else None
+        return ProjectRAGIndex(target).build(
+            resolved,
+            metadata=metadata,
+            router=router,
+            semantic=effective_semantic,
+        )
 
     def search_code_rag(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
         target = self._existing_file(index_path)
