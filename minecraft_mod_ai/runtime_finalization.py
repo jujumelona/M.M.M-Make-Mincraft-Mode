@@ -37,6 +37,7 @@ def finalize_runtime() -> None:
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
+        from .bounded_source_edit_contract import install as install_bounded_source_edit
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .context_budget_preflight import run_context_budget_preflight
         from .forced_tool_execution_contract import install as install_forced_tool_execution
@@ -66,6 +67,11 @@ def finalize_runtime() -> None:
         install_agent_mcp_transport_pool()
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
+        # Source files are repository state, not model output pages. Replace the old
+        # complete-file model contract with bounded exact-span edits before any runtime
+        # instance can cache the generation schema. The host still materializes the
+        # canonical SHA-bound transactional patch immediately before execution.
+        install_bounded_source_edit(agent_tool_runtime)
         install_route_integrity(
             model_router_module=model_router,
             small_model_module=small_model_max_agent_contract,
