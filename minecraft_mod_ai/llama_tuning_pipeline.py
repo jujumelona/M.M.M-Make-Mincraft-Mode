@@ -63,39 +63,54 @@ class NativeLlamaTuningPipeline:
 
     @staticmethod
     def _context_value(config: Any) -> int:
-        """Resolve llama context at the final launch boundary.
+        """Resolve the launch context from explicit operator or registry policy.
 
-        Zero is intentional: llama.cpp defines ``--ctx-size 0`` as loading the
-        native context size from the model metadata. MMM must not silently shrink
-        a model's context window. Only an explicit operator override may replace
-        that model-native value.
+        ``--ctx-size 0`` is still available for profiles that intentionally want the
+        model-native context. Resource-constrained profiles can instead declare a
+        ``runtime_context_default`` in registry metadata so a small request does not
+        allocate a huge native KV cache merely because the checkpoint advertises a
+        very large maximum context. Explicit operator overrides remain authoritative.
         """
-        model_id = str(getattr(config, "model_id", "")).casefold()
+
         extra = getattr(config, "extra", {})
-        filename = (
-            str(extra.get("gguf_filename", "")).casefold()
-            if isinstance(extra, dict)
-            else ""
+        metadata = extra if isinstance(extra, dict) else {}
+        qwen_t4_hotpath = (
+            str(metadata.get("runtime_contract", "")).strip().casefold() == "qwen"
+            and str(metadata.get("decode_hotpath", "")).strip().casefold() == "t4_mtp"
         )
-        qwen35_mtp = "qwen3.5-9b" in model_id and (
-            "mtp" in model_id or "mtp" in filename
-        )
-        if qwen35_mtp:
+
+        if qwen_t4_hotpath:
             raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
             if raw:
                 from .qwen35_mtp_hotpath_contract import _context_size
 
                 return _context_size(config)
-            return 0
+        else:
+            raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
+            if raw:
+                try:
+                    value = int(raw)
+                except ValueError:
+                    value = -1
+                if value >= 0:
+                    return value
 
-        raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
-        if raw:
+        configured_default = metadata.get("runtime_context_default")
+        if configured_default not in (None, ""):
             try:
-                value = int(raw)
-            except ValueError:
-                value = -1
-            if value >= 0:
-                return value
+                value = int(configured_default)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "runtime_context_default must be a positive integer"
+                ) from exc
+            if value <= 0:
+                raise ValueError("runtime_context_default must be a positive integer")
+            maximum = int(getattr(config, "max_context", 0) or 0)
+            if maximum > 0 and value > maximum:
+                raise ValueError(
+                    "runtime_context_default cannot exceed the registered max_context"
+                )
+            return value
         return 0
 
     def _install_profile_context_authority(self) -> None:
