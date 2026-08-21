@@ -67,12 +67,19 @@ class EmbeddingAdapter:
             str(self.config.extra.get("revision", "")).strip(),
         )
 
-    def _vector_cache_key(
+    def _vector_cache_keys(
         self,
-        text: str,
+        texts: Sequence[str],
         dimensions: int,
-    ) -> tuple[str, str, str, int, str]:
-        return (*self._backend_key(), dimensions, _text_digest(text))
+    ) -> dict[str, tuple[str, str, str, int, str]]:
+        """Build each per-text cache key once for the current embed call."""
+
+        model_id, device, revision = self._backend_key()
+        prefix = (model_id, device, revision, dimensions)
+        return {
+            text: (*prefix, _text_digest(text))
+            for text in dict.fromkeys(texts)
+        }
 
     def _load_backend(self) -> _EmbeddingBackend:
         require_package("sentence-transformers", minimum="3.0.0")
@@ -134,6 +141,9 @@ class EmbeddingAdapter:
 
         dimensions = int(self.config.extra.get("dimensions", 512))
         cache_active = _cache_enabled()
+        cache_keys = (
+            self._vector_cache_keys(cleaned, dimensions) if cache_active else {}
+        )
         vectors_by_text: dict[str, tuple[float, ...]] = {}
         missing: list[str] = []
         seen_missing: set[str] = set()
@@ -141,7 +151,7 @@ class EmbeddingAdapter:
         if cache_active:
             with _VECTOR_CACHE_LOCK:
                 for text in cleaned:
-                    cache_key = self._vector_cache_key(text, dimensions)
+                    cache_key = cache_keys[text]
                     cached = _VECTOR_CACHE.get(cache_key)
                     if cached is not None:
                         _VECTOR_CACHE.move_to_end(cache_key)
@@ -179,7 +189,7 @@ class EmbeddingAdapter:
                     with _VECTOR_CACHE_LOCK:
                         still_missing: list[str] = []
                         for text in missing:
-                            cache_key = self._vector_cache_key(text, dimensions)
+                            cache_key = cache_keys[text]
                             cached = _VECTOR_CACHE.get(cache_key)
                             if cached is not None:
                                 _VECTOR_CACHE.move_to_end(cache_key)
@@ -198,7 +208,9 @@ class EmbeddingAdapter:
                 )
             computed = tuple(tuple(float(value) for value in row) for row in vectors)
             if len(computed) != len(missing):
-                raise RuntimeError("Embedding backend returned a different number of vectors than inputs.")
+                raise RuntimeError(
+                    "Embedding backend returned a different number of vectors than inputs."
+                )
             print(
                 "retrieval embedding: encode done",
                 f"batch={len(cleaned)}",
@@ -213,7 +225,7 @@ class EmbeddingAdapter:
             if cache_active:
                 with _VECTOR_CACHE_LOCK:
                     for text, vector in zip(missing, computed, strict=True):
-                        cache_key = self._vector_cache_key(text, dimensions)
+                        cache_key = cache_keys[text]
                         _VECTOR_CACHE[cache_key] = vector
                         _VECTOR_CACHE.move_to_end(cache_key)
                     while len(_VECTOR_CACHE) > _result_cache_limit():
