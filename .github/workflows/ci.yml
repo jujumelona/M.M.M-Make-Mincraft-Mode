@@ -47,6 +47,7 @@ jobs:
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
 
   runtime-clean:
+    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Runtime composition
@@ -66,6 +67,7 @@ jobs:
           tests/test_runtime_wrapper_signature_integrity.py
 
   mcp-evidence:
+    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Minecraft MCP evidence
@@ -83,6 +85,7 @@ jobs:
           tests/test_research_coordinator.py
 
   planner-contract:
+    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Planner host template contract
@@ -96,6 +99,7 @@ jobs:
       - run: python -m pytest -q tests/test_planner_template_schema.py
 
   parallel-repair:
+    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Parallel repair safety
@@ -113,6 +117,7 @@ jobs:
           tests/test_llama_parallel_runtime_contract.py
 
   remaining-tests:
+    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Remaining tests ${{ matrix.shard }}/3
