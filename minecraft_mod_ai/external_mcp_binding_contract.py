@@ -4,11 +4,11 @@ from __future__ import annotations
 
 Historically ``external_mcp_schema`` selected the first live provider, while the
 later ``external_mcp_call`` independently routed again and could fail over to a
-provider with a different input schema.  That is a TOCTOU contract violation: the
-model can be validated against schema A and execute tool B.  This contract keeps a
+provider with a different input schema. That is a TOCTOU contract violation: the
+model can be validated against schema A and execute tool B. This contract keeps a
 live schema binding per request scope, revalidates it immediately before execution,
-and invokes exactly that reviewed server/tool pair.  Provider/schema drift requires
-an explicit schema refresh instead of silent failover.
+and invokes exactly that reviewed server/tool pair. Provider/schema/route drift
+requires an explicit schema refresh instead of silent failover.
 """
 
 import copy
@@ -32,11 +32,7 @@ class ExternalMCPSchemaBindingError(RuntimeError):
 def _server_scope(values: Collection[str] | None) -> frozenset[str] | None:
     if values is None:
         return None
-    return frozenset(
-        value
-        for raw in values
-        if (value := str(raw).strip())
-    )
+    return frozenset(value for raw in values if (value := str(raw).strip()))
 
 
 def _binding_key(
@@ -59,14 +55,30 @@ def _binding_key(
     )
 
 
-def _fingerprint(schema: Mapping[str, Any]) -> str:
+def _fingerprint(value: Any) -> str:
     payload = json.dumps(
-        dict(schema),
+        value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        default=str,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _route_fingerprint(router: Any, route: Mapping[str, Any]) -> str:
+    """Hash every execution-relevant provider identity without retaining secrets."""
+
+    entry = route["entry"]
+    child_env = router._child_env(entry)
+    identity = {
+        "server": str(route["server"]),
+        "route": dict(route["route"]),
+        "entry": dict(entry),
+        "resolved_url_sha256": _fingerprint(router._server_url(entry)),
+        "child_env_sha256": _fingerprint(dict(child_env)),
+    }
+    return _fingerprint(identity)
 
 
 def _binding_store(bridge: Any) -> dict[Any, dict[str, Any]]:
@@ -85,6 +97,45 @@ def _schema_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         if name in payload:
             result[name] = payload[name]
     return result
+
+
+def _resolve_exact_route(
+    router: Any,
+    *,
+    capability: str,
+    stage: str,
+    target: Mapping[str, str],
+    max_access: str,
+    allowed_server_ids: Collection[str] | None,
+    server: str,
+    tool: str,
+) -> Mapping[str, Any]:
+    allowed = _server_scope(allowed_server_ids)
+    routes = router.registry.routes(
+        capability,
+        stage=stage,
+        minecraft_version=target["minecraft_version"],
+        loader=target["loader"],
+        max_access=max_access,
+    )
+    matches = [
+        route
+        for route in routes
+        if str(route["server"]) == server
+        and str(route["route"].get("tool", "")).strip() == tool
+        and (allowed is None or str(route["server"]) in allowed)
+    ]
+    if len(matches) != 1:
+        raise ExternalMCPSchemaBindingError(
+            "Bound external MCP route disappeared or became ambiguous: "
+            f"server={server!r} tool={tool!r} matches={len(matches)}"
+        )
+    route = matches[0]
+    if not router._configured(route["entry"]):
+        raise ExternalMCPSchemaBindingError(
+            f"Bound external MCP provider {server!r} is unavailable"
+        )
+    return route
 
 
 def _run_live_provider_schema(
@@ -119,6 +170,8 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
             stage: str,
             server: str,
             tool: str,
+            expected_access: str,
+            expected_route_sha256: str,
             arguments: Mapping[str, Any] | None = None,
             target: Any = None,
             max_access: str = "read",
@@ -126,6 +179,7 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
             allowed_server_ids: Collection[str] | None = None,
         ) -> dict[str, Any]:
             resolved = external_mcp_router_module.MCPRouteTarget.from_value(target)
+            target_dict = resolved.to_dict()
             allowed = _server_scope(allowed_server_ids)
             if stage != "runtime" and max_access != "read":
                 raise external_mcp_router_module.ExternalMCPError(
@@ -143,31 +197,31 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 raise external_mcp_router_module.ExternalMCPError(
                     f"Bound MCP server {server!r} is outside the authorized provider scope."
                 )
-
-            routes = self.registry.routes(
-                capability,
-                stage=stage,
-                minecraft_version=resolved.minecraft_version,
-                loader=resolved.loader,
-                max_access=max_access,
-            )
-            matches = [
-                route
-                for route in routes
-                if str(route["server"]) == server
-                and str(route["route"].get("tool", "")).strip() == tool
-            ]
-            if len(matches) != 1:
-                raise external_mcp_router_module.ExternalMCPError(
-                    "Bound external MCP route is missing or ambiguous: "
-                    f"server={server!r} tool={tool!r} matches={len(matches)}"
+            try:
+                route = _resolve_exact_route(
+                    self,
+                    capability=capability,
+                    stage=stage,
+                    target=target_dict,
+                    max_access=max_access,
+                    allowed_server_ids=allowed,
+                    server=server,
+                    tool=tool,
                 )
-            route = matches[0]
+            except ExternalMCPSchemaBindingError as exc:
+                raise external_mcp_router_module.ExternalMCPError(str(exc)) from exc
             entry = route["entry"]
             route_spec = route["route"]
-            if not self._configured(entry):
+            live_access = str(route_spec.get("access", "read")).strip() or "read"
+            if live_access != expected_access:
                 raise external_mcp_router_module.ExternalMCPError(
-                    f"Bound external MCP provider {server!r} is no longer configured."
+                    "Bound external MCP access changed after schema discovery: "
+                    f"expected={expected_access!r} actual={live_access!r}"
+                )
+            live_route_sha256 = _route_fingerprint(self, route)
+            if live_route_sha256 != expected_route_sha256:
+                raise external_mcp_router_module.ExternalMCPError(
+                    "Bound external MCP provider/route identity changed after schema discovery"
                 )
 
             call_args = self._arguments_for_route(
@@ -186,9 +240,9 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 "tool": tool,
                 "capability": capability,
                 "stage": stage,
-                "access": route_spec.get("access", "read"),
+                "access": live_access,
                 "trust": entry.get("trust", "unknown"),
-                "requested_target": resolved.to_dict(),
+                "requested_target": target_dict,
                 "server_info": called.get("server_info", {}),
                 "arguments_sha256": external_mcp_router_module._sha256(call_args),
                 "result_sha256": external_mcp_router_module._sha256(called["result"]),
@@ -199,13 +253,11 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 "schema_version": "mmm/external-mcp-evidence-bundle-v1",
                 "capability": capability,
                 "stage": stage,
-                "target": resolved.to_dict(),
+                "target": target_dict,
                 "required_corroboration": 1,
                 "status": "PASS",
                 "evidence": [receipt],
-                "attempts": [
-                    {"server": server, "tool": tool, "status": "PASS"}
-                ],
+                "attempts": [{"server": server, "tool": tool, "status": "PASS"}],
             }
             bundle["bundle_sha256"] = external_mcp_router_module._sha256(bundle)
             return bundle
@@ -284,21 +336,49 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                     f"{result.get('server')!r}/{result.get('tool')!r}"
                 ),
             )
+            binding = {
+                "server": str(result.get("server", "")).strip(),
+                "tool": str(result.get("tool", "")).strip(),
+                "schema_sha256": _fingerprint(schema),
+                "target_args": dict(
+                    result.get("target_args_injected_by_router", {}) or {}
+                ),
+                "access": str(result.get("access", "read")).strip() or "read",
+            }
+            if not binding["server"] or not binding["tool"]:
+                raise ExternalMCPSchemaBindingError(
+                    "Live external MCP schema did not identify an exact provider/tool owner."
+                )
+            target = external_agent_bridge_module._target(payload)
+            max_access = str(payload.get("max_access", "read")).strip().lower() or "read"
+            router = self._external_router()
+            route = _resolve_exact_route(
+                router,
+                capability=str(payload.get("capability", "")).strip(),
+                stage=stage,
+                target=target,
+                max_access=max_access,
+                allowed_server_ids=allowed_server_ids,
+                server=binding["server"],
+                tool=binding["tool"],
+            )
+            route_spec = route["route"]
+            live_access = str(route_spec.get("access", "read")).strip() or "read"
+            if live_access != binding["access"]:
+                raise ExternalMCPSchemaBindingError(
+                    "External MCP route access disagrees with discovered schema owner"
+                )
+            live_target_args = dict(route_spec.get("target_args", {}) or {})
+            if live_target_args != binding["target_args"]:
+                raise ExternalMCPSchemaBindingError(
+                    "External MCP route target projection disagrees with discovered schema"
+                )
+            binding["route_sha256"] = _route_fingerprint(router, route)
         except Exception as exc:
             invalidate(self, key)
+            if isinstance(exc, external_agent_bridge_module.ExternalAgentBridgeError):
+                raise
             raise external_agent_bridge_module.ExternalAgentBridgeError(str(exc)) from exc
-        binding = {
-            "server": str(result.get("server", "")).strip(),
-            "tool": str(result.get("tool", "")).strip(),
-            "schema_sha256": _fingerprint(schema),
-            "target_args": dict(result.get("target_args_injected_by_router", {}) or {}),
-            "access": str(result.get("access", "read")).strip() or "read",
-        }
-        if not binding["server"] or not binding["tool"]:
-            invalidate(self, key)
-            raise external_agent_bridge_module.ExternalAgentBridgeError(
-                "Live external MCP schema did not identify an exact provider/tool owner."
-            )
         with self._lock:
             _binding_store(self)[key] = binding
         return result
@@ -314,35 +394,31 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
         binding: Mapping[str, Any],
     ) -> Mapping[str, Any]:
         router = self._external_router()
-        allowed = _server_scope(allowed_server_ids)
-        routes = router.registry.routes(
-            capability,
+        route = _resolve_exact_route(
+            router,
+            capability=capability,
             stage=stage,
-            minecraft_version=target["minecraft_version"],
-            loader=target["loader"],
+            target=target,
             max_access=max_access,
+            allowed_server_ids=allowed_server_ids,
+            server=str(binding["server"]),
+            tool=str(binding["tool"]),
         )
-        matches = [
-            route
-            for route in routes
-            if str(route["server"]) == binding["server"]
-            and str(route["route"].get("tool", "")).strip() == binding["tool"]
-            and (allowed is None or str(route["server"]) in allowed)
-        ]
-        if len(matches) != 1:
+        route_spec = route["route"]
+        live_access = str(route_spec.get("access", "read")).strip() or "read"
+        if live_access != str(binding.get("access", "read")):
             raise ExternalMCPSchemaBindingError(
-                "Bound external MCP route disappeared or became ambiguous"
+                "Bound external MCP access changed after schema discovery"
             )
-        route = matches[0]
-        if not router._configured(route["entry"]):
-            raise ExternalMCPSchemaBindingError(
-                f"Bound external MCP provider {binding['server']!r} is unavailable"
-            )
-        if dict(route["route"].get("target_args", {}) or {}) != dict(
+        if dict(route_spec.get("target_args", {}) or {}) != dict(
             binding.get("target_args", {}) or {}
         ):
             raise ExternalMCPSchemaBindingError(
                 "Bound external MCP target-argument projection changed"
+            )
+        if _route_fingerprint(router, route) != str(binding.get("route_sha256", "")):
+            raise ExternalMCPSchemaBindingError(
+                "Bound external MCP provider/route identity changed after schema discovery"
             )
         return route
 
@@ -483,6 +559,8 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 stage=stage,
                 server=binding["server"],
                 tool=binding["tool"],
+                expected_access=binding["access"],
+                expected_route_sha256=binding["route_sha256"],
                 arguments=arguments,
                 target=target,
                 max_access=max_access,
