@@ -4,6 +4,7 @@ import os
 from functools import wraps
 from typing import Any, Mapping
 
+from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
 _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
 _PAYLOAD_MARKER = "_mmm_qwen35_profile_output_default_v5"
@@ -202,11 +203,11 @@ def _install_fast_probe_policy(autotune: Any) -> None:
     """
 
     current = autotune._probe_server
-    if getattr(current, _PROBE_MARKER, False):
+    if has_contract_marker(current, _PROBE_MARKER):
         return
     primary = (
         getattr(current, "__wrapped__", None)
-        if getattr(current, "_mmm_correctness_sentinel", False)
+        if owns_contract_marker(current, "_mmm_correctness_sentinel")
         else None
     )
 
