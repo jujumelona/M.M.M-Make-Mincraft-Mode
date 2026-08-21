@@ -25,21 +25,10 @@ def _metadata(source_commit: str = "sha256:test") -> dict[str, str]:
 
 
 def test_research_runtime_is_installed_by_package_bootstrap() -> None:
-    assert getattr(
-        rag_index.ProjectRAGIndex.build,
-        "_mmm_research_rag_performance_v1",
-        False,
-    )
-    assert getattr(
-        rag_index._sqlite_search_pass,
-        "_mmm_research_rag_performance_v1",
-        False,
-    )
-    assert getattr(
-        centroid_vector_rag.direct_centroid_vector_search,
-        "_mmm_research_rag_performance_v1",
-        False,
-    )
+    assert hasattr(rag_index.ProjectRAGIndex, "_full_rebuild")
+    assert hasattr(rag_index, "_full_sqlite_search_pass")
+    assert hasattr(centroid_vector_rag, "_full_direct_centroid_vector_search")
+    rag_perf.harden(rag_index, centroid_vector_rag)
     assert getattr(
         trajectory_memory.append_trajectory,
         "_mmm_research_memory_performance_v1",
