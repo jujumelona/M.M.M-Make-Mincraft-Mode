@@ -16,7 +16,10 @@ from minecraft_mod_ai.model_adapters import (
 )
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.small_model_hybrid_search_contract import _modes
-from minecraft_mod_ai.tool_validation_surface_contract import install as install_tool_validation_surface
+from minecraft_mod_ai.tool_validation_surface_contract import (
+    _validation_surface,
+    install as install_tool_validation_surface,
+)
 
 
 def _schema(name: str, properties: dict | None = None) -> dict:
@@ -114,6 +117,61 @@ def test_visible_schema_wins_over_stale_authorized_schema_for_same_tool() -> Non
 
     response = llama_cpp_adapter._qwen_tool_generation_response(message, request)
     assert response.tool_calls[0].arguments["operation"] == "replace_exact"
+
+
+def test_duplicate_name_inside_one_validation_surface_fails_closed() -> None:
+    first = _schema("apply_source_edit", {"path": {"type": "string"}})
+    second = _schema(
+        "apply_source_edit",
+        {"operation": {"type": "string", "enum": ["replace_exact"]}},
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="duplicate tool schema name 'apply_source_edit'.*authorized-validation",
+    ):
+        _validation_surface((), (first, second))
+
+
+def test_duplicate_name_inside_causal_authorization_fails_before_selection() -> None:
+    first = _schema("inspect_github_repository", {"repository": {"type": "string"}})
+    second = _schema("inspect_github_repository", {"owner": {"type": "string"}})
+    with pytest.raises(
+        RuntimeError,
+        match="duplicate tool schema name 'inspect_github_repository'.*causal-authorized",
+    ):
+        remember_authorized_tools((first, second))
+
+
+def test_reasoning_continuation_preserves_full_request_contract() -> None:
+    install_tool_validation_surface()
+    visible = _schema("inspect_github_repository", {"repository": {"type": "string"}})
+    hidden = _schema("apply_source_edit", {"path": {"type": "string"}})
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "repair it"},),
+        response_format="json",
+        response_schema={"type": "object"},
+        tools=(visible,),
+        tool_validation_schemas=(visible, hidden),
+        tool_choice="auto",
+        parallel_tool_calls=False,
+        task="repair-task",
+        prompt="repair-prompt",
+        metadata={"trace": "schema-regression"},
+    )
+
+    continued = llama_cpp_adapter._reasoning_continuation_request(request, "thinking")
+
+    assert continued.tool_validation_schemas == request.tool_validation_schemas
+    assert continued.task == request.task
+    assert continued.prompt == request.prompt
+    assert continued.metadata == request.metadata
+    assert continued.response_format == request.response_format
+    assert continued.response_schema == request.response_schema
+    assert continued.tools == request.tools
+    assert continued.tool_choice == request.tool_choice
+    assert continued.parallel_tool_calls is False
+    assert continued.media_paths == ()
+    assert continued.messages[-1]["role"] == "user"
 
 
 def test_truly_unauthorized_qwen_tool_still_fails_validation() -> None:
