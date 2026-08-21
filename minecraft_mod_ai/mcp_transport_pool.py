@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -27,6 +29,62 @@ SessionFactory = Callable[
 ]
 
 
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(item) for item in value]
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _jsonable(model_dump(mode="json"))
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:
+        return str(value)
+
+
+def _tool_schema_fingerprint(listed: Any) -> str:
+    rows: list[dict[str, Any]] = []
+    for item in getattr(listed, "tools", ()) or ():
+        schema = getattr(item, "inputSchema", None)
+        if schema is None:
+            schema = getattr(item, "input_schema", None)
+        rows.append(
+            {
+                "name": str(getattr(item, "name", "")).strip(),
+                "description": str(getattr(item, "description", "") or ""),
+                "input_schema": _jsonable(schema),
+            }
+        )
+    rows.sort(key=lambda item: item["name"])
+    payload = json.dumps(
+        rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _schema_scope_key(
+    stage: str,
+    env: Mapping[str, str],
+    timeout_seconds: float,
+) -> tuple[str, str, float]:
+    env_payload = json.dumps(
+        sorted((str(key), str(value)) for key, value in env.items()),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return (
+        stage,
+        hashlib.sha256(env_payload).hexdigest(),
+        float(timeout_seconds),
+    )
+
+
 @dataclass(frozen=True)
 class _TransportRequest:
     operation: str
@@ -36,6 +94,7 @@ class _TransportRequest:
     result: concurrent.futures.Future[Any]
     name: str = ""
     arguments: Mapping[str, Any] | None = None
+    expected_schema_sha256: str = ""
 
 
 @asynccontextmanager
@@ -199,6 +258,8 @@ class _SessionWorker:
         current_stage = ""
         current_env: dict[str, str] | None = None
         current_timeout = 0.0
+        current_listed_tools: Any = None
+        current_schema_sha256 = ""
 
         try:
             while True:
@@ -207,6 +268,7 @@ class _SessionWorker:
                     return
                 try:
                     requested_env = dict(request.env)
+                    opened_now = False
                     if (
                         session is None
                         or current_stage != request.stage
@@ -224,11 +286,28 @@ class _SessionWorker:
                         current_stage = request.stage
                         current_env = requested_env
                         current_timeout = request.timeout_seconds
+                        with anyio.fail_after(request.timeout_seconds):
+                            current_listed_tools = await session.list_tools()
+                        current_schema_sha256 = _tool_schema_fingerprint(
+                            current_listed_tools
+                        )
+                        opened_now = True
 
                     with anyio.fail_after(request.timeout_seconds):
                         if request.operation == "list_tools":
-                            value = await session.list_tools()
+                            if not opened_now:
+                                current_listed_tools = await session.list_tools()
+                                current_schema_sha256 = _tool_schema_fingerprint(
+                                    current_listed_tools
+                                )
+                            value = current_listed_tools
                         elif request.operation == "call_tool":
+                            expected = request.expected_schema_sha256
+                            if expected and current_schema_sha256 != expected:
+                                raise RuntimeError(
+                                    "MCP pooled worker schema drift detected before execution: "
+                                    f"expected={expected} actual={current_schema_sha256}"
+                                )
                             value = await session.call_tool(
                                 request.name,
                                 arguments=dict(request.arguments or {}),
@@ -242,8 +321,10 @@ class _SessionWorker:
                 except BaseException as exc:
                     if not request.result.done():
                         request.result.set_exception(exc)
-                    # Transport-level exceptions may leave stdio half-open. Invalidate
-                    # this slot so the next request gets a clean process/session.
+                    # Transport-level exceptions or a schema mismatch may leave this
+                    # worker incompatible with the runtime's canonical tool surface.
+                    # Invalidate the slot so a future runtime/session must re-establish
+                    # the contract instead of executing against stale ownership.
                     if context is not None:
                         try:
                             await context.__aexit__(
@@ -258,6 +339,8 @@ class _SessionWorker:
                     current_stage = ""
                     current_env = None
                     current_timeout = 0.0
+                    current_listed_tools = None
+                    current_schema_sha256 = ""
         finally:
             if context is not None:
                 try:
@@ -289,6 +372,10 @@ class MCPTransportPool:
     keeps its stdio subprocess warm for repeated calls and swaps sessions only when
     stage/environment/timeout changes. ModelRouter's existing read-wave parallelism
     therefore stays bounded while process startup/initialize is amortized.
+
+    Every scope also owns one canonical raw tools/list fingerprint. A worker that
+    restarts with a different tool surface is rejected before call_tool execution,
+    preventing a cached schema from worker A from being used against worker B.
     """
 
     def __init__(
@@ -310,6 +397,8 @@ class MCPTransportPool:
             raise ValueError("max_pending_per_worker must be positive")
         self._closed = False
         self._dispatch_lock = threading.Lock()
+        self._schema_lock = threading.Lock()
+        self._schema_fingerprints: dict[tuple[str, str, float], str] = {}
         self._workers = tuple(
             _SessionWorker(
                 session_factory=session_factory,
@@ -326,12 +415,19 @@ class MCPTransportPool:
         env: Mapping[str, str],
         timeout_seconds: float,
     ) -> Any:
-        return await self._execute(
+        listed = await self._execute(
             operation="list_tools",
             stage=stage,
             env=env,
             timeout_seconds=timeout_seconds,
         )
+        self._register_schema(
+            stage=stage,
+            env=env,
+            timeout_seconds=timeout_seconds,
+            listed=listed,
+        )
+        return listed
 
     async def call_tool(
         self,
@@ -342,6 +438,24 @@ class MCPTransportPool:
         name: str,
         arguments: Mapping[str, Any],
     ) -> Any:
+        expected = self._schema_fingerprint_for_scope(
+            stage=stage,
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
+        if not expected:
+            await self.list_tools(
+                stage=stage,
+                env=env,
+                timeout_seconds=timeout_seconds,
+            )
+            expected = self._schema_fingerprint_for_scope(
+                stage=stage,
+                env=env,
+                timeout_seconds=timeout_seconds,
+            )
+        if not expected:  # pragma: no cover - defensive invariant
+            raise RuntimeError("MCP schema fingerprint was not established before execution")
         return await self._execute(
             operation="call_tool",
             stage=stage,
@@ -349,6 +463,7 @@ class MCPTransportPool:
             timeout_seconds=timeout_seconds,
             name=name,
             arguments=arguments,
+            expected_schema_sha256=expected,
         )
 
     def close(self) -> None:
@@ -357,8 +472,43 @@ class MCPTransportPool:
                 return
             self._closed = True
             workers = self._workers
+        with self._schema_lock:
+            self._schema_fingerprints.clear()
         for worker in workers:
             worker.close()
+
+    def _register_schema(
+        self,
+        *,
+        stage: str,
+        env: Mapping[str, str],
+        timeout_seconds: float,
+        listed: Any,
+    ) -> str:
+        key = _schema_scope_key(stage, env, timeout_seconds)
+        fingerprint = _tool_schema_fingerprint(listed)
+        with self._schema_lock:
+            previous = self._schema_fingerprints.get(key)
+            if previous is None:
+                self._schema_fingerprints[key] = fingerprint
+                return fingerprint
+            if previous != fingerprint:
+                raise RuntimeError(
+                    "MCP tools/list schema drift detected across pooled workers: "
+                    f"expected={previous} actual={fingerprint}"
+                )
+            return previous
+
+    def _schema_fingerprint_for_scope(
+        self,
+        *,
+        stage: str,
+        env: Mapping[str, str],
+        timeout_seconds: float,
+    ) -> str:
+        key = _schema_scope_key(stage, env, timeout_seconds)
+        with self._schema_lock:
+            return self._schema_fingerprints.get(key, "")
 
     async def _execute(
         self,
@@ -369,6 +519,7 @@ class MCPTransportPool:
         timeout_seconds: float,
         name: str = "",
         arguments: Mapping[str, Any] | None = None,
+        expected_schema_sha256: str = "",
     ) -> Any:
         future: concurrent.futures.Future[Any] = concurrent.futures.Future()
         request = _TransportRequest(
@@ -379,6 +530,7 @@ class MCPTransportPool:
             result=future,
             name=name,
             arguments=dict(arguments or {}),
+            expected_schema_sha256=expected_schema_sha256,
         )
         worker = self._reserve_worker()
         worker.submit(request)
