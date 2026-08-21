@@ -27,7 +27,9 @@ def finalize_runtime() -> None:
 
         from . import agent_tool_runtime
         from . import causal_tool_frontier_contract
+        from . import llama_server_autotune
         from . import llama_server_hardware_policy
+        from . import llama_server_runtime_tuning
         from . import model_router
         from . import parallel_runtime_contract
         from . import small_model_max_agent_contract
@@ -38,6 +40,7 @@ def finalize_runtime() -> None:
         from .forced_tool_execution_contract import install as install_forced_tool_execution
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_length_resilience import install as install_llama_length_resilience
+        from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_unbounded_generation import install as install_llama_unbounded_generation
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter, openai_compatible
@@ -73,8 +76,13 @@ def finalize_runtime() -> None:
         # the tool loop instead of delegating through that old callable. Re-bind the
         # compactor here, after every loop owner, so it is on the executable path.
         install_small_model_compaction(model_router)
+        # MTP-capable llama.cpp profiles already reuse prompt state through the native
+        # prompt cache. Drop the duplicate RAM arena only for those profiles, while
+        # keeping the generic bounded cache reservation for non-MTP launches.
+        install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         # llama.cpp n_predict/max_tokens=-1 is its native unlimited policy. Do not
-        # truncate source-edit/tool turns at a registry max_new_tokens value.
+        # truncate ordinary source-edit/tool turns at a registry max_new_tokens value.
+        # Registry-declared Qwen T4/MTP pages retain their explicit bounded policy.
         install_llama_unbounded_generation(llama_server_hardware_policy)
         # A remaining finish_reason='length' is then context pressure. Recover once by
         # compacting large observations; never invent another output-token ceiling.
