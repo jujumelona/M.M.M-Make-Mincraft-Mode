@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import parallel_runtime_contract as parallel_runtime
@@ -44,14 +45,21 @@ def test_autotune_cache_keeps_multiple_model_fingerprints(monkeypatch, tmp_path)
     assert set(payload["entries"]) == {"model-a", "model-b"}
 
 
-def test_autotune_metadata_and_model_resolution_are_process_cached() -> None:
-    assert getattr(autotune._resolve_model_path, "_mmm_parallel_prefetch_resolver", False)
-    assert parallel_runtime._MODEL_RESOLVER is not None
-    assert getattr(
-        parallel_runtime._MODEL_RESOLVER,
-        "_mmm_process_model_path_cache",
-        False,
-    )
+def test_autotune_model_resolution_delegates_to_process_prefetch(monkeypatch) -> None:
+    captured = {}
+
+    def resolve_model_path(config, resolver):
+        captured["config"] = config
+        captured["resolver"] = resolver
+        return "/tmp/model.gguf"
+
+    monkeypatch.setattr(parallel_runtime, "resolve_model_path", resolve_model_path)
+    config = SimpleNamespace(model_id="repo/model", extra={})
+
+    assert autotune._resolve_model_path(config) == "/tmp/model.gguf"
+    assert captured["config"] is config
+    assert captured["resolver"] is autotune._resolve_model_path_direct
+    assert isinstance(parallel_runtime._PREFETCH_FUTURES, dict)
     assert getattr(autotune._server_version, "_mmm_process_metadata_cache", False)
     assert getattr(autotune._hardware_identity, "_mmm_process_metadata_cache", False)
     assert getattr(autotune._load_cached_decision, "_mmm_multi_decision_store", False)
