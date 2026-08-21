@@ -19,14 +19,13 @@ def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
 
 
 def _direct_call_names(function: ast.FunctionDef) -> list[str]:
-    calls: list[str] = []
-    for statement in function.body:
-        if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+    calls: list[tuple[int, int, str]] = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
-        callee = statement.value.func
-        if isinstance(callee, ast.Name):
-            calls.append(callee.id)
-    return calls
+        calls.append((node.lineno, node.col_offset, node.func.id))
+    calls.sort()
+    return [name for _, _, name in calls]
 
 
 def test_bootstrap_owns_execution_extensions_before_adaptive_hardening() -> None:
