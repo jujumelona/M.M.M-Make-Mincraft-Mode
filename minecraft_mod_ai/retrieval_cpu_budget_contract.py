@@ -6,14 +6,21 @@ The default Colab/T4 profile runs Qwen retrieval models on CPU. Exact source anc
 lexical ranking, dependency-graph expansion and procedural alignment are already
 available without loading those models. Dense retrieval remains available only when an
 operator explicitly sets ``MMM_RAG_ENABLE_CPU_DENSE=1``.
+
+This policy is revalidated against the *current executable owners* every time install
+runs.  Module-level installation markers are not sufficient because later runtime
+composition can legitimately replace a search wrapper while leaving an old marker
+behind.
 """
 
 import os
+from functools import wraps
 from typing import Any
 
-_MARKER = "_mmm_retrieval_cpu_budget_v1"
+_MARKER = "_mmm_retrieval_cpu_budget_v2"
 _HYBRID_MARKER = "_mmm_small_model_hybrid_code_rag"
-_HYBRID_BUDGET_MARKER = "_mmm_cpu_dense_hybrid_guard_v1"
+_HYBRID_BUDGET_MARKER = "_mmm_cpu_dense_hybrid_guard_v2"
+_PRODUCTION_BUDGET_MARKER = "_mmm_cpu_dense_production_guard_v1"
 _DENSE_OPT_IN = "MMM_RAG_ENABLE_CPU_DENSE"
 
 
@@ -65,57 +72,132 @@ def _lexical_pre_design_owner(current: Any) -> Any:
 def _install_live_hybrid_budget(hybrid_module: Any) -> None:
     """Prevent live ``search_code_rag`` from escalating into CPU dense work.
 
-    The hybrid search wrapper consults ``_modes`` at call time and later uses
-    ``adapt_query_vector`` for its centroid fallback. Guard both lookup points instead
-    of bypassing the wrapper, so lexical caching, relation expansion, receipts and
-    correction metadata remain intact.
+    Check function ownership rather than a sticky module marker.  If another composer
+    replaced ``_modes`` or centroid adaptation after an earlier install, this function
+    binds the policy to the new executable owner instead of incorrectly returning early.
     """
 
-    if bool(getattr(hybrid_module, _HYBRID_BUDGET_MARKER, False)):
+    current_modes = hybrid_module._modes
+    current_adapt = hybrid_module.adapt_query_vector
+    modes_guarded = bool(getattr(current_modes, _HYBRID_BUDGET_MARKER, False))
+    adapt_guarded = bool(getattr(current_adapt, _HYBRID_BUDGET_MARKER, False))
+    if modes_guarded and adapt_guarded:
         return
 
-    original_modes = hybrid_module._modes
-    original_adapt_query_vector = hybrid_module.adapt_query_vector
+    if not modes_guarded:
+        original_modes = current_modes
 
-    def budgeted_modes(
-        route: str,
-        caller_semantic: bool,
-        caller_rerank: bool,
-    ):
-        if _dense_opted_in():
-            return original_modes(route, caller_semantic, caller_rerank)
-        labels = {
-            "dependency": "lexical+relations",
-            "global": "lexical+global-relations",
-        }
-        return ((False, False, labels.get(route, "lexical")),)
+        @wraps(original_modes)
+        def budgeted_modes(
+            route: str,
+            caller_semantic: bool,
+            caller_rerank: bool,
+        ):
+            if _dense_opted_in():
+                return original_modes(route, caller_semantic, caller_rerank)
+            labels = {
+                "dependency": "lexical+relations",
+                "global": "lexical+global-relations",
+            }
+            return ((False, False, labels.get(route, "lexical")),)
 
-    def budgeted_adapt_query_vector(router: Any, query: str, texts: Any):
-        if _dense_opted_in():
-            return original_adapt_query_vector(router, query, texts)
-        return []
+        setattr(budgeted_modes, _HYBRID_BUDGET_MARKER, True)
+        hybrid_module._modes = budgeted_modes
 
-    hybrid_module._modes = budgeted_modes
-    hybrid_module.adapt_query_vector = budgeted_adapt_query_vector
-    setattr(hybrid_module, _HYBRID_BUDGET_MARKER, True)
+    if not adapt_guarded:
+        original_adapt_query_vector = current_adapt
+
+        @wraps(original_adapt_query_vector)
+        def budgeted_adapt_query_vector(router: Any, query: str, texts: Any):
+            if _dense_opted_in():
+                return original_adapt_query_vector(router, query, texts)
+            return []
+
+        setattr(budgeted_adapt_query_vector, _HYBRID_BUDGET_MARKER, True)
+        hybrid_module.adapt_query_vector = budgeted_adapt_query_vector
+
+
+def _install_production_tool_budget(production_tools_module: Any) -> None:
+    """Make the ProductionToolService boundary fail closed to lexical CPU retrieval."""
+
+    cls = production_tools_module.ProductionToolService
+
+    current_search = cls.search_code_rag
+    if not bool(getattr(current_search, _PRODUCTION_BUDGET_MARKER, False)):
+
+        @wraps(current_search)
+        def search_budgeted(
+            self: Any,
+            query: str,
+            *,
+            index_path: str = "rag/project-index.json",
+            limit: int = 8,
+            semantic: bool = False,
+            rerank: bool = False,
+            required_metadata: dict[str, Any] | None = None,
+        ):
+            dense = _dense_opted_in()
+            return current_search(
+                self,
+                query,
+                index_path=index_path,
+                limit=limit,
+                semantic=bool(semantic and dense),
+                rerank=bool(rerank and dense),
+                required_metadata=required_metadata,
+            )
+
+        setattr(search_budgeted, _PRODUCTION_BUDGET_MARKER, True)
+        cls.search_code_rag = search_budgeted
+
+    current_index = cls.index_project_rag
+    if not bool(getattr(current_index, _PRODUCTION_BUDGET_MARKER, False)):
+
+        @wraps(current_index)
+        def index_budgeted(
+            self: Any,
+            roots: Any,
+            *,
+            index_path: str = "rag/project-index.json",
+            metadata: dict[str, Any],
+            semantic: bool = False,
+        ):
+            return current_index(
+                self,
+                roots,
+                index_path=index_path,
+                metadata=metadata,
+                semantic=bool(semantic and _dense_opted_in()),
+            )
+
+        setattr(index_budgeted, _PRODUCTION_BUDGET_MARKER, True)
+        cls.index_project_rag = index_budgeted
 
 
 def install(repository_grounding_module: Any, pre_design_module: Any) -> None:
-    if bool(getattr(repository_grounding_module, _MARKER, False)):
-        return
+    from . import production_tools, small_model_hybrid_search_contract
 
-    from . import small_model_hybrid_search_contract
+    # These are intentionally checked on every call. Runtime composition can replace a
+    # callable after an earlier policy install, and a stale module marker must never be
+    # interpreted as proof that the live path is still guarded.
+    _install_live_hybrid_budget(small_model_hybrid_search_contract)
+    _install_production_tool_budget(production_tools)
 
     if not _dense_opted_in():
         repository_grounding_module._explore_with_degraded_fallback = (
             _lexical_repository_exploration
         )
-        lexical_owner = _lexical_pre_design_owner(pre_design_module._search_code_index)
-        pre_design_module._search_code_index = lexical_owner
+        pre_design_module._search_code_index = _lexical_pre_design_owner(
+            pre_design_module._search_code_index
+        )
 
-    _install_live_hybrid_budget(small_model_hybrid_search_contract)
     setattr(repository_grounding_module, _MARKER, True)
     setattr(pre_design_module, _MARKER, True)
 
 
-__all__ = ["install"]
+__all__ = [
+    "_dense_opted_in",
+    "_install_live_hybrid_budget",
+    "_install_production_tool_budget",
+    "install",
+]
