@@ -28,6 +28,54 @@ _ALLOWED_VERSION_POLICIES = frozenset(
 _RESEARCH_STAGES = frozenset({"planning", "research", "migration", "generation", "quality", "runtime"})
 
 
+def _assert_unambiguous_yaml(text: str) -> None:
+    """Reject parser precedence that could hide reviewed registry ownership.
+
+    PyYAML's normal mapping constructor uses last-writer-wins semantics for duplicate
+    keys. By the time ordinary schema validation runs, an earlier provider/capability
+    owner has already disappeared. YAML merge keys introduce the same hidden
+    precedence through aliases, so this security-sensitive registry forbids them too.
+    """
+
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"External MCP registry YAML is invalid: {exc}") from exc
+    if root is None:
+        return
+
+    def visit(node: yaml.Node, path: str) -> None:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[str] = set()
+            for key_node, value_node in node.value:
+                if not isinstance(key_node, yaml.ScalarNode):
+                    line = int(getattr(key_node.start_mark, "line", -1)) + 1
+                    raise ValueError(
+                        f"External MCP registry mapping key at {path} line {line} "
+                        "must be a scalar"
+                    )
+                key = str(key_node.value)
+                line = int(getattr(key_node.start_mark, "line", -1)) + 1
+                if key == "<<":
+                    raise ValueError(
+                        f"External MCP registry YAML merge keys are forbidden at "
+                        f"{path} line {line}"
+                    )
+                if key in seen:
+                    raise ValueError(
+                        f"Duplicate external MCP registry YAML key {key!r} at "
+                        f"{path} line {line}"
+                    )
+                seen.add(key)
+                visit(value_node, f"{path}.{key}")
+            return
+        if isinstance(node, yaml.SequenceNode):
+            for index, child in enumerate(node.value):
+                visit(child, f"{path}[{index}]")
+
+    visit(root, "$")
+
+
 class ExternalMCPRegistry:
     """Reviewed registry of external MCP providers and capability routes.
 
@@ -43,7 +91,9 @@ class ExternalMCPRegistry:
             if path is not None
             else config_path("external_mcp_registry.yaml")
         )
-        raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+        text = self.path.read_text(encoding="utf-8")
+        _assert_unambiguous_yaml(text)
+        raw = yaml.safe_load(text)
         if not isinstance(raw, dict):
             raise ValueError("External MCP registry must be an object.")
         schema = raw.get("schema_version")
