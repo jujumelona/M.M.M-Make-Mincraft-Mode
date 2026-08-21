@@ -78,7 +78,7 @@ def test_native_tool_request_keeps_server_parser_disabled() -> None:
     assert payload["temperature"] == 0.7
     assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
-    assert payload["min_p"] == 0.0
+    assert "min_p" not in payload
     assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
 
