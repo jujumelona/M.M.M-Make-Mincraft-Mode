@@ -60,6 +60,15 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
                 "content for create_file."
             ),
         },
+        "text": {
+            "type": "string",
+            "maxLength": _MAX_REPLACEMENT_CHARS,
+            "description": (
+                "Lossless Qwen alias: replacement text for replace_exact, or content "
+                "for insert_before/insert_after/create_file. Canonical fields win "
+                "when both are present."
+            ),
+        },
         "count": {
             "type": "integer",
             "minimum": 1,
@@ -114,6 +123,20 @@ def _normalize_operation(runtime_module: Any, value: Any) -> str:
             f"Unsupported source write operation: {value!r}"
         )
     return operation
+
+
+def _canonicalize_text_alias(
+    payload: Mapping[str, Any],
+    operation: str,
+) -> Mapping[str, Any]:
+    """Map Qwen's generic ``text`` field without weakening the strict schema."""
+
+    canonical_key = "new" if operation == "replace_exact" else "content"
+    if "text" not in payload or canonical_key in payload:
+        return payload
+    normalized = dict(payload)
+    normalized[canonical_key] = payload["text"]
+    return normalized
 
 
 def _normalize_model_target(
@@ -183,6 +206,7 @@ def materialize_model_source_edit(
         )
 
     operation = _normalize_operation(runtime_module, payload.get("operation"))
+    payload = _canonicalize_text_alias(payload, operation)
     path = _bounded_text(
         runtime_module, payload, "path", maximum=_MAX_PATH_CHARS, required=True
     )
