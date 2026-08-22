@@ -223,10 +223,7 @@ def test_unknown_parameter_is_discarded_and_same_tool_is_retried_from_schema() -
     retry = calls[1]
     assert retry.tools == (edit,)
     assert retry.tool_validation_schemas == request.tool_validation_schemas
-    assert retry.tool_choice == {
-        "type": "function",
-        "function": {"name": "apply_source_edit"},
-    }
+    assert retry.tool_choice == "auto"
     assert retry.parallel_tool_calls is False
     correction = retry.messages[-1]["content"]
     assert "discarded without execution" in correction
