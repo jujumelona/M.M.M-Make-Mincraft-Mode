@@ -197,6 +197,12 @@ def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) ->
             extra={
                 "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
                 "runtime_contract": "qwen",
+                "qwen_family": "qwen3.5",
+                "qwen_tool_markup": "qwen3_coder_xml",
+                "qwen_action_thinking_control": "enable_thinking_false",
+                "qwen_preserve_thinking": False,
+                "qwen_reasoning_effort": False,
+                "qwen_assistant_prefill": True,
                 "decode_hotpath": "t4_mtp",
             },
             max_new_tokens=8192,

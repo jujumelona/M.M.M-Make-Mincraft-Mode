@@ -52,7 +52,6 @@ _SAMPLING = {
         "min_p": 0.01,
         "presence_penalty": 0.04,
         "repeat_penalty": 0.83,
-        "reasoning_effort": "none",
     },
 }
 
@@ -64,12 +63,19 @@ class _Adapter:
         role: str = "coder_safe",
         enabled: bool = True,
         reasoning_effort: str = "",
+        family: str = "qwen3.6",
     ) -> None:
         extra = {}
         if enabled:
             extra.update(
                 {
                     "runtime_contract": "qwen",
+                    "qwen_family": family,
+                    "qwen_tool_markup": "qwen3_coder_xml",
+                    "qwen_action_thinking_control": "enable_thinking_false",
+                    "qwen_preserve_thinking": family in {"qwen3.6", "qwen3.8"},
+                    "qwen_reasoning_effort": family == "qwen3.8",
+                    "qwen_assistant_prefill": True,
                     "agent_thinking": True,
                     "sampling_profiles": _SAMPLING,
                 }
@@ -98,20 +104,20 @@ def _request(
     )
 
 
-def test_registry_declared_auto_tool_loop_enables_thinking_preservation() -> None:
+def test_registry_declared_auto_tool_action_disables_thinking() -> None:
     payload = hardware._server_payload(_Adapter(), _request())
 
     assert payload["chat_template_kwargs"] == {
-        "enable_thinking": True,
-        "preserve_thinking": True,
+        "enable_thinking": False,
+        "preserve_thinking": False,
     }
     assert "reasoning_effort" not in payload
-    assert payload["temperature"] == 0.23
-    assert payload["top_p"] == 0.67
-    assert payload["top_k"] == 13
-    assert payload["min_p"] == 0.02
-    assert payload["presence_penalty"] == 0.12
-    assert payload["repeat_penalty"] == 0.89
+    assert payload["temperature"] == 0.11
+    assert payload["top_p"] == 0.61
+    assert payload["top_k"] == 7
+    assert payload["min_p"] == 0.01
+    assert payload["presence_penalty"] == 0.04
+    assert payload["repeat_penalty"] == 0.83
     assert "repetition_penalty" not in payload
 
 
@@ -119,24 +125,28 @@ def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
     enabled = hardware._server_payload(_Adapter(enabled=True), _request())
     disabled = hardware._server_payload(_Adapter(enabled=False), _request())
 
-    assert enabled["chat_template_kwargs"]["preserve_thinking"] is True
-    assert enabled["temperature"] == 0.23
+    assert enabled["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
+    assert "reasoning_effort" not in enabled
+    assert enabled["temperature"] == 0.11
     assert disabled["chat_template_kwargs"] == {"enable_thinking": False}
     assert disabled["reasoning_effort"] == "none"
 
 
-def test_registry_reasoning_effort_is_forwarded_without_version_branch() -> None:
+def test_qwen38_action_drops_planning_reasoning_effort() -> None:
     payload = hardware._server_payload(
-        _Adapter(role="researcher", reasoning_effort="high"),
+        _Adapter(role="researcher", reasoning_effort="xhigh", family="qwen3.8"),
         _request(),
     )
 
     assert payload["chat_template_kwargs"] == {
-        "enable_thinking": True,
-        "reasoning_effort": "high",
-        "preserve_thinking": True,
+        "enable_thinking": False,
+        "preserve_thinking": False,
     }
-    assert payload["temperature"] == 0.31
+    assert "reasoning_effort" not in payload
+    assert payload["temperature"] == 0.11
 
 
 def test_family_wrapper_preserves_existing_payload_contract_markers() -> None:
@@ -168,7 +178,11 @@ def test_forced_return_function_stays_owned_by_transport_layer() -> None:
     )
 
     assert payload["temperature"] == 0.0
-    assert "preserve_thinking" not in payload.get("chat_template_kwargs", {})
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
+    assert "reasoning_effort" not in payload
 
 
 def test_local_prompt_forced_auto_turn_does_not_restore_agent_thinking() -> None:
@@ -188,9 +202,11 @@ def test_local_prompt_forced_auto_turn_does_not_restore_agent_thinking() -> None
     payload = hardware._server_payload(_Adapter(), local)
 
     assert local.tool_choice == "auto"
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["reasoning_effort"] == "none"
-    assert "preserve_thinking" not in payload["chat_template_kwargs"]
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
+    assert "reasoning_effort" not in payload
 
 
 def test_final_agent_continuation_keeps_thinking_without_tools() -> None:

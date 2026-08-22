@@ -24,15 +24,17 @@ from functools import wraps
 from types import SimpleNamespace
 from typing import Any, Iterator, Mapping
 
+from .qwen_family_capabilities import qwen_family_capabilities
+
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
-_TOOL_TRANSPORT_EPOCH = "jinja-pure-content-host-v1"
+_TOOL_TRANSPORT_EPOCH = "qwen-family-jinja-prefill-host-v2"
 _BENCHMARK_MARKER = "_mmm_qwen_tool_calibration_benchmark_v1"
 _RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
 _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
 _PARALLEL_STAGE_MARKER = "_mmm_qwen_mtp_single_slot_stage_v1"
 _LAUNCH_MARKER = "_mmm_qwen_mtp_single_slot_launch_v1"
-_FINGERPRINT_MARKER = "_mmm_qwen_mtp_single_slot_fingerprint_v1"
+_FINGERPRINT_MARKER = "_mmm_qwen_mtp_single_slot_fingerprint_v2"
 _WIDTH_MARKER = "_mmm_qwen_recommended_mtp_widths_v1"
 _RUNTIME_CONTRACT = "qwen"
 _ACTIVE_BENCHMARK_CONFIG: ContextVar[Any | None] = ContextVar(
@@ -51,8 +53,8 @@ def _config_extra(config: Any) -> Mapping[str, Any]:
 
 
 def _family(config: Any) -> str | None:
-    contract = str(_config_extra(config).get("runtime_contract", "")).strip().casefold()
-    return _RUNTIME_CONTRACT if contract == _RUNTIME_CONTRACT else None
+    capabilities = qwen_family_capabilities(config, required=True)
+    return capabilities.family if capabilities is not None else None
 
 
 def _recommended_mtp_widths(config: Any) -> str | None:
@@ -361,6 +363,7 @@ def _install_mtp_single_slot_policy(autotune: Any) -> None:
                 return base
             payload = {
                 "base": base,
+                "qwen_family": _family(config),
                 "qwen_mtp_parallel": "single-slot-v1",
                 "qwen_tool_transport": _TOOL_TRANSPORT_EPOCH,
             }

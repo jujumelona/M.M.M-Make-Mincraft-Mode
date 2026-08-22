@@ -9,9 +9,12 @@ repair an action that is itself too large. The classification lives here so down
 recovery never has to infer semantics from human-readable error strings.
 """
 
+import copy
+import hashlib
+import json
 from typing import Any, Mapping
 
-_MARKER = "_mmm_llama_finish_reason_classifier_v2"
+_MARKER = "_mmm_llama_finish_reason_classifier_v3"
 CONTEXT_PRESSURE = "context_pressure"
 OUTPUT_EXHAUSTED = "output_exhausted"
 _CONTEXT_ERROR = (
@@ -22,33 +25,63 @@ _OUTPUT_ERROR = (
     "native llama-server exhausted the bounded output allowance before the "
     "assistant action completed"
 )
+_HTTP_CONTEXT_MARKERS = (
+    "exceeds the available context size",
+    '"type":"exceed_context_size"',
+    '"type": "exceed_context_size"',
+)
 
 
 class LlamaCompletionBoundaryError(RuntimeError):
     """Typed llama completion stop that is safe to classify through wrapper chains."""
 
-    def __init__(self, message: str, *, kind: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str,
+        partial_message: Mapping[str, Any] | None = None,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        max_tokens: int = 0,
+    ) -> None:
         if kind not in {CONTEXT_PRESSURE, OUTPUT_EXHAUSTED}:
             raise ValueError(f"unsupported llama completion boundary kind: {kind!r}")
         self.kind = kind
+        self.partial_message = _copy_partial_message(partial_message)
+        self.prompt_tokens = _int_value(prompt_tokens)
+        self.completion_tokens = _int_value(completion_tokens)
+        self.max_tokens = _int_value(max_tokens)
+        self.partial_bytes, self.partial_sha256 = partial_message_receipt(
+            self.partial_message
+        )
         super().__init__(message)
 
 
-def completion_boundary_kind(exc: BaseException) -> str:
-    """Return a typed completion-boundary kind through backend/wrapper exception chains."""
+def completion_boundary_error(
+    exc: BaseException,
+) -> LlamaCompletionBoundaryError | None:
+    """Return the typed boundary through backend/wrapper exception chains."""
 
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, LlamaCompletionBoundaryError):
-            return current.kind
+            return current
         wrapped = getattr(current, "cause", None)
         if isinstance(wrapped, BaseException) and id(wrapped) not in seen:
             current = wrapped
             continue
         current = current.__cause__ or current.__context__
-    return ""
+    return None
+
+
+def completion_boundary_kind(exc: BaseException) -> str:
+    """Return a typed completion-boundary kind through wrapper chains."""
+
+    boundary = completion_boundary_error(exc)
+    return boundary.kind if boundary is not None else ""
 
 
 def _int_value(value: Any) -> int:
@@ -58,6 +91,37 @@ def _int_value(value: Any) -> int:
         return 0
 
 
+def _copy_partial_message(
+    message: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(message, Mapping):
+        return {}
+    # Keep continuation data structural and out of the exception string. The server
+    # already bounds it by max_tokens; a deep copy prevents later response mutation.
+    return copy.deepcopy(dict(message))
+
+
+def partial_message_receipt(message: Mapping[str, Any] | None) -> tuple[int, str]:
+    """Return a non-secret progress receipt for one partial assistant message."""
+
+    partial = _copy_partial_message(message)
+    progress = {
+        key: partial[key]
+        for key in ("reasoning_content", "reasoning", "content", "tool_calls")
+        if key in partial and partial[key] not in (None, "", (), [], {})
+    }
+    if not progress:
+        return 0, ""
+    encoded = json.dumps(
+        progress,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
 def _usage(data: Mapping[str, Any]) -> tuple[int, int]:
     raw = data.get("usage")
     if not isinstance(raw, Mapping):
@@ -65,9 +129,25 @@ def _usage(data: Mapping[str, Any]) -> tuple[int, int]:
     return _int_value(raw.get("prompt_tokens")), _int_value(raw.get("completion_tokens"))
 
 
+def _http_context_pressure(status_code: Any, body: str) -> bool:
+    """Recognize only llama.cpp's explicit prompt/context HTTP 400 contract."""
+
+    if _int_value(status_code) != 400:
+        return False
+    normalized = " ".join(str(body or "").casefold().split())
+    return any(marker in normalized for marker in _HTTP_CONTEXT_MARKERS)
+
+
 def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> LlamaCompletionBoundaryError:
     prompt_tokens, completion_tokens = _usage(data)
     max_tokens = _int_value(payload.get("max_tokens"))
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    partial_message = (
+        choice.get("message")
+        if isinstance(choice, Mapping) and isinstance(choice.get("message"), Mapping)
+        else None
+    )
     details = (
         f" prompt_tokens={prompt_tokens}"
         f" completion_tokens={completion_tokens}"
@@ -81,10 +161,18 @@ def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> LlamaC
         return LlamaCompletionBoundaryError(
             _OUTPUT_ERROR + "; split the action into smaller tool edits;" + details,
             kind=OUTPUT_EXHAUSTED,
+            partial_message=partial_message,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            max_tokens=max_tokens,
         )
     return LlamaCompletionBoundaryError(
         _CONTEXT_ERROR + "; compact/retrieve less evidence for this turn;" + details,
         kind=CONTEXT_PRESSURE,
+        partial_message=partial_message,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        max_tokens=max_tokens,
     )
 
 
@@ -98,6 +186,15 @@ def install(llama_cpp_module: Any) -> None:
         response = llama_cpp_module._post_completion(server_url, payload)
         if response.status_code >= 400:
             body = llama_cpp_module._bounded_response_body(response)
+            if _http_context_pressure(response.status_code, body):
+                raise LlamaCompletionBoundaryError(
+                    _CONTEXT_ERROR
+                    + "; llama-server rejected the prompt because it exceeds the "
+                    "available context size;"
+                    + f" max_tokens={_int_value(payload.get('max_tokens')) or 'model-default'}",
+                    kind=CONTEXT_PRESSURE,
+                    max_tokens=_int_value(payload.get("max_tokens")),
+                )
             raise RuntimeError(
                 f"llama server returned HTTP {response.status_code}"
                 + (f": {body}" if body else "")
@@ -127,7 +224,10 @@ __all__ = [
     "OUTPUT_EXHAUSTED",
     "_CONTEXT_ERROR",
     "_OUTPUT_ERROR",
+    "_http_context_pressure",
     "_length_error",
+    "completion_boundary_error",
     "completion_boundary_kind",
     "install",
+    "partial_message_receipt",
 ]

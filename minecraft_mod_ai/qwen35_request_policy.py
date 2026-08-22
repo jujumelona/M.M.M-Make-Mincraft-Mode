@@ -13,13 +13,15 @@ from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Iterator, Literal, Mapping
 
+from .qwen_family_capabilities import qwen_family_capabilities, qwen_family_name
+
 SamplingMode = Literal["general_thinking", "precise_coding", "non_thinking"]
 
-_PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v3"
+_PAYLOAD_MARKER = "_mmm_qwen35_request_policy_v4"
 _BASE_ARGS_MARKER = "_mmm_qwen35_benchmark_reasoning_off_v3"
 _BENCHMARK_MARKER = "_mmm_qwen35_decode_benchmark_scope_v3"
 _VARIANT_MARKER = "_mmm_qwen35_tuning_variant_scope_v2"
-_FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v3"
+_FINGERPRINT_MARKER = "_mmm_qwen35_request_policy_fingerprint_v4"
 _BENCHMARK_ENV = "MMM_QWEN35_DECODE_BENCHMARK"
 _POLICY_NAME = "task_aware_sampling"
 
@@ -30,7 +32,11 @@ def _extra(config: Any) -> Mapping[str, Any]:
 
 
 def _policy_enabled(config: Any) -> bool:
-    return str(_extra(config).get("request_policy", "")).strip().casefold() == _POLICY_NAME
+    return (
+        qwen_family_name(config) == "qwen3.5"
+        and str(_extra(config).get("request_policy", "")).strip().casefold()
+        == _POLICY_NAME
+    )
 
 
 def _is_qwen35(config: Any) -> bool:
@@ -41,6 +47,13 @@ def _is_qwen35(config: Any) -> bool:
 
 def _request_sampling_mode(config: Any, request: Any) -> SamplingMode:
     tools = getattr(request, "tools", ()) or ()
+    # Tool-capable turns are action pages: the causal/planning layer has already
+    # selected the visible action surface and this decode only has to materialize a
+    # bounded, schema-validated call. Qwen3.5 thinks by default, so treating these as
+    # precise-coding pages can spend the whole action allowance inside ``<think>``
+    # before the tool envelope closes.
+    if tools:
+        return "non_thinking"
     structured_fill = (
         getattr(request, "response_format", None) == "json" and not tools
     )
@@ -83,12 +96,20 @@ def _install_payload_policy(hardware_policy: Any) -> None:
         if result.get("tool_choice") == "required":
             return _enforce_required_tool_sampling(result)
 
+        mode = _request_sampling_mode(config, request)
         defaults = _request_defaults(config, request)
         result.pop("chat_template_kwargs", None)
         result.pop("thinking_budget_tokens", None)
         if "reasoning_effort" not in defaults:
             result.pop("reasoning_effort", None)
         result.update(defaults)
+        if mode == "non_thinking":
+            capabilities = qwen_family_capabilities(config, required=True)
+            assert capabilities is not None
+            # Qwen3.5's published hard switch is the template kwarg. Do not rely on
+            # llama.cpp's OpenAI-specific reasoning_effort alias as a model contract.
+            result.pop("reasoning_effort", None)
+            result["chat_template_kwargs"] = capabilities.action_template_kwargs()
         return result
 
     setattr(payload, _PAYLOAD_MARKER, True)
@@ -208,6 +229,7 @@ def _install_fingerprint(autotune: Any) -> None:
             "base": base,
             "request_policy": _POLICY_NAME,
             "benchmark_reasoning": "off",
+            "tool_action_mode": "non-thinking-v1",
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

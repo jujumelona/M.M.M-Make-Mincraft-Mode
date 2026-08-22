@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import concurrent.futures
 import inspect
+import threading
+from types import SimpleNamespace
 
 import pytest
 
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
+import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph
-from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
+from minecraft_mod_ai.complete_orchestrator import (
+    CompleteExecutionOptions,
+    CompleteProductionOrchestrator,
+)
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.work_graph import (
@@ -104,6 +110,26 @@ def test_only_builtin_sidecar_integration_stays_on_cpu_stage() -> None:
     assert work_graph._module_stage(sidecar) == "content"
 
 
+def test_fluid_without_deterministic_generator_uses_llm_custom_lane() -> None:
+    fluid = ProductionModule(
+        module_id="custom_fluid",
+        kind="fluid",
+        config={"summary": "custom fluid implementation"},
+    )
+    assert work_graph._module_stage(fluid) == "custom"
+    node = work_graph._node(
+        "generate-custom-fluid",
+        "generate:custom",
+        (),
+        {
+            "kind": "module-shard",
+            "generation_stage": "custom",
+            "members": [{"module_id": fluid.module_id, "kind": fluid.kind}],
+        },
+    )
+    assert node.resource_class == "llm"
+
+
 def test_shared_gpu_allows_llm_read_sharing_but_blocks_image(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     plan = WorkGraphPlan(
@@ -170,3 +196,120 @@ def test_parallel_custom_search_has_one_runtime_owner() -> None:
     assert getattr(generate, "_mmm_research_generation_search", False)
     assert not getattr(custom_search._width, "_mmm_context_single_candidate", False)
     assert custom_search._active_native_slots() >= 1
+
+
+def test_independent_custom_nodes_use_isolated_generators_in_parallel(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        safety,
+        "_capacities",
+        lambda: {"cpu_io": 1, "llm": 2, "image_gpu": 1, "commit": 1},
+    )
+    modules = tuple(
+        ProductionModule(
+            module_id=f"parallel_custom_{index}",
+            kind="custom_java",
+            config={"summary": str(index)},
+        )
+        for index in range(2)
+    )
+    nodes = tuple(
+        WorkNode(
+            node_id=f"generate-custom-{index:08d}",
+            stage="generate:custom",
+            input_hash=f"sha256:parallel-{index}",
+            dependencies=(),
+            payload={
+                "kind": "module-shard",
+                "generation_stage": "custom",
+                "members": [{"module_id": module.module_id}],
+                "resource_class": "llm",
+            },
+            resource_class="llm",
+        )
+        for index, module in enumerate(modules)
+    )
+    plan = WorkGraphPlan(
+        schema_version="mmm/production-work-graph-v1",
+        proposal_hash="sha256:parallel-custom",
+        graph_hash="sha256:parallel-custom-graph",
+        module_count=2,
+        nodes=nodes,
+    )
+    ledger = DurableWorkLedger(
+        tmp_path / "parallel-custom.sqlite",
+        proposal_hash=plan.proposal_hash,
+    )
+    ledger.sync_plan(plan)
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+
+    guard = threading.Lock()
+    barrier = threading.Barrier(2)
+    active = 0
+    max_active = 0
+    generator_router_ids: list[int] = []
+    forked_routers: list[object] = []
+
+    class _ParallelGenerator:
+        def __init__(self, router, **_kwargs):
+            generator_router_ids.append(id(router))
+
+        def generate(self, _root, *, module, **_kwargs):
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            barrier.wait(timeout=3)
+            with guard:
+                active -= 1
+            return {
+                "status": "SOURCE_GENERATED",
+                "module_id": module.module_id,
+                "touched_paths": [],
+            }
+
+    def fork_router(_router):
+        forked = object()
+        forked_routers.append(forked)
+        return forked
+
+    monkeypatch.setattr(orchestrator_module, "CustomModuleGenerator", _ParallelGenerator)
+    monkeypatch.setattr(orchestrator_module, "_fork_custom_work_router", fork_router)
+    approved = SimpleNamespace(
+        base_proposal=SimpleNamespace(
+            spec=SimpleNamespace(
+                mod_id="parallel_mod",
+                package_name="example.parallel",
+                platform=SimpleNamespace(
+                    minecraft_version="1.20.1",
+                    loader="fabric",
+                    yarn_mappings="1.20.1+build.10",
+                ),
+            )
+        ),
+        assets=(),
+    )
+    owner = CompleteProductionOrchestrator(workspace_root=tmp_path / "workspace")
+    execute = inspect.unwrap(
+        CompleteProductionOrchestrator._execute_generation_work
+    ).__get__(owner, CompleteProductionOrchestrator)
+    result = execute(
+        approved=approved,
+        ordered=list(modules),
+        work_plan=plan,
+        ledger=ledger,
+        project_root=project_root,
+        run_root=run_root,
+        options=CompleteExecutionOptions(source_only=True),
+        router=object(),
+    )
+
+    assert max_active == 2
+    assert len(forked_routers) == 2
+    assert len(set(generator_router_ids)) == 2
+    assert len(result["module_receipts"]) == 2

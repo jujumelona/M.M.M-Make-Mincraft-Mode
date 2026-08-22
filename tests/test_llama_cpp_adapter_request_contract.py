@@ -46,6 +46,26 @@ def _adapter() -> LlamaCppAdapter:
             adapter="llama_cpp",
             model_id="test/qwen3.5-9b",
             max_new_tokens=512,
+            extra={
+                "runtime_contract": "qwen",
+                "qwen_family": "qwen3.5",
+                "qwen_tool_markup": "qwen3_coder_xml",
+                "qwen_action_thinking_control": "enable_thinking_false",
+                "qwen_preserve_thinking": False,
+                "qwen_reasoning_effort": False,
+                "qwen_assistant_prefill": True,
+                "request_policy": "task_aware_sampling",
+                "sampling_profiles": {
+                    "non_thinking": {
+                        "temperature": 0.7,
+                        "top_p": 0.8,
+                        "top_k": 20,
+                        "min_p": 0.0,
+                        "presence_penalty": 1.5,
+                        "repeat_penalty": 1.0,
+                    }
+                },
+            },
         )
     )
 
@@ -92,14 +112,14 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert payload["parallel_tool_calls"] is True
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["temperature"] == 0.7
     assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
-    assert "min_p" not in payload
+    assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
-    assert "repeat_penalty" not in payload
+    assert payload["repeat_penalty"] == 1.0
 
 
 def test_generate_turn_rejects_server_parsed_openai_tool_calls(monkeypatch) -> None:

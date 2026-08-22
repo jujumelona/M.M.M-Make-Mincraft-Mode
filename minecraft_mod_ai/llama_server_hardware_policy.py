@@ -164,13 +164,6 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
-        model_id = str(getattr(adapter.config, "model_id", ""))
-        normalized = "".join(ch for ch in model_id.lower() if ch.isalnum())
-        if "qwen35" in normalized:
-            payload["temperature"] = 0.7
-            payload["top_p"] = 0.8
-            payload["top_k"] = 20
-            payload["presence_penalty"] = 1.5
     elif getattr(request, "response_format", None) == "json":
         # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
         # Final JSON syntax and schema validation belong to ModelRouter.

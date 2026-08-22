@@ -206,6 +206,9 @@ def _parallel_generate(
     count = search_module._width(kwargs.get("module"))
     candidate_roots = _clone_candidate_roots(performance_module, root, count=count)
     candidates: list[tuple[int, Path, dict[str, Any], dict[str, Any]]] = []
+    winner_index: int | None = None
+    winner_checkpoint_acknowledged = False
+    winner_live_committed = False
     try:
         candidates, errors = _run_candidate_generation(
             owner,
@@ -236,6 +239,7 @@ def _parallel_generate(
             performance_module=performance_module,
             source_patch_module=source_patch_module,
         )
+        winner_live_committed = True
         rewritten = performance_module._rewrite_root_paths(result, winner_root, root)
         rewritten["patch_receipt"] = commit_receipt
         rewritten["agentic_generation_search"] = {
@@ -263,6 +267,12 @@ def _parallel_generate(
             "research_initialization": "content_addressed_singleflight",
             "winner_commit": "three_way_rebase_preserving_concurrent_changes",
         }
+        winner_checkpoint_acknowledged = bool(
+            owner.acknowledge_generation_checkpoint(rewritten)
+        )
+        rewritten["generation_checkpoint_acknowledged"] = (
+            winner_checkpoint_acknowledged
+        )
         print(
             "custom generation search:",
             f"candidates={len(evaluations)}",
@@ -273,6 +283,16 @@ def _parallel_generate(
         )
         return rewritten
     finally:
+        for candidate_index, _candidate_root, candidate_result, _capture in candidates:
+            if (
+                winner_checkpoint_acknowledged
+                and candidate_index == winner_index
+            ):
+                continue
+            if winner_live_committed and candidate_index != winner_index:
+                owner.discard_generation_checkpoint(candidate_result)
+            else:
+                owner.release_generation_checkpoint(candidate_result)
         for candidate_root in candidate_roots:
             shutil.rmtree(candidate_root, ignore_errors=True)
 
@@ -307,7 +327,12 @@ def install_coder_max_efficiency() -> None:
     ) -> dict[str, Any]:
         count = search_module._width(kwargs.get("module"))
         if count <= 1:
-            return current(self, project_root, *args, **kwargs)
+            result = current(self, project_root, *args, **kwargs)
+            if isinstance(result, dict):
+                result["generation_checkpoint_acknowledged"] = bool(
+                    self.acknowledge_generation_checkpoint(result)
+                )
+            return result
         return _parallel_generate(
             self,
             single_generate,

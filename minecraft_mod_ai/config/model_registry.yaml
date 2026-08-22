@@ -43,6 +43,12 @@ _qwen36_35b: &qwen36_35b
   gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   runtime_contract: qwen
+  qwen_family: qwen3.6
+  qwen_tool_markup: qwen3_coder_xml
+  qwen_action_thinking_control: enable_thinking_false
+  qwen_preserve_thinking: true
+  qwen_reasoning_effort: false
+  qwen_assistant_prefill: true
   agent_thinking: true
   mtp_widths: "1,2"
   sampling_profiles:
@@ -67,7 +73,6 @@ _qwen36_35b: &qwen36_35b
       min_p: 0.0
       presence_penalty: 1.5
       repeat_penalty: 1.0
-      reasoning_effort: none
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
@@ -81,6 +86,12 @@ _qwen38_27b_q4: &qwen38_27b_q4
   gguf_filename: Qwen3.8-27B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-BF16.gguf
   runtime_contract: qwen
+  qwen_family: qwen3.8
+  qwen_tool_markup: qwen3_coder_xml
+  qwen_action_thinking_control: enable_thinking_false
+  qwen_preserve_thinking: true
+  qwen_reasoning_effort: true
+  qwen_assistant_prefill: true
   agent_thinking: true
   thinking_reasoning_effort: xhigh
   native_mtp: true
@@ -100,7 +111,6 @@ _qwen38_27b_q4: &qwen38_27b_q4
       min_p: 0.0
       presence_penalty: 1.5
       repeat_penalty: 1.0
-      reasoning_effort: none
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
@@ -114,6 +124,12 @@ _qwen35_9b: &qwen35_9b
   gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
   mmproj_filename: mmproj-F16.gguf
   runtime_contract: qwen
+  qwen_family: qwen3.5
+  qwen_tool_markup: qwen3_coder_xml
+  qwen_action_thinking_control: enable_thinking_false
+  qwen_preserve_thinking: false
+  qwen_reasoning_effort: false
+  qwen_assistant_prefill: true
   agent_thinking: true
   request_policy: task_aware_sampling
   decode_hotpath: t4_mtp
@@ -141,7 +157,6 @@ _qwen35_9b: &qwen35_9b
       min_p: 0.0
       presence_penalty: 1.5
       repeat_penalty: 1.0
-      reasoning_effort: none
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0

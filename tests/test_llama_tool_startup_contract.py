@@ -14,6 +14,8 @@ def test_every_native_server_start_path_includes_jinja_and_pure_content_parser()
     assert args.count("--jinja") == 1
     assert "--skip-chat-parsing" in args
     assert args.count("--skip-chat-parsing") == 1
+    assert "--prefill-assistant" in args
+    assert args.count("--prefill-assistant") == 1
 
 
 def test_hot_colab_reload_stops_old_managed_server_before_module_purge(

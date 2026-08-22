@@ -372,6 +372,10 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         # reasoning/tool markup in message.content. MMM validates and parses that raw
         # model protocol on the host instead of accepting llama.cpp-parsed tool calls.
         "--skip-chat-parsing",
+        # Output-exhausted non-thinking actions are resumed by appending the exact
+        # partial assistant turn. Pin the server capability explicitly rather than
+        # depending on a build default that could change across Colab upgrades.
+        "--prefill-assistant",
         "--no-ui",
         "--log-disable",
     ]

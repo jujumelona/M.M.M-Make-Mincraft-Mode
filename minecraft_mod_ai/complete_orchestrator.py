@@ -42,6 +42,14 @@ from .complete_orchestrator_services import blockbench_review, generate_assets, 
 from .work_graph import DurableWorkLedger, WorkGraphError, WorkNode, WorkGraphPlan, build_production_work_plan, run_named_checkpoint
 _REQUIRED_GATE_TO_EVIDENCE = {'registry': 'source', 'resource': 'source', 'recipe': 'source', 'jdt': 'jdt', 'jdt diagnostics': 'jdt', 'gradle': 'gradle', 'gradle clean build': 'gradle', 'gametest': 'gametest', 'gametest spawn and attributes': 'gametest', 'jar validation': 'jar', 'blockbench uv and bone hierarchy review': 'blockbench', 'blockbench uv render review': 'blockbench', 'minecraft server client runtime': 'runtime_client', 'mineflayer playtest': 'playtest', 'runtime interaction tests': 'playtest', 'runtime animation review': 'runtime_visual', 'visual review': 'visual', 'client gui and validated network action test': 'playtest_visual', 'research ledger integrity': 'research_ledger'}
 
+
+def _fork_custom_work_router(router: Any) -> Any:
+    """Fork request-local state while retaining one managed model server."""
+
+    from .custom_generation_research import _fork_router_for_candidate
+
+    return _fork_router_for_candidate(router)
+
 @dataclass(frozen=True)
 class CompleteExecutionOptions:
     source_only: bool = False
@@ -381,22 +389,33 @@ class CompleteProductionOrchestrator:
                         router = self.router_factory()
             return router
         shared_project_index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
-        custom_generator: CustomModuleGenerator | None = None
+        fallback_custom_generator: CustomModuleGenerator | None = None
 
-        def get_custom_generator() -> CustomModuleGenerator:
-            nonlocal custom_generator
-            if custom_generator is None:
+        def new_custom_generator() -> CustomModuleGenerator:
+            nonlocal fallback_custom_generator
+            base_router = get_router()
+            worker_router = _fork_custom_work_router(base_router)
+            if worker_router is base_router:
+                # Legacy routers and test doubles that cannot fork retain the
+                # instance-level safety lock. Real ModelRouter workers isolate only
+                # workspace/tool state and still share one llama-server/model copy.
                 with runtime_init_lock:
-                    if custom_generator is None:
-                        custom_generator = CustomModuleGenerator(get_router(), policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index)
-            return custom_generator
-
-        def generate_custom(module: ProductionModule) -> dict[str, Any]:
-            return get_custom_generator().generate(project_root, module=module, research_modules=research_modules, minecraft_version=spec.platform.minecraft_version, loader=spec.platform.loader, mappings=spec.platform.yarn_mappings)
+                    if fallback_custom_generator is None:
+                        fallback_custom_generator = CustomModuleGenerator(base_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints')
+                    return fallback_custom_generator
+            return CustomModuleGenerator(worker_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints')
 
         def module_node_action(node: WorkNode, members: list[ProductionModule]) -> dict[str, Any]:
             stage = str(node.payload.get('generation_stage', ''))
             receipts: list[dict[str, Any]] = []
+            node_custom_generator: CustomModuleGenerator | None = None
+
+            def generate_custom(module: ProductionModule) -> dict[str, Any]:
+                nonlocal node_custom_generator
+                if node_custom_generator is None:
+                    node_custom_generator = new_custom_generator()
+                return node_custom_generator.generate(project_root, module=module, research_modules=research_modules, minecraft_version=spec.platform.minecraft_version, loader=spec.platform.loader, mappings=spec.platform.yarn_mappings)
+
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
                 receipts.extend((write_research_shard(project_root, module=module) for module in research_shards))

@@ -46,11 +46,23 @@ def _install_locked_source_patcher(source_patch_module: Any) -> None:
                 target = root / relative
                 before[relative] = target.read_bytes() if target.is_file() and (not target.is_symlink()) else None
             capture_records.append({'root': str(root), 'operations': copy.deepcopy(operation_list), 'before': before})
-            return original(self, operation_list)
+            receipt = original(self, operation_list)
+            _persist_active_custom_checkpoint(root)
+            return receipt
         with project_write_lock(root):
-            return original(self, operation_list)
+            receipt = original(self, operation_list)
+            _persist_active_custom_checkpoint(root)
+            return receipt
     locked_apply._mmm_path_commit_contract = True
     patcher.apply = locked_apply
+
+
+def _persist_active_custom_checkpoint(project_root: Path) -> None:
+    """Durably journal a staged tool edit without coupling the base patcher to MMM."""
+
+    from .custom_module_generator import persist_active_generation_checkpoint
+
+    persist_active_generation_checkpoint(project_root)
 
 def _project_root_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Path | None:
     candidates: list[Any] = []
@@ -97,6 +109,7 @@ def _install_staged_custom_generator(custom_module_generator_module: Any, source
         old_staging_root = getattr(_CAPTURE, 'staging_root', None)
         _CAPTURE.records = records
         _CAPTURE.staging_root = staging_root
+        result: dict[str, Any] | None = None
         try:
             result = original(self, staging_root, *args, **kwargs)
             if not isinstance(result, dict):
@@ -108,6 +121,10 @@ def _install_staged_custom_generator(custom_module_generator_module: Any, source
             rewritten['patch_receipt'] = commit_receipt
             rewritten['staging_receipt'] = {'schema_version': 'mmm/custom-staging-v1', 'status': 'COMMITTED', 'isolated_generation': True, 'operation_count': len(captured['operations']), 'live_project_root': str(live_root)}
             return rewritten
+        except BaseException:
+            if isinstance(result, dict):
+                self.release_generation_checkpoint(result)
+            raise
         finally:
             if old_records is None:
                 try:

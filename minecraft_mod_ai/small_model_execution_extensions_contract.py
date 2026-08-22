@@ -96,9 +96,10 @@ def _install_partial_source_edit(runtime_module: Any) -> None:
                     "description": (
                         "Make one bounded semantic source/resource write. Use exact replacement "
                         "or insert-before/after for local edits, create_file for a new file, "
-                        "replace_file for a whole existing file, and delete_file only when removal "
-                        "is intended. The host owns project selection, SHA-256 preconditions and "
-                        "transactional execution."
+                        "append_file for one 2048-character continuation chunk, replace_file for "
+                        "a whole existing file, and delete_file only when removal is intended. "
+                        "The host owns project selection, SHA-256 preconditions and transactional "
+                        "execution."
                     ),
                     "parameters": _SOURCE_EDIT_SCHEMA,
                 },

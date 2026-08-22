@@ -13,6 +13,12 @@ def _config(*, native_mtp: bool = False) -> SimpleNamespace:
         model_id="vendor/arbitrary-runtime-model",
         extra={
             "runtime_contract": "qwen",
+            "qwen_family": "qwen3.6",
+            "qwen_tool_markup": "qwen3_coder_xml",
+            "qwen_action_thinking_control": "enable_thinking_false",
+            "qwen_preserve_thinking": True,
+            "qwen_reasoning_effort": False,
+            "qwen_assistant_prefill": True,
             "mmproj_filename": "projector.gguf",
             "native_mtp": native_mtp,
         },

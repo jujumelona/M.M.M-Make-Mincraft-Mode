@@ -40,7 +40,6 @@ _PROFILES = {
         "top_k": 7,
         "presence_penalty": 0.04,
         "repeat_penalty": 0.83,
-        "reasoning_effort": "none",
     },
 }
 
@@ -48,6 +47,12 @@ _PROFILES = {
 def _config(*, effort: str = "") -> SimpleNamespace:
     extra = {
         "runtime_contract": "qwen",
+        "qwen_family": "qwen3.6",
+        "qwen_tool_markup": "qwen3_coder_xml",
+        "qwen_action_thinking_control": "enable_thinking_false",
+        "qwen_preserve_thinking": True,
+        "qwen_reasoning_effort": False,
+        "qwen_assistant_prefill": True,
         "agent_thinking": True,
         "sampling_profiles": _PROFILES,
     }
@@ -84,7 +89,10 @@ def test_general_thinking_sampling_comes_from_registry_metadata() -> None:
     assert payload["top_k"] == 17
     assert payload["presence_penalty"] == 0.21
     assert payload["repeat_penalty"] == 0.91
-    assert payload["chat_template_kwargs"] == {"enable_thinking": True}
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "preserve_thinking": True,
+    }
     assert "repetition_penalty" not in payload
 
 
@@ -98,18 +106,17 @@ def test_coder_sampling_comes_from_precise_registry_profile() -> None:
     assert payload["repeat_penalty"] == 0.89
 
 
-def test_auto_tool_agent_preserves_thinking_without_model_identity() -> None:
+def test_auto_tool_action_disables_thinking_without_model_identity() -> None:
     payload = _payload(
         role="researcher",
         request=_request(tools=(_TOOL,), tool_choice="auto"),
         effort="high",
     )
 
-    assert payload["temperature"] == 0.31
+    assert payload["temperature"] == 0.11
     assert payload["chat_template_kwargs"] == {
-        "enable_thinking": True,
-        "reasoning_effort": "high",
-        "preserve_thinking": True,
+        "enable_thinking": False,
+        "preserve_thinking": False,
     }
     assert "reasoning_effort" not in payload
 
@@ -121,8 +128,11 @@ def test_json_fill_uses_registry_non_thinking_profile() -> None:
     assert payload["top_p"] == 0.61
     assert payload["top_k"] == 7
     assert payload["presence_penalty"] == 0.04
-    assert payload["reasoning_effort"] == "none"
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning_effort" not in payload
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
 
 
 def test_forced_tool_does_not_apply_registry_sampling_profile() -> None:
@@ -139,4 +149,8 @@ def test_forced_tool_does_not_apply_registry_sampling_profile() -> None:
 
     assert payload["temperature"] == 0.0
     assert payload["repetition_penalty"] == 1.05
-    assert "chat_template_kwargs" not in payload
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
+    assert "reasoning_effort" not in payload

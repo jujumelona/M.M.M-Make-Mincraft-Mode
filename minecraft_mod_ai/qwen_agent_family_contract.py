@@ -17,11 +17,11 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .model_adapters.base import GenerationRequest, GenerationResponse
+from .qwen_family_capabilities import qwen_family_capabilities
 
 _MAX_REASONING_TRACES = 64
 _REASONING_TRACE_LOCK = threading.RLock()
 _INSTALLED = False
-_RUNTIME_CONTRACT = "qwen"
 _SAMPLING_MODES = frozenset({"general_thinking", "precise_coding", "non_thinking"})
 
 
@@ -31,7 +31,7 @@ def _config_extra(config: Any) -> Mapping[str, Any]:
 
 
 def _uses_runtime_contract(config: Any) -> bool:
-    return str(_config_extra(config).get("runtime_contract", "")).strip().casefold() == _RUNTIME_CONTRACT
+    return qwen_family_capabilities(config, required=False) is not None
 
 
 def _agent_thinking_enabled(config: Any) -> bool:
@@ -85,8 +85,11 @@ def _qwen_agent_request(request: Any) -> bool:
     if _forced_tool_choice(tool_choice):
         return False
     tools = getattr(request, "tools", ()) or ()
-    if tools and tool_choice in (None, "auto"):
-        return True
+    if tools:
+        # A model-visible tool page is an action/materialization turn. Planning and
+        # reasoning happen on separate no-tool pages; never restore a prior private
+        # trace into the finite output allowance that must close a tool envelope.
+        return False
     return _assistant_has_agent_history(_request_messages(request))
 
 
@@ -99,12 +102,15 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
         # pure-content hardware transport renders its one schema as wire required. Do
         # not restore stale agent reasoning for this deterministic control turn.
         return None
+    if _forced_tool_choice(getattr(request, "tool_choice", None)):
+        # Named/required actions are rendered as one required wire schema and the
+        # transport owns their temperature-zero policy.  Check this before the
+        # broader tool-action rule so the family profile cannot make them stochastic.
+        return None
+    if tools:
+        return "non_thinking"
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
-    if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        # Forced transport probes/tool actions stay deterministic and non-thinking;
-        # the generic transport owns temperature zero for this special case.
-        return None
     normalized_role = str(role or "").strip().casefold()
     if normalized_role in {"coder", "coder_safe"}:
         return "precise_coding"
@@ -120,26 +126,45 @@ def _apply_family_payload_policy(
 ) -> dict[str, Any]:
     """Apply registry-declared hybrid-thinking/tool-loop semantics."""
 
-    if not _agent_thinking_enabled(config):
+    capabilities = qwen_family_capabilities(config, required=False)
+    if capabilities is None:
         return payload
 
     mode = _qwen_sampling_mode(role, request)
     agent_request = _qwen_agent_request(request)
-    if mode is None and not agent_request:
+    action_page = bool(getattr(request, "tools", ()) or ()) or (
+        getattr(request, "response_format", None) == "json"
+    )
+    if not action_page and not _agent_thinking_enabled(config):
+        return payload
+    if mode is None and not agent_request and not action_page:
         return payload
 
     extra = _config_extra(config)
-    if mode == "non_thinking":
-        payload["reasoning_effort"] = "none"
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if action_page:
+        # All three supported families use the officially documented hard template
+        # switch for direct action output. Qwen3.6/3.8 additionally expose historical
+        # reasoning preservation, so turn that off explicitly. Qwen3.8 accepts only
+        # xhigh/medium/low reasoning_effort; never send the OpenAI-specific ``none``.
+        payload.pop("reasoning_effort", None)
+        payload["chat_template_kwargs"] = capabilities.action_template_kwargs()
     else:
         payload.pop("reasoning_effort", None)
         template_kwargs: dict[str, Any] = {"enable_thinking": True}
-        reasoning_effort = str(extra.get("thinking_reasoning_effort", "")).strip()
-        if reasoning_effort:
-            template_kwargs["reasoning_effort"] = reasoning_effort
-        if agent_request:
+        if capabilities.preserve_thinking:
             template_kwargs["preserve_thinking"] = True
+        if capabilities.reasoning_effort:
+            reasoning_effort = str(
+                extra.get("thinking_reasoning_effort", "xhigh")
+            ).strip().casefold()
+            if reasoning_effort not in {"xhigh", "medium", "low"}:
+                raise ValueError(
+                    "Qwen3.8 thinking_reasoning_effort must be xhigh, medium, or low"
+                )
+            # The pinned llama.cpp server does not forward non-none top-level
+            # reasoning_effort values. Its Jinja contract receives this model-native
+            # value through chat_template_kwargs instead.
+            template_kwargs["reasoning_effort"] = reasoning_effort
         payload["chat_template_kwargs"] = template_kwargs
 
     if mode is not None:
@@ -148,6 +173,22 @@ def _apply_family_payload_policy(
             payload.pop("repetition_penalty", None)
             payload.update(sampling)
     return payload
+
+
+def _strip_reasoning_history(request: GenerationRequest) -> GenerationRequest:
+    """Remove private traces before a non-thinking action/materialization page."""
+
+    changed = False
+    messages: list[Mapping[str, Any]] = []
+    for raw in _request_messages(request):
+        message = dict(raw)
+        if message.get("role") == "assistant":
+            for key in ("reasoning_content", "reasoning"):
+                if key in message:
+                    message.pop(key, None)
+                    changed = True
+        messages.append(message)
+    return replace(request, messages=tuple(messages)) if changed else request
 
 
 def _canonical_arguments(value: Any) -> str:
@@ -274,7 +315,7 @@ def install() -> None:
     from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
     current_payload = llama_server_hardware_policy._server_payload
-    if not getattr(current_payload, "_mmm_qwen_family_agent_policy", False):
+    if not getattr(current_payload, "_mmm_qwen_family_agent_policy_v2", False):
 
         @wraps(current_payload)
         def server_payload(adapter: Any, request: Any) -> dict[str, Any]:
@@ -287,22 +328,31 @@ def install() -> None:
                 request=request,
             )
 
+        server_payload._mmm_qwen_family_agent_policy_v2 = True  # type: ignore[attr-defined]
         server_payload._mmm_qwen_family_agent_policy = True  # type: ignore[attr-defined]
         llama_server_hardware_policy._server_payload = server_payload
 
     current_generate_turn = LlamaCppAdapter.generate_turn
-    if not getattr(current_generate_turn, "_mmm_qwen_reasoning_history", False):
+    if not getattr(current_generate_turn, "_mmm_qwen_reasoning_history_v2", False):
 
         @wraps(current_generate_turn)
         def generate_turn(self: Any, request: GenerationRequest) -> GenerationResponse:
             config = getattr(self, "config", None)
             qwen_agent = _agent_thinking_enabled(config) and _qwen_agent_request(request)
-            prepared = _inject_reasoning_history(self, request) if qwen_agent else request
+            action_page = bool(getattr(request, "tools", ()) or ()) or (
+                getattr(request, "response_format", None) == "json"
+            )
+            capabilities = qwen_family_capabilities(config, required=False)
+            if capabilities is not None and action_page:
+                prepared = _strip_reasoning_history(request)
+            else:
+                prepared = _inject_reasoning_history(self, request) if qwen_agent else request
             response = current_generate_turn(self, prepared)
             if qwen_agent:
                 _remember_reasoning(self, response)
             return response
 
+        generate_turn._mmm_qwen_reasoning_history_v2 = True  # type: ignore[attr-defined]
         generate_turn._mmm_qwen_reasoning_history = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate_turn = generate_turn
 
@@ -314,4 +364,4 @@ def install() -> None:
 _qwen36_agent_request = _qwen_agent_request
 _qwen36_sampling_mode = _qwen_sampling_mode
 
-__all__ = ["install"]
+__all__ = ["_strip_reasoning_history", "install"]

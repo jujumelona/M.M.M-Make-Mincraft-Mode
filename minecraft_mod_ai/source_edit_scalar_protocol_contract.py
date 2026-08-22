@@ -18,6 +18,7 @@ from typing import Any, Mapping
 _MAX_PATH_CHARS = 512
 _MAX_MATCH_CHARS = 4096
 _MAX_REPLACEMENT_CHARS = 8192
+_MAX_APPEND_CHARS = 2048
 _MAX_PAYLOAD_BYTES = 16 * 1024
 _MAX_COUNT = 16
 _MARKER = "_mmm_scalar_source_edit_protocol_v1"
@@ -26,6 +27,7 @@ _CANONICAL_OPERATIONS = (
     "insert_before",
     "insert_after",
     "create_file",
+    "append_file",
     "replace_file",
     "delete_file",
 )
@@ -45,8 +47,9 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": (
                 "Use create_file only when the target does not exist. Use replace_file "
-                "or delete_file for a whole existing file, and replace_exact or "
-                "insert_before/insert_after for bounded partial edits."
+                "or delete_file for a whole existing file, append_file to continue a "
+                f"large file in chunks of at most {_MAX_APPEND_CHARS} characters, and "
+                "replace_exact or insert_before/insert_after for bounded partial edits."
             ),
             # Keep the model contract narrow while accepting common Qwen shorthands
             # that are losslessly canonicalized by the host before dispatch.
@@ -61,7 +64,7 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "maxLength": _MAX_REPLACEMENT_CHARS,
             "description": (
                 "Inserted text for insert_before/insert_after, or complete bounded "
-                "content for create_file."
+                "content for create_file, replace_file, or one append_file chunk."
             ),
         },
         "text": {
@@ -69,7 +72,7 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "maxLength": _MAX_REPLACEMENT_CHARS,
             "description": (
                 "Lossless Qwen alias: replacement text for replace_exact, or content "
-                "for insert_before/insert_after/create_file. Canonical fields win "
+                "for insert_before/insert_after/create_file/append_file. Canonical fields win "
                 "when both are present."
             ),
         },
@@ -80,6 +83,20 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "default": 1,
         },
     },
+    "allOf": [
+        {
+            "if": {
+                "properties": {"operation": {"const": "append_file"}},
+                "required": ["operation"],
+            },
+            "then": {
+                "properties": {
+                    "content": {"maxLength": _MAX_APPEND_CHARS},
+                    "text": {"maxLength": _MAX_APPEND_CHARS},
+                }
+            },
+        }
+    ],
 }
 
 _ALLOWED_FIELDS = frozenset(SOURCE_EDIT_SCHEMA["properties"])
@@ -193,6 +210,8 @@ def materialize_model_source_edit(
     runtime_module: Any,
     workspace_root: str | Path,
     payload: Mapping[str, Any],
+    *,
+    bound_project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Compile exactly one scalar source write into one canonical host patch."""
 
@@ -220,7 +239,29 @@ def materialize_model_source_edit(
     path = _bounded_text(
         runtime_module, payload, "path", maximum=_MAX_PATH_CHARS, required=True
     )
-    root, project_root_argument = runtime_module._discover_model_project_root(workspace_root)
+    if bound_project_root is None:
+        root, project_root_argument = runtime_module._discover_model_project_root(
+            workspace_root
+        )
+    else:
+        workspace = Path(workspace_root).expanduser().resolve()
+        root = Path(bound_project_root).expanduser().resolve()
+        if (
+            not workspace.is_dir()
+            or workspace.is_symlink()
+            or not root.is_dir()
+            or root.is_symlink()
+        ):
+            raise runtime_module.AgentToolRuntimeError(
+                "Host-bound model workspace/project must be regular directories"
+            )
+        try:
+            relative = root.relative_to(workspace)
+        except ValueError as exc:
+            raise runtime_module.AgentToolRuntimeError(
+                "Host-bound model project escaped its workspace"
+            ) from exc
+        project_root_argument = "." if not relative.parts else relative.as_posix()
     normalized, target = _normalize_model_target(
         runtime_module,
         root,
@@ -251,7 +292,7 @@ def materialize_model_source_edit(
             ],
         }
 
-    if operation in {"replace_file", "delete_file"}:
+    if operation in {"replace_file", "append_file", "delete_file"}:
         forbidden = {"old", "new", "anchor", "count"}.intersection(payload)
         if operation == "delete_file":
             forbidden.update({"content", "text"}.intersection(payload))
@@ -265,10 +306,22 @@ def materialize_model_source_edit(
             "path": normalized,
             "expected_sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
         }
-        if operation == "replace_file":
-            host_operation["content"] = _bounded_file_content(
-                runtime_module, payload, "replace_file"
-            )
+        if operation in {"replace_file", "append_file"}:
+            content = _bounded_file_content(runtime_module, payload, operation)
+            if operation == "append_file":
+                if len(content) > _MAX_APPEND_CHARS:
+                    raise runtime_module.AgentToolRuntimeError(
+                        "append_file content exceeds the model-facing "
+                        f"{_MAX_APPEND_CHARS}-character chunk limit"
+                    )
+                try:
+                    current = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise runtime_module.AgentToolRuntimeError(
+                        f"append_file target is not UTF-8 text: {normalized}"
+                    ) from exc
+                content = current + content
+            host_operation["content"] = content
         return {
             "project_root": project_root_argument,
             "operations": [host_operation],

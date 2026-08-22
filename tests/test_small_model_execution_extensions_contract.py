@@ -42,7 +42,12 @@ def test_source_edit_schema_is_scalar_and_bounded() -> None:
     assert properties["old"]["maxLength"] <= 4096
     assert properties["new"]["maxLength"] <= 8192
     assert "create_file" in properties["operation"]["enum"]
+    assert "append_file" in properties["operation"]["enum"]
     assert "create" in properties["operation"]["enum"]
+    append_rule = _SOURCE_EDIT_SCHEMA["allOf"][0]
+    assert append_rule["if"]["properties"]["operation"] == {"const": "append_file"}
+    assert append_rule["then"]["properties"]["content"]["maxLength"] == 2048
+    assert append_rule["then"]["properties"]["text"]["maxLength"] == 2048
 
 
 def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path) -> None:
@@ -207,6 +212,81 @@ def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> N
     assert source.read_text(encoding="utf-8") == (
         "final class Example {\n    int newValue;\n    void run() {}\n}\n"
     )
+
+
+def test_append_file_materializes_bounded_chunk_with_host_hash(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Large.java"
+    source.write_bytes(b"package example;\n")
+    before = source.read_bytes()
+
+    payload = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "append_file",
+            "path": "src/main/java/example/Large.java",
+            "content": "final class Large {}\n",
+        },
+    )
+
+    assert payload["operations"] == [
+        {
+            "operation": "replace",
+            "path": "src/main/java/example/Large.java",
+            "expected_sha256": "sha256:" + hashlib.sha256(before).hexdigest(),
+            "content": "package example;\nfinal class Large {}\n",
+        }
+    ]
+    TransactionalSourcePatcher(project).apply(payload["operations"])
+    assert source.read_text(encoding="utf-8") == (
+        "package example;\nfinal class Large {}\n"
+    )
+
+
+def test_append_file_rejects_non_utf8_target_without_mutation(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/resources/binary.dat"
+    before = b"\xff\xfe\x00"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(before)
+
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="not UTF-8"):
+        _materialize_model_source_edit(
+            agent_tool_runtime,
+            workspace,
+            {
+                "operation": "append_file",
+                "path": "src/main/resources/binary.dat",
+                "content": "unsafe",
+            },
+        )
+
+    assert source.read_bytes() == before
+
+
+def test_append_file_rejects_chunk_that_can_overrun_scalar_json_budget(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/resources/large.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("prefix\n", encoding="utf-8")
+    before = source.read_bytes()
+
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="chunk limit"):
+        _materialize_model_source_edit(
+            agent_tool_runtime,
+            workspace,
+            {
+                "operation": "append_file",
+                "path": "src/main/resources/large.txt",
+                "content": "x" * 2049,
+            },
+        )
+
+    assert source.read_bytes() == before
 
 
 def test_partial_source_edit_rejects_ambiguous_anchor_without_mutation(tmp_path) -> None:

@@ -179,8 +179,9 @@ def finalize_runtime() -> None:
         install_stale_tool_recovery(causal_tool_frontier_contract)
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
-        # Durable generation nodes own output-exhaustion recovery. Retry that exact
-        # persisted node once instead of issuing a hidden second model completion.
+        # The live module producer owns output exhaustion inside its resumable staged
+        # workspace. The durable boundary preserves the typed failure but never
+        # replays the whole node or its retrieval/tool side effects.
         install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
         # Exact host-required calls have one policy owner across transports. Remote
         # endpoints use native required-tool forcing; local llama.cpp renders one

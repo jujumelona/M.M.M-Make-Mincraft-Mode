@@ -30,7 +30,6 @@ _SAMPLING_PROFILES = {
         "min_p": 0.0,
         "presence_penalty": 1.5,
         "repeat_penalty": 1.0,
-        "reasoning_effort": "none",
     },
 }
 
@@ -39,6 +38,13 @@ def _config(role: str = "planner", *, qwen: bool = True):
     if qwen:
         extra = {
             "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+            "runtime_contract": "qwen",
+            "qwen_family": "qwen3.5",
+            "qwen_tool_markup": "qwen3_coder_xml",
+            "qwen_action_thinking_control": "enable_thinking_false",
+            "qwen_preserve_thinking": False,
+            "qwen_reasoning_effort": False,
+            "qwen_assistant_prefill": True,
             "request_policy": "task_aware_sampling",
             "sampling_profiles": _SAMPLING_PROFILES,
         }
@@ -134,18 +140,18 @@ def test_host_owned_json_fill_uses_native_non_thinking_mode() -> None:
 
     payload = hardware._server_payload(adapter, _request(response_format="json"))
 
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["temperature"] == 0.7
     assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
     assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
-    assert "chat_template_kwargs" not in payload
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "thinking_budget_tokens" not in payload
 
 
-def test_tool_transport_does_not_disable_qwen_reasoning_by_itself() -> None:
+def test_tool_action_uses_qwen_native_non_thinking_mode() -> None:
     _autotune_module, hardware = _install_isolated()
     adapter = SimpleNamespace(config=_config("planner"))
     tool = {"type": "function", "function": {"name": "lookup"}}
@@ -155,10 +161,10 @@ def test_tool_transport_does_not_disable_qwen_reasoning_by_itself() -> None:
         _request(response_format="json", tools=(tool,)),
     )
 
-    assert payload["temperature"] == 1.0
-    assert payload["top_p"] == 0.95
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
     assert "reasoning_effort" not in payload
-    assert "chat_template_kwargs" not in payload
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_model_name_without_registry_policy_does_not_activate_qwen_policy() -> None:

@@ -21,9 +21,24 @@ _QWEN_PRECISE_PROFILE = {
 
 def _qwen_extra() -> dict[str, object]:
     return {
+        "runtime_contract": "qwen",
+        "qwen_family": "qwen3.5",
+        "qwen_tool_markup": "qwen3_coder_xml",
+        "qwen_action_thinking_control": "enable_thinking_false",
+        "qwen_preserve_thinking": False,
+        "qwen_reasoning_effort": False,
+        "qwen_assistant_prefill": True,
         "request_policy": "task_aware_sampling",
         "sampling_profiles": {
             "precise_coding": dict(_QWEN_PRECISE_PROFILE),
+            "non_thinking": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "top_k": 20,
+                "min_p": 0.0,
+                "presence_penalty": 1.5,
+                "repeat_penalty": 1.0,
+            },
         },
     }
 
@@ -66,12 +81,12 @@ def test_native_tool_payload_keeps_jinja_tools_visible_for_host_parser() -> None
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert "reasoning_effort" not in payload
-    assert "chat_template_kwargs" not in payload
-    assert payload["temperature"] == 0.6
-    assert payload["top_p"] == 0.95
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
     assert payload["min_p"] == 0.0
-    assert payload["presence_penalty"] == 0.0
+    assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
@@ -111,7 +126,7 @@ def test_local_host_forced_qwen35_turn_is_required_and_deterministic_on_wire() -
     assert request.tool_choice == "auto"
     assert payload["tool_choice"] == "required"
     assert payload["temperature"] == 0.0
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     for key in (
         "top_p",
@@ -219,11 +234,13 @@ def test_qwen35_tool_profile_is_registry_scoped() -> None:
     qwen_payload = _server_payload(qwen, request)
     generic_payload = _server_payload(generic, request)
 
-    assert qwen_payload["temperature"] == 0.6
-    assert qwen_payload["top_p"] == 0.95
+    assert qwen_payload["temperature"] == 0.7
+    assert "reasoning_effort" not in qwen_payload
+    assert qwen_payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert qwen_payload["top_p"] == 0.8
     assert qwen_payload["top_k"] == 20
     assert qwen_payload["min_p"] == 0.0
-    assert qwen_payload["presence_penalty"] == 0.0
+    assert qwen_payload["presence_penalty"] == 1.5
     assert qwen_payload["repeat_penalty"] == 1.0
     assert generic_payload["temperature"] == 0.0
     assert "top_p" not in generic_payload

@@ -7,6 +7,9 @@ import pytest
 from minecraft_mod_ai.llama_finish_reason_contract import (
     _CONTEXT_ERROR,
     _OUTPUT_ERROR,
+    CONTEXT_PRESSURE,
+    OUTPUT_EXHAUSTED,
+    completion_boundary_error,
     install,
 )
 
@@ -43,6 +46,13 @@ def test_output_cap_is_not_misreported_as_context_pressure() -> None:
     assert _OUTPUT_ERROR in str(captured.value)
     assert _CONTEXT_ERROR not in str(captured.value)
     assert "completion_tokens=8192" in str(captured.value)
+    boundary = completion_boundary_error(captured.value)
+    assert boundary is not None
+    assert boundary.kind == OUTPUT_EXHAUSTED
+    assert boundary.partial_message == {"content": "partial"}
+    assert boundary.partial_bytes > 0
+    assert len(boundary.partial_sha256) == 64
+    assert "partial" not in str(boundary)
 
 
 def test_context_pressure_remains_eligible_for_context_compaction() -> None:
@@ -59,6 +69,12 @@ def test_context_pressure_remains_eligible_for_context_compaction() -> None:
 
     assert _CONTEXT_ERROR in str(captured.value)
     assert "prompt_tokens=31000" in str(captured.value)
+    boundary = completion_boundary_error(captured.value)
+    assert boundary is not None
+    assert boundary.kind == CONTEXT_PRESSURE
+    assert boundary.prompt_tokens == 31000
+    assert boundary.completion_tokens == 1200
+    assert boundary.max_tokens == 8192
 
 
 def test_successful_completion_is_returned_unchanged() -> None:
@@ -72,3 +88,57 @@ def test_successful_completion_is_returned_unchanged() -> None:
     install(module)
 
     assert module._completion_message("http://localhost", {"max_tokens": 8192}) == message
+
+
+def test_v3_installer_does_not_accept_a_stale_v2_hot_reload_marker() -> None:
+    module = _module(
+        {
+            "choices": [{"finish_reason": "stop", "message": {"content": "new"}}],
+        }
+    )
+    module._mmm_llama_finish_reason_classifier_v2 = True
+
+    install(module)
+
+    assert module._completion_message("http://localhost", {}) == {"content": "new"}
+    assert module._mmm_llama_finish_reason_classifier_v3 is True
+
+
+def test_pinned_llama_http_context_error_is_typed_without_echoing_body() -> None:
+    body = (
+        '{"error":{"message":"request (40001 tokens) exceeds the available '
+        'context size (32768 tokens), try increasing it",'
+        '"type":"exceed_context_size"}}'
+    )
+    response = SimpleNamespace(status_code=400, text=body)
+    module = SimpleNamespace(
+        _post_completion=lambda _url, _payload: response,
+        _bounded_response_body=lambda returned: returned.text,
+    )
+    install(module)
+
+    with pytest.raises(RuntimeError) as caught:
+        module._completion_message("http://localhost", {"max_tokens": 8192})
+
+    boundary = completion_boundary_error(caught.value)
+    assert boundary is not None
+    assert boundary.kind == CONTEXT_PRESSURE
+    assert boundary.max_tokens == 8192
+    assert "40001" not in str(boundary)
+
+
+def test_unrelated_http_400_is_not_misclassified_as_context_pressure() -> None:
+    response = SimpleNamespace(
+        status_code=400,
+        text='{"error":{"message":"invalid tool schema"}}',
+    )
+    module = SimpleNamespace(
+        _post_completion=lambda _url, _payload: response,
+        _bounded_response_body=lambda returned: returned.text,
+    )
+    install(module)
+
+    with pytest.raises(RuntimeError, match="invalid tool schema") as caught:
+        module._completion_message("http://localhost", {"max_tokens": 8192})
+
+    assert completion_boundary_error(caught.value) is None

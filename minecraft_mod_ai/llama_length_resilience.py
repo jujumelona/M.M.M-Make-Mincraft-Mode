@@ -16,7 +16,7 @@ from typing import Any, Mapping
 from .llama_finish_reason_contract import CONTEXT_PRESSURE, completion_boundary_kind
 from .model_context_budget import emergency_fit_messages
 
-_MARKER = "_mmm_bounded_length_recovery_v3"
+_MARKER = "_mmm_bounded_length_recovery_v4"
 _LENGTH_RETRY_MESSAGE_BYTES = 32 * 1024
 
 
@@ -60,6 +60,16 @@ def install(llama_cpp_module: Any) -> None:
                 raise
 
             original_messages = tuple(payload.get("messages", ()) or ())
+            # A trailing assistant message is llama.cpp's assistant-prefill contract.
+            # Compacting it would discard or rewrite the exact unfinished output and
+            # could make a partial tool action appear complete. Let the typed context
+            # boundary reach the producer so it can split the outstanding obligation.
+            if (
+                original_messages
+                and isinstance(original_messages[-1], Mapping)
+                and original_messages[-1].get("role") == "assistant"
+            ):
+                raise
             fitted_messages = emergency_fit_messages(
                 original_messages,
                 budget_bytes=_LENGTH_RETRY_MESSAGE_BYTES,

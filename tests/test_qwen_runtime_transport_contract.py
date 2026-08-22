@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from types import SimpleNamespace
 
@@ -12,13 +13,28 @@ from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import qwen_runtime_transport_contract as contract
 
 
-def _config(model_id: str, *, qwen: bool = True) -> SimpleNamespace:
+def _config(
+    model_id: str,
+    *,
+    qwen: bool = True,
+    family: str = "qwen3.6",
+) -> SimpleNamespace:
     extra = {
         "gguf_filename": f"{model_id.split('/')[-1]}.gguf",
         "mtp_widths": "1,2",
     }
     if qwen:
-        extra["runtime_contract"] = "qwen"
+        extra.update(
+            {
+                "runtime_contract": "qwen",
+                "qwen_family": family,
+                "qwen_tool_markup": "qwen3_coder_xml",
+                "qwen_action_thinking_control": "enable_thinking_false",
+                "qwen_preserve_thinking": family in {"qwen3.6", "qwen3.8"},
+                "qwen_reasoning_effort": family == "qwen3.8",
+                "qwen_assistant_prefill": True,
+            }
+        )
     return SimpleNamespace(
         model_id=model_id,
         max_context=262144,
@@ -124,7 +140,7 @@ def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
     ok, error = contract._tool_probe(
         "http://127.0.0.1:8910/v1",
         fake_autotune,
-        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF", family="qwen3.5"),
     )
 
     assert ok is True
@@ -132,7 +148,7 @@ def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
     payload = captured["payload"]
     assert payload["tool_choice"] == "required"
     assert payload["temperature"] == 0.0
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["tools"][0]["function"]["name"] == "mmm_transport_probe"
 
@@ -152,7 +168,7 @@ def test_qwen35_tool_probe_rejects_server_parsed_tool_calls(monkeypatch) -> None
     ok, error = contract._tool_probe(
         "http://127.0.0.1:8910/v1",
         SimpleNamespace(_env_int=lambda _name, default: default),
-        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF", family="qwen3.5"),
     )
 
     assert ok is False
@@ -271,7 +287,7 @@ def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
     assert seen[-1] == ("4", 4, "none")
 
     current = fake._fingerprint(
-        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF", family="qwen3.5"),
         "llama-server",
         "/tmp/model.gguf",
     )
@@ -279,9 +295,15 @@ def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
         b'{"base":"base","qwen_mtp_parallel":"single-slot-v1"}'
     ).hexdigest()
     expected = hashlib.sha256(
-        (
-            '{"base":"base","qwen_mtp_parallel":"single-slot-v1",'
-            f'"qwen_tool_transport":"{contract._TOOL_TRANSPORT_EPOCH}"}}'
+        json.dumps(
+            {
+                "base": "base",
+                "qwen_family": "qwen3.5",
+                "qwen_mtp_parallel": "single-slot-v1",
+                "qwen_tool_transport": contract._TOOL_TRANSPORT_EPOCH,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
     assert current == expected
@@ -389,7 +411,7 @@ def test_initial_qwen_variant_requires_tool_probe(monkeypatch) -> None:
     result = fake._mmm_run_tuning_variant(
         "llama-server",
         "/tmp/model.gguf",
-        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF", family="qwen3.5"),
         object(),
         variant,
     )

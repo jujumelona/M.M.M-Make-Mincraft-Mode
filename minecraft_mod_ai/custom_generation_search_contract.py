@@ -178,6 +178,67 @@ def _clone_candidate_snapshot(base_root: Path, *, candidate_index: int, performa
     return candidate_root
 
 
+def _capture_candidate(
+    owner: Any,
+    single_generate: Any,
+    candidate_root: Path,
+    *,
+    strategy: str,
+    candidate_index: int,
+    count: int,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run one isolated candidate and return its verified rebase capture.
+
+    ``coder_max_efficiency_contract`` owns the shared-base fan-out, while this
+    module owns candidate research/strategy routing and the exact before/after
+    patch contract.  Keep an immutable, copy-on-write sibling snapshot until the
+    generated receipt has been checked so a later concurrent winner commit still
+    has the base bytes required for a three-way rebase.
+    """
+
+    from . import performance_final_contract as performance_module
+
+    resolved_root = Path(candidate_root).expanduser().resolve()
+    if not resolved_root.is_dir() or resolved_root.is_symlink():
+        raise RuntimeError("Custom candidate root must be a regular directory.")
+    base_root = performance_module._clone_snapshot_tree(
+        resolved_root,
+        parent=resolved_root.parent,
+        prefix=f"candidate-base-{candidate_index:02d}-",
+    )
+    previous_router = owner.router
+    result: dict[str, Any] | None = None
+    checkpoint_handed_off = False
+    owner.router = _StrategyRouter(
+        previous_router,
+        strategy=strategy,
+        candidate_index=candidate_index,
+        count=count,
+    )
+    try:
+        result = _run_single_with_research(
+            owner,
+            single_generate,
+            resolved_root,
+            args=args,
+            kwargs=kwargs,
+        )
+        capture = _candidate_patch_capture(
+            base_root=base_root,
+            candidate_root=resolved_root,
+            result=result,
+        )
+        checkpoint_handed_off = True
+        return result, capture
+    finally:
+        if result is not None and not checkpoint_handed_off:
+            owner.release_generation_checkpoint(result)
+        owner.router = previous_router
+        shutil.rmtree(base_root, ignore_errors=True)
+
+
 def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
     touched = [str(value).replace('\\', '/') for value in result.get('touched_paths', []) if isinstance(value, str)]
     java_paths = tuple(sorted((path for path in touched if path.lower().endswith('.java'))))
@@ -241,6 +302,9 @@ def install(custom_module_generator_module: Any) -> None:
         base_root = performance_module._clone_source_snapshot(live_root)
         candidates: list[tuple[int, Path, dict[str, Any]]] = []
         errors: dict[int, BaseException] = {}
+        winner_index: int | None = None
+        winner_checkpoint_acknowledged = False
+        winner_live_committed = False
 
         def solve(candidate_index: int) -> tuple[int, Path, dict[str, Any]]:
             candidate_root = _clone_candidate_snapshot(
@@ -327,6 +391,7 @@ def install(custom_module_generator_module: Any) -> None:
                 capture=capture,
                 source_patch_module=source_patch_module,
             )
+            winner_live_committed = True
             rewritten = performance_module._rewrite_root_paths(
                 result,
                 winner_root,
@@ -351,6 +416,15 @@ def install(custom_module_generator_module: Any) -> None:
                 'research_aware': True,
                 'dependency_admission': 'exact',
             }
+            # The base generator's checkpoint is intentionally retained while this
+            # candidate is only staged.  Acknowledge its opaque cleanup token only
+            # after the winning patch has committed to the live project above.
+            winner_checkpoint_acknowledged = bool(
+                self.acknowledge_generation_checkpoint(rewritten)
+            )
+            rewritten['generation_checkpoint_acknowledged'] = (
+                winner_checkpoint_acknowledged
+            )
             print(
                 'custom generation search:',
                 f'candidates={len(evaluations)}',
@@ -361,7 +435,16 @@ def install(custom_module_generator_module: Any) -> None:
             )
             return rewritten
         finally:
-            for _candidate_index, candidate_root, _result in candidates:
+            for candidate_index, candidate_root, candidate_result in candidates:
+                if (
+                    winner_checkpoint_acknowledged
+                    and candidate_index == winner_index
+                ):
+                    pass
+                elif winner_live_committed and candidate_index != winner_index:
+                    self.discard_generation_checkpoint(candidate_result)
+                else:
+                    self.release_generation_checkpoint(candidate_result)
                 shutil.rmtree(candidate_root.parent, ignore_errors=True)
             shutil.rmtree(base_root, ignore_errors=True)
 
@@ -377,6 +460,7 @@ __all__ = [
     "_StrategyRouter",
     "_STRATEGIES",
     "_active_native_slots",
+    "_capture_candidate",
     "_candidate_patch_capture",
     "_fork_router_for_candidate",
     "_target_values",

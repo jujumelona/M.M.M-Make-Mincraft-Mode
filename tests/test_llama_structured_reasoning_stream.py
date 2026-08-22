@@ -9,9 +9,40 @@ from minecraft_mod_ai.llama_server_hardware_policy import (
 )
 
 
-def _adapter(max_new_tokens: int = 8192, model_id: str = "generic/model"):
+def _adapter(
+    max_new_tokens: int = 8192,
+    model_id: str = "generic/model",
+    *,
+    qwen_family: str = "",
+):
+    extra = {}
+    if qwen_family:
+        extra = {
+            "runtime_contract": "qwen",
+            "qwen_family": qwen_family,
+            "qwen_tool_markup": "qwen3_coder_xml",
+            "qwen_action_thinking_control": "enable_thinking_false",
+            "qwen_preserve_thinking": qwen_family in {"qwen3.6", "qwen3.8"},
+            "qwen_reasoning_effort": qwen_family == "qwen3.8",
+            "qwen_assistant_prefill": True,
+            "request_policy": "task_aware_sampling",
+            "sampling_profiles": {
+                "non_thinking": {
+                    "temperature": 0.7,
+                    "top_p": 0.8,
+                    "top_k": 20,
+                    "min_p": 0.0,
+                    "presence_penalty": 1.5,
+                    "repeat_penalty": 1.0,
+                }
+            },
+        }
     return SimpleNamespace(
-        config=SimpleNamespace(max_new_tokens=max_new_tokens, model_id=model_id)
+        config=SimpleNamespace(
+            max_new_tokens=max_new_tokens,
+            model_id=model_id,
+            extra=extra,
+        )
     )
 
 
@@ -64,7 +95,11 @@ def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
     )
 
     payload = _server_payload(
-        _adapter(model_id="unsloth/Qwen3.5-9B-MTP-GGUF"), request
+        _adapter(
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            qwen_family="qwen3.5",
+        ),
+        request,
     )
 
     assert payload["tools"] == [tool]
@@ -73,14 +108,14 @@ def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
     assert "response_format" not in payload
     assert "json_schema" not in payload
     assert "grammar" not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["temperature"] == 0.7
     assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
-    assert "min_p" not in payload
+    assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
-    assert "repeat_penalty" not in payload
+    assert payload["repeat_penalty"] == 1.0
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:

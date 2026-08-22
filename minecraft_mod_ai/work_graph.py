@@ -585,7 +585,10 @@ def _module_stage(module: ProductionModule) -> str:
         return 'entity'
     if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
         return 'system'
-    extended_kinds = {'item', 'block', 'fluid', 'status_effect', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
+    # Only kinds implemented by ExtendedContentGenerator belong on the CPU content
+    # lane. Fluid has no deterministic generator and must use the bounded custom LLM
+    # lane, otherwise it silently consumes llama work from a CPU executor.
+    extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
     if module.kind in extended_kinds:
         return 'content'
     return 'custom'

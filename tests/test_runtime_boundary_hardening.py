@@ -70,7 +70,7 @@ def test_source_mutation_keeps_authoritative_output_budget() -> None:
     assert hardware._server_payload(adapter, search_request)["max_tokens"] == 4096
 
 
-def test_work_node_retries_output_exhaustion_once() -> None:
+def test_work_node_preserves_output_exhaustion_without_whole_action_replay() -> None:
     class Ledger:
         def __init__(self) -> None:
             self.state = "running"
@@ -85,28 +85,91 @@ def test_work_node_retries_output_exhaustion_once() -> None:
 
     class FakeOrchestrator:
         calls = 0
+        error = None
 
         @staticmethod
         def _run_work_node(ledger, node, *, action, validate_cached, shared_index=None):
             FakeOrchestrator.calls += 1
-            if FakeOrchestrator.calls == 1:
-                ledger.state = "failed"
-                boundary = LlamaCompletionBoundaryError("exhausted", kind=OUTPUT_EXHAUSTED)
-                raise ModelBackendError(role="coder", model_id="model", cause=boundary) from boundary
-            return {"status": "SUCCEEDED"}
+            ledger.state = "failed"
+            boundary = LlamaCompletionBoundaryError("exhausted", kind=OUTPUT_EXHAUSTED)
+            FakeOrchestrator.error = ModelBackendError(
+                role="coder", model_id="model", cause=boundary
+            )
+            raise FakeOrchestrator.error from boundary
 
     install_work_recovery(FakeOrchestrator)
     ledger = Ledger()
-    result = FakeOrchestrator._run_work_node(
-        ledger,
-        SimpleNamespace(node_id="generate-custom-1"),
-        action=lambda: {},
-        validate_cached=lambda value: True,
-    )
+    with pytest.raises(ModelBackendError) as caught:
+        FakeOrchestrator._run_work_node(
+            ledger,
+            SimpleNamespace(node_id="generate-custom-1"),
+            action=lambda: {},
+            validate_cached=lambda value: True,
+        )
 
-    assert result == {"status": "SUCCEEDED"}
-    assert FakeOrchestrator.calls == 2
-    assert ledger.retries == 1
+    assert completion_boundary_kind(caught.value) == OUTPUT_EXHAUSTED
+    assert caught.value is FakeOrchestrator.error
+    assert FakeOrchestrator.calls == 1
+    assert ledger.retries == 0
+
+
+def test_install_peels_legacy_whole_node_replay_wrapper() -> None:
+    class Ledger:
+        retries = 0
+
+        def task(self, _node_id):
+            return {"state": "failed"}
+
+        def retry(self, _node_id):
+            self.retries += 1
+
+    class FakeOrchestrator:
+        calls = 0
+
+        @staticmethod
+        def _run_work_node(ledger, node, *, action, validate_cached, shared_index=None):
+            FakeOrchestrator.calls += 1
+            boundary = LlamaCompletionBoundaryError("exhausted", kind=OUTPUT_EXHAUSTED)
+            raise ModelBackendError(role="coder", model_id="model", cause=boundary) from boundary
+
+    original = FakeOrchestrator._run_work_node
+
+    def legacy_replay(ledger, node, *, action, validate_cached, shared_index=None):
+        try:
+            return original(
+                ledger,
+                node,
+                action=action,
+                validate_cached=validate_cached,
+                shared_index=shared_index,
+            )
+        except ModelBackendError:
+            ledger.retry(node.node_id)
+            return original(
+                ledger,
+                node,
+                action=action,
+                validate_cached=validate_cached,
+                shared_index=shared_index,
+            )
+
+    legacy_replay.__wrapped__ = original
+    legacy_replay._mmm_completion_boundary_work_recovery_v1 = True
+    FakeOrchestrator._run_work_node = staticmethod(legacy_replay)
+
+    install_work_recovery(FakeOrchestrator)
+    ledger = Ledger()
+    with pytest.raises(ModelBackendError) as caught:
+        FakeOrchestrator._run_work_node(
+            ledger,
+            SimpleNamespace(node_id="generate-custom-1"),
+            action=lambda: {},
+            validate_cached=lambda value: True,
+        )
+
+    assert completion_boundary_kind(caught.value) == OUTPUT_EXHAUSTED
+    assert FakeOrchestrator.calls == 1
+    assert ledger.retries == 0
 
 
 def test_work_node_does_not_retry_unrelated_failure() -> None:
