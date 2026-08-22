@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai.llama_finish_reason_contract import (
