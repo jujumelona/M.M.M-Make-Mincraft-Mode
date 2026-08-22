@@ -42,6 +42,33 @@ _SOURCE_MUTATION_NAMES = frozenset(
     }
 )
 _SEMANTIC_STALL_LIMIT = 2
+_PROGRESS_NOISE_KEYS = frozenset(
+    {
+        "arguments",
+        "coverage_score",
+        "created_at",
+        "cursor",
+        "duration",
+        "duration_ms",
+        "elapsed",
+        "elapsed_ms",
+        "latency",
+        "latency_ms",
+        "query",
+        "rank",
+        "relevance_score",
+        "request",
+        "request_id",
+        "score",
+        "timestamp",
+        "timing",
+        "timings",
+        "token_count",
+        "tokens",
+        "trace_id",
+        "updated_at",
+    }
+)
 
 
 class FrontierExecutionGate:
@@ -127,56 +154,57 @@ def _forced_tool_name(tool_choice: Any) -> str:
     return str(function.get("name", "")).strip()
 
 
-def _latest_tool_action_signature(
+def _stable_progress_value(value: Any) -> Any:
+    """Strip request echoes and volatile telemetry from an observation identity."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_progress_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key).strip().casefold() not in _PROGRESS_NOISE_KEYS
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_stable_progress_value(item) for item in value]
+    return value
+
+
+def _latest_tool_result_signature(
     messages: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[str, str], ...]:
-    """Return the latest model tool intent without call-id or result-payload noise."""
+    """Return the latest successful tool results without call-id/input/telemetry noise."""
 
+    normalized: list[tuple[str, str]] = []
+    saw_tool = False
     for message in reversed(messages):
-        if str(message.get("role", "")).strip().casefold() != "assistant":
-            continue
-        calls = message.get("tool_calls")
-        if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
-            continue
-        normalized: list[tuple[str, str]] = []
-        for call in calls:
-            if not isinstance(call, Mapping):
+        role = str(message.get("role", "")).strip().casefold()
+        if role == "tool":
+            saw_tool = True
+            name = str(message.get("name", "")).strip()
+            content = message.get("content")
+            if not name or not isinstance(content, (str, Mapping)):
                 continue
-            function = call.get("function")
-            if isinstance(function, Mapping):
-                name = str(function.get("name", "")).strip()
-                arguments = function.get("arguments")
+            if isinstance(content, Mapping):
+                payload: Any = content
             else:
-                name = str(call.get("name", "")).strip()
-                arguments = call.get("arguments")
-            if not name:
-                continue
-            if isinstance(arguments, str):
-                raw = arguments.strip()
                 try:
-                    parsed = json.loads(raw)
+                    payload = json.loads(content)
                 except (json.JSONDecodeError, TypeError):
-                    canonical = raw
-                else:
-                    canonical = json.dumps(
-                        parsed,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        default=str,
-                        separators=(",", ":"),
-                    )
-            else:
-                canonical = json.dumps(
-                    arguments,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    default=str,
-                    separators=(",", ":"),
-                )
+                    continue
+            if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+                continue
+            result = _stable_progress_value(payload.get("result"))
+            canonical = json.dumps(
+                result,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            )
             normalized.append((name, canonical))
-        if normalized:
-            return tuple(normalized)
-    return ()
+            continue
+        if saw_tool and role == "assistant":
+            break
+    return tuple(sorted(normalized))
 
 
 def _structured_intent(payload: Mapping[str, Any]) -> str:
@@ -365,14 +393,14 @@ class CausalFrontierAdapter:
         state: frozenset[str],
         goals: Sequence[str],
         names: Sequence[str],
-        action_signature: Sequence[tuple[str, str]] = (),
+        result_signature: Sequence[tuple[str, str]] = (),
     ) -> None:
-        """Stop retrieval churn when host causal facts, frontier, and action repeat.
+        """Stop retrieval churn when host facts, frontier, and observations repeat.
 
         Source-mutation retry ownership remains in the writable coder contract. This
-        guard only covers non-mutating causal frontiers whose model-issued tool intent
-        also repeats, so novel retrieval queries can gather more evidence while
-        call-id/result hash noise cannot consume the hard 12-round budget.
+        guard only covers non-mutating causal frontiers. A new model query is not
+        progress by itself: only a changed reviewed tool result resets the stall, so
+        query paraphrases cannot consume the hard 12-round budget indefinitely.
         """
 
         normalized_names = tuple(str(name) for name in names)
@@ -387,7 +415,7 @@ class CausalFrontierAdapter:
             tuple(sorted(state)),
             tuple(str(goal) for goal in goals),
             normalized_names,
-            tuple((str(name), str(arguments)) for name, arguments in action_signature),
+            tuple((str(name), str(result)) for name, result in result_signature),
         )
         if fingerprint != self._last_semantic_frontier:
             self._last_semantic_frontier = fingerprint
@@ -467,7 +495,7 @@ class CausalFrontierAdapter:
             state=state,
             goals=goals,
             names=selected_names,
-            action_signature=_latest_tool_action_signature(request.messages),
+            result_signature=_latest_tool_result_signature(request.messages),
         )
         self._publish_frontier(selected_names)
 
