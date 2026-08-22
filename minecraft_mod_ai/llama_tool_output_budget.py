@@ -2,11 +2,13 @@ from __future__ import annotations
 
 """Bounded output policy for native llama.cpp tool turns.
 
-Tool calls must remain bounded, but source-edit actions can legitimately need several
-thousand tokens of structured payload.  The bound therefore follows the configured
-model output budget (up to a hard host cap) instead of forcing every tool action into
-an arbitrary 4K decode.  Input fitting reserves this same budget so increasing the
-tool allowance cannot steal space from the runtime context window.
+The model-facing source ACI is scalar: one reviewed action is emitted per turn and
+large multi-edit arrays are host-owned.  An 8K default therefore wastes decode budget
+on every retrieval/edit decision.  Keep 4K as the conservative default so create-file
+operations can still carry a substantial UTF-8 source body, while explicit operators
+may raise the bound through ``MMM_LLAMA_TOOL_MAX_TOKENS`` when a deployment genuinely
+needs larger single actions.  Final text synthesis keeps the model's normal output
+budget because this policy applies only while tool schemas are exposed.
 """
 
 import os
@@ -14,7 +16,7 @@ from functools import wraps
 from typing import Any, Mapping
 
 _MARKER = "_mmm_llama_tool_output_budget_v1"
-_DEFAULT_TOOL_MAX_TOKENS = 8192
+_DEFAULT_TOOL_MAX_TOKENS = 4096
 _MAX_TOOL_MAX_TOKENS = 16384
 
 
