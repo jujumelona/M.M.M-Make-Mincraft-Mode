@@ -11,7 +11,7 @@ import threading
 from contextlib import AsyncExitStack
 from itertools import islice
 from pathlib import Path, PurePosixPath
-from typing import Any, Collection, Mapping
+from typing import Any, Collection, Mapping, Sequence
 
 import anyio
 
