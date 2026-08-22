@@ -109,13 +109,16 @@ def install(causal_frontier_contract_module: Any) -> None:
                 retry_request = replace(
                     request,
                     messages=retry_messages,
-                    # Keep the server/model exposure at one current legal action. The
-                    # broader frozen surface is validation-only so a stale repeat can
-                    # be parsed, classified and discarded by the host instead of dying
-                    # inside named-tool-choice validation.
+                    # Expose exactly one current legal action and force that exact name.
+                    # The broader frozen surface remains validation-only so a model that
+                    # still repeats a stale name can be parsed, classified and discarded
+                    # by the host without granting it execution authority.
                     tools=forced_tools,
                     tool_validation_schemas=tuple(candidates),
-                    tool_choice="required",
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": forced_name},
+                    },
                     parallel_tool_calls=False,
                 )
                 corrected = self.inner.generate_turn(retry_request)
