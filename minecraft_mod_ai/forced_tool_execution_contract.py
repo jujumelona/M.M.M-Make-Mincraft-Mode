@@ -3,16 +3,15 @@ from __future__ import annotations
 """Make host-forced tool choices executable, not advisory.
 
 Several production paths can require one exact function call: writable source mutation,
-mandatory RAG retrieval, and structured decisions. Historically each caller set
-``tool_choice`` and then checked the model response independently while still exposing
-the rest of the current tool frontier. A model could therefore emit prose or another
-action and the caller would only discover the violation after a long generation round.
+mandatory RAG retrieval, and structured decisions. Every transport must therefore make
+that requirement visible to the model before validating it after generation.
 
-The local llama.cpp adapter owns and validates its host-side tool transport directly.
-This late contract only handles remote OpenAI-compatible adapters, where exact host
-choices are reduced to one visible function and native ``required`` forcing. Keeping
-those ownership boundaries separate avoids coupling runtime finalization to private
-implementation helpers inside the local adapter.
+Remote OpenAI-compatible endpoints can use their native ``required`` transport after
+narrowing the visible surface to one function. Local llama.cpp intentionally keeps PEG
+server parsing disabled, so its transport-level ``tool_choice`` remains ``none``; the
+same semantic requirement is conveyed through one visible schema plus an explicit
+system instruction, and this host wrapper validates the exact call with one bounded
+retry. This keeps one forced-tool owner across transports without re-enabling PEG.
 """
 
 import json
@@ -21,7 +20,12 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 _MARKER = "_mmm_forced_tool_execution_v1"
+_LOCAL_MARKER = "_mmm_local_forced_tool_execution_v1"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
+_FIRST_LOCAL_INSTRUCTION = (
+    "The host requires the only available function for this turn. Call it exactly once "
+    "with schema-valid arguments. Do not answer in prose instead of the required call."
+)
 _RETRY_INSTRUCTION = (
     "The previous assistant turn did not satisfy the host-required function call. "
     "Call the only available function exactly once now. Do not answer in prose."
@@ -46,6 +50,21 @@ def forced_tool_name(tool_choice: Any) -> str:
     if not isinstance(function, Mapping):
         return ""
     return str(function.get("name", "")).strip()
+
+
+def _selected_schema(request: Any, name: str) -> tuple[Mapping[str, Any], ...]:
+    from .model_adapters import ModelConfigurationError
+
+    selected = tuple(
+        schema
+        for schema in request.tools
+        if isinstance(schema, Mapping) and _tool_name(schema) == name
+    )
+    if len(selected) != 1:
+        raise ModelConfigurationError(
+            f"Host-forced tool {name!r} does not resolve to exactly one exposed schema."
+        )
+    return selected
 
 
 def _narrow_capability_context(
@@ -84,35 +103,33 @@ def _narrow_capability_context(
     return tuple(narrowed)
 
 
-def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
-    """Reduce a remote forced turn to one schema without dropping request metadata."""
+def _single_tool_request(
+    request: Any,
+    name: str,
+    *,
+    retry: bool,
+    native_required: bool,
+) -> Any:
+    """Reduce one forced turn to one schema without dropping request metadata."""
 
-    from .model_adapters import ModelConfigurationError
-
-    selected = tuple(
-        schema
-        for schema in request.tools
-        if isinstance(schema, Mapping) and _tool_name(schema) == name
-    )
-    if len(selected) != 1:
-        raise ModelConfigurationError(
-            f"Host-forced tool {name!r} does not resolve to exactly one exposed schema."
-        )
-
+    selected = _selected_schema(request, name)
     messages: Sequence[Mapping[str, Any]] = _narrow_capability_context(
         request.messages,
         selected,
     )
-    if retry:
-        messages = (*tuple(messages), {"role": "system", "content": _RETRY_INSTRUCTION})
+    instruction = _RETRY_INSTRUCTION if retry else _FIRST_LOCAL_INSTRUCTION
+    if retry or not native_required:
+        messages = (*tuple(messages), {"role": "system", "content": instruction})
 
-    # Remote OpenAI-compatible endpoints use their native required-tool transport.
-    # Exact identity is structural because only the selected schema remains visible.
+    # Remote endpoints can enforce required natively. Local llama.cpp deliberately
+    # leaves PEG parsing disabled, so semantic forcing is prompt+surface owned here and
+    # the inner Qwen parser must remain on auto rather than validating a force that the
+    # server transport never received.
     return replace(
         request,
         messages=messages,
         tools=selected,
-        tool_choice="required",
+        tool_choice="required" if native_required else "auto",
         parallel_tool_calls=False,
     )
 
@@ -120,6 +137,13 @@ def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
 def _contains_exact_call(turn: Any, name: str) -> bool:
     calls = tuple(getattr(turn, "tool_calls", ()) or ())
     return len(calls) == 1 and str(getattr(calls[0], "name", "")).strip() == name
+
+
+def _call_names(turn: Any) -> str:
+    return ",".join(
+        str(getattr(call, "name", "")).strip()
+        for call in tuple(getattr(turn, "tool_calls", ()) or ())
+    ) or "<prose>"
 
 
 def _install_remote_adapter_class(cls: Any) -> None:
@@ -135,27 +159,34 @@ def _install_remote_adapter_class(cls: Any) -> None:
         if not name:
             return current(self, request)
 
-        constrained = _single_tool_request(request, name, retry=False)
-        first = current(self, constrained)
+        first = current(
+            self,
+            _single_tool_request(
+                request,
+                name,
+                retry=False,
+                native_required=True,
+            ),
+        )
         if _contains_exact_call(first, name):
             return first
 
-        retry_request = _single_tool_request(request, name, retry=True)
-        second = current(self, retry_request)
+        second = current(
+            self,
+            _single_tool_request(
+                request,
+                name,
+                retry=True,
+                native_required=True,
+            ),
+        )
         if _contains_exact_call(second, name):
             return second
 
-        first_calls = ",".join(
-            str(getattr(call, "name", "")).strip()
-            for call in tuple(getattr(first, "tool_calls", ()) or ())
-        ) or "<prose>"
-        second_calls = ",".join(
-            str(getattr(call, "name", "")).strip()
-            for call in tuple(getattr(second, "tool_calls", ()) or ())
-        ) or "<prose>"
         raise ModelConfigurationError(
             "Remote model violated the host-forced single-tool contract after the "
-            f"bounded retry for {name!r}; first={first_calls}, retry={second_calls}."
+            f"bounded retry for {name!r}; first={_call_names(first)}, "
+            f"retry={_call_names(second)}."
         )
 
     setattr(generate_turn, _MARKER, True)
@@ -166,10 +197,63 @@ def _install_remote_adapter_class(cls: Any) -> None:
     cls.generate_turn = generate_turn
 
 
-def install(*, openai_compatible_module: Any) -> None:
-    """Install exact-tool forcing only where transport ownership is still remote."""
+def _install_local_adapter_class(cls: Any) -> None:
+    current = cls.generate_turn
+    if getattr(current, _LOCAL_MARKER, False):
+        return
+
+    @wraps(current)
+    def generate_turn(self: Any, request: Any) -> Any:
+        from .model_adapters import ModelConfigurationError
+
+        name = forced_tool_name(getattr(request, "tool_choice", None))
+        if not name:
+            return current(self, request)
+
+        first = current(
+            self,
+            _single_tool_request(
+                request,
+                name,
+                retry=False,
+                native_required=False,
+            ),
+        )
+        if _contains_exact_call(first, name):
+            return first
+
+        second = current(
+            self,
+            _single_tool_request(
+                request,
+                name,
+                retry=True,
+                native_required=False,
+            ),
+        )
+        if _contains_exact_call(second, name):
+            return second
+
+        raise ModelConfigurationError(
+            "Local llama model violated the host-forced single-tool contract after the "
+            f"bounded prompt-enforced retry for {name!r}; first={_call_names(first)}, "
+            f"retry={_call_names(second)}."
+        )
+
+    setattr(generate_turn, _LOCAL_MARKER, True)
+    generate_turn._mmm_forced_tool_single_surface = True
+    generate_turn._mmm_forced_tool_single_context = True
+    generate_turn._mmm_forced_tool_prompt_transport = True
+    generate_turn._mmm_forced_tool_bounded_retry = True
+    cls.generate_turn = generate_turn
+
+
+def install(*, openai_compatible_module: Any, llama_cpp_module: Any | None = None) -> None:
+    """Install one exact-tool forcing policy across remote and local transports."""
 
     _install_remote_adapter_class(openai_compatible_module.OpenAICompatibleAdapter)
+    if llama_cpp_module is not None:
+        _install_local_adapter_class(llama_cpp_module.LlamaCppAdapter)
 
 
 __all__ = ["forced_tool_name", "install"]
