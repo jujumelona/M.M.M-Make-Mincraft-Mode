@@ -1,26 +1,31 @@
 from __future__ import annotations
 
-"""Bounded output policy for native llama.cpp tool turns.
+"""Output policy for native llama.cpp tool turns.
 
-The model-facing source ACI is scalar: one reviewed action is emitted per turn and
-large multi-edit arrays are host-owned.  An 8K default therefore wastes decode budget
-on every retrieval/edit decision.  Keep 4K as the conservative default so create-file
-operations can still carry a substantial UTF-8 source body, while explicit operators
-may raise the bound through ``MMM_LLAMA_TOOL_MAX_TOKENS`` when a deployment genuinely
-needs larger single actions.  Final text synthesis keeps the model's normal output
-budget because this policy applies only while tool schemas are exposed.
+Compact retrieval/navigation actions benefit from a bounded scalar decode budget, but
+source mutation actions carry reviewed source text inside the tool arguments.  Those
+payload-heavy actions must retain the model/runtime ``max_new_tokens`` budget selected
+by the normal server payload policy.  Applying the compact 4K cap to ``apply_source_*``
+turns creates a second, hidden output-budget owner and can truncate a valid action
+before its JSON/tool envelope closes.
 """
 
 import os
 from functools import wraps
 from typing import Any, Mapping
 
-_MARKER = "_mmm_llama_tool_output_budget_v1"
+_MARKER = "_mmm_llama_tool_output_budget_v2"
 _DEFAULT_TOOL_MAX_TOKENS = 4096
 _MAX_TOOL_MAX_TOKENS = 16384
+_PAYLOAD_HEAVY_TOOL_NAMES = frozenset({
+    "apply_source_edit",
+    "apply_source_patch",
+})
 
 
 def _tool_max_tokens() -> int:
+    """Return the operator-configurable cap for compact scalar tool turns."""
+
     raw = os.environ.get("MMM_LLAMA_TOOL_MAX_TOKENS", "").strip()
     if not raw:
         return _DEFAULT_TOOL_MAX_TOKENS
@@ -34,7 +39,7 @@ def _tool_max_tokens() -> int:
 
 
 def tool_output_budget(config: Any) -> int:
-    """Return the authoritative positive output reserve for one tool turn."""
+    """Return the positive compact-tool decode reserve, bounded by model config."""
 
     limit = _tool_max_tokens()
     try:
@@ -44,6 +49,41 @@ def tool_output_budget(config: Any) -> int:
     if configured > 0:
         limit = min(limit, configured)
     return max(1, limit)
+
+
+def _tool_name(tool: Any) -> str:
+    """Extract a tool name from OpenAI-style mappings or typed tool objects."""
+
+    if isinstance(tool, Mapping):
+        name = tool.get("name")
+        if isinstance(name, str) and name:
+            return name
+        function = tool.get("function")
+        if isinstance(function, Mapping):
+            name = function.get("name")
+            if isinstance(name, str) and name:
+                return name
+
+    name = getattr(tool, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    function = getattr(tool, "function", None)
+    name = getattr(function, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    return ""
+
+
+def _tool_names(request: Any) -> frozenset[str]:
+    tools = getattr(request, "tools", ()) or ()
+    return frozenset(name for name in (_tool_name(tool) for tool in tools) if name)
+
+
+def _requires_model_output_budget(request: Any) -> bool:
+    """Return True when a tool can legitimately carry a large source payload."""
+
+    names = _tool_names(request)
+    return bool(names & _PAYLOAD_HEAVY_TOOL_NAMES)
 
 
 def _bounded_tool_limit(
@@ -61,7 +101,7 @@ def _bounded_tool_limit(
 
 
 def install(hardware_module: Any) -> None:
-    """Keep tool turns bounded after every earlier output-policy wrapper."""
+    """Cap compact tool turns without overriding payload-heavy mutation budgets."""
 
     current = hardware_module._server_payload
     if getattr(current, _MARKER, False):
@@ -70,7 +110,8 @@ def install(hardware_module: Any) -> None:
     @wraps(current)
     def bounded_tool_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload = dict(current(adapter, request))
-        if getattr(request, "tools", ()) or ():
+        tools = getattr(request, "tools", ()) or ()
+        if tools and not _requires_model_output_budget(request):
             payload["max_tokens"] = _bounded_tool_limit(adapter, payload)
         return payload
 
@@ -80,7 +121,9 @@ def install(hardware_module: Any) -> None:
 
 __all__ = [
     "_bounded_tool_limit",
+    "_requires_model_output_budget",
     "_tool_max_tokens",
+    "_tool_names",
     "install",
     "tool_output_budget",
 ]
