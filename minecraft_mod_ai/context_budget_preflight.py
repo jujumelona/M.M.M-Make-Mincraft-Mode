@@ -27,6 +27,7 @@ def _encoded_size(messages: Any) -> int:
 def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy
     from . import small_model_context_compaction as archive_module
+    from .llama_length_resilience import length_recovery_installed
     from .llama_tool_output_budget import tool_output_budget
     from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
@@ -103,14 +104,7 @@ def run_context_budget_preflight() -> None:
             "tool-output policy"
         )
 
-    if (
-        getattr(
-            llama_cpp_adapter._completion_message,
-            "_mmm_bounded_length_recovery_v2",
-            False,
-        )
-        is not True
-    ):
+    if not length_recovery_installed(llama_cpp_adapter._completion_message):
         raise ContextBudgetPreflightError(
             "llama completion path is missing bounded finish_reason=length recovery"
         )
