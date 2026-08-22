@@ -13,6 +13,7 @@ from minecraft_mod_ai.forced_tool_execution_contract import install
 class _Request:
     messages: tuple[dict[str, Any], ...] = ()
     tools: tuple[dict[str, Any], ...] = ()
+    tool_validation_schemas: tuple[dict[str, Any], ...] = ()
     tool_choice: object | None = None
     parallel_tool_calls: bool = True
 
@@ -75,6 +76,47 @@ def test_local_forced_tool_uses_prompt_and_auto_transport_then_recovers_none() -
         assert constrained.parallel_tool_calls is False
     assert "host requires" in seen[0].messages[-1]["content"].casefold()
     assert "previous assistant turn" in seen[1].messages[-1]["content"].casefold()
+
+
+def test_local_forced_tool_returns_validation_only_stale_call_without_nested_retry() -> None:
+    seen: list[_Request] = []
+
+    class LocalAdapter:
+        def generate_turn(self, request: _Request):
+            seen.append(request)
+            return SimpleNamespace(
+                tool_calls=(SimpleNamespace(name="java_workspace_symbols"),),
+                content="",
+            )
+
+    class RemoteAdapter:
+        def generate_turn(self, request: _Request):
+            return SimpleNamespace(tool_calls=(), content="unused")
+
+    install(
+        openai_compatible_module=SimpleNamespace(OpenAICompatibleAdapter=RemoteAdapter),
+        llama_cpp_module=SimpleNamespace(LlamaCppAdapter=LocalAdapter),
+    )
+
+    current = _schema("search_project_rag")
+    stale = _schema("java_workspace_symbols")
+    request = _Request(
+        messages=({"role": "user", "content": "repair"},),
+        tools=(current,),
+        tool_validation_schemas=(current, stale),
+        tool_choice={
+            "type": "function",
+            "function": {"name": "search_project_rag"},
+        },
+    )
+
+    turn = LocalAdapter().generate_turn(request)
+
+    assert [call.name for call in turn.tool_calls] == ["java_workspace_symbols"]
+    assert len(seen) == 1
+    assert seen[0].tools == (current,)
+    assert seen[0].tool_choice == "auto"
+    assert "previous assistant turn" not in seen[0].messages[-1]["content"].casefold()
 
 
 def test_writable_progress_stops_forcing_after_successful_source_mutation() -> None:
