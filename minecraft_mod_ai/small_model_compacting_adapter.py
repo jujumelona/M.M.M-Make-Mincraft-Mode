@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from functools import wraps
 from typing import Any
@@ -9,6 +10,108 @@ from .small_model_context_compaction import compact_messages
 
 
 _MARKER = "_mmm_lossless_context_compaction"
+_IMPLEMENTATION_SOURCE_SEED_BYTES = 12 * 1024
+_REDUNDANT_IMPLEMENTATION_FIELDS = frozenset(
+    {
+        "project_manifest",
+        "source_observation_receipt",
+        "research_context",
+    }
+)
+
+
+def _json_bytes(value: Any) -> int:
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def _bounded_exact_source_seed(value: Any, *, byte_budget: int) -> Any:
+    """Bound the first exact-source seed while preserving host receipt metadata.
+
+    Supplemental workspace/RAG tools remain available after the first decode.  The
+    seed therefore needs representative exact source, not an entire project page on
+    every subsequent tool turn.  Records are removed whole so byte ranges and hashes
+    are never rewritten or turned into approximate evidence.
+    """
+
+    if not isinstance(value, dict) or _json_bytes(value) <= byte_budget:
+        return value
+    bounded = json.loads(json.dumps(value, ensure_ascii=False))
+    original_records = sum(
+        len(bounded.get(key, ()))
+        for key in ("global_anchors", "page_observations")
+        if isinstance(bounded.get(key), list)
+    )
+    for key in ("page_observations", "global_anchors"):
+        records = bounded.get(key)
+        if not isinstance(records, list):
+            continue
+        while records and _json_bytes(bounded) > byte_budget:
+            records.pop()
+    bounded["global_anchor_count"] = len(bounded.get("global_anchors", ()))
+    retained_records = sum(
+        len(bounded.get(key, ()))
+        for key in ("global_anchors", "page_observations")
+        if isinstance(bounded.get(key), list)
+    )
+    bounded["model_seed_compaction"] = {
+        "bounded_bytes": int(byte_budget),
+        "omitted_record_count": max(0, original_records - retained_records),
+        "supplemental_retrieval_available": True,
+    }
+    return bounded
+
+
+def _compact_implementation_seed(messages: Any) -> tuple[dict[str, Any], ...]:
+    """Canonicalize duplicated host evidence in one ``implement_module`` request.
+
+    ``host_grounding`` already carries the authoritative manifest/source/research
+    receipts, and the research router injects its own bounded live research bundle.
+    Re-sending the raw receipts and research payload beside those owners made every
+    tool round re-prefill tens of kilobytes of duplicate context.
+    """
+
+    compacted: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = dict(raw_message)
+        content = message.get("content")
+        if (
+            str(message.get("role", "")).casefold() != "user"
+            or not isinstance(content, str)
+            or not content.lstrip().startswith("{")
+        ):
+            compacted.append(message)
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            compacted.append(message)
+            continue
+        if not isinstance(payload, dict) or payload.get("phase") != "implement_module":
+            compacted.append(message)
+            continue
+
+        for key in _REDUNDANT_IMPLEMENTATION_FIELDS:
+            payload.pop(key, None)
+        if "initial_exact_source_context" in payload:
+            payload["initial_exact_source_context"] = _bounded_exact_source_seed(
+                payload["initial_exact_source_context"],
+                byte_budget=_IMPLEMENTATION_SOURCE_SEED_BYTES,
+            )
+        message["content"] = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        compacted.append(message)
+    return tuple(compacted)
 
 
 class CompactingAdapter:
@@ -19,10 +122,11 @@ class CompactingAdapter:
         return getattr(self.inner, name)
 
     def generate_turn(self, request: Any) -> Any:
-        # Exchange compaction removes older history when possible. Context fitting then
-        # handles the first assistant/tool exchange too, where there is no older round
-        # for the historical compactor to replace.
-        messages = compact_messages(request.messages)
+        # Canonicalize the immutable implementation seed before historical exchange
+        # compaction.  This shrinks the prefix reused by every tool round instead of
+        # waiting until the context window is nearly exhausted.
+        messages = _compact_implementation_seed(request.messages)
+        messages = compact_messages(messages)
         messages = fit_messages_to_context(
             messages,
             config=getattr(self.inner, "config", None),
@@ -40,9 +144,9 @@ class CompactingAdapter:
 def _is_live_compaction_wrapper(value: Any) -> bool:
     """Identify the actual wrapper implementation, not inherited marker metadata.
 
-    ``functools.wraps`` copies a wrapped callable's ``__dict__`` by default. A later
-    wrapper can therefore inherit ``_mmm_lossless_context_compaction=True`` even when
-    it bypasses the compaction callable entirely. The code object cannot be copied by
+    ``functools.wraps`` copies the immediate wrapper metadata, but late composition can
+    place another wrapper above a callable whose ``_mmm_*`` marker is used as an
+    executable contract by independent validators. The code object cannot be copied by
     ``wraps`` and is the authoritative owner check for this runtime boundary.
     """
 
@@ -87,4 +191,10 @@ def install(model_router_module: Any) -> None:
     model_router_module.ModelRouter._generate_with_tools = generate_with_compaction
 
 
-__all__ = ["CompactingAdapter", "_is_live_compaction_wrapper", "install"]
+__all__ = [
+    "CompactingAdapter",
+    "_bounded_exact_source_seed",
+    "_compact_implementation_seed",
+    "_is_live_compaction_wrapper",
+    "install",
+]
