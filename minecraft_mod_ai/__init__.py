@@ -18,7 +18,6 @@ from .complete_orchestrator import (
     CompletePipelineResult,
     CompleteProductionOrchestrator,
 )
-from .completion_boundary_work_recovery import install as _install_completion_boundary_work_recovery
 from .complete_orchestrator_support import CompleteProductionError
 from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import AssetRequest, CompleteProposal, ProductionModule
@@ -66,8 +65,6 @@ from .technology_radar import (
     technology_research_routes,
 )
 from .training import TrainingTraceStore
-
-_install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
 
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
