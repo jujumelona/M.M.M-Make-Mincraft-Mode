@@ -15,6 +15,51 @@ _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
 )
 
 
+def _model_router_owner(router: Any) -> Any | None:
+    """Resolve the concrete ModelRouter through research/search proxy layers."""
+
+    current = router
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if (
+            hasattr(current, "_generation_lock")
+            and hasattr(current, "_agent_workspace_root")
+            and hasattr(current, "_agent_tool_runtime")
+            and hasattr(current, "_agent_require_fresh_evidence")
+        ):
+            return current
+        current = getattr(current, "_router", None)
+    return None
+
+
+def _capture_agent_binding(router: Any) -> tuple[Any, Any, Any, bool] | None:
+    """Capture mutable agent binding state before one custom-coder transaction."""
+
+    owner = _model_router_owner(router)
+    if owner is None:
+        return None
+    with owner._generation_lock:
+        return (
+            owner,
+            owner._agent_workspace_root,
+            owner._agent_tool_runtime,
+            bool(owner._agent_require_fresh_evidence),
+        )
+
+
+def _restore_agent_binding(snapshot: tuple[Any, Any, Any, bool] | None) -> None:
+    """Prevent custom-coder workspace/evidence policy from leaking to later calls."""
+
+    if snapshot is None:
+        return
+    owner, workspace_root, runtime, require_fresh_evidence = snapshot
+    with owner._generation_lock:
+        owner._agent_workspace_root = workspace_root
+        owner._agent_tool_runtime = runtime
+        owner._agent_require_fresh_evidence = require_fresh_evidence
+
+
 def install(custom_module_generator_module: Any) -> None:
     """Bind the custom coder to one executable host-selected platform target."""
 
@@ -74,6 +119,7 @@ def _install_custom_generator_scope(module_api: Any) -> None:
                 "Custom coder mappings disagree with the approved platform target: "
                 f"{mapping_id!r} != {adapter.yarn_mappings!r}."
             )
+        agent_binding = _capture_agent_binding(self.router)
         token = _ACTIVE_CODER_TARGET.set(adapter)
         try:
             return original(
@@ -87,8 +133,10 @@ def _install_custom_generator_scope(module_api: Any) -> None:
             )
         finally:
             _ACTIVE_CODER_TARGET.reset(token)
+            _restore_agent_binding(agent_binding)
 
     generate._mmm_dynamic_coder_target = True
+    generate._mmm_scoped_agent_workspace = True
     cls.generate = generate
 
 
@@ -209,4 +257,9 @@ def _bind_target(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]:
     return result
 
 
-__all__ = ["install"]
+__all__ = [
+    "_capture_agent_binding",
+    "_model_router_owner",
+    "_restore_agent_binding",
+    "install",
+]
