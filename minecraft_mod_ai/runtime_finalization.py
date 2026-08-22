@@ -51,6 +51,8 @@ def finalize_runtime() -> None:
         )
         from .causal_stale_tool_recovery_contract import install as install_stale_tool_recovery
         from .coder_tool_route_integrity_contract import install as install_route_integrity
+        from .complete_orchestrator import CompleteProductionOrchestrator
+        from .completion_boundary_work_recovery import install as install_completion_boundary_work_recovery
         from .context_budget_preflight import run_context_budget_preflight
         from .external_mcp_binding_concurrency_contract import (
             install as install_external_mcp_binding_concurrency,
@@ -161,6 +163,9 @@ def finalize_runtime() -> None:
         install_stale_tool_recovery(causal_tool_frontier_contract)
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
+        # Durable generation nodes own output-exhaustion recovery. Retry that exact
+        # persisted node once instead of issuing a hidden second model completion.
+        install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
         # Exact host-required calls have one policy owner across transports. Remote
         # endpoints use native required-tool forcing; local llama.cpp keeps PEG parsing
         # disabled and enforces the same semantic requirement with one visible schema,
