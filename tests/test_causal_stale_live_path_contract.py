@@ -6,6 +6,7 @@ from minecraft_mod_ai import causal_frontier_adapter
 from minecraft_mod_ai import causal_stale_tool_recovery_contract as recovery
 from minecraft_mod_ai import causal_tool_frontier_contract
 from minecraft_mod_ai import coder_tool_route_integrity_contract
+from minecraft_mod_ai.model_adapters.base import GenerationRequest
 
 
 def _schema(name: str) -> dict:
@@ -83,7 +84,7 @@ def test_stale_recovery_forces_one_current_tool_and_rotates(monkeypatch) -> None
     )
     recovery._install_generate_turn(FakeAdapter)
     adapter = FakeAdapter()
-    request = SimpleNamespace(
+    request = GenerationRequest(
         messages=({"role": "user", "content": "repair"},),
         tools=adapter.authorized_surface,
         tool_validation_schemas=adapter.authorized_surface,
@@ -95,20 +96,14 @@ def test_stale_recovery_forces_one_current_tool_and_rotates(monkeypatch) -> None
 
     assert result.tool_calls[0].name == "search_code_rag"
     assert len(requests) == 3
-    forced_names = [
-        row.tool_choice["function"]["name"]
-        for row in requests
-    ]
+    forced_names = [row.tool_choice["function"]["name"] for row in requests]
     assert forced_names == [
         "search_project_rag",
         "java_workspace_symbols",
         "search_code_rag",
     ]
     assert all(len(row.tools) == 1 for row in requests)
-    assert [
-        row.tools[0]["function"]["name"]
-        for row in requests
-    ] == forced_names
+    assert [row.tools[0]["function"]["name"] for row in requests] == forced_names
     assert adapter.published == [
         ("search_project_rag",),
         ("java_workspace_symbols",),
