@@ -10,7 +10,10 @@ def test_external_mcp_registry_is_version_locked() -> None:
     assert registry["mmm-frontdoor"]["env"]["MMM_MCP_STAGE"] == "frontdoor"
     generation = registry["mmm-generation"]
     assert generation["command"] == [
-        "python", "-m", "minecraft_mod_ai.mod_generation_mcp_server"
+        "python",
+        "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
+        "minecraft_mod_ai.mod_generation_mcp_server",
     ]
     assert "env" not in generation
     minecraft_dev = registry["minecraft-dev"]
