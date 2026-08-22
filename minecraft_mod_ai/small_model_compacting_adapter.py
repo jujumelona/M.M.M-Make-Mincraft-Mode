@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 from functools import wraps
@@ -31,6 +32,27 @@ def _json_bytes(value: Any) -> int:
     )
 
 
+def _trim_record_tail(
+    value: dict[str, Any],
+    key: str,
+    *,
+    current_bytes: int,
+    byte_budget: int,
+) -> int:
+    """Trim one record list without repeatedly serializing the full payload."""
+
+    records = value.get(key)
+    if not isinstance(records, list):
+        return current_bytes
+    while records and current_bytes > byte_budget:
+        removed = records.pop()
+        current_bytes -= _json_bytes(removed)
+        if records:
+            # Canonical JSON has one comma between adjacent list elements.
+            current_bytes -= 1
+    return current_bytes
+
+
 def _bounded_exact_source_seed(value: Any, *, byte_budget: int) -> Any:
     """Bound the first exact-source seed while preserving host receipt metadata.
 
@@ -40,20 +62,30 @@ def _bounded_exact_source_seed(value: Any, *, byte_budget: int) -> Any:
     are never rewritten or turned into approximate evidence.
     """
 
-    if not isinstance(value, dict) or _json_bytes(value) <= byte_budget:
+    if not isinstance(value, dict):
         return value
-    bounded = json.loads(json.dumps(value, ensure_ascii=False))
+    current_bytes = _json_bytes(value)
+    if current_bytes <= byte_budget:
+        return value
+
+    # The seed came from json.loads in the live path, so deepcopy preserves the same
+    # JSON-compatible structure without paying for another encode/decode round trip.
+    bounded = copy.deepcopy(value)
     original_records = sum(
         len(bounded.get(key, ()))
         for key in ("global_anchors", "page_observations")
         if isinstance(bounded.get(key), list)
     )
     for key in ("page_observations", "global_anchors"):
-        records = bounded.get(key)
-        if not isinstance(records, list):
-            continue
-        while records and _json_bytes(bounded) > byte_budget:
-            records.pop()
+        current_bytes = _trim_record_tail(
+            bounded,
+            key,
+            current_bytes=current_bytes,
+            byte_budget=byte_budget,
+        )
+        if current_bytes <= byte_budget:
+            break
+
     bounded["global_anchor_count"] = len(bounded.get("global_anchors", ()))
     retained_records = sum(
         len(bounded.get(key, ()))

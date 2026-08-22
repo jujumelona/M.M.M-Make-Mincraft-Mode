@@ -35,6 +35,10 @@ def _canonical_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _canonical_size(value: Any) -> int:
+    return len(_canonical_bytes(value))
+
+
 def _default_context_bytes() -> int:
     raw = os.environ.get("MMM_SMALL_AGENT_CONTEXT_BYTES", "").strip()
     if not raw:
@@ -96,13 +100,18 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
         max_context - reserved_output_tokens - _CONTEXT_TOKEN_GUARD,
     )
     context_bytes = available_input_tokens * _BYTES_PER_TOKEN_BUDGET
-    tool_bytes = len(_canonical_bytes(tuple(tools))) if tools else 0
+    tool_bytes = _canonical_size(tuple(tools)) if tools else 0
     derived = context_bytes - tool_bytes
     return max(_MIN_CONTEXT_BYTES, min(default, derived))
 
 
-def _tool_preview(raw: str, *, allowance: int) -> str:
-    encoded = raw.encode("utf-8")
+def _tool_preview(
+    raw: str,
+    *,
+    allowance: int,
+    encoded: bytes | None = None,
+) -> str:
+    encoded = raw.encode("utf-8") if encoded is None else encoded
     if len(encoded) <= allowance:
         return raw
     allowance = max(_MIN_TOOL_PREVIEW_BYTES, allowance)
@@ -120,6 +129,7 @@ def _summary_payload(
     preview_bytes: int,
 ) -> str:
     raw = str(message.get("content", ""))
+    raw_bytes = raw.encode("utf-8")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -129,12 +139,12 @@ def _summary_payload(
         "_mmm_context_compaction": {
             "schema_version": "mmm/tool-observation-context-v1",
             "raw_observation": dict(archive),
-            "original_bytes": len(raw.encode("utf-8")),
-            "sha256": "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "original_bytes": len(raw_bytes),
+            "sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
             "protocol_role_preserved": True,
         },
         "tool": str(message.get("name", "")),
-        "preview": _tool_preview(raw, allowance=preview_bytes),
+        "preview": _tool_preview(raw, allowance=preview_bytes, encoded=raw_bytes),
     }
     if isinstance(parsed, Mapping):
         for key in ("ok", "tool", "error"):
@@ -174,7 +184,8 @@ def _compact_tool_messages(
     preview_bytes: int,
 ) -> tuple[Mapping[str, Any], ...]:
     values: list[Mapping[str, Any]] = [dict(message) for message in messages]
-    if len(_canonical_bytes(values)) <= budget:
+    current_size = _canonical_size(values)
+    if current_size <= budget:
         return tuple(values)
 
     from .small_model_context_compaction import _archive_transcript
@@ -203,8 +214,12 @@ def _compact_tool_messages(
             archive=archive,
             preview_bytes=preview_bytes,
         )
+        # The outer message list shape is unchanged, so its canonical size changes by
+        # exactly the serialized size delta of the one replaced message. Tracking that
+        # delta avoids re-serializing the entire history after every tool compaction.
+        current_size += _canonical_size(replacement) - _canonical_size(original)
         values[index] = replacement
-        if len(_canonical_bytes(values)) <= budget:
+        if current_size <= budget:
             break
     return tuple(values)
 
@@ -215,7 +230,7 @@ def _compact_old_exchanges(
     budget: int,
 ) -> tuple[Mapping[str, Any], ...]:
     original = tuple(messages)
-    if len(_canonical_bytes(original)) <= budget:
+    if _canonical_size(original) <= budget:
         return original
     assistants = [
         index
@@ -259,7 +274,7 @@ def _compact_old_exchanges(
             context,
             *original[start:],
         )
-        if len(_canonical_bytes(compacted)) > budget:
+        if _canonical_size(compacted) > budget:
             continue
         persisted = _archive_transcript(dropped)
         if not bool(persisted.get("available")):
@@ -294,17 +309,17 @@ def fit_messages_to_context(
 
     budget = request_message_budget(config, tools)
     values = tuple(messages)
-    if len(_canonical_bytes(values)) <= budget:
+    if _canonical_size(values) <= budget:
         return values
 
     # First pass keeps enough evidence text for code decisions while removing the
     # pathological 48 KiB-per-tool accumulation seen after parallel RAG/LSP reads.
     values = _compact_tool_messages(values, budget=budget, preview_bytes=8 * 1024)
-    if len(_canonical_bytes(values)) <= budget:
+    if _canonical_size(values) <= budget:
         return values
 
     values = _compact_old_exchanges(values, budget=budget)
-    if len(_canonical_bytes(values)) <= budget:
+    if _canonical_size(values) <= budget:
         return values
 
     # Emergency second pass still keeps an exact archive pointer and a useful head/
@@ -321,7 +336,7 @@ def emergency_fit_messages(
 
     budget = max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, int(budget_bytes)))
     values = _compact_tool_messages(messages, budget=budget, preview_bytes=4 * 1024)
-    if len(_canonical_bytes(values)) <= budget:
+    if _canonical_size(values) <= budget:
         return values
     return _compact_old_exchanges(values, budget=budget)
 

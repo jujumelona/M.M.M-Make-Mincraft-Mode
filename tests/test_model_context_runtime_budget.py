@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import minecraft_mod_ai.model_context_budget as context_budget
+from minecraft_mod_ai import small_model_context_compaction
 from minecraft_mod_ai.llama_tool_output_budget import tool_output_budget
 from minecraft_mod_ai.model_context_budget import (
     _BYTES_PER_TOKEN_BUDGET,
@@ -90,3 +92,38 @@ def test_runtime_context_override_is_shared_with_prompt_fitting(monkeypatch) -> 
         runtime_tokens - _CONTEXT_TOKEN_GUARD
     ) * _BYTES_PER_TOKEN_BUDGET
     assert tool_budget == _expected_tool_budget(config, tool)
+
+
+def test_tool_compaction_avoids_repeated_full_history_serialization(monkeypatch) -> None:
+    messages = tuple(
+        {
+            "role": "tool",
+            "name": f"tool-{index}",
+            "content": '{"result":{"payload":"' + ("x" * 12000) + '"}}',
+        }
+        for index in range(6)
+    )
+    monkeypatch.setattr(
+        small_model_context_compaction,
+        "_archive_transcript",
+        lambda _messages: {"available": True, "path": "memory://test"},
+    )
+    full_history_scans = 0
+    original_canonical_bytes = context_budget._canonical_bytes
+
+    def counting_canonical_bytes(value):
+        nonlocal full_history_scans
+        if isinstance(value, list) and len(value) == len(messages):
+            full_history_scans += 1
+        return original_canonical_bytes(value)
+
+    monkeypatch.setattr(context_budget, "_canonical_bytes", counting_canonical_bytes)
+
+    compacted = context_budget._compact_tool_messages(
+        messages,
+        budget=40 * 1024,
+        preview_bytes=2048,
+    )
+
+    assert compacted != messages
+    assert full_history_scans == 1

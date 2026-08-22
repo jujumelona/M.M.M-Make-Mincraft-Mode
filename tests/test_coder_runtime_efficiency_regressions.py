@@ -4,6 +4,7 @@ import json
 import threading
 from types import SimpleNamespace
 
+import minecraft_mod_ai.small_model_compacting_adapter as compaction_adapter
 from minecraft_mod_ai.llama_tool_output_budget import _tool_max_tokens, tool_output_budget
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.platform_custom_coder_contract import (
@@ -115,3 +116,42 @@ def test_implementation_seed_removes_duplicate_receipts_and_bounds_exact_source(
     assert _json_bytes(source) <= _IMPLEMENTATION_SOURCE_SEED_BYTES + 512
     assert source["model_seed_compaction"]["omitted_record_count"] > 0
     assert source["model_seed_compaction"]["supplemental_retrieval_available"] is True
+
+
+def test_exact_source_seed_avoids_repeated_full_payload_serialization(monkeypatch) -> None:
+    records = [
+        {
+            "observation_id": f"obs-{index}",
+            "path": f"src/main/java/example/C{index}.java",
+            "text": "x" * 2048,
+        }
+        for index in range(20)
+    ]
+    source = {
+        "schema_version": "mmm/source-observation-context-v1",
+        "global_anchor_count": 10,
+        "global_anchors": records[:10],
+        "page_observations": records[10:],
+    }
+    full_payload_scans = 0
+    original_json_bytes = compaction_adapter._json_bytes
+
+    def counting_json_bytes(value):
+        nonlocal full_payload_scans
+        if (
+            isinstance(value, dict)
+            and "global_anchors" in value
+            and "page_observations" in value
+        ):
+            full_payload_scans += 1
+        return original_json_bytes(value)
+
+    monkeypatch.setattr(compaction_adapter, "_json_bytes", counting_json_bytes)
+
+    bounded = compaction_adapter._bounded_exact_source_seed(
+        source,
+        byte_budget=8 * 1024,
+    )
+
+    assert full_payload_scans == 1
+    assert bounded["model_seed_compaction"]["omitted_record_count"] > 0
