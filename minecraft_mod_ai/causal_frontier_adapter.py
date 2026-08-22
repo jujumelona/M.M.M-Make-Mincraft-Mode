@@ -127,6 +127,58 @@ def _forced_tool_name(tool_choice: Any) -> str:
     return str(function.get("name", "")).strip()
 
 
+def _latest_tool_action_signature(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, str], ...]:
+    """Return the latest model tool intent without call-id or result-payload noise."""
+
+    for message in reversed(messages):
+        if str(message.get("role", "")).strip().casefold() != "assistant":
+            continue
+        calls = message.get("tool_calls")
+        if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
+            continue
+        normalized: list[tuple[str, str]] = []
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function")
+            if isinstance(function, Mapping):
+                name = str(function.get("name", "")).strip()
+                arguments = function.get("arguments")
+            else:
+                name = str(call.get("name", "")).strip()
+                arguments = call.get("arguments")
+            if not name:
+                continue
+            if isinstance(arguments, str):
+                raw = arguments.strip()
+                try:
+                    parsed = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    canonical = raw
+                else:
+                    canonical = json.dumps(
+                        parsed,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                        separators=(",", ":"),
+                    )
+            else:
+                canonical = json.dumps(
+                    arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                    separators=(",", ":"),
+                )
+            normalized.append((name, canonical))
+        if normalized:
+            return tuple(normalized)
+    return ()
+
+
 def _structured_intent(payload: Mapping[str, Any]) -> str:
     """Extract routing intent without hauling evidence/context blobs into the query."""
 
@@ -286,7 +338,10 @@ class CausalFrontierAdapter:
         self.preference = dict(preference or {})
         self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
         self._last_semantic_frontier: tuple[
-            tuple[str, ...], tuple[str, ...], tuple[str, ...]
+            tuple[str, ...],
+            tuple[str, ...],
+            tuple[str, ...],
+            tuple[tuple[str, str], ...],
         ] | None = None
         self._semantic_stall_count = 0
         self._state_ledger = CausalStateLedger()
@@ -310,13 +365,14 @@ class CausalFrontierAdapter:
         state: frozenset[str],
         goals: Sequence[str],
         names: Sequence[str],
+        action_signature: Sequence[tuple[str, str]] = (),
     ) -> None:
-        """Stop retrieval churn when host causal facts and frontier no longer change.
+        """Stop retrieval churn when host causal facts, frontier, and action repeat.
 
         Source-mutation retry ownership remains in the writable coder contract. This
-        guard only covers non-mutating causal frontiers whose repeated observations do
-        not add any reviewed host fact, so payload/hash noise cannot consume the hard
-        12-round budget.
+        guard only covers non-mutating causal frontiers whose model-issued tool intent
+        also repeats, so novel retrieval queries can gather more evidence while
+        call-id/result hash noise cannot consume the hard 12-round budget.
         """
 
         normalized_names = tuple(str(name) for name in names)
@@ -331,6 +387,7 @@ class CausalFrontierAdapter:
             tuple(sorted(state)),
             tuple(str(goal) for goal in goals),
             normalized_names,
+            tuple((str(name), str(arguments)) for name, arguments in action_signature),
         )
         if fingerprint != self._last_semantic_frontier:
             self._last_semantic_frontier = fingerprint
@@ -406,7 +463,12 @@ class CausalFrontierAdapter:
             tool_choice = "auto" if selected else None
             parallel_tool_calls = True if selected else False
         selected_names = tuple(_name(schema) for schema in selected)
-        self._guard_semantic_progress(state=state, goals=goals, names=selected_names)
+        self._guard_semantic_progress(
+            state=state,
+            goals=goals,
+            names=selected_names,
+            action_signature=_latest_tool_action_signature(request.messages),
+        )
         self._publish_frontier(selected_names)
 
         # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
