@@ -29,9 +29,9 @@ from .causal_frontier_adapter import (
     current_frontier_names,
 )
 
-_MARKER = "_mmm_stale_tool_recovery_v2"
+_MARKER = "_mmm_stale_tool_recovery_v3"
 _MAX_RESYNC_ATTEMPTS = 1
-_RUNTIME_CONTRACT_EPOCH = "causal-resync-v3"
+_RUNTIME_CONTRACT_EPOCH = "causal-resync-v4"
 _PROTOCOL_PREFIXES = (
     "Qwen ",
     "unparsed Qwen ",
@@ -90,14 +90,7 @@ def _tool_name_from_protocol_error(message: str) -> str:
 
 
 def _model_tool_protocol_failure(exc: BaseException) -> tuple[str, str] | None:
-    """Classify model-produced Qwen/tool-choice failures, never backend failures.
-
-    ``LlamaCppAdapter`` historically wrapped every host parser ``RuntimeError`` in a
-    ``ModelBackendError``. Until that transport boundary can be narrowed without
-    changing backend-failure semantics, inspect only its explicit ``cause`` and only
-    the finite parser/tool-choice prefixes emitted by the Qwen host parser. HTTP,
-    timeout, server payload, hardware and process failures do not match this contract.
-    """
+    """Classify model-produced Qwen/tool-choice failures, never backend failures."""
 
     from .model_adapters import ModelBackendError
 
@@ -116,17 +109,27 @@ def _candidate_surfaces(
     self: Any,
     request: Any,
 ) -> tuple[tuple[str, ...], tuple[Mapping[str, Any], ...], dict[str, Mapping[str, Any]]]:
+    """Return the current turn frontier intersected with this adapter's authority.
+
+    ``current_frontier_names`` is request-local compatibility state and can be changed
+    by nested model/retrieval calls. It is therefore never authority by itself. The
+    frozen adapter surface remains the security owner and the live frontier is accepted
+    only after the current causal turn has published it.
+    """
+
     candidates: Sequence[Mapping[str, Any]] = (
         self.authorized_surface or tuple(request.tools)
     )
     by_name = {_name(schema): schema for schema in candidates if _name(schema)}
-    visible = tuple(current_frontier_names() or ())
-    if not visible:
+    frontier = current_frontier_names()
+    if frontier is None:
         visible = tuple(
             name
             for schema in tuple(request.tools)
             if (name := _name(schema)) and name in by_name
         )
+    else:
+        visible = tuple(name for name in frontier if name in by_name)
     return visible, tuple(candidates), by_name
 
 
@@ -137,13 +140,7 @@ def _select_resync_tool(
     authorized: frozenset[str],
     failed_tool: str,
 ) -> str:
-    """Select one deterministic current action or fail closed.
-
-    A malformed current tool retries that same tool. A known stale tool retries the
-    current host-selected action. A tool that was never authorized is never converted
-    into a legal request. Nameless malformed markup is recoverable only when the host
-    had already selected one exact current action.
-    """
+    """Select one deterministic current action or fail closed."""
 
     from .model_adapters import ModelConfigurationError
 
@@ -197,7 +194,7 @@ def _resync_once(
     forced_tools = (forced_schema,)
     detail = " ".join(protocol_detail.split())[:240]
     feedback_text = (
-        "The previous model tool action was discarded without execution. "
+        "The previous stale or malformed model tool action was discarded without execution. "
         f"Rejected: {rejected}. Call exactly {forced_name!r} once with schema-valid "
         "arguments; do not emit any other tool name."
     )
@@ -267,15 +264,14 @@ def _install_generate_turn(base: type[Any]) -> None:
     def generate_turn(self: Any, request: Any) -> Any:
         from .model_adapters import ModelConfigurationError
 
-        visible, candidates, by_name = _candidate_surfaces(self, request)
-        authorized = frozenset(by_name)
-        visible_set = frozenset(visible)
         try:
             turn = current(self, request)
         except BaseException as exc:
             protocol_failure = _model_tool_protocol_failure(exc)
             if protocol_failure is None:
                 raise
+            visible, candidates, by_name = _candidate_surfaces(self, request)
+            authorized = frozenset(by_name)
             message, failed_tool = protocol_failure
             forced_name = _select_resync_tool(
                 request,
@@ -294,6 +290,11 @@ def _install_generate_turn(base: type[Any]) -> None:
                 protocol_detail=message,
             )
 
+        # The causal adapter publishes the exact frontier while executing ``current``.
+        # Read it afterwards, never before, so a nested/prior turn cannot steer recovery.
+        visible, candidates, by_name = _candidate_surfaces(self, request)
+        authorized = frozenset(by_name)
+        visible_set = frozenset(visible)
         stale = _stale_names(
             turn,
             authorized_names=authorized,
