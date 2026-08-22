@@ -51,6 +51,7 @@ def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path)
     source = project / "src/main/java/example/Example.java"
     old = "final class Example {\n    int oldValue;\n}\n"
     source.write_text(old, encoding="utf-8")
+    original_bytes = source.read_bytes()
 
     payload = _materialize_model_source_edit(
         agent_tool_runtime,
@@ -67,7 +68,9 @@ def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path)
     assert len(payload["operations"]) == 1
     operation = payload["operations"][0]
     assert operation["operation"] == "edit"
-    assert operation["expected_sha256"] == "sha256:" + hashlib.sha256(old.encode()).hexdigest()
+    assert operation["expected_sha256"] == (
+        "sha256:" + hashlib.sha256(original_bytes).hexdigest()
+    )
     assert operation["replacements"] == [
         {"old": "oldValue", "new": "newValue", "count": 1}
     ]
@@ -187,6 +190,7 @@ def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> N
         },
     )
     TransactionalSourcePatcher(project).apply(first["operations"])
+    newline = "\r\n" if b"\r\n" in source.read_bytes() else "\n"
 
     second = _materialize_model_source_edit(
         agent_tool_runtime,
@@ -194,8 +198,8 @@ def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> N
         {
             "operation": "insert_before",
             "path": "src/main/java/example/Example.java",
-            "anchor": "}\n",
-            "content": "    void run() {}\n",
+            "anchor": "}" + newline,
+            "content": "    void run() {}" + newline,
         },
     )
     TransactionalSourcePatcher(project).apply(second["operations"])
@@ -223,6 +227,36 @@ def test_partial_source_edit_rejects_ambiguous_anchor_without_mutation(tmp_path)
                 "content": "!",
             },
         )
+    assert source.read_text(encoding="utf-8") == before
+
+
+def test_scoped_materialization_failure_reports_unchanged_workspace(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    before = "token token\n"
+    source.write_text(before, encoding="utf-8")
+    runtime = agent_tool_runtime.AgentToolRuntime(
+        profile="test",
+        workspace_root=workspace,
+    )
+
+    with pytest.raises(
+        agent_tool_runtime.AgentToolRuntimeError,
+        match=r"expected 1 matches, found 2.*\[workspace_impact=unchanged\]",
+    ):
+        runtime.call_scoped(
+            "generation",
+            "apply_source_edit",
+            {
+                "operation": "replace_exact",
+                "path": "src/main/java/example/Example.java",
+                "old": "token",
+                "new": "updated",
+            },
+            external_server_ids=(),
+        )
+
     assert source.read_text(encoding="utf-8") == before
 
 

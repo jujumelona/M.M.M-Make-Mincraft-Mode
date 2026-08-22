@@ -9,7 +9,7 @@ import time
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 
 _TELEMETRY_LOCK = threading.Lock()
@@ -60,14 +60,78 @@ def _bootstrap_native_server() -> str | None:
     return _existing_built_server()
 
 
+def _named_tool_choice_name(request: Any) -> str:
+    choice = getattr(request, "tool_choice", None)
+    if not isinstance(choice, Mapping):
+        return ""
+    function = choice.get("function")
+    if not isinstance(function, Mapping):
+        raise ValueError("named tool_choice requires function metadata")
+    name = str(function.get("name", "")).strip()
+    if not name:
+        raise ValueError("named tool_choice requires a function name")
+    return name
+
+
+def _required_tool_name(request: Any) -> str:
+    named = _named_tool_choice_name(request)
+    if named:
+        return named
+
+    # Local named forcing narrows the visible schema first and retains the semantic
+    # name in host-only metadata while the model-facing request remains parseable as
+    # auto. With pure-content server parsing, required now accurately renders that
+    # one-schema requirement into the Jinja prompt without delegating validation.
+    try:
+        from .forced_tool_execution_contract import host_forced_tool_name
+
+        return host_forced_tool_name(request)
+    except ImportError:
+        return ""
+
+
+def _server_tool_choice(request: Any) -> str:
+    """Map host semantics onto llama.cpp's string-only Jinja tool contract."""
+
+    if _required_tool_name(request):
+        return "required"
+
+    choice = getattr(request, "tool_choice", None)
+    normalized = str(choice or "auto").strip().casefold()
+    if normalized not in {"auto", "required", "none"}:
+        raise ValueError(f"unsupported llama-server tool_choice: {choice!r}")
+    return normalized
+
+
+def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep forced one-tool turns deterministic and non-thinking on the wire."""
+
+    if payload.get("tool_choice") != "required":
+        return payload
+    payload["temperature"] = 0.0
+    for key in (
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "repeat_penalty",
+        "repetition_penalty",
+    ):
+        payload.pop(key, None)
+    payload["reasoning_effort"] = "none"
+    payload["chat_template_kwargs"] = {"enable_thinking": False}
+    return payload
+
+
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the authoritative OpenAI-compatible llama-server chat payload.
 
-    Tool-capable turns keep the model's native Jinja ``tools`` prompt while forcing
-    transport ``tool_choice=none`` so llama.cpp never activates PEG-native tool
-    parsing. The request's semantic tool-choice contract remains host-owned and is
-    validated after Qwen markup parsing. JSON syntax/schema validation for ordinary
-    structured output is router-owned, so no sampler grammar is sent.
+    The managed server runs with ``--skip-chat-parsing``. Tool-capable turns therefore
+    keep the model's native Jinja ``tools`` prompt and truthful ``auto``/``required``
+    choice while returning raw Qwen markup in ``message.content``. The semantic tool
+    contract remains host-owned and is validated after markup parsing. JSON
+    syntax/schema validation for ordinary structured output is router-owned, so no
+    sampler grammar is sent.
     """
 
     payload: dict[str, Any] = {
@@ -78,8 +142,22 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     tools = getattr(request, "tools", ()) or ()
     if tools:
-        payload["tools"] = [dict(tool) for tool in tools]
-        payload["tool_choice"] = "none"
+        required_name = _required_tool_name(request)
+        visible_tools = tuple(tools)
+        if required_name:
+            visible_tools = tuple(
+                tool
+                for tool in tools
+                if isinstance(tool, Mapping)
+                and isinstance(tool.get("function"), Mapping)
+                and str(tool["function"].get("name", "")).strip() == required_name
+            )
+            if len(visible_tools) != 1:
+                raise ValueError(
+                    f"required tool {required_name!r} must match exactly one schema"
+                )
+        payload["tools"] = [dict(tool) for tool in visible_tools]
+        payload["tool_choice"] = _server_tool_choice(request)
         payload["parallel_tool_calls"] = bool(
             getattr(request, "parallel_tool_calls", False)
         )
@@ -98,7 +176,7 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         # Final JSON syntax and schema validation belong to ModelRouter.
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
-    return payload
+    return _enforce_required_tool_sampling(payload)
 
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:

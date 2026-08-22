@@ -681,7 +681,47 @@ def _mcp_error_detail(normalized: Mapping[str, Any]) -> str:
         default=str,
         separators=(",", ":"),
     )
-    return _redact_text(detail)[:_MAX_MCP_ERROR_DETAIL_CHARS]
+    detail = _redact_text(detail)
+    # Read every current and legacy transaction marker before truncating diagnostics.
+    # A first-marker conversion is unsafe: a long error can put ``unchanged`` near the
+    # front and a later, more authoritative ``drift`` beyond the retained 8 KiB.
+    impacts = _workspace_impacts_from_mcp_detail(detail)
+    if impacts:
+        canonical = _conservative_mcp_workspace_impact(impacts)
+        canonical_suffix = f" [workspace_impact={canonical}]"
+        keep = max(0, _MAX_MCP_ERROR_DETAIL_CHARS - len(canonical_suffix))
+        return detail[:keep] + canonical_suffix
+    return detail[:_MAX_MCP_ERROR_DETAIL_CHARS]
+
+
+def _workspace_impacts_from_mcp_detail(detail: str) -> tuple[str, ...]:
+    impacts: list[str] = []
+    for marker in ("[workspace_impact=", "[mmm-workspace-impact:"):
+        search_at = 0
+        while True:
+            marker_at = detail.find(marker, search_at)
+            if marker_at < 0:
+                break
+            value_at = marker_at + len(marker)
+            end = detail.find("]", value_at)
+            if end < 0:
+                impacts.append("unknown")
+                break
+            impacts.append(detail[value_at:end].strip().casefold() or "unknown")
+            search_at = end + 1
+    return tuple(impacts)
+
+
+def _conservative_mcp_workspace_impact(impacts: Sequence[str]) -> str:
+    normalized = tuple(str(value).strip().casefold() for value in impacts)
+    known = {"unchanged", "rolled_back", "drift", "uncertain"}
+    if any(value in {"applied", "uncertain"} or value not in known for value in normalized):
+        return "uncertain"
+    if "drift" in normalized:
+        return "drift"
+    if "rolled_back" in normalized:
+        return "rolled_back"
+    return "unchanged"
 
 
 def _result_byte_limit() -> int:

@@ -1,9 +1,10 @@
 """Native llama.cpp server GGUF inference adapter.
 
 Local GGUF inference is server-only. Tool-aware turns keep the model's own Jinja
-``tools`` prompt, but deliberately disable llama.cpp's PEG-native tool parser and
-parse the model's native Qwen tagged tool calls on the host. This keeps one decode,
-the same sampling/MTP path, and one canonical model-facing tool protocol.
+``tools`` prompt while the managed server's ``--skip-chat-parsing`` mode returns raw
+reasoning/tool markup in ``message.content``. MMM rejects server-parsed calls and
+parses the model's native Qwen tags on the host. This keeps one decode, the same
+sampling/MTP path, and one canonical model-facing tool protocol.
 """
 from __future__ import annotations
 
@@ -94,7 +95,7 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one semantic turn without llama.cpp PEG-native tool parsing."""
+        """Generate one semantic turn with raw, host-validated tool markup."""
 
         cfg = self.config
         server_url = self._server_url(request)
@@ -166,7 +167,7 @@ def _tool_semantic_completion(
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Run one normal Qwen tool turn while keeping llama.cpp PEG fully inactive."""
+    """Run one normal Qwen tool turn through pure-content server parsing."""
 
     from ..llama_stream_efficiency_contract import _report_server_connection
 
@@ -217,17 +218,18 @@ def _tool_server_payload(
     adapter: LlamaCppAdapter,
     request: GenerationRequest,
 ) -> dict[str, Any]:
-    """Assert the canonical hardware policy produced PEG-free tool transport."""
+    """Assert the canonical hardware policy preserves Jinja tool visibility."""
 
-    from ..llama_server_hardware_policy import _server_payload
+    from ..llama_server_hardware_policy import _server_payload, _server_tool_choice
 
     payload = _server_payload(adapter, request)
     if not payload.get("tools"):
-        raise RuntimeError("PEG-free tool transport received no tool schemas")
-    if payload.get("tool_choice") != "none":
+        raise RuntimeError("pure-content tool transport received no tool schemas")
+    expected_choice = _server_tool_choice(request)
+    if payload.get("tool_choice") != expected_choice:
         raise RuntimeError(
-            "llama hardware policy violated PEG-free tool transport: "
-            "tool_choice must be none"
+            "llama hardware policy violated pure-content tool transport: "
+            f"tool_choice must be {expected_choice!r}"
         )
     return payload
 
@@ -236,9 +238,11 @@ def _plain_generation_response(message: Mapping[str, Any]) -> GenerationResponse
     if message.get("tool_calls"):
         raise RuntimeError("plain completion unexpectedly returned tool_calls")
     content_value = message.get("content")
-    content = content_value if isinstance(content_value, str) else ""
+    content_raw = content_value if isinstance(content_value, str) else ""
     reasoning_value = message.get("reasoning_content", message.get("reasoning"))
-    reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
+    server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
+    embedded_reasoning, content = _split_qwen_reasoning_markup(content_raw)
+    reasoning = _merge_reasoning(server_reasoning, embedded_reasoning)
     return GenerationResponse(
         content=content.strip(),
         reasoning_content=reasoning.strip(),
@@ -251,15 +255,17 @@ def _qwen_tool_generation_response(
 ) -> GenerationResponse:
     if message.get("tool_calls"):
         raise RuntimeError(
-            "llama-server returned server-parsed tool_calls even though PEG-free "
-            "transport disabled server tool parsing"
+            "llama-server returned server-parsed tool_calls even though managed "
+            "--skip-chat-parsing requires raw host-validated markup"
         )
 
     schemas = _tool_schema_map(request.tools)
     content_value = message.get("content")
     content_raw = content_value if isinstance(content_value, str) else ""
     reasoning_value = message.get("reasoning_content", message.get("reasoning"))
-    reasoning_raw = reasoning_value if isinstance(reasoning_value, str) else ""
+    server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
+    embedded_reasoning, content_raw = _split_qwen_reasoning_markup(content_raw)
+    reasoning_raw = _merge_reasoning(server_reasoning, embedded_reasoning)
 
     reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
     content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
@@ -271,6 +277,23 @@ def _qwen_tool_generation_response(
         tool_calls=tuple(calls),
         reasoning_content=reasoning.strip(),
     )
+
+
+def _split_qwen_reasoning_markup(text: str) -> tuple[str, str]:
+    """Split one leading Qwen ``<think>`` block from pure-content transport."""
+
+    if not text:
+        return "", ""
+    stripped = text.lstrip()
+    if not stripped.startswith("<think>"):
+        return "", text
+    reasoning_start = len("<think>")
+    reasoning_end = stripped.find("</think>", reasoning_start)
+    if reasoning_end < 0:
+        raise RuntimeError("Qwen reasoning block is missing </think>")
+    reasoning = stripped[reasoning_start:reasoning_end].strip()
+    content = stripped[reasoning_end + len("</think>") :].lstrip()
+    return reasoning, content
 
 
 def _tool_schema_map(

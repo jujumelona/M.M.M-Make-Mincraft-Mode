@@ -132,7 +132,8 @@ def test_replace_file_materializes_hash_guarded_whole_file_replace(tmp_path) -> 
         {
             "operation": "replace",
             "path": "src/main/java/example/Example.java",
-            "expected_sha256": "sha256:" + hashlib.sha256(before.encode()).hexdigest(),
+            "expected_sha256": "sha256:"
+            + hashlib.sha256(source.read_bytes()).hexdigest(),
             "content": "final class Example { int newValue; }\n",
         }
     ]
@@ -158,6 +159,7 @@ def test_delete_file_materializes_hash_guarded_delete(tmp_path) -> None:
         {
             "operation": "delete",
             "path": "src/main/java/example/Example.java",
-            "expected_sha256": "sha256:" + hashlib.sha256(before.encode()).hexdigest(),
+            "expected_sha256": "sha256:"
+            + hashlib.sha256(source.read_bytes()).hexdigest(),
         }
     ]

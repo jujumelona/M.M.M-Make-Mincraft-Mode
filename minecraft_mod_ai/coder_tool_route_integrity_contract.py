@@ -10,12 +10,14 @@ allowing either late wrapper to replace the other.
 """
 
 import json
+from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .causal_frontier_adapter import (
     CausalFrontierAdapter,
     FrontierExecutionGate,
+    authorized_tool_preference,
     authorized_tools,
     clear_current_frontier,
 )
@@ -222,8 +224,6 @@ def _preferred_visible_mutation(
 
 
 def _force_tool_choice(request: Any, tool_name: str) -> Any:
-    from .model_adapters import GenerationRequest
-
     selected = tuple(
         schema
         for schema in request.tools
@@ -236,17 +236,13 @@ def _force_tool_choice(request: Any, tool_name: str) -> Any:
         for schema in request.tools
         if _tool_name(schema) != tool_name
     )
-    return GenerationRequest(
-        messages=request.messages,
-        media_paths=request.media_paths,
-        response_format=request.response_format,
-        response_schema=request.response_schema,
+    # Preserve validation-only historical schemas, task metadata, and any future
+    # request fields. This helper owns only execution ordering and force semantics.
+    return replace(
+        request,
         tools=selected + remainder,
         tool_choice={"type": "function", "function": {"name": tool_name}},
         parallel_tool_calls=False,
-        task=getattr(request, "task", ""),
-        prompt=getattr(request, "prompt", ""),
-        metadata=getattr(request, "metadata", {}),
     )
 
 
@@ -386,26 +382,26 @@ def _run_with_dynamic_frontier(
 ) -> str:
     """Run the final tool loop with the complete authorized surface behind a per-turn frontier."""
 
-    from .model_adapters import GenerationRequest
-
-    complete_surface = authorized_tools(request.tools)
+    complete_surface = tuple(authorized_tools(request.tools))
+    complete_preference = dict(authorized_tool_preference())
     _require_mutation_surface(
         complete_surface,
         messages=request.messages,
         stage=stage,
         role=role,
     )
-    host_request = GenerationRequest(
-        messages=request.messages,
-        media_paths=request.media_paths,
-        response_format=request.response_format,
-        response_schema=request.response_schema,
+    # Freeze the same authorization and request state as the canonical causal-loop
+    # wrapper.  This late route-integrity wrapper replaces that live loop, so omitting
+    # these values would make the adapter consult mutable compatibility ContextVars on
+    # every turn.  Nested retrieval can update those ContextVars and otherwise change
+    # the transition schema mid-loop, forcing the state ledger to replay history
+    # against a different surface and lose already verified code evidence.
+    host_request = replace(
+        request,
         tools=complete_surface,
+        tool_validation_schemas=complete_surface,
         tool_choice="auto" if complete_surface else None,
         parallel_tool_calls=True if complete_surface else False,
-        task=getattr(request, "task", ""),
-        prompt=getattr(request, "prompt", ""),
-        metadata=getattr(request, "metadata", {}),
     )
     execution_gate = FrontierExecutionGate()
     wrapped_adapter = CausalFrontierAdapter(
@@ -417,6 +413,9 @@ def _run_with_dynamic_frontier(
         ),
         frontier_limit=3,
         execution_gate=execution_gate,
+        authorized_surface=complete_surface,
+        preference=complete_preference,
+        request_template=host_request,
     )
     clear_current_frontier()
     try:

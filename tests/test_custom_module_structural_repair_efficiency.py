@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
 from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.scale_policy import ScalePolicy
 
@@ -111,3 +114,49 @@ def test_out_of_scope_agent_edit_is_discarded_without_touching_real_project(tmp_
     assert wrapper.read_text(encoding="utf-8") == "distributionUrl=original\n"
     assert "gradle/wrapper/gradle-wrapper.properties" in result["discarded_out_of_scope_paths"]
     assert (root / "src/main/java/example/Generated.java").is_file()
+
+
+def test_exhausted_causal_resync_discards_staged_edit_before_error_escapes(
+    tmp_path: Path,
+) -> None:
+    """Lock the exact Colab failure's workspace-impact boundary.
+
+    The model may already have used the staged edit tool before it repeats a stale
+    action.  The resulting exception currently carries no durable tool transcript or
+    cleanup receipt, so the real project must remain untouched and the orchestrator
+    must not infer that replay is safe from the exception text alone.
+    """
+
+    root = tmp_path / "project"
+    root.mkdir()
+
+    class _CausalResyncFailureRouter(_AgenticRouter):
+        def generate_text(self, role, messages, **kwargs):
+            super().generate_text(role, messages, **kwargs)
+            raise ModelConfigurationError(
+                "Model failed the single causal-frontier re-synchronization attempt; "
+                "forced='search_project_rag' rejected=apply_source_edit "
+                "visible=search_project_rag,java_workspace_symbols,search_code_rag"
+            )
+
+    router = _CausalResyncFailureRouter()
+    target = adapter_for_target("1.20.1", "fabric")
+    with pytest.raises(ModelConfigurationError, match="causal-frontier"):
+        CustomModuleGenerator(
+            router,
+            policy=ScalePolicy(model_context_bytes=4096),
+        ).generate(
+            root,
+            module=ProductionModule(
+                "causal_retry_guard",
+                "custom_java",
+                {"feature": "shape"},
+            ),
+            minecraft_version=target.minecraft_version,
+            loader=target.loader,
+            mappings=target.yarn_mappings,
+        )
+
+    assert not (root / "src/main/java/example/Generated.java").exists()
+    assert router.workspace is not None
+    assert not router.workspace.exists()

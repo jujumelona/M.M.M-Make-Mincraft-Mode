@@ -70,7 +70,8 @@ def test_replace_file_materializes_transactional_replace_with_host_hash(tmp_path
         {
             "operation": "replace",
             "path": "src/main/java/example/Example.java",
-            "expected_sha256": "sha256:" + hashlib.sha256(before.encode()).hexdigest(),
+            "expected_sha256": "sha256:"
+            + hashlib.sha256(source.read_bytes()).hexdigest(),
             "content": after,
         }
     ]
@@ -99,7 +100,8 @@ def test_delete_file_materializes_transactional_delete_with_host_hash(tmp_path) 
         {
             "operation": "delete",
             "path": "src/main/java/example/Obsolete.java",
-            "expected_sha256": "sha256:" + hashlib.sha256(before.encode()).hexdigest(),
+            "expected_sha256": "sha256:"
+            + hashlib.sha256(source.read_bytes()).hexdigest(),
         }
     ]
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])

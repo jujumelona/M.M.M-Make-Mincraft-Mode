@@ -17,7 +17,10 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
 )
 from minecraft_mod_ai.llama_tool_output_budget import install as install_tool_output_budget
 from minecraft_mod_ai.mcp_stdio_support import install_mcp_protocol_print_guard
-from minecraft_mod_ai.model_adapters.base import ModelBackendError
+from minecraft_mod_ai.model_adapters.base import (
+    ModelBackendError,
+    ModelConfigurationError,
+)
 
 
 def _tool(name: str) -> dict[str, object]:
@@ -124,6 +127,54 @@ def test_work_node_does_not_retry_unrelated_failure() -> None:
             validate_cached=lambda value: True,
         )
     assert FakeOrchestrator.calls == 1
+
+
+def test_work_node_does_not_blindly_retry_exhausted_causal_resync() -> None:
+    """A model-protocol failure alone is not a safe durable retry receipt.
+
+    Custom-module tool calls run in a disposable staging workspace.  Until the
+    producer proves that workspace was discarded and no external side effect
+    escaped it, replaying the whole node would silently repeat expensive model and
+    retrieval work from the beginning.
+    """
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.state = "running"
+            self.retries = 0
+
+        def task(self, _node_id):
+            return {"state": self.state}
+
+        def retry(self, _node_id):
+            self.retries += 1
+            self.state = "pending"
+
+    class FakeOrchestrator:
+        calls = 0
+
+        @staticmethod
+        def _run_work_node(ledger, node, *, action, validate_cached, shared_index=None):
+            FakeOrchestrator.calls += 1
+            ledger.state = "failed"
+            raise ModelConfigurationError(
+                "Model failed the single causal-frontier re-synchronization attempt; "
+                "forced='search_project_rag' rejected=apply_source_edit "
+                "visible=search_project_rag,java_workspace_symbols,search_code_rag"
+            )
+
+    install_work_recovery(FakeOrchestrator)
+    ledger = Ledger()
+    with pytest.raises(ModelConfigurationError, match="causal-frontier"):
+        FakeOrchestrator._run_work_node(
+            ledger,
+            SimpleNamespace(node_id="generate-custom-00000000"),
+            action=lambda: {},
+            validate_cached=lambda value: True,
+        )
+
+    assert FakeOrchestrator.calls == 1
+    assert ledger.retries == 0
 
 
 def test_mcp_print_guard_keeps_default_print_off_stdout(capsys) -> None:

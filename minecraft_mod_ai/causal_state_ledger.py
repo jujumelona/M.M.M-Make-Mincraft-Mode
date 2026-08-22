@@ -38,7 +38,10 @@ _FRESH_EVIDENCE_FACTS = frozenset(
 )
 _WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back", "drift", "uncertain"})
 _INVALIDATING_WORKSPACE_IMPACTS = frozenset({"drift", "uncertain"})
-_WORKSPACE_IMPACT_MARKER = "[workspace_impact="
+_WORKSPACE_IMPACT_MARKERS = (
+    "[workspace_impact=",
+    "[mmm-workspace-impact:",
+)
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -73,14 +76,9 @@ def _is_failed_source_mutation(message: Mapping[str, Any]) -> bool:
 def _workspace_impact_from_error(error: str) -> str:
     """Recover a normalized transaction fact from the text-only runtime boundary."""
 
-    marker_at = error.find(_WORKSPACE_IMPACT_MARKER)
-    if marker_at >= 0:
-        value_at = marker_at + len(_WORKSPACE_IMPACT_MARKER)
-        end = error.find("]", value_at)
-        if end >= 0:
-            impact = error[value_at:end].strip().casefold()
-            if impact in _WORKSPACE_IMPACTS:
-                return impact
+    impacts = _workspace_impacts_from_error(error)
+    if impacts:
+        return _conservative_workspace_impact(impacts)
     # Spec/schema/resource-policy failures are raised by the tool service before the
     # transactional patcher is invoked, so they cannot have mutated the workspace.
     if error.lstrip().startswith("SpecValidationError:"):
@@ -90,17 +88,62 @@ def _workspace_impact_from_error(error: str) -> str:
     return "uncertain"
 
 
+def _workspace_impacts_from_error(error: str) -> tuple[str, ...]:
+    """Parse all marker claims without inventing an impact for marker-free text."""
+
+    impacts: list[str] = []
+    for marker in _WORKSPACE_IMPACT_MARKERS:
+        search_at = 0
+        while True:
+            marker_at = error.find(marker, search_at)
+            if marker_at < 0:
+                break
+            value_at = marker_at + len(marker)
+            end = error.find("]", value_at)
+            if end < 0:
+                # A malformed transaction marker is not evidence of an unchanged
+                # workspace. Treat it like an unknown impact below.
+                impacts.append("unknown")
+                break
+            impacts.append(error[value_at:end].strip().casefold() or "unknown")
+            search_at = end + 1
+    return tuple(impacts)
+
+
+def _conservative_workspace_impact(impacts: Sequence[str]) -> str:
+    """Collapse conflicting transaction facts without trusting first-marker order."""
+
+    normalized = tuple(str(value).strip().casefold() for value in impacts)
+    # ``applied`` means the old snapshot is definitely stale. Unknown values and an
+    # explicit uncertain marker cannot prove rollback, so normalize both to uncertain.
+    if any(
+        value in {"applied", "uncertain"} or value not in _WORKSPACE_IMPACTS
+        for value in normalized
+    ):
+        return "uncertain"
+    if "drift" in normalized:
+        return "drift"
+    if "rolled_back" in normalized:
+        return "rolled_back"
+    return "unchanged"
+
+
 def _failed_source_mutation_workspace_impact(message: Mapping[str, Any]) -> str:
     if not _is_failed_source_mutation(message):
         return ""
     payload = _graph._payload(message)
     if payload is None:
         return "uncertain"
-    for result in _graph._result_mappings(payload):
-        impact = str(result.get("workspace_impact", "")).strip().casefold()
-        if impact in _WORKSPACE_IMPACTS:
-            return impact
-    return _workspace_impact_from_error(str(payload.get("error", "")))
+    structured_impacts = [
+        str(result.get("workspace_impact", "")).strip().casefold()
+        for result in _graph._result_mappings(payload)
+        if "workspace_impact" in result
+    ]
+    error = str(payload.get("error", ""))
+    marker_impacts = _workspace_impacts_from_error(error)
+    if structured_impacts or marker_impacts:
+        return _conservative_workspace_impact((*structured_impacts, *marker_impacts))
+    return _workspace_impact_from_error(error)
 
 
 def _failed_source_mutation_requires_refresh(message: Mapping[str, Any]) -> bool:

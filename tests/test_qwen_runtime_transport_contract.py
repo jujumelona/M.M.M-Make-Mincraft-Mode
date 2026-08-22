@@ -4,6 +4,7 @@ import hashlib
 import os
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from minecraft_mod_ai import llama_server_autotune as autotune
@@ -82,6 +83,80 @@ def test_tool_signature_rejects_wrong_tool_arguments() -> None:
     assert not contract._tool_call_signature(
         _tool_response(call_id="call-a", arguments='{"value":8}')
     )
+
+
+def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "<think>check the exact argument</think>"
+                                "<tool_call><function=mmm_transport_probe>"
+                                "<parameter=value>7</parameter>"
+                                "</function></tool_call>"
+                            )
+                        }
+                    }
+                ]
+            }
+
+    def post(url: str, *, json: dict, timeout: int) -> Response:
+        captured.update(url=url, payload=dict(json), timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+    fake_autotune = SimpleNamespace(
+        _env_int=lambda _name, default: default,
+    )
+
+    ok, error = contract._tool_probe(
+        "http://127.0.0.1:8910/v1",
+        fake_autotune,
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+    )
+
+    assert ok is True
+    assert error == ""
+    payload = captured["payload"]
+    assert payload["tool_choice"] == "required"
+    assert payload["temperature"] == 0.0
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["tools"][0]["function"]["name"] == "mmm_transport_probe"
+
+
+def test_qwen35_tool_probe_rejects_server_parsed_tool_calls(monkeypatch) -> None:
+    class Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict:
+            return _tool_response(call_id="server-call", arguments='{"value":7}')
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
+
+    ok, error = contract._tool_probe(
+        "http://127.0.0.1:8910/v1",
+        SimpleNamespace(_env_int=lambda _name, default: default),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+    )
+
+    assert ok is False
+    assert "server-parsed tool_calls" in error
 
 
 def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
@@ -195,6 +270,23 @@ def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
     )
     assert seen[-1] == ("4", 4, "none")
 
+    current = fake._fingerprint(
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF"),
+        "llama-server",
+        "/tmp/model.gguf",
+    )
+    legacy = hashlib.sha256(
+        b'{"base":"base","qwen_mtp_parallel":"single-slot-v1"}'
+    ).hexdigest()
+    expected = hashlib.sha256(
+        (
+            '{"base":"base","qwen_mtp_parallel":"single-slot-v1",'
+            f'"qwen_tool_transport":"{contract._TOOL_TRANSPORT_EPOCH}"}}'
+        ).encode("utf-8")
+    ).hexdigest()
+    assert current == expected
+    assert current != legacy
+
 
 class _FakeAutotune:
     def __init__(self) -> None:
@@ -263,7 +355,9 @@ def test_main_staged_benchmark_requires_tool_probe(monkeypatch) -> None:
     fake = _FakeAutotune()
     fake.benchmark_variant = runtime_tuning.ServerVariant("mtp-2", "draft-mtp", 2)
 
-    def passing_probe(_base_url: str, _autotune: object) -> tuple[bool, str]:
+    def passing_probe(
+        _base_url: str, _autotune: object, _config_value: object
+    ) -> tuple[bool, str]:
         fake.tool_calls += 1
         return True, ""
 
@@ -283,7 +377,9 @@ def test_main_staged_benchmark_requires_tool_probe(monkeypatch) -> None:
 def test_initial_qwen_variant_requires_tool_probe(monkeypatch) -> None:
     fake = _FakeAutotune()
 
-    def passing_probe(_base_url: str, _autotune: object) -> tuple[bool, str]:
+    def passing_probe(
+        _base_url: str, _autotune: object, _config_value: object
+    ) -> tuple[bool, str]:
         fake.tool_calls += 1
         return True, ""
 
@@ -306,7 +402,10 @@ def test_bad_mtp_tool_transport_fails_variant_before_decode(monkeypatch) -> None
     monkeypatch.setattr(
         contract,
         "_tool_probe",
-        lambda _base_url, _autotune: (False, "canonical call mismatch"),
+        lambda _base_url, _autotune, _config_value: (
+            False,
+            "canonical call mismatch",
+        ),
     )
     contract._install_tool_equivalence_policy(fake)
     variant = runtime_tuning.ServerVariant("mtp-4", "draft-mtp", 4)
@@ -324,7 +423,9 @@ def test_non_qwen_and_neutral_refinements_do_not_add_tool_probe(monkeypatch) -> 
     fake = _FakeAutotune()
     calls = 0
 
-    def counted_probe(_base_url: str, _autotune: object) -> tuple[bool, str]:
+    def counted_probe(
+        _base_url: str, _autotune: object, _config_value: object
+    ) -> tuple[bool, str]:
         nonlocal calls
         calls += 1
         return True, ""

@@ -129,11 +129,21 @@ def _install_partial_source_edit(runtime_module: Any) -> None:
             external_server_ids: Sequence[str],
         ):
             if str(stage).strip().lower() == "generation" and str(name).strip() == _SOURCE_EDIT_TOOL:
-                raw_patch = _materialize_model_source_edit(
-                    runtime_module,
-                    self.workspace_root,
-                    dict(arguments or {}),
-                )
+                try:
+                    raw_patch = _materialize_model_source_edit(
+                        runtime_module,
+                        self.workspace_root,
+                        dict(arguments or {}),
+                    )
+                except runtime_module.AgentToolRuntimeError as exc:
+                    # Scalar materialization only validates/reads the selected project;
+                    # transactional mutation starts in the delegated patch call below.
+                    # Preserve that fact across ModelRouter's text-only error envelope
+                    # so the causal ledger does not discard still-current evidence.
+                    detail = runtime_module._redact_text(str(exc))
+                    if "[workspace_impact=" not in detail:
+                        detail += " [workspace_impact=unchanged]"
+                    raise runtime_module.AgentToolRuntimeError(detail) from exc
                 return self.call("generation", "apply_source_patch", raw_patch)
             return current_call_scoped(
                 self,

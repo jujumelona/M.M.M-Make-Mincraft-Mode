@@ -91,7 +91,7 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
     assert len(sent_payloads) == 1
     payload = sent_payloads[0]
     assert payload["tools"] == [tool]
-    assert payload["tool_choice"] == "none"
+    assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert "response_format" not in payload
     assert "json_schema" not in payload

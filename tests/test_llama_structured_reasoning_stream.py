@@ -42,7 +42,7 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     assert payload["max_tokens"] == -1
 
 
-def test_native_tool_request_keeps_server_parser_disabled() -> None:
+def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
     tool = {
         "type": "function",
         "function": {
@@ -68,7 +68,7 @@ def test_native_tool_request_keeps_server_parser_disabled() -> None:
     )
 
     assert payload["tools"] == [tool]
-    assert payload["tool_choice"] == "none"
+    assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert "response_format" not in payload
     assert "json_schema" not in payload

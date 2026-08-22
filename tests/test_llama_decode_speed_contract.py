@@ -210,7 +210,7 @@ def test_structured_local_payload_keeps_json_validation_host_side_and_native_too
     )
     tool_payload = hardware_policy._server_payload(adapter, tool_request)
     assert tool_payload["tools"] == [tool]
-    assert tool_payload["tool_choice"] == "none"
+    assert tool_payload["tool_choice"] == "auto"
     assert tool_payload["parallel_tool_calls"] is True
     assert tool_payload["reasoning_effort"] == "none"
     assert tool_payload["chat_template_kwargs"] == {"enable_thinking": False}

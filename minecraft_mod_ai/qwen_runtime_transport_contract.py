@@ -21,10 +21,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
+from types import SimpleNamespace
 from typing import Any, Iterator, Mapping
 
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
+_TOOL_TRANSPORT_EPOCH = "jinja-pure-content-host-v1"
 _BENCHMARK_MARKER = "_mmm_qwen_tool_calibration_benchmark_v1"
 _RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
 _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
@@ -147,27 +149,40 @@ def _canonical_arguments(value: Any) -> Any:
         return raw
 
 
-def _tool_call_signature(response: Mapping[str, Any]) -> str:
+def _tool_call_signature(response: Any) -> str:
     """Return a stable signature only for the exact expected semantic tool call."""
 
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
-        return ""
-    message = choices[0].get("message")
-    if not isinstance(message, Mapping):
-        return ""
-    raw_calls = message.get("tool_calls")
-    if not isinstance(raw_calls, list) or len(raw_calls) != 1:
-        return ""
-    call = raw_calls[0]
-    if not isinstance(call, Mapping):
-        return ""
-    function = call.get("function")
-    if not isinstance(function, Mapping):
-        return ""
-
-    name = str(function.get("name", "")).strip()
-    arguments = _canonical_arguments(function.get("arguments", "{}"))
+    calls = getattr(response, "tool_calls", None)
+    if calls is not None:
+        if len(calls) != 1:
+            return ""
+        call = calls[0]
+        name = str(getattr(call, "name", "")).strip()
+        arguments = _canonical_arguments(getattr(call, "arguments", {}))
+    else:
+        if not isinstance(response, Mapping):
+            return ""
+        choices = response.get("choices")
+        if (
+            not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], Mapping)
+        ):
+            return ""
+        message = choices[0].get("message")
+        if not isinstance(message, Mapping):
+            return ""
+        raw_calls = message.get("tool_calls")
+        if not isinstance(raw_calls, list) or len(raw_calls) != 1:
+            return ""
+        call = raw_calls[0]
+        if not isinstance(call, Mapping):
+            return ""
+        function = call.get("function")
+        if not isinstance(function, Mapping):
+            return ""
+        name = str(function.get("name", "")).strip()
+        arguments = _canonical_arguments(function.get("arguments", "{}"))
     if name != _TOOL_NAME or arguments != {"value": _TOOL_VALUE}:
         return ""
 
@@ -180,14 +195,24 @@ def _tool_call_signature(response: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _tool_probe(base_url: str, autotune: Any) -> tuple[bool, str]:
-    """Exercise llama.cpp's native function-tool parser on the already-live server."""
+def _tool_probe_request() -> Any:
+    from .model_adapters.base import GenerationRequest
 
-    import httpx
-
-    payload = {
-        "model": "local",
-        "messages": [
+    tool = {
+        "type": "function",
+        "function": {
+            "name": _TOOL_NAME,
+            "description": "Deterministic transport correctness probe.",
+            "parameters": {
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    return GenerationRequest(
+        messages=(
             {
                 "role": "system",
                 "content": "Use the requested function exactly once. Do not answer in text.",
@@ -196,33 +221,60 @@ def _tool_probe(base_url: str, autotune: Any) -> tuple[bool, str]:
                 "role": "user",
                 "content": f"Call {_TOOL_NAME} with value {_TOOL_VALUE}.",
             },
-        ],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": _TOOL_NAME,
-                    "description": "Deterministic transport correctness probe.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"value": {"type": "integer"}},
-                        "required": ["value"],
-                        "additionalProperties": False,
-                    },
-                },
-            }
-        ],
-        "tool_choice": "required",
-        "parallel_tool_calls": False,
-        "max_tokens": 48,
-        "temperature": 0.0,
-        "seed": 1234,
-        "cache_prompt": False,
-        "stream": False,
-        "reasoning_effort": "none",
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
+        ),
+        tools=(tool,),
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+
+def _tool_probe_payload(config: Any) -> tuple[Any, dict[str, Any]]:
+    """Build calibration through the exact production Jinja/raw-host contract."""
+
+    from .llama_server_hardware_policy import _server_payload
+
+    request = _tool_probe_request()
+    payload = _server_payload(SimpleNamespace(config=config), request)
+    payload.update(
+        {
+            "max_tokens": 48,
+            "seed": 1234,
+            "cache_prompt": False,
+            "stream": False,
+        }
+    )
+    if payload.get("tool_choice") != "required":
+        raise RuntimeError("tool calibration must render required Jinja tool choice")
+    if payload.get("temperature") != 0.0:
+        raise RuntimeError("tool calibration must use deterministic sampling")
+    return request, payload
+
+
+def _raw_tool_probe_turn(data: Mapping[str, Any], request: Any) -> Any:
+    """Parse a calibration response exactly like a production Qwen tool turn."""
+
+    choices = data.get("choices")
+    if (
+        not isinstance(choices, list)
+        or not choices
+        or not isinstance(choices[0], Mapping)
+    ):
+        raise RuntimeError("native tool probe returned no completion choice")
+    message = choices[0].get("message")
+    if not isinstance(message, Mapping):
+        raise RuntimeError("native tool probe returned no assistant message")
+    from .model_adapters.llama_cpp_adapter import _qwen_tool_generation_response
+
+    return _qwen_tool_generation_response(message, request)
+
+
+def _tool_probe(base_url: str, autotune: Any, config: Any) -> tuple[bool, str]:
+    """Exercise pure-content Jinja tools plus MMM's production host parser."""
+
+    import httpx
+
     try:
+        request, payload = _tool_probe_payload(config)
         response = httpx.post(
             f"{base_url.rstrip('/')}/chat/completions",
             json=payload,
@@ -230,9 +282,12 @@ def _tool_probe(base_url: str, autotune: Any) -> tuple[bool, str]:
         )
         response.raise_for_status()
         data = response.json()
-        signature = _tool_call_signature(data) if isinstance(data, Mapping) else ""
+        if not isinstance(data, Mapping):
+            return False, "native tool probe returned a non-object response"
+        turn = _raw_tool_probe_turn(data, request)
+        signature = _tool_call_signature(turn)
         if not signature:
-            return False, "native tool probe returned no valid canonical tool call"
+            return False, "host parser returned no valid canonical tool call"
         return True, ""
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -307,6 +362,7 @@ def _install_mtp_single_slot_policy(autotune: Any) -> None:
             payload = {
                 "base": base,
                 "qwen_mtp_parallel": "single-slot-v1",
+                "qwen_tool_transport": _TOOL_TRANSPORT_EPOCH,
             }
             return hashlib.sha256(
                 json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
@@ -405,7 +461,7 @@ def _install_tool_equivalence_policy(autotune: Any) -> None:
         if active_run is not None and active_run[1] != variant:
             return probe
 
-        valid, error = _tool_probe(base_url, autotune)
+        valid, error = _tool_probe(base_url, autotune, config)
         if not valid:
             raise RuntimeError(f"Qwen native tool transport calibration failed: {error}")
         return probe

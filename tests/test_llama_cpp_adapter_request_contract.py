@@ -88,7 +88,7 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert turn.content == '{"game_design":{}}'
     payload = captured["payload"]
     assert payload["tools"] == [_tool()]
-    assert payload["tool_choice"] == "none"
+    assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     for forbidden in ("response_format", "json_schema", "grammar"):
         assert forbidden not in payload
@@ -141,7 +141,7 @@ def test_generate_turn_rejects_server_parsed_openai_tool_calls(monkeypatch) -> N
     with pytest.raises(ModelBackendError, match="server-parsed tool_calls"):
         _adapter().generate_turn(request)
     assert captured["payload"]["tools"] == [_tool()]
-    assert captured["payload"]["tool_choice"] == "none"
+    assert captured["payload"]["tool_choice"] == "auto"
 
 
 def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatch) -> None:
@@ -199,7 +199,46 @@ def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatc
     assert continuation_messages[-1]["role"] == "user"
     assert "Do not return another reasoning-only response" in continuation_messages[-1]["content"]
     assert payloads[1]["tools"] == [_tool()]
-    assert payloads[1]["tool_choice"] == "none"
+    assert payloads[1]["tool_choice"] == "auto"
+
+
+def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch) -> None:
+    monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *args, **kwargs: _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "<think>inspect the current schema</think>\n"
+                                "<tool_call><function=lookup>"
+                                "<parameter=q>exact api</parameter>"
+                                "</function></tool_call>"
+                            )
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "inspect then act"},),
+            tools=(_tool(),),
+            tool_choice="auto",
+        )
+    )
+
+    assert turn.content == ""
+    assert turn.reasoning_content == "inspect the current schema"
+    assert [call.name for call in turn.tool_calls] == ["lookup"]
+    assert turn.tool_calls[0].arguments == {"q": "exact api"}
 
 
 def test_repeated_reasoning_only_turn_fails_closed_after_one_continuation(monkeypatch) -> None:

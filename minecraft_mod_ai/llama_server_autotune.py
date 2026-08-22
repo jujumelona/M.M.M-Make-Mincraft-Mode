@@ -368,6 +368,10 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         # This belongs to the server launch contract itself because autotune,
         # planner/coder priming and adapters can all be the first launch owner.
         "--jinja",
+        # Keep Jinja prompt rendering (including the current tool schemas) but return
+        # reasoning/tool markup in message.content. MMM validates and parses that raw
+        # model protocol on the host instead of accepting llama.cpp-parsed tool calls.
+        "--skip-chat-parsing",
         "--no-ui",
         "--log-disable",
     ]

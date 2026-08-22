@@ -12,6 +12,7 @@ from minecraft_mod_ai.qwen_agent_family_contract import (
     _inject_reasoning_history,
     _remember_reasoning,
 )
+from minecraft_mod_ai.forced_tool_execution_contract import _single_tool_request
 
 
 _TOOL = {
@@ -168,6 +169,28 @@ def test_forced_return_function_stays_owned_by_transport_layer() -> None:
 
     assert payload["temperature"] == 0.0
     assert "preserve_thinking" not in payload.get("chat_template_kwargs", {})
+
+
+def test_local_prompt_forced_auto_turn_does_not_restore_agent_thinking() -> None:
+    original = _request(
+        tool_choice={
+            "type": "function",
+            "function": {"name": "read_project_file"},
+        }
+    )
+    local = _single_tool_request(
+        original,
+        "read_project_file",
+        retry=False,
+        native_required=False,
+    )
+
+    payload = hardware._server_payload(_Adapter(), local)
+
+    assert local.tool_choice == "auto"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["reasoning_effort"] == "none"
+    assert "preserve_thinking" not in payload["chat_template_kwargs"]
 
 
 def test_final_agent_continuation_keeps_thinking_without_tools() -> None:

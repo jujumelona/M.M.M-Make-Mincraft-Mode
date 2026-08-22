@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from minecraft_mod_ai.forced_tool_execution_contract import _single_tool_request
 from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+    LlamaCppAdapter,
+    _qwen_tool_generation_response,
+)
 
 
 _QWEN_PRECISE_PROFILE = {
@@ -24,11 +28,11 @@ def _qwen_extra() -> dict[str, object]:
     }
 
 
-def _tool_schema() -> dict[str, object]:
+def _tool_schema(name: str = "search_code_rag") -> dict[str, object]:
     return {
         "type": "function",
         "function": {
-            "name": "search_code_rag",
+            "name": name,
             "description": "Search code",
             "parameters": {
                 "type": "object",
@@ -39,7 +43,7 @@ def _tool_schema() -> dict[str, object]:
     }
 
 
-def test_native_tool_payload_keeps_server_peg_disabled() -> None:
+def test_native_tool_payload_keeps_jinja_tools_visible_for_host_parser() -> None:
     adapter = LlamaCppAdapter(
         AdapterConfig(
             role="coder_safe",
@@ -59,7 +63,7 @@ def test_native_tool_payload_keeps_server_peg_disabled() -> None:
 
     assert request.tool_choice == "auto"
     assert payload["tools"] == [_tool_schema()]
-    assert payload["tool_choice"] == "none"
+    assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert "reasoning_effort" not in payload
     assert "chat_template_kwargs" not in payload
@@ -76,6 +80,119 @@ def test_native_tool_payload_keeps_server_peg_disabled() -> None:
     )
     assert "host-tool-envelope" not in rendered
     assert "REVIEWED_TOOL_CATALOG" not in rendered
+
+
+def test_local_host_forced_qwen35_turn_is_required_and_deterministic_on_wire() -> None:
+    adapter = LlamaCppAdapter(
+        AdapterConfig(
+            role="coder_safe",
+            adapter="llama_cpp",
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra=_qwen_extra(),
+        )
+    )
+    named = GenerationRequest(
+        messages=({"role": "user", "content": "search now"},),
+        tools=(_tool_schema(),),
+        tool_choice={
+            "type": "function",
+            "function": {"name": "search_code_rag"},
+        },
+    )
+    request = _single_tool_request(
+        named,
+        "search_code_rag",
+        retry=False,
+        native_required=False,
+    )
+
+    payload = _server_payload(adapter, request)
+
+    assert request.tool_choice == "auto"
+    assert payload["tool_choice"] == "required"
+    assert payload["temperature"] == 0.0
+    assert payload["reasoning_effort"] == "none"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    for key in (
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "repeat_penalty",
+        "repetition_penalty",
+    ):
+        assert key not in payload
+
+
+def test_multi_tool_named_choice_narrows_wire_and_host_enforces_exact_name() -> None:
+    adapter = LlamaCppAdapter(
+        AdapterConfig(
+            role="coder_safe",
+            adapter="llama_cpp",
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra=_qwen_extra(),
+        )
+    )
+    selected = _tool_schema("search_code_rag")
+    other = _tool_schema("java_workspace_symbols")
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "search now"},),
+        tools=(other, selected),
+        tool_choice={
+            "type": "function",
+            "function": {"name": "search_code_rag"},
+        },
+    )
+
+    payload = _server_payload(adapter, request)
+
+    assert payload["tool_choice"] == "required"
+    assert payload["tools"] == [selected]
+    raw_selected = {
+        "content": (
+            "<tool_call><function=search_code_rag>"
+            "<parameter=query>registry</parameter>"
+            "</function></tool_call>"
+        )
+    }
+    turn = _qwen_tool_generation_response(raw_selected, request)
+    assert [call.name for call in turn.tool_calls] == ["search_code_rag"]
+
+    raw_other = {
+        "content": (
+            "<tool_call><function=java_workspace_symbols>"
+            "<parameter=query>registry</parameter>"
+            "</function></tool_call>"
+        )
+    }
+    try:
+        _qwen_tool_generation_response(raw_other, request)
+    except RuntimeError as exc:
+        assert "violated named tool_choice" in str(exc)
+    else:
+        raise AssertionError("host must reject a non-selected named tool")
+
+
+def test_semantic_none_remains_none_without_narrowing_tool_schemas() -> None:
+    adapter = LlamaCppAdapter(
+        AdapterConfig(
+            role="coder_safe",
+            adapter="llama_cpp",
+            model_id="generic/model",
+        )
+    )
+    first = _tool_schema("search_code_rag")
+    second = _tool_schema("java_workspace_symbols")
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "answer without tools"},),
+        tools=(first, second),
+        tool_choice="none",
+    )
+
+    payload = _server_payload(adapter, request)
+
+    assert payload["tool_choice"] == "none"
+    assert payload["tools"] == [first, second]
 
 
 def test_qwen35_tool_profile_is_registry_scoped() -> None:

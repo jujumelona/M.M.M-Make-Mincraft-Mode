@@ -44,6 +44,15 @@ _QWEN_TOOL_PATTERNS = (
     re.compile(r"Qwen requested an unexposed tool '([^']+)'"),
     re.compile(r"named tool_choice '([^']+)'"),
 )
+_DETERMINISTIC_READ_PRIORITY = ("search_code_rag", "search_project_rag")
+_SOURCE_MUTATION_TOOLS = frozenset(
+    {
+        "apply_source_edit",
+        "apply_source_patch",
+        "apply_java_operations",
+        "repair_project",
+    }
+)
 _runtime_marker_printed = False
 
 
@@ -121,7 +130,18 @@ def _candidate_surfaces(
         self.authorized_surface or tuple(request.tools)
     )
     by_name = {_name(schema): schema for schema in candidates if _name(schema)}
-    frontier = current_frontier_names()
+    # The execution gate is loop-owner state shared with worker threads. A nested
+    # model/retrieval call can overwrite the compatibility ContextVar between the
+    # causal adapter publishing its frontier and this post-generation validation.
+    # Prefer the owner-local gate; retain the ContextVar only for legacy/fake adapters
+    # that do not carry one.
+    frontier = None
+    execution_gate = getattr(self, "execution_gate", None)
+    visible_names = getattr(execution_gate, "visible_names", None)
+    if callable(visible_names):
+        frontier = visible_names()
+    if frontier is None:
+        frontier = current_frontier_names()
     if frontier is None:
         visible = tuple(
             name
@@ -183,6 +203,50 @@ def _resync_once(
     protocol_detail: str = "",
 ) -> Any:
     from .model_adapters import ModelConfigurationError
+    from .forced_tool_execution_contract import deterministic_forced_read_turn
+
+    # A stale model action can occur immediately after a source-edit precondition
+    # failure changes the live frontier back to repository evidence.  Do not spend a
+    # second full-context decode asking the same model to spell a read-only call that
+    # the host can derive exactly from the request and its reviewed schema. Prefer the
+    # code RAG route when project RAG cannot prove an exact Minecraft target.
+    deterministic_turn = None
+    rejected_names = frozenset(
+        name.strip() for name in rejected.split(",") if name.strip()
+    )
+    if rejected_names.intersection(_SOURCE_MUTATION_TOOLS):
+        # A failed edit needs current local anchors, even when exact target metadata
+        # would also make project/API RAG constructible. Keep the originally forced
+        # action next as a fallback for surfaces without code RAG.
+        read_order = ("search_code_rag", forced_name, "search_project_rag")
+    else:
+        read_order = (forced_name, *_DETERMINISTIC_READ_PRIORITY)
+    ordered_read_names = tuple(dict.fromkeys(read_order))
+    for candidate_name in ordered_read_names:
+        if candidate_name not in visible:
+            continue
+        candidate_schema = by_name.get(candidate_name)
+        if candidate_schema is None:
+            continue
+        candidate_request = replace(
+            request,
+            tools=(candidate_schema,),
+            tool_validation_schemas=tuple(candidates),
+            tool_choice={
+                "type": "function",
+                "function": {"name": candidate_name},
+            },
+            parallel_tool_calls=False,
+        )
+        candidate_turn = deterministic_forced_read_turn(
+            candidate_request,
+            candidate_name,
+        )
+        if candidate_turn is None:
+            continue
+        forced_name = candidate_name
+        deterministic_turn = candidate_turn
+        break
 
     forced_schema = by_name.get(forced_name)
     if forced_schema is None:
@@ -221,12 +285,16 @@ def _resync_once(
     self._publish_frontier((forced_name,))
     print(
         "causal tool resync:",
-        f"attempt=1/{_MAX_RESYNC_ATTEMPTS}",
+        f"attempt={0 if deterministic_turn is not None else 1}/{_MAX_RESYNC_ATTEMPTS}",
         f"rejected={rejected}",
         f"forced={forced_name}",
+        f"execution={'host-read' if deterministic_turn is not None else 'model'}",
         file=sys.stderr,
         flush=True,
     )
+    if deterministic_turn is not None:
+        self._reset_stale_guard()
+        return deterministic_turn
     try:
         corrected = self.inner.generate_turn(retry_request)
     except BaseException as exc:

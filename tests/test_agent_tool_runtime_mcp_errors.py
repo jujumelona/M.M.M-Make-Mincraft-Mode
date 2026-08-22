@@ -65,8 +65,32 @@ def test_mcp_error_preserves_workspace_impact_marker_and_redacts_secrets() -> No
 
     message = str(raised.value)
     assert "[mmm-workspace-impact:unchanged]" in message
+    assert "[workspace_impact=unchanged]" in message
     assert "api_key=[REDACTED]" in message
     assert "supersecretvalue" not in message
+
+
+def test_mcp_error_collapses_markers_before_bounded_diagnostic_truncation() -> None:
+    raw = SimpleNamespace(
+        isError=True,
+        structuredContent=None,
+        content=(
+            SimpleNamespace(
+                text=(
+                    "[mmm-workspace-impact:unchanged] "
+                    + ("diagnostic " * 900)
+                    + "[mmm-workspace-impact:drift]"
+                )
+            ),
+        ),
+    )
+
+    with pytest.raises(AgentToolRuntimeError) as raised:
+        _invoke(_Runtime(raw))
+
+    message = str(raised.value)
+    assert len(message) < 9 * 1024
+    assert message.endswith("[workspace_impact=drift]")
 
 
 def test_mcp_error_without_detail_remains_generic_and_fail_closed() -> None:

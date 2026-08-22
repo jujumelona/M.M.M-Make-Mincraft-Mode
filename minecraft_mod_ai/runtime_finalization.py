@@ -183,9 +183,9 @@ def finalize_runtime() -> None:
         # persisted node once instead of issuing a hidden second model completion.
         install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
         # Exact host-required calls have one policy owner across transports. Remote
-        # endpoints use native required-tool forcing; local llama.cpp keeps PEG parsing
-        # disabled and enforces the same semantic requirement with one visible schema,
-        # explicit prompt guidance and bounded host validation.
+        # endpoints use native required-tool forcing; local llama.cpp renders one
+        # visible Jinja schema as required, returns raw markup through its managed
+        # pure-content parser, and performs bounded semantic validation on the host.
         install_forced_tool_execution(
             openai_compatible_module=openai_compatible,
             llama_cpp_module=llama_cpp_adapter,

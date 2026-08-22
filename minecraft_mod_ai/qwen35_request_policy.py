@@ -75,6 +75,14 @@ def _install_payload_policy(hardware_policy: Any) -> None:
         if not _policy_enabled(config):
             return result
 
+        # A named/required one-tool request is a transport control turn, not a normal
+        # agent sampling page. Reassert the shared wire invariant after this outer
+        # profile wrapper so Qwen3.5 defaults cannot turn forced recovery stochastic.
+        from .llama_server_hardware_policy import _enforce_required_tool_sampling
+
+        if result.get("tool_choice") == "required":
+            return _enforce_required_tool_sampling(result)
+
         defaults = _request_defaults(config, request)
         result.pop("chat_template_kwargs", None)
         result.pop("thinking_budget_tokens", None)

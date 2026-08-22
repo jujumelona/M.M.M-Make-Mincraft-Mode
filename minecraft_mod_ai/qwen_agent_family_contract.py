@@ -54,6 +54,14 @@ def _forced_tool_choice(tool_choice: Any) -> bool:
     return isinstance(tool_choice, Mapping) or str(tool_choice or "").casefold() == "required"
 
 
+def _host_forced_tool(request: Any) -> bool:
+    """Recognize local forced turns stored as host-semantic ``auto`` metadata."""
+
+    from .forced_tool_execution_contract import host_forced_tool_name
+
+    return bool(host_forced_tool_name(request))
+
+
 def _request_messages(request: Any) -> Sequence[Mapping[str, Any]]:
     raw = getattr(request, "messages", ()) or ()
     return tuple(message for message in raw if isinstance(message, Mapping))
@@ -71,6 +79,8 @@ def _assistant_has_agent_history(messages: Sequence[Mapping[str, Any]]) -> bool:
 
 
 def _qwen_agent_request(request: Any) -> bool:
+    if _host_forced_tool(request):
+        return False
     tool_choice = getattr(request, "tool_choice", None)
     if _forced_tool_choice(tool_choice):
         return False
@@ -84,6 +94,11 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     """Map MMM request semantics onto registry-declared generation modes."""
 
     tools = getattr(request, "tools", ()) or ()
+    if _host_forced_tool(request):
+        # The request object remains auto for host-validation compatibility, while the
+        # pure-content hardware transport renders its one schema as wire required. Do
+        # not restore stale agent reasoning for this deterministic control turn.
+        return None
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
     if _forced_tool_choice(getattr(request, "tool_choice", None)):
