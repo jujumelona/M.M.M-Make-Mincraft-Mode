@@ -94,7 +94,7 @@ def install(causal_frontier_contract_module: Any) -> None:
                 feedback = {
                     "role": "system",
                     "content": (
-                        "The previous tool action was discarded without execution because "
+                        "The previous stale tool action was discarded without execution because "
                         "it is not the host-selected action for the current causal state. "
                         f"Rejected: {', '.join(rejected)}. Call exactly {forced_name!r} "
                         "now; do not emit any other tool name."
