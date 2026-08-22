@@ -20,19 +20,19 @@ def _config():
             "decode_hotpath": "t4_mtp",
             "mtp_widths": "1,2,3,4,5,6",
         },
-        max_new_tokens=8192,
+        max_new_tokens=-1,
     )
 
 
-def test_qwen_output_preserves_profile_default_and_operator_can_override(monkeypatch) -> None:
+def test_qwen_output_is_unlimited_by_default_and_operator_can_override(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     hardware = SimpleNamespace(
-        _server_payload=lambda adapter, request: {"max_tokens": 8192}
+        _server_payload=lambda adapter, request: {"max_tokens": 1234}
     )
     contract._install_output_policy(hardware)
     adapter = SimpleNamespace(config=_config())
 
-    assert hardware._server_payload(adapter, object())["max_tokens"] == 8192
+    assert hardware._server_payload(adapter, object())["max_tokens"] == -1
 
     monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "24576")
     assert hardware._server_payload(adapter, object())["max_tokens"] == 24576
@@ -43,9 +43,9 @@ def test_qwen_output_preserves_profile_default_and_operator_can_override(monkeyp
 
 @pytest.mark.parametrize(
     ("operator_limit", "expected"),
-    ((None, 2048), ("1536", 1536), ("24576", 2048), ("-1", 2048)),
+    ((None, -1), ("1536", 1536), ("24576", 24576), ("-1", -1)),
 )
-def test_research_note_has_schema_local_output_cap(
+def test_research_note_has_no_transport_output_cap(
     monkeypatch, operator_limit, expected
 ) -> None:
     if operator_limit is None:
@@ -53,7 +53,7 @@ def test_research_note_has_schema_local_output_cap(
     else:
         monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", operator_limit)
     hardware = SimpleNamespace(
-        _server_payload=lambda adapter, request: {"max_tokens": 8192}
+        _server_payload=lambda adapter, request: {"max_tokens": 1234}
     )
     contract._install_output_policy(hardware)
     request = SimpleNamespace(
@@ -68,10 +68,10 @@ def test_research_note_has_schema_local_output_cap(
     )["max_tokens"] == expected
 
 
-def test_non_research_schema_keeps_full_profile_output_budget(monkeypatch) -> None:
+def test_non_research_schema_uses_native_unlimited_output(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     hardware = SimpleNamespace(
-        _server_payload=lambda adapter, request: {"max_tokens": 8192}
+        _server_payload=lambda adapter, request: {"max_tokens": 1234}
     )
     contract._install_output_policy(hardware)
     request = SimpleNamespace(
@@ -83,7 +83,7 @@ def test_non_research_schema_keeps_full_profile_output_budget(monkeypatch) -> No
 
     assert hardware._server_payload(
         SimpleNamespace(config=_config()), request
-    )["max_tokens"] == 8192
+    )["max_tokens"] == -1
 
 
 def test_output_limit_rejects_zero_and_invalid_values(monkeypatch) -> None:

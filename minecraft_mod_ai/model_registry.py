@@ -195,7 +195,7 @@ class ModelRegistry:
             max_input_tokens=_nonnegative_int(
                 raw.get("max_input_tokens", 0), f"{role}.max_input_tokens"
             ),
-            max_new_tokens=_positive_int(
+            max_new_tokens=_completion_budget(
                 raw.get("max_new_tokens", 1200), f"{role}.max_new_tokens"
             ),
             min_free_vram_mb=_nonnegative_int(
@@ -245,6 +245,16 @@ def _required_env(raw: Mapping[str, Any], key: str, role: str) -> str:
 def _positive_int(value: Any, field: str) -> int:
     if type(value) is not int or value <= 0:
         raise ModelConfigurationError(f"{field} must be a positive integer.")
+    return value
+
+
+def _completion_budget(value: Any, field: str) -> int:
+    """Accept a positive bound or llama.cpp's native unlimited sentinel."""
+
+    if type(value) is not int or (value != -1 and value <= 0):
+        raise ModelConfigurationError(
+            f"{field} must be -1 (unlimited) or a positive integer."
+        )
     return value
 
 

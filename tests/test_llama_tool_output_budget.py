@@ -37,7 +37,7 @@ def _adapter() -> SimpleNamespace:
                 "qwen_assistant_prefill": True,
                 "decode_hotpath": "t4_mtp",
             },
-            max_new_tokens=8192,
+            max_new_tokens=-1,
         )
     )
 
@@ -53,7 +53,7 @@ def _request(tool_name: str) -> SimpleNamespace:
     )
 
 
-def test_fully_composed_compact_tool_turn_uses_bounded_action_budget(monkeypatch) -> None:
+def test_fully_composed_qwen_tool_turn_uses_native_unlimited_output(monkeypatch) -> None:
     monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
     monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
     adapter = _adapter()
@@ -61,8 +61,7 @@ def test_fully_composed_compact_tool_turn_uses_bounded_action_budget(monkeypatch
     payload = hardware_policy._server_payload(adapter, _request("search_code_rag"))
 
     assert tool_output_budget(adapter.config) == 4096
-    assert payload["max_tokens"] == 4096
-    assert payload["max_tokens"] < adapter.config.max_new_tokens
+    assert payload["max_tokens"] == -1
 
 
 def test_payload_heavy_source_mutation_keeps_model_runtime_budget(monkeypatch) -> None:

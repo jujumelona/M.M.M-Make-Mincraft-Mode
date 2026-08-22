@@ -76,7 +76,7 @@ _qwen36_35b: &qwen36_35b
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
-  max_new_tokens: 8192
+  max_new_tokens: -1
   min_free_vram_mb: 2000
   exclusive_gpu: true
 
@@ -114,7 +114,7 @@ _qwen38_27b_q4: &qwen38_27b_q4
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
-  max_new_tokens: 8192
+  max_new_tokens: -1
   min_free_vram_mb: 2000
   exclusive_gpu: true
 
@@ -160,7 +160,7 @@ _qwen35_9b: &qwen35_9b
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
-  max_new_tokens: 8192
+  max_new_tokens: -1
   min_free_vram_mb: 1000
   exclusive_gpu: true
 
@@ -266,7 +266,7 @@ profiles:
           - Qwen/Qwen3-Coder-30B-A3B-Instruct
           - Qwen/Qwen3-Coder-Next
         max_context: 131072
-        max_new_tokens: 8192
+        max_new_tokens: -1
       coder_safe:
         provider: openai_compatible
         adapter: openai_compatible

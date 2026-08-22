@@ -188,7 +188,43 @@ def test_fully_composed_qwen38_tool_payload_never_leaks_reasoning_none() -> None
     assert "reasoning_effort" not in payload
     assert payload["tools"] == list(request.tools)
     assert payload["tool_choice"] == "auto"
-    assert payload["max_tokens"] == 4096
+    assert payload["max_tokens"] == -1
+
+
+@pytest.mark.parametrize(
+    "profile",
+    ("Qwen3.5-9B_6GB", "Qwen3.6-35B_23GB", "Qwen3.8-27B_18GB"),
+)
+@pytest.mark.parametrize("request_kind", ("plain", "json", "tool"))
+def test_all_local_qwen_families_use_native_unlimited_completion(
+    monkeypatch, profile: str, request_kind: str
+) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
+    config = ModelRegistry("config/model_registry.yaml").role(profile, "coder")
+    if request_kind == "plain":
+        request = GenerationRequest(
+            messages=({"role": "user", "content": "implement one task"},),
+        )
+    elif request_kind == "json":
+        request = GenerationRequest(
+            messages=({"role": "user", "content": "emit one section"},),
+            response_format="json",
+            response_schema={
+                "type": "object",
+                "properties": {"section": {"type": "string"}},
+                "required": ["section"],
+                "additionalProperties": False,
+            },
+        )
+    else:
+        request = _tool_request()
+
+    payload = llama_server_hardware_policy._server_payload(
+        SimpleNamespace(config=config), request
+    )
+
+    assert config.max_new_tokens == -1
+    assert payload["max_tokens"] == -1
 
 
 def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> None:

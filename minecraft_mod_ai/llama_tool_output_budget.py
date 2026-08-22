@@ -86,6 +86,12 @@ def _requires_model_output_budget(request: Any) -> bool:
     return bool(names & _PAYLOAD_HEAVY_TOOL_NAMES)
 
 
+def _uses_native_unlimited_qwen(config: Any) -> bool:
+    extra = getattr(config, "extra", {})
+    metadata = extra if isinstance(extra, Mapping) else {}
+    return str(metadata.get("runtime_contract", "")).strip().casefold() == "qwen"
+
+
 def _bounded_tool_limit(
     adapter: Any,
     payload: Mapping[str, Any],
@@ -111,7 +117,11 @@ def install(hardware_module: Any) -> None:
     def bounded_tool_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload = dict(current(adapter, request))
         tools = getattr(request, "tools", ()) or ()
-        if tools and not _requires_model_output_budget(request):
+        if (
+            tools
+            and not _uses_native_unlimited_qwen(getattr(adapter, "config", None))
+            and not _requires_model_output_budget(request)
+        ):
             payload["max_tokens"] = _bounded_tool_limit(adapter, payload)
         return payload
 
