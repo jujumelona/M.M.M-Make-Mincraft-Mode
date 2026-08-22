@@ -1,12 +1,13 @@
 schema_version: mmm/external-mcp-registry-v2
 servers:
   # First-party MMM stage servers are advertised here for discovery, but the
-  # federation router never recursively invokes them.
+  # federation router never recursively invokes them. Keep their executable contract
+  # identical to root/plugin MCP configs so stdout is always JSON-RPC-only.
   mmm-frontdoor:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: frontdoor}
     version_policy: dynamic
     loaders: [fabric]
@@ -15,7 +16,7 @@ servers:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: research}
     version_policy: dynamic
     loaders: [fabric]
@@ -24,7 +25,7 @@ servers:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mod_generation_mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mod_generation_mcp_server]
     version_policy: dynamic
     loaders: [fabric]
     trust: first_party
@@ -32,7 +33,7 @@ servers:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: quality}
     version_policy: dynamic
     loaders: [fabric]
@@ -41,7 +42,7 @@ servers:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: runtime}
     version_policy: dynamic
     loaders: [fabric]
@@ -50,7 +51,7 @@ servers:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: release}
     version_policy: dynamic
     loaders: [fabric]
@@ -59,7 +60,7 @@ servers:
     status: enabled
     federated: false
     transport: stdio
-    command: [python, -m, minecraft_mod_ai.mcp_server]
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
     env: {MMM_MCP_STAGE: training}
     version_policy: dynamic
     loaders: [fabric]
