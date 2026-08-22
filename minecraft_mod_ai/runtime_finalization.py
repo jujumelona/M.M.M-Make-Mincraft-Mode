@@ -9,21 +9,37 @@ integrity must wrap the progress-aware loop that bootstrap installs late, and th
 structured-intent projection must be the *outermost* routing-query owner so older
 user-only wrappers cannot reintroduce tail truncation. Keeping those operations here
 prevents package ``__init__`` from becoming a second ad-hoc bootstrap graph.
+
+Late finalization is process-lifetime composition just like bootstrap. If any installer
+fails after mutating a callable, replaying the prefix is not transactionally safe. A
+failed or recursively re-entered finalization therefore poisons this process; a clean
+process restart is the only supported retry boundary.
 """
 
 import threading
 
 _FINALIZE_LOCK = threading.RLock()
 _FINALIZED = False
+_FINALIZING = False
 
 
 def finalize_runtime() -> None:
-    global _FINALIZED
+    global _FINALIZED, _FINALIZING
     if _FINALIZED:
         return
     with _FINALIZE_LOCK:
         if _FINALIZED:
             return
+        if _FINALIZING:
+            raise RuntimeError(
+                "runtime finalization was re-entered or a prior late-finalization "
+                "attempt failed after partial mutation; restart the process before "
+                "retrying"
+            )
+        # Intentionally cleared only after every installer and preflight succeeds.
+        # Any exception leaves the process poisoned so already-applied wrappers cannot
+        # be replayed on top of themselves by a later import/finalization attempt.
+        _FINALIZING = True
 
         from . import agent_capability_context
         from . import agent_tool_runtime
@@ -205,8 +221,9 @@ def finalize_runtime() -> None:
         # surface; execution remains restricted by the per-turn causal visibility gate.
         install_tool_validation_surface()
         # Qwen tagged string parameters occasionally include harmless JSON quoting or
-        # formatting drift. Canonicalize only uniquely equivalent enum spellings and
-        # discard/retry one semantic mismatch before any tool action can execute.
+        # formatting drift. Canonicalize only uniquely equivalent enum spellings here.
+        # Semantic mismatches remain typed parser failures; causal stale recovery is the
+        # single owner of any model-action re-synchronization.
         install_qwen_enum_recovery(llama_cpp_adapter)
         # llama.cpp reports both output-cap exhaustion and context pressure as
         # finish_reason='length'. Classify them before resilience wrappers are bound so
@@ -218,8 +235,8 @@ def finalize_runtime() -> None:
         # while genuine finish_reason=length still follows the compaction path below.
         install_llama_server_response_resilience(llama_cpp_adapter)
         # A remaining context-pressure length stop recovers once by compacting tool
-        # observations. Output-cap exhaustion is deliberately not retried here; the
-        # bounded source-edit ACI splits that work across ordinary agent turns.
+        # observations. Output-cap exhaustion is not retried in the adapter; the durable
+        # work-node owner above decides whether that persisted generation node retries.
         install_llama_length_resilience(llama_cpp_adapter)
         # Bootstrap's integrity stage runs before these late finalization wrappers are
         # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
@@ -238,6 +255,7 @@ def finalize_runtime() -> None:
         run_runtime_live_path_preflight()
         run_runtime_preflight()
         _FINALIZED = True
+        _FINALIZING = False
 
 
 __all__ = ["finalize_runtime"]
