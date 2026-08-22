@@ -386,32 +386,24 @@ def test_live_causal_adapter_discards_stale_and_bounds_resync() -> None:
 
     with pytest.raises(
         ModelConfigurationError,
-        match="bounded causal-frontier re-synchronization",
+        match="single causal-frontier re-synchronization attempt",
     ):
         adapter.generate_turn(request)
 
-    # Initial semantic attempt plus three bounded re-synchronization attempts.
-    assert len(inner.requests) == 4
-    retries = inner.requests[1:]
-    assert all(
-        [schema["function"]["name"] for schema in retry.tools]
-        == ["inspect_github_repository"]
-        for retry in retries
-    )
-    assert all(
-        retry.tool_choice
-        == {
-            "type": "function",
-            "function": {"name": "inspect_github_repository"},
-        }
-        for retry in retries
-    )
-    assert all(retry.parallel_tool_calls is False for retry in retries)
-    assert all(
-        [schema["function"]["name"] for schema in retry.tool_validation_schemas]
-        == ["inspect_github_repository", "apply_source_edit"]
-        for retry in retries
-    )
+    # One initial semantic attempt plus exactly one host-owned re-synchronization.
+    assert len(inner.requests) == 2
+    retry = inner.requests[1]
+    assert [schema["function"]["name"] for schema in retry.tools] == [
+        "inspect_github_repository"
+    ]
+    assert retry.tool_choice == {
+        "type": "function",
+        "function": {"name": "inspect_github_repository"},
+    }
+    assert retry.parallel_tool_calls is False
+    assert [
+        schema["function"]["name"] for schema in retry.tool_validation_schemas
+    ] == ["inspect_github_repository", "apply_source_edit"]
 
 
 def test_generic_code_rag_dense_escalation_is_explicit_opt_in(monkeypatch) -> None:
