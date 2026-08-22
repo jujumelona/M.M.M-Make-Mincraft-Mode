@@ -343,7 +343,7 @@ def test_live_causal_adapter_final_synthesis_clears_tool_validation_only() -> No
     assert sent.metadata == {"trace": "final-synthesis"}
 
 
-def test_live_causal_adapter_stops_repeated_stale_authorized_call() -> None:
+def test_live_causal_adapter_discards_stale_and_bounds_resync() -> None:
     visible = _schema("inspect_github_repository", {"repository": {"type": "string"}})
     edit = _schema(
         "apply_source_edit",
@@ -360,11 +360,16 @@ def test_live_causal_adapter_stops_repeated_stale_authorized_call() -> None:
     )
 
     class Inner:
+        def __init__(self) -> None:
+            self.requests = []
+
         def generate_turn(self, request):
+            self.requests.append(request)
             return GenerationResponse(tool_calls=(stale_call,))
 
+    inner = Inner()
     adapter = CausalFrontierAdapter(
-        Inner(),
+        inner,
         stage="generation",
         role="coder",
         require_fresh_evidence=False,
@@ -379,12 +384,34 @@ def test_live_causal_adapter_stops_repeated_stale_authorized_call() -> None:
         },
     )
 
-    assert adapter.generate_turn(request).tool_calls == (stale_call,)
     with pytest.raises(
         ModelConfigurationError,
-        match="repeated stale authorized tool calls without causal frontier progress",
+        match="bounded causal-frontier re-synchronization",
     ):
         adapter.generate_turn(request)
+
+    # Initial semantic attempt plus three bounded re-synchronization attempts.
+    assert len(inner.requests) == 4
+    retries = inner.requests[1:]
+    assert all(
+        [schema["function"]["name"] for schema in retry.tools]
+        == ["inspect_github_repository"]
+        for retry in retries
+    )
+    assert all(
+        retry.tool_choice
+        == {
+            "type": "function",
+            "function": {"name": "inspect_github_repository"},
+        }
+        for retry in retries
+    )
+    assert all(retry.parallel_tool_calls is False for retry in retries)
+    assert all(
+        [schema["function"]["name"] for schema in retry.tool_validation_schemas]
+        == ["inspect_github_repository", "apply_source_edit"]
+        for retry in retries
+    )
 
 
 def test_generic_code_rag_dense_escalation_is_explicit_opt_in(monkeypatch) -> None:
