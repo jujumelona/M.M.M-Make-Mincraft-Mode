@@ -5,13 +5,15 @@ from __future__ import annotations
 llama.cpp uses the same finish reason when a bounded decode exhausts ``max_tokens``
 and when the server cannot complete within its context window. Those are different
 agent failures: shrinking observations can recover context pressure, but it cannot
-repair an action that is itself too large. The latter must be split into another
-bounded agent action.
+repair an action that is itself too large. The classification lives here so downstream
+recovery never has to infer semantics from human-readable error strings.
 """
 
 from typing import Any, Mapping
 
-_MARKER = "_mmm_llama_finish_reason_classifier_v1"
+_MARKER = "_mmm_llama_finish_reason_classifier_v2"
+CONTEXT_PRESSURE = "context_pressure"
+OUTPUT_EXHAUSTED = "output_exhausted"
 _CONTEXT_ERROR = (
     "native llama-server reached its model/server context boundary before the "
     "assistant turn completed"
@@ -20,6 +22,33 @@ _OUTPUT_ERROR = (
     "native llama-server exhausted the bounded output allowance before the "
     "assistant action completed"
 )
+
+
+class LlamaCompletionBoundaryError(RuntimeError):
+    """Typed llama completion stop that is safe to classify through wrapper chains."""
+
+    def __init__(self, message: str, *, kind: str) -> None:
+        if kind not in {CONTEXT_PRESSURE, OUTPUT_EXHAUSTED}:
+            raise ValueError(f"unsupported llama completion boundary kind: {kind!r}")
+        self.kind = kind
+        super().__init__(message)
+
+
+def completion_boundary_kind(exc: BaseException) -> str:
+    """Return a typed completion-boundary kind through backend/wrapper exception chains."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, LlamaCompletionBoundaryError):
+            return current.kind
+        wrapped = getattr(current, "cause", None)
+        if isinstance(wrapped, BaseException) and id(wrapped) not in seen:
+            current = wrapped
+            continue
+        current = current.__cause__ or current.__context__
+    return ""
 
 
 def _int_value(value: Any) -> int:
@@ -36,7 +65,7 @@ def _usage(data: Mapping[str, Any]) -> tuple[int, int]:
     return _int_value(raw.get("prompt_tokens")), _int_value(raw.get("completion_tokens"))
 
 
-def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> RuntimeError:
+def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> LlamaCompletionBoundaryError:
     prompt_tokens, completion_tokens = _usage(data)
     max_tokens = _int_value(payload.get("max_tokens"))
     details = (
@@ -49,8 +78,14 @@ def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> Runtim
     # of parser/control tokens. Treat only a near-saturated positive decode allowance
     # as output exhaustion; otherwise preserve the context-pressure recovery path.
     if max_tokens > 0 and completion_tokens >= max(1, max_tokens - 2):
-        return RuntimeError(_OUTPUT_ERROR + "; split the action into smaller tool edits;" + details)
-    return RuntimeError(_CONTEXT_ERROR + "; compact/retrieve less evidence for this turn;" + details)
+        return LlamaCompletionBoundaryError(
+            _OUTPUT_ERROR + "; split the action into smaller tool edits;" + details,
+            kind=OUTPUT_EXHAUSTED,
+        )
+    return LlamaCompletionBoundaryError(
+        _CONTEXT_ERROR + "; compact/retrieve less evidence for this turn;" + details,
+        kind=CONTEXT_PRESSURE,
+    )
 
 
 def install(llama_cpp_module: Any) -> None:
@@ -86,4 +121,13 @@ def install(llama_cpp_module: Any) -> None:
     setattr(llama_cpp_module, _MARKER, True)
 
 
-__all__ = ["_CONTEXT_ERROR", "_OUTPUT_ERROR", "_length_error", "install"]
+__all__ = [
+    "CONTEXT_PRESSURE",
+    "LlamaCompletionBoundaryError",
+    "OUTPUT_EXHAUSTED",
+    "_CONTEXT_ERROR",
+    "_OUTPUT_ERROR",
+    "_length_error",
+    "completion_boundary_kind",
+    "install",
+]
