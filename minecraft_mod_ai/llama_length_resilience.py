@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-"""Bounded recovery for llama.cpp ``finish_reason='length'`` responses.
+"""Bounded recovery for llama.cpp context-pressure completion stops.
 
-A ``length`` stop can mean prompt/context pressure or exhaustion of the bounded output
-allowance. Recovery is exactly one retry after compacting large tool observations,
-while preserving the request's authoritative positive output-token policy. The retry
-message budget is deliberately tighter than the normal first-pass budget so a 32K T4
-slot still has room for the full coder tool decode.
+The finish-reason contract owns classification. This module owns exactly one recovery:
+compact large observations and retry a genuine context-pressure turn while preserving
+the authoritative positive output-token policy. Output exhaustion is deliberately not
+reinterpreted here as context pressure.
 """
 
 import json
@@ -14,10 +13,10 @@ import sys
 from functools import wraps
 from typing import Any, Mapping
 
+from .llama_finish_reason_contract import CONTEXT_PRESSURE, completion_boundary_kind
 from .model_context_budget import emergency_fit_messages
 
-_MARKER = "_mmm_bounded_length_recovery_v2"
-_LENGTH_ERROR_FRAGMENT = "reached its model/server context boundary before the assistant turn completed"
+_MARKER = "_mmm_bounded_length_recovery_v3"
 _LENGTH_RETRY_MESSAGE_BYTES = 32 * 1024
 
 
@@ -51,7 +50,7 @@ def install(llama_cpp_module: Any) -> None:
         try:
             return current(server_url, payload)
         except RuntimeError as exc:
-            if _LENGTH_ERROR_FRAGMENT not in str(exc):
+            if completion_boundary_kind(exc) != CONTEXT_PRESSURE:
                 raise
 
             original_messages = tuple(payload.get("messages", ()) or ())
@@ -66,11 +65,9 @@ def install(llama_cpp_module: Any) -> None:
 
             retry_payload = dict(payload)
             retry_payload["messages"] = [dict(message) for message in fitted_messages]
-            # Preserve the authoritative tool/page bound. Input fitting now reserves
-            # this exact decode allowance against the live server context, so recovery
-            # only needs to reclaim prompt space rather than mutate output policy.
-
-            # stderr is mandatory: MCP stdio reserves stdout for JSON-RPC frames.
+            # Preserve the authoritative tool/page bound. Input fitting reserves this
+            # exact decode allowance against the live server context; recovery reclaims
+            # prompt space and never mutates output ownership.
             print(
                 "llama length recovery: retrying once",
                 f" message_bytes={before_bytes}->{after_bytes}",
