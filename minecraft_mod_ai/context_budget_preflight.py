@@ -45,7 +45,7 @@ def run_context_budget_preflight() -> None:
     if (
         getattr(
             llama_server_hardware_policy._server_payload,
-            "_mmm_llama_tool_output_budget_v1",
+            "_mmm_llama_tool_output_budget_v2",
             False,
         )
         is not True
@@ -73,20 +73,34 @@ def run_context_budget_preflight() -> None:
     synthetic_tool_payload = llama_server_hardware_policy._server_payload(
         synthetic_adapter,
         SimpleNamespace(
-            messages=({"role": "user", "content": "edit"},),
-            tools=({"type": "function", "function": {"name": "apply_source_edit"}},),
+            messages=({"role": "user", "content": "search"},),
+            tools=({"type": "function", "function": {"name": "search_code_rag"}},),
             response_format="json",
         ),
     )
     expected_tool_budget = tool_output_budget(synthetic_adapter.config)
     if synthetic_tool_payload.get("max_tokens") != expected_tool_budget:
         raise ContextBudgetPreflightError(
-            "llama-server tool payload disagrees with the authoritative bounded "
+            "llama-server compact tool payload disagrees with the authoritative bounded "
             f"tool-output policy: expected {expected_tool_budget}"
         )
     if expected_tool_budget >= synthetic_adapter.config.max_new_tokens:
         raise ContextBudgetPreflightError(
             "default scalar tool-output budget must remain below full coder generation budget"
+        )
+
+    synthetic_mutation_payload = llama_server_hardware_policy._server_payload(
+        synthetic_adapter,
+        SimpleNamespace(
+            messages=({"role": "user", "content": "edit"},),
+            tools=({"type": "function", "function": {"name": "apply_source_edit"}},),
+            response_format="json",
+        ),
+    )
+    if synthetic_mutation_payload.get("max_tokens") != synthetic_payload.get("max_tokens"):
+        raise ContextBudgetPreflightError(
+            "llama-server source mutation payload was incorrectly capped by the compact "
+            "tool-output policy"
         )
 
     if (
