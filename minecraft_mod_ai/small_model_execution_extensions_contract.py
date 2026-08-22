@@ -4,80 +4,28 @@ from __future__ import annotations
 
 The contract adds two complementary capabilities without changing model weights:
 
-* an exact-anchor source-edit ACI that keeps project selection, hashes and the raw
-  transactional patch protocol host-owned; and
+* one scalar source-edit ACI whose schema/materializer is owned by
+  ``source_edit_scalar_protocol_contract`` while this module owns runtime dispatch;
 * explicit requires/provides SkillBank composition with fail-closed dependency
   ordering. Dependencies are never inferred from lexical similarity.
 """
 
 import hashlib
 import json
+import sys
 from collections import defaultdict
 from functools import wraps
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from .source_edit_scalar_protocol_contract import (
+    SOURCE_EDIT_SCHEMA as _SOURCE_EDIT_SCHEMA,
+    materialize_model_source_edit as _materialize_scalar_source_edit,
+)
 
 _INSTALLED = False
 _SOURCE_EDIT_TOOL = "apply_source_edit"
-_MAX_SOURCE_EDITS = 96
 _MAX_COMPOSED_SKILLS = 12
-
-_SOURCE_EDIT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["edits"],
-    "properties": {
-        "edits": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": _MAX_SOURCE_EDITS,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["operation", "path"],
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": ["replace_exact", "insert_before", "insert_after"],
-                    },
-                    "path": {"type": "string", "minLength": 1},
-                    "old": {"type": "string", "minLength": 1},
-                    "new": {"type": "string"},
-                    "anchor": {"type": "string", "minLength": 1},
-                    "content": {"type": "string"},
-                    "count": {"type": "integer", "minimum": 1, "default": 1},
-                },
-            },
-        }
-    },
-}
-
-
-def _normalize_model_source_path(runtime_module: Any, root: Path, raw_path: Any) -> tuple[str, Path]:
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise runtime_module.AgentToolRuntimeError("Model source path must be a non-empty string")
-    normalized = PurePosixPath(raw_path.strip().replace("\\", "/")).as_posix()
-    path = PurePosixPath(normalized)
-    if path.is_absolute() or normalized in {"", "."} or ".." in path.parts:
-        raise runtime_module.AgentToolRuntimeError(f"Unsafe model source path: {raw_path!r}")
-    if not any(normalized.startswith(prefix) for prefix in runtime_module._MODEL_SOURCE_PREFIXES):
-        raise runtime_module.AgentToolRuntimeError(
-            "Model source edits are limited to src/main/java, src/main/resources, "
-            f"src/test/java and src/gametest: {normalized}"
-        )
-    cursor = root
-    for part in path.parts[:-1]:
-        cursor = cursor / part
-        if cursor.exists() and cursor.is_symlink():
-            raise runtime_module.AgentToolRuntimeError(
-                f"Model source path traverses a symlink: {normalized}"
-            )
-    target = root.joinpath(*path.parts)
-    if not target.exists() or target.is_symlink() or not target.is_file():
-        raise runtime_module.AgentToolRuntimeError(
-            f"Partial source edit requires an existing regular file: {normalized}"
-        )
-    return normalized, target
 
 
 def _replacement_for_edit(runtime_module: Any, item: Mapping[str, Any], path: str) -> dict[str, Any]:
@@ -116,71 +64,19 @@ def _materialize_model_source_edit(
     workspace_root: str | Path,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Compile small exact edits into one hash-guarded raw patch per touched file."""
+    """Delegate scalar source-write compilation to its single canonical owner."""
 
-    extra = set(payload) - {"edits"}
-    if extra:
-        raise runtime_module.AgentToolRuntimeError(
-            "Model-facing source edits accept only edits; host-owned project/patch "
-            f"fields are forbidden: {sorted(extra)}"
-        )
-    root, project_root_argument = runtime_module._discover_model_project_root(workspace_root)
-    raw_edits = payload.get("edits")
-    if not isinstance(raw_edits, list) or not raw_edits:
-        raise runtime_module.AgentToolRuntimeError("edits must be a non-empty list")
-    if len(raw_edits) > _MAX_SOURCE_EDITS:
-        raise runtime_module.AgentToolRuntimeError(
-            f"edits exceeds the model-facing {_MAX_SOURCE_EDITS}-edit batch limit"
-        )
-
-    grouped: dict[str, dict[str, Any]] = {}
-    for raw in raw_edits:
-        if not isinstance(raw, Mapping):
-            raise runtime_module.AgentToolRuntimeError("Each model source edit must be an object")
-        normalized, target = _normalize_model_source_path(runtime_module, root, raw.get("path"))
-        replacement = _replacement_for_edit(runtime_module, raw, normalized)
-        state = grouped.get(normalized)
-        if state is None:
-            raw_bytes = target.read_bytes()
-            try:
-                text = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise runtime_module.AgentToolRuntimeError(
-                    f"Partial source edit target is not UTF-8 text: {normalized}"
-                ) from exc
-            state = {
-                "sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
-                "text": text,
-                "replacements": [],
-            }
-            grouped[normalized] = state
-
-        found = state["text"].count(replacement["old"])
-        if found != replacement["count"]:
-            raise runtime_module.AgentToolRuntimeError(
-                f"Exact source-edit precondition failed for {normalized}: expected "
-                f"{replacement['count']} matches, found {found}"
-            )
-        state["text"] = state["text"].replace(
-            replacement["old"], replacement["new"], replacement["count"]
-        )
-        state["replacements"].append(replacement)
-
-    operations = [
-        {
-            "operation": "edit",
-            "path": path,
-            "expected_sha256": state["sha256"],
-            "replacements": state["replacements"],
-        }
-        for path, state in grouped.items()
-    ]
-    return {"project_root": project_root_argument, "operations": operations}
+    return _materialize_scalar_source_edit(
+        sys.modules[__name__],
+        runtime_module,
+        workspace_root,
+        payload,
+    )
 
 
 def _install_partial_source_edit(runtime_module: Any) -> None:
     current_schemas = runtime_module.AgentToolRuntime.tool_schemas
-    if not getattr(current_schemas, "_mmm_partial_source_edit_v1", False):
+    if not getattr(current_schemas, "_mmm_scalar_source_edit_v2", False):
 
         @wraps(current_schemas)
         def tool_schemas(self: Any, stage: str):
@@ -198,10 +94,11 @@ def _install_partial_source_edit(runtime_module: Any) -> None:
                 "function": {
                     "name": _SOURCE_EDIT_TOOL,
                     "description": (
-                        "Make small exact edits to existing semantic source/resource files. "
-                        "Use exact replacement or insert-before/after anchors; never emit a full "
-                        "file when a local edit is sufficient. The host owns project selection, "
-                        "current SHA-256 preconditions, coalescing and the transactional write."
+                        "Make one bounded semantic source/resource write. Use exact replacement "
+                        "or insert-before/after for local edits, create_file for a new file, "
+                        "replace_file for a whole existing file, and delete_file only when removal "
+                        "is intended. The host owns project selection, SHA-256 preconditions and "
+                        "transactional execution."
                     ),
                     "parameters": _SOURCE_EDIT_SCHEMA,
                 },
@@ -210,16 +107,17 @@ def _install_partial_source_edit(runtime_module: Any) -> None:
             with self._lock:
                 self._schema_cache["generation"] = result
                 self._allowed_tool_cache["generation"] = frozenset(
-                    str(item["function"]["name"]) for item in result
+                    str(item["function"]["name"])
+                    for item in result
                 )
             return result
 
-        tool_schemas._mmm_partial_source_edit_v1 = True  # type: ignore[attr-defined]
+        tool_schemas._mmm_scalar_source_edit_v2 = True  # type: ignore[attr-defined]
         tool_schemas.__wrapped__ = current_schemas  # type: ignore[attr-defined]
         runtime_module.AgentToolRuntime.tool_schemas = tool_schemas
 
     current_call_scoped = runtime_module.AgentToolRuntime.call_scoped
-    if not getattr(current_call_scoped, "_mmm_partial_source_edit_v1", False):
+    if not getattr(current_call_scoped, "_mmm_scalar_source_edit_v2", False):
 
         @wraps(current_call_scoped)
         def call_scoped(
@@ -245,7 +143,7 @@ def _install_partial_source_edit(runtime_module: Any) -> None:
                 external_server_ids=external_server_ids,
             )
 
-        call_scoped._mmm_partial_source_edit_v1 = True  # type: ignore[attr-defined]
+        call_scoped._mmm_scalar_source_edit_v2 = True  # type: ignore[attr-defined]
         call_scoped.__wrapped__ = current_call_scoped  # type: ignore[attr-defined]
         runtime_module.AgentToolRuntime.call_scoped = call_scoped
 
