@@ -26,10 +26,13 @@ _CANONICAL_OPERATIONS = (
     "insert_before",
     "insert_after",
     "create_file",
+    "replace_file",
+    "delete_file",
 )
 _OPERATION_ALIASES = {
     "replace": "replace_exact",
     "create": "create_file",
+    "delete": "delete_file",
 }
 _ACCEPTED_OPERATIONS = (*_CANONICAL_OPERATIONS, *_OPERATION_ALIASES)
 
@@ -41,8 +44,9 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
         "operation": {
             "type": "string",
             "description": (
-                "Use create_file only when the target does not exist. Use replace_exact "
-                "or insert_before/insert_after for an existing file."
+                "Use create_file only when the target does not exist. Use replace_file "
+                "or delete_file for a whole existing file, and replace_exact or "
+                "insert_before/insert_after for bounded partial edits."
             ),
             # Keep the model contract narrow while accepting common Qwen shorthands
             # that are losslessly canonicalized by the host before dispatch.
@@ -102,10 +106,14 @@ def _bounded_text(
     return value
 
 
-def _bounded_create_content(runtime_module: Any, payload: Mapping[str, Any]) -> str:
+def _bounded_file_content(
+    runtime_module: Any,
+    payload: Mapping[str, Any],
+    operation: str,
+) -> str:
     value = payload.get("content")
     if not isinstance(value, str):
-        raise runtime_module.AgentToolRuntimeError("create_file requires text content")
+        raise runtime_module.AgentToolRuntimeError(f"{operation} requires text content")
     if len(value) > _MAX_REPLACEMENT_CHARS:
         raise runtime_module.AgentToolRuntimeError(
             f"content exceeds the model-facing {_MAX_REPLACEMENT_CHARS}-character limit"
@@ -131,6 +139,8 @@ def _canonicalize_text_alias(
 ) -> Mapping[str, Any]:
     """Map Qwen's generic ``text`` field without weakening the strict schema."""
 
+    if operation == "delete_file":
+        return payload
     canonical_key = "new" if operation == "replace_exact" else "content"
     if "text" not in payload or canonical_key in payload:
         return payload
@@ -234,9 +244,34 @@ def materialize_model_source_edit(
                 {
                     "operation": "create",
                     "path": normalized,
-                    "content": _bounded_create_content(runtime_module, payload),
+                    "content": _bounded_file_content(
+                        runtime_module, payload, "create_file"
+                    ),
                 }
             ],
+        }
+
+    if operation in {"replace_file", "delete_file"}:
+        forbidden = {"old", "new", "anchor", "count"}.intersection(payload)
+        if operation == "delete_file":
+            forbidden.update({"content", "text"}.intersection(payload))
+        if forbidden:
+            raise runtime_module.AgentToolRuntimeError(
+                f"Fields {sorted(forbidden)} are invalid for {operation}"
+            )
+        raw_bytes = target.read_bytes()
+        host_operation: dict[str, Any] = {
+            "operation": "delete" if operation == "delete_file" else "replace",
+            "path": normalized,
+            "expected_sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
+        }
+        if operation == "replace_file":
+            host_operation["content"] = _bounded_file_content(
+                runtime_module, payload, "replace_file"
+            )
+        return {
+            "project_root": project_root_argument,
+            "operations": [host_operation],
         }
 
     count = payload.get("count", 1)
