@@ -61,7 +61,9 @@ def test_install_canonicalizes_quoted_string_before_original_decoder() -> None:
             raise _outside_enum_error(tool_name, key)
         return raw
 
-    original_completion = lambda adapter, server_url, request: "unused"
+    def original_completion(adapter, server_url, request):
+        return "unused"
+
     fake_module = SimpleNamespace(
         _decode_parameter_value=original_decode,
         _tool_semantic_completion=original_completion,
@@ -86,7 +88,9 @@ def test_tool_specific_alias_is_canonicalized_without_generation_retry() -> None
             raise _outside_enum_error(tool_name, key)
         return raw
 
-    original_completion = lambda adapter, server_url, request: "unchanged"
+    def original_completion(adapter, server_url, request):
+        return "unchanged"
+
     fake_module = SimpleNamespace(
         _decode_parameter_value=original_decode,
         _tool_semantic_completion=original_completion,
@@ -146,7 +150,9 @@ def test_unknown_parameter_remains_parser_error_for_causal_recovery_owner() -> N
             f"Qwen tool {tool_name!r} emitted unknown parameter {key!r}"
         )
 
-    original_completion = lambda adapter, server_url, request: "unchanged"
+    def original_completion(adapter, server_url, request):
+        return "unchanged"
+
     fake_module = SimpleNamespace(
         _decode_parameter_value=original_decode,
         _tool_semantic_completion=original_completion,
