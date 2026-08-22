@@ -121,10 +121,6 @@ def goals_for_query(query: str) -> tuple[str, ...]:
     )
     plan = ("plan", "planning", "계획", "플랜")
 
-    # Specific terminal outcomes win over implementation means. External MCP/tools
-    # are a terminal goal only when the query names no stronger semantic outcome.
-    # This prevents transport/capability wording from hijacking verify/runtime,
-    # evidence, or planning requests as well as source-changing coder turns.
     if _contains(value, runtime_verify):
         return ("runtime_verify",)
     if _contains(value, release):
@@ -161,15 +157,7 @@ def _lexical_preference(
     query: str,
     tool_schemas: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
-    """Rank already-authorized tools without invoking an embedding/reranker model.
-
-    Causal legality and graph path cost decide which transitions can run. Query
-    relevance is only a tie-breaker, so paying a 0.6B CPU reranker over 12-16 tool
-    schemas before the causal frontier removes most of them is pure scheduling waste.
-    Reuse the max-agent selector's deterministic tokenization/document projection and
-    keep the expensive reranker for actual evidence retrieval where it can affect
-    answer quality.
-    """
+    """Rank already-authorized tools without invoking an embedding/reranker model."""
 
     token_fn = getattr(owner, "_tokens", None)
     document_fn = getattr(owner, "_tool_document", None)
@@ -200,14 +188,7 @@ def _lexical_preference(
 
 
 class _FrontierRuntimeProxy:
-    """Enforce the exact schemas shown on the current model turn.
-
-    The underlying router keeps the complete security/role/stage authorization set so
-    future rounds may reveal new causal transitions. This proxy is the narrower host
-    execution gate: a model may execute only a tool that was actually present in its
-    most recent request. The gate is an ordinary thread-safe shared object because
-    independent read calls execute inside ``ThreadPoolExecutor`` workers.
-    """
+    """Enforce the exact schemas shown on the current model turn."""
 
     def __init__(self, inner: Any, execution_gate: FrontierExecutionGate) -> None:
         self._inner = inner
@@ -216,8 +197,6 @@ class _FrontierRuntimeProxy:
     def _require_visible(self, name: str) -> None:
         visible = self._execution_gate.visible_names()
         if visible is None:
-            # Before the first model turn no tool is executable. Do not fall back to
-            # ContextVar state here because worker threads do not inherit it.
             raise RuntimeError("No causal frontier has been published for execution.")
         if name not in visible:
             raise RuntimeError(
@@ -236,10 +215,6 @@ class _FrontierRuntimeProxy:
         **kwargs: Any,
     ) -> Any:
         self._require_visible(name)
-        # Production AgentToolRuntime owns call_scoped and therefore retains the
-        # stage/role/model scope checks. Minimal compatibility/test runtimes may only
-        # implement call(); falling back there preserves their original host contract
-        # without weakening production scope enforcement.
         method = getattr(self._inner, "call_scoped", None)
         if callable(method):
             return method(stage, name, arguments, **kwargs)
@@ -269,16 +244,8 @@ def _install_live_loop() -> None:
         stage: str,
         role: str,
     ) -> str:
-        # Capture authorization exactly once. Compatibility ContextVars are written by
-        # selector wrappers and can be overwritten by nested model/retrieval calls; a
-        # live coder loop must never let those nested calls replace its own security
-        # surface or preference ordering.
         complete_surface = tuple(authorized_tools(request.tools))
         complete_preference = dict(authorized_tool_preference())
-        # Preserve every upstream request field. This wrapper owns only the broader
-        # causal authorization/validation surface and tool-choice policy; reconstructing
-        # GenerationRequest manually would silently reset metadata/task/prompt and any
-        # future contract field added by another layer.
         host_request = replace(
             request,
             tools=complete_surface,
@@ -338,17 +305,12 @@ def install(max_agent_owner: Any) -> None:
             tool_schemas: Sequence[Mapping[str, Any]],
             require_fresh_evidence: bool = False,
         ) -> tuple[Mapping[str, Any], ...]:
-            del router  # Causal tool exposure is host-computable; no model scoring needed.
+            del router
             available = tuple(tool_schemas)
             remember_authorized_tools(available, {})
             if not available:
                 return ()
 
-            # Compute the legal next-action set before any expensive model work. The
-            # old path called the CPU reranker on a 12-16 schema shortlist just to
-            # obtain a tie-break preference, then discarded almost all of that work
-            # through the causal graph. A deterministic lexical preference preserves
-            # query relevance while causal path cost remains authoritative.
             rank = _lexical_preference(module, query, available)
             remember_authorized_tools(available, rank)
             state = infer_verified_state(
@@ -377,6 +339,7 @@ def install(max_agent_owner: Any) -> None:
                 f"state={','.join(sorted(state))}",
                 f"goals={','.join(goals)}",
                 f"tools={','.join(_name(item) for item in result)}",
+                file=sys.stderr,
                 flush=True,
             )
             return result
