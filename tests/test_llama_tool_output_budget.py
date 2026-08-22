@@ -4,26 +4,26 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_length_resilience
 from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
+from minecraft_mod_ai.llama_finish_reason_contract import (
+    CONTEXT_PRESSURE,
+    LlamaCompletionBoundaryError,
+)
 from minecraft_mod_ai.llama_tool_output_budget import tool_output_budget
 
 
-def _tool() -> dict[str, object]:
+def _tool(name: str = "apply_source_edit") -> dict[str, object]:
     return {
         "type": "function",
         "function": {
-            "name": "apply_source_edit",
-            "description": "edit source",
+            "name": name,
+            "description": name,
             "parameters": {"type": "object", "properties": {}},
         },
     }
 
 
-def test_fully_composed_qwen_tool_turn_uses_bounded_action_budget(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
-    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
-    adapter = SimpleNamespace(
+def _adapter() -> SimpleNamespace:
+    return SimpleNamespace(
         config=SimpleNamespace(
             model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
             extra={
@@ -34,20 +34,40 @@ def test_fully_composed_qwen_tool_turn_uses_bounded_action_budget(
             max_new_tokens=8192,
         )
     )
-    request = SimpleNamespace(
+
+
+def _request(tool_name: str) -> SimpleNamespace:
+    return SimpleNamespace(
         messages=({"role": "user", "content": "repair the source"},),
         response_format="json",
         response_schema=None,
-        tools=(_tool(),),
+        tools=(_tool(tool_name),),
         tool_choice="auto",
         parallel_tool_calls=False,
     )
 
-    payload = hardware_policy._server_payload(adapter, request)
+
+def test_fully_composed_compact_tool_turn_uses_bounded_action_budget(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
+    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
+    adapter = _adapter()
+
+    payload = hardware_policy._server_payload(adapter, _request("search_code_rag"))
 
     assert tool_output_budget(adapter.config) == 4096
     assert payload["max_tokens"] == 4096
     assert payload["max_tokens"] < adapter.config.max_new_tokens
+
+
+def test_payload_heavy_source_mutation_keeps_model_runtime_budget(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
+    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
+    adapter = _adapter()
+
+    payload = hardware_policy._server_payload(adapter, _request("apply_source_edit"))
+
+    # The compact 4K policy must never become a second owner for a source payload.
+    assert payload["max_tokens"] == -1
 
 
 def test_tool_output_override_remains_hard_bounded(monkeypatch) -> None:
@@ -63,9 +83,9 @@ def test_length_recovery_preserves_existing_tool_output_budget(monkeypatch) -> N
     def completion(_server_url: str, payload: dict[str, object]):
         attempts.append(dict(payload))
         if len(attempts) == 1:
-            raise RuntimeError(
-                "native llama-server reached its model/server context boundary before "
-                "the assistant turn completed"
+            raise LlamaCompletionBoundaryError(
+                "synthetic context pressure",
+                kind=CONTEXT_PRESSURE,
             )
         return {"content": "ok"}
 
@@ -85,7 +105,7 @@ def test_length_recovery_preserves_existing_tool_output_budget(monkeypatch) -> N
                 {"role": "tool", "content": "y" * 10_000},
             ],
             "max_tokens": 4096,
-            "tools": [_tool()],
+            "tools": [_tool("search_code_rag")],
         },
     )
 
