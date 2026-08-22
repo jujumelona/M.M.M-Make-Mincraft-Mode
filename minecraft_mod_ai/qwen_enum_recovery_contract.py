@@ -227,10 +227,12 @@ def _retry_request(request: Any, error: RuntimeError) -> Any:
         if visible_schema is not None and hasattr(request, "tools"):
             updates["tools"] = (visible_schema,)
         if visible_schema is not None and hasattr(request, "tool_choice"):
-            updates["tool_choice"] = {
-                "type": "function",
-                "function": {"name": tool_name},
-            }
+            # Local llama.cpp deliberately keeps PEG-native server forcing disabled.
+            # The corrective system message and one-schema surface convey the intended
+            # action; exact host-forced retries are owned by forced_tool_execution_contract.
+            # Keeping this internal parser retry on auto prevents host validation from
+            # claiming a force that was never sent through the local transport.
+            updates["tool_choice"] = "auto"
     return replace(request, **updates)
 
 
