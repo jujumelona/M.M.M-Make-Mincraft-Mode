@@ -49,7 +49,11 @@ def test_all_generation_registries_use_mod_only_server() -> None:
             encoding="utf-8"
         )
     )
-    expected = ["-m", "minecraft_mod_ai.mod_generation_mcp_server"]
+    expected = [
+        "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
+        "minecraft_mod_ai.mod_generation_mcp_server",
+    ]
     for config in (root_config, plugin_config):
         args = config["mcpServers"]["mmm-generation"]["args"]
         assert args == expected
