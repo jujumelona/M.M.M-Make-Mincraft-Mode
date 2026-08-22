@@ -27,6 +27,7 @@ def _encoded_size(messages: Any) -> int:
 def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy
     from . import small_model_context_compaction as archive_module
+    from .llama_tool_output_budget import tool_output_budget
     from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
 
@@ -77,9 +78,15 @@ def run_context_budget_preflight() -> None:
             response_format="json",
         ),
     )
-    if synthetic_tool_payload.get("max_tokens") != 8192:
+    expected_tool_budget = tool_output_budget(synthetic_adapter.config)
+    if synthetic_tool_payload.get("max_tokens") != expected_tool_budget:
         raise ContextBudgetPreflightError(
-            "llama-server tool payload does not retain the configured coder output budget"
+            "llama-server tool payload disagrees with the authoritative bounded "
+            f"tool-output policy: expected {expected_tool_budget}"
+        )
+    if expected_tool_budget >= synthetic_adapter.config.max_new_tokens:
+        raise ContextBudgetPreflightError(
+            "default scalar tool-output budget must remain below full coder generation budget"
         )
 
     if (
