@@ -20,6 +20,12 @@ _MARKER = "_mmm_bounded_length_recovery_v3"
 _LENGTH_RETRY_MESSAGE_BYTES = 32 * 1024
 
 
+def length_recovery_installed(completion_message: Any) -> bool:
+    """Return whether the canonical context-pressure recovery owns this call path."""
+
+    return bool(getattr(completion_message, _MARKER, False))
+
+
 def _payload_bytes(messages: Any) -> int:
     try:
         return len(
@@ -39,7 +45,7 @@ def install(llama_cpp_module: Any) -> None:
     """Install one non-recursive context-pressure retry around completion handling."""
 
     current = llama_cpp_module._completion_message
-    if getattr(current, _MARKER, False):
+    if length_recovery_installed(current):
         return
 
     @wraps(current)
@@ -81,4 +87,4 @@ def install(llama_cpp_module: Any) -> None:
     llama_cpp_module._completion_message = completion_with_length_recovery
 
 
-__all__ = ["install"]
+__all__ = ["install", "length_recovery_installed"]
