@@ -56,9 +56,48 @@ class _Request:
     parallel_tool_calls: bool = True
 
 
+@dataclass(frozen=True)
+class _ToolRequest:
+    messages: tuple[dict[str, str], ...] = ()
+    parallel_tool_calls: bool = True
+    tools: tuple[dict[str, object], ...] = ()
+    tool_validation_schemas: tuple[dict[str, object], ...] = ()
+    tool_choice: object | None = None
+
+
 def _outside_enum_error(tool_name: str, key: str) -> RuntimeError:
     return RuntimeError(
         f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
+    )
+
+
+def _tool_schema(name: str, parameters: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": parameters,
+        },
+    }
+
+
+def _source_edit_schema() -> dict[str, object]:
+    return _tool_schema(
+        "apply_source_edit",
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["operation", "path"],
+            "properties": {
+                "operation": {"type": "string"},
+                "path": {"type": "string"},
+                "old": {"type": "string"},
+                "new": {"type": "string"},
+                "anchor": {"type": "string"},
+                "content": {"type": "string"},
+                "count": {"type": "integer"},
+            },
+        },
     )
 
 
@@ -141,4 +180,85 @@ def test_second_invalid_enum_fails_after_one_retry() -> None:
 
     with pytest.raises(RuntimeError, match="after one bounded corrective retry"):
         fake_module._tool_semantic_completion(None, "http://local", _Request())
+    assert attempts == 2
+
+
+def test_unknown_parameter_is_discarded_and_same_tool_is_retried_from_schema() -> None:
+    calls: list[_ToolRequest] = []
+    edit = _source_edit_schema()
+    search = _tool_schema(
+        "search_code_rag",
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"query": {"type": "string"}},
+        },
+    )
+
+    def original_decode(tool_name, key, raw, schema):
+        return raw
+
+    def original_completion(adapter, server_url, request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise RuntimeError(
+                "Qwen tool 'apply_source_edit' emitted unknown parameter 'after_line'"
+            )
+        return "corrected"
+
+    fake_module = SimpleNamespace(
+        _decode_parameter_value=original_decode,
+        _tool_semantic_completion=original_completion,
+    )
+    qwen_enum_recovery.install(fake_module)
+
+    request = _ToolRequest(
+        messages=({"role": "user", "content": "repair"},),
+        tools=(edit, search),
+        tool_validation_schemas=(edit, search),
+    )
+    assert fake_module._tool_semantic_completion(None, "http://local", request) == "corrected"
+    assert len(calls) == 2
+
+    retry = calls[1]
+    assert retry.tools == (edit,)
+    assert retry.tool_validation_schemas == request.tool_validation_schemas
+    assert retry.tool_choice == {
+        "type": "function",
+        "function": {"name": "apply_source_edit"},
+    }
+    assert retry.parallel_tool_calls is False
+    correction = retry.messages[-1]["content"]
+    assert "discarded without execution" in correction
+    assert "after_line" in correction
+    for allowed in ("operation", "path", "old", "new", "anchor", "content", "count"):
+        assert allowed in correction
+
+
+def test_unknown_parameter_retry_is_bounded_and_fails_closed() -> None:
+    attempts = 0
+    edit = _source_edit_schema()
+
+    def original_decode(tool_name, key, raw, schema):
+        return raw
+
+    def original_completion(adapter, server_url, request):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError(
+            "Qwen tool 'apply_source_edit' emitted unknown parameter 'after_line'"
+        )
+
+    fake_module = SimpleNamespace(
+        _decode_parameter_value=original_decode,
+        _tool_semantic_completion=original_completion,
+    )
+    qwen_enum_recovery.install(fake_module)
+
+    request = _ToolRequest(
+        tools=(edit,),
+        tool_validation_schemas=(edit,),
+    )
+    with pytest.raises(RuntimeError, match="after one bounded corrective retry"):
+        fake_module._tool_semantic_completion(None, "http://local", request)
     assert attempts == 2
