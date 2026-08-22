@@ -330,6 +330,21 @@ def _install_generate_turn(base: type[Any]) -> None:
     setattr(base, _MARKER, True)
 
 
+def is_installed() -> bool:
+    """Return whether this owner is bound to the canonical live adapter.
+
+    Callers must use this semantic predicate instead of copying the private versioned
+    marker name into tests or preflights. That keeps marker versioning local to the
+    contract owner while still checking both the class alias and executable method.
+    """
+
+    canonical = causal_frontier_adapter_module.CausalFrontierAdapter
+    return bool(
+        getattr(canonical, _MARKER, False)
+        and getattr(canonical.generate_turn, _MARKER, False)
+    )
+
+
 def install(causal_frontier_contract_module: Any) -> None:
     global _runtime_marker_printed
 
@@ -349,4 +364,4 @@ def install(causal_frontier_contract_module: Any) -> None:
         _runtime_marker_printed = True
 
 
-__all__ = ["install"]
+__all__ = ["install", "is_installed"]
