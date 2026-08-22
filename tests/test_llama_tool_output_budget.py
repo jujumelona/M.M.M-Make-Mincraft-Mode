@@ -18,7 +18,7 @@ def _tool() -> dict[str, object]:
     }
 
 
-def test_fully_composed_qwen_tool_turn_uses_configured_coder_budget(
+def test_fully_composed_qwen_tool_turn_uses_bounded_action_budget(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
@@ -45,8 +45,9 @@ def test_fully_composed_qwen_tool_turn_uses_configured_coder_budget(
 
     payload = hardware_policy._server_payload(adapter, request)
 
-    assert tool_output_budget(adapter.config) == 8192
-    assert payload["max_tokens"] == 8192
+    assert tool_output_budget(adapter.config) == 4096
+    assert payload["max_tokens"] == 4096
+    assert payload["max_tokens"] < adapter.config.max_new_tokens
 
 
 def test_tool_output_override_remains_hard_bounded(monkeypatch) -> None:
@@ -56,7 +57,7 @@ def test_tool_output_override_remains_hard_bounded(monkeypatch) -> None:
     assert tool_output_budget(config) == 16384
 
 
-def test_length_recovery_preserves_bounded_tool_output_budget(monkeypatch) -> None:
+def test_length_recovery_preserves_existing_tool_output_budget(monkeypatch) -> None:
     attempts: list[dict[str, object]] = []
 
     def completion(_server_url: str, payload: dict[str, object]):
@@ -83,12 +84,12 @@ def test_length_recovery_preserves_bounded_tool_output_budget(monkeypatch) -> No
                 {"role": "user", "content": "x" * 50_000},
                 {"role": "tool", "content": "y" * 10_000},
             ],
-            "max_tokens": 8192,
+            "max_tokens": 4096,
             "tools": [_tool()],
         },
     )
 
     assert result == {"content": "ok"}
     assert len(attempts) == 2
-    assert attempts[1]["max_tokens"] == 8192
+    assert attempts[1]["max_tokens"] == 4096
     assert len(str(attempts[1]["messages"])) < len(str(attempts[0]["messages"]))
