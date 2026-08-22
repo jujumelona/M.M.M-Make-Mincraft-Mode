@@ -72,6 +72,7 @@ def finalize_runtime() -> None:
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
+        from .qwen_enum_recovery_contract import install as install_qwen_enum_recovery
         from .retrieval_cpu_budget_contract import install as install_retrieval_cpu_budget
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_hot_path_contract import (
@@ -193,6 +194,10 @@ def finalize_runtime() -> None:
         # Parse stale but host-authorized tool names against the complete authorized
         # surface; execution remains restricted by the per-turn causal visibility gate.
         install_tool_validation_surface()
+        # Qwen tagged string parameters occasionally include harmless JSON quoting or
+        # formatting drift. Canonicalize only uniquely equivalent enum spellings and
+        # discard/retry one semantic mismatch before any tool action can execute.
+        install_qwen_enum_recovery(llama_cpp_adapter)
         # llama.cpp reports both output-cap exhaustion and context pressure as
         # finish_reason='length'. Classify them before resilience wrappers are bound so
         # only genuine context pressure triggers observation compaction/retry.
