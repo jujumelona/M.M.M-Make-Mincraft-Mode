@@ -18,6 +18,7 @@ name would leave those pre-bound aliases on the unrecovered implementation.
 """
 
 import re
+import sys
 from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
@@ -226,6 +227,7 @@ def _resync_once(
         f"attempt=1/{_MAX_RESYNC_ATTEMPTS}",
         f"rejected={rejected}",
         f"forced={forced_name}",
+        file=sys.stderr,
         flush=True,
     )
     try:
@@ -340,6 +342,7 @@ def install(causal_frontier_contract_module: Any) -> None:
             "stale_resync=1",
             "malformed_tool_resync=1",
             f"source={__file__}",
+            file=sys.stderr,
             flush=True,
         )
         _runtime_marker_printed = True
