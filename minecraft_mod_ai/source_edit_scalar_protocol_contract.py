@@ -349,29 +349,17 @@ def materialize_model_source_edit(
 
 
 def install(extension_module: Any, runtime_module: Any) -> None:
+    """Assert canonical ownership; runtime dispatch imports this protocol directly."""
+
     if bool(getattr(extension_module, _MARKER, False)):
         return
-
-    def materialize(
-        runtime_owner: Any,
-        workspace_root: str | Path,
-        payload: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return materialize_model_source_edit(
-            extension_module,
-            runtime_owner,
-            workspace_root,
-            payload,
+    if getattr(extension_module, "_SOURCE_EDIT_SCHEMA", None) is not SOURCE_EDIT_SCHEMA:
+        raise RuntimeError(
+            "Source-edit execution must import SOURCE_EDIT_SCHEMA from the scalar protocol owner."
         )
-
-    extension_module._SOURCE_EDIT_SCHEMA = SOURCE_EDIT_SCHEMA
-    extension_module._materialize_model_source_edit = materialize
+    if not callable(getattr(extension_module, "_materialize_model_source_edit", None)):
+        raise RuntimeError("Source-edit execution is missing its canonical materializer delegate.")
     setattr(extension_module, _MARKER, True)
-
-    # Existing AgentToolRuntime instances may have cached the old nested-array schema.
-    # Finalization normally installs before instances exist, but clearing class-owned
-    # caches here would be unsafe because caches are per instance. The runtime schema
-    # wrapper reads this module global on its first generation-schema construction.
     del runtime_module
 
 
