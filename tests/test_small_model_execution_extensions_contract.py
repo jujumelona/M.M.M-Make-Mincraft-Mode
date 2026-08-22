@@ -41,6 +41,8 @@ def test_source_edit_schema_is_scalar_and_bounded() -> None:
     assert properties["path"]["maxLength"] <= 512
     assert properties["old"]["maxLength"] <= 4096
     assert properties["new"]["maxLength"] <= 8192
+    assert "create_file" in properties["operation"]["enum"]
+    assert "create" in properties["operation"]["enum"]
 
 
 def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path) -> None:
@@ -75,6 +77,97 @@ def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path)
     assert source.read_text(encoding="utf-8") == (
         "final class Example {\n    int newValue;\n}\n"
     )
+
+
+def test_scalar_source_write_materializes_new_file_and_host_applies(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    target = project / "src/main/java/example/Created.java"
+    content = "package example;\nfinal class Created {}\n"
+
+    payload = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "create_file",
+            "path": "src/main/java/example/Created.java",
+            "content": content,
+        },
+    )
+
+    assert payload == {
+        "project_root": "demo",
+        "operations": [
+            {
+                "operation": "create",
+                "path": "src/main/java/example/Created.java",
+                "content": content,
+            }
+        ],
+    }
+    receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
+    assert receipt["status"] == "APPLIED"
+    assert target.read_text(encoding="utf-8") == content
+
+
+def test_scalar_source_write_accepts_lossless_create_alias(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    _project(workspace)
+
+    payload = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "create",
+            "path": "src/main/resources/demo.txt",
+            "content": "created\n",
+        },
+    )
+
+    assert payload["operations"] == [
+        {
+            "operation": "create",
+            "path": "src/main/resources/demo.txt",
+            "content": "created\n",
+        }
+    ]
+
+
+def test_scalar_source_create_rejects_existing_target_without_mutation(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    before = "final class Example {}\n"
+    source.write_text(before, encoding="utf-8")
+
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="already exists"):
+        _materialize_model_source_edit(
+            agent_tool_runtime,
+            workspace,
+            {
+                "operation": "create_file",
+                "path": "src/main/java/example/Example.java",
+                "content": "final class Replacement {}\n",
+            },
+        )
+    assert source.read_text(encoding="utf-8") == before
+
+
+def test_scalar_source_create_rejects_edit_only_fields(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    _project(workspace)
+
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="invalid for create_file"):
+        _materialize_model_source_edit(
+            agent_tool_runtime,
+            workspace,
+            {
+                "operation": "create_file",
+                "path": "src/main/java/example/Created.java",
+                "content": "final class Created {}\n",
+                "old": "should-not-be-used",
+            },
+        )
 
 
 def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> None:
