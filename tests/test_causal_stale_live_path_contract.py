@@ -29,26 +29,17 @@ def test_runtime_stale_recovery_reaches_prebound_coder_alias() -> None:
 
     assert coder_tool_route_integrity_contract.CausalFrontierAdapter is canonical
     assert causal_tool_frontier_contract.CausalFrontierAdapter is canonical
-    assert getattr(canonical, "_mmm_stale_tool_recovery_v1", False)
-    assert getattr(canonical.generate_turn, "_mmm_stale_tool_recovery_v1", False)
+    assert getattr(canonical, "_mmm_stale_tool_recovery_v2", False)
+    assert getattr(canonical.generate_turn, "_mmm_stale_tool_recovery_v2", False)
 
 
-def test_stale_recovery_forces_one_current_tool_and_rotates(monkeypatch) -> None:
+def test_stale_recovery_forces_one_current_tool_once(monkeypatch) -> None:
     requests = []
 
     class Inner:
-        def __init__(self) -> None:
-            self.outputs = iter(
-                (
-                    _turn("apply_source_edit"),
-                    _turn("apply_source_edit"),
-                    _turn("search_code_rag"),
-                )
-            )
-
         def generate_turn(self, request):
             requests.append(request)
-            return next(self.outputs)
+            return _turn("search_project_rag")
 
     class FakeAdapter:
         def __init__(self) -> None:
@@ -94,19 +85,11 @@ def test_stale_recovery_forces_one_current_tool_and_rotates(monkeypatch) -> None
 
     result = adapter.generate_turn(request)
 
-    assert result.tool_calls[0].name == "search_code_rag"
-    assert len(requests) == 3
-    forced_names = [row.tool_choice["function"]["name"] for row in requests]
-    assert forced_names == [
-        "search_project_rag",
-        "java_workspace_symbols",
-        "search_code_rag",
-    ]
-    assert all(len(row.tools) == 1 for row in requests)
-    assert [row.tools[0]["function"]["name"] for row in requests] == forced_names
-    assert adapter.published == [
-        ("search_project_rag",),
-        ("java_workspace_symbols",),
-        ("search_code_rag",),
-    ]
+    assert result.tool_calls[0].name == "search_project_rag"
+    assert len(requests) == 1
+    retry = requests[0]
+    assert retry.tool_choice["function"]["name"] == "search_project_rag"
+    assert len(retry.tools) == 1
+    assert retry.tools[0]["function"]["name"] == "search_project_rag"
+    assert adapter.published == [("search_project_rag",)]
     assert adapter.reset_count >= 2
