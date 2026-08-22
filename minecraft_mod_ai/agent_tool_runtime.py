@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 from contextlib import AsyncExitStack
+from itertools import islice
 from pathlib import Path, PurePosixPath
 from typing import Any, Collection, Mapping
 
@@ -713,11 +714,14 @@ def _small_metadata(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): _small_metadata(item, depth=depth + 1)
-            for key, item in list(value.items())[:16]
+            for key, item in islice(value.items(), 16)
             if not _sensitive_key(key)
         }
     if isinstance(value, (list, tuple, set)):
-        return [_small_metadata(item, depth=depth + 1) for item in list(value)[:16]]
+        return [
+            _small_metadata(item, depth=depth + 1)
+            for item in islice(value, 16)
+        ]
     return _small_metadata(_jsonable(value), depth=depth + 1)
 
 
@@ -747,6 +751,27 @@ def _preserved_evidence(value: Any) -> list[dict[str, Any]]:
     return preserved
 
 
+def _json_byte_size_and_preview(
+    value: Any,
+    *,
+    preview_bytes: int,
+) -> tuple[int, bytes]:
+    encoder = json.JSONEncoder(
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    total_bytes = 0
+    preview = bytearray()
+    for chunk in encoder.iterencode(value):
+        encoded_chunk = chunk.encode("utf-8")
+        total_bytes += len(encoded_chunk)
+        remaining = preview_bytes - len(preview)
+        if remaining > 0:
+            preview.extend(encoded_chunk[:remaining])
+    return total_bytes, bytes(preview)
+
+
 def _bounded_result(result: Mapping[str, Any]) -> dict[str, Any]:
     sanitized = _sanitize_observation(result)
     if not isinstance(sanitized, Mapping):
@@ -758,18 +783,16 @@ def _bounded_result(result: Mapping[str, Any]) -> dict[str, Any]:
         "sanitized": True,
         "truncated": False,
     }
-    encoded = json.dumps(
-        bounded,
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
-    ).encode("utf-8")
     limit = _result_byte_limit()
-    if len(encoded) <= limit:
+    preview_bytes = max(1024, min(limit // 2, 16 * 1024))
+    original_bytes, encoded_preview = _json_byte_size_and_preview(
+        bounded,
+        preview_bytes=preview_bytes,
+    )
+    if original_bytes <= limit:
         return bounded
 
-    preview_bytes = max(1024, min(limit // 2, 16 * 1024))
-    preview = encoded[:preview_bytes].decode("utf-8", errors="ignore")
+    preview = encoded_preview.decode("utf-8", errors="ignore")
     return {
         _OBSERVATION_META_KEY: {
             "trust": "untrusted_data_only",
@@ -777,7 +800,7 @@ def _bounded_result(result: Mapping[str, Any]) -> dict[str, Any]:
             "truncated": True,
         },
         "truncated": True,
-        "original_bytes": len(encoded),
+        "original_bytes": original_bytes,
         "preserved_evidence": _preserved_evidence(bounded),
         "preview": preview,
         "hint": (
