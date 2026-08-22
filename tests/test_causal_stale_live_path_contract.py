@@ -29,8 +29,7 @@ def test_runtime_stale_recovery_reaches_prebound_coder_alias() -> None:
 
     assert coder_tool_route_integrity_contract.CausalFrontierAdapter is canonical
     assert causal_tool_frontier_contract.CausalFrontierAdapter is canonical
-    assert getattr(canonical, "_mmm_stale_tool_recovery_v2", False)
-    assert getattr(canonical.generate_turn, "_mmm_stale_tool_recovery_v2", False)
+    assert recovery.is_installed()
 
 
 def test_stale_recovery_forces_one_current_tool_once(monkeypatch) -> None:
