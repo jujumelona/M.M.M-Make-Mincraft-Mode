@@ -290,9 +290,10 @@ class _WritableProgressAdapter:
     Prerequisite retrieval remains ``auto`` on the first attempt. If a small model
     answers in prose instead of taking one of the already-authorized causal actions,
     retry exactly once with the first visible frontier action forced. Mutation actions
-    are forced by explicit host priority as soon as the causal frontier makes them
-    legal, with bounded failover after explicit host-call failures. Final synthesis is
-    rejected until a successful mutation observation is present in the transcript.
+    are forced by explicit host priority only until one reviewed mutation succeeds;
+    after that proof exists, the model returns to auto/final synthesis instead of being
+    forced into redundant source writes. Final synthesis is rejected until a successful
+    mutation observation is present in the transcript.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -313,6 +314,12 @@ class _WritableProgressAdapter:
             return self.inner.generate_turn(request)
 
         if request.tool_choice != "auto":
+            return self.inner.generate_turn(request)
+
+        # Once the host transcript proves a real source mutation succeeded, forcing
+        # another mutation is no longer progress. Let the ordinary causal/model loop
+        # decide whether another action is genuinely needed or whether to finalize.
+        if _source_mutation_applied(request.messages):
             return self.inner.generate_turn(request)
 
         visible_mutations = tuple(
