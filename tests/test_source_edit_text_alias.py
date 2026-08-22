@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from minecraft_mod_ai import agent_tool_runtime
@@ -107,3 +109,55 @@ def test_source_edit_still_rejects_unlisted_parameters(tmp_path) -> None:
                 "unexpected": "still rejected",
             },
         )
+
+
+def test_replace_file_materializes_hash_guarded_whole_file_replace(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    before = "final class Example { int oldValue; }\n"
+    source.write_text(before, encoding="utf-8")
+
+    payload = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "replace_file",
+            "path": "src/main/java/example/Example.java",
+            "text": "final class Example { int newValue; }\n",
+        },
+    )
+
+    assert payload["operations"] == [
+        {
+            "operation": "replace",
+            "path": "src/main/java/example/Example.java",
+            "expected_sha256": "sha256:" + hashlib.sha256(before.encode()).hexdigest(),
+            "content": "final class Example { int newValue; }\n",
+        }
+    ]
+
+
+def test_delete_file_materializes_hash_guarded_delete(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    before = "final class Example {}\n"
+    source.write_text(before, encoding="utf-8")
+
+    payload = _materialize_model_source_edit(
+        agent_tool_runtime,
+        workspace,
+        {
+            "operation": "delete_file",
+            "path": "src/main/java/example/Example.java",
+        },
+    )
+
+    assert payload["operations"] == [
+        {
+            "operation": "delete",
+            "path": "src/main/java/example/Example.java",
+            "expected_sha256": "sha256:" + hashlib.sha256(before.encode()).hexdigest(),
+        }
+    ]
