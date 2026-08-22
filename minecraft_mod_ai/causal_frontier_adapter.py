@@ -3,6 +3,7 @@ from __future__ import annotations
 """Per-turn causal tool exposure for the live retrieve/act/observe loop."""
 
 import json
+import sys
 import threading
 from contextvars import ContextVar
 from dataclasses import replace
@@ -369,6 +370,7 @@ class CausalFrontierAdapter:
             f"state={','.join(sorted(state))}",
             f"goals={','.join(goals)}",
             f"tools={','.join(names)}",
+            file=sys.stderr,
             flush=True,
         )
         turn = self.inner.generate_turn(rebuilt)
