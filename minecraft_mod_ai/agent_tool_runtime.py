@@ -92,6 +92,7 @@ _MODEL_SOURCE_PATCH_SCHEMA: dict[str, Any] = {
 _DEFAULT_MAX_TOOL_RESULT_BYTES = 48 * 1024
 _MIN_TOOL_RESULT_BYTES = 8 * 1024
 _MAX_TOOL_RESULT_BYTES = 128 * 1024
+_MAX_MCP_ERROR_DETAIL_CHARS = 8 * 1024
 _OBSERVATION_META_KEY = "_mmm_observation"
 _SENSITIVE_KEYS = frozenset(
     {
@@ -400,9 +401,14 @@ class AgentToolRuntime:
         # ``call_tool`` itself remains fail-closed if code/server state diverges.
         async with self._session(stage) as session:
             raw = await session.call_tool(name, arguments=dict(arguments))
+            normalized = _normalize_tool_result(raw)
             if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):
-                raise AgentToolRuntimeError(f"MCP tool {name!r} returned an error")
-            return _normalize_tool_result(raw)
+                detail = _mcp_error_detail(normalized)
+                message = f"MCP tool {name!r} returned an error"
+                if detail:
+                    message = f"{message}: {detail}"
+                raise AgentToolRuntimeError(message)
+            return normalized
 
     def _session(self, stage: str):
         return _MCPStdioSession(
@@ -655,6 +661,27 @@ def _normalize_tool_result(raw: Any) -> dict[str, Any]:
         "parsed_text": _jsonable(parsed_text),
         "resources": resources,
     }
+
+
+def _mcp_error_detail(normalized: Mapping[str, Any]) -> str:
+    """Keep server diagnostics/impact markers while bounding and redacting them."""
+
+    meaningful = {
+        key: value
+        for key, value in normalized.items()
+        if value not in (None, "", [], {}, ())
+    }
+    if not meaningful:
+        return ""
+    sanitized = _sanitize_observation(meaningful)
+    detail = json.dumps(
+        sanitized,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return _redact_text(detail)[:_MAX_MCP_ERROR_DETAIL_CHARS]
 
 
 def _result_byte_limit() -> int:
