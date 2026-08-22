@@ -4,6 +4,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mcp_server"
       ],
       "env": {
@@ -16,6 +17,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mcp_server"
       ],
       "env": {
@@ -28,6 +30,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mod_generation_mcp_server"
       ],
       "env": {
@@ -40,6 +43,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mcp_server"
       ],
       "env": {
@@ -52,6 +56,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mcp_server"
       ],
       "env": {
@@ -64,6 +69,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mcp_server"
       ],
       "env": {
@@ -76,6 +82,7 @@
       "command": "python",
       "args": [
         "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
         "minecraft_mod_ai.mcp_server"
       ],
       "env": {
