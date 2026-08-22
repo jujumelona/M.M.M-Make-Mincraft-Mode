@@ -11,7 +11,8 @@ narrowing the visible surface to one function. Local llama.cpp intentionally kee
 server parsing disabled, so its transport-level ``tool_choice`` remains ``none``; the
 same semantic requirement is conveyed through one visible schema plus an explicit
 system instruction, and this host wrapper validates the exact call with one bounded
-retry. This keeps one forced-tool owner across transports without re-enabling PEG.
+retry. Causal stale-tool recovery owns retries for validation-only historical tools, so
+this layer returns those calls unchanged instead of multiplying full model decodes.
 """
 
 import json
@@ -65,6 +66,39 @@ def _selected_schema(request: Any, name: str) -> tuple[Mapping[str, Any], ...]:
             f"Host-forced tool {name!r} does not resolve to exactly one exposed schema."
         )
     return selected
+
+
+def _schema_names(schemas: Any) -> frozenset[str]:
+    try:
+        candidates = tuple(schemas or ())
+    except TypeError:
+        return frozenset()
+    return frozenset(
+        name
+        for schema in candidates
+        if isinstance(schema, Mapping) and (name := _tool_name(schema))
+    )
+
+
+def _validation_only_tool_names(request: Any) -> frozenset[str]:
+    """Return parseable historical tools that are not executable this turn."""
+
+    visible = _schema_names(getattr(request, "tools", ()))
+    validation = _schema_names(getattr(request, "tool_validation_schemas", ()))
+    return validation - visible
+
+
+def _is_validation_only_stale_turn(request: Any, turn: Any) -> bool:
+    """Whether the turn belongs to the outer causal stale-tool recovery owner."""
+
+    calls = tuple(getattr(turn, "tool_calls", ()) or ())
+    if not calls:
+        return False
+    stale = _validation_only_tool_names(request)
+    return bool(
+        stale
+        and all(str(getattr(call, "name", "")).strip() in stale for call in calls)
+    )
 
 
 def _narrow_capability_context(
@@ -170,6 +204,12 @@ def _install_remote_adapter_class(cls: Any) -> None:
         )
         if _contains_exact_call(first, name):
             return first
+        # Causal stale recovery deliberately keeps previously authorized tools
+        # parseable through tool_validation_schemas while exposing only the current
+        # frontier in request.tools. It owns discard/re-sync for those calls. Retrying
+        # here would hide the stale result from that owner and duplicate full decodes.
+        if _is_validation_only_stale_turn(request, first):
+            return first
 
         second = current(
             self,
@@ -220,6 +260,8 @@ def _install_local_adapter_class(cls: Any) -> None:
             ),
         )
         if _contains_exact_call(first, name):
+            return first
+        if _is_validation_only_stale_turn(request, first):
             return first
 
         second = current(
