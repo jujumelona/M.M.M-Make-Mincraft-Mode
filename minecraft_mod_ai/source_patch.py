@@ -12,8 +12,28 @@ from .mod_output_scope import ModOutputScopeError, validate_mod_output_path
 from .project_write_lock import project_write_lock
 
 
+_WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back", "drift", "uncertain"})
+
+
 class SourcePatchError(RuntimeError):
-    """Raised when a bounded source patch cannot be validated or committed."""
+    """Raised when a bounded source patch cannot be validated or committed.
+
+    ``workspace_impact`` is a host-owned transaction fact consumed by the causal
+    state ledger. It distinguishes harmless pre-write failures from stale-snapshot
+    drift and from failures where rollback could not prove the workspace state.
+    """
+
+    def __init__(self, message: str, *, workspace_impact: str = "unchanged") -> None:
+        impact = str(workspace_impact).strip().casefold()
+        if impact not in _WORKSPACE_IMPACTS:
+            raise ValueError(f"Unsupported source-patch workspace impact: {workspace_impact!r}")
+        self.workspace_impact = impact
+        super().__init__(message)
+
+    def __str__(self) -> str:
+        # The model tool runtime currently normalizes exceptions to text. Keep a
+        # machine-readable suffix so the transaction fact survives that boundary.
+        return f"{super().__str__()} [workspace_impact={self.workspace_impact}]"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -142,7 +162,8 @@ class TransactionalSourcePatcher:
                 actual = sha256_bytes(before or b"")
                 if expected != actual:
                     raise SourcePatchError(
-                        f"SHA-256 precondition failed for {item['path']}: {actual} != {expected}"
+                        f"SHA-256 precondition failed for {item['path']}: {actual} != {expected}",
+                        workspace_impact="drift",
                     )
                 if item["operation"] == "replace":
                     after = item["content"].encode("utf-8")
@@ -198,20 +219,35 @@ class TransactionalSourcePatcher:
             committed_order = [
                 path for path, _after in ordered_staged if path in committed
             ]
+            rollback_errors: list[tuple[Path, BaseException]] = []
             for path in reversed(committed_order):
                 original = originals[path]
-                if original is None:
-                    if path.exists():
-                        path.unlink()
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(original)
+                try:
+                    if original is None:
+                        if path.exists():
+                            path.unlink()
+                    else:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(original)
+                except BaseException as exc:
+                    rollback_errors.append((path, exc))
             first_error = next(
                 errors[path]
                 for path, _after in ordered_staged
                 if path in errors
             )
-            raise SourcePatchError(f"Patch transaction rolled back: {first_error}") from first_error
+            if rollback_errors:
+                rollback_path, rollback_error = rollback_errors[0]
+                relative = rollback_path.relative_to(self.project_root).as_posix()
+                raise SourcePatchError(
+                    "Patch transaction failed and rollback was incomplete for "
+                    f"{relative}: {rollback_error}",
+                    workspace_impact="uncertain",
+                ) from first_error
+            raise SourcePatchError(
+                f"Patch transaction rolled back: {first_error}",
+                workspace_impact="rolled_back",
+            ) from first_error
 
         return {
             "schema_version": "mmm/source-patch-receipt-v1",
