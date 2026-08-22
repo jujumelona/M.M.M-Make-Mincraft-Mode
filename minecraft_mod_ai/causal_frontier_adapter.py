@@ -33,6 +33,15 @@ _INTENT_FIELDS = (
     "query",
     "instruction",
 )
+_SOURCE_MUTATION_NAMES = frozenset(
+    {
+        "apply_source_patch",
+        "apply_source_edit",
+        "apply_java_operations",
+        "repair_project",
+    }
+)
+_SEMANTIC_STALL_LIMIT = 2
 
 
 class FrontierExecutionGate:
@@ -276,6 +285,10 @@ class CausalFrontierAdapter:
         self.authorized_surface = surface
         self.preference = dict(preference or {})
         self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+        self._last_semantic_frontier: tuple[
+            tuple[str, ...], tuple[str, ...], tuple[str, ...]
+        ] | None = None
+        self._semantic_stall_count = 0
         self._state_ledger = CausalStateLedger()
 
     def _publish_frontier(self, names: Sequence[str]) -> None:
@@ -286,6 +299,54 @@ class CausalFrontierAdapter:
 
     def _reset_stale_guard(self) -> None:
         self._last_stale_frontier = None
+
+    def _reset_semantic_guard(self) -> None:
+        self._last_semantic_frontier = None
+        self._semantic_stall_count = 0
+
+    def _guard_semantic_progress(
+        self,
+        *,
+        state: frozenset[str],
+        goals: Sequence[str],
+        names: Sequence[str],
+    ) -> None:
+        """Stop retrieval churn when host causal facts and frontier no longer change.
+
+        Source-mutation retry ownership remains in the writable coder contract. This
+        guard only covers non-mutating causal frontiers whose repeated observations do
+        not add any reviewed host fact, so payload/hash noise cannot consume the hard
+        12-round budget.
+        """
+
+        normalized_names = tuple(str(name) for name in names)
+        if (
+            not state
+            or not normalized_names
+            or _SOURCE_MUTATION_NAMES.intersection(normalized_names)
+        ):
+            self._reset_semantic_guard()
+            return
+        fingerprint = (
+            tuple(sorted(state)),
+            tuple(str(goal) for goal in goals),
+            normalized_names,
+        )
+        if fingerprint != self._last_semantic_frontier:
+            self._last_semantic_frontier = fingerprint
+            self._semantic_stall_count = 0
+            return
+        self._semantic_stall_count += 1
+        if self._semantic_stall_count < _SEMANTIC_STALL_LIMIT:
+            return
+
+        from .model_adapters import ModelConfigurationError
+
+        raise ModelConfigurationError(
+            "Causal tool loop reached a semantic no-progress fixed point before the "
+            "hard tool-round budget: "
+            f"state={','.join(sorted(state))} tools={','.join(normalized_names)}"
+        )
 
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
@@ -300,12 +361,14 @@ class CausalFrontierAdapter:
         if not request.tools and request.tool_choice is None:
             self._publish_frontier(())
             self._reset_stale_guard()
+            self._reset_semantic_guard()
             return self.inner.generate_turn(request)
 
         candidates = self.authorized_surface or authorized_tools(request.tools)
         if not candidates:
             self._publish_frontier(())
             self._reset_stale_guard()
+            self._reset_semantic_guard()
             return self.inner.generate_turn(request)
         _assert_unique_schema_names(candidates, surface="causal-candidate")
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
@@ -343,6 +406,7 @@ class CausalFrontierAdapter:
             tool_choice = "auto" if selected else None
             parallel_tool_calls = True if selected else False
         selected_names = tuple(_name(schema) for schema in selected)
+        self._guard_semantic_progress(state=state, goals=goals, names=selected_names)
         self._publish_frontier(selected_names)
 
         # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
