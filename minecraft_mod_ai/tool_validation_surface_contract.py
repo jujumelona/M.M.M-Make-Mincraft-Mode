@@ -79,6 +79,7 @@ def _validation_surface(
 
 def install() -> None:
     from .model_adapters import llama_cpp_adapter
+    from .qwen_enum_recovery_contract import install as install_qwen_enum_recovery
 
     current_parse = llama_cpp_adapter._qwen_tool_generation_response
     if not has_contract_marker(current_parse, _PARSE_MARKER):
@@ -121,6 +122,12 @@ def install() -> None:
         llama_cpp_adapter._reasoning_continuation_request = (
             continuation_with_authorized_surface
         )
+
+    # Enum validation is part of the same host-side Qwen parse boundary. Install it
+    # after the visible/authorized schema merge so canonicalization sees the exact
+    # schema that the parser will validate, while execution authority remains solely
+    # with the current causal frontier.
+    install_qwen_enum_recovery(llama_cpp_adapter)
 
 
 __all__ = [
