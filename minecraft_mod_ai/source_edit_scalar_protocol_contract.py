@@ -19,6 +19,9 @@ _MAX_REPLACEMENT_CHARS = 8192
 _MAX_PAYLOAD_BYTES = 16 * 1024
 _MAX_COUNT = 16
 _MARKER = "_mmm_scalar_source_edit_protocol_v1"
+_CANONICAL_OPERATIONS = ("replace_exact", "insert_before", "insert_after")
+_OPERATION_ALIASES = {"replace": "replace_exact"}
+_ACCEPTED_OPERATIONS = (*_CANONICAL_OPERATIONS, *_OPERATION_ALIASES)
 
 SOURCE_EDIT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -27,7 +30,9 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
     "properties": {
         "operation": {
             "type": "string",
-            "enum": ["replace_exact", "insert_before", "insert_after"],
+            # Keep the model contract narrow while accepting the one common Qwen
+            # shorthand that is losslessly canonicalized by the host before dispatch.
+            "enum": list(_ACCEPTED_OPERATIONS),
         },
         "path": {"type": "string", "minLength": 1, "maxLength": _MAX_PATH_CHARS},
         "old": {"type": "string", "minLength": 1, "maxLength": _MAX_MATCH_CHARS},
@@ -67,6 +72,18 @@ def _bounded_text(
     return value
 
 
+def _normalize_operation(runtime_module: Any, value: Any) -> str:
+    if not isinstance(value, str):
+        raise runtime_module.AgentToolRuntimeError("operation must be a string")
+    operation = value.strip()
+    operation = _OPERATION_ALIASES.get(operation, operation)
+    if operation not in _CANONICAL_OPERATIONS:
+        raise runtime_module.AgentToolRuntimeError(
+            f"Unsupported source edit operation: {value!r}"
+        )
+    return operation
+
+
 def materialize_model_source_edit(
     extension_module: Any,
     runtime_module: Any,
@@ -94,11 +111,7 @@ def materialize_model_source_edit(
             f"Source-edit arguments exceed the {_MAX_PAYLOAD_BYTES}-byte turn limit"
         )
 
-    operation = str(payload.get("operation", "")).strip()
-    if operation not in {"replace_exact", "insert_before", "insert_after"}:
-        raise runtime_module.AgentToolRuntimeError(
-            f"Unsupported source edit operation: {operation!r}"
-        )
+    operation = _normalize_operation(runtime_module, payload.get("operation"))
     path = _bounded_text(
         runtime_module, payload, "path", maximum=_MAX_PATH_CHARS, required=True
     )
