@@ -2,6 +2,13 @@ import json
 from pathlib import Path
 
 
+_STDIO_ENTRYPOINT = "minecraft_mod_ai.mcp_stdio_entrypoint"
+
+
+def _safe_module_args(target: str) -> list[str]:
+    return ["-m", _STDIO_ENTRYPOINT, target]
+
+
 def test_mcp_config_has_real_local_dev_and_research_servers() -> None:
     config = json.loads(Path(".mcp.json").read_text(encoding="utf-8"))
     servers = config["mcpServers"]
@@ -14,17 +21,15 @@ def test_mcp_config_has_real_local_dev_and_research_servers() -> None:
         "mmm-training": "training",
     }
     for server_name, stage in staged_servers.items():
-        assert servers[server_name]["args"] == [
-            "-m",
-            "minecraft_mod_ai.mcp_server",
-        ]
+        assert servers[server_name]["args"] == _safe_module_args(
+            "minecraft_mod_ai.mcp_server"
+        )
         assert servers[server_name]["env"]["MMM_MCP_STAGE"] == stage
 
     generation = servers["mmm-generation"]
-    assert generation["args"] == [
-        "-m",
-        "minecraft_mod_ai.mod_generation_mcp_server",
-    ]
+    assert generation["args"] == _safe_module_args(
+        "minecraft_mod_ai.mod_generation_mcp_server"
+    )
     assert generation["env"]["MMM_MCP_STAGE"] == "generation"
 
     assert servers["minecraft-dev"]["args"] == [
