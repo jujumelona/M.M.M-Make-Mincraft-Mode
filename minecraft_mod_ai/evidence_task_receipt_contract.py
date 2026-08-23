@@ -189,48 +189,6 @@ def validate_task_receipt(
             )
 
 
-def _install_batch_receipt_guard() -> None:
-    from . import evidence_first_pipeline_contract as pipeline
-
-    current = pipeline._batches_from_handoff
-    if getattr(current, "_mmm_evidence_task_receipt_guard", False):
-        return
-
-    @wraps(current)
-    def batches_from_handoff(
-        plan: Mapping[str, Any],
-        *,
-        batch_type: type,
-    ) -> tuple[Any, ...]:
-        batches = current(plan, batch_type=batch_type)
-        expected = build_task_receipt_extensions(plan)
-        tasks = {
-            str(item.get("task_id") or ""): item
-            for item in plan.get("tasks", ())
-            if isinstance(item, Mapping) and str(item.get("task_id") or "")
-        }
-        for batch in batches:
-            task_id = str(getattr(batch, "batch_id", "") or "")
-            embedded = getattr(batch, "task_contract", None)
-            if (
-                task_id not in tasks
-                or task_id not in expected
-                or not isinstance(embedded, Mapping)
-            ):
-                raise EvidencePlanError(
-                    f"Evidence production batch {task_id!r} has no canonical task receipt."
-                )
-            validate_task_receipt(
-                embedded,
-                task=tasks[task_id],
-                expected_extensions=expected[task_id],
-            )
-        return batches
-
-    batches_from_handoff._mmm_evidence_task_receipt_guard = True  # type: ignore[attr-defined]
-    pipeline._batches_from_handoff = batches_from_handoff
-
-
 def _install_reuse_receipt_guard() -> None:
     from . import resource_asset_production as production
 
@@ -313,7 +271,6 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    _install_batch_receipt_guard()
     _install_reuse_receipt_guard()
     _INSTALLED = True
 
