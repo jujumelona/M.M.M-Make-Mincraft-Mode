@@ -318,7 +318,21 @@ class CausalFrontierAdapter:
         _assert_unique_schema_names(candidates, surface="causal-candidate")
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
         forced_name = _forced_tool_name(request.tool_choice)
+        blocked_mutations: frozenset[str] = frozenset()
         if forced_name:
+            if forced_name in _SOURCE_MUTATION_NAMES:
+                forced_snapshot = self._state_ledger.resolve(
+                    request.messages,
+                    candidates,
+                    require_fresh_evidence=self.require_fresh_evidence,
+                    query_fn=_query,
+                )
+                blocked_mutations = forced_snapshot.blocked_mutation_tools
+                if forced_name in blocked_mutations:
+                    raise ModelConfigurationError(
+                        "Host-forced source mutation reached a semantic fixed point "
+                        f"without workspace progress: {forced_name!r}."
+                    )
             forced_schema = by_name.get(forced_name)
             if forced_schema is None:
                 raise ModelConfigurationError(
@@ -339,8 +353,12 @@ class CausalFrontierAdapter:
             )
             state = snapshot.state
             goals = tuple(goals_for_query(snapshot.query))
+            blocked_mutations = snapshot.blocked_mutation_tools
+            frontier_candidates = tuple(
+                schema for schema in candidates if _name(schema) not in blocked_mutations
+            )
             names = executable_frontier(
-                candidates,
+                frontier_candidates,
                 state=state,
                 goals=goals,
                 limit=self.frontier_limit,
@@ -348,6 +366,12 @@ class CausalFrontierAdapter:
                 preference=self.preference or authorized_tool_preference(),
             )
             selected = tuple(by_name[name] for name in names if name in by_name)
+            if not selected and blocked_mutations:
+                raise ModelConfigurationError(
+                    "Every causally reachable source-mutation route reached a semantic "
+                    "fixed point without workspace progress; refusing another retrieval/retry loop. "
+                    f"blocked={','.join(sorted(blocked_mutations))}"
+                )
             selected_names = tuple(_name(schema) for schema in selected)
             if len(selected_names) == 1 and selected_names[0] in _SOURCE_MUTATION_NAMES:
                 # A causal frontier with exactly one writable transition is already a
