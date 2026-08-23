@@ -28,10 +28,6 @@ def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy
     from . import small_model_context_compaction as archive_module
     from .llama_length_resilience import length_recovery_installed
-    from .llama_stream_efficiency_contract import (
-        _raw_qwen_action_complete,
-        _single_required_tool_turn,
-    )
     from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
 
@@ -92,33 +88,19 @@ def run_context_budget_preflight() -> None:
         raise ContextBudgetPreflightError(
             "required tool turns must use semantic action completion, not an output cap"
         )
-    if not _single_required_tool_turn(synthetic_tool_payload):
+    if synthetic_tool_payload.get("tool_choice") != "required":
         raise ContextBudgetPreflightError(
-            "required tool payload is not recognized as one serial semantic action"
+            "required tool payload did not preserve native llama-server tool semantics"
         )
-    if not _raw_qwen_action_complete(
-        {
-            "content": (
-                "<tool_call><function=apply_source_edit>"
-                "<parameter=operation>delete_file</parameter>"
-                "<parameter=path>src/main/resources/a.json</parameter>"
-                "</function></tool_call>"
-            )
-        }
-    ):
+    if synthetic_tool_payload.get("parallel_tool_calls") is not False:
         raise ContextBudgetPreflightError(
-            "Qwen semantic tool boundary does not recognize a complete action envelope"
+            "single required tool payload unexpectedly enabled parallel tool calls"
         )
-    if _raw_qwen_action_complete(
-        {
-            "content": (
-                "<tool_call><function=apply_source_edit>"
-                "<parameter=operation>delete_file</parameter>"
-            )
-        }
-    ):
+    if [item.get("function", {}).get("name") for item in synthetic_tool_payload.get("tools", [])] != [
+        "apply_source_edit"
+    ]:
         raise ContextBudgetPreflightError(
-            "Qwen semantic tool boundary accepted an incomplete action envelope"
+            "required tool payload did not expose exactly the selected function schema"
         )
 
     if not length_recovery_installed(llama_cpp_adapter._completion_message):
