@@ -15,14 +15,16 @@ from typing import Any, Collection, Mapping, Sequence
 import anyio
 
 from .external_agent_bridge import ExternalAgentBridge, TOOL_NAMES as EXTERNAL_TOOL_NAMES
+from .source_edit_scalar_protocol_contract import (
+    SOURCE_EDIT_SCHEMA,
+    materialize_model_source_edit,
+)
 
 
 class AgentToolRuntimeError(RuntimeError):
     pass
 
 
-# Recursive top-level orchestration is not a model tool. This is not an approval
-# gate: every ordinary stage tool is executed immediately when Qwen calls it.
 _BLOCKED_MODEL_TOOLS = frozenset(
     {
         "plan_game",
@@ -32,17 +34,20 @@ _BLOCKED_MODEL_TOOLS = frozenset(
         "approve_plan",
         "approve_complete_plan",
         "execute_complete_project",
-        # These start another heavyweight model/GPU workflow. Keep them in the
-        # durable host pipeline rather than nesting a second model into this turn.
         "generate_assets",
         "repair_project",
         "run_model_smoke",
     }
 )
-# Host transaction primitives are intentionally not part of the model-facing surface.
-# Model writes go through apply_source_edit, which compiles into apply_source_patch only
-# after path and exact-current-state validation on the host.
 _HOST_ONLY_MODEL_TOOLS = frozenset({"apply_source_patch"})
+_SOURCE_EDIT_TOOL = "apply_source_edit"
+_SOURCE_EDIT_DESCRIPTION = (
+    "Apply one executable semantic source/resource edit. For an existing file use an "
+    "exact replacement or insert-before/after anchor; create_file is for a genuinely "
+    "new file and delete_file removes one file. The host resolves the bound project, "
+    "checks current content and SHA preconditions, executes the transaction, and returns "
+    "the observation before the model chooses its next action."
+)
 _VALID_STAGES = frozenset(
     {
         "frontdoor",
@@ -96,9 +101,7 @@ _SENSITIVE_SUFFIXES = (
     "_credentials",
 )
 _SECRET_PATTERNS = (
-    re.compile(
-        r"(?i)\b(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,;]+)"
-    ),
+    re.compile(r"(?i)\b(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,;]+)"),
     re.compile(
         r"(?i)\b((?:api[_-]?key|access[_-]?token|refresh[_-]?token|"
         r"password|passwd|client[_-]?secret)\s*[:=]\s*)([^\s,;]+)"
@@ -127,13 +130,7 @@ _PRESERVED_EVIDENCE_KEYS = frozenset(
 
 
 class AgentToolRuntime:
-    """Expose stage-scoped first-party and reviewed external MCP tools to Qwen.
-
-    The MCP servers remain the source of truth for tool schemas and execution. This
-    host converts them to the OpenAI function-tool shape and bridges synchronous model
-    generation to the asynchronous MCP Python client. Tool calls do not require a
-    user-approval round trip.
-    """
+    """Expose stage-scoped first-party and reviewed external MCP tools to the agent."""
 
     def __init__(
         self,
@@ -167,6 +164,7 @@ class AgentToolRuntime:
                 return cached
             listed = self._run_async(self._list_tools_async, selected)
             schemas: list[dict[str, Any]] = []
+            names: set[str] = set()
             for item in listed:
                 name = str(item.get("name", "")).strip()
                 if (
@@ -175,6 +173,10 @@ class AgentToolRuntime:
                     or (selected == "generation" and name in _HOST_ONLY_MODEL_TOOLS)
                 ):
                     continue
+                if name in names:
+                    raise AgentToolRuntimeError(
+                        f"Duplicate first-party model tool schema: {name!r}"
+                    )
                 parameters = item.get("input_schema")
                 if not isinstance(parameters, Mapping):
                     parameters = {"type": "object", "properties": {}}
@@ -188,6 +190,25 @@ class AgentToolRuntime:
                         },
                     }
                 )
+                names.add(name)
+
+            if selected == "generation":
+                if _SOURCE_EDIT_TOOL in names:
+                    raise AgentToolRuntimeError(
+                        "apply_source_edit must have exactly one host-owned model schema"
+                    )
+                schemas.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": _SOURCE_EDIT_TOOL,
+                            "description": _SOURCE_EDIT_DESCRIPTION,
+                            "parameters": SOURCE_EDIT_SCHEMA,
+                        },
+                    }
+                )
+                names.add(_SOURCE_EDIT_TOOL)
+
             schemas.extend(self._external_bridge.tool_schemas(selected))
             result = tuple(schemas)
             self._schema_cache[selected] = result
@@ -220,7 +241,7 @@ class AgentToolRuntime:
         *,
         external_server_ids: Collection[str],
     ) -> dict[str, Any]:
-        """Execute a model tool while enforcing its reviewed visible surface/providers."""
+        """Execute one model action through its reviewed visible tool surface."""
         return self._call(
             stage,
             name,
@@ -261,7 +282,25 @@ class AgentToolRuntime:
 
         payload = dict(arguments or {})
         try:
-            if tool_name in EXTERNAL_TOOL_NAMES:
+            if selected == "generation" and tool_name == _SOURCE_EDIT_TOOL:
+                try:
+                    patch = materialize_model_source_edit(
+                        sys.modules[__name__],
+                        self.workspace_root,
+                        payload,
+                    )
+                except AgentToolRuntimeError as exc:
+                    detail = _redact_text(str(exc))
+                    if "[workspace_impact=" not in detail:
+                        detail += " [workspace_impact=unchanged]"
+                    raise AgentToolRuntimeError(detail) from exc
+                result = self._run_async(
+                    self._call_tool_async,
+                    selected,
+                    "apply_source_patch",
+                    patch,
+                )
+            elif tool_name in EXTERNAL_TOOL_NAMES:
                 result = self._external_bridge.call(
                     selected,
                     tool_name,
@@ -275,6 +314,8 @@ class AgentToolRuntime:
                     tool_name,
                     payload,
                 )
+        except AgentToolRuntimeError:
+            raise
         except Exception as exc:
             raise AgentToolRuntimeError(_redact_text(str(exc))) from exc
         return _bounded_result(result)
@@ -293,16 +334,12 @@ class AgentToolRuntime:
                 "MMM_MCP_STAGE": stage,
                 "MMM_MODEL_PROFILE": self.profile,
                 "MMM_WORKSPACE": self.workspace_root,
-                # If an MCP implementation internally uses a model, do not let that
-                # nested model open another agent/MCP loop.
                 "MMM_AGENT_TOOL_CHILD": "1",
             }
         )
         return env
 
     def _run_async(self, function: Any, *args: Any) -> Any:
-        """Bridge one independent MCP stdio session without serializing read calls."""
-
         async def runner() -> Any:
             return await function(*args)
 
@@ -352,9 +389,6 @@ class AgentToolRuntime:
         name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
-        # Model calls are already checked against the cached visible surface. Host calls
-        # may intentionally target a hidden transaction primitive such as
-        # apply_source_patch; call_tool remains the MCP server's fail-closed authority.
         async with self._session(stage) as session:
             raw = await session.call_tool(name, arguments=dict(arguments))
             normalized = _normalize_tool_result(raw)
@@ -399,9 +433,6 @@ class _MCPStdioSession:
         self._stack = stack
         try:
             stack.enter_context(anyio.fail_after(self.timeout_seconds))
-            # MCP's stdio client forwards errlog to the subprocess stderr handle.
-            # Notebook stderr objects (Colab/IPython) may not expose a real fileno(),
-            # so always give the child an actual fd-backed file instead of sys.stderr.
             errlog = stack.enter_context(
                 tempfile.TemporaryFile(mode="w+", encoding="utf-8")
             )
@@ -419,9 +450,6 @@ class _MCPStdioSession:
             await self.session.initialize()
             return self.session
         except BaseException as original:
-            # Only contexts that successfully entered are registered in AsyncExitStack.
-            # This avoids calling __aexit__ on a stdio async generator whose __aenter__
-            # failed, which otherwise masks the real error with an athrow RuntimeError.
             try:
                 await stack.aclose()
             except BaseException as cleanup_error:
@@ -463,8 +491,6 @@ def _looks_like_bound_project(root: Path) -> bool:
 
 
 def _discover_model_project_root(workspace_root: str | Path) -> tuple[Path, str]:
-    """Resolve the single host-bound project without asking the model for a path."""
-
     workspace = Path(workspace_root).expanduser().resolve()
     if not workspace.is_dir() or workspace.is_symlink():
         raise AgentToolRuntimeError("Bound model workspace must be a regular directory")
@@ -525,8 +551,6 @@ def _normalize_tool_result(raw: Any) -> dict[str, Any]:
 
 
 def _mcp_error_detail(normalized: Mapping[str, Any]) -> str:
-    """Keep server diagnostics/impact markers while bounding and redacting them."""
-
     meaningful = {
         key: value
         for key, value in normalized.items()
@@ -543,9 +567,6 @@ def _mcp_error_detail(normalized: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     )
     detail = _redact_text(detail)
-    # Read every current and legacy transaction marker before truncating diagnostics.
-    # A first-marker conversion is unsafe: a long error can put ``unchanged`` near the
-    # front and a later, more authoritative ``drift`` beyond the retained 8 KiB.
     impacts = _workspace_impacts_from_mcp_detail(detail)
     if impacts:
         canonical = _conservative_mcp_workspace_impact(impacts)
