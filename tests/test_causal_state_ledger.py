@@ -43,6 +43,29 @@ def _failed_patch() -> dict:
     }
 
 
+def _safe_failed_patch(error: str = "SpecValidationError: anchor mismatch") -> dict:
+    return {
+        "role": "tool",
+        "name": "apply_source_patch",
+        "content": {"ok": False, "error": error},
+    }
+
+
+def _applied_patch() -> dict:
+    return {
+        "role": "tool",
+        "name": "apply_source_patch",
+        "content": {
+            "ok": True,
+            "_mmm_source_mutation": {
+                "tool": "apply_source_patch",
+                "status": "APPLIED_BY_HOST_RUNTIME",
+            },
+            "result": {"status": "APPLIED"},
+        },
+    }
+
+
 def _query(messages) -> str:
     return "repair project" if messages else ""
 
@@ -174,3 +197,65 @@ def test_tool_surface_change_falls_back_to_full_replay() -> None:
         query_fn=_query,
     )
     assert snapshot.replayed_full_transcript is True
+
+
+def test_same_semantic_mutation_failure_recovers_then_blocks_without_global_round_cap() -> None:
+    schemas = (_schema("search_code_rag"), _schema("apply_source_patch"))
+    ledger = CausalStateLedger()
+    messages = [{"role": "user", "content": "repair project"}, _rag_ok()]
+    ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+
+    messages = [*messages, _safe_failed_patch()]
+    first = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert "evidence_ready" in first.state
+    assert first.blocked_mutation_tools == frozenset()
+
+    messages = [*messages, _safe_failed_patch()]
+    recovering = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert "evidence_ready" not in recovering.state
+    assert recovering.blocked_mutation_tools == frozenset()
+
+    messages = [*messages, _rag_ok()]
+    refreshed = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert "evidence_ready" in refreshed.state
+    assert refreshed.blocked_mutation_tools == frozenset()
+
+    messages = [*messages, _safe_failed_patch()]
+    fixed = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert "evidence_ready" in fixed.state
+    assert fixed.blocked_mutation_tools == frozenset({"apply_source_patch"})
+
+
+def test_fresh_evidence_recovers_but_does_not_forget_safe_mutation_failure() -> None:
+    schemas = (_schema("search_code_rag"), _schema("apply_source_patch"))
+    ledger = CausalStateLedger()
+    messages = [
+        {"role": "user", "content": "repair project"},
+        _rag_ok(),
+        _safe_failed_patch(),
+    ]
+    first = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert first.blocked_mutation_tools == frozenset()
+
+    messages = [*messages, _rag_ok(), _safe_failed_patch()]
+    fixed = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert fixed.blocked_mutation_tools == frozenset({"apply_source_patch"})
+
+
+def test_successful_source_mutation_clears_semantic_fixed_point_epoch() -> None:
+    schemas = (_schema("search_code_rag"), _schema("apply_source_patch"))
+    ledger = CausalStateLedger()
+    messages = [
+        {"role": "user", "content": "repair project"},
+        _rag_ok(),
+        _safe_failed_patch(),
+        _rag_ok(),
+        _safe_failed_patch(),
+    ]
+    fixed = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert fixed.blocked_mutation_tools == frozenset({"apply_source_patch"})
+
+    messages = [*messages, _applied_patch()]
+    advanced = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
+    assert advanced.blocked_mutation_tools == frozenset()
+    assert "repair" in advanced.state
