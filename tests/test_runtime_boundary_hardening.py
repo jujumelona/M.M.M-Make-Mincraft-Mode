@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
 from minecraft_mod_ai.completion_boundary_work_recovery import install as install_work_recovery
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
@@ -15,7 +16,6 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     _length_error,
     completion_boundary_kind,
 )
-from minecraft_mod_ai.llama_tool_output_budget import install as install_tool_output_budget
 from minecraft_mod_ai.mcp_stdio_support import install_mcp_protocol_print_guard
 from minecraft_mod_ai.model_adapters.base import (
     ModelBackendError,
@@ -51,23 +51,33 @@ def test_boundary_kind_survives_model_backend_wrapper() -> None:
     assert completion_boundary_kind(wrapped) == OUTPUT_EXHAUSTED
 
 
-def test_source_mutation_keeps_authoritative_output_budget() -> None:
-    hardware = SimpleNamespace()
+def test_tool_turn_does_not_invent_tool_specific_output_cap() -> None:
+    adapter = SimpleNamespace(
+        config=SimpleNamespace(
+            adapter="llama_cpp",
+            role="coder",
+            model_id="test",
+            max_new_tokens=8192,
+            extra={},
+        )
+    )
 
-    def server_payload(adapter, request):
-        return {"max_tokens": adapter.config.max_new_tokens}
+    def request(name: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            messages=({"role": "user", "content": "repair"},),
+            response_format="text",
+            response_schema=None,
+            tools=(_tool(name),),
+            tool_choice="auto",
+            parallel_tool_calls=False,
+        )
 
-    hardware._server_payload = server_payload
-    install_tool_output_budget(hardware)
-    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
-
-    edit_request = SimpleNamespace(tools=(_tool("apply_source_edit"),))
-    patch_request = SimpleNamespace(tools=(_tool("apply_source_patch"),))
-    search_request = SimpleNamespace(tools=(_tool("search_code_rag"),))
-
-    assert hardware._server_payload(adapter, edit_request)["max_tokens"] == 8192
-    assert hardware._server_payload(adapter, patch_request)["max_tokens"] == 8192
-    assert hardware._server_payload(adapter, search_request)["max_tokens"] == 4096
+    assert hardware_policy._server_payload(
+        adapter, request("apply_source_edit")
+    )["max_tokens"] == 8192
+    assert hardware_policy._server_payload(
+        adapter, request("search_code_rag")
+    )["max_tokens"] == 8192
 
 
 def test_work_node_preserves_output_exhaustion_without_whole_action_replay() -> None:
@@ -193,14 +203,6 @@ def test_work_node_does_not_retry_unrelated_failure() -> None:
 
 
 def test_work_node_does_not_blindly_retry_exhausted_causal_resync() -> None:
-    """A model-protocol failure alone is not a safe durable retry receipt.
-
-    Custom-module tool calls run in a disposable staging workspace.  Until the
-    producer proves that workspace was discarded and no external side effect
-    escaped it, replaying the whole node would silently repeat expensive model and
-    retrieval work from the beginning.
-    """
-
     class Ledger:
         def __init__(self) -> None:
             self.state = "running"
