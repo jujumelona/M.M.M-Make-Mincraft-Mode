@@ -2,9 +2,8 @@
 
 Local GGUF inference is server-only. Tool-aware turns keep the model's own Jinja
 ``tools`` prompt while the managed server's ``--skip-chat-parsing`` mode returns raw
-reasoning/tool markup in ``message.content``. MMM rejects server-parsed calls and
-parses the model's native Qwen tags on the host. This keeps one decode, the same
-sampling/MTP path, and one canonical model-facing tool protocol.
+reasoning/tool markup in ``message.content``. MMM parses the model's native Qwen tags
+on the host and returns each complete action immediately to the agent loop.
 """
 from __future__ import annotations
 
@@ -97,7 +96,7 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one semantic turn with raw, host-validated tool markup."""
+        """Generate one semantic turn with host-validated Qwen tool markup."""
 
         cfg = self.config
         server_url = self._server_url(request)
@@ -174,12 +173,15 @@ def _tool_semantic_completion(
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Run one normal Qwen tool turn through pure-content server parsing."""
+    """Return one executable Qwen tool action to the host agent loop.
+
+    Tool turns never use assistant-prefill pagination. A complete action is the turn
+    boundary; the host executes it, appends the observation, and calls the model again.
+    """
 
     from ..llama_stream_efficiency_contract import _report_server_connection
 
-    message = _completion_message_with_prefill(
-        adapter,
+    message = _completion_message(
         server_url,
         _tool_server_payload(adapter, request),
     )
@@ -197,8 +199,7 @@ def _tool_semantic_completion(
         request,
         turn.reasoning_content,
     )
-    continued_message = _completion_message_with_prefill(
-        adapter,
+    continued_message = _completion_message(
         server_url,
         _tool_server_payload(adapter, continuation_request),
     )
@@ -493,8 +494,7 @@ def _completion_message_with_prefill(
                     raise LlamaCompletionBoundaryError(
                         _OUTPUT_ERROR
                         + "; live assistant-prefill calibration was unavailable;"
-                        + " preserve this partial and split it into bounded scalar edits;"
-                        + f" partial_bytes={next_bytes}",
+                        + f" preserved_partial_bytes={next_bytes}",
                         kind=OUTPUT_EXHAUSTED,
                         partial_message=merged,
                         prompt_tokens=boundary.prompt_tokens,
@@ -716,9 +716,6 @@ def _parse_qwen_function(
             and "path" in properties
             and "file" not in properties
         ):
-            # Qwen commonly uses ``file`` for source-edit targets. Normalize only
-            # when this exact tool schema exposes canonical ``path`` and does not
-            # itself define ``file``; all downstream schema/type checks remain strict.
             key = "path"
         if key in arguments:
             previous = argument_sources[key]
