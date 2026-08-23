@@ -11,7 +11,11 @@ from minecraft_mod_ai.complete_spec import (
     ProductionModule,
     complete_proposal_from_parts,
 )
-from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
+from minecraft_mod_ai.evidence_first_planning import (
+    EvidencePlanError,
+    compile_evidence_first_plan,
+)
+from minecraft_mod_ai.evidence_task_receipt_contract import build_task_receipt_extensions
 from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
@@ -66,6 +70,7 @@ def _evidence_proposal(
         item["requirement_id"]: item
         for item in plan["request_catalog"]["requirements"]
     }
+    receipt_extensions = build_task_receipt_extensions(plan)
     modules = []
     for task in reversed(plan["tasks"]):
         context = {
@@ -75,7 +80,8 @@ def _evidence_proposal(
                 for reference in task["requirement_refs"]
             ],
         }
-        embedded = {**task, "request_context": context}
+        assert context == receipt_extensions[task["task_id"]]["request_context"]
+        embedded = {**task, **copy.deepcopy(receipt_extensions[task["task_id"]])}
         config = {
             "summary": "misleading unrelated fallback tokens",
             "name": "quests" if "trade" in task["task_id"] else "trade",
@@ -283,7 +289,7 @@ def test_evidence_reuse_binding_rejects_stale_plan_hash() -> None:
         }
     ).with_hash()
 
-    with pytest.raises(SpecValidationError, match="plan hash mismatch"):
+    with pytest.raises(EvidencePlanError, match="plan hash mismatch"):
         assets.bind_reuse_plan(proposal)
 
 
