@@ -35,6 +35,7 @@ class _Ledger:
         return SimpleNamespace(
             state=frozenset({"code_evidence", "evidence_ready", "workspace_bound"}),
             query="fix the implementation",
+            blocked_mutation_tools=frozenset(),
         )
 
 
