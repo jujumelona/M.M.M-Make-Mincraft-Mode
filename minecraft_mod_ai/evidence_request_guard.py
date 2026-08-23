@@ -42,8 +42,11 @@ def install_evidence_request_guard() -> None:
 
     @wraps(original_plan)
     def guarded_plan(self: GameDesignPlanner, prompt: str, *args: Any, **kwargs: Any):
-        # This must happen before ``original_plan`` because that call may invoke a
-        # model. No model output is available or consulted at this boundary.
+        # Preserve the planner's established validation contract for requests that
+        # cannot reach model generation. Valid requests are frozen before any model
+        # output exists or can participate in requirement identity.
+        if not prompt.strip():
+            return original_plan(self, prompt, *args, **kwargs)
         request_catalog = build_authoritative_request_catalog(prompt)
         result = original_plan(self, prompt, *args, **kwargs)
         if not isinstance(result, tuple) or len(result) != 2:
