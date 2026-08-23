@@ -125,7 +125,7 @@ def _is_transparent_lru_cache_wrapper(value: Any) -> bool:
 
     ``functools.lru_cache`` preserves calls through ``__wrapped__`` but its C-level
     ``_lru_cache_wrapper`` has no independent signature for
-    ``inspect.signature(..., follow_wrapped=False)``.  Skip only that transparent
+    ``inspect.signature(..., follow_wrapped=False)``. Skip only that transparent
     layer; deeper Python wrappers are still audited normally.
     """
 
@@ -231,7 +231,11 @@ def _layer_identity(layer: Any) -> str:
         or getattr(layer, "__name__", "")
         or type(layer).__qualname__
     )
-    return f"{module}:{qualname}"
+    code = getattr(layer, "__code__", None)
+    filename = str(getattr(code, "co_filename", "") or "")
+    first_line = int(getattr(code, "co_firstlineno", 0) or 0)
+    location = f" [{filename}:{first_line}]" if filename else ""
+    return f"{module}:{qualname}{location}"
 
 
 def audit_installed_wrappers(
