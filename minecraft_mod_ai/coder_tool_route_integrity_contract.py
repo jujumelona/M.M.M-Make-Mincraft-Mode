@@ -10,7 +10,6 @@ allowing either late wrapper to replace the other.
 """
 
 import json
-from collections import Counter
 from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
@@ -36,7 +35,6 @@ _MUTATION_PRIORITY = (
     "repair_project",
 )
 _MUTATION_TOOLS = frozenset(_MUTATION_PRIORITY)
-_MUTATION_ROUTE_FAILURE_LIMIT = 2
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -103,38 +101,17 @@ def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
     return any(mutation_observation_applied(message) for message in reversed(messages))
 
 
-def _mutation_failure_counts(messages: Sequence[Mapping[str, Any]]) -> Counter[str]:
-    """Count explicit failed mutation observations already visible to this turn."""
+def _preferred_visible_mutation(tools: Sequence[Mapping[str, Any]]) -> str:
+    """Choose a reviewed mutation route without depending on schema ordering.
 
-    counts: Counter[str] = Counter()
-    for message in messages:
-        if str(message.get("role", "")).strip().casefold() != "tool":
-            continue
-        name = str(message.get("name", "")).strip()
-        if name not in _MUTATION_TOOLS:
-            continue
-        content = message.get("content")
-        payload: Any = content
-        if isinstance(content, str):
-            try:
-                payload = json.loads(content)
-            except json.JSONDecodeError:
-                continue
-        if isinstance(payload, Mapping) and payload.get("ok") is False:
-            counts[name] += 1
-    return counts
-
-
-def _preferred_visible_mutation(
-    tools: Sequence[Mapping[str, Any]],
-    messages: Sequence[Mapping[str, Any]],
-) -> str:
-    """Choose the cheapest visible mutation route that has not locally exhausted."""
+    Retry/evidence-epoch ownership lives in ``CausalStateLedger``. This transport-side
+    wrapper only chooses among mutation actions that the current causal frontier has
+    already declared legal; it must not maintain a second retry budget.
+    """
 
     visible = {_tool_name(schema) for schema in tools}
-    failures = _mutation_failure_counts(messages)
     for name in _MUTATION_PRIORITY:
-        if name in visible and failures[name] < _MUTATION_ROUTE_FAILURE_LIMIT:
+        if name in visible:
             return name
     return ""
 
@@ -152,6 +129,8 @@ def _force_tool_choice(request: Any, tool_name: str) -> Any:
         for schema in request.tools
         if _tool_name(schema) != tool_name
     )
+    # Preserve validation-only historical schemas, task metadata, and any future
+    # request fields. This helper owns only execution ordering and force semantics.
     return replace(
         request,
         tools=selected + remainder,
@@ -197,11 +176,17 @@ def _require_mutation_surface(
 class _WritableProgressAdapter:
     """Keep an implementation turn alive until a reviewed source mutation succeeds.
 
-    Retrieval remains model-owned. Once mutation is causal/legal, the host prefers the
-    cheapest reviewed route. Two explicit failures on that same visible route permit a
-    local fail-over to the next reviewed mutation route; exhausting every visible route
-    fails closed. This bounded route fail-over does not replay the node or own evidence
-    refresh/checkpoints: ``CausalStateLedger`` remains the owner of those transitions.
+    Prerequisite retrieval remains ``auto`` on the first attempt. If a small model
+    answers in prose instead of taking one of the already-authorized causal actions,
+    retry exactly once with the first visible frontier action forced. Mutation actions
+    are forced by explicit host priority only until one reviewed mutation succeeds;
+    after that proof exists, the model returns to auto/final synthesis instead of being
+    forced into redundant source writes. Final synthesis is rejected until a successful
+    mutation observation is present in the transcript.
+
+    Mutation retry/evidence refresh policy is intentionally not implemented here.
+    ``CausalStateLedger`` is the single owner of that state transition so this wrapper
+    cannot terminate a valid recovery path with a second, drifting retry budget.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -225,25 +210,13 @@ class _WritableProgressAdapter:
         if request.tool_choice != "auto" and forced_name not in _MUTATION_TOOLS:
             return self.inner.generate_turn(request)
 
+        # Once the host transcript proves a real source mutation succeeded, forcing
+        # another mutation is no longer progress. Let the ordinary causal/model loop
+        # decide whether another action is genuinely needed or whether to finalize.
         if _source_mutation_applied(request.messages):
             return self.inner.generate_turn(request)
 
-        failures = _mutation_failure_counts(request.messages)
-        if forced_name and failures[forced_name] >= _MUTATION_ROUTE_FAILURE_LIMIT:
-            raise ModelConfigurationError(
-                f"Writable coder exhausted bounded mutation retry budget for {forced_name!r}."
-            )
-
-        mutation = forced_name or _preferred_visible_mutation(request.tools, request.messages)
-        visible_mutations = {
-            _tool_name(schema)
-            for schema in request.tools
-            if _tool_name(schema) in _MUTATION_TOOLS
-        }
-        if not mutation and visible_mutations:
-            raise ModelConfigurationError(
-                "Writable coder exhausted bounded mutation retry budget for every visible source-mutation route."
-            )
+        mutation = forced_name or _preferred_visible_mutation(request.tools)
         if mutation:
             forced = request if forced_name == mutation else _force_tool_choice(request, mutation)
             turn = self.inner.generate_turn(forced)
@@ -254,6 +227,10 @@ class _WritableProgressAdapter:
                 )
             return turn
 
+        # Observation/retrieval frontiers remain model-owned on the first attempt.
+        # If the model refuses every visible action and emits prose, that prose is not
+        # a valid implementation result: make bounded causal progress by forcing only
+        # an action that the outer CausalFrontierAdapter already exposed and fenced.
         turn = self.inner.generate_turn(request)
         if turn.tool_calls:
             return turn
@@ -299,6 +276,12 @@ def _run_with_dynamic_frontier(
         stage=stage,
         role=role,
     )
+    # Freeze the same authorization and request state as the canonical causal-loop
+    # wrapper.  This late route-integrity wrapper replaces that live loop, so omitting
+    # these values would make the adapter consult mutable compatibility ContextVars on
+    # every turn. Nested retrieval can update those ContextVars and otherwise change
+    # the transition schema mid-loop, forcing the state ledger to replay history
+    # against a different surface and lose already verified code evidence.
     host_request = replace(
         request,
         tools=complete_surface,
@@ -357,6 +340,12 @@ def _install_implementation_goal_priority(causal_module: Any) -> None:
 
     @wraps(current)
     def goals_for_query(query: str) -> tuple[str, ...]:
+        # Host custom generation embeds evidence/tool metadata in the user JSON. The
+        # explicit phase is stronger terminal intent than incidental strings such as
+        # "external MCP" appearing inside that metadata. Use the existing `repair`
+        # terminal fact because it is produced only by reviewed source-edit tools;
+        # the broader `act/project_changed` goal could terminate on unrelated project
+        # mutation and recreate the empty-source-diff failure.
         if "implement_module" in str(query).casefold():
             return ("repair",)
         return tuple(current(query))
