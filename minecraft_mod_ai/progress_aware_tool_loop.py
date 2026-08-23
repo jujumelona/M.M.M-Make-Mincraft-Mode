@@ -19,10 +19,11 @@ def generate_with_tools(
 ) -> str:
     """Run retrieve/act/observe with semantic retrieval progress.
 
-    The round budget is only the final liveness guard. Mandatory evidence is
-    satisfied by validated host grounding when present; otherwise the host may
-    force each internal RAG source at most once. Supplemental retrieval remains
-    model-driven and repeated queries/evidence never count as progress.
+    Semantic progress owns normal liveness. A round budget only applies when the
+    operator explicitly configures one. Mandatory evidence is satisfied by validated
+    host grounding when present; otherwise the host may force each internal RAG
+    source at most once. Supplemental retrieval remains model-driven and repeated
+    queries/evidence never count as progress.
     """
     from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
     from .coder_tool_route_integrity_contract import (
@@ -62,16 +63,15 @@ def generate_with_tools(
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
     while True:
-        if round_index >= round_limit:
+        if round_limit is not None and round_index >= round_limit:
             if require_rag and not progress.has_fresh_evidence:
                 raise ModelConfigurationError(
-                    "Agent reached the hard tool-round liveness guard before required "
-                    "evidence became available. Retrieval progress should normally "
-                    "terminate earlier."
+                    "Agent reached the explicit tool-round limit before required "
+                    "evidence became available."
                 )
             if implementation_requires_mutation and not _source_mutation_applied(messages):
                 raise ModelConfigurationError(
-                    "Writable coder reached the hard tool-round liveness guard before a "
+                    "Writable coder reached the explicit tool-round limit before a "
                     "reviewed source mutation was applied; refusing a prose-only implementation."
                 )
             return _finalize_without_tools(
@@ -81,10 +81,10 @@ def generate_with_tools(
                 request,
                 messages,
                 instruction=(
-                    f"The host tool liveness guard was reached after {round_limit} rounds. "
+                    f"The explicitly configured host tool limit was reached after {round_limit} rounds. "
                     "Do not call more tools. Return the final answer using only observations already present."
                 ),
-                empty_error="Agent returned an empty final response at the hard tool-round guard.",
+                empty_error="Agent returned an empty final response at the explicit tool-round limit.",
             )
 
         tool_choice = request.tool_choice
