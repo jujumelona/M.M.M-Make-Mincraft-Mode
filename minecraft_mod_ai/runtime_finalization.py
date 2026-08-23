@@ -54,7 +54,6 @@ def finalize_runtime() -> None:
         from . import parallel_runtime_contract
         from . import repository_grounding
         from . import research_rag_performance
-        from . import small_model_execution_extensions_contract
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
@@ -93,10 +92,7 @@ def finalize_runtime() -> None:
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_compacting_adapter import install as install_small_model_compaction
-        from .source_edit_scalar_protocol_contract import (
-            SOURCE_EDIT_SCHEMA,
-            install as install_scalar_source_edit_protocol,
-        )
+        from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
         from .tool_validation_surface_contract import install as install_tool_validation_surface
 
@@ -115,10 +111,6 @@ def finalize_runtime() -> None:
         )
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
-        install_scalar_source_edit_protocol(
-            small_model_execution_extensions_contract,
-            agent_tool_runtime,
-        )
         install_procedural_skill_identity(external_procedural_skill_contract)
         install_tool_schema_ownership(
             agent_tool_runtime,
