@@ -67,13 +67,13 @@ def install_postbootstrap() -> None:
 
 
 def _install_joint_platform_optimizer(resolver: Any) -> None:
-    """Select versions after reuse evaluation without making reuse a fatal gate.
+    """Select automatic/new targets only through evidence-first reuse evaluation.
 
     Existing-project preservation remains owned by ``platform_resolver``. Every
     automatic/new target flows through this hook without a Minecraft-version filter.
-    Joint reuse optimization is an enhancement: if live ecosystem evidence is
-    temporarily unavailable, the canonical host optimizer still chooses from the
-    unfixed executable candidate set and planning continues.
+    An explicit ``MMM_ECOSYSTEM_DISCOVERY=off`` opt-out keeps the canonical host
+    optimizer available, but an evidence-first optimization failure must not silently
+    select a target through the legacy optimizer.
     """
 
     current = resolver._optimize
@@ -105,17 +105,14 @@ def _install_joint_platform_optimizer(resolver: Any) -> None:
         discovery_mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
         if discovery_mode == "off":
             return base_optimizer()
-        try:
-            joint = optimize_platform_and_reuse(
-                prompt,
-                design=design,
-                module_kinds=module_kinds,
-                loader_constraint=loader_constraint,
-                version_constraint=None,
-                target_research_fn=target_research_fn,
-            )
-        except ValueError:
-            return base_optimizer()
+        joint = optimize_platform_and_reuse(
+            prompt,
+            design=design,
+            module_kinds=module_kinds,
+            loader_constraint=loader_constraint,
+            version_constraint=None,
+            target_research_fn=target_research_fn,
+        )
         result = joint.base_optimization
         object.__setattr__(result, "_mmm_reuse_plan", joint.selected_plan.to_dict())
         return result
@@ -252,7 +249,7 @@ def _install_reuse_materialization(custom_module_generator: Any) -> None:
                         )
                     if capability and mode == "fresh":
                         fresh.append(capability)
-                    elif capability and mode == "adapt":
+                    elif capability and mode in {"adapt", "source_transplant"}:
                         adapters.append(capability)
             model_config = {
                 key: value
@@ -267,10 +264,12 @@ def _install_reuse_materialization(custom_module_generator: Any) -> None:
                     "_adapter_capabilities": adapters,
                     "_generation_rule": (
                         "Generate only the capabilities listed in _fresh_only_capabilities and "
-                        "the minimal adapters listed in _adapter_capabilities. Reuse approved "
-                        "same-project/MMM/library/source-transplant capabilities exactly as the "
-                        "compact reuse decisions and pinned source context specify; do not "
-                        "reimplement them."
+                        "the minimal project-local integration/adaptation work listed in "
+                        "_adapter_capabilities. A source_transplant decision is pinned donor "
+                        "evidence, not a completed project implementation: use its source context "
+                        "and implement only the residual integration delta. Reuse approved "
+                        "same-project/MMM/library capabilities exactly as the compact reuse "
+                        "decisions specify; do not reimplement them."
                     ),
                 }
             )
