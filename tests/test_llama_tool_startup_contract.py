@@ -7,13 +7,12 @@ from types import SimpleNamespace
 from minecraft_mod_ai import llama_server_autotune as autotune
 
 
-def test_every_native_server_start_path_includes_jinja_and_pure_content_parser() -> None:
+def test_every_native_server_start_path_keeps_jinja_native_tool_parser() -> None:
     config = SimpleNamespace(max_context=32768)
     args = autotune._base_args("llama-server", "/tmp/model.gguf", config, 8910)
     assert "--jinja" in args
     assert args.count("--jinja") == 1
-    assert "--skip-chat-parsing" in args
-    assert args.count("--skip-chat-parsing") == 1
+    assert "--skip-chat-parsing" not in args
     assert "--prefill-assistant" in args
     assert args.count("--prefill-assistant") == 1
 
