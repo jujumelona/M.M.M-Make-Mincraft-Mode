@@ -2,12 +2,10 @@ from __future__ import annotations
 
 """Canonical model-facing source edit protocol.
 
-A coding agent should emit one executable edit, receive the host observation, then
-re-plan. Action boundaries are semantic, not arbitrary byte/token pages. Existing
-files therefore use anchored edits instead of complete-file regeneration; new files
-may be created in one action. The host resolves the project root, validates paths,
-checks exact preconditions and compiles the action into the transactional
-``apply_source_patch`` MCP primitive.
+One model action describes one executable edit. Existing files are changed through
+exact spans or anchors; a genuinely new file may be created in one action. The host
+resolves the project, validates the current file state, derives a SHA precondition and
+compiles the action into the internal transactional ``apply_source_patch`` primitive.
 """
 
 import hashlib
@@ -15,7 +13,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 
-_MARKER = "_mmm_scalar_source_edit_protocol_v2"
 _CANONICAL_OPERATIONS = (
     "replace_exact",
     "insert_before",
@@ -40,8 +37,7 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "enum": list(_ACCEPTED_OPERATIONS),
             "description": (
                 "Use replace_exact or insert_before/insert_after for an existing file, "
-                "create_file only for a new file, and delete_file only when removal is "
-                "intended. Do not regenerate an existing complete file."
+                "create_file for a new file, and delete_file only when removal is intended."
             ),
         },
         "path": {
@@ -65,23 +61,17 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
         },
         "content": {
             "type": "string",
-            "description": (
-                "Inserted text for insert operations, or complete content only when "
-                "creating a genuinely new file."
-            ),
+            "description": "Inserted text, or complete content when creating a new file.",
         },
         "text": {
             "type": "string",
-            "description": (
-                "Lossless Qwen alias for new/content. Canonical fields win when both "
-                "are supplied."
-            ),
+            "description": "Lossless Qwen alias for new/content.",
         },
         "count": {
             "type": "integer",
             "minimum": 1,
             "default": 1,
-            "description": "Expected exact occurrence count for the selected anchor/span.",
+            "description": "Expected exact occurrence count for the selected span/anchor.",
         },
     },
 }
@@ -100,15 +90,6 @@ def _required_text(
     if not isinstance(value, str) or (not allow_empty and not value):
         requirement = "text" if allow_empty else "a non-empty string"
         raise runtime_module.AgentToolRuntimeError(f"{key} must be {requirement}")
-    return value
-
-
-def _optional_text(runtime_module: Any, payload: Mapping[str, Any], key: str) -> str | None:
-    value = payload.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise runtime_module.AgentToolRuntimeError(f"{key} must be text")
     return value
 
 
@@ -201,8 +182,25 @@ def _bound_project(
     return root, "." if not relative.parts else relative.as_posix()
 
 
+def _replacement_for_edit(
+    runtime_module: Any,
+    *,
+    operation: str,
+    path: str,
+    payload: Mapping[str, Any],
+    count: int,
+) -> dict[str, Any]:
+    if operation == "replace_exact":
+        old = _required_text(runtime_module, payload, "old")
+        new = _required_text(runtime_module, payload, "new", allow_empty=True)
+        return {"old": old, "new": new, "count": count}
+    anchor = _required_text(runtime_module, payload, "anchor")
+    content = _required_text(runtime_module, payload, "content", allow_empty=True)
+    new = content + anchor if operation == "insert_before" else anchor + content
+    return {"old": anchor, "new": new, "count": count}
+
+
 def materialize_model_source_edit(
-    extension_module: Any,
     runtime_module: Any,
     workspace_root: str | Path,
     payload: Mapping[str, Any],
@@ -276,21 +274,22 @@ def materialize_model_source_edit(
     if type(count) is not int or count < 1:
         raise runtime_module.AgentToolRuntimeError("count must be a positive integer")
 
-    item: dict[str, Any] = {"operation": operation, "path": path, "count": count}
     if operation == "replace_exact":
-        item["old"] = _required_text(runtime_module, payload, "old")
-        item["new"] = _required_text(runtime_module, payload, "new", allow_empty=True)
         forbidden = {"anchor", "content"}.intersection(payload)
     else:
-        item["anchor"] = _required_text(runtime_module, payload, "anchor")
-        item["content"] = _required_text(runtime_module, payload, "content", allow_empty=True)
         forbidden = {"old", "new"}.intersection(payload)
     if forbidden:
         raise runtime_module.AgentToolRuntimeError(
             f"Fields {sorted(forbidden)} are invalid for {operation}"
         )
 
-    replacement = extension_module._replacement_for_edit(runtime_module, item, normalized)
+    replacement = _replacement_for_edit(
+        runtime_module,
+        operation=operation,
+        path=normalized,
+        payload=payload,
+        count=count,
+    )
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -317,19 +316,4 @@ def materialize_model_source_edit(
     }
 
 
-def install(extension_module: Any, runtime_module: Any) -> None:
-    """Assert that runtime dispatch uses this single source-edit schema/materializer."""
-
-    if bool(getattr(extension_module, _MARKER, False)):
-        return
-    if getattr(extension_module, "_SOURCE_EDIT_SCHEMA", None) is not SOURCE_EDIT_SCHEMA:
-        raise RuntimeError(
-            "Source-edit execution must import SOURCE_EDIT_SCHEMA from its canonical owner."
-        )
-    if not callable(getattr(extension_module, "_materialize_model_source_edit", None)):
-        raise RuntimeError("Source-edit execution is missing its canonical materializer delegate.")
-    setattr(extension_module, _MARKER, True)
-    del runtime_module
-
-
-__all__ = ["SOURCE_EDIT_SCHEMA", "install", "materialize_model_source_edit"]
+__all__ = ["SOURCE_EDIT_SCHEMA", "materialize_model_source_edit"]
