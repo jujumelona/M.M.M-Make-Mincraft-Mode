@@ -488,8 +488,23 @@ class CausalFrontierAdapter:
                 preference=self.preference or authorized_tool_preference(),
             )
             selected = tuple(by_name[name] for name in names if name in by_name)
-            tool_choice = "auto" if selected else None
-            parallel_tool_calls = True if selected else False
+            selected_names = tuple(_name(schema) for schema in selected)
+            if len(selected_names) == 1 and selected_names[0] in _SOURCE_MUTATION_NAMES:
+                # A causal frontier with exactly one writable transition is already a
+                # host decision. Leaving that transition as ``auto`` lets a small local
+                # model spend an entire context window narrating or reproducing source
+                # instead of closing the bounded action envelope. Promote only this
+                # unambiguous mutation frontier to a named required call. The normal
+                # tool loop executes it, appends the observation, then recomputes the
+                # next frontier; no arbitrary token cap or whole-turn replay is needed.
+                tool_choice = {
+                    "type": "function",
+                    "function": {"name": selected_names[0]},
+                }
+                parallel_tool_calls = False
+            else:
+                tool_choice = "auto" if selected else None
+                parallel_tool_calls = True if selected else False
         selected_names = tuple(_name(schema) for schema in selected)
         self._guard_semantic_progress(
             state=state,
