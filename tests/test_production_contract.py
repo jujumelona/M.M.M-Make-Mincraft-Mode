@@ -47,6 +47,41 @@ def test_hash_binding_rejects_mutation_and_external_binding_mismatch() -> None:
     with pytest.raises(ProductionContractError, match='acceptance catalog'):
         validate_production_contract(compiled.contract, ['weather_compass'], ['invented pass'])
 
+def test_complete_module_and_asset_payloads_are_bound_to_current_content() -> None:
+    module = _module('weather_compass', 'item', feature='weather')
+    asset = {
+        'asset_id': 'weather_compass_texture',
+        'kind': 'item_texture',
+        'prompt': 'weather compass icon',
+        'target_path': 'assets/example/textures/item/weather_compass.png',
+        'width': 16,
+        'height': 16,
+    }
+    compiled = _compile(modules=[module], assets=[asset])
+    validate_production_contract(
+        compiled.contract,
+        [module],
+        compiled.acceptance_tests,
+        [asset],
+    )
+    changed_module = copy.deepcopy(module)
+    changed_module['config']['changed'] = True
+    with pytest.raises(ProductionContractError, match='module source binding'):
+        validate_production_contract(
+            compiled.contract,
+            [changed_module],
+            compiled.acceptance_tests,
+            [asset],
+        )
+    changed_asset = {**asset, 'prompt': 'different texture'}
+    with pytest.raises(ProductionContractError, match='asset source binding'):
+        validate_production_contract(
+            compiled.contract,
+            [module],
+            compiled.acceptance_tests,
+            [changed_asset],
+        )
+
 def test_evaluation_requires_fresh_independent_receipts() -> None:
     compiled = _compile()
     missing = evaluate_quality_contract(compiled.contract, {}, PROPOSAL_HASH)

@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import shutil
+import threading
+from concurrent.futures import Future
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -91,16 +93,51 @@ def _attach_existing_target(owner: Any, existing_input: Path | None) -> None:
     from .importer import inspect_existing_project_archive
 
     report = inspect_existing_project_archive(existing_input)
+    observed_archive_sha256 = str(report.archive_sha256)
+    if not observed_archive_sha256.startswith("sha256:"):
+        raise SpecValidationError(
+            "Existing-project inspection did not return a qualified archive SHA-256."
+        )
     if report.minecraft_version:
         owner._mmm_existing_minecraft_version = report.minecraft_version
     if report.loader:
         owner._mmm_existing_loader = report.loader
-    owner._mmm_existing_platform_report = {
-        "minecraft_version": report.minecraft_version,
-        "minecraft_versions": list(report.minecraft_versions),
-        "loader": report.loader,
-        "source": str(existing_input),
-    }
+    report_payload = report.to_dict()
+    report_payload["source"] = str(existing_input)
+    if report_payload.get("archive_sha256") != observed_archive_sha256:
+        raise SpecValidationError(
+            "Existing-project report is not bound to its observed archive SHA-256."
+        )
+    owner._mmm_existing_archive_sha256 = observed_archive_sha256
+    owner._mmm_existing_platform_report = report_payload
+    owner._mmm_existing_project_report = report_payload
+
+    # Build the deeper symbol/resource/test/dependency inventory while the
+    # independent semantic-design call is running.  The target-selection wrapper
+    # joins this future before it can decide reuse or platform coordinates.
+    future: Future[Any] = Future()
+
+    def inspect_inventory() -> None:
+        try:
+            from .project_inventory import inspect_existing_archive_inventory
+
+            inventory = inspect_existing_archive_inventory(existing_input)
+            inventory.validate()
+            if inventory.source_sha256 != observed_archive_sha256:
+                raise SpecValidationError(
+                    "Existing-project ZIP changed between platform inspection and "
+                    "background project inventory."
+                )
+            future.set_result(inventory)
+        except BaseException as exc:
+            future.set_exception(exc)
+
+    threading.Thread(
+        target=inspect_inventory,
+        name="mmm-existing-project-inventory",
+        daemon=True,
+    ).start()
+    owner._mmm_existing_project_inventory_future = future
 
 
 def _sha256_file(path: Path) -> str:
@@ -108,7 +145,55 @@ def _sha256_file(path: Path) -> str:
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    return "sha256:" + digest.hexdigest()
+
+
+def _verified_existing_input_sha256(
+    owner: Any,
+    existing_input: Path,
+    *,
+    await_inventory: bool = False,
+) -> str:
+    """Return the session's one observed archive digest or fail on any drift.
+
+    The importer report owns the observation. Planning, the asynchronous deep
+    inventory, and the proposal all bind to that exact digest; none is allowed to
+    silently replace it with a later observation of the path.
+    """
+
+    path = existing_input.expanduser().resolve()
+    if not path.is_file() or path.is_symlink():
+        raise FileNotFoundError(path)
+    expected = str(getattr(owner, "_mmm_existing_archive_sha256", ""))
+    if not expected.startswith("sha256:") or len(expected) != 71:
+        raise SpecValidationError(
+            "Existing-project session has no immutable observed archive SHA-256. "
+            "Create a new session for this ZIP."
+        )
+    report = getattr(owner, "_mmm_existing_project_report", None)
+    if not isinstance(report, dict) or report.get("archive_sha256") != expected:
+        raise SpecValidationError(
+            "Existing-project report disagrees with the session archive SHA-256."
+        )
+    if _sha256_file(path) != expected:
+        raise SpecValidationError(
+            "Existing-project ZIP changed after the session observed it. "
+            "Create a new session for the changed ZIP."
+        )
+
+    future = getattr(owner, "_mmm_existing_project_inventory_future", None)
+    if isinstance(future, Future) and (await_inventory or future.done()):
+        try:
+            inventory = future.result()
+        except BaseException as exc:
+            raise SpecValidationError(
+                f"Existing-project inventory could not be bound to the observed ZIP: {exc}"
+            ) from exc
+        if str(getattr(inventory, "source_sha256", "")) != expected:
+            raise SpecValidationError(
+                "Existing-project inventory disagrees with the session archive SHA-256."
+            )
+    return expected
 
 
 def _is_colab_drive_path(path: Path) -> bool:
@@ -393,25 +478,10 @@ class CompleteModAISession:
         _attach_existing_target(self.router, self.existing_input)
         if fast_mode:
             print(
-                "⚡ [Fast Mode Activated] 선택한 모델로 초소형 간이 제작/검토 모드를 실행합니다.",
+                "⚡ [Fast Mode Activated] 검색·작업 스케줄링만 빠르게 조정하며 "
+                "모델 컨텍스트와 출력 한도는 줄이지 않습니다.",
                 flush=True,
             )
-            for role_name in (
-                "planner",
-                "coder",
-                "researcher",
-                "coder_safe",
-                "visual_critic",
-            ):
-                try:
-                    cfg = self.router.registry.role(model_profile, role_name)
-                except (KeyError, ValueError, SpecValidationError):
-                    continue
-                if hasattr(cfg, "max_context"):
-                    cfg.max_context = min(cfg.max_context, 8192)
-                if hasattr(cfg, "max_new_tokens"):
-                    cfg.max_new_tokens = min(cfg.max_new_tokens, 1024)
-
         self.planner = CompleteGameDesignPlanner(self.router)
         self.orchestrator = CompleteProductionOrchestrator(
             workspace_root=self.workspace_root,
@@ -451,15 +521,26 @@ class CompleteModAISession:
             raise SpecValidationError("대화 내용을 입력해 주세요.") from exc
         existing_hash = ""
         if self.existing_input is not None:
-            if not self.existing_input.is_file():
-                raise FileNotFoundError(self.existing_input)
-            existing_hash = _sha256_file(self.existing_input)
+            existing_hash = _verified_existing_input_sha256(
+                self.router,
+                self.existing_input,
+            )
 
         proposal = self.planner.plan(
             updated_brief,
             media_paths=media_paths,
             existing_input_sha256=existing_hash,
         )
+        if self.existing_input is not None:
+            rebound = _verified_existing_input_sha256(
+                self.router,
+                self.existing_input,
+                await_inventory=True,
+            )
+            if rebound != existing_hash or proposal.existing_input_sha256 != existing_hash:
+                raise SpecValidationError(
+                    "Complete proposal is not bound to the session's observed existing-project ZIP."
+                )
         self.brief = updated_brief
         self.complete_proposal = proposal
         self.save_plan()

@@ -78,6 +78,57 @@ class GameDesignPlanner:
                 page_budget=page_budget,
             )
 
+        # Existing-project evidence is collected by the host before planning and
+        # joined with the independently produced semantic design before any target
+        # or reuse decision.  It remains private host context (underscore-prefixed)
+        # and is never inferred or rewritten by the model.
+        existing_report = getattr(self.router, "_mmm_existing_project_report", None)
+        if isinstance(existing_report, Mapping):
+            design = {**design, "_existing_project_report": dict(existing_report)}
+        existing_inventory = getattr(
+            self.router, "_mmm_existing_project_inventory", None
+        )
+        inventory_future = getattr(
+            self.router, "_mmm_existing_project_inventory_future", None
+        )
+        if existing_inventory is None and hasattr(inventory_future, "result"):
+            inventory = inventory_future.result()
+            validate = getattr(inventory, "validate", None)
+            if not callable(validate):
+                raise SpecValidationError(
+                    "Existing-project inventory did not return a validated host object."
+                )
+            validate()
+            to_dict = getattr(inventory, "to_dict", None)
+            if not callable(to_dict):
+                raise SpecValidationError(
+                    "Existing-project inventory cannot be bound to planning."
+                )
+            existing_inventory = to_dict()
+            self.router._mmm_existing_project_inventory = existing_inventory
+        if isinstance(existing_inventory, Mapping):
+            from .project_inventory import validate_project_inventory_payload
+
+            inventory_payload = validate_project_inventory_payload(
+                existing_inventory
+            )
+            self.router._mmm_existing_project_inventory = inventory_payload
+            design = {
+                **design,
+                "_existing_project_inventory": inventory_payload,
+                "_existing_snapshot": inventory_payload,
+                "_component_catalog": dict(
+                    inventory_payload.get("component_catalog") or {}
+                ),
+            }
+
+        from .evidence_first_planning import build_request_catalog
+
+        design = {
+            **design,
+            "_evidence_request_catalog": build_request_catalog(prompt, design),
+        }
+
         research_brief = normalize_research_brief(prompt, design)
         design = {**design, "_research_brief": research_brief}
         build_slice = _deterministic_bootstrap(prompt, design)

@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 from .json_stream import CanonicalJsonError, canonical_json_sha256, validate_canonical_json
 from .scale_policy import ScalePolicy
@@ -207,7 +207,26 @@ class CompleteProposal:
             raise SpecValidationError(
                 "game_design must contain finite JSON values."
             ) from exc
-        if not self.modules:
+        evidence_plan = self.game_design.get("_evidence_first_plan")
+        retained_only = False
+        if isinstance(evidence_plan, Mapping):
+            try:
+                from .evidence_first_planning import validate_evidence_first_plan
+
+                validate_evidence_first_plan(
+                    evidence_plan,
+                    prompt=self.requested_prompt,
+                )
+                retained_only = (
+                    not evidence_plan.get("gap_catalog")
+                    and not evidence_plan.get("tasks")
+                    and bool(evidence_plan.get("verified_provides"))
+                )
+            except (ImportError, ValueError, TypeError, RecursionError) as exc:
+                raise SpecValidationError(
+                    f"Invalid evidence-first implementation plan: {exc}"
+                ) from exc
+        if not self.modules and not retained_only:
             raise SpecValidationError(
                 "A complete proposal must contain at least one production module."
             )
@@ -271,8 +290,10 @@ class CompleteProposal:
 
                 validate_production_contract(
                     contract,
-                    [module.module_id for module in self.modules],
+                    self.modules,
                     self.acceptance_tests,
+                    self.assets,
+                    evidence_plan if isinstance(evidence_plan, Mapping) else None,
                 )
             except ValueError as exc:
                 raise SpecValidationError(

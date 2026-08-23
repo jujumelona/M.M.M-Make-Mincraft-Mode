@@ -14,7 +14,7 @@ CONTRACT_SCHEMA = 'mmm/production-contract-v1'
 REPORT_SCHEMA = 'mmm/quality-report-v1'
 _SHA256 = re.compile('^sha256:[0-9a-f]{64}$')
 _TOKEN = re.compile('[\\w]+', re.UNICODE)
-_MAX_DIRECT_IMPLEMENTATION_REFS = 8
+_LEGACY_DIRECT_IMPLEMENTATION_REFS = 8
 _MAX_MATCH_TERMS = 16
 _MAX_POSTING_SCAN = 32
 _PLATEAU_THRESHOLD = 3
@@ -36,7 +36,7 @@ class ProductionContractCompilation:
     contract: dict[str, Any]
     acceptance_tests: tuple[str, ...]
 
-def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence['ProductionModule | Mapping[str, Any]']=(), assets: Sequence['AssetRequest | Mapping[str, Any]']=(), acceptance_tests: Sequence[str]=()) -> ProductionContractCompilation:
+def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence['ProductionModule | Mapping[str, Any]']=(), assets: Sequence['AssetRequest | Mapping[str, Any]']=(), acceptance_tests: Sequence[str]=(), evidence_plan: Mapping[str, Any] | None=None) -> ProductionContractCompilation:
     """Compile prompt-derived scope into a deterministic evidence contract."""
     if not isinstance(requested_prompt, str) or not requested_prompt.strip():
         raise ProductionContractError('requested_prompt must be a non-empty string')
@@ -73,8 +73,17 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         seen_aids.add(asset_id)
         normalized_assets.append(asset)
     input_acceptance = _normalize_acceptance_tests(acceptance_tests)
-    requirements = _compile_requirements(requested_prompt, design_snapshot, research_snapshot)
-    implementation_catalog, implementation_search = _implementation_catalog(normalized_modules, normalized_assets)
+    normalized_evidence_plan = _validated_evidence_plan(evidence_plan)
+    requirements = (
+        _compile_evidence_requirements(requested_prompt, normalized_evidence_plan)
+        if normalized_evidence_plan is not None
+        else _compile_requirements(requested_prompt, design_snapshot, research_snapshot)
+    )
+    implementation_catalog, implementation_search = _implementation_catalog(
+        normalized_modules,
+        normalized_assets,
+        evidence_plan=normalized_evidence_plan,
+    )
     if not implementation_catalog:
         raise ProductionContractError('production contract requires at least one implementation')
     active_dimensions, activation_reasons = _infer_dimensions(requested_prompt=requested_prompt, game_design=design_snapshot, research_brief=research_snapshot, modules=[item for item in normalized_modules if not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and item['config'].get('integration_type') == 'mmm_research_shard')], assets=normalized_assets)
@@ -118,7 +127,21 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     coverage_groups: list[dict[str, Any]] = []
     for requirement in requirements:
         requirement_ref = requirement['requirement_ref']
-        direct_implementations = _bounded_matches(requirement_ref, requirement['statement'] + ' ' + requirement['source_ref'], implementation_search, implementation_index, _MAX_DIRECT_IMPLEMENTATION_REFS)
+        direct_implementations = (
+            _evidence_implementation_refs(
+                normalized_evidence_plan,
+                requirement,
+                implementation_refs={item['implementation_ref'] for item in implementation_catalog},
+            )
+            if normalized_evidence_plan is not None
+            else _bounded_matches(
+                requirement_ref,
+                requirement['statement'] + ' ' + requirement['source_ref'],
+                implementation_search,
+                implementation_index,
+                _LEGACY_DIRECT_IMPLEMENTATION_REFS,
+            )
+        )
         matched_input_tests = _bounded_matches(requirement_ref, requirement['statement'], input_test_search, input_test_index, 2, fallback=False)
         relevant_dimensions = list(_BASELINE_DIMENSIONS)
         if requirement['source'] == 'requested_prompt':
@@ -133,13 +156,25 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         requirement['coverage_group_ref'] = group_ref
         coverage_groups.append({'group_ref': group_ref, 'requirement_ref': requirement_ref, 'implementation_catalog_ref': 'catalog:implementations', 'implementation_refs': direct_implementations, 'acceptance_catalog_ref': 'catalog:acceptance', 'acceptance_refs': [requirement_acceptance[requirement_ref], *matched_input_tests], 'quality_dimension_refs': quality_refs, 'evidence_route_refs': ['evidence:' + value.removeprefix('quality:') for value in quality_refs]})
     acceptance_tuple = tuple(entry['statement'] for entry in acceptance_catalog)
-    source_bindings = {'game_design_sha256': _canonical_sha256(design_snapshot), 'research_brief_sha256': '' if research_snapshot is None else _canonical_sha256(research_snapshot), 'module_input_sha256': _canonical_sha256(normalized_modules), 'asset_input_sha256': _canonical_sha256(normalized_assets)}
-    contract: dict[str, Any] = {'schema_version': CONTRACT_SCHEMA, 'requested_prompt': requested_prompt, 'source_bindings': source_bindings, 'requirement_catalog': requirements, 'implementation_catalog': implementation_catalog, 'acceptance_catalog': acceptance_catalog, 'quality_dimension_catalog': quality_catalog, 'evidence_route_catalog': evidence_routes, 'coverage_groups': coverage_groups, 'completion_policy': _json_copy(_COMPLETION_POLICY, 'completion_policy'), 'catalog_stats': {'requirements': len(requirements), 'implementations': len(implementation_catalog), 'acceptance_tests': len(acceptance_catalog), 'quality_dimensions': len(quality_catalog), 'coverage_groups': len(coverage_groups), 'max_direct_implementation_refs_per_group': _MAX_DIRECT_IMPLEMENTATION_REFS}, 'contract_sha256': ''}
+    source_bindings = {'game_design_sha256': _canonical_sha256(design_snapshot), 'research_brief_sha256': '' if research_snapshot is None else _canonical_sha256(research_snapshot), 'module_input_sha256': _canonical_sha256(normalized_modules), 'asset_input_sha256': _canonical_sha256(normalized_assets), 'evidence_plan_sha256': '' if normalized_evidence_plan is None else str(normalized_evidence_plan['plan_sha256'])}
+    contract: dict[str, Any] = {'schema_version': CONTRACT_SCHEMA, 'requested_prompt': requested_prompt, 'source_bindings': source_bindings, 'requirement_catalog': requirements, 'implementation_catalog': implementation_catalog, 'acceptance_catalog': acceptance_catalog, 'quality_dimension_catalog': quality_catalog, 'evidence_route_catalog': evidence_routes, 'coverage_groups': coverage_groups, 'completion_policy': _json_copy(_COMPLETION_POLICY, 'completion_policy'), 'catalog_stats': {'requirements': len(requirements), 'implementations': len(implementation_catalog), 'acceptance_tests': len(acceptance_catalog), 'quality_dimensions': len(quality_catalog), 'coverage_groups': len(coverage_groups), 'max_direct_implementation_refs_per_group': max((len(item['implementation_refs']) for item in coverage_groups), default=0)}, 'contract_sha256': ''}
     contract['contract_sha256'] = _hash_without_field(contract, 'contract_sha256')
-    validate_production_contract(contract, [item['module_id'] for item in normalized_modules], acceptance_tuple)
+    validate_production_contract(
+        contract,
+        normalized_modules,
+        acceptance_tuple,
+        normalized_assets,
+        normalized_evidence_plan,
+    )
     return ProductionContractCompilation(contract=contract, acceptance_tests=acceptance_tuple)
 
-def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterable[str], acceptance_tests: Iterable[str]) -> None:
+def validate_production_contract(
+    contract: Mapping[str, Any],
+    modules: Iterable[Any],
+    acceptance_tests: Iterable[str],
+    assets: Iterable[Any] | None = None,
+    evidence_plan: Mapping[str, Any] | None = None,
+) -> None:
     """Strictly validate a contract and its external proposal bindings."""
     if not isinstance(contract, Mapping):
         raise ProductionContractError('production contract must be an object')
@@ -162,6 +197,17 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
             raise ProductionContractError(f'invalid source binding: {key}')
     if not source_bindings['game_design_sha256']:
         raise ProductionContractError('game design source binding is required')
+    normalized_evidence_plan = _validated_evidence_plan(evidence_plan)
+    if normalized_evidence_plan is not None:
+        if source_bindings.get('evidence_plan_sha256') != normalized_evidence_plan['plan_sha256']:
+            raise ProductionContractError(
+                'evidence plan source binding does not match the current proposal'
+            )
+    elif source_bindings.get('evidence_plan_sha256') not in {'', None}:
+        # Standalone quality-report readers can validate the contract from its bound
+        # digest alone. Proposal validation always supplies the live plan as well.
+        if not _SHA256.fullmatch(str(source_bindings['evidence_plan_sha256'])):
+            raise ProductionContractError('invalid evidence plan source binding')
     requirements = _require_list(contract['requirement_catalog'], 'requirements')
     implementations = _require_list(contract['implementation_catalog'], 'implementations')
     acceptances = _require_list(contract['acceptance_catalog'], 'acceptance')
@@ -178,7 +224,7 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         if ref in requirement_refs:
             raise ProductionContractError(f'duplicate requirement ref: {ref}')
         requirement_refs.add(ref)
-        if item['source'] not in {'requested_prompt', 'game_design', 'research_brief'}:
+        if item['source'] not in {'requested_prompt', 'game_design', 'research_brief', 'evidence_plan'}:
             raise ProductionContractError(f'invalid requirement source: {ref}')
         _nonempty_string(item['source_ref'], 'requirement source_ref')
         _nonempty_string(item['statement'], 'requirement statement')
@@ -191,8 +237,35 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         raise ProductionContractError('exactly one original request requirement is required')
     if root_requirements[0]['statement'] != contract['requested_prompt']:
         raise ProductionContractError('original request requirement was changed')
+    if normalized_evidence_plan is not None:
+        expected_requirements = _compile_evidence_requirements(
+            str(contract['requested_prompt']), normalized_evidence_plan
+        )
+        actual_core = [
+            {
+                'requirement_ref': item['requirement_ref'],
+                'source': item['source'],
+                'source_ref': item['source_ref'],
+                'statement': item['statement'],
+            }
+            for item in requirements
+        ]
+        expected_core = [
+            {
+                'requirement_ref': item['requirement_ref'],
+                'source': item['source'],
+                'source_ref': item['source_ref'],
+                'statement': item['statement'],
+            }
+            for item in expected_requirements
+        ]
+        if actual_core != expected_core:
+            raise ProductionContractError(
+                'evidence requirement catalog does not match the validated plan'
+            )
     implementation_refs: set[str] = set()
     catalog_module_ids: list[str] = []
+    evidence_plan_entry: Mapping[str, Any] | None = None
     for item in implementations:
         _require_exact_keys(item, {'implementation_ref', 'source_kind', 'implementation_id', 'kind', 'content_sha256'}, 'implementation')
         ref = _nonempty_string(item['implementation_ref'], 'implementation_ref')
@@ -205,12 +278,91 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
             raise ProductionContractError(f'invalid implementation hash: {ref}')
         if item['source_kind'] == 'module':
             catalog_module_ids.append(item['implementation_id'])
-    expected_module_ids = list(module_ids)
+        elif item['source_kind'] == 'evidence_plan':
+            if evidence_plan_entry is not None:
+                raise ProductionContractError('duplicate evidence plan implementation')
+            evidence_plan_entry = item
+    bound_evidence_sha = str(source_bindings.get('evidence_plan_sha256') or '')
+    if bound_evidence_sha:
+        if evidence_plan_entry is None:
+            raise ProductionContractError('bound evidence plan implementation is missing')
+        if (
+            evidence_plan_entry['implementation_ref'] != 'implementation:evidence_plan'
+            or evidence_plan_entry['implementation_id'] != bound_evidence_sha
+            or evidence_plan_entry['content_sha256'] != bound_evidence_sha
+        ):
+            raise ProductionContractError('evidence plan implementation binding mismatch')
+    elif evidence_plan_entry is not None:
+        raise ProductionContractError('unbound evidence plan implementation')
+    external_modules = list(modules)
+    normalized_external_modules: list[dict[str, Any]] | None
+    if all(isinstance(value, str) for value in external_modules):
+        expected_module_ids = list(external_modules)
+        normalized_external_modules = None
+    elif any(isinstance(value, str) for value in external_modules):
+        raise ProductionContractError(
+            'external modules must be all IDs or all complete module objects'
+        )
+    else:
+        normalized_external_modules = [
+            _normalize_module(value) for value in external_modules
+        ]
+        expected_module_ids = [
+            item['module_id'] for item in normalized_external_modules
+        ]
     if any(not isinstance(value, str) or not value for value in expected_module_ids):
-        raise ProductionContractError('module_ids must contain non-empty strings')
+        raise ProductionContractError('modules must contain non-empty module IDs')
     _require_unique(expected_module_ids, 'external module ID')
     if set(catalog_module_ids) != set(expected_module_ids):
         raise ProductionContractError('module catalog does not match proposal module IDs')
+    if normalized_external_modules is not None:
+        if source_bindings['module_input_sha256'] != _canonical_sha256(
+            normalized_external_modules
+        ):
+            raise ProductionContractError(
+                'module source binding does not match the current proposal modules'
+            )
+        module_hashes = {
+            item['implementation_id']: item['content_sha256']
+            for item in implementations
+            if item['source_kind'] == 'module'
+        }
+        for module in normalized_external_modules:
+            if module_hashes.get(module['module_id']) != _canonical_sha256(module):
+                raise ProductionContractError(
+                    'module implementation hash does not match the current proposal: '
+                    + module['module_id']
+                )
+    if assets is not None:
+        normalized_external_assets = [_normalize_asset(value) for value in assets]
+        asset_ids = [item['asset_id'] for item in normalized_external_assets]
+        _require_unique(asset_ids, 'external asset ID')
+        catalog_asset_ids = [
+            item['implementation_id']
+            for item in implementations
+            if item['source_kind'] == 'asset'
+        ]
+        if set(catalog_asset_ids) != set(asset_ids):
+            raise ProductionContractError(
+                'asset catalog does not match proposal asset IDs'
+            )
+        if source_bindings['asset_input_sha256'] != _canonical_sha256(
+            normalized_external_assets
+        ):
+            raise ProductionContractError(
+                'asset source binding does not match the current proposal assets'
+            )
+        asset_hashes = {
+            item['implementation_id']: item['content_sha256']
+            for item in implementations
+            if item['source_kind'] == 'asset'
+        }
+        for asset in normalized_external_assets:
+            if asset_hashes.get(asset['asset_id']) != _canonical_sha256(asset):
+                raise ProductionContractError(
+                    'asset implementation hash does not match the current proposal: '
+                    + asset['asset_id']
+                )
     acceptance_refs: set[str] = set()
     catalog_acceptance: list[str] = []
     for item in acceptances:
@@ -306,10 +458,22 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         if item['implementation_catalog_ref'] != 'catalog:implementations':
             raise ProductionContractError(f'invalid implementation catalog ref: {group_ref}')
         direct_refs = _require_string_list(item['implementation_refs'], 'implementation refs', nonempty=True)
-        if len(direct_refs) > _MAX_DIRECT_IMPLEMENTATION_REFS:
-            raise ProductionContractError(f'too many direct implementation refs: {group_ref}')
         if len(direct_refs) != len(set(direct_refs)) or not set(direct_refs) <= implementation_refs:
             raise ProductionContractError(f'invalid implementation refs: {group_ref}')
+        if normalized_evidence_plan is not None:
+            requirement = next(
+                value for value in requirements
+                if value['requirement_ref'] == requirement_ref
+            )
+            expected_direct_refs = _evidence_implementation_refs(
+                normalized_evidence_plan,
+                requirement,
+                implementation_refs=implementation_refs,
+            )
+            if direct_refs != expected_direct_refs:
+                raise ProductionContractError(
+                    f'evidence implementation binding mismatch: {group_ref}'
+                )
         if item['acceptance_catalog_ref'] != 'catalog:acceptance':
             raise ProductionContractError(f'invalid acceptance catalog ref: {group_ref}')
         test_refs = _require_string_list(item['acceptance_refs'], 'acceptance refs', nonempty=True)
@@ -329,7 +493,7 @@ def validate_production_contract(contract: Mapping[str, Any], module_ids: Iterab
         raise ProductionContractError('not every requirement has one coverage group')
     stats = contract['catalog_stats']
     _require_exact_keys(stats, {'requirements', 'implementations', 'acceptance_tests', 'quality_dimensions', 'coverage_groups', 'max_direct_implementation_refs_per_group'}, 'catalog stats')
-    expected_stats = {'requirements': len(requirements), 'implementations': len(implementations), 'acceptance_tests': len(acceptances), 'quality_dimensions': len(dimensions), 'coverage_groups': len(groups), 'max_direct_implementation_refs_per_group': _MAX_DIRECT_IMPLEMENTATION_REFS}
+    expected_stats = {'requirements': len(requirements), 'implementations': len(implementations), 'acceptance_tests': len(acceptances), 'quality_dimensions': len(dimensions), 'coverage_groups': len(groups), 'max_direct_implementation_refs_per_group': max((len(item['implementation_refs']) for item in groups), default=0)}
     if stats != expected_stats:
         raise ProductionContractError('catalog stats do not match contract catalogs')
 
@@ -420,6 +584,125 @@ def _compile_requirements(requested_prompt: str, game_design: Any, research_brie
         requirements.append({'requirement_ref': f'requirement:{digest}', 'source': source, 'source_ref': source_ref, 'statement': statement, 'coverage_group_ref': ''})
     return requirements
 
+
+def _compile_evidence_requirements(
+    requested_prompt: str,
+    evidence_plan: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Bind the production catalog to host-atomized evidence requirements.
+
+    The whole request remains a root scope record.  Every independently accepted
+    requirement is then represented by its immutable evidence-plan identifier so
+    coverage can point to the exact retained component or semantic task instead of
+    a token-overlap fallback.
+    """
+
+    raw: list[tuple[str, str, str]] = [
+        ('requested_prompt', 'request:$', requested_prompt)
+    ]
+    request_catalog = evidence_plan.get('request_catalog')
+    if not isinstance(request_catalog, Mapping):
+        raise ProductionContractError('evidence plan request catalog is missing')
+    requirements = request_catalog.get('requirements')
+    if not isinstance(requirements, list) or not requirements:
+        raise ProductionContractError('evidence plan has no request requirements')
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping):
+            raise ProductionContractError('evidence requirement must be an object')
+        requirement_id = _nonempty_string(
+            requirement.get('requirement_id'), 'evidence requirement ID'
+        )
+        source_span = requirement.get('source_span')
+        if not isinstance(source_span, Mapping):
+            raise ProductionContractError(
+                f'evidence requirement has no source span: {requirement_id}'
+            )
+        statement = _nonempty_string(
+            source_span.get('text') or requirement.get('capability'),
+            f'evidence requirement statement: {requirement_id}',
+        )
+        raw.append(
+            ('evidence_plan', f'evidence_plan:{requirement_id}', statement)
+        )
+
+    compiled: list[dict[str, str]] = []
+    for source, source_ref, statement in raw:
+        digest = hashlib.sha256(
+            _canonical_json(
+                {
+                    'source': source,
+                    'source_ref': source_ref,
+                    'statement': statement,
+                }
+            ).encode('utf-8')
+        ).hexdigest()
+        compiled.append(
+            {
+                'requirement_ref': f'requirement:{digest}',
+                'source': source,
+                'source_ref': source_ref,
+                'statement': statement,
+                'coverage_group_ref': '',
+            }
+        )
+    return compiled
+
+
+def _evidence_implementation_refs(
+    evidence_plan: Mapping[str, Any],
+    requirement: Mapping[str, Any],
+    *,
+    implementation_refs: set[str],
+) -> list[str]:
+    """Resolve one contract requirement to exact plan-owned implementation refs."""
+
+    if requirement.get('source') == 'requested_prompt':
+        result = ['implementation:evidence_plan']
+    else:
+        source_ref = str(requirement.get('source_ref') or '')
+        prefix = 'evidence_plan:'
+        if not source_ref.startswith(prefix):
+            raise ProductionContractError(
+                'evidence-mode requirement lacks an exact evidence-plan reference'
+            )
+        requirement_id = source_ref[len(prefix):]
+        bindings = evidence_plan.get('acceptance_release_bindings')
+        if not isinstance(bindings, list):
+            raise ProductionContractError(
+                'evidence plan acceptance bindings are missing'
+            )
+        matches = [
+            item
+            for item in bindings
+            if isinstance(item, Mapping)
+            and item.get('requirement_ref') == requirement_id
+        ]
+        if len(matches) != 1:
+            raise ProductionContractError(
+                f'evidence requirement needs exactly one release binding: {requirement_id}'
+            )
+        binding = matches[0]
+        component_refs = _require_string_list(
+            binding.get('component_refs'),
+            f'evidence component refs: {requirement_id}',
+            nonempty=False,
+        )
+        task_refs = _require_string_list(
+            binding.get('task_refs'),
+            f'evidence task refs: {requirement_id}',
+            nonempty=False,
+        )
+        result = [
+            *(f'implementation:retained_component:{value}' for value in component_refs),
+            *(f'implementation:module:{value}' for value in task_refs),
+        ]
+    result = list(dict.fromkeys(result))
+    if not result or not set(result) <= implementation_refs:
+        raise ProductionContractError(
+            'evidence requirement does not resolve to current exact implementations'
+        )
+    return result
+
 def _source_items(source: str, value: Any) -> list[tuple[str, str, str]]:
     result: list[tuple[str, str, str]] = []
     stack: list[tuple[str, Any]] = [('$', value)]
@@ -484,7 +767,26 @@ def _object_mapping(value: Any, label: str) -> dict[str, Any]:
         return dict(fields)
     raise ProductionContractError(f'{label} must be an object or dataclass')
 
-def _implementation_catalog(modules: Sequence[Mapping[str, Any]], assets: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, str]], dict[str, set[str]]]:
+def _validated_evidence_plan(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ProductionContractError('evidence_plan must be an object')
+    try:
+        from .evidence_first_planning import validate_evidence_first_plan
+
+        validate_evidence_first_plan(value)
+    except (ImportError, ValueError, TypeError, RecursionError) as exc:
+        raise ProductionContractError(f'invalid evidence plan: {exc}') from exc
+    return _json_copy(dict(value), 'evidence_plan')
+
+
+def _implementation_catalog(
+    modules: Sequence[Mapping[str, Any]],
+    assets: Sequence[Mapping[str, Any]],
+    *,
+    evidence_plan: Mapping[str, Any] | None = None,
+) -> tuple[list[dict[str, str]], dict[str, set[str]]]:
     catalog: list[dict[str, str]] = []
     search: dict[str, set[str]] = {}
     def add(ref: str, source_kind: str, identity: str, kind: str, value: Any, *, searchable: bool=True) -> None:
@@ -497,6 +799,52 @@ def _implementation_catalog(modules: Sequence[Mapping[str, Any]], assets: Sequen
     for item in assets:
         asset_id = item['asset_id']
         add(f'implementation:asset:{asset_id}', 'asset', asset_id, item['kind'], item)
+    if evidence_plan is not None:
+        plan_sha256 = str(evidence_plan['plan_sha256'])
+        catalog.append(
+            {
+                'implementation_ref': 'implementation:evidence_plan',
+                'source_kind': 'evidence_plan',
+                'implementation_id': plan_sha256,
+                'kind': 'semantic_dependency_manifest',
+                'content_sha256': plan_sha256,
+            }
+        )
+        search['implementation:evidence_plan'] = _tokens(
+            ' '.join(
+                str(item.get('capability') or '')
+                for item in evidence_plan.get('request_catalog', {}).get('requirements', [])
+                if isinstance(item, Mapping)
+            )
+        )
+        for component in evidence_plan.get('component_catalog', []):
+            if not isinstance(component, Mapping):
+                continue
+            if component.get('verification_status') != 'verified' or component.get('bound_to_project') is not True:
+                continue
+            component_id = str(component.get('component_id') or '')
+            content_sha256 = str(component.get('content_sha256') or '')
+            if not component_id or not _SHA256.fullmatch(content_sha256):
+                raise ProductionContractError('retained component has invalid evidence binding')
+            ref = f'implementation:retained_component:{component_id}'
+            catalog.append(
+                {
+                    'implementation_ref': ref,
+                    'source_kind': 'retained_component',
+                    'implementation_id': component_id,
+                    'kind': str(component.get('kind') or 'project_component'),
+                    'content_sha256': content_sha256,
+                }
+            )
+            search[ref] = _tokens(
+                ' '.join(
+                    [
+                        component_id,
+                        str(component.get('kind') or ''),
+                        *(str(item) for item in component.get('provides', ())),
+                    ]
+                )
+            )
     return catalog, search
 
 def _scalar_text(value: Any) -> Iterable[str]:

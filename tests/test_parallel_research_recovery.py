@@ -148,7 +148,13 @@ def test_fixed_point_recovery_is_accepted_only_with_real_route_receipts() -> Non
     plan = compile_minecraft_knowledge_plan("새 보스 몬스터를 추가해줘.")
     domains = list(plan["research_domains"])
     research = {
-        "research_brief": {"domains": domains},
+        "research_brief": {
+            "domains": domains,
+            "_mmm_platform_target": {
+                "minecraft_version": "1.21.1",
+                "loader": "fabric",
+            },
+        },
         "deterministic": {
             "forced_project_rag": {
                 "domains": [

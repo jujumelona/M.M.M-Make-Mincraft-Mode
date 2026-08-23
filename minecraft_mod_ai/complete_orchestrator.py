@@ -50,6 +50,60 @@ def _fork_custom_work_router(router: Any) -> Any:
 
     return _fork_router_for_candidate(router)
 
+
+def _semantic_execution_observation(
+    module: ProductionModule,
+    receipt: dict[str, Any],
+    *,
+    dependent_ids: Iterable[str],
+) -> dict[str, Any] | None:
+    """Bind one persisted edit receipt back to its immutable semantic task."""
+
+    config = module.config if isinstance(module.config, dict) else {}
+    task = config.get("evidence_task")
+    if not isinstance(task, dict):
+        return None
+    touched = sorted(
+        {
+            str(value).replace("\\", "/")
+            for value in receipt.get("touched_paths", ())
+            if isinstance(value, str) and value.strip()
+        }
+    )
+    core: dict[str, Any] = {
+        "schema_version": "mmm/semantic-task-observation-v1",
+        "task_id": module.module_id,
+        "task_sha256": str(task.get("task_sha256") or ""),
+        "requirement_refs": list(task.get("requirement_refs") or ()),
+        "gap_refs": list(task.get("gap_refs") or ()),
+        "applied_action_count": int(receipt.get("operation_count") or 0),
+        "touched_paths": touched,
+        "touched_paths_sha256": "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                touched,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "patch_receipt": receipt.get("patch_receipt"),
+        "source_observation_receipt": receipt.get("source_observation_receipt"),
+        "impact_probes": list(task.get("impact_probes") or ()),
+        "affected_downstream_task_ids": sorted(set(dependent_ids)),
+        "status": "OBSERVED",
+    }
+    core["observation_sha256"] = "sha256:" + hashlib.sha256(
+        json.dumps(
+            core,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return core
+
 @dataclass(frozen=True)
 class CompleteExecutionOptions:
     source_only: bool = False
@@ -369,6 +423,23 @@ class CompleteProductionOrchestrator:
         from . import scheduler_parallel_safety_contract as scheduler_safety
         spec = approved.base_proposal.spec
         module_lookup = {module.module_id: module for module in ordered}
+        direct_dependents: dict[str, set[str]] = {
+            module.module_id: set() for module in ordered
+        }
+        for module in ordered:
+            for dependency in module.depends_on:
+                direct_dependents.setdefault(dependency, set()).add(module.module_id)
+
+        def downstream_ids(module_id: str) -> tuple[str, ...]:
+            pending = list(direct_dependents.get(module_id, ()))
+            affected: set[str] = set()
+            while pending:
+                candidate = pending.pop()
+                if candidate in affected:
+                    continue
+                affected.add(candidate)
+                pending.extend(direct_dependents.get(candidate, ()))
+            return tuple(sorted(affected))
         research_modules = tuple((module for module in ordered if is_research_shard(module)))
         asset_lookup = {item.asset_id: item for item in approved.assets}
         generation_nodes = tuple((node for node in work_plan.nodes if node.stage.startswith('generate:')))
@@ -437,7 +508,20 @@ class CompleteProductionOrchestrator:
                 receipts.extend((generate_custom(module) for module in members))
             else:
                 raise CompleteProductionError(f'Unsupported generation work stage: {stage}')
-            return {'schema_version': 'mmm/generation-work-node-v1', 'status': 'SUCCEEDED', 'node_id': node.node_id, 'stage': stage, 'module_ids': [module.module_id for module in members], 'receipts': receipts}
+            semantic_observations = [
+                observation
+                for module, receipt in zip(members, receipts, strict=False)
+                if isinstance(receipt, dict)
+                and (
+                    observation := _semantic_execution_observation(
+                        module,
+                        receipt,
+                        dependent_ids=downstream_ids(module.module_id),
+                    )
+                )
+                is not None
+            ]
+            return {'schema_version': 'mmm/generation-work-node-v1', 'status': 'SUCCEEDED', 'node_id': node.node_id, 'stage': stage, 'module_ids': [module.module_id for module in members], 'receipts': receipts, 'semantic_observations': semantic_observations}
 
         def process_node(node: WorkNode) -> None:
             if not node.stage.startswith('generate:'):

@@ -54,6 +54,11 @@ def attach_generation_plan(router: Any, proposal: CompleteProposal) -> CompleteP
 
 def bind_reuse_plan(proposal: CompleteProposal) -> CompleteProposal:
     """Bind the approved plan once and assign each capability to one production owner."""
+    if '_evidence_first_plan' in proposal.game_design:
+        evidence_plan = proposal.game_design.get('_evidence_first_plan')
+        if not isinstance(evidence_plan, Mapping):
+            raise SpecValidationError('Evidence-first reuse binding requires an object plan.')
+        return _bind_evidence_reuse_plan(proposal, evidence_plan)
     selection = proposal.game_design.get('_platform_selection')
     reuse_plan = selection.get('reuse_plan') if isinstance(selection, Mapping) else None
     if not isinstance(reuse_plan, Mapping):
@@ -74,6 +79,419 @@ def bind_reuse_plan(proposal: CompleteProposal) -> CompleteProposal:
     updated = replace(proposal, game_design=game_design, modules=tuple(modules), approval_hash='').with_hash()
     updated.validate()
     return updated
+
+
+def _bind_evidence_reuse_plan(
+    proposal: CompleteProposal,
+    evidence_plan: Mapping[str, Any],
+) -> CompleteProposal:
+    """Bind reuse through the validated semantic DAG, without similarity routing.
+
+    Evidence-mode ownership is derived only from exact host-owned identifiers.  The
+    final task that provides a requirement's canonical capability owns its reuse
+    decision.  Intermediate tasks retain their exact task-level reference contract,
+    but never acquire a capability through token overlap or a first-module fallback.
+    """
+    try:
+        from .evidence_first_planning import validate_evidence_first_plan
+
+        validate_evidence_first_plan(evidence_plan, prompt=proposal.requested_prompt)
+    except (ImportError, ValueError, TypeError, RecursionError) as exc:
+        raise SpecValidationError(
+            f'Evidence-first reuse binding rejected an invalid plan: {exc}'
+        ) from exc
+
+    plan_sha256 = str(evidence_plan.get('plan_sha256') or '')
+    request_catalog = evidence_plan.get('request_catalog')
+    raw_requirements = (
+        request_catalog.get('requirements')
+        if isinstance(request_catalog, Mapping)
+        else None
+    )
+    raw_decisions = evidence_plan.get('reuse_decisions')
+    raw_tasks = evidence_plan.get('tasks')
+    raw_components = evidence_plan.get('component_catalog')
+    if not all(
+        isinstance(value, list)
+        for value in (raw_requirements, raw_decisions, raw_tasks, raw_components)
+    ):
+        raise SpecValidationError(
+            'Evidence-first reuse binding requires list catalogs for requirements, decisions, tasks, and components.'
+        )
+
+    requirements = {
+        str(item.get('requirement_id') or ''): item
+        for item in raw_requirements
+        if isinstance(item, Mapping)
+    }
+    decisions = {
+        str(item.get('requirement_ref') or ''): item
+        for item in raw_decisions
+        if isinstance(item, Mapping)
+    }
+    tasks = {
+        str(item.get('task_id') or ''): item
+        for item in raw_tasks
+        if isinstance(item, Mapping)
+    }
+    components = {
+        str(item.get('component_id') or ''): item
+        for item in raw_components
+        if isinstance(item, Mapping)
+    }
+    if len(requirements) != len(raw_requirements):
+        raise SpecValidationError('Evidence-first requirement catalog contains an invalid or duplicate reference.')
+    if len(decisions) != len(raw_decisions):
+        raise SpecValidationError('Evidence-first reuse decisions contain an invalid or duplicate requirement reference.')
+    if len(tasks) != len(raw_tasks):
+        raise SpecValidationError('Evidence-first task catalog contains an invalid or duplicate task reference.')
+    if len(components) != len(raw_components):
+        raise SpecValidationError('Evidence-first component catalog contains an invalid or duplicate component reference.')
+    if set(decisions) != set(requirements):
+        raise SpecValidationError('Evidence-first reuse decisions do not exactly cover the requirement catalog.')
+
+    modules = {module.module_id: module for module in proposal.modules}
+    if len(modules) != len(proposal.modules) or set(modules) != set(tasks):
+        raise SpecValidationError(
+            'Evidence-first production modules must map one-to-one to semantic task IDs.'
+        )
+
+    for task_id, task in tasks.items():
+        module = modules[task_id]
+        _validate_evidence_module_binding(
+            module=module,
+            task=task,
+            evidence_plan_sha256=plan_sha256,
+            request_catalog=request_catalog,
+            requirements=requirements,
+            decisions=decisions,
+            components=components,
+        )
+
+    owner_decisions: dict[str, list[Mapping[str, Any]]] = {}
+    for requirement_ref, decision in decisions.items():
+        action = str(decision.get('action') or '')
+        if action == 'retain':
+            continue
+        requirement = requirements[requirement_ref]
+        required_provides = set(
+            _strict_string_refs(
+                requirement.get('provides'),
+                f'requirement {requirement_ref} provides',
+            )
+        )
+        if not required_provides:
+            raise SpecValidationError(
+                f'Evidence-first requirement {requirement_ref} has no capability provide.'
+            )
+        exact_owners = [
+            task_id
+            for task_id, task in tasks.items()
+            if requirement_ref
+            in _strict_string_refs(
+                task.get('requirement_refs'),
+                f'task {task_id} requirement_refs',
+            )
+            and required_provides
+            <= set(
+                _strict_string_refs(
+                    task.get('provides'),
+                    f'task {task_id} provides',
+                )
+            )
+        ]
+        if len(exact_owners) != 1:
+            raise SpecValidationError(
+                f'Evidence-first requirement {requirement_ref} must have exactly one task '
+                f'providing {sorted(required_provides)}; found {sorted(exact_owners)}.'
+            )
+        owner_decisions.setdefault(exact_owners[0], []).append(decision)
+
+    target_decision = evidence_plan.get('target_decision')
+    target = (
+        dict(target_decision.get('coordinates') or {})
+        if isinstance(target_decision, Mapping)
+        else {}
+    )
+    projected = [
+        _project_evidence_reuse_decision(decision)
+        for decision in raw_decisions
+        if isinstance(decision, Mapping) and decision.get('action') != 'retain'
+    ]
+    approved_plan: dict[str, Any] = {
+        'schema_version': 'mmm/evidence-bound-reuse-plan-v1',
+        'target': target,
+        'evidence_plan_sha256': plan_sha256,
+        'capabilities': projected,
+        'evidence_decisions': [dict(item) for item in raw_decisions],
+    }
+    approved_receipt = {
+        'schema_version': approved_plan['schema_version'],
+        'target': target,
+        'evidence_plan_sha256': plan_sha256,
+    }
+
+    rebound_modules: list[ProductionModule] = []
+    for module in proposal.modules:
+        owned_evidence = owner_decisions.get(module.module_id, [])
+        if not owned_evidence:
+            rebound_modules.append(module)
+            continue
+        owned_projected = [
+            _project_evidence_reuse_decision(decision)
+            for decision in owned_evidence
+        ]
+        owned_plan = {
+            **approved_plan,
+            'capabilities': owned_projected,
+            'evidence_decisions': [dict(item) for item in owned_evidence],
+        }
+        owned_capabilities = [str(item.get('capability') or '') for item in owned_evidence]
+        owned_component_refs = list(
+            dict.fromkeys(
+                reference
+                for item in owned_evidence
+                for reference in _strict_string_refs(
+                    item.get('component_refs'),
+                    f"reuse decision {item.get('decision_id')} component_refs",
+                )
+            )
+        )
+        config = {
+            **module.config,
+            '_approved_reuse_plan': approved_receipt,
+            '_owned_reuse_plan': owned_plan,
+            '_owned_capabilities': owned_capabilities,
+            '_owned_component_refs': owned_component_refs,
+        }
+        rebound_modules.append(replace(module, config=config))
+
+    game_design = {**proposal.game_design, '_reuse_plan': approved_plan}
+    game_design, acceptance_tests = _refresh_evidence_production_contract(
+        proposal=proposal,
+        game_design=game_design,
+        modules=tuple(rebound_modules),
+        evidence_plan=evidence_plan,
+    )
+    updated = replace(
+        proposal,
+        game_design=game_design,
+        modules=tuple(rebound_modules),
+        acceptance_tests=acceptance_tests,
+        approval_hash='',
+    ).with_hash()
+    updated.validate()
+    return updated
+
+
+def _refresh_evidence_production_contract(
+    *,
+    proposal: CompleteProposal,
+    game_design: Mapping[str, Any],
+    modules: tuple[ProductionModule, ...],
+    evidence_plan: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Rebind a v2 contract after host-only reuse metadata changes modules."""
+    current = game_design.get('_production_contract')
+    if current is None:
+        return dict(game_design), proposal.acceptance_tests
+    if not isinstance(current, Mapping):
+        raise SpecValidationError('Evidence-first production contract must be an object.')
+    raw_acceptance = current.get('acceptance_catalog')
+    if not isinstance(raw_acceptance, list):
+        raise SpecValidationError('Evidence-first production contract has no acceptance catalog.')
+    input_acceptance = tuple(
+        str(item.get('statement') or '')
+        for item in raw_acceptance
+        if isinstance(item, Mapping) and item.get('origin') == 'input'
+    )
+    if not input_acceptance or any(not item for item in input_acceptance):
+        raise SpecValidationError(
+            'Evidence-first production contract has no exact input acceptance receipts.'
+        )
+    contract_design = {
+        key: value
+        for key, value in game_design.items()
+        if not str(key).startswith('_') and key != 'production_outline'
+    }
+    research_brief = game_design.get('_research_brief')
+    try:
+        from .production_contract import compile_production_contract
+
+        compiled = compile_production_contract(
+            requested_prompt=proposal.requested_prompt,
+            game_design=contract_design,
+            research_brief=(research_brief if isinstance(research_brief, Mapping) else None),
+            modules=modules,
+            assets=proposal.assets,
+            acceptance_tests=input_acceptance,
+            evidence_plan=evidence_plan,
+        )
+    except (ImportError, ValueError, TypeError, RecursionError) as exc:
+        raise SpecValidationError(
+            f'Evidence-first production contract could not bind exact reuse ownership: {exc}'
+        ) from exc
+    return (
+        {**dict(game_design), '_production_contract': compiled.contract},
+        tuple(compiled.acceptance_tests),
+    )
+
+
+def _validate_evidence_module_binding(
+    *,
+    module: ProductionModule,
+    task: Mapping[str, Any],
+    evidence_plan_sha256: str,
+    request_catalog: Mapping[str, Any],
+    requirements: Mapping[str, Mapping[str, Any]],
+    decisions: Mapping[str, Mapping[str, Any]],
+    components: Mapping[str, Mapping[str, Any]],
+) -> None:
+    task_id = str(task.get('task_id') or '')
+    config = module.config
+    if config.get('evidence_plan_sha256') != evidence_plan_sha256:
+        raise SpecValidationError(
+            f'Evidence task {task_id} is bound to a stale plan hash.'
+        )
+    embedded = config.get('evidence_task')
+    if not isinstance(embedded, Mapping):
+        raise SpecValidationError(f'Evidence task {task_id} has no host-owned task receipt.')
+    extras = set(embedded) - set(task)
+    if extras - {'request_context'}:
+        raise SpecValidationError(
+            f'Evidence task {task_id} contains unrecognized receipt fields: {sorted(extras)}.'
+        )
+    for key, value in task.items():
+        if embedded.get(key) != value:
+            raise SpecValidationError(
+                f'Evidence task {task_id} changed host-owned field {key!r}.'
+            )
+    if 'request_context' in embedded:
+        requirement_refs = _strict_string_refs(
+            task.get('requirement_refs'),
+            f'task {task_id} requirement_refs',
+        )
+        expected_context = {
+            'prompt_sha256': request_catalog.get('prompt_sha256'),
+            'requirements': [dict(requirements[reference]) for reference in requirement_refs],
+        }
+        if embedded.get('request_context') != expected_context:
+            raise SpecValidationError(
+                f'Evidence task {task_id} request context is stale or references another requirement.'
+            )
+
+    exact_fields = (
+        'requirement_refs',
+        'gap_refs',
+        'reuse_refs',
+        'owned_anchors',
+        'consumes',
+        'provides',
+        'acceptance',
+        'impact_probes',
+    )
+    for key in exact_fields:
+        if config.get(key) != task.get(key):
+            raise SpecValidationError(
+                f'Evidence task {task_id} module binding changed {key!r}.'
+            )
+    if config.get('batch_id') != task_id:
+        raise SpecValidationError(f'Evidence task {task_id} module batch ID does not match.')
+    if tuple(module.depends_on) != tuple(
+        _strict_string_refs(task.get('depends_on'), f'task {task_id} depends_on')
+    ):
+        raise SpecValidationError(f'Evidence task {task_id} module dependencies changed.')
+    if tuple(module.required_gates) != tuple(
+        _strict_string_refs(task.get('required_gates'), f'task {task_id} required_gates')
+    ):
+        raise SpecValidationError(f'Evidence task {task_id} module gates changed.')
+
+    requirement_refs = _strict_string_refs(
+        task.get('requirement_refs'),
+        f'task {task_id} requirement_refs',
+    )
+    expected_reuse_refs: list[str] = []
+    for requirement_ref in requirement_refs:
+        if requirement_ref not in requirements or requirement_ref not in decisions:
+            raise SpecValidationError(
+                f'Evidence task {task_id} references unknown requirement {requirement_ref!r}.'
+            )
+        decision = decisions[requirement_ref]
+        capability = str(decision.get('capability') or '')
+        if _canonical_evidence_capability(capability) != _canonical_evidence_capability(
+            requirements[requirement_ref].get('capability')
+        ):
+            raise SpecValidationError(
+                f'Evidence task {task_id} decision capability does not exactly match its requirement.'
+            )
+        component_refs = _strict_string_refs(
+            decision.get('component_refs'),
+            f"reuse decision {decision.get('decision_id')} component_refs",
+        )
+        if any(reference not in components for reference in component_refs):
+            raise SpecValidationError(
+                f'Evidence task {task_id} reuse decision references an unknown component.'
+            )
+        expected_reuse_refs.extend(component_refs)
+        expected_reuse_refs.extend(
+            _strict_string_refs(
+                decision.get('source_refs'),
+                f"reuse decision {decision.get('decision_id')} source_refs",
+            )
+        )
+    expected_reuse_refs = list(dict.fromkeys(expected_reuse_refs))
+    actual_reuse_refs = list(
+        _strict_string_refs(task.get('reuse_refs'), f'task {task_id} reuse_refs')
+    )
+    if actual_reuse_refs != expected_reuse_refs:
+        raise SpecValidationError(
+            f'Evidence task {task_id} reuse_refs do not exactly match its hashed decisions.'
+        )
+
+
+def _project_evidence_reuse_decision(decision: Mapping[str, Any]) -> dict[str, Any]:
+    capability = str(decision.get('capability') or '').strip()
+    action = str(decision.get('action') or '')
+    if action == 'fresh':
+        return {
+            'capability': capability,
+            'mode': 'fresh',
+            'source_id': '',
+            'rationale': str(decision.get('residual_work') or ''),
+        }
+    if action == 'adapt':
+        receipt = decision.get('external_receipt')
+        if not isinstance(receipt, Mapping):
+            raise SpecValidationError(
+                f'Evidence reuse decision {decision.get("decision_id")} has no external receipt.'
+            )
+        projected = dict(receipt)
+        if _canonical_evidence_capability(projected.get('capability')) != _canonical_evidence_capability(capability):
+            raise SpecValidationError(
+                f'Evidence reuse decision {decision.get("decision_id")} external capability changed.'
+            )
+        return projected
+    raise SpecValidationError(
+        f'Evidence reuse decision {decision.get("decision_id")} cannot be assigned to a generation task.'
+    )
+
+
+def _strict_string_refs(value: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise SpecValidationError(f'{label} must be a list of exact string references.')
+    refs = tuple(item for item in value if isinstance(item, str) and item.strip())
+    if len(refs) != len(value) or len(set(refs)) != len(refs):
+        raise SpecValidationError(f'{label} contains an invalid or duplicate reference.')
+    return refs
+
+
+def _canonical_evidence_capability(value: Any) -> str:
+    capability = str(value or '').strip().casefold()
+    if capability.startswith('capability:'):
+        capability = capability[len('capability:'):]
+    if not capability:
+        raise SpecValidationError('Evidence reuse binding encountered an empty capability ID.')
+    return f'capability:{capability}'
 
 def _assign_capability_owners(modules: Sequence[ProductionModule], decisions: Sequence[Mapping[str, Any]]) -> dict[int, tuple[Mapping[str, Any], ...]]:
     candidates = [index for index, module in enumerate(modules) if module.kind != 'audio']

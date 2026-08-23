@@ -14,6 +14,7 @@ from .complete_spec import (
 )
 from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
+from .evidence_first_planning import compile_evidence_first_plan, task_batches
 from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
 from .production_contract import compile_production_contract
 from .spec import SpecValidationError
@@ -32,6 +33,9 @@ class _ProductionBatch:
     depends_on_batches: tuple[str, ...]
     deliverables: tuple[str, ...]
     exports: tuple[str, ...]
+    task_contract: Mapping[str, Any] | None = None
+    evidence_plan_sha256: str = ""
+    acceptance_tests: tuple[str, ...] = ()
 
 
 class CompleteGameDesignPlanner:
@@ -93,11 +97,24 @@ class CompleteGameDesignPlanner:
             ),
         }
 
-        batches = _host_batches(prompt, internal_design)
+        evidence_plan = compile_evidence_first_plan(prompt, internal_design)
+        internal_design = {
+            **internal_design,
+            "_evidence_first_plan": evidence_plan,
+        }
+        batches = _evidence_host_batches(evidence_plan)
         modules, assets, acceptance_tests = self._expand_batches(
             batches,
             prompt=prompt,
             game_design=internal_design,
+            evidence_mode=True,
+            evidence_acceptance_tests=tuple(
+                str(check)
+                for binding in evidence_plan["acceptance_release_bindings"]
+                if isinstance(binding, Mapping)
+                for check in binding.get("acceptance", ())
+                if str(check).strip()
+            ),
         )
 
         contract_design = {
@@ -112,6 +129,7 @@ class CompleteGameDesignPlanner:
             modules=modules,
             assets=assets,
             acceptance_tests=acceptance_tests,
+            evidence_plan=evidence_plan,
         )
         internal_design = {
             **internal_design,
@@ -134,10 +152,12 @@ class CompleteGameDesignPlanner:
         *,
         prompt: str,
         game_design: dict[str, Any],
+        evidence_mode: bool = False,
+        evidence_acceptance_tests: Sequence[str] = (),
     ) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...], tuple[str, ...]]:
         modules: list[ProductionModule] = []
         assets: list[AssetRequest] = []
-        tests: list[str] = []
+        tests: list[str] = list(dict.fromkeys(evidence_acceptance_tests))
         known_module_ids: set[str] = set()
         exports_by_batch: dict[str, tuple[str, ...]] = {}
 
@@ -154,11 +174,29 @@ class CompleteGameDesignPlanner:
                 exports=batch.exports,
                 depends_on_batches=dependency_ids,
                 known_module_ids=tuple(known_module_ids),
+                host_module_contracts=(
+                    {
+                        module_id: {
+                            **dict(batch.task_contract or {}),
+                            "evidence_plan_sha256": batch.evidence_plan_sha256,
+                            "evidence_task": dict(batch.task_contract or {}),
+                        }
+                        for module_id in batch.exports
+                    }
+                    if batch.task_contract is not None
+                    else None
+                ),
+                acceptance_tests=batch.acceptance_tests,
             )
+            task_request = _bounded_task_request(batch)
             request = {
-                "request": prompt,
+                "request": task_request if task_request is not None else prompt,
                 "batch": _batch_dict(batch),
-                "design": _implementation_research_outline(game_design),
+                "design": (
+                    _bounded_task_design(game_design, batch)
+                    if batch.task_contract is not None
+                    else _implementation_research_outline(game_design)
+                ),
                 "template_skeleton": skeleton,
             }
             raw_page = _generate_json_page(
@@ -209,7 +247,7 @@ class CompleteGameDesignPlanner:
                 module.module_id for module in accepted_modules
             )
 
-        if not modules:
+        if not modules and not evidence_mode:
             fallback = build_batch_skeleton(
                 batch_id="core_features",
                 scope="Implement the complete requested mod behavior.",
@@ -226,7 +264,11 @@ class CompleteGameDesignPlanner:
 
 
 def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
-    """Build one complete production template without model-owned batch structure."""
+    """Legacy compatibility helper for callers without an evidence-first contract.
+
+    Live complete planning uses :func:`_evidence_host_batches`; this function remains
+    available for stored callers and tests that construct the old minimal design shape.
+    """
     raw_modules = game_design.get("modules")
     exports: list[str] = []
     seen: set[str] = set()
@@ -265,6 +307,74 @@ def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_Product
             exports=("core_features",),
         ),
     )
+
+
+def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
+    """Compile the validated semantic task DAG into host-owned production batches."""
+    raw_batches = task_batches(plan)
+    requirements = {
+        str(item.get("requirement_id") or ""): dict(item)
+        for item in plan.get("request_catalog", {}).get("requirements", [])
+        if isinstance(item, Mapping) and item.get("requirement_id")
+    }
+    batches: list[_ProductionBatch] = []
+    for raw in raw_batches:
+        task = dict(raw["task_contract"])
+        task["request_context"] = {
+            "prompt_sha256": plan["request_catalog"]["prompt_sha256"],
+            "requirements": [
+                requirements[reference]
+                for reference in task.get("requirement_refs", ())
+                if reference in requirements
+            ],
+        }
+        batches.append(
+            _ProductionBatch(
+                batch_id=str(raw["batch_id"]),
+                scope=str(raw["scope"]),
+                depends_on_batches=tuple(str(item) for item in raw["depends_on_batches"]),
+                deliverables=tuple(str(item) for item in raw["deliverables"]),
+                exports=tuple(str(item) for item in raw["exports"]),
+                task_contract=task,
+                evidence_plan_sha256=str(plan["plan_sha256"]),
+                acceptance_tests=tuple(str(item) for item in task.get("acceptance", ())),
+            )
+        )
+    return tuple(batches)
+
+
+def _bounded_task_request(batch: _ProductionBatch) -> dict[str, Any] | None:
+    if not isinstance(batch.task_contract, Mapping):
+        return None
+    context = batch.task_contract.get("request_context")
+    return dict(context) if isinstance(context, Mapping) else {
+        "requirement_refs": list(batch.task_contract.get("requirement_refs") or ()),
+    }
+
+
+def _bounded_task_design(
+    game_design: Mapping[str, Any],
+    batch: _ProductionBatch,
+) -> dict[str, Any]:
+    """Send only the active semantic task and frozen target evidence to the model."""
+    selection = _mapping_copy(game_design.get("_platform_selection"))
+    target = _mapping_copy(selection.get("target"))
+    task = dict(batch.task_contract or {})
+    return {
+        "target": target,
+        "task_id": batch.batch_id,
+        "semantic_outcome": task.get("semantic_outcome"),
+        "consumes": list(task.get("consumes") or ()),
+        "provides": list(task.get("provides") or ()),
+        "owned_anchors": list(task.get("owned_anchors") or ()),
+        "reuse_refs": list(task.get("reuse_refs") or ()),
+        "required_gates": list(task.get("required_gates") or ()),
+        "acceptance": list(task.get("acceptance") or ()),
+    }
+
+
+def _mapping_copy(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _implementation_prompt(prompt: str, game_design: dict[str, Any]) -> str:
@@ -433,13 +543,17 @@ def _unique_strings(value: Any) -> list[str]:
 
 
 def _batch_dict(batch: _ProductionBatch) -> dict[str, Any]:
-    return {
+    value = {
         "batch_id": batch.batch_id,
         "scope": batch.scope,
         "depends_on_batches": list(batch.depends_on_batches),
         "deliverables": list(batch.deliverables),
         "exports": list(batch.exports),
     }
+    if batch.task_contract is not None:
+        value["task_id"] = batch.batch_id
+        value["evidence_plan_sha256"] = batch.evidence_plan_sha256
+    return value
 
 
 __all__ = ["CompleteGameDesignPlanner"]

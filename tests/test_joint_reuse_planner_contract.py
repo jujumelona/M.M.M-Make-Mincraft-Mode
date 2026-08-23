@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from pathlib import Path
 
 from minecraft_mod_ai import component_registry
-from minecraft_mod_ai.reuse_planner import ReuseDecision, decompose_capability_graph
+from minecraft_mod_ai.reuse_planner import (
+    ReuseDecision,
+    _declared_same_project_capabilities,
+    decompose_capability_graph,
+)
 from minecraft_mod_ai.source_transplant import _target_compatibility
+from minecraft_mod_ai.project_inventory import inspect_project_inventory
 
 
 def test_capability_graph_uses_behavior_not_whole_mod_theme() -> None:
@@ -16,6 +22,48 @@ def test_capability_graph_uses_behavior_not_whole_mod_theme() -> None:
     assert "trade.validation" in graph.nodes
     assert "ui.shop_menu" in graph.nodes
     assert all("maple" not in item and "메이플" not in item for item in graph.nodes)
+
+
+def test_capability_graph_has_no_default_logical_project_size_cap() -> None:
+    systems = [{"id": f"feature.system_{index:03d}"} for index in range(96)]
+    graph = decompose_capability_graph(
+        "Implement the declared systems.",
+        design={"systems": systems},
+    )
+    assert graph.nodes == tuple(
+        f"feature.system_{index:03d}" for index in range(96)
+    )
+
+
+def test_design_claim_alone_cannot_admit_same_project_reuse() -> None:
+    assert _declared_same_project_capabilities(
+        {
+            "existing_capabilities": ["weather_compass"],
+            "same_project_capabilities": ["network.sync"],
+        }
+    ) == set()
+
+
+def test_validated_project_receipt_admits_exact_same_project_capability(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "settings.gradle.kts").write_text(
+        'rootProject.name = "reuse-evidence"\n',
+        encoding="utf-8",
+    )
+    source = tmp_path / "src/main/java/example/WeatherCompass.java"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "package example; public final class WeatherCompass {}\n",
+        encoding="utf-8",
+    )
+    inventory = inspect_project_inventory(tmp_path).to_dict()
+
+    capabilities = _declared_same_project_capabilities(
+        {"_existing_project_inventory": inventory}
+    )
+
+    assert "weather_compass" in capabilities
 
 
 def test_reuse_value_is_saved_work_not_reuse_count() -> None:

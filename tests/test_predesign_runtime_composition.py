@@ -180,13 +180,6 @@ def observed_worker(
         worker_contexts[domain_id] = context_receipt
         names = worker_threads.setdefault(domain_id, [])
         names.append(threading.current_thread().name)
-        attempt = len(names)
-    if (
-        domain_id == "mk_item_block"
-        and attempt == 1
-        and threading.current_thread().name.startswith("mmm_research_domain")
-    ):
-        raise RuntimeError("shared local router rejected concurrent request")
     return installed_worker(
         router,
         prompt=prompt,
@@ -260,27 +253,18 @@ assert forced_calls == 1, f"forced RAG executed {forced_calls} times"
 assert set(worker_contexts) == brief_domain_ids
 assert set(materialized_receipts) == brief_domain_ids
 assert all(isinstance(value, dict) for value in worker_contexts.values())
-assert all(
-    names and names[0].startswith("mmm_research_domain")
-    for names in worker_threads.values()
-)
-assert worker_threads["mk_item_block"] == [
-    worker_threads["mk_item_block"][0],
-    "MainThread",
-]
-assert all(
-    len(names) == (2 if domain_id == "mk_item_block" else 1)
-    for domain_id, names in worker_threads.items()
-)
+assert brief_domain_ids == {"request"}
+assert set(worker_threads) == {"request"}
+assert len(worker_threads["request"]) == 1
 assert coverage["status"] == "PASS"
 assert len(coverage_by_domain) == 7
-assert all(status != "MISSING_FORCED_RAG_RECEIPT" for status in coverage_by_domain.values())
-assert all(status == "ROUTES_EXECUTED" for status in coverage_by_domain.values())
-assert model_calls["mk_item_block"] == 1
-recovered_note = notes["mk_item_block"]
-assert recovered_note["sufficient"] is True
-assert recovered_note.get("worker_error") is not True
-assert all(notes[domain_id]["sufficient"] is True for domain_id in coverage_by_domain)
+assert all(
+    status == "DEFERRED_UNTIL_TARGET_FREEZE"
+    for status in coverage_by_domain.values()
+)
+assert model_calls["request"] == 1
+assert notes["request"]["sufficient"] is True
+assert notes["request"].get("worker_error") is not True
 
 print(
     "__MMM_RESULT__="
@@ -292,8 +276,8 @@ print(
             "worker_domains": sorted(worker_contexts),
             "worker_threads": worker_threads,
             "coverage": coverage_by_domain,
-            "recovery_calls": len(worker_threads["mk_item_block"]),
-            "recovered_sufficient": recovered_note["sufficient"],
+            "request_calls": len(worker_threads["request"]),
+            "request_sufficient": notes["request"]["sufficient"],
         },
         sort_keys=True,
     )
@@ -301,7 +285,7 @@ print(
 """
 
 
-def test_fresh_runtime_bootstrap_preserves_forced_rag_across_parallel_recovery(
+def test_fresh_runtime_bootstrap_defers_versioned_routes_before_target_freeze(
     tmp_path: Path,
 ) -> None:
     env = dict(os.environ)
@@ -338,6 +322,6 @@ def test_fresh_runtime_bootstrap_preserves_forced_rag_across_parallel_recovery(
     assert result["forced_calls"] == 1
     assert result["forced_owner_index"] < result["parallel_owner_index"]
     assert len(result["coverage"]) == 7
-    assert result["recovery_calls"] == 2
-    assert result["worker_threads"]["mk_item_block"][-1] == "MainThread"
-    assert result["recovered_sufficient"] is True
+    assert result["worker_domains"] == ["request"]
+    assert result["request_calls"] == 1
+    assert result["request_sufficient"] is True

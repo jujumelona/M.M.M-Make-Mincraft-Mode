@@ -20,6 +20,17 @@ TOP_LEVEL_KEYS = frozenset(
     }
 )
 
+# Evidence-task pages expose only this bounded detail surface to the planner model.
+# The semantic contract itself remains byte-for-byte host-owned in ``evidence_task``.
+MODEL_TASK_DETAIL_KEYS = frozenset(
+    {
+        "implementation_notes",
+        "api_usage",
+        "validation_notes",
+        "asset_notes",
+    }
+)
+
 MODULE_KINDS = frozenset(
     {
         "item",
@@ -114,6 +125,8 @@ def build_batch_skeleton(
     exports: Sequence[str],
     depends_on_batches: Sequence[str] = (),
     known_module_ids: Sequence[str] = (),
+    host_module_contracts: Mapping[str, Mapping[str, Any]] | None = None,
+    acceptance_tests: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Create the complete page shape and module identities on the host."""
     batch = _normalize_id(batch_id, "batch")
@@ -124,25 +137,53 @@ def build_batch_skeleton(
     dependencies = [
         item for item in _unique_strings(depends_on_batches) if item in known
     ]
-    return {
-        "modules": [
+    contracts = host_module_contracts or {}
+    modules: list[dict[str, Any]] = []
+    for module_id in module_ids:
+        config: dict[str, Any] = {
+            "summary": f"Implementation for {module_id}",
+            "batch_id": batch,
+            "scope": str(scope or "").strip(),
+        }
+        contract = contracts.get(module_id)
+        if isinstance(contract, Mapping):
+            config.update(
+                {
+                    "evidence_plan_sha256": str(
+                        contract.get("evidence_plan_sha256") or ""
+                    ),
+                    "evidence_task": dict(contract.get("evidence_task") or contract),
+                    "requirement_refs": _unique_strings(
+                        contract.get("requirement_refs")
+                    ),
+                    "gap_refs": _unique_strings(contract.get("gap_refs")),
+                    "reuse_refs": _unique_strings(contract.get("reuse_refs")),
+                    "owned_anchors": list(contract.get("owned_anchors") or []),
+                    "consumes": _unique_strings(contract.get("consumes")),
+                    "provides": _unique_strings(contract.get("provides")),
+                    "acceptance": _unique_strings(contract.get("acceptance")),
+                    "impact_probes": _unique_strings(contract.get("impact_probes")),
+                    "model_fill": {},
+                }
+            )
+        modules.append(
             {
                 "module_id": module_id,
                 "kind": "custom_java",
-                "config": {
-                    "summary": f"Implementation for {module_id}",
-                    "batch_id": batch,
-                    "scope": str(scope or "").strip(),
-                },
+                "config": config,
                 "depends_on": dependencies,
-                "required_gates": [],
+                "required_gates": (
+                    _unique_strings(contract.get("required_gates"))
+                    if isinstance(contract, Mapping)
+                    else []
+                ),
             }
-            for module_id in module_ids
-        ],
+        )
+    return {
+        "modules": modules,
         "assets": [],
-        "acceptance_tests": [
-            f"test_{module_id}_registers" for module_id in module_ids
-        ],
+        "acceptance_tests": _unique_strings(acceptance_tests)
+        or [f"test_{module_id}_registers" for module_id in module_ids],
         "completed_deliverables": _unique_strings(deliverables)
         or [f"{batch}_feature"],
         "complete": True,
@@ -184,27 +225,39 @@ def _merge_modules(
         kind = str(item.get("kind") or host_item.get("kind") or "custom_java")
         if kind not in MODULE_KINDS:
             kind = "custom_java"
-        config = item.get("config")
-        if not isinstance(config, dict):
-            config = dict(host_item.get("config") or {})
+        host_config = dict(host_item.get("config") or {})
+        raw_config = item.get("config")
+        evidence_owned = isinstance(host_config.get("evidence_task"), Mapping)
+        if evidence_owned:
+            details = {
+                key: raw_config[key]
+                for key in MODEL_TASK_DETAIL_KEYS
+                if isinstance(raw_config, Mapping) and key in raw_config
+            }
+            config = {**host_config, "model_fill": details}
+            # Task kind, dependency edges, and gates are also host-owned.
+            kind = str(host_item.get("kind") or "custom_java")
+        elif isinstance(raw_config, dict):
+            config = dict(raw_config)
+        else:
+            config = host_config
         dependencies = [
             dependency
-            for dependency in _unique_strings(item.get("depends_on"))
+            for dependency in _unique_strings(host_item.get("depends_on"))
             if dependency in valid_module_catalog and dependency != module_id
         ]
-        if not dependencies:
-            dependencies = [
-                dependency
-                for dependency in _unique_strings(host_item.get("depends_on"))
-                if dependency in valid_module_catalog and dependency != module_id
-            ]
+        gates = (
+            _unique_strings(host_item.get("required_gates"))
+            if evidence_owned
+            else _unique_strings(item.get("required_gates"))
+        )
         merged.append(
             {
                 "module_id": module_id,
                 "kind": kind,
                 "config": config,
                 "depends_on": dependencies,
-                "required_gates": _unique_strings(item.get("required_gates")),
+                "required_gates": gates,
             }
         )
     return merged
@@ -257,15 +310,31 @@ def merge_model_output_into_skeleton(
     allowed_output = {
         key: model_output[key] for key in TOP_LEVEL_KEYS if key in model_output
     }
+    evidence_owned = any(
+        isinstance(item, Mapping)
+        and isinstance(_mapping_config(item).get("evidence_task"), Mapping)
+        for item in skeleton.get("modules", ())
+    )
     return {
         "modules": _merge_modules(skeleton, allowed_output, valid_module_catalog),
-        "assets": _merge_assets(allowed_output),
-        "acceptance_tests": _unique_strings(allowed_output.get("acceptance_tests"))
-        or _unique_strings(skeleton.get("acceptance_tests")),
-        "completed_deliverables": _unique_strings(
-            allowed_output.get("completed_deliverables")
-        )
-        or _unique_strings(skeleton.get("completed_deliverables")),
+        "assets": [] if evidence_owned else _merge_assets(allowed_output),
+        "acceptance_tests": (
+            _unique_strings(skeleton.get("acceptance_tests"))
+            if evidence_owned
+            else _unique_strings(allowed_output.get("acceptance_tests"))
+            or _unique_strings(skeleton.get("acceptance_tests"))
+        ),
+        "completed_deliverables": (
+            _unique_strings(skeleton.get("completed_deliverables"))
+            if evidence_owned
+            else _unique_strings(allowed_output.get("completed_deliverables"))
+            or _unique_strings(skeleton.get("completed_deliverables"))
+        ),
         "complete": True,
         "next_cursor": "",
     }
+
+
+def _mapping_config(value: Mapping[str, Any]) -> dict[str, Any]:
+    config = value.get("config")
+    return dict(config) if isinstance(config, Mapping) else {}

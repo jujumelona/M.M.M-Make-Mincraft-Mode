@@ -745,6 +745,7 @@ def _parse_qwen_function(
     additional = schema.get("additionalProperties", True)
 
     arguments: dict[str, Any] = {}
+    argument_sources: dict[str, str] = {}
     pos = name_end + 1
     while True:
         pos = _skip_space(text, pos)
@@ -761,13 +762,33 @@ def _parse_qwen_function(
         key_end = text.find(">", key_start)
         if key_end < 0:
             raise RuntimeError(f"Qwen tool {name!r} parameter tag is missing '>'")
-        key = text[key_start:key_end].strip()
-        if not key:
+        emitted_key = text[key_start:key_end].strip()
+        if not emitted_key:
             raise RuntimeError(f"Qwen tool {name!r} emitted an empty parameter name")
+        key = emitted_key
+        if (
+            name == "apply_source_edit"
+            and emitted_key == "action"
+            and "operation" in properties
+            and "action" not in properties
+        ):
+            # Qwen sometimes labels the scalar edit discriminator ``action`` even
+            # though the exposed ACI calls it ``operation``.  This is a lossless,
+            # tool-specific field-name alias: decode exactly once against the
+            # canonical operation schema, then keep every existing type/enum check.
+            key = "operation"
         if key in arguments:
-            raise RuntimeError(f"Qwen tool {name!r} repeated parameter {key!r}")
+            previous = argument_sources[key]
+            if {previous, emitted_key} == {"action", "operation"}:
+                raise RuntimeError(
+                    "Qwen tool 'apply_source_edit' emitted both alias 'action' "
+                    "and canonical parameter 'operation'"
+                )
+            raise RuntimeError(f"Qwen tool {name!r} repeated parameter {emitted_key!r}")
         if key not in properties and additional is False:
-            raise RuntimeError(f"Qwen tool {name!r} emitted unknown parameter {key!r}")
+            raise RuntimeError(
+                f"Qwen tool {name!r} emitted unknown parameter {emitted_key!r}"
+            )
 
         value_start = key_end + 1
         close_at = _find_parameter_close(text, value_start)
@@ -781,6 +802,7 @@ def _parse_qwen_function(
         if not isinstance(value_schema, Mapping):
             value_schema = {}
         arguments[key] = _decode_parameter_value(name, key, raw, value_schema)
+        argument_sources[key] = emitted_key
         pos = close_at + len(_PARAMETER_CLOSE)
 
     missing = sorted(required - arguments.keys())

@@ -104,7 +104,8 @@ def _input_acceptance_tests(result: CompleteProposal) -> tuple[str, ...]:
 def _recompile_live_contract(module: Any, result: CompleteProposal, *, game_design: dict[str, Any], lowered: tuple[ProductionModule, ...]) -> tuple[dict[str, Any], tuple[str, ...]]:
     contract_design = {key: value for key, value in game_design.items() if not str(key).startswith('_')}
     research_brief = game_design.get('_research_brief')
-    compiled = module.compile_production_contract(requested_prompt=result.requested_prompt, game_design=contract_design, research_brief=research_brief if isinstance(research_brief, dict) else None, modules=lowered, assets=result.assets, acceptance_tests=_input_acceptance_tests(result))
+    evidence_plan = game_design.get('_evidence_first_plan')
+    compiled = module.compile_production_contract(requested_prompt=result.requested_prompt, game_design=contract_design, research_brief=research_brief if isinstance(research_brief, dict) else None, modules=lowered, assets=result.assets, acceptance_tests=_input_acceptance_tests(result), evidence_plan=evidence_plan if isinstance(evidence_plan, Mapping) else None)
     return ({**game_design, '_production_contract': compiled.contract}, tuple(compiled.acceptance_tests))
 
 def _carrier_index(modules: list[ProductionModule]) -> int | None:
@@ -116,6 +117,16 @@ def _carrier_index(modules: list[ProductionModule]) -> int | None:
 def _as_custom_carrier(item: ProductionModule, *, extra_config: dict[str, Any]) -> ProductionModule:
     config = {**item.config, 'implementation': 'custom', 'requested_kind': item.config.get('requested_kind', item.kind), 'platform_generation': 'central_ai_live_target', **extra_config}
     return ProductionModule(module_id=item.module_id, kind='custom_java', config=config, depends_on=item.depends_on, required_gates=item.required_gates)
+
+def _validated_retain_only(result: CompleteProposal) -> bool:
+    if result.modules:
+        return False
+    plan = result.game_design.get('_evidence_first_plan')
+    if not isinstance(plan, Mapping):
+        return False
+    from .evidence_first_planning import validate_evidence_first_plan
+    validate_evidence_first_plan(plan, prompt=result.requested_prompt)
+    return bool(plan.get('verified_provides')) and not plan.get('gap_catalog') and not plan.get('tasks')
 
 def _install_live_module_lowering(module: Any) -> None:
     cls = module.CompleteGameDesignPlanner
@@ -130,10 +141,15 @@ def _install_live_module_lowering(module: Any) -> None:
         target = selection.get('target', {}) if isinstance(selection, dict) else {}
         if not isinstance(target, dict) or target.get('source_api_family') != 'fabric_live_ai':
             return result
-        bootstrap_contents = _bootstrap_content_payload(result)
-        bootstrap_boss = _bootstrap_boss_payload(result)
         migration_requested = bool(isinstance(selection, dict) and selection.get('migration_requested'))
         migration_from = selection.get('migration_from') if isinstance(selection, dict) else None
+        if not migration_requested and _validated_retain_only(result):
+            # The validated existing project already supplies every requirement.
+            # Base ModSpec content is descriptive input here, not permission to
+            # invent an otherwise unnecessary source-generation carrier.
+            return result
+        bootstrap_contents = _bootstrap_content_payload(result)
+        bootstrap_boss = _bootstrap_boss_payload(result)
         lowered: list[ProductionModule] = []
         changed = False
         bootstrap_bound = False

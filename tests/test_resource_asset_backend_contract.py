@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 
 from PIL import Image
 import pytest
 
-from minecraft_mod_ai.complete_spec import AssetRequest, ProductionModule
+from minecraft_mod_ai.complete_spec import (
+    AssetRequest,
+    ProductionModule,
+    complete_proposal_from_parts,
+)
+from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
 from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
 from minecraft_mod_ai.model_registry import ModelRegistry
+from minecraft_mod_ai.pipeline import MinecraftModPipeline
+from minecraft_mod_ai.planner import HeuristicPlanner
+from minecraft_mod_ai.production_contract import compile_production_contract
+from minecraft_mod_ai.spec import SpecValidationError
 from minecraft_mod_ai import resource_asset_production as assets
 
 
@@ -19,6 +29,102 @@ def _asset() -> AssetRequest:
         target_path="assets/minecraft/textures/item/diamond_sword.png",
         width=16,
         height=16,
+    )
+
+
+def _evidence_proposal(
+    *,
+    prompt: str = "Implement trade and quests.",
+    plan: dict | None = None,
+    with_production_contract: bool = False,
+):
+    design = {
+        "pitch": "Implement two independently verified capabilities.",
+        "modules": [
+            {"plugin_id": "trade", "reason": "trade"},
+            {"plugin_id": "quests", "reason": "quests"},
+        ],
+        "acceptance_tests": ["trade works", "quests work"],
+        "_platform_selection": {
+            "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
+            "reuse_plan": {
+                "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
+                "capability_graph": {
+                    "nodes": ["trade", "quests"],
+                    "edges": [],
+                    "sources": [],
+                },
+                "capabilities": [
+                    {"capability": "trade", "mode": "fresh", "source_id": ""},
+                    {"capability": "quests", "mode": "fresh", "source_id": ""},
+                ],
+            },
+        },
+    }
+    plan = plan or compile_evidence_first_plan(prompt, design)
+    requirements = {
+        item["requirement_id"]: item
+        for item in plan["request_catalog"]["requirements"]
+    }
+    modules = []
+    for task in reversed(plan["tasks"]):
+        context = {
+            "prompt_sha256": plan["request_catalog"]["prompt_sha256"],
+            "requirements": [
+                requirements[reference]
+                for reference in task["requirement_refs"]
+            ],
+        }
+        embedded = {**task, "request_context": context}
+        config = {
+            "summary": "misleading unrelated fallback tokens",
+            "name": "quests" if "trade" in task["task_id"] else "trade",
+            "batch_id": task["task_id"],
+            "scope": task["semantic_outcome"],
+            "evidence_plan_sha256": plan["plan_sha256"],
+            "evidence_task": embedded,
+            **{
+                key: copy.deepcopy(task[key])
+                for key in (
+                    "requirement_refs",
+                    "gap_refs",
+                    "reuse_refs",
+                    "owned_anchors",
+                    "consumes",
+                    "provides",
+                    "acceptance",
+                    "impact_probes",
+                )
+            },
+            "model_fill": {},
+        }
+        modules.append(
+            ProductionModule(
+                module_id=task["task_id"],
+                kind="custom_java",
+                config=config,
+                depends_on=tuple(task["depends_on"]),
+                required_gates=tuple(task["required_gates"]),
+            )
+        )
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(prompt)
+    acceptance_tests = tuple(design["acceptance_tests"])
+    if with_production_contract:
+        compiled = compile_production_contract(
+            requested_prompt=prompt,
+            game_design={key: value for key, value in design.items() if not key.startswith("_")},
+            modules=tuple(modules),
+            acceptance_tests=acceptance_tests,
+            evidence_plan=plan,
+        )
+        design = {**design, "_production_contract": compiled.contract}
+        acceptance_tests = compiled.acceptance_tests
+    return complete_proposal_from_parts(
+        requested_prompt=prompt,
+        base_proposal=base,
+        game_design={**design, "_evidence_first_plan": plan},
+        modules=tuple(modules),
+        acceptance_tests=acceptance_tests,
     )
 
 
@@ -109,3 +215,163 @@ def test_capabilities_are_assigned_once_to_matching_modules() -> None:
     assert sorted(flat) == ["trade.transaction", "ui.shop_menu"]
     assert sum(item["capability"] == "trade.transaction" for rows in ownership.values() for item in rows) == 1
     assert sum(item["capability"] == "ui.shop_menu" for rows in ownership.values() for item in rows) == 1
+
+
+def test_evidence_reuse_ownership_uses_exact_task_provides_not_tokens() -> None:
+    proposal = _evidence_proposal()
+
+    rebound = assets.bind_reuse_plan(proposal)
+
+    owners = {
+        module.module_id: module.config.get("_owned_capabilities", [])
+        for module in rebound.modules
+        if module.config.get("_owned_capabilities")
+    }
+    assert len(owners) == 2
+    for module in rebound.modules:
+        task = module.config["evidence_task"]
+        final_capabilities = {
+            value.removeprefix("capability:")
+            for value in task["provides"]
+            if value.startswith("capability:")
+        }
+        if final_capabilities:
+            assert module.config["_owned_capabilities"] == list(final_capabilities)
+            owned = module.config["_owned_reuse_plan"]
+            assert owned["evidence_plan_sha256"] == rebound.game_design[
+                "_evidence_first_plan"
+            ]["plan_sha256"]
+            assert {
+                item["capability"] for item in owned["capabilities"]
+            } == final_capabilities
+    assert rebound.game_design["_reuse_plan"]["schema_version"] == (
+        "mmm/evidence-bound-reuse-plan-v1"
+    )
+
+
+def test_evidence_reuse_binding_rejects_module_ref_drift() -> None:
+    proposal = _evidence_proposal()
+    first = proposal.modules[0]
+    corrupted = ProductionModule(
+        module_id=first.module_id,
+        kind=first.kind,
+        config={**first.config, "reuse_refs": ["component:not-in-the-plan"]},
+        depends_on=first.depends_on,
+        required_gates=first.required_gates,
+    )
+    proposal = type(proposal)(
+        **{
+            **proposal.__dict__,
+            "modules": (corrupted, *proposal.modules[1:]),
+            "approval_hash": "",
+        }
+    ).with_hash()
+
+    with pytest.raises(SpecValidationError, match="module binding changed 'reuse_refs'"):
+        assets.bind_reuse_plan(proposal)
+
+
+def test_evidence_reuse_binding_rejects_stale_plan_hash() -> None:
+    proposal = _evidence_proposal()
+    plan = copy.deepcopy(proposal.game_design["_evidence_first_plan"])
+    plan["plan_sha256"] = "sha256:" + "0" * 64
+    proposal = type(proposal)(
+        **{
+            **proposal.__dict__,
+            "game_design": {**proposal.game_design, "_evidence_first_plan": plan},
+            "approval_hash": "",
+        }
+    ).with_hash()
+
+    with pytest.raises(SpecValidationError, match="plan hash mismatch"):
+        assets.bind_reuse_plan(proposal)
+
+
+def test_evidence_reuse_binding_refreshes_v2_module_hash_contract() -> None:
+    proposal = _evidence_proposal(with_production_contract=True)
+    old_module_hash = proposal.game_design["_production_contract"]["source_bindings"][
+        "module_input_sha256"
+    ]
+
+    rebound = assets.bind_reuse_plan(proposal)
+
+    assert rebound.schema_version == "mmm/complete-proposal-v2"
+    assert rebound.game_design["_production_contract"]["source_bindings"][
+        "module_input_sha256"
+    ] != old_module_hash
+    rebound.validate()
+
+
+def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> None:
+    prompt = "Implement trade."
+    donor = {
+        "schema_version": "mmm/source-transplant-slice-v1",
+        "capability": "trade",
+        "repository": "owner/trade-mod",
+        "commit_sha": "a" * 40,
+        "license_id": "MIT",
+        "target_compatibility": "adapt",
+        "files": [
+            {
+                "path": "src/main/java/example/Trade.java",
+                "blob_sha": "b" * 40,
+                "sha256": "sha256:" + "c" * 64,
+                "size_bytes": 100,
+            }
+        ],
+    }
+    reuse = {
+        "capability_graph": {"nodes": ["trade"], "edges": [], "sources": []},
+        "capabilities": [
+            {
+                "capability": "trade",
+                "mode": "source_transplant",
+                "source_id": "owner/trade-mod",
+                "component_refs": ["trade_candidate"],
+                "donor": donor,
+            }
+        ],
+    }
+    design = {
+        "modules": [{"plugin_id": "trade", "reason": "trade"}],
+        "acceptance_tests": ["trade works"],
+        "_platform_selection": {
+            "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
+            "reuse_plan": reuse,
+        },
+    }
+    components = [
+        {
+            "component_id": "trade_candidate",
+            "kind": "symbol",
+            "locator": "src/main/java/example/Trade.java#Trade",
+            "content_sha256": "sha256:" + "d" * 64,
+            "provides": ["capability:trade"],
+            "provenance": {
+                "origin": "external",
+                "repository": "owner/trade-mod",
+                "revision": "a" * 40,
+                "license": "MIT",
+                "dependency_closure_verified": True,
+            },
+            "compatibility": {"minecraft_version": "1.21.1", "loader": "fabric"},
+        }
+    ]
+    plan = compile_evidence_first_plan(
+        prompt,
+        design,
+        component_catalog=components,
+        reuse_plan=reuse,
+    )
+    proposal = _evidence_proposal(prompt=prompt, plan=plan)
+
+    rebound = assets.bind_reuse_plan(proposal)
+
+    owner = next(
+        module for module in rebound.modules if module.config.get("_owned_capabilities")
+    )
+    decision = owner.config["_owned_reuse_plan"]["evidence_decisions"][0]
+    assert owner.config["_owned_component_refs"] == ["trade_candidate"]
+    assert decision["component_refs"] == ["trade_candidate"]
+    assert decision["decision_sha256"].startswith("sha256:")
+    assert owner.config["_owned_reuse_plan"]["capabilities"][0]["donor"] == donor

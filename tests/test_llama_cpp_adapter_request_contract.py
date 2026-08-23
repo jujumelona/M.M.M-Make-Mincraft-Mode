@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from minecraft_mod_ai import llama_server_autotune
+from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.model_adapters.base import (
     AdapterConfig,
     GenerationRequest,
@@ -77,6 +78,31 @@ def _tool() -> dict[str, object]:
             "name": "lookup",
             "description": "lookup",
             "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _source_edit_tool(*, include_action: bool = False) -> dict[str, object]:
+    properties: dict[str, object] = {
+        "operation": {
+            "type": "string",
+            "enum": ["replace_exact", "insert_before", "insert_after"],
+        },
+        "path": {"type": "string"},
+    }
+    if include_action:
+        properties["action"] = {"type": "string"}
+    return {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "apply one exact source edit",
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": ["operation", "path"],
+                "additionalProperties": False,
+            },
         },
     }
 
@@ -259,6 +285,169 @@ def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch
     assert turn.reasoning_content == "inspect the current schema"
     assert [call.name for call in turn.tool_calls] == ["lookup"]
     assert turn.tool_calls[0].arguments == {"q": "exact api"}
+
+
+def test_apply_source_edit_action_alias_is_one_decode_local_recovery(monkeypatch) -> None:
+    posts = 0
+    decoded: list[tuple[str, str, str]] = []
+    original_decode = llama_cpp_adapter._decode_parameter_value
+
+    def tracked_decode(tool_name, key, raw, schema):
+        decoded.append((tool_name, key, raw))
+        return original_decode(tool_name, key, raw, schema)
+
+    def post(url, *, json, timeout):
+        nonlocal posts
+        posts += 1
+        return _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "<tool_call><function=apply_source_edit>"
+                                "<parameter=action>replace_exact</parameter>"
+                                "<parameter=path>src/main/java/Example.java</parameter>"
+                                "</function></tool_call>"
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(llama_cpp_adapter, "_decode_parameter_value", tracked_decode)
+    monkeypatch.setattr(httpx, "post", post)
+
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "apply one edit"},),
+            tools=(_source_edit_tool(),),
+            tool_choice={
+                "type": "function",
+                "function": {"name": "apply_source_edit"},
+            },
+        )
+    )
+
+    assert posts == 1
+    assert decoded == [
+        ("apply_source_edit", "operation", "replace_exact"),
+        ("apply_source_edit", "path", "src/main/java/Example.java"),
+    ]
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].arguments == {
+        "operation": "replace_exact",
+        "path": "src/main/java/Example.java",
+    }
+    assert "action" not in turn.tool_calls[0].arguments
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        (
+            "<parameter=action>replace_exact</parameter>"
+            "<parameter=operation>replace_exact</parameter>"
+        ),
+        (
+            "<parameter=operation>replace_exact</parameter>"
+            "<parameter=action>replace_exact</parameter>"
+        ),
+    ],
+)
+def test_apply_source_edit_rejects_canonical_alias_collision(
+    monkeypatch,
+    parameters: str,
+) -> None:
+    posts = 0
+
+    def post(url, *, json, timeout):
+        nonlocal posts
+        posts += 1
+        return _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "<tool_call><function=apply_source_edit>"
+                                + parameters
+                                + "<parameter=path>Example.java</parameter>"
+                                "</function></tool_call>"
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(httpx, "post", post)
+    with pytest.raises(ModelBackendError, match="both alias 'action'.*'operation'"):
+        _adapter().generate_turn(
+            GenerationRequest(
+                messages=({"role": "user", "content": "apply one edit"},),
+                tools=(_source_edit_tool(),),
+                tool_choice="auto",
+            )
+        )
+    assert posts == 1
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "include_action", "parameter", "expected"),
+    [
+        ("lookup", False, "action", "unknown parameter 'action'"),
+        ("apply_source_edit", False, "mode", "unknown parameter 'mode'"),
+        (
+            "apply_source_edit",
+            True,
+            "action",
+            "omitted required parameters: operation",
+        ),
+    ],
+)
+def test_action_alias_does_not_weaken_other_schema_boundaries(
+    monkeypatch,
+    tool_name: str,
+    include_action: bool,
+    parameter: str,
+    expected: str,
+) -> None:
+    schema = _source_edit_tool(include_action=include_action)
+    schema["function"]["name"] = tool_name
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *args, **kwargs: _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                f"<tool_call><function={tool_name}>"
+                                f"<parameter={parameter}>replace_exact</parameter>"
+                                "<parameter=path>Example.java</parameter>"
+                                "</function></tool_call>"
+                            )
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+
+    with pytest.raises(ModelBackendError, match=expected):
+        _adapter().generate_turn(
+            GenerationRequest(
+                messages=({"role": "user", "content": "one tool"},),
+                tools=(schema,),
+                tool_choice="auto",
+            )
+        )
 
 
 def test_repeated_reasoning_only_turn_fails_closed_after_one_continuation(monkeypatch) -> None:

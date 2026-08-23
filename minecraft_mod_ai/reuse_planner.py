@@ -9,6 +9,7 @@ and fresh options are considered.  Counts are diagnostic only; selection minimis
 expected implementation + verification work and preserves donor provenance.
 """
 
+import hashlib
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,7 +67,19 @@ _CAPABILITY_HINTS = {
     "audit": ("audit.event_log",),
 }
 _PROMPT_CAPABILITY_WORDS = frozenset(_CAPABILITY_HINTS)
-_GRAPH_LIMIT = 32
+
+
+def _capability_graph_limit() -> int:
+    """Return an optional operator quota; zero keeps logical project scale unbounded."""
+
+    raw = os.environ.get("MMM_REUSE_CAPABILITY_LIMIT", "0").strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("MMM_REUSE_CAPABILITY_LIMIT must be a non-negative integer.") from exc
+    if value < 0:
+        raise ValueError("MMM_REUSE_CAPABILITY_LIMIT must be a non-negative integer.")
+    return value
 
 
 @dataclass(frozen=True)
@@ -102,6 +115,10 @@ def decompose_capability_graph(
     edges: list[tuple[str, str]] = []
     sources: dict[str, str] = {}
     seen: set[str] = set()
+    limit = _capability_graph_limit()
+
+    def at_limit() -> bool:
+        return limit > 0 and len(ordered) >= limit
 
     def add(raw: Any, source: str, parent: str = "") -> str:
         value = _capability_id(raw)
@@ -110,7 +127,7 @@ def decompose_capability_graph(
         expanded = _expand_capability(value)
         anchor = expanded[0] if expanded else value
         for node in expanded or (value,):
-            if node not in seen and len(ordered) < _GRAPH_LIMIT:
+            if node not in seen and not at_limit():
                 seen.add(node)
                 ordered.append(node)
                 sources[node] = source
@@ -121,7 +138,7 @@ def decompose_capability_graph(
         return anchor
 
     def walk(value: Any, source: str, parent: str = "", depth: int = 0) -> None:
-        if depth > 6 or len(ordered) >= _GRAPH_LIMIT:
+        if at_limit():
             return
         if isinstance(value, str):
             add(value, source, parent)
@@ -442,15 +459,15 @@ def optimize_platform_and_reuse(
     if not initial_ranked:
         raise ValueError("No executable target produced an implementation plan.")
 
-    # Ecosystem project metadata is secondary evidence, not a reuse admission gate.
-    # Deep-check only near-optimal reuse-cost targets so version count does not create
-    # an O(targets x capabilities) network bottleneck.
-    near = _near_cost_targets(initial_ranked)
+    # Every feasible candidate that may participate in selection receives the same
+    # target-evidence pass.  A cheap pre-evidence score is not authority to discard
+    # candidates, and an unverified candidate is never allowed to win.
+    evidence_targets = _near_cost_targets(initial_ranked)
     evidence_by_id: dict[str, _platform.TargetEvidence] = {}
-    if discovery_mode != "off" and near:
-        matrix, matrix_errors = _platform._parallel_support_matrix(near, queries, client)
+    if discovery_mode != "off" and evidence_targets:
+        matrix, matrix_errors = _platform._parallel_support_matrix(evidence_targets, queries, client)
         deep = _platform._parallel_deep(
-            near,
+            evidence_targets,
             queries=queries,
             matrix=matrix,
             client=client,
@@ -460,9 +477,19 @@ def optimize_platform_and_reuse(
         )
         evidence_by_id = {item.adapter.adapter_id: item for item in deep}
 
+    if discovery_mode == "off":
+        selectable = initial_ranked
+    else:
+        selectable = tuple(
+            item
+            for item in initial_ranked
+            if item.adapter.adapter_id in evidence_by_id
+        )
+        if not selectable:
+            raise ValueError("No executable platform target survived evidence verification.")
     adjusted = [
         _apply_platform_evidence(item, evidence_by_id.get(item.adapter.adapter_id))
-        for item in initial_ranked
+        for item in selectable
     ]
     ranked = tuple(
         sorted(
@@ -476,25 +503,44 @@ def optimize_platform_and_reuse(
             reverse=True,
         )
     )
-    selected_plan = ranked[0]
-
-    # Official/agentic target research is a selected-target verification step, not
-    # a reason to multiply expensive RAG calls across all versions.
+    # Official/agentic target research is a winner-admission gate.  Verify ranked
+    # candidates one at a time: a failed/unavailable/unresolved receipt removes
+    # that candidate, then the next candidate is tried.  This avoids both an
+    # unverified winner and an all-target RAG fan-out.
     if target_research_fn is not None:
-        try:
-            selected_research = target_research_fn(selected_plan.adapter)
-        except Exception:
-            selected_research = None
-        if isinstance(selected_research, Mapping):
-            evidence = selected_plan.platform_evidence
-            if evidence is not None:
-                quality, _ = _platform._research_quality(selected_research)
-                evidence = _replace_evidence_research(evidence, selected_research, quality)
-                selected_plan = _replace_plan_evidence(selected_plan, evidence)
-                ranked = tuple(
-                    selected_plan if item.adapter.adapter_id == selected_plan.adapter.adapter_id else item
-                    for item in ranked
-                )
+        rejected_ids: set[str] = set()
+        selected_plan: TargetImplementationPlan | None = None
+        for candidate in ranked:
+            try:
+                selected_research = target_research_fn(candidate.adapter)
+            except Exception:
+                selected_research = None
+            if not _valid_target_research_receipt(selected_research, candidate.adapter):
+                rejected_ids.add(candidate.adapter.adapter_id)
+                continue
+            evidence = candidate.platform_evidence
+            if evidence is None:
+                rejected_ids.add(candidate.adapter.adapter_id)
+                continue
+            quality, _ = _platform._research_quality(selected_research)
+            evidence = _replace_evidence_research(evidence, selected_research, quality)
+            selected_plan = _replace_plan_evidence(candidate, evidence)
+            break
+        if selected_plan is None:
+            raise ValueError(
+                "No executable platform target produced valid target research evidence."
+            )
+        ranked = (
+            selected_plan,
+            *(
+                item
+                for item in ranked
+                if item.adapter.adapter_id not in rejected_ids
+                and item.adapter.adapter_id != selected_plan.adapter.adapter_id
+            ),
+        )
+    else:
+        selected_plan = ranked[0]
 
     evidence_items = tuple(
         item.platform_evidence
@@ -780,12 +826,14 @@ def _parallel_donor_repository_discovery(
 
 
 def _near_cost_targets(plans: Sequence[TargetImplementationPlan]) -> tuple[PlatformAdapter, ...]:
-    if not plans:
-        return ()
-    best = min(item.total_expected_cost for item in plans)
-    limit = max(best * 1.15, best + 8.0)
-    selected = [item.adapter for item in plans if item.total_expected_cost <= limit]
-    return tuple(selected[:12])
+    """Return every feasible candidate that can participate in target selection.
+
+    Kept as a private compatibility seam for tests/extensions that patched the old
+    shortlist helper.  There is deliberately no fixed evidence width or cost-based
+    pre-verification exclusion.
+    """
+
+    return tuple(item.adapter for item in plans)
 
 
 def _apply_platform_evidence(
@@ -863,14 +911,42 @@ def _fresh_cost(capability: str) -> tuple[float, float]:
 
 
 def _declared_same_project_capabilities(design: Mapping[str, Any] | None) -> set[str]:
+    """Return only capabilities backed by a validated existing-project inventory.
+
+    Model-authored design prose is never reuse evidence.  The inventory scanner owns
+    the locators and byte hashes and emits deterministic ``capability:`` aliases for
+    exact symbol/resource identities.
+    """
+
     if not isinstance(design, Mapping):
         return set()
-    values: list[str] = []
-    for key in ("existing_capabilities", "same_project_capabilities", "preserved_capabilities"):
-        raw = design.get(key)
-        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
-            values.extend(str(item).strip().casefold() for item in raw if str(item).strip())
-    return set(values)
+    raw_inventory = design.get("_existing_project_inventory")
+    if not isinstance(raw_inventory, Mapping):
+        raw_inventory = design.get("_existing_snapshot")
+    if not isinstance(raw_inventory, Mapping):
+        return set()
+    try:
+        from .project_inventory import validate_project_inventory_payload
+
+        inventory = validate_project_inventory_payload(raw_inventory)
+    except (ImportError, ValueError, TypeError, RecursionError):
+        return set()
+    catalog = inventory.get("component_catalog")
+    components = catalog.get("components") if isinstance(catalog, Mapping) else None
+    if not isinstance(components, list):
+        return set()
+    capabilities: set[str] = set()
+    for component in components:
+        if not isinstance(component, Mapping):
+            continue
+        for value in component.get("provides", ()):
+            text = str(value).strip().casefold()
+            if not text.startswith("capability:"):
+                continue
+            capability = text.removeprefix("capability:").strip()
+            if capability:
+                capabilities.add(capability)
+    return capabilities
 
 
 def _fresh_only_plan(
@@ -928,6 +1004,61 @@ def _fresh_evidence(adapter: PlatformAdapter, queries: Sequence[str]) -> _platfo
         residual_cost=len(queries),
         dependency_complexity=0,
     )
+
+
+def _valid_target_research_receipt(
+    payload: Any,
+    adapter: PlatformAdapter,
+) -> bool:
+    """Validate the host research graph that admits a ranked target as winner."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("schema_version") != "mmm/central-evidence-graph-v1":
+        return False
+    if str(payload.get("status", "")).strip().casefold() in {
+        "failed",
+        "failure",
+        "unavailable",
+        "error",
+    }:
+        return False
+    errors = payload.get("errors")
+    if isinstance(errors, Sequence) and not isinstance(errors, (str, bytes)) and errors:
+        return False
+    unresolved = payload.get("unresolved_official_domains")
+    if not isinstance(unresolved, list) or unresolved:
+        return False
+    domains = payload.get("domains")
+    if not isinstance(domains, list) or not domains:
+        return False
+    if any(
+        not isinstance(domain, Mapping) or not str(domain.get("domain_id", "")).strip()
+        for domain in domains
+    ):
+        return False
+    target = payload.get("target")
+    if not isinstance(target, Mapping):
+        return False
+    if (
+        str(target.get("minecraft_version", "")) != adapter.minecraft_version
+        or str(target.get("loader", "")).strip().casefold() != adapter.loader
+        or str(target.get("mappings", "")) != adapter.yarn_mappings
+    ):
+        return False
+    if payload.get("authorization") != "none" or payload.get("retrieval_is_authority") is not False:
+        return False
+    claimed = str(payload.get("evidence_sha256", ""))
+    if not claimed.startswith("sha256:") or len(claimed) != 71:
+        return False
+    from .spec import canonical_json
+
+    unsigned = dict(payload)
+    unsigned.pop("evidence_sha256", None)
+    expected = "sha256:" + hashlib.sha256(
+        canonical_json(unsigned).encode("utf-8")
+    ).hexdigest()
+    return claimed == expected
 
 
 def _replace_evidence_research(

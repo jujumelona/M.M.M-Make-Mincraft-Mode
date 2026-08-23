@@ -48,6 +48,63 @@ def _proposal(module_count: int = 4):
     )
 
 
+def _custom_proposal(modules: tuple[ProductionModule, ...]):
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(
+        "Create an evidence-owned custom feature"
+    )
+    return complete_proposal_from_parts(
+        requested_prompt="Create an evidence-owned custom feature",
+        base_proposal=base,
+        game_design={"title": "Exclusive anchor graph"},
+        modules=modules,
+        acceptance_tests=("all custom anchors are verified",),
+    )
+
+
+def _exclusive_anchor(locator: str) -> list[dict[str, str]]:
+    return [
+        {
+            "kind": "symbol",
+            "locator": locator,
+            "ownership": "exclusive",
+            "status": "host_reserved",
+        }
+    ]
+
+
+def test_only_conflicting_semantic_anchors_are_serialized(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    modules = (
+        ProductionModule(
+            "custom_a",
+            "custom_java",
+            {"owned_anchors": _exclusive_anchor("symbol:shared#register")},
+        ),
+        ProductionModule(
+            "custom_b",
+            "custom_java",
+            {"owned_anchors": _exclusive_anchor("symbol:shared#register")},
+        ),
+        ProductionModule(
+            "custom_c",
+            "custom_java",
+            {"owned_anchors": _exclusive_anchor("symbol:independent#render")},
+        ),
+    )
+    plan = build_production_work_plan(
+        _custom_proposal(modules),
+        policy=ScalePolicy(java_shard_size=1),
+    )
+    custom = [node for node in plan.nodes if node.stage == "generate:custom"]
+    by_member = {
+        node.payload["members"][0]["module_id"]: node for node in custom
+    }
+
+    assert by_member["custom_a"].node_id in by_member["custom_b"].dependencies
+    assert by_member["custom_a"].node_id not in by_member["custom_c"].dependencies
+    assert by_member["custom_b"].node_id not in by_member["custom_c"].dependencies
+
+
 def test_large_proposal_becomes_more_bounded_shards_without_global_cap() -> None:
     proposal = _proposal(20_000)
     policy = ScalePolicy(java_shard_size=37)

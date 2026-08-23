@@ -84,6 +84,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
     ordered = _topological_modules(selected_modules)
     nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
     module_node: dict[str, str] = {}
+    exclusive_anchor_node: dict[str, str] = {}
     generated_nodes: list[str] = []
     for stage, members in _module_shards(ordered, policy=policy):
         node_id = f'generate-{stage}-{len(generated_nodes):08d}'
@@ -91,11 +92,19 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         dependencies = {'prepare-project'}
         for module in members:
             dependencies.update((module_node[dependency] for dependency in module.depends_on if dependency not in member_ids))
+            dependencies.update(
+                exclusive_anchor_node[anchor]
+                for anchor in _exclusive_anchor_keys(module)
+                if anchor in exclusive_anchor_node
+            )
+        dependencies.discard(node_id)
         payload = {'kind': 'module-shard', 'generation_stage': stage, 'members': [_module_payload(module) for module in members]}
         nodes.append(_node(node_id, f'generate:{stage}', sorted(dependencies), payload))
         generated_nodes.append(node_id)
         for module in members:
             module_node[module.module_id] = node_id
+            for anchor in _exclusive_anchor_keys(module):
+                exclusive_anchor_node[anchor] = node_id
     for index, assets in enumerate(_chunks(proposal.assets, max(1, policy.java_shard_size))):
         node_id = f'generate-assets-{index:08d}'
         nodes.append(_node(node_id, 'generate:assets', ('prepare-project',), {'kind': 'asset-shard', 'members': [asdict(asset) for asset in assets]}))
@@ -571,6 +580,26 @@ _node._mmm_shared_write_commit_lane = True  # type: ignore[attr-defined]
 
 def _module_payload(module: ProductionModule) -> dict[str, Any]:
     return {'module_id': module.module_id, 'kind': module.kind, 'config': module.config, 'depends_on': list(module.depends_on), 'required_gates': list(module.required_gates)}
+
+
+def _exclusive_anchor_keys(module: ProductionModule) -> tuple[str, ...]:
+    """Return exact host-reserved anchors that may not execute concurrently."""
+
+    config = module.config if isinstance(module.config, dict) else {}
+    raw = config.get('owned_anchors')
+    if not isinstance(raw, list):
+        evidence_task = config.get('evidence_task')
+        raw = evidence_task.get('owned_anchors') if isinstance(evidence_task, dict) else None
+    if not isinstance(raw, list):
+        return ()
+    keys: list[str] = []
+    for anchor in raw:
+        if not isinstance(anchor, dict) or anchor.get('ownership') != 'exclusive':
+            continue
+        locator = str(anchor.get('locator') or '').strip()
+        if locator:
+            keys.append(locator)
+    return tuple(dict.fromkeys(keys))
 
 def _module_stage(module: ProductionModule) -> str:
     if is_research_shard(module) or module.kind == 'research_shard':
