@@ -266,7 +266,7 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
 def install(agentic_module: Any) -> None:
     """Install repair-only candidate parallelism; planner Best-of-N is retired."""
     current_repair_count = agentic_module._repair_candidate_count
-    if not has_contract_marker(current_repair_count, "_mmm_failure_gated_search"):
+    if not owns_contract_marker(current_repair_count, "_mmm_failure_gated_search"):
         risk_candidate_count = _base_repair_candidate_count(current_repair_count)
 
         def repair_candidate_count(
@@ -294,7 +294,7 @@ def install(agentic_module: Any) -> None:
             return min(slots, risk_width)
 
         repair_candidate_count._mmm_failure_gated_search = True
-        repair_candidate_count.__wrapped__ = current_repair_count
+        repair_candidate_count.__wrapped__ = risk_candidate_count
         agentic_module._repair_candidate_count = repair_candidate_count
 
     _install_parallel_repair_search(agentic_module)
