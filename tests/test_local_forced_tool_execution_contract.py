@@ -75,7 +75,7 @@ def _code_rag_schema() -> dict[str, Any]:
     }
 
 
-def test_local_forced_tool_uses_prompt_and_auto_transport_then_recovers_none() -> None:
+def test_local_forced_tool_uses_one_required_surface_then_protocol_retry() -> None:
     seen: list[_Request] = []
 
     class LocalAdapter:
@@ -114,9 +114,9 @@ def test_local_forced_tool_uses_prompt_and_auto_transport_then_recovers_none() -
     assert len(seen) == 2
     for constrained in seen:
         assert constrained.tools == (edit,)
-        assert constrained.tool_choice == "auto"
+        assert constrained.tool_choice == "required"
         assert constrained.parallel_tool_calls is False
-    assert "host requires" in seen[0].messages[-1]["content"].casefold()
+    assert seen[0].messages == request.messages
     assert "previous assistant turn" in seen[1].messages[-1]["content"].casefold()
 
 
@@ -157,8 +157,8 @@ def test_local_forced_tool_returns_validation_only_stale_call_without_nested_ret
     assert [call.name for call in turn.tool_calls] == ["java_workspace_symbols"]
     assert len(seen) == 1
     assert seen[0].tools == (current,)
-    assert seen[0].tool_choice == "auto"
-    assert "previous assistant turn" not in seen[0].messages[-1]["content"].casefold()
+    assert seen[0].tool_choice == "required"
+    assert seen[0].messages == request.messages
 
 
 def test_local_forced_project_rag_replaces_stale_write_with_host_read_call() -> None:
