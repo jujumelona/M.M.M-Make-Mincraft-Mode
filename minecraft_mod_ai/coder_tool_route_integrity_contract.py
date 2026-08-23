@@ -21,7 +21,6 @@ from .causal_frontier_adapter import (
     authorized_tools,
     clear_current_frontier,
 )
-from .causal_state_ledger import supplies_fresh_evidence
 from .causal_tool_frontier_contract import _FrontierRuntimeProxy
 from .causal_tool_graph import shortest_causal_path
 from .source_mutation_contract import mutation_observation_applied
@@ -36,7 +35,6 @@ _MUTATION_PRIORITY = (
     "repair_project",
 )
 _MUTATION_TOOLS = frozenset(_MUTATION_PRIORITY)
-_MUTATION_FAILURE_LIMIT = 2
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -103,56 +101,17 @@ def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
     return any(mutation_observation_applied(message) for message in reversed(messages))
 
 
-def _latest_fresh_evidence_index(
-    messages: Sequence[Mapping[str, Any]],
-    schemas: Sequence[Mapping[str, Any]],
-) -> int:
-    for index in range(len(messages) - 1, -1, -1):
-        if supplies_fresh_evidence(messages[index], schemas):
-            return index
-    return -1
+def _preferred_visible_mutation(tools: Sequence[Mapping[str, Any]]) -> str:
+    """Choose a reviewed mutation route without depending on schema ordering.
 
-
-def _failed_mutation_attempts(
-    messages: Sequence[Mapping[str, Any]],
-    name: str,
-    *,
-    evidence_schemas: Sequence[Mapping[str, Any]] = (),
-) -> int:
-    """Count unproven writes only inside the current corrective-evidence epoch."""
-
-    start = _latest_fresh_evidence_index(messages, evidence_schemas) + 1
-    failures = 0
-    for message in messages[start:]:
-        if str(message.get("role", "")).strip().casefold() != "tool":
-            continue
-        if str(message.get("name", "")).strip() != name:
-            continue
-        if not mutation_observation_applied(message):
-            failures += 1
-    return failures
-
-
-def _preferred_visible_mutation(
-    tools: Sequence[Mapping[str, Any]],
-    messages: Sequence[Mapping[str, Any]],
-    *,
-    evidence_schemas: Sequence[Mapping[str, Any]] = (),
-) -> str:
-    """Choose a reviewed mutation route without depending on schema ordering."""
+    Retry/evidence-epoch ownership lives in ``CausalStateLedger``. This transport-side
+    wrapper only chooses among mutation actions that the current causal frontier has
+    already declared legal; it must not maintain a second retry budget.
+    """
 
     visible = {_tool_name(schema) for schema in tools}
     for name in _MUTATION_PRIORITY:
-        if name not in visible:
-            continue
-        if (
-            _failed_mutation_attempts(
-                messages,
-                name,
-                evidence_schemas=evidence_schemas,
-            )
-            < _MUTATION_FAILURE_LIMIT
-        ):
+        if name in visible:
             return name
     return ""
 
@@ -224,6 +183,10 @@ class _WritableProgressAdapter:
     after that proof exists, the model returns to auto/final synthesis instead of being
     forced into redundant source writes. Final synthesis is rejected until a successful
     mutation observation is present in the transcript.
+
+    Mutation retry/evidence refresh policy is intentionally not implemented here.
+    ``CausalStateLedger`` is the single owner of that state transition so this wrapper
+    cannot terminate a valid recovery path with a second, drifting retry budget.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -253,33 +216,8 @@ class _WritableProgressAdapter:
         if _source_mutation_applied(request.messages):
             return self.inner.generate_turn(request)
 
-        evidence_schemas = tuple(
-            getattr(request, "tool_validation_schemas", ()) or request.tools
-        )
-        visible_mutations = tuple(
-            name
-            for schema in request.tools
-            if (name := _tool_name(schema)) in _MUTATION_TOOLS
-        )
-        mutation = forced_name or _preferred_visible_mutation(
-            request.tools,
-            request.messages,
-            evidence_schemas=evidence_schemas,
-        )
+        mutation = forced_name or _preferred_visible_mutation(request.tools)
         if mutation:
-            if (
-                _failed_mutation_attempts(
-                    request.messages,
-                    mutation,
-                    evidence_schemas=evidence_schemas,
-                )
-                >= _MUTATION_FAILURE_LIMIT
-            ):
-                raise ModelConfigurationError(
-                    "Writable coder exhausted the bounded mutation retry budget for the "
-                    f"current causal frontier ({mutation}); refusing to repeat the same "
-                    "failed source-edit loop without a new evidence epoch."
-                )
             forced = request if forced_name == mutation else _force_tool_choice(request, mutation)
             turn = self.inner.generate_turn(forced)
             if not turn.tool_calls or mutation not in {call.name for call in turn.tool_calls}:
@@ -288,13 +226,6 @@ class _WritableProgressAdapter:
                     "refusing a prose-only implementation turn after mutation became causal/legal."
                 )
             return turn
-        if visible_mutations:
-            exhausted = ", ".join(dict.fromkeys(visible_mutations))
-            raise ModelConfigurationError(
-                "Writable coder exhausted the bounded mutation retry budget for the "
-                f"current causal frontier ({exhausted}); refusing to repeat the same "
-                "failed source-edit loop without a new evidence epoch."
-            )
 
         # Observation/retrieval frontiers remain model-owned on the first attempt.
         # If the model refuses every visible action and emits prose, that prose is not
