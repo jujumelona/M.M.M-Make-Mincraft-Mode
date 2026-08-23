@@ -394,7 +394,11 @@ def test_writable_progress_stops_forcing_after_successful_source_mutation() -> N
                 {
                     "ok": True,
                     "tool": "apply_source_edit",
-                    "result": {"status": "APPLIED"},
+                    "result": {
+                        "schema_version": "mmm/source-patch-receipt-v1",
+                        "status": "APPLIED",
+                        "operations": [{"operation": "replace"}],
+                    },
                 }
             ),
         },
