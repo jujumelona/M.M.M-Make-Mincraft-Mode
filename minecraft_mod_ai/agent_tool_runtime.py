@@ -230,7 +230,6 @@ class AgentToolRuntime:
             name,
             arguments,
             external_server_ids=None,
-            enforce_model_surface=False,
         )
 
     def call_scoped(
@@ -251,7 +250,6 @@ class AgentToolRuntime:
                 for raw in external_server_ids
                 if (value := str(raw).strip())
             ),
-            enforce_model_surface=True,
         )
 
     def _call(
@@ -261,13 +259,18 @@ class AgentToolRuntime:
         arguments: Mapping[str, Any] | None,
         *,
         external_server_ids: frozenset[str] | None,
-        enforce_model_surface: bool,
     ) -> dict[str, Any]:
         selected = self._stage(stage)
         tool_name = name.strip()
         if not tool_name:
             raise AgentToolRuntimeError("tool name must not be empty")
-        if enforce_model_surface:
+
+        # A non-None external provider scope is the model-execution boundary. Host
+        # calls deliberately pass None and may reach hidden transaction primitives.
+        # Keeping this distinction in one argument prevents wrapper/API drift from a
+        # second boolean that can disagree with the provider authorization scope.
+        model_scoped = external_server_ids is not None
+        if model_scoped:
             if tool_name in _BLOCKED_MODEL_TOOLS or tool_name in _HOST_ONLY_MODEL_TOOLS:
                 raise AgentToolRuntimeError(
                     f"Tool {tool_name!r} is intentionally not model-callable."
