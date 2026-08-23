@@ -74,10 +74,10 @@ def test_tool_turn_does_not_invent_tool_specific_output_cap() -> None:
 
     assert hardware_policy._server_payload(
         adapter, request("apply_source_edit")
-    )["max_tokens"] == 8192
+    )["max_tokens"] == -1
     assert hardware_policy._server_payload(
         adapter, request("search_code_rag")
-    )["max_tokens"] == 8192
+    )["max_tokens"] == -1
 
 
 def test_work_node_preserves_output_exhaustion_without_whole_action_replay() -> None:
