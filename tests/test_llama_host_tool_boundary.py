@@ -114,16 +114,12 @@ def test_local_host_forced_qwen35_turn_is_required_and_deterministic_on_wire() -
             "function": {"name": "search_code_rag"},
         },
     )
-    request = _single_tool_request(
-        named,
-        "search_code_rag",
-        retry=False,
-        native_required=False,
-    )
+    request = _single_tool_request(named, "search_code_rag", retry=False)
 
     payload = _server_payload(adapter, request)
 
-    assert request.tool_choice == "auto"
+    assert request.tool_choice == "required"
+    assert request.parallel_tool_calls is False
     assert payload["tool_choice"] == "required"
     assert payload["temperature"] == 0.0
     assert "reasoning_effort" not in payload
