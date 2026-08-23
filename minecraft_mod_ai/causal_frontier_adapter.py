@@ -41,34 +41,6 @@ _SOURCE_MUTATION_NAMES = frozenset(
         "repair_project",
     }
 )
-_SEMANTIC_STALL_LIMIT = 2
-_PROGRESS_NOISE_KEYS = frozenset(
-    {
-        "arguments",
-        "coverage_score",
-        "created_at",
-        "cursor",
-        "duration",
-        "duration_ms",
-        "elapsed",
-        "elapsed_ms",
-        "latency",
-        "latency_ms",
-        "query",
-        "rank",
-        "relevance_score",
-        "request",
-        "request_id",
-        "score",
-        "timestamp",
-        "timing",
-        "timings",
-        "token_count",
-        "tokens",
-        "trace_id",
-        "updated_at",
-    }
-)
 
 
 class FrontierExecutionGate:
@@ -152,59 +124,6 @@ def _forced_tool_name(tool_choice: Any) -> str:
     if not isinstance(function, Mapping):
         return ""
     return str(function.get("name", "")).strip()
-
-
-def _stable_progress_value(value: Any) -> Any:
-    """Strip request echoes and volatile telemetry from an observation identity."""
-
-    if isinstance(value, Mapping):
-        return {
-            str(key): _stable_progress_value(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if str(key).strip().casefold() not in _PROGRESS_NOISE_KEYS
-        }
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_stable_progress_value(item) for item in value]
-    return value
-
-
-def _latest_tool_result_signature(
-    messages: Sequence[Mapping[str, Any]],
-) -> tuple[tuple[str, str], ...]:
-    """Return the latest successful tool results without call-id/input/telemetry noise."""
-
-    normalized: list[tuple[str, str]] = []
-    saw_tool = False
-    for message in reversed(messages):
-        role = str(message.get("role", "")).strip().casefold()
-        if role == "tool":
-            saw_tool = True
-            name = str(message.get("name", "")).strip()
-            content = message.get("content")
-            if not name or not isinstance(content, (str, Mapping)):
-                continue
-            if isinstance(content, Mapping):
-                payload: Any = content
-            else:
-                try:
-                    payload = json.loads(content)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            if not isinstance(payload, Mapping) or payload.get("ok") is not True:
-                continue
-            result = _stable_progress_value(payload.get("result"))
-            canonical = json.dumps(
-                result,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-                separators=(",", ":"),
-            )
-            normalized.append((name, canonical))
-            continue
-        if saw_tool and role == "assistant":
-            break
-    return tuple(sorted(normalized))
 
 
 def _structured_intent(payload: Mapping[str, Any]) -> str:
@@ -365,13 +284,6 @@ class CausalFrontierAdapter:
         self.authorized_surface = surface
         self.preference = dict(preference or {})
         self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
-        self._last_semantic_frontier: tuple[
-            tuple[str, ...],
-            tuple[str, ...],
-            tuple[str, ...],
-            tuple[tuple[str, str], ...],
-        ] | None = None
-        self._semantic_stall_count = 0
         self._state_ledger = CausalStateLedger()
 
     def _publish_frontier(self, names: Sequence[str]) -> None:
@@ -382,56 +294,6 @@ class CausalFrontierAdapter:
 
     def _reset_stale_guard(self) -> None:
         self._last_stale_frontier = None
-
-    def _reset_semantic_guard(self) -> None:
-        self._last_semantic_frontier = None
-        self._semantic_stall_count = 0
-
-    def _guard_semantic_progress(
-        self,
-        *,
-        state: frozenset[str],
-        goals: Sequence[str],
-        names: Sequence[str],
-        result_signature: Sequence[tuple[str, str]] = (),
-    ) -> None:
-        """Stop retrieval churn when host facts, frontier, and observations repeat.
-
-        Source-mutation retry ownership remains in the writable coder contract. This
-        guard only covers non-mutating causal frontiers. A new model query is not
-        progress by itself: only a changed reviewed tool result resets the stall, so
-        query paraphrases cannot consume the hard 12-round budget indefinitely.
-        """
-
-        normalized_names = tuple(str(name) for name in names)
-        if (
-            not state
-            or not normalized_names
-            or _SOURCE_MUTATION_NAMES.intersection(normalized_names)
-        ):
-            self._reset_semantic_guard()
-            return
-        fingerprint = (
-            tuple(sorted(state)),
-            tuple(str(goal) for goal in goals),
-            normalized_names,
-            tuple((str(name), str(result)) for name, result in result_signature),
-        )
-        if fingerprint != self._last_semantic_frontier:
-            self._last_semantic_frontier = fingerprint
-            self._semantic_stall_count = 0
-            return
-        self._semantic_stall_count += 1
-        if self._semantic_stall_count < _SEMANTIC_STALL_LIMIT:
-            return
-
-        from .model_adapters import ModelConfigurationError
-
-        raise ModelConfigurationError(
-            "Causal tool loop reached a semantic no-progress fixed point before the "
-            "hard tool-round budget: "
-            f"state={','.join(sorted(state))} tools={','.join(normalized_names)}"
-        )
 
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
@@ -446,14 +308,12 @@ class CausalFrontierAdapter:
         if not request.tools and request.tool_choice is None:
             self._publish_frontier(())
             self._reset_stale_guard()
-            self._reset_semantic_guard()
             return self.inner.generate_turn(request)
 
         candidates = self.authorized_surface or authorized_tools(request.tools)
         if not candidates:
             self._publish_frontier(())
             self._reset_stale_guard()
-            self._reset_semantic_guard()
             return self.inner.generate_turn(request)
         _assert_unique_schema_names(candidates, surface="causal-candidate")
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
@@ -506,12 +366,10 @@ class CausalFrontierAdapter:
                 tool_choice = "auto" if selected else None
                 parallel_tool_calls = True if selected else False
         selected_names = tuple(_name(schema) for schema in selected)
-        self._guard_semantic_progress(
-            state=state,
-            goals=goals,
-            names=selected_names,
-            result_signature=_latest_tool_result_signature(request.messages),
-        )
+        # Do not terminate here on a fuzzy/normalized semantic fingerprint. The core
+        # router owns exact tool-call + observation fixed-point detection, while this
+        # adapter owns only causal legality. Distinct queries/cursors/scores may be
+        # legitimate progress and must not be collapsed into a fatal stall signal.
         self._publish_frontier(selected_names)
 
         # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
