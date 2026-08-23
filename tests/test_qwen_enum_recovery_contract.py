@@ -82,31 +82,25 @@ def test_install_canonicalizes_quoted_string_before_original_decoder() -> None:
     assert fake_module._tool_semantic_completion is original_completion
 
 
-def test_tool_specific_alias_is_canonicalized_without_generation_retry() -> None:
+def test_removed_whole_file_alias_is_not_canonicalized() -> None:
     def original_decode(tool_name, key, raw, schema):
         if raw not in schema["enum"]:
             raise _outside_enum_error(tool_name, key)
         return raw
 
-    def original_completion(adapter, server_url, request):
-        return "unchanged"
-
     fake_module = SimpleNamespace(
         _decode_parameter_value=original_decode,
-        _tool_semantic_completion=original_completion,
+        _tool_semantic_completion=lambda *args, **kwargs: "unchanged",
     )
     qwen_enum_recovery.install(fake_module)
 
-    assert (
+    with pytest.raises(qwen_enum_recovery.QwenEnumValueError):
         fake_module._decode_parameter_value(
             "apply_source_edit",
             "operation",
             "update_file",
-            {"type": "string", "enum": ["replace_file", "delete_file"]},
+            {"type": "string", "enum": ["replace_exact", "delete_file"]},
         )
-        == "replace_file"
-    )
-    assert fake_module._tool_semantic_completion is original_completion
 
 
 def test_invalid_semantic_enum_becomes_typed_protocol_error_without_retry() -> None:
