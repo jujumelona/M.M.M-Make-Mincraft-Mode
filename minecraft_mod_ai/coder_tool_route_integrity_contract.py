@@ -21,6 +21,7 @@ from .causal_frontier_adapter import (
     authorized_tools,
     clear_current_frontier,
 )
+from .causal_state_ledger import supplies_fresh_evidence
 from .causal_tool_frontier_contract import _FrontierRuntimeProxy
 from .causal_tool_graph import shortest_causal_path
 
@@ -203,14 +204,27 @@ def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+def _latest_fresh_evidence_index(
+    messages: Sequence[Mapping[str, Any]],
+    schemas: Sequence[Mapping[str, Any]],
+) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        if supplies_fresh_evidence(messages[index], schemas):
+            return index
+    return -1
+
+
 def _failed_mutation_attempts(
     messages: Sequence[Mapping[str, Any]],
     name: str,
+    *,
+    evidence_schemas: Sequence[Mapping[str, Any]] = (),
 ) -> int:
-    """Count mutation observations that did not prove a reviewed source change."""
+    """Count unproven writes only inside the current corrective-evidence epoch."""
 
+    start = _latest_fresh_evidence_index(messages, evidence_schemas) + 1
     failures = 0
-    for message in messages:
+    for message in messages[start:]:
         if str(message.get("role", "")).strip().casefold() != "tool":
             continue
         if str(message.get("name", "")).strip() != name:
@@ -226,6 +240,8 @@ def _failed_mutation_attempts(
 def _preferred_visible_mutation(
     tools: Sequence[Mapping[str, Any]],
     messages: Sequence[Mapping[str, Any]],
+    *,
+    evidence_schemas: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """Choose a reviewed mutation route without depending on schema ordering."""
 
@@ -233,7 +249,14 @@ def _preferred_visible_mutation(
     for name in _MUTATION_PRIORITY:
         if name not in visible:
             continue
-        if _failed_mutation_attempts(messages, name) < _MUTATION_FAILURE_LIMIT:
+        if (
+            _failed_mutation_attempts(
+                messages,
+                name,
+                evidence_schemas=evidence_schemas,
+            )
+            < _MUTATION_FAILURE_LIMIT
+        ):
             return name
     return ""
 
@@ -334,18 +357,32 @@ class _WritableProgressAdapter:
         if _source_mutation_applied(request.messages):
             return self.inner.generate_turn(request)
 
+        evidence_schemas = tuple(
+            getattr(request, "tool_validation_schemas", ()) or request.tools
+        )
         visible_mutations = tuple(
             name
             for schema in request.tools
             if (name := _tool_name(schema)) in _MUTATION_TOOLS
         )
-        mutation = forced_name or _preferred_visible_mutation(request.tools, request.messages)
+        mutation = forced_name or _preferred_visible_mutation(
+            request.tools,
+            request.messages,
+            evidence_schemas=evidence_schemas,
+        )
         if mutation:
-            if _failed_mutation_attempts(request.messages, mutation) >= _MUTATION_FAILURE_LIMIT:
+            if (
+                _failed_mutation_attempts(
+                    request.messages,
+                    mutation,
+                    evidence_schemas=evidence_schemas,
+                )
+                >= _MUTATION_FAILURE_LIMIT
+            ):
                 raise ModelConfigurationError(
                     "Writable coder exhausted the bounded mutation retry budget for the "
                     f"current causal frontier ({mutation}); refusing to repeat the same "
-                    "failed source-edit loop."
+                    "failed source-edit loop without a new evidence epoch."
                 )
             forced = request if forced_name == mutation else _force_tool_choice(request, mutation)
             turn = self.inner.generate_turn(forced)
@@ -360,7 +397,7 @@ class _WritableProgressAdapter:
             raise ModelConfigurationError(
                 "Writable coder exhausted the bounded mutation retry budget for the "
                 f"current causal frontier ({exhausted}); refusing to repeat the same "
-                "failed source-edit loop."
+                "failed source-edit loop without a new evidence epoch."
             )
 
         # Observation/retrieval frontiers remain model-owned on the first attempt.

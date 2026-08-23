@@ -38,6 +38,8 @@ _FRESH_EVIDENCE_FACTS = frozenset(
 )
 _WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back", "drift", "uncertain"})
 _INVALIDATING_WORKSPACE_IMPACTS = frozenset({"drift", "uncertain"})
+_SAFE_RETRY_WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back"})
+_SAFE_MUTATION_FAILURE_REFRESH_LIMIT = 2
 _WORKSPACE_IMPACT_MARKERS = (
     "[workspace_impact=",
     "[mmm-workspace-impact:",
@@ -146,17 +148,6 @@ def _failed_source_mutation_workspace_impact(message: Mapping[str, Any]) -> str:
     return _workspace_impact_from_error(error)
 
 
-def _failed_source_mutation_requires_refresh(message: Mapping[str, Any]) -> bool:
-    return _failed_source_mutation_workspace_impact(message) in _INVALIDATING_WORKSPACE_IMPACTS
-
-
-def _latest_invalidating_source_mutation(messages: Sequence[Mapping[str, Any]]) -> int | None:
-    for index in range(len(messages) - 1, -1, -1):
-        if _failed_source_mutation_requires_refresh(messages[index]):
-            return index
-    return None
-
-
 def _transitions(schemas: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         transition.name: transition
@@ -194,6 +185,20 @@ def _fresh_evidence_ready(state: frozenset[str]) -> bool:
     return "evidence_ready" in state and bool(_FRESH_EVIDENCE_FACTS.intersection(state))
 
 
+def supplies_fresh_evidence(
+    message: Mapping[str, Any],
+    schemas: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Return whether one reviewed observation starts a usable evidence epoch."""
+
+    state = _advance_verified_state(
+        frozenset({"workspace_bound"}),
+        (message,),
+        schemas,
+    )
+    return _fresh_evidence_ready(state)
+
+
 @dataclass(frozen=True)
 class CausalStateSnapshot:
     state: frozenset[str]
@@ -222,6 +227,47 @@ class CausalStateLedger:
         self._query = ""
         self._refresh_required = False
         self._fresh_state = frozenset({"workspace_bound"})
+        self._safe_mutation_failures = 0
+
+    def _reset_refresh_epoch(self) -> None:
+        self._refresh_required = False
+        self._fresh_state = frozenset({"workspace_bound"})
+        self._safe_mutation_failures = 0
+
+    def _observe_refresh_policy(
+        self,
+        message: Mapping[str, Any],
+        schemas: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Turn repeated safe write failures into a corrective-evidence transition."""
+
+        impact = _failed_source_mutation_workspace_impact(message)
+        if impact:
+            if impact in _INVALIDATING_WORKSPACE_IMPACTS:
+                self._refresh_required = True
+                self._fresh_state = frozenset({"workspace_bound"})
+                self._safe_mutation_failures = 0
+                return
+            if impact in _SAFE_RETRY_WORKSPACE_IMPACTS:
+                self._safe_mutation_failures += 1
+                if self._safe_mutation_failures >= _SAFE_MUTATION_FAILURE_REFRESH_LIMIT:
+                    self._refresh_required = True
+                    self._fresh_state = frozenset({"workspace_bound"})
+                    self._safe_mutation_failures = 0
+                return
+
+        if self._refresh_required:
+            self._fresh_state = _advance_verified_state(
+                self._fresh_state,
+                (message,),
+                schemas,
+            )
+            if _fresh_evidence_ready(self._fresh_state):
+                self._reset_refresh_epoch()
+            return
+
+        if supplies_fresh_evidence(message, schemas):
+            self._safe_mutation_failures = 0
 
     def resolve(
         self,
@@ -260,18 +306,7 @@ class CausalStateLedger:
                 (message,),
                 schemas,
             )
-            if _failed_source_mutation_requires_refresh(message):
-                self._refresh_required = True
-                self._fresh_state = frozenset({"workspace_bound"})
-                continue
-            if self._refresh_required:
-                self._fresh_state = _advance_verified_state(
-                    self._fresh_state,
-                    (message,),
-                    schemas,
-                )
-                if _fresh_evidence_ready(self._fresh_state):
-                    self._refresh_required = False
+            self._observe_refresh_policy(message, schemas)
 
         self._remember_continuity(messages, signature)
         return self._snapshot(replayed=False, suffix_count=len(suffix))
@@ -309,17 +344,9 @@ class CausalStateLedger:
         )
         self._baseline_state = frozenset(host_baseline_causal_facts(messages))
         self._query = query_fn(messages)
-        failed_at = _latest_invalidating_source_mutation(messages)
-        if failed_at is None:
-            self._refresh_required = False
-            self._fresh_state = frozenset({"workspace_bound"})
-        else:
-            self._fresh_state = verified_state_from_messages(
-                messages[failed_at + 1 :],
-                schemas,
-                require_fresh_evidence=True,
-            )
-            self._refresh_required = "evidence_ready" not in self._fresh_state
+        self._reset_refresh_epoch()
+        for message in messages:
+            self._observe_refresh_policy(message, schemas)
         self._initialized = True
         self._remember_continuity(messages, signature)
         return self._snapshot(replayed=True, suffix_count=len(messages))
@@ -347,4 +374,4 @@ class CausalStateLedger:
         )
 
 
-__all__ = ["CausalStateLedger", "CausalStateSnapshot"]
+__all__ = ["CausalStateLedger", "CausalStateSnapshot", "supplies_fresh_evidence"]
