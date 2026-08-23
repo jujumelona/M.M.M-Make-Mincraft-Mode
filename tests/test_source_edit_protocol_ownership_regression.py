@@ -20,6 +20,7 @@ def test_scalar_protocol_is_the_single_source_edit_schema_owner() -> None:
     schema = scalar_protocol.SOURCE_EDIT_SCHEMA
     properties = schema["properties"]
 
+    assert agent_tool_runtime.SOURCE_EDIT_SCHEMA is schema
     assert "edits" not in properties
     assert schema["required"] == ["operation", "path"]
     assert set(properties["operation"]["enum"]) == {
@@ -36,15 +37,8 @@ def test_scalar_protocol_is_the_single_source_edit_schema_owner() -> None:
     assert "append_file" not in properties["operation"]["enum"]
 
 
-def test_scalar_protocol_install_is_validation_only_and_idempotent() -> None:
-    schema_before = scalar_protocol.SOURCE_EDIT_SCHEMA
-    materializer_before = scalar_protocol.materialize_model_source_edit
-
-    scalar_protocol.install()
-    scalar_protocol.install()
-
-    assert scalar_protocol.SOURCE_EDIT_SCHEMA is schema_before
-    assert scalar_protocol.materialize_model_source_edit is materializer_before
+def test_agent_runtime_uses_canonical_materializer_directly() -> None:
+    assert agent_tool_runtime.materialize_model_source_edit is scalar_protocol.materialize_model_source_edit
 
 
 def test_replace_exact_materializes_transactional_edit_with_host_hash(tmp_path) -> None:
