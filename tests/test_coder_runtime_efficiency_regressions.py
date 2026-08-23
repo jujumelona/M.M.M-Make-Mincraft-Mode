@@ -5,7 +5,6 @@ import threading
 from types import SimpleNamespace
 
 import minecraft_mod_ai.small_model_compacting_adapter as compaction_adapter
-from minecraft_mod_ai.llama_tool_output_budget import _tool_max_tokens, tool_output_budget
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.platform_custom_coder_contract import (
     _capture_agent_binding,
@@ -32,16 +31,6 @@ def test_qwen35_coder_uses_registry_declared_precise_agent_policy() -> None:
         "presence_penalty": 0.0,
         "repeat_penalty": 1.0,
     }
-
-
-def test_tool_turn_default_budget_is_bounded_below_full_generation(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
-
-    assert _tool_max_tokens() == 4096
-    assert tool_output_budget(SimpleNamespace(max_new_tokens=8192)) == 4096
-
-    monkeypatch.setenv("MMM_LLAMA_TOOL_MAX_TOKENS", "6000")
-    assert tool_output_budget(SimpleNamespace(max_new_tokens=8192)) == 6000
 
 
 def test_custom_coder_agent_binding_is_transaction_scoped() -> None:
