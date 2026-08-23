@@ -397,6 +397,7 @@ def test_plain_structured_output_is_joined_before_semantic_parse(monkeypatch) ->
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
     monkeypatch.setattr(adapter_module, "_completion_message", complete)
     result = adapter_module._completion_message_with_prefill(
         _adapter(),
