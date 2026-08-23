@@ -161,9 +161,9 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     tools = getattr(request, "tools", ()) or ()
     if tools:
         # Agent work is iterative: one model turn chooses/constructs the next action,
-        # the host executes it, then the observation drives the following turn.  An
+        # the host executes it, then the observation drives the following turn. An
         # unlimited model-level max_new_tokens therefore must not become an unlimited
-        # *single action* decode and consume the entire context before the host can act.
+        # single action decode and consume the entire context before the host can act.
         payload["max_tokens"] = _tool_action_max_tokens(payload["max_tokens"])
         required_name = _required_tool_name(request)
         visible_tools = tuple(tools)
@@ -629,11 +629,23 @@ def install(autotune_module: Any) -> None:
                 args.append("--metrics")
             if "--slots" not in args:
                 args.append("--slots")
+            extra = getattr(config, "extra", {})
+            if (
+                isinstance(extra, Mapping)
+                and str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
+                and "--reasoning" not in args
+            ):
+                # Current llama.cpp deprecates the old Qwen enable_thinking template
+                # switch in favor of the server reasoning policy. Tool/action turns
+                # must not spend their entire decode budget in hidden reasoning before
+                # the host receives the next action.
+                args.extend(["--reasoning", "off"])
             return args
 
         adaptive_base_args._mmm_auto_gpu_layers = True  # type: ignore[attr-defined]
         adaptive_base_args._mmm_single_decode_slot = True  # type: ignore[attr-defined]
         adaptive_base_args._mmm_native_telemetry_endpoints = True  # type: ignore[attr-defined]
+        adaptive_base_args._mmm_qwen_reasoning_off = True  # type: ignore[attr-defined]
         autotune_module._base_args = adaptive_base_args
 
     original_variant = autotune_module._variant_args
