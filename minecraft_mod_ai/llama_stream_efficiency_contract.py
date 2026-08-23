@@ -85,8 +85,6 @@ def _raw_qwen_action_complete(message: Mapping[str, Any]) -> bool:
             continue
         wrapped = value.find(_TOOL_CALL_OPEN)
         if wrapped >= 0:
-            # Once a wrapped tool call starts, only its outer close is executable.
-            # Stopping at </function> would hand an incomplete envelope to the parser.
             return value.find(
                 _TOOL_CALL_CLOSE,
                 wrapped + len(_TOOL_CALL_OPEN),
@@ -230,19 +228,6 @@ class _StreamingCompletionClient:
                     )
                     break
 
-        if (
-            stop_on_action
-            and saw_done
-            and not semantic_action_complete
-            and str(finish_reason or "").strip().casefold() == "length"
-        ):
-            # Tool actions must never be converted into paged assistant prose. If the
-            # envelope did not close, no action is executable and the original failure
-            # must reach the caller instead of entering assistant-prefill continuation.
-            raise RuntimeError(
-                "required tool action did not close before llama-server context boundary; "
-                "refusing assistant-prefill continuation"
-            )
         if not saw_done and not semantic_action_complete:
             raise RuntimeError("llama server stream ended before a semantic completion boundary")
 
