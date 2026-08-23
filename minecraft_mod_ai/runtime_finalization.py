@@ -36,9 +36,6 @@ def finalize_runtime() -> None:
                 "attempt failed after partial mutation; restart the process before "
                 "retrying"
             )
-        # Intentionally cleared only after every installer and preflight succeeds.
-        # Any exception leaves the process poisoned so already-applied wrappers cannot
-        # be replayed on top of themselves by a later import/finalization attempt.
         _FINALIZING = True
 
         from . import agent_capability_context
@@ -49,6 +46,7 @@ def finalize_runtime() -> None:
         from . import external_mcp_router
         from . import external_procedural_skill_contract
         from . import llama_server_autotune
+        from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
         from . import mcp_transport_pool
         from . import model_router
@@ -102,29 +100,14 @@ def finalize_runtime() -> None:
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
         from .tool_validation_surface_contract import install as install_tool_validation_surface
 
-        # Order is semantic. Route integrity must come after bootstrap because adaptive
-        # retrieval replaces ModelRouter._generate_with_tools late. Structured intent
-        # comes after route integrity because route integrity also installs a legacy
-        # user-only query wrapper; the structured projection must own the final call.
         install_agent_mcp_transport_pool()
-        # Raw tools/list is the source contract for both the first-party MCP server and
-        # reviewed external providers. Reject duplicate names and malformed/non-object
-        # input schemas before any model-facing layer can normalize them into a weaker
-        # permissive shape. Then bind external schema discovery to the exact provider
-        # that executes it so route failover cannot swap schema A for provider B.
         install_mcp_schema_integrity(
             agent_tool_runtime,
             external_agent_bridge,
             external_mcp_router,
         )
         install_external_mcp_binding(external_agent_bridge, external_mcp_router)
-        # The bridge is shared across concurrent model agents. Keep one reviewed schema
-        # owner per exact stage/target/access/provider scope so a simultaneous schema
-        # refresh cannot replace the provider contract another request already saw.
         install_external_mcp_binding_concurrency(external_agent_bridge)
-        # Remove event-loop blocking queue backpressure, unrelated-provider global
-        # serialization, and query-time semantic-LSH reconciliation only after the
-        # safety/ownership contracts above have established the execution boundaries.
         install_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
             external_mcp_router_module=external_mcp_router,
@@ -132,18 +115,11 @@ def finalize_runtime() -> None:
         )
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
-        # One source-write surface only: apply_source_edit is model-facing and compiles
-        # to the host-only apply_source_patch transaction primitive. No complete-file
-        # patch projection or byte-page wrapper is installed around it.
         install_scalar_source_edit_protocol(
             small_model_execution_extensions_contract,
             agent_tool_runtime,
         )
-        # Procedural skill IDs are content commitments. Persistent JSONL is mutable, so
-        # reject rows whose current content no longer hashes to their declared skill_id
-        # before dependency composition can collapse identities in a dict.
         install_procedural_skill_identity(external_procedural_skill_contract)
-        # The final runtime boundary has exactly one model-facing source-write owner.
         install_tool_schema_ownership(
             agent_tool_runtime,
             expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
@@ -153,80 +129,32 @@ def finalize_runtime() -> None:
             small_model_module=small_model_max_agent_contract,
             causal_module=causal_tool_frontier_contract,
         )
-        # A stale but authorized action is parser-valid yet not executable on a later
-        # causal frontier. Consume it before the core loop and force one legal frontier
-        # correction rather than manufacturing a failed tool observation and crashing
-        # when the model repeats the stale action.
         install_stale_tool_recovery(causal_tool_frontier_contract)
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
-        # The live module producer owns output exhaustion inside its resumable staged
-        # workspace. The durable boundary preserves the typed failure but never
-        # replays the whole node or its retrieval/tool side effects.
         install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
-        # Exact host-required calls have one policy owner across transports. The local
-        # Qwen transport narrows a required turn to one schema and returns control at
-        # the completed action envelope so the router can execute and observe it.
         install_forced_tool_execution(
             openai_compatible_module=openai_compatible,
             llama_cpp_module=llama_cpp_adapter,
         )
-        # RAG build/search may call embed/rerank repeatedly. Install this before the
-        # structural preflight so a fresh process cannot silently regress to per-call
-        # CPU model construction.
         install_retrieval_residency(model_router_module=model_router)
-        # Baseline repository observation and pre-design code search are host-local
-        # lexical/graph work. Do not silently load CPU embedding/reranker models merely
-        # because the registry exposes them; dense escalation is explicit opt-in.
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
-        # Bootstrap installs an early compactor, but adaptive retrieval later replaces
-        # the tool loop instead of delegating through that old callable. Re-bind the
-        # compactor here, after every loop owner, so it is on the executable path.
         install_small_model_compaction(model_router)
-        # Alias ACIs share one reviewed permission namespace with their canonical tool.
-        # Normalize before the already-composed Skill permission stack so late wrapper
-        # rebinding cannot make an alias report a narrower authorization set.
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
-        # MTP-capable llama.cpp profiles already reuse prompt state through the native
-        # prompt cache. Drop the duplicate RAM arena only for those profiles, while
-        # keeping the generic bounded cache reservation for non-MTP launches.
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
-        # Ordinary top-level llama.cpp turns may use the model/runtime prediction policy.
-        # Tool execution is now stopped by semantic action completion, not a hidden
-        # token-count wrapper.
         install_llama_unbounded_generation(llama_server_hardware_policy)
-        # Parse stale but host-authorized tool names against the complete authorized
-        # surface; execution remains restricted by the per-turn causal visibility gate.
         install_tool_validation_surface()
-        # Qwen tagged string parameters occasionally include harmless JSON quoting or
-        # formatting drift. Canonicalize only uniquely equivalent enum spellings here.
-        # Semantic mismatches remain typed parser failures; causal stale recovery is the
-        # single owner of any model-action re-synchronization.
         install_qwen_enum_recovery(llama_cpp_adapter)
-        # llama.cpp reports both output-cap exhaustion and context pressure as
-        # finish_reason='length'. Classify them before resilience wrappers are bound so
-        # only genuine context pressure triggers observation compaction/retry.
         install_llama_finish_reason(llama_cpp_adapter)
-        # A transient local inference failure occurs before any semantic turn reaches
-        # ModelRouter, so exactly one transport retry cannot duplicate a tool action.
         install_llama_server_response_resilience(llama_cpp_adapter)
-        # A remaining context-pressure length stop recovers once by compacting tool
-        # observations. Semantic tool actions should normally return before this path.
         install_llama_length_resilience(llama_cpp_adapter)
-        # Bootstrap's integrity stage runs before these late finalization wrappers are
-        # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
-        # fails before any retrieval/model work instead of surfacing during generation.
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
             external_mcp_router_module=external_mcp_router,
             research_rag_performance_module=research_rag_performance,
         )
         verify_installed_wrappers()
-        # Exercise the exact first assistant + parallel 48 KiB tool-observation shape
-        # that previously reached the server boundary before a second assistant turn.
         run_context_budget_preflight()
-        # Marker inheritance cannot prove that a wrapper executes. Verify the concrete
-        # code-object order of the final ModelRouter path before any model is loaded.
         run_runtime_live_path_preflight()
         run_runtime_preflight()
         _FINALIZED = True
