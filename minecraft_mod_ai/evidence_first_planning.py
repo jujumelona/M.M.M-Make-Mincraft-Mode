@@ -454,9 +454,6 @@ def normalize_component_catalog(
         content_sha256 = _normalize_sha(
             item.get("content_sha256") or item.get("sha256") or item.get("content_hash")
         )
-        verification_status = str(
-            item.get("verification_status") or item.get("status") or "unverified"
-        ).strip().casefold()
         bound_to_project = bool(
             inventory_attested
             and origin in {"same_project", "existing_project", "workspace"}
@@ -870,7 +867,7 @@ def _semantic_steps(
     branches: Mapping[str, Mapping[str, Any]],
 ) -> tuple[_Step, ...]:
     folded = capability.casefold()
-    root = f"target:frozen"
+    root = "target:frozen"
     if any(term in folded for term in ("worldgen", "biome", "placed_feature", "configured_feature", "structure", "dimension")):
         configured = f"configured:{capability}"
         placed = f"placed:{capability}"
