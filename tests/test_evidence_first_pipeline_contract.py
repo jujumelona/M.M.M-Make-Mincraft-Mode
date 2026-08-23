@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,71 +19,32 @@ class _Batch:
     acceptance_tests: tuple[str, ...] = ()
 
 
-def test_semantic_branches_use_exact_requirement_evidence() -> None:
-    requirements = [
-        {
-            "requirement_id": "req_network",
-            "capability": "network.trade_sync",
-            "statement": "Synchronize server-authoritative trade state.",
-            "provides": ["capability:network.trade_sync"],
-            "source_span": {"text": "Synchronize server-authoritative trade state."},
-        },
-        {
-            "requirement_id": "req_music",
-            "capability": "music.syncopation",
-            "statement": "Add syncopation to music playback.",
-            "provides": ["capability:music.syncopation"],
-            "source_span": {"text": "Add syncopation to music playback."},
-        },
-    ]
+def test_install_keeps_existing_planning_and_target_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from minecraft_mod_ai import evidence_first_planning, platform_resolver
 
-    branches = contract._semantic_branch_predicates(
-        requirements,
-        (),
-        {"project_topology": {"loaders": ["fabric"]}},
+    branch_owner = evidence_first_planning._branch_predicates
+    target_owner = platform_resolver._optimize
+    calls: list[str] = []
+
+    monkeypatch.setattr(contract, "_INSTALLED", False)
+    monkeypatch.setattr(
+        contract,
+        "_install_handoff_owner",
+        lambda: calls.append("handoff"),
+    )
+    monkeypatch.setattr(
+        contract,
+        "_install_execution_impact",
+        lambda: calls.append("execution"),
     )
 
-    assert branches["needs_network"]["status"] == "ACTIVE"
-    assert branches["needs_network"]["evidence_refs"] == ["req_network"]
-    assert branches["needs_registry"]["status"] == "NOT_APPLICABLE"
-    assert branches["needs_loader_leaf"]["status"] == "NOT_APPLICABLE"
+    contract.install()
 
-
-def test_semantic_branches_bind_multiloader_to_target_topology() -> None:
-    branches = contract._semantic_branch_predicates(
-        (),
-        (),
-        {"project_topology": {"loaders": ["fabric", "neoforge"]}},
-    )
-
-    assert branches["needs_loader_leaf"] == {
-        "predicate": "needs_loader_leaf",
-        "status": "ACTIVE",
-        "evidence_refs": ["target-topology:multiple-loaders"],
-        "reason": "activated by exact requirement/component/topology evidence",
-    }
-
-
-def test_automatic_target_rejects_base_optimizer_fallback() -> None:
-    result = SimpleNamespace()
-
-    with pytest.raises(ValueError, match="joint evidence-backed reuse optimization"):
-        contract._require_evidence_backed_optimization(
-            result,
-            automatic_target=True,
-        )
-
-    result._mmm_reuse_plan = {
-        "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
-        "capabilities": [{"capability": "trade.transaction", "mode": "fresh"}],
-    }
-    assert (
-        contract._require_evidence_backed_optimization(
-            result,
-            automatic_target=True,
-        )
-        is result
-    )
+    assert calls == ["handoff", "execution"]
+    assert evidence_first_planning._branch_predicates is branch_owner
+    assert platform_resolver._optimize is target_owner
 
 
 def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,16 +53,8 @@ def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> No
         "request_catalog": {
             "prompt_sha256": "prompt-sha",
             "requirements": [
-                {
-                    "requirement_id": "req_a",
-                    "capability": "a",
-                    "statement": "A",
-                },
-                {
-                    "requirement_id": "req_b",
-                    "capability": "b",
-                    "statement": "B",
-                },
+                {"requirement_id": "req_a", "capability": "a", "statement": "A"},
+                {"requirement_id": "req_b", "capability": "b", "statement": "B"},
             ],
         },
         "tasks": [
@@ -118,25 +70,23 @@ def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> No
                 "task_id": "task_b",
                 "semantic_outcome": "Implement B",
                 "requirement_refs": ["req_b"],
-                # Intentionally empty: live lowering must use the handoff graph edge.
                 "depends_on": [],
                 "provides": ["b"],
                 "acceptance": ["B passes"],
             },
         ],
     }
+    monkeypatch.setattr(contract, "validate_evidence_first_plan", lambda _plan: None)
     monkeypatch.setattr(
         contract,
         "build_evidence_first_handoff",
         lambda _plan: {
+            "source_plan_sha256": "plan-sha",
             "handoff_sha256": "handoff-sha",
             "work_graph": {
                 "task_refs": ["task_a", "task_b"],
                 "edges": [
-                    {
-                        "from_task_ref": "task_a",
-                        "to_task_ref": "task_b",
-                    }
+                    {"from_task_ref": "task_a", "to_task_ref": "task_b"}
                 ],
             },
             "production_modules": [
@@ -170,8 +120,33 @@ def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
 
-def test_execution_observation_replans_only_on_unexpected_index_drift() -> None:
-    tasks = [
+def test_handoff_must_bind_the_exact_validated_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = {
+        "plan_sha256": "expected",
+        "request_catalog": {"requirements": []},
+        "tasks": [],
+    }
+    monkeypatch.setattr(contract, "validate_evidence_first_plan", lambda _plan: None)
+    monkeypatch.setattr(
+        contract,
+        "build_evidence_first_handoff",
+        lambda _plan: {
+            "source_plan_sha256": "stale",
+            "handoff_sha256": "handoff",
+            "work_graph": {"task_refs": [], "edges": []},
+            "production_modules": [],
+            "asset_requests": [],
+        },
+    )
+
+    with pytest.raises(ValueError, match="exact source plan hash"):
+        contract._batches_from_handoff(plan, batch_type=_Batch)
+
+
+def _impact_tasks() -> list[dict]:
+    return [
         {
             "task_id": "task_a",
             "depends_on": [],
@@ -183,70 +158,72 @@ def test_execution_observation_replans_only_on_unexpected_index_drift() -> None:
             "owned_paths": ["src/main/java/example/B.java"],
         },
     ]
-    observation = {
+
+
+def _observation() -> dict:
+    return {
         "schema_version": "mmm/semantic-task-observation-v1",
         "task_id": "task_a",
         "touched_paths": ["src/main/java/example/A.java"],
         "affected_downstream_task_ids": ["task_b"],
         "observation_sha256": "old",
     }
-    previous_index = {
+
+
+def _index(a: str, b: str) -> dict:
+    return {
         "files": [
-            {
-                "path": "src/main/java/example/A.java",
-                "sha256": "sha256:old-a",
-            },
-            {
-                "path": "src/main/java/example/B.java",
-                "sha256": "sha256:old-b",
-            },
+            {"path": "src/main/java/example/A.java", "sha256": a},
+            {"path": "src/main/java/example/B.java", "sha256": b},
         ]
     }
 
-    expected_only = {
-        "files": [
-            {
-                "path": "src/main/java/example/A.java",
-                "sha256": "sha256:new-a",
-            },
-            {
-                "path": "src/main/java/example/B.java",
-                "sha256": "sha256:old-b",
-            },
-        ]
-    }
+
+def test_execution_observation_replans_only_incomplete_affected_tasks() -> None:
+    previous = _index("sha256:old-a", "sha256:old-b")
+    expected_only = _index("sha256:new-a", "sha256:old-b")
+
     enriched = contract._enrich_execution_observation(
-        observation,
-        tasks=tasks,
-        previous_index=previous_index,
+        _observation(),
+        tasks=_impact_tasks(),
+        previous_index=previous,
         current_index=expected_only,
         completed_task_ids=(),
     )
-    assert enriched["replan_required"] is False
-    assert enriched["impact_replan_scope"] == ["task_b"]
 
-    unexpected_drift = {
-        "files": [
-            {
-                "path": "src/main/java/example/A.java",
-                "sha256": "sha256:new-a",
-            },
-            {
-                "path": "src/main/java/example/B.java",
-                "sha256": "sha256:external-change",
-            },
-        ]
-    }
+    assert enriched["replan_required"] is True
+    assert enriched["impact_replan_scope"] == ["task_b"]
+    assert enriched["unexpected_drift_paths"] == []
+    assert enriched["observation_sha256"].startswith("sha256:")
+
+    completed = contract._enrich_execution_observation(
+        _observation(),
+        tasks=_impact_tasks(),
+        previous_index=previous,
+        current_index=expected_only,
+        completed_task_ids=("task_b",),
+    )
+    assert completed["replan_required"] is False
+    assert completed["impact_replan_scope"] == []
+
+
+def test_execution_observation_records_unexpected_index_drift() -> None:
+    previous = _index("sha256:old-a", "sha256:old-b")
+    unexpected = _index("sha256:new-a", "sha256:external-change")
+
     enriched = contract._enrich_execution_observation(
-        observation,
-        tasks=tasks,
-        previous_index=previous_index,
-        current_index=unexpected_drift,
+        _observation(),
+        tasks=_impact_tasks(),
+        previous_index=previous,
+        current_index=unexpected,
         completed_task_ids=(),
     )
+
     assert enriched["replan_required"] is True
+    assert enriched["unexpected_drift_paths"] == [
+        "src/main/java/example/B.java"
+    ]
     assert set(enriched["project_index_refresh"]["changed_paths"]) == {
         "src/main/java/example/A.java",
         "src/main/java/example/B.java",
     }
-    assert enriched["observation_sha256"].startswith("sha256:")
