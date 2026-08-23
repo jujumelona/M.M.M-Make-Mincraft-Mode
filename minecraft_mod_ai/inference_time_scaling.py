@@ -133,8 +133,6 @@ def _install_generation_replay(search: Any) -> None:
     setattr(strategy_generate_with_branch, _REPLAY_MARKER, True)
     strategy_cls.generate_text = strategy_generate_with_branch
 
-    # Preserve the original independent strategy families while making candidate
-    # intent explicit about trajectory reuse/failure avoidance.
     search._STRATEGIES = (
         "minimal_surface_area_fresh",
         "api_contract_verified_trajectory_replay",
@@ -166,6 +164,11 @@ def _install_search_width(generation_search: Any, repair_search: Any) -> None:
 
         @wraps(current_repair_count)
         def repair_candidate_count(self: Any, evidence: Mapping[str, Any], memory: Sequence[Mapping[str, Any]]) -> int:
+            # Candidate search is an execution-time repair policy. A direct, read-only
+            # patch-synthesis call has no bound project root, staging snapshot, or
+            # verifier surface, so fanning it out would only duplicate model calls.
+            if getattr(self, "_mmm_agentic_root", None) is None:
+                return 1
             base = int(current_repair_count(self, evidence, memory))
             mode = _scaling_mode()
             if mode == "off":

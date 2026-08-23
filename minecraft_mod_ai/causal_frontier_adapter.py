@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Per-turn causal tool exposure for the live retrieve/act/observe loop."""
 
+import hashlib
 import json
 import sys
 import threading
@@ -39,6 +40,18 @@ _SOURCE_MUTATION_NAMES = frozenset(
         "apply_source_edit",
         "apply_java_operations",
         "repair_project",
+    }
+)
+_VOLATILE_RESULT_KEYS = frozenset(
+    {
+        "query",
+        "score",
+        "elapsed_ms",
+        "duration_ms",
+        "latency_ms",
+        "timing_ms",
+        "request_id",
+        "trace_id",
     }
 )
 
@@ -124,6 +137,53 @@ def _forced_tool_name(tool_choice: Any) -> str:
     if not isinstance(function, Mapping):
         return ""
     return str(function.get("name", "")).strip()
+
+
+def _stable_result_value(value: Any) -> Any:
+    """Remove request/telemetry noise while preserving evidence identity."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_result_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key).casefold() not in _VOLATILE_RESULT_KEYS
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_stable_result_value(item) for item in value]
+    return value
+
+
+def _latest_tool_result_signature(
+    messages: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Fingerprint the latest observation by evidence, not query or telemetry noise."""
+
+    for message in reversed(messages):
+        if str(message.get("role", "")).casefold() != "tool":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                payload = content
+        else:
+            payload = content
+        if isinstance(payload, Mapping) and "result" in payload:
+            payload = payload.get("result")
+        stable = {
+            "tool": str(message.get("name", "")),
+            "result": _stable_result_value(payload),
+        }
+        encoded = json.dumps(
+            stable,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return None
 
 
 def _structured_intent(payload: Mapping[str, Any]) -> str:
@@ -276,14 +336,13 @@ class CausalFrontierAdapter:
         self.frontier_limit = max(1, min(int(frontier_limit), 3))
         self.execution_gate = execution_gate
         self.request_template = request_template
-        # Freeze these once for the whole live tool loop. Nested model/retrieval calls
-        # may update the compatibility ContextVars, but they must never replace this
-        # coder turn's security-filtered authorization or query preference.
         surface = tuple(authorized_surface)
         _assert_unique_schema_names(surface, surface="causal-authorized")
         self.authorized_surface = surface
         self.preference = dict(preference or {})
         self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+        self._semantic_stall_fingerprint: tuple[Any, ...] | None = None
+        self._semantic_stall_count = 0
         self._state_ledger = CausalStateLedger()
 
     def _publish_frontier(self, names: Sequence[str]) -> None:
@@ -295,6 +354,40 @@ class CausalFrontierAdapter:
     def _reset_stale_guard(self) -> None:
         self._last_stale_frontier = None
 
+    def _guard_semantic_progress(
+        self,
+        *,
+        state: frozenset[str],
+        goals: Sequence[str],
+        names: Sequence[str],
+        result_signature: str | None = None,
+    ) -> None:
+        """Fail closed on repeated read frontiers with no new causal evidence."""
+
+        from .model_adapters import ModelConfigurationError
+
+        normalized_names = tuple(str(name) for name in names)
+        if not normalized_names or any(name in _SOURCE_MUTATION_NAMES for name in normalized_names):
+            self._semantic_stall_fingerprint = None
+            self._semantic_stall_count = 0
+            return
+        fingerprint = (
+            tuple(sorted(str(value) for value in state)),
+            tuple(str(value) for value in goals),
+            normalized_names,
+            result_signature,
+        )
+        if fingerprint == self._semantic_stall_fingerprint:
+            self._semantic_stall_count += 1
+        else:
+            self._semantic_stall_fingerprint = fingerprint
+            self._semantic_stall_count = 1
+        if self._semantic_stall_count >= 3:
+            raise ModelConfigurationError(
+                "Causal retrieval reached a semantic no-progress fixed point before "
+                "the hard round guard."
+            )
+
     def generate_turn(self, request: Any) -> Any:
         from .causal_tool_frontier_contract import goals_for_query
         from .model_adapters import ModelConfigurationError
@@ -302,18 +395,17 @@ class CausalFrontierAdapter:
         if self.request_template is not None:
             request = _restore_derived_request(self.request_template, request)
 
-        # The core loop intentionally emits an explicit tools=() request for
-        # fixed-point/final synthesis. That is a control signal, not a new planning
-        # round; never resurrect the broader authorization ContextVar on that turn.
         if not request.tools and request.tool_choice is None:
             self._publish_frontier(())
             self._reset_stale_guard()
+            self._guard_semantic_progress(state=frozenset(), goals=(), names=())
             return self.inner.generate_turn(request)
 
         candidates = self.authorized_surface or authorized_tools(request.tools)
         if not candidates:
             self._publish_frontier(())
             self._reset_stale_guard()
+            self._guard_semantic_progress(state=frozenset(), goals=(), names=())
             return self.inner.generate_turn(request)
         _assert_unique_schema_names(candidates, surface="causal-candidate")
         by_name = {_name(schema): schema for schema in candidates if _name(schema)}
@@ -350,13 +442,6 @@ class CausalFrontierAdapter:
             selected = tuple(by_name[name] for name in names if name in by_name)
             selected_names = tuple(_name(schema) for schema in selected)
             if len(selected_names) == 1 and selected_names[0] in _SOURCE_MUTATION_NAMES:
-                # A causal frontier with exactly one writable transition is already a
-                # host decision. Leaving that transition as ``auto`` lets a small local
-                # model spend an entire context window narrating or reproducing source
-                # instead of closing the bounded action envelope. Promote only this
-                # unambiguous mutation frontier to a named required call. The normal
-                # tool loop executes it, appends the observation, then recomputes the
-                # next frontier; no arbitrary token cap or whole-turn replay is needed.
                 tool_choice = {
                     "type": "function",
                     "function": {"name": selected_names[0]},
@@ -366,18 +451,15 @@ class CausalFrontierAdapter:
                 tool_choice = "auto" if selected else None
                 parallel_tool_calls = True if selected else False
         selected_names = tuple(_name(schema) for schema in selected)
-        # Do not terminate here on a fuzzy/normalized semantic fingerprint. The core
-        # router owns exact tool-call + observation fixed-point detection, while this
-        # adapter owns only causal legality. Distinct queries/cursors/scores may be
-        # legitimate progress and must not be collapsed into a fatal stall signal.
+        if not forced_name:
+            self._guard_semantic_progress(
+                state=state,
+                goals=goals,
+                names=selected_names,
+                result_signature=_latest_tool_result_signature(request.messages),
+            )
         self._publish_frontier(selected_names)
 
-        # GenerationRequest is a frozen dataclass. ``replace`` preserves every field
-        # owned by upstream contracts (including future additions) while changing only
-        # the per-turn causal surface and injected capability context. The broader
-        # validation surface lets a transport parser understand a stale but authorized
-        # tool reference; FrontierExecutionGate still rejects execution unless that
-        # tool is present in ``selected`` on this exact turn.
         rebuilt = replace(
             request,
             messages=_with_capability_context(
@@ -431,6 +513,7 @@ class CausalFrontierAdapter:
 __all__ = [
     "CausalFrontierAdapter",
     "FrontierExecutionGate",
+    "_latest_tool_result_signature",
     "authorized_tool_preference",
     "authorized_tools",
     "clear_current_frontier",
