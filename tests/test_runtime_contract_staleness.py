@@ -28,7 +28,7 @@ def test_forced_tool_finalization_does_not_depend_on_local_private_helpers() -> 
 
     assert getattr(
         RemoteAdapter.generate_turn,
-        "_mmm_forced_tool_execution_v1",
+        "_mmm_forced_tool_execution_v2",
         False,
     ) is True
 
