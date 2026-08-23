@@ -4,68 +4,38 @@ import hashlib
 
 import pytest
 
-from minecraft_mod_ai.agent_tool_runtime import (
-    AgentToolRuntime,
-    AgentToolRuntimeError,
-    _MODEL_SOURCE_PATCH_SCHEMA,
-    _materialize_model_source_patch,
+from minecraft_mod_ai import agent_tool_runtime
+from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime, AgentToolRuntimeError
+from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+    SOURCE_EDIT_SCHEMA,
+    materialize_model_source_edit,
 )
-from minecraft_mod_ai.mcp_schema_integrity_contract import ensure_schema_environment
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
 
 def _project(workspace, name: str = "demo"):
     project = workspace / name
-    (project / "src").mkdir(parents=True)
+    (project / "src/main/java/example").mkdir(parents=True)
     (project / "settings.gradle").write_text('rootProject.name = "demo"\n', encoding="utf-8")
     return project
 
 
-def _capture_first_party_payload(runtime, monkeypatch):
-    captured = {}
-    # Production caches are now owned by the exact MCP child environment. Establish
-    # that identity before intentionally priming this unit-test cache; otherwise the
-    # fail-closed runtime correctly invalidates this synthetic pre-owner cache.
-    ensure_schema_environment(runtime, "generation")
-    runtime._schema_cache["generation"] = ()
-    runtime._allowed_tool_cache["generation"] = frozenset({"apply_source_patch"})
-
-    def fake_run_async(_function, *args):
-        captured["args"] = args
-        return {
-            "structured_content": {"ok": True},
-            "text": [],
-            "parsed_text": None,
-            "resources": [],
-        }
-
-    monkeypatch.setattr(runtime, "_run_async", fake_run_async)
-    return captured
+def _source_edit_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "semantic edit",
+            "parameters": SOURCE_EDIT_SCHEMA,
+        },
+    }
 
 
-def test_model_source_patch_schema_exposes_only_bounded_anchored_edits() -> None:
-    assert _MODEL_SOURCE_PATCH_SCHEMA["required"] == ["files"]
-    assert set(_MODEL_SOURCE_PATCH_SCHEMA["properties"]) == {"files"}
-    files = _MODEL_SOURCE_PATCH_SCHEMA["properties"]["files"]
-    assert files["maxItems"] == 4
-    file_schema = files["items"]
-    assert file_schema["required"] == ["path", "edits"]
-    assert set(file_schema["properties"]) == {"path", "edits"}
-    edits = file_schema["properties"]["edits"]
-    assert edits["maxItems"] == 8
-    assert edits["items"]["required"] == ["old_text", "new_text"]
-    assert set(edits["items"]["properties"]) == {"old_text", "new_text"}
-    assert "content" not in file_schema["properties"]
-    assert "operation" not in file_schema["properties"]
-    assert "expected_sha256" not in file_schema["properties"]
-    assert "project_root" not in _MODEL_SOURCE_PATCH_SCHEMA["properties"]
-
-
-def test_generation_tool_schema_hides_raw_patch_protocol(monkeypatch, tmp_path) -> None:
+def test_generation_tool_schema_hides_raw_patch_and_exposes_one_semantic_edit(monkeypatch, tmp_path) -> None:
     runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
-    raw_schema = {
+    raw_patch = {
         "name": "apply_source_patch",
-        "description": "raw strict patch",
+        "description": "host transaction primitive",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -75,21 +45,27 @@ def test_generation_tool_schema_hides_raw_patch_protocol(monkeypatch, tmp_path) 
             "required": ["project_root", "operations"],
         },
     }
-    monkeypatch.setattr(runtime, "_run_async", lambda *_args: [raw_schema])
+    monkeypatch.setattr(runtime, "_run_async", lambda *_args: [raw_patch])
     monkeypatch.setattr(runtime._external_bridge, "tool_schemas", lambda _stage: ())
 
     exposed = runtime.tool_schemas("generation")
+    names = [item["function"]["name"] for item in exposed]
 
-    patch_tool = next(
-        item for item in exposed if item["function"]["name"] == "apply_source_patch"
-    )
-    assert patch_tool["function"]["parameters"] == _MODEL_SOURCE_PATCH_SCHEMA
-    assert set(patch_tool["function"]["parameters"]["properties"]) == {"files"}
+    assert "apply_source_patch" not in names
+    assert names.count("apply_source_edit") == 1
+    source_edit = next(item for item in exposed if item["function"]["name"] == "apply_source_edit")
+    assert source_edit["function"]["parameters"] == SOURCE_EDIT_SCHEMA
 
 
 def test_host_stage_call_preserves_raw_strict_patch_contract(monkeypatch, tmp_path) -> None:
     runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
-    captured = _capture_first_party_payload(runtime, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def fake_run_async(_function, *args):
+        captured["args"] = args
+        return {"structured_content": {"ok": True}}
+
+    monkeypatch.setattr(runtime, "_run_async", fake_run_async)
     raw = {
         "project_root": "demo",
         "operations": [
@@ -106,27 +82,44 @@ def test_host_stage_call_preserves_raw_strict_patch_contract(monkeypatch, tmp_pa
     assert captured["args"] == ("generation", "apply_source_patch", raw)
 
 
-def test_model_scoped_call_materializes_host_patch_metadata(monkeypatch, tmp_path) -> None:
+def test_model_scoped_call_rejects_host_only_patch_protocol(tmp_path) -> None:
+    runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
+
+    with pytest.raises(AgentToolRuntimeError, match="not model-callable"):
+        runtime.call_scoped(
+            "generation",
+            "apply_source_patch",
+            {"project_root": "demo", "operations": []},
+            external_server_ids=(),
+        )
+
+
+def test_model_scoped_source_edit_materializes_internal_patch(monkeypatch, tmp_path) -> None:
     workspace = tmp_path / "workspace"
-    _project(workspace)
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    source.write_text("final class Example { int oldValue; }\n", encoding="utf-8")
+    before = source.read_bytes()
     runtime = AgentToolRuntime(profile="test", workspace_root=workspace)
-    captured = _capture_first_party_payload(runtime, monkeypatch)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(runtime, "tool_schemas", lambda _stage: (_source_edit_tool(),))
+    runtime._allowed_tool_cache["generation"] = frozenset({"apply_source_edit"})
+
+    def fake_run_async(_function, *args):
+        captured["args"] = args
+        return {"structured_content": {"ok": True}}
+
+    monkeypatch.setattr(runtime, "_run_async", fake_run_async)
 
     runtime.call_scoped(
         "generation",
-        "apply_source_patch",
+        "apply_source_edit",
         {
-            "files": [
-                {
-                    "path": "src/main/java/example/Example.java",
-                    "edits": [
-                        {
-                            "old_text": "",
-                            "new_text": "package example;\nfinal class Example {}\n",
-                        }
-                    ],
-                }
-            ]
+            "operation": "replace_exact",
+            "path": "src/main/java/example/Example.java",
+            "old": "oldValue",
+            "new": "newValue",
         },
         external_server_ids=(),
     )
@@ -137,189 +130,52 @@ def test_model_scoped_call_materializes_host_patch_metadata(monkeypatch, tmp_pat
     assert payload["project_root"] == "demo"
     assert payload["operations"] == [
         {
-            "operation": "create",
+            "operation": "edit",
             "path": "src/main/java/example/Example.java",
-            "content": "package example;\nfinal class Example {}\n",
+            "expected_sha256": "sha256:" + hashlib.sha256(before).hexdigest(),
+            "replacements": [{"old": "oldValue", "new": "newValue", "count": 1}],
         }
     ]
 
 
-def test_host_resolves_project_and_applies_unique_span_with_exact_sha(tmp_path) -> None:
+def test_host_materializes_unique_span_with_exact_sha(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
-    source.parent.mkdir(parents=True)
     old = "package example;\nfinal class Example {}\n"
-    updated = "package example;\nfinal class Example { int value = 1; }\n"
     source.write_text(old, encoding="utf-8")
 
-    payload = _materialize_model_source_patch(
+    payload = materialize_model_source_edit(
+        agent_tool_runtime,
         workspace,
         {
-            "files": [
-                {
-                    "path": "src/main/java/example/Example.java",
-                    "edits": [
-                        {
-                            "old_text": "final class Example {}",
-                            "new_text": "final class Example { int value = 1; }",
-                        }
-                    ],
-                }
-            ],
+            "operation": "replace_exact",
+            "path": "src/main/java/example/Example.java",
+            "old": "final class Example {}",
+            "new": "final class Example { int value = 1; }",
         },
     )
 
-    assert payload["project_root"] == "demo"
-    assert payload["operations"] == [
-        {
-            "operation": "replace",
-            "path": "src/main/java/example/Example.java",
-            "expected_sha256": "sha256:" + hashlib.sha256(old.encode("utf-8")).hexdigest(),
-            "content": updated,
-        }
-    ]
-
+    operation = payload["operations"][0]
+    assert operation["operation"] == "edit"
+    assert operation["expected_sha256"] == "sha256:" + hashlib.sha256(old.encode("utf-8")).hexdigest()
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
     assert receipt["status"] == "APPLIED"
-    assert source.read_text(encoding="utf-8") == updated
+    assert "int value = 1" in source.read_text(encoding="utf-8")
 
 
-def test_multiple_micro_edits_are_applied_sequentially(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/java/example/Example.java"
-    source.parent.mkdir(parents=True)
-    source.write_text("final class Example {\n    int a = 1;\n}\n", encoding="utf-8")
-
-    payload = _materialize_model_source_patch(
-        workspace,
-        {
-            "files": [
-                {
-                    "path": "src/main/java/example/Example.java",
-                    "edits": [
-                        {"old_text": "int a = 1;", "new_text": "int a = 2;"},
-                        {"old_text": "int a = 2;", "new_text": "int value = 2;"},
-                    ],
-                }
-            ]
-        },
-    )
-
-    assert payload["operations"][0]["content"] == (
-        "final class Example {\n    int value = 2;\n}\n"
-    )
-
-
-def test_host_derives_create_from_one_empty_anchor(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    _project(workspace)
-
-    payload = _materialize_model_source_patch(
-        workspace,
-        {
-            "files": [
-                {
-                    "path": "src/main/resources/assets/demo/lang/en_us.json",
-                    "edits": [
-                        {
-                            "old_text": "",
-                            "new_text": '{"item.demo.example":"Example"}\n',
-                        }
-                    ],
-                }
-            ],
-        },
-    )
-
-    assert payload["operations"] == [
-        {
-            "operation": "create",
-            "path": "src/main/resources/assets/demo/lang/en_us.json",
-            "content": '{"item.demo.example":"Example"}\n',
-        }
-    ]
-
-
-def test_existing_file_requires_one_exact_unique_anchor(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/java/example/Example.java"
-    source.parent.mkdir(parents=True)
-    source.write_text("int value;\nint value;\n", encoding="utf-8")
-
-    with pytest.raises(AgentToolRuntimeError, match="matched 2 times"):
-        _materialize_model_source_patch(
-            workspace,
-            {
-                "files": [
-                    {
-                        "path": "src/main/java/example/Example.java",
-                        "edits": [{"old_text": "int value;", "new_text": "int count;"}],
-                    }
-                ]
-            },
-        )
-
-
-def test_model_action_size_is_bounded_instead_of_consuming_decode_context(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    _project(workspace)
-
-    with pytest.raises(AgentToolRuntimeError, match="new_text exceeds"):
-        _materialize_model_source_patch(
-            workspace,
-            {
-                "files": [
-                    {
-                        "path": "src/main/java/example/Huge.java",
-                        "edits": [{"old_text": "", "new_text": "x" * (8 * 1024 + 1)}],
-                    }
-                ]
-            },
-        )
-
-
-def test_model_source_patch_cannot_target_gradle_or_build_infrastructure(tmp_path) -> None:
+def test_source_edit_cannot_target_gradle_or_build_infrastructure(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     _project(workspace)
 
     with pytest.raises(AgentToolRuntimeError, match="limited to src/main/java"):
-        _materialize_model_source_patch(
+        materialize_model_source_edit(
+            agent_tool_runtime,
             workspace,
             {
-                "files": [
-                    {
-                        "path": "gradle/wrapper/gradle-wrapper.properties",
-                        "edits": [
-                            {
-                                "old_text": "",
-                                "new_text": "distributionUrl=should-never-be-model-owned\n",
-                            }
-                        ],
-                    }
-                ],
-            },
-        )
-
-
-def test_model_cannot_choose_project_root_or_smuggle_patch_fields(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    _project(workspace)
-
-    with pytest.raises(AgentToolRuntimeError, match="host-owned project/patch fields are forbidden"):
-        _materialize_model_source_patch(
-            workspace,
-            {
-                "project_root": "demo",
-                "files": [
-                    {
-                        "path": "src/main/java/example/Example.java",
-                        "edits": [{"old_text": "", "new_text": "final class Example {}\n"}],
-                    }
-                ],
-                "operations": [],
+                "operation": "create_file",
+                "path": "gradle/wrapper/gradle-wrapper.properties",
+                "content": "distributionUrl=should-never-be-model-owned\n",
             },
         )
 
@@ -330,14 +186,12 @@ def test_host_refuses_ambiguous_project_root_instead_of_asking_model(tmp_path) -
     _project(workspace, "two")
 
     with pytest.raises(AgentToolRuntimeError, match="exactly one source project"):
-        _materialize_model_source_patch(
+        materialize_model_source_edit(
+            agent_tool_runtime,
             workspace,
             {
-                "files": [
-                    {
-                        "path": "src/main/java/example/Example.java",
-                        "edits": [{"old_text": "", "new_text": "final class Example {}\n"}],
-                    }
-                ]
+                "operation": "create_file",
+                "path": "src/main/java/example/Example.java",
+                "content": "final class Example {}\n",
             },
         )
