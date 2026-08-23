@@ -75,9 +75,6 @@ _PARALLEL_READ_TOOLS = frozenset(
         "external_mcp_schema",
     }
 )
-_DEFAULT_AGENT_TOOL_ROUNDS = 12
-_MIN_AGENT_TOOL_ROUNDS = 1
-_MAX_AGENT_TOOL_ROUNDS = 64
 
 
 class ModelRouter:
@@ -354,7 +351,7 @@ class ModelRouter:
         stage: str,
         role: str,
     ) -> str:
-        """Run bounded retrieve/act/observe production until semantic convergence."""
+        """Run retrieve/act/observe production until semantic convergence."""
 
         from .agent_capability_context import (
             reviewed_mcp_servers_for_model_role,
@@ -486,7 +483,7 @@ class ModelRouter:
                 )
 
         while True:
-            if round_index >= round_limit:
+            if round_limit is not None and round_index >= round_limit:
                 if require_rag and not rag_evidence_seen:
                     raise ModelConfigurationError(
                         "Agent tool budget exhausted after "
@@ -517,12 +514,12 @@ class ModelRouter:
                 if final_turn.tool_calls:
                     raise ModelConfigurationError(
                         "Agent emitted tool calls after the host disabled tools at the "
-                        "hard round budget."
+                        "explicit round budget."
                     )
                 final_content = final_turn.content.strip()
                 if not final_content:
                     raise ModelConfigurationError(
-                        "Agent returned an empty final response at the hard tool-round budget."
+                        "Agent returned an empty final response at the explicit tool-round budget."
                     )
                 return final_content
 
@@ -846,16 +843,15 @@ ModelRouter.generate_text._mmm_uses_canonical_request_preparation = True  # type
 ModelRouter.generate_text._mmm_parallel_router_contract_version = 3  # type: ignore[attr-defined]
 
 
-def _agent_tool_round_limit() -> int:
-    raw = os.environ.get(
-        "MMM_AGENT_TOOL_ROUNDS",
-        str(_DEFAULT_AGENT_TOOL_ROUNDS),
-    ).strip()
+def _agent_tool_round_limit() -> int | None:
+    raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()
+    if not raw:
+        return None
     try:
         value = int(raw)
     except ValueError:
-        value = _DEFAULT_AGENT_TOOL_ROUNDS
-    return max(_MIN_AGENT_TOOL_ROUNDS, min(value, _MAX_AGENT_TOOL_ROUNDS))
+        return None
+    return value if value > 0 else None
 
 
 def _parallel_read_workers() -> int:
