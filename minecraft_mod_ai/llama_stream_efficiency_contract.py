@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Persistent llama.cpp HTTP/SSE transport for ordinary text completions.
+
+Tool turns deliberately do not use this module's SSE text aggregation. They are sent
+through llama.cpp's native chat parser so a completed structured ``tool_calls`` message
+is the semantic boundary returned to the agent loop. This module only accelerates
+plain text completions and records lightweight usage telemetry.
+"""
+
 import json
 import math
 import os
@@ -15,10 +23,6 @@ _CLIENT_LIMIT = 4
 _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 300.0
-_TOOL_CALL_OPEN = "<tool_call>"
-_TOOL_CALL_CLOSE = "</tool_call>"
-_FUNCTION_OPEN = "<function="
-_FUNCTION_CLOSE = "</function>"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -46,8 +50,6 @@ def _stream_idle_timeout_seconds() -> float:
 
 
 def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> int:
-    """Append one OpenAI-compatible SSE delta into an assistant message."""
-
     progressed = 0
     role = delta.get("role")
     if isinstance(role, str) and role:
@@ -59,53 +61,11 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
         previous = message.get(key)
         message[key] = (previous if isinstance(previous, str) else "") + value
         progressed += len(value)
-    tool_calls = delta.get("tool_calls")
-    if tool_calls:
-        message["tool_calls"] = tool_calls
     return progressed
 
 
-def _single_required_tool_turn(payload: Mapping[str, Any]) -> bool:
-    """Return whether this request represents exactly one serial semantic action."""
-
-    tools = payload.get("tools")
-    if not isinstance(tools, list) or len(tools) != 1:
-        return False
-    if bool(payload.get("parallel_tool_calls", False)):
-        return False
-    return str(payload.get("tool_choice", "auto") or "auto").strip().casefold() == "required"
-
-
-def _raw_qwen_action_complete(message: Mapping[str, Any]) -> bool:
-    """Detect one fully closed Qwen action envelope without size/token heuristics."""
-
-    for key in ("reasoning_content", "reasoning", "content"):
-        value = message.get(key)
-        if not isinstance(value, str) or not value:
-            continue
-        wrapped = value.find(_TOOL_CALL_OPEN)
-        if wrapped >= 0:
-            return value.find(
-                _TOOL_CALL_CLOSE,
-                wrapped + len(_TOOL_CALL_OPEN),
-            ) >= 0
-        direct = value.find(_FUNCTION_OPEN)
-        if direct >= 0 and value.find(
-            _FUNCTION_CLOSE,
-            direct + len(_FUNCTION_OPEN),
-        ) >= 0:
-            return True
-    return False
-
-
 class _StreamingCompletionClient:
-    """Aggregate SSE and return control at the first complete semantic action.
-
-    Normal text completions still wait for the server ``[DONE]`` marker. A serial
-    required tool turn instead returns as soon as one complete Qwen action envelope
-    exists, allowing ModelRouter to execute it and feed the observation into the next
-    model turn. No arbitrary token or byte limit defines this boundary.
-    """
+    """Reuse one HTTP client and stream only non-tool chat completions."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
@@ -125,7 +85,11 @@ class _StreamingCompletionClient:
             not isinstance(payload, Mapping)
             or not url.rstrip("/").endswith("/chat/completions")
             or payload.get("stream") is True
+            or bool(payload.get("tools"))
         ):
+            # Tool turns must remain native OpenAI-compatible responses. Streaming
+            # tool-call deltas are incremental and cannot be treated as executable
+            # actions until llama.cpp has finished parsing the call.
             return self._client.post(url, **kwargs)
 
         import httpx
@@ -144,8 +108,6 @@ class _StreamingCompletionClient:
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
-        semantic_action_complete = False
-        stop_on_action = _single_required_tool_turn(streamed_payload)
         progress_chars = 0
 
         with self._client.stream("POST", url, **stream_kwargs) as response:
@@ -196,40 +158,28 @@ class _StreamingCompletionClient:
                 if delta is None:
                     continue
                 progressed = _append_message_delta(message, delta)
-                if progressed > 0:
-                    progress_chars += progressed
-                    now = time.monotonic()
-                    if not first_delta_reported:
-                        print(
-                            "llama server: completion first output delta",
-                            f" elapsed={now - started:.1f}s",
-                            flush=True,
-                        )
-                        first_delta_reported = True
-                    if now - last_report >= 15.0:
-                        print(
-                            "llama server: completion stream progress",
-                            f" chars={progress_chars}",
-                            f" elapsed={now - started:.1f}s",
-                            flush=True,
-                        )
-                        last_report = now
-
-                if stop_on_action and (
-                    message.get("tool_calls") or _raw_qwen_action_complete(message)
-                ):
-                    semantic_action_complete = True
-                    finish_reason = "tool_calls"
+                if progressed <= 0:
+                    continue
+                progress_chars += progressed
+                now = time.monotonic()
+                if not first_delta_reported:
                     print(
-                        "llama server: semantic tool action complete; returning to host",
-                        f" chars={progress_chars}",
-                        f" elapsed={time.monotonic() - started:.1f}s",
+                        "llama server: completion first output delta",
+                        f" elapsed={now - started:.1f}s",
                         flush=True,
                     )
-                    break
+                    first_delta_reported = True
+                if now - last_report >= 15.0:
+                    print(
+                        "llama server: completion stream progress",
+                        f" chars={progress_chars}",
+                        f" elapsed={now - started:.1f}s",
+                        flush=True,
+                    )
+                    last_report = now
 
-        if not saw_done and not semantic_action_complete:
-            raise RuntimeError("llama server stream ended before a semantic completion boundary")
+        if not saw_done:
+            raise RuntimeError("llama server stream ended before the [DONE] marker")
 
         result: dict[str, Any] = {
             "choices": [
@@ -290,8 +240,6 @@ def _report_server_connection(server_url: str) -> None:
 
 
 def _native_timing_summary(timings: Any) -> dict[str, float | int] | None:
-    """Normalize llama.cpp aggregate decode/speculative telemetry defensively."""
-
     if not isinstance(timings, dict):
         return None
     result: dict[str, float | int] = {}
@@ -313,7 +261,6 @@ def _native_timing_summary(timings: Any) -> dict[str, float | int] | None:
         result["draft_n"] = draft_n
         result["draft_n_accepted"] = accepted
         result["draft_acceptance_pct"] = 100.0 * accepted / draft_n
-
     return result or None
 
 
@@ -355,7 +302,8 @@ def _commit_usage(
 
 
 def install(hardware_module: Any) -> None:
-    """Use SSE-native usage and persistent HTTP connections on the llama hot path."""
+    """Install the SSE fast path for plain text generation only."""
+
     current = hardware_module._strict_server_generate
     if getattr(current, "_mmm_sse_usage_fast_path", False):
         return
@@ -369,6 +317,10 @@ def install(hardware_module: Any) -> None:
 
         try:
             payload = hardware_module._server_payload(adapter, request)
+            if payload.get("tools"):
+                # Tool turns are semantic OpenAI chat responses, not text streams.
+                return current(adapter, request, server_url)
+
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
             endpoint = f"{server_url.rstrip('/')}/chat/completions"
@@ -495,6 +447,7 @@ def install(hardware_module: Any) -> None:
                 else None
             )
             native = _native_timing_summary(final_timings)
+            spec_type, _, _ = _active_decode_profile()
             if committed is not None:
                 request_total = int(committed["prompt_tokens"]) + int(
                     committed["output_tokens"]
@@ -574,7 +527,9 @@ def install(hardware_module: Any) -> None:
 
 __all__ = [
     "_active_decode_profile",
+    "_client",
     "_native_timing_summary",
+    "_report_server_connection",
     "_stream_idle_timeout_seconds",
     "install",
 ]
