@@ -49,7 +49,6 @@ def finalize_runtime() -> None:
         from . import external_mcp_router
         from . import external_procedural_skill_contract
         from . import llama_server_autotune
-        from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
         from . import mcp_transport_pool
         from . import model_router
@@ -61,10 +60,6 @@ def finalize_runtime() -> None:
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
-        from .bounded_source_edit_contract import (
-            BOUNDED_SOURCE_EDIT_SCHEMA,
-            install as install_bounded_source_edit,
-        )
         from .causal_stale_tool_recovery_contract import install as install_stale_tool_recovery
         from .coder_tool_route_integrity_contract import install as install_route_integrity
         from .complete_orchestrator import CompleteProductionOrchestrator
@@ -82,7 +77,6 @@ def finalize_runtime() -> None:
         from .llama_server_response_resilience import (
             install as install_llama_server_response_resilience,
         )
-        from .llama_tool_output_budget import install as install_llama_tool_output_budget
         from .llama_unbounded_generation import install as install_llama_unbounded_generation
         from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
         from .mcp_transport_pool import install_agent_mcp_transport_pool
@@ -138,15 +132,9 @@ def finalize_runtime() -> None:
         )
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
-        # Source files are repository state, not model output pages. Replace the old
-        # complete-file model contract with bounded exact-span edits before any runtime
-        # instance can cache the generation schema. The host still materializes the
-        # canonical SHA-bound transactional patch immediately before execution.
-        install_bounded_source_edit(agent_tool_runtime)
-        # The small-model extension historically exposed one nested array<object> of
-        # up to dozens of edits. Besides encouraging oversized actions, that shape is
-        # fragile on tagged Qwen tool transports. Freeze the final model-facing ACI to
-        # one scalar exact edit per turn before any runtime instance caches schemas.
+        # One source-write surface only: apply_source_edit is model-facing and compiles
+        # to the host-only apply_source_patch transaction primitive. No complete-file
+        # patch projection or byte-page wrapper is installed around it.
         install_scalar_source_edit_protocol(
             small_model_execution_extensions_contract,
             agent_tool_runtime,
@@ -155,17 +143,10 @@ def finalize_runtime() -> None:
         # reject rows whose current content no longer hashes to their declared skill_id
         # before dependency composition can collapse identities in a dict.
         install_procedural_skill_identity(external_procedural_skill_contract)
-        # Schema producers may be layered, but ownership is singular at the final
-        # runtime boundary. Validate the composed surface before AgentToolRuntime can
-        # cache it or dispatch by name, and pin the two source-write projections to
-        # their final model-facing contracts so wrapper order cannot silently regress
-        # them to an older host/raw schema.
+        # The final runtime boundary has exactly one model-facing source-write owner.
         install_tool_schema_ownership(
             agent_tool_runtime,
-            expected_parameters={
-                "apply_source_patch": BOUNDED_SOURCE_EDIT_SCHEMA,
-                "apply_source_edit": SOURCE_EDIT_SCHEMA,
-            },
+            expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
         )
         install_route_integrity(
             model_router_module=model_router,
@@ -183,10 +164,9 @@ def finalize_runtime() -> None:
         # workspace. The durable boundary preserves the typed failure but never
         # replays the whole node or its retrieval/tool side effects.
         install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
-        # Exact host-required calls have one policy owner across transports. Remote
-        # endpoints use native required-tool forcing; local llama.cpp renders one
-        # visible Jinja schema as required, returns raw markup through its managed
-        # pure-content parser, and performs bounded semantic validation on the host.
+        # Exact host-required calls have one policy owner across transports. The local
+        # Qwen transport narrows a required turn to one schema and returns control at
+        # the completed action envelope so the router can execute and observe it.
         install_forced_tool_execution(
             openai_compatible_module=openai_compatible,
             llama_cpp_module=llama_cpp_adapter,
@@ -211,13 +191,10 @@ def finalize_runtime() -> None:
         # prompt cache. Drop the duplicate RAM arena only for those profiles, while
         # keeping the generic bounded cache reservation for non-MTP launches.
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
-        # Ordinary top-level llama.cpp turns may use the native unlimited prediction
-        # policy. Registry-declared Qwen T4/MTP pages retain their explicit bounds.
+        # Ordinary top-level llama.cpp turns may use the model/runtime prediction policy.
+        # Tool execution is now stopped by semantic action completion, not a hidden
+        # token-count wrapper.
         install_llama_unbounded_generation(llama_server_hardware_policy)
-        # Tool turns are semantic actions, not long-form generation. Install this after
-        # every unbounded/profile wrapper so a large RAG context cannot let a tool JSON
-        # decode consume the remaining model context before the action closes.
-        install_llama_tool_output_budget(llama_server_hardware_policy)
         # Parse stale but host-authorized tool names against the complete authorized
         # surface; execution remains restricted by the per-turn causal visibility gate.
         install_tool_validation_surface()
@@ -232,12 +209,9 @@ def finalize_runtime() -> None:
         install_llama_finish_reason(llama_cpp_adapter)
         # A transient local inference failure occurs before any semantic turn reaches
         # ModelRouter, so exactly one transport retry cannot duplicate a tool action.
-        # Install this inside length recovery: 5xx/connection recovery happens first,
-        # while genuine finish_reason=length still follows the compaction path below.
         install_llama_server_response_resilience(llama_cpp_adapter)
         # A remaining context-pressure length stop recovers once by compacting tool
-        # observations. Output-cap exhaustion is not retried in the adapter; the durable
-        # work-node owner above decides whether that persisted generation node retries.
+        # observations. Semantic tool actions should normally return before this path.
         install_llama_length_resilience(llama_cpp_adapter)
         # Bootstrap's integrity stage runs before these late finalization wrappers are
         # installed. Re-audit the fully composed runtime here so a narrowed late wrapper
