@@ -175,6 +175,26 @@ def _advance_verified_state(
     return frozenset(facts)
 
 
+def verified_state_from_messages(
+    messages: Sequence[Mapping[str, Any]],
+    schemas: Sequence[Mapping[str, Any]],
+    *,
+    require_fresh_evidence: bool = False,
+) -> frozenset[str]:
+    """Canonical full replay using the same mutation proof as incremental updates."""
+
+    state = set(
+        _advance_verified_state(
+            frozenset({"workspace_bound"}),
+            messages,
+            schemas,
+        )
+    )
+    if require_fresh_evidence and not _FRESH_EVIDENCE_FACTS.intersection(state):
+        state.discard("evidence_ready")
+    return frozenset(state)
+
+
 def _fresh_evidence_ready(state: frozenset[str]) -> bool:
     return "evidence_ready" in state and bool(_FRESH_EVIDENCE_FACTS.intersection(state))
 
@@ -331,11 +351,10 @@ class CausalStateLedger:
         require_fresh_evidence: bool,
         query_fn: Callable[[Sequence[Mapping[str, Any]]], str],
     ) -> CausalStateSnapshot:
-        del require_fresh_evidence
-        self._verified_state = _advance_verified_state(
-            frozenset({"workspace_bound"}),
+        self._verified_state = verified_state_from_messages(
             messages,
             schemas,
+            require_fresh_evidence=require_fresh_evidence,
         )
         self._baseline_state = frozenset(host_baseline_causal_facts(messages))
         self._query = query_fn(messages)
@@ -369,4 +388,9 @@ class CausalStateLedger:
         )
 
 
-__all__ = ["CausalStateLedger", "CausalStateSnapshot", "supplies_fresh_evidence"]
+__all__ = [
+    "CausalStateLedger",
+    "CausalStateSnapshot",
+    "supplies_fresh_evidence",
+    "verified_state_from_messages",
+]
