@@ -19,9 +19,6 @@ _TELEMETRY_TOTALS = {
     "generation_seconds": 0.0,
     "requests": 0,
 }
-_DEFAULT_TOOL_ACTION_MAX_TOKENS = 4096
-_MIN_TOOL_ACTION_MAX_TOKENS = 512
-_MAX_TOOL_ACTION_MAX_TOKENS = 8192
 
 
 def _existing_built_server() -> str | None:
@@ -106,21 +103,6 @@ def _server_tool_choice(request: Any) -> str:
     return normalized
 
 
-def _tool_action_max_tokens(configured: int) -> int:
-    """Return a finite decode budget for one agent action, never the whole task."""
-
-    raw = os.environ.get(
-        "MMM_AGENT_ACTION_MAX_TOKENS",
-        str(_DEFAULT_TOOL_ACTION_MAX_TOKENS),
-    ).strip()
-    try:
-        requested = int(raw)
-    except ValueError:
-        requested = _DEFAULT_TOOL_ACTION_MAX_TOKENS
-    cap = max(_MIN_TOOL_ACTION_MAX_TOKENS, min(requested, _MAX_TOOL_ACTION_MAX_TOKENS))
-    return min(configured, cap) if configured > 0 else cap
-
-
 def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
     """Keep forced one-tool turns deterministic and non-thinking on the wire."""
 
@@ -160,11 +142,6 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     }
     tools = getattr(request, "tools", ()) or ()
     if tools:
-        # Agent work is iterative: one model turn chooses/constructs the next action,
-        # the host executes it, then the observation drives the following turn. An
-        # unlimited model-level max_new_tokens therefore must not become an unlimited
-        # single action decode and consume the entire context before the host can act.
-        payload["max_tokens"] = _tool_action_max_tokens(payload["max_tokens"])
         required_name = _required_tool_name(request)
         visible_tools = tuple(tools)
         if required_name:
@@ -629,23 +606,11 @@ def install(autotune_module: Any) -> None:
                 args.append("--metrics")
             if "--slots" not in args:
                 args.append("--slots")
-            extra = getattr(config, "extra", {})
-            if (
-                isinstance(extra, Mapping)
-                and str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
-                and "--reasoning" not in args
-            ):
-                # Current llama.cpp deprecates the old Qwen enable_thinking template
-                # switch in favor of the server reasoning policy. Tool/action turns
-                # must not spend their entire decode budget in hidden reasoning before
-                # the host receives the next action.
-                args.extend(["--reasoning", "off"])
             return args
 
         adaptive_base_args._mmm_auto_gpu_layers = True  # type: ignore[attr-defined]
         adaptive_base_args._mmm_single_decode_slot = True  # type: ignore[attr-defined]
         adaptive_base_args._mmm_native_telemetry_endpoints = True  # type: ignore[attr-defined]
-        adaptive_base_args._mmm_qwen_reasoning_off = True  # type: ignore[attr-defined]
         autotune_module._base_args = adaptive_base_args
 
     original_variant = autotune_module._variant_args
@@ -799,6 +764,5 @@ __all__ = [
     "_stream_delta_parts",
     "_strict_server_generate",
     "_telemetry_totals",
-    "_tool_action_max_tokens",
     "install",
 ]
