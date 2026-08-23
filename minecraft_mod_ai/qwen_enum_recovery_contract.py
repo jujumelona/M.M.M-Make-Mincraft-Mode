@@ -2,14 +2,13 @@ from __future__ import annotations
 
 """Deterministic parser repair for Qwen tagged enum parameters.
 
-Qwen's native tagged tool format places scalar values directly inside tagged
-parameter blocks. Small local models occasionally serialize string enums with harmless
-formatting drift or use a small set of lossless, tool-specific synonyms.
+Qwen's tagged fallback format places scalar values directly inside parameter blocks.
+Small local models occasionally serialize string enums with harmless formatting drift.
 
-This module performs only deterministic parsing/canonicalization. It never asks the
-model to generate again. Malformed calls that cannot be repaired without inventing
-information are raised as typed protocol errors; causal_stale_tool_recovery_contract is
-the sole owner of any bounded model re-synchronization.
+This module performs only deterministic syntactic canonicalization. It never invents
+semantic aliases and never asks the model to generate again. Malformed calls that
+cannot be repaired without changing meaning are raised as typed protocol errors;
+causal_stale_tool_recovery_contract remains the sole owner of bounded re-synchronization.
 """
 
 import json
@@ -17,18 +16,9 @@ import re
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
-_MARKER = "_mmm_qwen_enum_recovery_v2"
+_MARKER = "_mmm_qwen_enum_recovery_v3"
 _NO_MATCH = object()
 _MAX_VALUE_PREVIEW = 160
-
-# Exact, lossless aliases observed from Qwen for this one protocol field. Keep this
-# deliberately finite: no fuzzy matching and no cross-tool semantic guessing.
-_TOOL_ENUM_ALIASES: dict[tuple[str, str], Mapping[str, str]] = {
-    ("apply_source_edit", "operation"): {
-        "overwrite_file": "replace_file",
-        "update_file": "replace_file",
-    },
-}
 
 
 class QwenEnumValueError(RuntimeError):
@@ -78,8 +68,9 @@ def _string_candidates(raw: str) -> tuple[str, ...]:
 def canonical_string_enum(raw: str, allowed_values: Sequence[Any]) -> Any:
     """Return one formatting-equivalent enum member, or ``_NO_MATCH``.
 
-    Generic normalization remains syntactic only. Semantic aliases are handled by the
-    separate finite tool/parameter map below so they cannot leak across schemas.
+    Normalization is syntactic only: whitespace, hyphen/underscore, camel-case and an
+    optional JSON string wrapper may be normalized. Semantic synonyms are never mapped
+    because that would silently revive removed operations such as whole-file writes.
     Ambiguous normalized schemas fail closed.
     """
 
@@ -97,31 +88,8 @@ def canonical_string_enum(raw: str, allowed_values: Sequence[Any]) -> Any:
     return _NO_MATCH
 
 
-def _canonical_tool_enum(
-    tool_name: str,
-    parameter_name: str,
-    raw: str,
-    allowed_values: Sequence[Any],
-) -> Any:
-    canonical = canonical_string_enum(raw, allowed_values)
-    if canonical is not _NO_MATCH:
-        return canonical
-    if not allowed_values or not all(isinstance(value, str) for value in allowed_values):
-        return _NO_MATCH
-
-    aliases = _TOOL_ENUM_ALIASES.get((tool_name, parameter_name))
-    if not aliases:
-        return _NO_MATCH
-    allowed = frozenset(str(value) for value in allowed_values)
-    for candidate in _string_candidates(raw):
-        target = aliases.get(_enum_key(candidate))
-        if target is not None and target in allowed:
-            return target
-    return _NO_MATCH
-
-
 def install(llama_cpp_module: Any) -> None:
-    """Install parser-only enum canonicalization; never install a generation retry."""
+    """Install fallback-parser enum canonicalization; never install a generation retry."""
 
     current_decode = llama_cpp_module._decode_parameter_value
     if bool(getattr(current_decode, _MARKER, False)):
@@ -136,7 +104,7 @@ def install(llama_cpp_module: Any) -> None:
     ) -> Any:
         enum = schema.get("enum")
         if isinstance(enum, list) and enum:
-            canonical = _canonical_tool_enum(tool_name, key, raw, enum)
+            canonical = canonical_string_enum(raw, enum)
             if canonical is not _NO_MATCH:
                 return canonical
         try:
