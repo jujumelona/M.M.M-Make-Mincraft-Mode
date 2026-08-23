@@ -258,4 +258,4 @@ def test_successful_source_mutation_clears_semantic_fixed_point_epoch() -> None:
     messages = [*messages, _applied_patch()]
     advanced = ledger.resolve(messages, schemas, require_fresh_evidence=True, query_fn=_query)
     assert advanced.blocked_mutation_tools == frozenset()
-    assert "repair" in advanced.state
+    assert "repaired" in advanced.state
