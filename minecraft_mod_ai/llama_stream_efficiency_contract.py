@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from functools import wraps
-from typing import Any
+from typing import Any, Mapping
 
 
 _CLIENT_LOCK = threading.RLock()
@@ -41,6 +41,162 @@ def _stream_idle_timeout_seconds() -> float:
     return value
 
 
+def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> int:
+    """Append one OpenAI-compatible SSE delta into an assistant message."""
+
+    progressed = 0
+    role = delta.get("role")
+    if isinstance(role, str) and role:
+        message["role"] = role
+    for key in ("reasoning_content", "reasoning", "content"):
+        value = delta.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        previous = message.get(key)
+        message[key] = (previous if isinstance(previous, str) else "") + value
+        progressed += len(value)
+    tool_calls = delta.get("tool_calls")
+    if tool_calls:
+        # Managed llama-server is configured with --skip-chat-parsing, so normal
+        # tool turns arrive as raw content. Preserve any unexpected parsed calls
+        # anyway so the adapter's existing strict rejection remains effective.
+        message["tool_calls"] = tool_calls
+    return progressed
+
+
+class _StreamingCompletionClient:
+    """Keep the legacy response API while receiving chat completions over SSE.
+
+    ``llama_cpp_adapter._post_completion`` historically used ``Client.post`` and
+    therefore saw no readable response bytes until llama-server finished the whole
+    turn. Its 600-second read timeout could consequently fire even while a long
+    Qwen/MTP tool turn was actively decoding. This proxy streams that same request,
+    aggregates deltas into the response shape expected by the adapter, and makes
+    the read timeout an actual *idle* timeout rather than a whole-turn timeout.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def close(self) -> Any:
+        return self._client.close()
+
+    def stream(self, method: str, url: str, **kwargs: Any) -> Any:
+        return self._client.stream(method, url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        payload = kwargs.get("json")
+        if (
+            not isinstance(payload, Mapping)
+            or not url.rstrip("/").endswith("/chat/completions")
+            or payload.get("stream") is True
+        ):
+            return self._client.post(url, **kwargs)
+
+        import httpx
+
+        streamed_payload = dict(payload)
+        streamed_payload["stream"] = True
+        streamed_payload["stream_options"] = {"include_usage": True}
+        stream_kwargs = dict(kwargs)
+        stream_kwargs["json"] = streamed_payload
+        request = httpx.Request("POST", url)
+        started = time.monotonic()
+        last_report = started
+        first_delta_reported = False
+        message: dict[str, Any] = {"role": "assistant", "content": ""}
+        finish_reason: Any = None
+        usage: dict[str, Any] | None = None
+        timings: dict[str, Any] | None = None
+        saw_done = False
+        progress_chars = 0
+
+        with self._client.stream("POST", url, **stream_kwargs) as response:
+            if response.status_code >= 400:
+                body = response.read()
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=body,
+                    request=request,
+                )
+
+            for raw_line in response.iter_lines():
+                line = raw_line.strip()
+                if not line or line.startswith(":") or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data:
+                    continue
+                if data == "[DONE]":
+                    saw_done = True
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("llama server returned malformed SSE JSON") from exc
+                if not isinstance(chunk, dict):
+                    continue
+                chunk_usage = chunk.get("usage")
+                if isinstance(chunk_usage, dict):
+                    usage = chunk_usage
+                chunk_timings = chunk.get("timings")
+                if isinstance(chunk_timings, dict):
+                    timings = chunk_timings
+                choices = chunk.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, Mapping):
+                    continue
+                current_finish = choice.get("finish_reason")
+                if current_finish is not None:
+                    finish_reason = current_finish
+                delta = choice.get("delta")
+                if not isinstance(delta, Mapping):
+                    candidate = choice.get("message")
+                    delta = candidate if isinstance(candidate, Mapping) else None
+                if delta is None:
+                    continue
+                progressed = _append_message_delta(message, delta)
+                if progressed <= 0:
+                    continue
+                progress_chars += progressed
+                now = time.monotonic()
+                if not first_delta_reported:
+                    print(
+                        "llama server: completion first output delta",
+                        f" elapsed={now - started:.1f}s",
+                        flush=True,
+                    )
+                    first_delta_reported = True
+                if now - last_report >= 15.0:
+                    print(
+                        "llama server: completion stream progress",
+                        f" chars={progress_chars}",
+                        f" elapsed={now - started:.1f}s",
+                        flush=True,
+                    )
+                    last_report = now
+
+        if not saw_done:
+            raise RuntimeError("llama server stream ended before the [DONE] marker")
+        result: dict[str, Any] = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ]
+        }
+        if usage is not None:
+            result["usage"] = usage
+        if timings is not None:
+            result["timings"] = timings
+        return httpx.Response(200, json=result, request=request)
+
+
 def _client(server_url: str) -> Any:
     import httpx
 
@@ -55,7 +211,7 @@ def _client(server_url: str) -> Any:
             write=30.0,
             pool=30.0,
         )
-        client = httpx.Client(
+        raw_client = httpx.Client(
             timeout=timeout,
             limits=httpx.Limits(
                 max_connections=8,
@@ -63,6 +219,7 @@ def _client(server_url: str) -> Any:
                 keepalive_expiry=60.0,
             ),
         )
+        client = _StreamingCompletionClient(raw_client)
         _CLIENTS[origin] = client
         while len(_CLIENTS) > _CLIENT_LIMIT:
             key = next(iter(_CLIENTS))
