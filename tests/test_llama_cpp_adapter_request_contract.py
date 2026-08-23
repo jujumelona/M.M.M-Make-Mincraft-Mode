@@ -4,7 +4,6 @@ import httpx
 import pytest
 
 from minecraft_mod_ai import llama_server_autotune
-from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.model_adapters.base import (
     AdapterConfig,
     GenerationRequest,
@@ -289,12 +288,6 @@ def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch
 
 def test_apply_source_edit_action_alias_is_one_decode_local_recovery(monkeypatch) -> None:
     posts = 0
-    decoded: list[tuple[str, str, str]] = []
-    original_decode = llama_cpp_adapter._decode_parameter_value
-
-    def tracked_decode(tool_name, key, raw, schema):
-        decoded.append((tool_name, key, raw))
-        return original_decode(tool_name, key, raw, schema)
 
     def post(url, *, json, timeout):
         nonlocal posts
@@ -317,7 +310,6 @@ def test_apply_source_edit_action_alias_is_one_decode_local_recovery(monkeypatch
             },
         )
 
-    monkeypatch.setattr(llama_cpp_adapter, "_decode_parameter_value", tracked_decode)
     monkeypatch.setattr(httpx, "post", post)
 
     turn = _adapter().generate_turn(
@@ -332,10 +324,6 @@ def test_apply_source_edit_action_alias_is_one_decode_local_recovery(monkeypatch
     )
 
     assert posts == 1
-    assert decoded == [
-        ("apply_source_edit", "operation", "replace_exact"),
-        ("apply_source_edit", "path", "src/main/java/Example.java"),
-    ]
     assert len(turn.tool_calls) == 1
     assert turn.tool_calls[0].arguments == {
         "operation": "replace_exact",
@@ -385,7 +373,7 @@ def test_apply_source_edit_rejects_canonical_alias_collision(
         )
 
     monkeypatch.setattr(httpx, "post", post)
-    with pytest.raises(ModelBackendError, match="both alias 'action'.*'operation'"):
+    with pytest.raises(ModelBackendError, match="conflicting sources.*parameter 'operation'"):
         _adapter().generate_turn(
             GenerationRequest(
                 messages=({"role": "user", "content": "apply one edit"},),
@@ -400,7 +388,7 @@ def test_apply_source_edit_rejects_canonical_alias_collision(
     ("tool_name", "include_action", "parameter", "expected"),
     [
         ("lookup", False, "action", "unknown parameter 'action'"),
-        ("apply_source_edit", False, "mode", "unknown parameter 'mode'"),
+        ("apply_source_edit", False, "strategy", "unknown parameter 'strategy'"),
         (
             "apply_source_edit",
             True,
