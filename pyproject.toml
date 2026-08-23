@@ -96,3 +96,9 @@ minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/minef
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.vulture]
+# These are compatibility inputs to the checkpoint identity helper. They are
+# intentionally excluded from the stable identity so unrelated observation/grounding
+# refreshes do not orphan resumable work; the function docstring records that policy.
+ignore_names = ["observation_receipt", "host_grounding"]
