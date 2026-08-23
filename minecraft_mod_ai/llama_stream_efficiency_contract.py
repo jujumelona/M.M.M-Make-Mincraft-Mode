@@ -15,6 +15,10 @@ _CLIENT_LIMIT = 4
 _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 300.0
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
+_FUNCTION_OPEN = "<function="
+_FUNCTION_CLOSE = "</function>"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -57,22 +61,57 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
         progressed += len(value)
     tool_calls = delta.get("tool_calls")
     if tool_calls:
-        # Managed llama-server is configured with --skip-chat-parsing, so normal
-        # tool turns arrive as raw content. Preserve any unexpected parsed calls
-        # anyway so the adapter's existing strict rejection remains effective.
+        # Preserve native parsed calls if a llama.cpp build emits them. The local
+        # adapter remains the schema-validation owner for the selected Qwen transport.
         message["tool_calls"] = tool_calls
     return progressed
 
 
-class _StreamingCompletionClient:
-    """Keep the legacy response API while receiving chat completions over SSE.
+def _single_required_tool_turn(payload: Mapping[str, Any]) -> bool:
+    """Return whether this request represents exactly one serial semantic action."""
 
-    ``llama_cpp_adapter._post_completion`` historically used ``Client.post`` and
-    therefore saw no readable response bytes until llama-server finished the whole
-    turn. Its 600-second read timeout could consequently fire even while a long
-    Qwen/MTP tool turn was actively decoding. This proxy streams that same request,
-    aggregates deltas into the response shape expected by the adapter, and makes
-    the read timeout an actual *idle* timeout rather than a whole-turn timeout.
+    tools = payload.get("tools")
+    if not isinstance(tools, list) or len(tools) != 1:
+        return False
+    if bool(payload.get("parallel_tool_calls", False)):
+        return False
+    return str(payload.get("tool_choice", "auto") or "auto").strip().casefold() == "required"
+
+
+def _raw_qwen_action_complete(message: Mapping[str, Any]) -> bool:
+    """Detect a closed Qwen action envelope without imposing a byte/token budget.
+
+    The managed Qwen transport intentionally keeps raw tagged tool markup so it can
+    tolerate llama.cpp parser regressions. For a serial required action, the semantic
+    boundary is the closing tool/function tag: once that boundary exists, continuing
+    to decode prose or another action only delays host execution and can exhaust the
+    model context. Final schema validation still happens in llama_cpp_adapter.
+    """
+
+    for key in ("reasoning_content", "reasoning", "content"):
+        value = message.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        wrapped = value.find(_TOOL_CALL_OPEN)
+        if wrapped >= 0:
+            closed = value.find(_TOOL_CALL_CLOSE, wrapped + len(_TOOL_CALL_OPEN))
+            if closed >= 0:
+                return True
+        direct = value.find(_FUNCTION_OPEN)
+        if direct >= 0:
+            closed = value.find(_FUNCTION_CLOSE, direct + len(_FUNCTION_OPEN))
+            if closed >= 0:
+                return True
+    return False
+
+
+class _StreamingCompletionClient:
+    """Aggregate SSE while returning control at the first complete semantic action.
+
+    Text completions still run until the server's ``[DONE]`` marker. A serial required
+    Qwen tool turn is different: once its tool envelope closes, the model has produced
+    an executable action. The HTTP stream is then closed immediately so ModelRouter can
+    execute the tool, append the observation, and start the next reasoning turn.
     """
 
     def __init__(self, client: Any) -> None:
@@ -112,6 +151,8 @@ class _StreamingCompletionClient:
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
+        semantic_action_complete = False
+        stop_on_action = _single_required_tool_turn(streamed_payload)
         progress_chars = 0
 
         with self._client.stream("POST", url, **stream_kwargs) as response:
@@ -162,28 +203,40 @@ class _StreamingCompletionClient:
                 if delta is None:
                     continue
                 progressed = _append_message_delta(message, delta)
-                if progressed <= 0:
-                    continue
-                progress_chars += progressed
-                now = time.monotonic()
-                if not first_delta_reported:
-                    print(
-                        "llama server: completion first output delta",
-                        f" elapsed={now - started:.1f}s",
-                        flush=True,
-                    )
-                    first_delta_reported = True
-                if now - last_report >= 15.0:
-                    print(
-                        "llama server: completion stream progress",
-                        f" chars={progress_chars}",
-                        f" elapsed={now - started:.1f}s",
-                        flush=True,
-                    )
-                    last_report = now
+                if progressed > 0:
+                    progress_chars += progressed
+                    now = time.monotonic()
+                    if not first_delta_reported:
+                        print(
+                            "llama server: completion first output delta",
+                            f" elapsed={now - started:.1f}s",
+                            flush=True,
+                        )
+                        first_delta_reported = True
+                    if now - last_report >= 15.0:
+                        print(
+                            "llama server: completion stream progress",
+                            f" chars={progress_chars}",
+                            f" elapsed={now - started:.1f}s",
+                            flush=True,
+                        )
+                        last_report = now
 
-        if not saw_done:
-            raise RuntimeError("llama server stream ended before the [DONE] marker")
+                if stop_on_action and (
+                    message.get("tool_calls") or _raw_qwen_action_complete(message)
+                ):
+                    semantic_action_complete = True
+                    finish_reason = "tool_calls"
+                    print(
+                        "llama server: semantic tool action complete; returning to host",
+                        f" chars={progress_chars}",
+                        f" elapsed={time.monotonic() - started:.1f}s",
+                        flush=True,
+                    )
+                    break
+
+        if not saw_done and not semantic_action_complete:
+            raise RuntimeError("llama server stream ended before a semantic completion boundary")
         result: dict[str, Any] = {
             "choices": [
                 {
