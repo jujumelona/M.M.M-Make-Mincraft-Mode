@@ -54,14 +54,6 @@ def _forced_tool_choice(tool_choice: Any) -> bool:
     return isinstance(tool_choice, Mapping) or str(tool_choice or "").casefold() == "required"
 
 
-def _host_forced_tool(request: Any) -> bool:
-    """Recognize local forced turns stored as host-semantic ``auto`` metadata."""
-
-    from .forced_tool_execution_contract import host_forced_tool_name
-
-    return bool(host_forced_tool_name(request))
-
-
 def _request_messages(request: Any) -> Sequence[Mapping[str, Any]]:
     raw = getattr(request, "messages", ()) or ()
     return tuple(message for message in raw if isinstance(message, Mapping))
@@ -79,16 +71,14 @@ def _assistant_has_agent_history(messages: Sequence[Mapping[str, Any]]) -> bool:
 
 
 def _qwen_agent_request(request: Any) -> bool:
-    if _host_forced_tool(request):
-        return False
     tool_choice = getattr(request, "tool_choice", None)
     if _forced_tool_choice(tool_choice):
         return False
     tools = getattr(request, "tools", ()) or ()
     if tools:
-        # A model-visible tool page is an action/materialization turn. Planning and
-        # reasoning happen on separate no-tool pages; never restore a prior private
-        # trace into the finite output allowance that must close a tool envelope.
+        # Model-visible tools define an action/materialization page. Planning and
+        # private reasoning stay on no-tool pages so the action turn contains only
+        # the executable envelope the host will run and observe.
         return False
     return _assistant_has_agent_history(_request_messages(request))
 
@@ -97,15 +87,9 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     """Map MMM request semantics onto registry-declared generation modes."""
 
     tools = getattr(request, "tools", ()) or ()
-    if _host_forced_tool(request):
-        # The request object remains auto for host-validation compatibility, while the
-        # pure-content hardware transport renders its one schema as wire required. Do
-        # not restore stale agent reasoning for this deterministic control turn.
-        return None
     if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        # Named/required actions are rendered as one required wire schema and the
-        # transport owns their temperature-zero policy.  Check this before the
-        # broader tool-action rule so the family profile cannot make them stochastic.
+        # Named/required actions use one required transport schema and the transport
+        # owns their deterministic sampling policy.
         return None
     if tools:
         return "non_thinking"
@@ -142,10 +126,6 @@ def _apply_family_payload_policy(
 
     extra = _config_extra(config)
     if action_page:
-        # All three supported families use the officially documented hard template
-        # switch for direct action output. Qwen3.6/3.8 additionally expose historical
-        # reasoning preservation, so turn that off explicitly. Qwen3.8 accepts only
-        # xhigh/medium/low reasoning_effort; never send the OpenAI-specific ``none``.
         payload.pop("reasoning_effort", None)
         payload["chat_template_kwargs"] = capabilities.action_template_kwargs()
     else:
@@ -161,9 +141,6 @@ def _apply_family_payload_policy(
                 raise ValueError(
                     "Qwen3.8 thinking_reasoning_effort must be xhigh, medium, or low"
                 )
-            # The pinned llama.cpp server does not forward non-none top-level
-            # reasoning_effort values. Its Jinja contract receives this model-native
-            # value through chat_template_kwargs instead.
             template_kwargs["reasoning_effort"] = reasoning_effort
         payload["chat_template_kwargs"] = template_kwargs
 
@@ -359,8 +336,6 @@ def install() -> None:
     _INSTALLED = True
 
 
-# Backward-compatible private aliases for request-mode helpers only. Runtime/model
-# identity is intentionally no longer inferred from model names.
 _qwen36_agent_request = _qwen_agent_request
 _qwen36_sampling_mode = _qwen_sampling_mode
 
