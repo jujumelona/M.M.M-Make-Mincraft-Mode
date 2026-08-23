@@ -61,8 +61,6 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
         progressed += len(value)
     tool_calls = delta.get("tool_calls")
     if tool_calls:
-        # Preserve native parsed calls if a llama.cpp build emits them. The local
-        # adapter remains the schema-validation owner for the selected Qwen transport.
         message["tool_calls"] = tool_calls
     return progressed
 
@@ -79,14 +77,7 @@ def _single_required_tool_turn(payload: Mapping[str, Any]) -> bool:
 
 
 def _raw_qwen_action_complete(message: Mapping[str, Any]) -> bool:
-    """Detect a closed Qwen action envelope without imposing a byte/token budget.
-
-    The managed Qwen transport intentionally keeps raw tagged tool markup so it can
-    tolerate llama.cpp parser regressions. For a serial required action, the semantic
-    boundary is the closing tool/function tag: once that boundary exists, continuing
-    to decode prose or another action only delays host execution and can exhaust the
-    model context. Final schema validation still happens in llama_cpp_adapter.
-    """
+    """Detect one fully closed Qwen action envelope without size/token heuristics."""
 
     for key in ("reasoning_content", "reasoning", "content"):
         value = message.get(key)
@@ -94,24 +85,28 @@ def _raw_qwen_action_complete(message: Mapping[str, Any]) -> bool:
             continue
         wrapped = value.find(_TOOL_CALL_OPEN)
         if wrapped >= 0:
-            closed = value.find(_TOOL_CALL_CLOSE, wrapped + len(_TOOL_CALL_OPEN))
-            if closed >= 0:
-                return True
+            # Once a wrapped tool call starts, only its outer close is executable.
+            # Stopping at </function> would hand an incomplete envelope to the parser.
+            return value.find(
+                _TOOL_CALL_CLOSE,
+                wrapped + len(_TOOL_CALL_OPEN),
+            ) >= 0
         direct = value.find(_FUNCTION_OPEN)
-        if direct >= 0:
-            closed = value.find(_FUNCTION_CLOSE, direct + len(_FUNCTION_OPEN))
-            if closed >= 0:
-                return True
+        if direct >= 0 and value.find(
+            _FUNCTION_CLOSE,
+            direct + len(_FUNCTION_OPEN),
+        ) >= 0:
+            return True
     return False
 
 
 class _StreamingCompletionClient:
-    """Aggregate SSE while returning control at the first complete semantic action.
+    """Aggregate SSE and return control at the first complete semantic action.
 
-    Text completions still run until the server's ``[DONE]`` marker. A serial required
-    Qwen tool turn is different: once its tool envelope closes, the model has produced
-    an executable action. The HTTP stream is then closed immediately so ModelRouter can
-    execute the tool, append the observation, and start the next reasoning turn.
+    Normal text completions still wait for the server ``[DONE]`` marker. A serial
+    required tool turn instead returns as soon as one complete Qwen action envelope
+    exists, allowing ModelRouter to execute it and feed the observation into the next
+    model turn. No arbitrary token or byte limit defines this boundary.
     """
 
     def __init__(self, client: Any) -> None:
@@ -235,8 +230,22 @@ class _StreamingCompletionClient:
                     )
                     break
 
+        if (
+            stop_on_action
+            and saw_done
+            and not semantic_action_complete
+            and str(finish_reason or "").strip().casefold() == "length"
+        ):
+            # Tool actions must never be converted into paged assistant prose. If the
+            # envelope did not close, no action is executable and the original failure
+            # must reach the caller instead of entering assistant-prefill continuation.
+            raise RuntimeError(
+                "required tool action did not close before llama-server context boundary; "
+                "refusing assistant-prefill continuation"
+            )
         if not saw_done and not semantic_action_complete:
             raise RuntimeError("llama server stream ended before a semantic completion boundary")
+
         result: dict[str, Any] = {
             "choices": [
                 {
