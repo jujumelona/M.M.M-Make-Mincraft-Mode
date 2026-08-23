@@ -1,162 +1,20 @@
 from __future__ import annotations
 
-"""Host-side execution extensions that let small models do less, safer work.
+"""Explicit requires/provides SkillBank composition for small-model execution.
 
-The contract adds two complementary capabilities without changing model weights:
-
-* one scalar source-edit ACI whose schema/materializer is owned by
-  ``source_edit_scalar_protocol_contract`` while this module owns runtime dispatch;
-* explicit requires/provides SkillBank composition with fail-closed dependency
-  ordering. Dependencies are never inferred from lexical similarity.
+Source editing is owned directly by AgentToolRuntime. This module now has one job:
+compose procedural skills through explicit dependency edges without inferring them
+from lexical similarity.
 """
 
 import hashlib
 import json
-import sys
 from collections import defaultdict
 from functools import wraps
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .source_edit_scalar_protocol_contract import (
-    SOURCE_EDIT_SCHEMA as _SOURCE_EDIT_SCHEMA,
-    materialize_model_source_edit as _materialize_scalar_source_edit,
-)
-
 _INSTALLED = False
-_SOURCE_EDIT_TOOL = "apply_source_edit"
 _MAX_COMPOSED_SKILLS = 12
-
-
-def _replacement_for_edit(runtime_module: Any, item: Mapping[str, Any], path: str) -> dict[str, Any]:
-    operation = str(item.get("operation", "")).strip()
-    count = item.get("count", 1)
-    if type(count) is not int or count < 1:
-        raise runtime_module.AgentToolRuntimeError(f"Invalid exact-match count for {path}")
-    if operation == "replace_exact":
-        allowed = {"operation", "path", "old", "new", "count"}
-        if set(item) - allowed:
-            raise runtime_module.AgentToolRuntimeError(f"Unknown replace_exact fields for {path}")
-        old = item.get("old")
-        new = item.get("new")
-        if not isinstance(old, str) or not old or not isinstance(new, str):
-            raise runtime_module.AgentToolRuntimeError(
-                f"replace_exact requires non-empty old and text new for {path}"
-            )
-        return {"old": old, "new": new, "count": count}
-    if operation in {"insert_before", "insert_after"}:
-        allowed = {"operation", "path", "anchor", "content", "count"}
-        if set(item) - allowed:
-            raise runtime_module.AgentToolRuntimeError(f"Unknown {operation} fields for {path}")
-        anchor = item.get("anchor")
-        content = item.get("content")
-        if not isinstance(anchor, str) or not anchor or not isinstance(content, str):
-            raise runtime_module.AgentToolRuntimeError(
-                f"{operation} requires non-empty anchor and text content for {path}"
-            )
-        new = content + anchor if operation == "insert_before" else anchor + content
-        return {"old": anchor, "new": new, "count": count}
-    raise runtime_module.AgentToolRuntimeError(f"Unsupported source edit operation: {operation!r}")
-
-
-def _materialize_model_source_edit(
-    runtime_module: Any,
-    workspace_root: str | Path,
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Delegate scalar source-write compilation to its single canonical owner."""
-
-    return _materialize_scalar_source_edit(
-        sys.modules[__name__],
-        runtime_module,
-        workspace_root,
-        payload,
-    )
-
-
-def _install_partial_source_edit(runtime_module: Any) -> None:
-    current_schemas = runtime_module.AgentToolRuntime.tool_schemas
-    if not getattr(current_schemas, "_mmm_scalar_source_edit_v2", False):
-
-        @wraps(current_schemas)
-        def tool_schemas(self: Any, stage: str):
-            schemas = current_schemas(self, stage)
-            if str(stage).strip().lower() != "generation":
-                return schemas
-            if any(
-                item.get("function", {}).get("name") == _SOURCE_EDIT_TOOL
-                for item in schemas
-                if isinstance(item, Mapping)
-            ):
-                return schemas
-            edit_tool = {
-                "type": "function",
-                "function": {
-                    "name": _SOURCE_EDIT_TOOL,
-                    "description": (
-                        "Make one bounded semantic source/resource write. Use exact replacement "
-                        "or insert-before/after for local edits, create_file for a new file, "
-                        "append_file for one 2048-character continuation chunk, replace_file for "
-                        "a whole existing file, and delete_file only when removal is intended. "
-                        "The host owns project selection, SHA-256 preconditions and transactional "
-                        "execution."
-                    ),
-                    "parameters": _SOURCE_EDIT_SCHEMA,
-                },
-            }
-            result = (*schemas, edit_tool)
-            with self._lock:
-                self._schema_cache["generation"] = result
-                self._allowed_tool_cache["generation"] = frozenset(
-                    str(item["function"]["name"])
-                    for item in result
-                )
-            return result
-
-        tool_schemas._mmm_scalar_source_edit_v2 = True  # type: ignore[attr-defined]
-        tool_schemas.__wrapped__ = current_schemas  # type: ignore[attr-defined]
-        runtime_module.AgentToolRuntime.tool_schemas = tool_schemas
-
-    current_call_scoped = runtime_module.AgentToolRuntime.call_scoped
-    if not getattr(current_call_scoped, "_mmm_scalar_source_edit_v2", False):
-
-        @wraps(current_call_scoped)
-        def call_scoped(
-            self: Any,
-            stage: str,
-            name: str,
-            arguments: Mapping[str, Any] | None = None,
-            *,
-            external_server_ids: Sequence[str],
-        ):
-            if str(stage).strip().lower() == "generation" and str(name).strip() == _SOURCE_EDIT_TOOL:
-                try:
-                    raw_patch = _materialize_model_source_edit(
-                        runtime_module,
-                        self.workspace_root,
-                        dict(arguments or {}),
-                    )
-                except runtime_module.AgentToolRuntimeError as exc:
-                    # Scalar materialization only validates/reads the selected project;
-                    # transactional mutation starts in the delegated patch call below.
-                    # Preserve that fact across ModelRouter's text-only error envelope
-                    # so the causal ledger does not discard still-current evidence.
-                    detail = runtime_module._redact_text(str(exc))
-                    if "[workspace_impact=" not in detail:
-                        detail += " [workspace_impact=unchanged]"
-                    raise runtime_module.AgentToolRuntimeError(detail) from exc
-                return self.call("generation", "apply_source_patch", raw_patch)
-            return current_call_scoped(
-                self,
-                stage,
-                name,
-                arguments,
-                external_server_ids=external_server_ids,
-            )
-
-        call_scoped._mmm_scalar_source_edit_v2 = True  # type: ignore[attr-defined]
-        call_scoped.__wrapped__ = current_call_scoped  # type: ignore[attr-defined]
-        runtime_module.AgentToolRuntime.call_scoped = call_scoped
 
 
 def _bounded_strings(value: Any, *, limit: int = 8, chars: int = 192) -> list[str]:
@@ -228,7 +86,11 @@ def _compose_skills(
                 if not capability:
                     continue
                 if any(
-                    capability in {_capability(item) for item in _bounded_strings(candidate.get("provides"), limit=8)}
+                    capability
+                    in {
+                        _capability(item)
+                        for item in _bounded_strings(candidate.get("provides"), limit=8)
+                    }
                     for candidate in selected.values()
                 ):
                     continue
@@ -254,9 +116,17 @@ def _compose_skills(
                 for candidate in selected.values()
                 if capability
                 and capability
-                in {_capability(item) for item in _bounded_strings(candidate.get("provides"), limit=8)}
+                in {
+                    _capability(item)
+                    for item in _bounded_strings(candidate.get("provides"), limit=8)
+                }
             ]
-            candidates.sort(key=lambda candidate: (-_skill_confidence(candidate), str(candidate.get("skill_id", ""))))
+            candidates.sort(
+                key=lambda candidate: (
+                    -_skill_confidence(candidate),
+                    str(candidate.get("skill_id", "")),
+                )
+            )
             if not candidates:
                 marker = {"skill_id": consumer_id, "requirement": requirement}
                 if marker not in unresolved:
@@ -264,7 +134,11 @@ def _compose_skills(
                 missing_ids.add(consumer_id)
                 continue
             provider_id = str(candidates[0].get("skill_id", ""))
-            edge = {"provider": provider_id, "consumer": consumer_id, "requirement": requirement}
+            edge = {
+                "provider": provider_id,
+                "consumer": consumer_id,
+                "requirement": requirement,
+            }
             if edge not in edges:
                 edges.append(edge)
 
@@ -382,8 +256,12 @@ def _install_ordered_skill_composition(skills_module: Any) -> None:
             skill = current_consolidated(skills)
             if skill is None:
                 return None
-            require_sets = [set(_bounded_strings(value.get("requires"), limit=8)) for value in skills]
-            provide_sets = [set(_bounded_strings(value.get("provides"), limit=8)) for value in skills]
+            require_sets = [
+                set(_bounded_strings(value.get("requires"), limit=8)) for value in skills
+            ]
+            provide_sets = [
+                set(_bounded_strings(value.get("provides"), limit=8)) for value in skills
+            ]
             common_requires = set.intersection(*require_sets) if require_sets else set()
             common_provides = set.intersection(*provide_sets) if provide_sets else set()
             result = dict(skill)
@@ -494,8 +372,14 @@ def _install_ordered_skill_composition(skills_module: Any) -> None:
                     bank_value["retrieved_skills"] = composition["ordered_skills"]
                     bank_value["skill_composition"] = composition
                     value["procedural_skillbank"] = bank_value
-                    method = dict(value.get("method", {})) if isinstance(value.get("method"), Mapping) else {}
-                    method["skill_composition"] = "explicit requires/provides DAG; unresolved/cyclic procedures are blocked"
+                    method = (
+                        dict(value.get("method", {}))
+                        if isinstance(value.get("method"), Mapping)
+                        else {}
+                    )
+                    method["skill_composition"] = (
+                        "explicit requires/provides DAG; unresolved/cyclic procedures are blocked"
+                    )
                     value["method"] = method
                     value["research_sha256"] = research._json_sha256(value)
                     return value
@@ -540,15 +424,10 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    from . import agent_tool_runtime, external_procedural_skill_contract
+    from . import external_procedural_skill_contract
 
-    _install_partial_source_edit(agent_tool_runtime)
     _install_ordered_skill_composition(external_procedural_skill_contract)
     _INSTALLED = True
 
 
-__all__ = [
-    "install",
-    "_compose_skills",
-    "_materialize_model_source_edit",
-]
+__all__ = ["install", "_compose_skills"]
