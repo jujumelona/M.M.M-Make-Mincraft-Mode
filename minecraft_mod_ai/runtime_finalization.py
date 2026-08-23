@@ -63,6 +63,7 @@ def finalize_runtime() -> None:
         from .completion_boundary_work_recovery import install as install_completion_boundary_work_recovery
         from .context_budget_preflight import run_context_budget_preflight
         from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
+        from .evidence_task_receipt_contract import install as install_evidence_task_receipts
         from .external_mcp_binding_concurrency_contract import (
             install as install_external_mcp_binding_concurrency,
         )
@@ -151,6 +152,7 @@ def finalize_runtime() -> None:
         run_runtime_live_path_preflight()
         run_runtime_preflight()
         install_evidence_first_pipeline()
+        install_evidence_task_receipts()
         _FINALIZED = True
         _FINALIZING = False
 
