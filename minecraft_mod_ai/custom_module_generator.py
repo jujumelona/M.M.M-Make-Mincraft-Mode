@@ -1665,7 +1665,6 @@ def _apply_bounded_scalar_obligation(
         validate_structured_output,
     )
     from . import agent_tool_runtime
-    from . import small_model_execution_extensions_contract as execution_extensions
     from .source_edit_scalar_protocol_contract import materialize_model_source_edit
 
     seen_rejections: set[str] = set()
@@ -1705,7 +1704,6 @@ def _apply_bounded_scalar_obligation(
             # scalar object, while the canonical protocol supplies only project
             # discovery, scope, and current SHA-256 preconditions.
             patch = materialize_model_source_edit(
-                execution_extensions,
                 agent_tool_runtime,
                 staged_root,
                 model_edit,
