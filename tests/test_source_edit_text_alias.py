@@ -61,16 +61,16 @@ def test_create_file_materializes_qwen_text_as_content(tmp_path) -> None:
         workspace,
         {
             "operation": "create_file",
-            "path": "src/main/java/example/Created.java",
-            "text": "package example;\nfinal class Created {}\n",
+            "path": "src/main/resources/created.txt",
+            "text": "created\n",
         },
     )
 
     assert payload["operations"] == [
         {
             "operation": "create",
-            "path": "src/main/java/example/Created.java",
-            "content": "package example;\nfinal class Created {}\n",
+            "path": "src/main/resources/created.txt",
+            "content": "created\n",
         }
     ]
 
