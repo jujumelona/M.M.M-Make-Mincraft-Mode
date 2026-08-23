@@ -1,9 +1,10 @@
 """Native llama.cpp server GGUF inference adapter.
 
-Local GGUF inference is server-only. Tool-aware turns keep the model's own Jinja
-``tools`` prompt while the managed server's ``--skip-chat-parsing`` mode returns raw
-reasoning/tool markup in ``message.content``. MMM parses the model's native Qwen tags
-on the host and returns each complete action immediately to the agent loop.
+Local GGUF inference is server-only. Tool-aware turns use llama.cpp's native Jinja
+function-tool parser and consume structured OpenAI-compatible ``message.tool_calls``.
+MMM validates every returned tool name and argument object against the exact visible
+schema before the agent loop can execute it. Raw Qwen XML remains a compatibility
+fallback only for server/parser misses; it is never the primary transport.
 """
 from __future__ import annotations
 
@@ -96,7 +97,7 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one semantic turn with host-validated Qwen tool markup."""
+        """Generate one semantic assistant turn."""
 
         cfg = self.config
         server_url = self._server_url(request)
@@ -173,10 +174,12 @@ def _tool_semantic_completion(
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Return one executable Qwen tool action to the host agent loop.
+    """Return one complete native tool/action turn to the host agent loop.
 
-    Tool turns never use assistant-prefill pagination. A complete action is the turn
-    boundary; the host executes it, appends the observation, and calls the model again.
+    Tool turns are deliberately one-shot: they never use SSE text aggregation,
+    assistant-prefill pagination, or an output-exhaustion continuation. llama.cpp must
+    close the structured action in this response; the host then executes it, appends
+    the observation and lets the normal agent loop decide the next turn.
     """
 
     from ..llama_stream_efficiency_contract import _report_server_connection
@@ -189,41 +192,12 @@ def _tool_semantic_completion(
     turn = _qwen_tool_generation_response(message, request)
     if _has_semantic_action(turn):
         return turn
-    if not turn.reasoning_content:
+    if turn.reasoning_content:
         raise RuntimeError(
-            "native llama-server returned neither visible content, reasoning, nor "
-            "Qwen tool calls"
+            "native llama-server returned reasoning without a complete semantic tool action"
         )
-
-    continuation_request = _reasoning_continuation_request(
-        request,
-        turn.reasoning_content,
-    )
-    continued_message = _completion_message(
-        server_url,
-        _tool_server_payload(adapter, continuation_request),
-    )
-    continued = _qwen_tool_generation_response(
-        continued_message,
-        continuation_request,
-    )
-    if not _has_semantic_action(continued):
-        if continued.reasoning_content:
-            raise RuntimeError(
-                "native llama-server returned a reasoning-only tool continuation "
-                "without a semantic action"
-            )
-        raise RuntimeError(
-            "native llama-server returned no semantic action after a reasoning-only "
-            "tool continuation"
-        )
-    return GenerationResponse(
-        content=continued.content,
-        tool_calls=continued.tool_calls,
-        reasoning_content=_merge_reasoning(
-            turn.reasoning_content,
-            continued.reasoning_content,
-        ),
+    raise RuntimeError(
+        "native llama-server returned neither visible content nor a complete tool call"
     )
 
 
@@ -231,17 +205,17 @@ def _tool_server_payload(
     adapter: LlamaCppAdapter,
     request: GenerationRequest,
 ) -> dict[str, Any]:
-    """Assert the canonical hardware policy preserves Jinja tool visibility."""
+    """Assert the canonical hardware policy preserves native Jinja tool semantics."""
 
     from ..llama_server_hardware_policy import _server_payload, _server_tool_choice
 
     payload = _server_payload(adapter, request)
     if not payload.get("tools"):
-        raise RuntimeError("pure-content tool transport received no tool schemas")
+        raise RuntimeError("native tool transport received no tool schemas")
     expected_choice = _server_tool_choice(request)
     if payload.get("tool_choice") != expected_choice:
         raise RuntimeError(
-            "llama hardware policy violated pure-content tool transport: "
+            "llama hardware policy violated native tool transport: "
             f"tool_choice must be {expected_choice!r}"
         )
     return payload
@@ -545,11 +519,6 @@ def _qwen_tool_generation_response(
     message: Mapping[str, Any],
     request: GenerationRequest,
 ) -> GenerationResponse:
-    if message.get("tool_calls"):
-        raise RuntimeError(
-            "llama-server returned server-parsed tool_calls even though managed "
-            "--skip-chat-parsing requires raw host-validated markup"
-        )
     schemas = _tool_schema_map(request.tools)
     content_value = message.get("content")
     content_raw = content_value if isinstance(content_value, str) else ""
@@ -557,6 +526,20 @@ def _qwen_tool_generation_response(
     server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
     embedded_reasoning, content_raw = _split_qwen_reasoning_markup(content_raw)
     reasoning_raw = _merge_reasoning(server_reasoning, embedded_reasoning)
+
+    native_calls = _parse_native_tool_calls(message, schemas)
+    if native_calls:
+        _reject_mixed_tool_protocol(content_raw, reasoning_raw)
+        _validate_tool_choice(request, native_calls)
+        return GenerationResponse(
+            content=content_raw.strip(),
+            tool_calls=native_calls,
+            reasoning_content=reasoning_raw.strip(),
+        )
+
+    # Compatibility fallback only. Some llama.cpp/Qwen parser combinations can miss
+    # the model's otherwise-complete XML action. The same visible schemas and host
+    # validation remain authoritative, so fallback recognition never widens execution.
     reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
     content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
     calls = (*reasoning_calls, *content_calls)
@@ -566,6 +549,114 @@ def _qwen_tool_generation_response(
         tool_calls=tuple(calls),
         reasoning_content=reasoning.strip(),
     )
+
+
+def _parse_native_tool_calls(
+    message: Mapping[str, Any],
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> tuple[ToolCall, ...]:
+    raw_calls = message.get("tool_calls")
+    if raw_calls is None:
+        return ()
+    if not isinstance(raw_calls, list):
+        raise RuntimeError("llama-server returned tool_calls in a non-list shape")
+    calls: list[ToolCall] = []
+    for index, raw_call in enumerate(raw_calls):
+        if not isinstance(raw_call, Mapping):
+            raise RuntimeError("llama-server returned an invalid structured tool call")
+        call_type = str(raw_call.get("type", "function") or "function").strip()
+        if call_type != "function":
+            raise RuntimeError(
+                f"llama-server returned unsupported tool call type {call_type!r}"
+            )
+        function = raw_call.get("function")
+        if not isinstance(function, Mapping):
+            raise RuntimeError("llama-server structured tool call lacks function metadata")
+        name = str(function.get("name", "")).strip()
+        if not name:
+            raise RuntimeError("llama-server structured tool call has an empty function name")
+        schema = schemas.get(name)
+        if schema is None:
+            raise RuntimeError(f"Qwen requested an unexposed tool {name!r}")
+        raw_arguments_value = function.get("arguments", "{}")
+        if isinstance(raw_arguments_value, Mapping):
+            arguments = dict(raw_arguments_value)
+            raw_arguments = json.dumps(
+                arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        elif isinstance(raw_arguments_value, str):
+            raw_arguments = raw_arguments_value
+            try:
+                decoded = json.loads(raw_arguments.strip() or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"llama-server structured tool {name!r} returned invalid JSON arguments"
+                ) from exc
+            if not isinstance(decoded, Mapping):
+                raise RuntimeError(
+                    f"llama-server structured tool {name!r} arguments must be an object"
+                )
+            arguments = dict(decoded)
+        else:
+            raise RuntimeError(
+                f"llama-server structured tool {name!r} arguments have an invalid shape"
+            )
+        _validate_native_tool_arguments(name, arguments, schema)
+        call_id = str(raw_call.get("id", "")).strip()
+        if not call_id:
+            digest = hashlib.sha256(
+                f"{index}\0{name}\0{raw_arguments}".encode("utf-8")
+            ).hexdigest()[:16]
+            call_id = f"call_{digest}"
+        calls.append(
+            ToolCall(
+                id=call_id,
+                name=name,
+                arguments=arguments,
+                raw_arguments=raw_arguments,
+            )
+        )
+    return tuple(calls)
+
+
+def _validate_native_tool_arguments(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    schema: Mapping[str, Any],
+) -> None:
+    try:
+        from jsonschema.validators import validator_for
+
+        validator_type = validator_for(schema)
+        validator_type.check_schema(schema)
+        errors = sorted(
+            validator_type(schema).iter_errors(dict(arguments)),
+            key=lambda error: tuple(str(part) for part in error.absolute_path),
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"tool {tool_name!r} has an invalid host validation schema"
+        ) from exc
+    if not errors:
+        return
+    error = errors[0]
+    path = ".".join(str(part) for part in error.absolute_path)
+    detail = " ".join(str(error.message).split())[:240]
+    location = f" at {path}" if path else ""
+    raise RuntimeError(
+        f"Qwen tool {tool_name!r} emitted schema-invalid arguments{location}: {detail}"
+    )
+
+
+def _reject_mixed_tool_protocol(content: str, reasoning: str) -> None:
+    combined = f"{reasoning}\n{content}"
+    for marker in _STRUCTURAL_MARKERS:
+        if marker in combined:
+            raise RuntimeError(
+                "llama-server returned both structured tool_calls and raw Qwen tool markup"
+            )
 
 
 def _split_qwen_reasoning_markup(text: str) -> tuple[str, str]:
