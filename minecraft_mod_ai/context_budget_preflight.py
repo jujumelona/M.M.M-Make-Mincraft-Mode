@@ -28,7 +28,10 @@ def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy
     from . import small_model_context_compaction as archive_module
     from .llama_length_resilience import length_recovery_installed
-    from .llama_tool_output_budget import tool_output_budget
+    from .llama_stream_efficiency_contract import (
+        _raw_qwen_action_complete,
+        _single_required_tool_turn,
+    )
     from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
 
@@ -43,26 +46,17 @@ def run_context_budget_preflight() -> None:
         raise ContextBudgetPreflightError(
             "llama-server payload is missing the native unbounded completion policy"
         )
-    if (
-        getattr(
-            llama_server_hardware_policy._server_payload,
-            "_mmm_llama_tool_output_budget_v2",
-            False,
-        )
-        is not True
-    ):
-        raise ContextBudgetPreflightError(
-            "llama-server payload is missing the bounded native tool-output policy"
-        )
 
     synthetic_adapter = SimpleNamespace(
-        config=SimpleNamespace(max_new_tokens=8192, model_id="synthetic")
+        config=SimpleNamespace(max_new_tokens=8192, model_id="synthetic", extra={})
     )
     synthetic_payload = llama_server_hardware_policy._server_payload(
         synthetic_adapter,
         SimpleNamespace(
             messages=({"role": "user", "content": "test"},),
             tools=(),
+            tool_choice=None,
+            parallel_tool_calls=False,
             response_format="text",
         ),
     )
@@ -71,37 +65,60 @@ def run_context_budget_preflight() -> None:
             "llama-server production payload is still capped by max_new_tokens"
         )
 
+    tool_schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "path": {"type": "string"},
+                },
+            },
+        },
+    }
     synthetic_tool_payload = llama_server_hardware_policy._server_payload(
         synthetic_adapter,
         SimpleNamespace(
-            messages=({"role": "user", "content": "search"},),
-            tools=({"type": "function", "function": {"name": "search_code_rag"}},),
-            response_format="json",
-        ),
-    )
-    expected_tool_budget = tool_output_budget(synthetic_adapter.config)
-    if synthetic_tool_payload.get("max_tokens") != expected_tool_budget:
-        raise ContextBudgetPreflightError(
-            "llama-server compact tool payload disagrees with the authoritative bounded "
-            f"tool-output policy: expected {expected_tool_budget}"
-        )
-    if expected_tool_budget >= synthetic_adapter.config.max_new_tokens:
-        raise ContextBudgetPreflightError(
-            "default scalar tool-output budget must remain below full coder generation budget"
-        )
-
-    synthetic_mutation_payload = llama_server_hardware_policy._server_payload(
-        synthetic_adapter,
-        SimpleNamespace(
             messages=({"role": "user", "content": "edit"},),
-            tools=({"type": "function", "function": {"name": "apply_source_edit"}},),
+            tools=(tool_schema,),
+            tool_choice="required",
+            parallel_tool_calls=False,
             response_format="json",
         ),
     )
-    if synthetic_mutation_payload.get("max_tokens") != synthetic_payload.get("max_tokens"):
+    if synthetic_tool_payload.get("max_tokens") != -1:
         raise ContextBudgetPreflightError(
-            "llama-server source mutation payload was incorrectly capped by the compact "
-            "tool-output policy"
+            "required tool turns must use semantic action completion, not an output cap"
+        )
+    if not _single_required_tool_turn(synthetic_tool_payload):
+        raise ContextBudgetPreflightError(
+            "required tool payload is not recognized as one serial semantic action"
+        )
+    if not _raw_qwen_action_complete(
+        {
+            "content": (
+                "<tool_call><function=apply_source_edit>"
+                "<parameter=operation>delete_file</parameter>"
+                "<parameter=path>src/main/resources/a.json</parameter>"
+                "</function></tool_call>"
+            )
+        }
+    ):
+        raise ContextBudgetPreflightError(
+            "Qwen semantic tool boundary does not recognize a complete action envelope"
+        )
+    if _raw_qwen_action_complete(
+        {
+            "content": (
+                "<tool_call><function=apply_source_edit>"
+                "<parameter=operation>delete_file</parameter>"
+            )
+        }
+    ):
+        raise ContextBudgetPreflightError(
+            "Qwen semantic tool boundary accepted an incomplete action envelope"
         )
 
     if not length_recovery_installed(llama_cpp_adapter._completion_message):
@@ -166,12 +183,8 @@ def run_context_budget_preflight() -> None:
             "runtime_context_default": 32768,
         },
     )
-    tools = (
-        {"type": "function", "function": {"name": "apply_source_edit"}},
-    )
+    tools = (tool_schema,)
 
-    # Exercise the repository default rather than an operator's explicit runtime
-    # override. The production function itself still honors both environment knobs.
     previous_qwen_ctx = os.environ.pop("MMM_QWEN35_MTP_CTX", None)
     previous_server_ctx = os.environ.pop("MMM_LLAMA_SERVER_CTX", None)
     try:
