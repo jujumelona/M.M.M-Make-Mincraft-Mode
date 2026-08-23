@@ -185,23 +185,19 @@ def test_forced_return_function_stays_owned_by_transport_layer() -> None:
     assert "reasoning_effort" not in payload
 
 
-def test_local_prompt_forced_auto_turn_does_not_restore_agent_thinking() -> None:
+def test_required_single_tool_turn_does_not_restore_agent_thinking() -> None:
     original = _request(
         tool_choice={
             "type": "function",
             "function": {"name": "read_project_file"},
         }
     )
-    local = _single_tool_request(
-        original,
-        "read_project_file",
-        retry=False,
-        native_required=False,
-    )
+    local = _single_tool_request(original, "read_project_file", retry=False)
 
     payload = hardware._server_payload(_Adapter(), local)
 
-    assert local.tool_choice == "auto"
+    assert local.tool_choice == "required"
+    assert local.parallel_tool_calls is False
     assert payload["chat_template_kwargs"] == {
         "enable_thinking": False,
         "preserve_thinking": False,
