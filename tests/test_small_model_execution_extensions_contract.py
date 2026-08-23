@@ -39,7 +39,16 @@ def test_source_edit_schema_is_scalar_semantic_action() -> None:
     assert "edits" not in properties
     assert all(value.get("type") != "array" for value in properties.values())
     operations = set(properties["operation"]["enum"])
-    assert {"replace_exact", "insert_before", "insert_after", "create_file", "delete_file"} <= operations
+    assert {
+        "replace_exact",
+        "insert_before",
+        "insert_after",
+        "create_file",
+        "create_java_type",
+        "add_java_import",
+        "insert_java_member",
+        "delete_file",
+    } <= operations
     assert "append_file" not in operations
     assert "replace_file" not in operations
     assert "maxLength" not in properties["new"]
@@ -82,15 +91,16 @@ def test_scalar_source_write_materializes_new_file_and_host_applies(tmp_path) ->
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     target = project / "src/main/java/example/Created.java"
-    content = "package example;\nfinal class Created {}\n"
+    content = "package example;\n\nfinal class Created {\n}\n"
 
     payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
-            "operation": "create_file",
+            "operation": "create_java_type",
             "path": "src/main/java/example/Created.java",
-            "content": content,
+            "package_name": "example",
+            "declaration": "final class Created",
         },
     )
 
@@ -135,9 +145,10 @@ def test_scalar_source_create_rejects_existing_target_without_mutation(tmp_path)
             agent_tool_runtime,
             workspace,
             {
-                "operation": "create_file",
+                "operation": "create_java_type",
                 "path": "src/main/java/example/Example.java",
-                "content": "final class Replacement {}\n",
+                "package_name": "example",
+                "declaration": "final class Example",
             },
         )
     assert source.read_text(encoding="utf-8") == before
