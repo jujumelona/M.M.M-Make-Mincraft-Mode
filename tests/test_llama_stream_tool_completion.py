@@ -50,45 +50,8 @@ def _event(payload: dict[str, Any]) -> str:
     return "data: " + json.dumps(payload, separators=(",", ":"))
 
 
-def test_tool_completion_post_is_received_as_sse_and_reassembled() -> None:
-    response = _FakeStreamResponse(
-        [
-            _event(
-                {
-                    "choices": [
-                        {
-                            "delta": {"role": "assistant", "reasoning_content": "inspect "},
-                            "finish_reason": None,
-                        }
-                    ]
-                }
-            ),
-            _event(
-                {
-                    "choices": [
-                        {
-                            "delta": {
-                                "content": (
-                                    "<tool_call><function=apply_source_edit>"
-                                    "<parameter=path>src/A.java</parameter>"
-                                    "</function></tool_call>"
-                                )
-                            },
-                            "finish_reason": None,
-                        }
-                    ]
-                }
-            ),
-            _event(
-                {
-                    "choices": [{"delta": {}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 100, "completion_tokens": 20},
-                }
-            ),
-            "data: [DONE]",
-        ]
-    )
-    raw = _FakeClient(response)
+def test_tool_completion_post_uses_native_non_streaming_transport() -> None:
+    raw = _FakeClient(_FakeStreamResponse([]))
     client = _StreamingCompletionClient(raw)
     payload = {
         "model": "local",
@@ -103,20 +66,12 @@ def test_tool_completion_post_is_received_as_sse_and_reassembled() -> None:
         timeout=httpx.Timeout(600.0),
     )
 
-    assert not raw.post_calls
-    assert len(raw.stream_calls) == 1
-    method, _, kwargs = raw.stream_calls[0]
-    assert method == "POST"
-    assert kwargs["json"]["stream"] is True
-    assert kwargs["json"]["stream_options"] == {"include_usage": True}
+    assert result.status_code == 204
+    assert len(raw.post_calls) == 1
+    assert not raw.stream_calls
+    _, kwargs = raw.post_calls[0]
+    assert kwargs["json"] is payload
     assert payload.get("stream") is None
-
-    data = result.json()
-    choice = data["choices"][0]
-    assert choice["finish_reason"] == "stop"
-    assert choice["message"]["reasoning_content"] == "inspect "
-    assert "<function=apply_source_edit>" in choice["message"]["content"]
-    assert data["usage"] == {"prompt_tokens": 100, "completion_tokens": 20}
 
 
 def test_non_completion_post_still_delegates_normally() -> None:
@@ -130,7 +85,7 @@ def test_non_completion_post_still_delegates_normally() -> None:
     assert not raw.stream_calls
 
 
-def test_stream_must_reach_done_marker() -> None:
+def test_plain_text_stream_must_reach_done_marker() -> None:
     response = _FakeStreamResponse(
         [
             _event(
@@ -147,7 +102,7 @@ def test_stream_must_reach_done_marker() -> None:
     try:
         client.post(
             "http://127.0.0.1:8080/chat/completions",
-            json={"messages": [], "tools": [{}]},
+            json={"messages": []},
         )
     except RuntimeError as exc:
         assert "before the [DONE] marker" in str(exc)
