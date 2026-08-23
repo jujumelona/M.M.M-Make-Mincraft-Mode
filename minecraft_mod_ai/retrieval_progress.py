@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 class RetrievalDecision(str, Enum):
     EXECUTE = "execute"
     DUPLICATE_QUERY = "duplicate_query"
-    SOURCE_STALLED = "source_stalled"
 
 
 class RetrievalObservation(str, Enum):
@@ -121,23 +120,20 @@ def _stable_value(value: Any, *, drop_volatile: bool) -> Any:
 class RetrievalProgress:
     """Host-owned novelty state for one retrieve/act/generate episode.
 
-    The global tool-round limit remains only a final liveness guard. Normal
-    retrieval progression is driven by novel queries and novel evidence.
+    Retrieval progression is driven by novel queries and novel evidence. Duplicate
+    evidence is local to the current observation and must never blacklist an entire
+    source, because a later distinct query can still produce new evidence.
     """
 
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
-    stalled_sources: set[str] = field(default_factory=set)
-    _last_source_evidence: dict[str, str] = field(default_factory=dict, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def begin(self, tool_name: str, arguments: Mapping[str, Any]) -> RetrievalDecision:
         source = retrieval_source_key(tool_name, arguments)
         signature = retrieval_query_signature(tool_name, arguments)
         with self._lock:
-            if source in self.stalled_sources:
-                return RetrievalDecision.SOURCE_STALLED
             if signature in self.attempted_queries:
                 return RetrievalDecision.DUPLICATE_QUERY
             self.attempted_queries.add(signature)
@@ -152,7 +148,6 @@ class RetrievalProgress:
         *,
         usable: bool,
     ) -> RetrievalObservation:
-        source = retrieval_source_key(tool_name, arguments)
         if not usable:
             return RetrievalObservation.WEAK
         fingerprint = evidence_fingerprint(value)
@@ -160,11 +155,8 @@ class RetrievalProgress:
             return RetrievalObservation.WEAK
         with self._lock:
             if fingerprint in self.evidence_fingerprints:
-                if self._last_source_evidence.get(source) == fingerprint:
-                    self.stalled_sources.add(source)
                 return RetrievalObservation.DUPLICATE_EVIDENCE
             self.evidence_fingerprints.add(fingerprint)
-            self._last_source_evidence[source] = fingerprint
             return RetrievalObservation.FRESH
 
     @property
@@ -181,10 +173,6 @@ class RetrievalProgress:
         exposed = set(exposed_tools)
         with self._lock:
             for name in preferred:
-                if (
-                    name in exposed
-                    and name not in self.attempted_sources
-                    and name not in self.stalled_sources
-                ):
+                if name in exposed and name not in self.attempted_sources:
                     return name
         return None
