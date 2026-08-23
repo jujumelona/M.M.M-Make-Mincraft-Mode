@@ -14,14 +14,13 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
+from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_TOOLS
+
 _MARKER = "_mmm_forced_tool_execution_v2"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
-_SOURCE_MUTATION_TOOLS = frozenset(
-    {"apply_source_edit", "apply_java_operations", "repair_project"}
-)
 _RETRY_INSTRUCTION = (
     "The previous assistant turn did not satisfy the required function call. "
     "Call the only available function exactly once with schema-valid arguments."
