@@ -78,6 +78,9 @@ class _StreamingCompletionClient:
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
     def close(self) -> Any:
         return self._client.close()
 
