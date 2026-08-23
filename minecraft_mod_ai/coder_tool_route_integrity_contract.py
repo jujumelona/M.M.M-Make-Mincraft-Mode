@@ -58,6 +58,19 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
     return str(function.get("name", "")).strip() if isinstance(function, Mapping) else ""
 
 
+def _named_tool_choice_name(tool_choice: Any) -> str:
+    """Return one host-forced function name without weakening other choice modes."""
+
+    if not isinstance(tool_choice, Mapping):
+        return ""
+    if str(tool_choice.get("type", "")).strip() != "function":
+        return ""
+    function = tool_choice.get("function")
+    if not isinstance(function, Mapping):
+        return ""
+    return str(function.get("name", "")).strip()
+
+
 def _user_only_request_query(messages: Sequence[Mapping[str, Any]]) -> str:
     """Route from user intent, never from injected capability boilerplate."""
 
@@ -194,7 +207,7 @@ def _failed_mutation_attempts(
     messages: Sequence[Mapping[str, Any]],
     name: str,
 ) -> int:
-    """Count only explicit host-call failures for one mutation route."""
+    """Count mutation observations that did not prove a reviewed source change."""
 
     failures = 0
     for message in messages:
@@ -203,7 +216,9 @@ def _failed_mutation_attempts(
         if str(message.get("name", "")).strip() != name:
             continue
         payload = _tool_payload(message)
-        if payload is not None and payload.get("ok") is False:
+        if payload is None:
+            continue
+        if not _source_mutation_applied((message,)):
             failures += 1
     return failures
 
@@ -309,7 +324,8 @@ class _WritableProgressAdapter:
                 )
             return self.inner.generate_turn(request)
 
-        if request.tool_choice != "auto":
+        forced_name = _named_tool_choice_name(request.tool_choice)
+        if request.tool_choice != "auto" and forced_name not in _MUTATION_TOOLS:
             return self.inner.generate_turn(request)
 
         # Once the host transcript proves a real source mutation succeeded, forcing
@@ -323,9 +339,15 @@ class _WritableProgressAdapter:
             for schema in request.tools
             if (name := _tool_name(schema)) in _MUTATION_TOOLS
         )
-        mutation = _preferred_visible_mutation(request.tools, request.messages)
+        mutation = forced_name or _preferred_visible_mutation(request.tools, request.messages)
         if mutation:
-            forced = _force_tool_choice(request, mutation)
+            if _failed_mutation_attempts(request.messages, mutation) >= _MUTATION_FAILURE_LIMIT:
+                raise ModelConfigurationError(
+                    "Writable coder exhausted the bounded mutation retry budget for the "
+                    f"current causal frontier ({mutation}); refusing to repeat the same "
+                    "failed source-edit loop."
+                )
+            forced = request if forced_name == mutation else _force_tool_choice(request, mutation)
             turn = self.inner.generate_turn(forced)
             if not turn.tool_calls or mutation not in {call.name for call in turn.tool_calls}:
                 raise ModelConfigurationError(
