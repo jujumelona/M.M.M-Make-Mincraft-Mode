@@ -57,23 +57,20 @@ def _resolve(ledger: CausalStateLedger, messages: list[dict]) -> frozenset[str]:
     ).state
 
 
-def test_safe_failed_mutations_preserve_ready_evidence() -> None:
-    ledger = CausalStateLedger()
-    messages = [{"role": "user", "content": "repair project"}, _rag_ok()]
-    ready = _resolve(ledger, messages)
-    assert {"code_evidence", "evidence_ready"}.issubset(ready)
+def test_single_safe_failed_mutations_preserve_ready_evidence() -> None:
+    failures = (
+        _failed_patch("unchanged"),
+        _failed_patch("rolled_back"),
+        _failed_patch(None, error_type="SpecValidationError"),
+    )
+    for failure in failures:
+        ledger = CausalStateLedger()
+        messages = [{"role": "user", "content": "repair project"}, _rag_ok()]
+        ready = _resolve(ledger, messages)
+        assert {"code_evidence", "evidence_ready"}.issubset(ready)
 
-    messages = [*messages, _failed_patch("unchanged")]
-    unchanged = _resolve(ledger, messages)
-    assert {"code_evidence", "evidence_ready"}.issubset(unchanged)
-
-    messages = [*messages, _failed_patch("rolled_back")]
-    rolled_back = _resolve(ledger, messages)
-    assert {"code_evidence", "evidence_ready"}.issubset(rolled_back)
-
-    messages = [*messages, _failed_patch(None, error_type="SpecValidationError")]
-    policy_rejected = _resolve(ledger, messages)
-    assert {"code_evidence", "evidence_ready"}.issubset(policy_rejected)
+        safe_failure = _resolve(ledger, [*messages, failure])
+        assert {"code_evidence", "evidence_ready"}.issubset(safe_failure)
 
 
 def test_drift_and_uncertain_failures_invalidate_snapshot_evidence() -> None:
