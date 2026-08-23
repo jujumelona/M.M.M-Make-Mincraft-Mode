@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -10,7 +9,7 @@ import tempfile
 import threading
 from contextlib import AsyncExitStack
 from itertools import islice
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Collection, Mapping, Sequence
 
 import anyio
@@ -40,6 +39,10 @@ _BLOCKED_MODEL_TOOLS = frozenset(
         "run_model_smoke",
     }
 )
+# Host transaction primitives are intentionally not part of the model-facing surface.
+# Model writes go through apply_source_edit, which compiles into apply_source_patch only
+# after path and exact-current-state validation on the host.
+_HOST_ONLY_MODEL_TOOLS = frozenset({"apply_source_patch"})
 _VALID_STAGES = frozenset(
     {
         "frontdoor",
@@ -58,37 +61,6 @@ _MODEL_SOURCE_PREFIXES = (
     "src/test/java/",
     "src/gametest/",
 )
-_MODEL_SOURCE_PATCH_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["files"],
-    "properties": {
-        "files": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 64,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["path", "content"],
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": (
-                            "Project-relative semantic source/resource path. Only src/main/java, "
-                            "src/main/resources, src/test/java and src/gametest are writable."
-                        ),
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Complete UTF-8 text for the file.",
-                    },
-                },
-            },
-        },
-    },
-}
 _DEFAULT_MAX_TOOL_RESULT_BYTES = 48 * 1024
 _MIN_TOOL_RESULT_BYTES = 8 * 1024
 _MAX_TOOL_RESULT_BYTES = 128 * 1024
@@ -197,25 +169,11 @@ class AgentToolRuntime:
             schemas: list[dict[str, Any]] = []
             for item in listed:
                 name = str(item.get("name", "")).strip()
-                if not name or name in _BLOCKED_MODEL_TOOLS:
-                    continue
-                if selected == "generation" and name == "apply_source_patch":
-                    schemas.append(
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "description": (
-                                    "Write complete semantic source/resource file text. The host "
-                                    "selects the bound project root and derives create-vs-replace, "
-                                    "exact SHA-256 preconditions and the transactional patch. Build "
-                                    "infrastructure and Gradle files are not writable through this "
-                                    "model-facing contract."
-                                ),
-                                "parameters": _MODEL_SOURCE_PATCH_SCHEMA,
-                            },
-                        }
-                    )
+                if (
+                    not name
+                    or name in _BLOCKED_MODEL_TOOLS
+                    or (selected == "generation" and name in _HOST_ONLY_MODEL_TOOLS)
+                ):
                     continue
                 parameters = item.get("input_schema")
                 if not isinstance(parameters, Mapping):
@@ -245,12 +203,13 @@ class AgentToolRuntime:
         name: str,
         arguments: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Host-stage call. ModelRouter uses call_scoped for model-owned execution."""
+        """Execute a host-owned stage tool, including hidden transaction primitives."""
         return self._call(
             stage,
             name,
             arguments,
             external_server_ids=None,
+            enforce_model_surface=False,
         )
 
     def call_scoped(
@@ -261,7 +220,7 @@ class AgentToolRuntime:
         *,
         external_server_ids: Collection[str],
     ) -> dict[str, Any]:
-        """Execute a model tool while enforcing its reviewed external MCP providers."""
+        """Execute a model tool while enforcing its reviewed visible surface/providers."""
         return self._call(
             stage,
             name,
@@ -271,6 +230,7 @@ class AgentToolRuntime:
                 for raw in external_server_ids
                 if (value := str(raw).strip())
             ),
+            enforce_model_surface=True,
         )
 
     def _call(
@@ -280,29 +240,26 @@ class AgentToolRuntime:
         arguments: Mapping[str, Any] | None,
         *,
         external_server_ids: frozenset[str] | None,
+        enforce_model_surface: bool,
     ) -> dict[str, Any]:
         selected = self._stage(stage)
         tool_name = name.strip()
         if not tool_name:
             raise AgentToolRuntimeError("tool name must not be empty")
-        if tool_name in _BLOCKED_MODEL_TOOLS:
-            raise AgentToolRuntimeError(
-                f"Tool {tool_name!r} is intentionally not model-callable."
-            )
-        self.tool_schemas(selected)
-        with self._lock:
-            allowed = self._allowed_tool_cache[selected]
-        if tool_name not in allowed:
-            raise AgentToolRuntimeError(
-                f"Tool {tool_name!r} is not exposed in stage {selected!r}."
-            )
+        if enforce_model_surface:
+            if tool_name in _BLOCKED_MODEL_TOOLS or tool_name in _HOST_ONLY_MODEL_TOOLS:
+                raise AgentToolRuntimeError(
+                    f"Tool {tool_name!r} is intentionally not model-callable."
+                )
+            self.tool_schemas(selected)
+            with self._lock:
+                allowed = self._allowed_tool_cache[selected]
+            if tool_name not in allowed:
+                raise AgentToolRuntimeError(
+                    f"Tool {tool_name!r} is not exposed in stage {selected!r}."
+                )
+
         payload = dict(arguments or {})
-        if (
-            external_server_ids is not None
-            and selected == "generation"
-            and tool_name == "apply_source_patch"
-        ):
-            payload = _materialize_model_source_patch(self.workspace_root, payload)
         try:
             if tool_name in EXTERNAL_TOOL_NAMES:
                 result = self._external_bridge.call(
@@ -395,10 +352,9 @@ class AgentToolRuntime:
         name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
-        # ``call`` already checked this name against the stage schema fetched from
-        # the same first-party server. Re-listing every schema after opening this
-        # process adds a full MCP round trip without creating a new safety boundary.
-        # ``call_tool`` itself remains fail-closed if code/server state diverges.
+        # Model calls are already checked against the cached visible surface. Host calls
+        # may intentionally target a hidden transaction primitive such as
+        # apply_source_patch; call_tool remains the MCP server's fail-closed authority.
         async with self._session(stage) as session:
             raw = await session.call_tool(name, arguments=dict(arguments))
             normalized = _normalize_tool_result(raw)
@@ -527,101 +483,6 @@ def _discover_model_project_root(workspace_root: str | Path) -> tuple[Path, str]
         )
     root = candidates[0].resolve()
     return root, root.relative_to(workspace).as_posix()
-
-
-def _materialize_model_source_patch(
-    workspace_root: str | Path,
-    payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Convert model file text into the strict patch protocol owned by the host.
-
-    The model chooses semantic source/resource paths and complete text only. The host
-    resolves the project root, enforces the writable namespace, observes current file
-    existence and computes the exact create/replace operation plus SHA-256 precondition
-    immediately before the MCP transaction. Build infrastructure therefore cannot be
-    represented by this contract.
-    """
-
-    extra = set(payload) - {"files"}
-    if extra:
-        raise AgentToolRuntimeError(
-            "Model-facing source writes accept only files; host-owned project/patch "
-            f"fields are forbidden: {sorted(extra)}"
-        )
-    root, project_root_argument = _discover_model_project_root(workspace_root)
-
-    raw_files = payload.get("files")
-    if not isinstance(raw_files, list) or not raw_files:
-        raise AgentToolRuntimeError("files must be a non-empty list")
-    if len(raw_files) > 64:
-        raise AgentToolRuntimeError("files exceeds the model-facing 64-file batch limit")
-
-    operations: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in raw_files:
-        if not isinstance(item, Mapping):
-            raise AgentToolRuntimeError("Each model source write must be an object")
-        item_extra = set(item) - {"path", "content"}
-        if item_extra:
-            raise AgentToolRuntimeError(
-                "Model source files accept only path and content; "
-                f"host-owned patch fields are forbidden: {sorted(item_extra)}"
-            )
-        raw_path = item.get("path")
-        content = item.get("content")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            raise AgentToolRuntimeError("Model source path must be a non-empty string")
-        if not isinstance(content, str):
-            raise AgentToolRuntimeError("Model source content must be text")
-
-        normalized = PurePosixPath(raw_path.strip().replace("\\", "/")).as_posix()
-        path = PurePosixPath(normalized)
-        if path.is_absolute() or normalized in {"", "."} or ".." in path.parts:
-            raise AgentToolRuntimeError(f"Unsafe model source path: {raw_path!r}")
-        if not any(normalized.startswith(prefix) for prefix in _MODEL_SOURCE_PREFIXES):
-            raise AgentToolRuntimeError(
-                "Model source writes are limited to src/main/java, src/main/resources, "
-                f"src/test/java and src/gametest: {normalized}"
-            )
-        if normalized in seen:
-            raise AgentToolRuntimeError(f"Duplicate model source path: {normalized}")
-        seen.add(normalized)
-
-        cursor = root
-        for part in path.parts[:-1]:
-            cursor = cursor / part
-            if cursor.exists() and cursor.is_symlink():
-                raise AgentToolRuntimeError(
-                    f"Model source path traverses a symlink: {normalized}"
-                )
-        target = root.joinpath(*path.parts)
-        if target.exists():
-            if target.is_symlink() or not target.is_file():
-                raise AgentToolRuntimeError(
-                    f"Model source target must be a regular file: {normalized}"
-                )
-            expected_sha256 = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
-            operations.append(
-                {
-                    "operation": "replace",
-                    "path": normalized,
-                    "expected_sha256": expected_sha256,
-                    "content": content,
-                }
-            )
-        else:
-            operations.append(
-                {
-                    "operation": "create",
-                    "path": normalized,
-                    "content": content,
-                }
-            )
-
-    return {
-        "project_root": project_root_argument,
-        "operations": operations,
-    }
 
 
 def _jsonable(value: Any) -> Any:
