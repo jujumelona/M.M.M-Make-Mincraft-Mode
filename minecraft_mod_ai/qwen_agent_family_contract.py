@@ -10,6 +10,7 @@ sampling profile from a model name.
 
 import hashlib
 import json
+import os
 import threading
 from collections import OrderedDict
 from dataclasses import replace
@@ -21,6 +22,9 @@ from .qwen_family_capabilities import qwen_family_capabilities
 
 _MAX_REASONING_TRACES = 64
 _REASONING_TRACE_LOCK = threading.RLock()
+_TOOL_RUNTIME_LOCK = threading.RLock()
+_TOOL_SAFE_RUNTIME_ACTIVE = False
+_TOOL_SAFE_RUNTIME_KEY: str | None = None
 _INSTALLED = False
 _SAMPLING_MODES = frozenset({"general_thinking", "precise_coding", "non_thinking"})
 
@@ -281,6 +285,151 @@ def _remember_reasoning(adapter: Any, response: GenerationResponse) -> None:
             store.popitem(last=False)
 
 
+def _runtime_receipt(autotune: Any) -> Mapping[str, Any]:
+    receipt = getattr(autotune, "_MMM_LLAMA_RUNTIME_RECEIPT", None)
+    if isinstance(receipt, Mapping):
+        return receipt
+    try:
+        decoded = json.loads(os.environ.get("MMM_LLAMA_RUNTIME_RECEIPT", ""))
+    except Exception:
+        decoded = None
+    return decoded if isinstance(decoded, Mapping) else {}
+
+
+def _managed_runtime_alive(autotune: Any) -> bool:
+    process = getattr(autotune, "_MANAGED_PROCESS", None)
+    url = str(getattr(autotune, "_MANAGED_URL", "") or "").strip()
+    return process is not None and process.poll() is None and bool(url)
+
+
+def _clear_managed_runtime(autotune: Any) -> None:
+    process = getattr(autotune, "_MANAGED_PROCESS", None)
+    url = str(getattr(autotune, "_MANAGED_URL", "") or "").strip().rstrip("/")
+    autotune._stop_server(process)
+    autotune._MANAGED_PROCESS = None
+    autotune._MANAGED_URL = None
+    configured = os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
+    if url and configured == url:
+        os.environ.pop("LLAMA_SERVER_URL", None)
+
+
+def _tool_safe_variant(autotune: Any, receipt: Mapping[str, Any]) -> Any:
+    return autotune.ServerVariant(
+        name="tool-safe",
+        spec_type="none",
+        draft_n_max=0,
+        ubatch=max(0, int(receipt.get("ubatch", 0) or 0)),
+        parallel=max(1, int(receipt.get("slots", 1) or 1)),
+        cache_reuse=max(0, int(receipt.get("cache_reuse", 0) or 0)),
+        draft_p_min=0.0,
+    )
+
+
+def _ensure_tool_safe_runtime(config: Any, request: GenerationRequest) -> None:
+    """Suspend speculative decoding for the complete contiguous Qwen tool phase.
+
+    llama.cpp's Qwen required-tool path can legally consume the full generation budget
+    under draft-MTP before entering the mandatory call. The same pinned runtime was
+    verified to close required calls reliably with ``spec-type none``. Keep the
+    autotuned speculative server for normal text, but switch once on entry to a tool
+    phase and keep that non-spec server for consecutive action/observation rounds.
+    """
+
+    global _TOOL_SAFE_RUNTIME_ACTIVE, _TOOL_SAFE_RUNTIME_KEY
+
+    if not (getattr(request, "tools", ()) or ()):
+        return
+    if qwen_family_capabilities(config, required=False) is None:
+        return
+
+    from . import llama_server_autotune as autotune
+
+    with _TOOL_RUNTIME_LOCK:
+        lock = getattr(autotune, "_AUTOTUNE_LOCK", None)
+        if lock is None:
+            raise RuntimeError("Qwen tool-safe runtime requires the managed llama-server lock")
+        with lock:
+            if not _managed_runtime_alive(autotune):
+                autotune.ensure_tuned_server(config, request)
+            if not _managed_runtime_alive(autotune):
+                # An explicitly external server is not owned by MMM and cannot be
+                # restarted safely here. Its operator owns speculation policy.
+                return
+
+            receipt = _runtime_receipt(autotune)
+            spec_type = str(
+                receipt.get(
+                    "spec_type",
+                    os.environ.get("MMM_LLAMA_ACTIVE_SPEC_TYPE", "none"),
+                )
+                or "none"
+            ).strip().casefold()
+            if spec_type == "none":
+                return
+            if _TOOL_SAFE_RUNTIME_ACTIVE:
+                return
+
+            binary = autotune._server_binary()
+            if not binary:
+                raise RuntimeError("native llama-server binary disappeared before tool phase")
+            model_path = autotune._resolve_model_path(config)
+            managed_key = getattr(autotune, "_MANAGED_KEY", None)
+            safe_variant = _tool_safe_variant(autotune, receipt)
+
+            _clear_managed_runtime(autotune)
+            try:
+                autotune._launch_selected(binary, model_path, config, safe_variant)
+            except Exception:
+                autotune._MANAGED_KEY = None
+                if managed_key:
+                    autotune._ATTEMPTED_KEYS.discard(managed_key)
+                _TOOL_SAFE_RUNTIME_ACTIVE = False
+                _TOOL_SAFE_RUNTIME_KEY = None
+                raise
+
+            autotune._MANAGED_KEY = managed_key
+            _TOOL_SAFE_RUNTIME_ACTIVE = True
+            _TOOL_SAFE_RUNTIME_KEY = managed_key
+            print(
+                "native llama-server: tool phase speculation suspended",
+                f"spec={spec_type}->none",
+                flush=True,
+            )
+
+
+def _restore_tool_runtime(config: Any, request: GenerationRequest) -> None:
+    """Restore the cached autotuned runtime once the tool phase is actually over."""
+
+    global _TOOL_SAFE_RUNTIME_ACTIVE, _TOOL_SAFE_RUNTIME_KEY
+
+    if not _TOOL_SAFE_RUNTIME_ACTIVE:
+        return
+
+    from . import llama_server_autotune as autotune
+
+    with _TOOL_RUNTIME_LOCK:
+        lock = getattr(autotune, "_AUTOTUNE_LOCK", None)
+        if lock is None:
+            raise RuntimeError("Qwen tool-safe runtime requires the managed llama-server lock")
+        with lock:
+            if not _TOOL_SAFE_RUNTIME_ACTIVE:
+                return
+            managed_key = _TOOL_SAFE_RUNTIME_KEY or getattr(autotune, "_MANAGED_KEY", None)
+            _clear_managed_runtime(autotune)
+            autotune._MANAGED_KEY = None
+            if managed_key:
+                autotune._ATTEMPTED_KEYS.discard(managed_key)
+            os.environ.pop("MMM_LLAMA_RUNTIME_RECEIPT", None)
+            autotune._MMM_LLAMA_RUNTIME_RECEIPT = None
+            _TOOL_SAFE_RUNTIME_ACTIVE = False
+            _TOOL_SAFE_RUNTIME_KEY = None
+            print(
+                "native llama-server: tool phase ended; restoring autotuned speculation",
+                flush=True,
+            )
+            autotune.ensure_tuned_server(config, request)
+
+
 def install() -> None:
     """Install registry-declared hybrid-thinking agent policy exactly once."""
 
@@ -316,10 +465,16 @@ def install() -> None:
         def generate_turn(self: Any, request: GenerationRequest) -> GenerationResponse:
             config = getattr(self, "config", None)
             qwen_agent = _agent_thinking_enabled(config) and _qwen_agent_request(request)
-            action_page = bool(getattr(request, "tools", ()) or ()) or (
-                getattr(request, "response_format", None) == "json"
-            )
+            tool_page = bool(getattr(request, "tools", ()) or ())
+            action_page = tool_page or getattr(request, "response_format", None) == "json"
             capabilities = qwen_family_capabilities(config, required=False)
+
+            if capabilities is not None:
+                if tool_page:
+                    _ensure_tool_safe_runtime(config, request)
+                elif _TOOL_SAFE_RUNTIME_ACTIVE:
+                    _restore_tool_runtime(config, request)
+
             if capabilities is not None and action_page:
                 prepared = _strip_reasoning_history(request)
             else:
@@ -327,10 +482,23 @@ def install() -> None:
             response = current_generate_turn(self, prepared)
             if qwen_agent:
                 _remember_reasoning(self, response)
+
+            # A tool-capable turn may finalize directly without another host-disabled
+            # tools=() page. Restore MTP immediately when that semantic tool phase ends.
+            if capabilities is not None and tool_page and not response.tool_calls:
+                restore_request = replace(
+                    prepared,
+                    tools=(),
+                    tool_validation_schemas=(),
+                    tool_choice=None,
+                    parallel_tool_calls=False,
+                )
+                _restore_tool_runtime(config, restore_request)
             return response
 
         generate_turn._mmm_qwen_reasoning_history_v2 = True  # type: ignore[attr-defined]
         generate_turn._mmm_qwen_reasoning_history = True  # type: ignore[attr-defined]
+        generate_turn._mmm_qwen_tool_safe_speculation = True  # type: ignore[attr-defined]
         LlamaCppAdapter.generate_turn = generate_turn
 
     _INSTALLED = True
@@ -339,4 +507,9 @@ def install() -> None:
 _qwen36_agent_request = _qwen_agent_request
 _qwen36_sampling_mode = _qwen_sampling_mode
 
-__all__ = ["_strip_reasoning_history", "install"]
+__all__ = [
+    "_ensure_tool_safe_runtime",
+    "_restore_tool_runtime",
+    "_strip_reasoning_history",
+    "install",
+]
