@@ -229,7 +229,7 @@ def test_two_full_attachment_pages_complete_one_tool_before_parse(monkeypatch) -
         assert payload["tools"] == wire_tools
         assert payload["tool_choice"] == "required"
         assert payload["parallel_tool_calls"] is False
-        assert payload["max_tokens"] == 8192
+        assert payload["max_tokens"] == -1
         assert payload["chat_template_kwargs"] == {"enable_thinking": False}
         assert "reasoning_effort" not in payload
     assert payloads[1]["messages"][-1]["content"].endswith(first_value_page)
@@ -397,7 +397,6 @@ def test_plain_structured_output_is_joined_before_semantic_parse(monkeypatch) ->
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
-
     monkeypatch.setattr(adapter_module, "_completion_message", complete)
     result = adapter_module._completion_message_with_prefill(
         _adapter(),
