@@ -4,8 +4,9 @@ from __future__ import annotations
 
 Tool turns deliberately do not use this module's SSE text aggregation. They are sent
 through llama.cpp's native chat parser so a completed structured ``tool_calls`` message
-is the semantic boundary returned to the agent loop. This module only accelerates
-plain text completions and records lightweight usage telemetry.
+is the semantic boundary returned to the agent loop. This module accelerates ordinary
+text completions and monitors native tool turns without changing their semantic
+transport.
 """
 
 import json
@@ -23,6 +24,9 @@ _CLIENT_LIMIT = 4
 _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 300.0
+_DEFAULT_TOOL_LIVENESS_HEARTBEAT_SECONDS = 15.0
+_DEFAULT_TOOL_STALL_WARNING_SECONDS = 120.0
+_DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -30,6 +34,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _positive_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive finite number.") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be a positive finite number.")
+    return value
 
 
 def _stream_idle_timeout_seconds() -> float:
@@ -64,6 +81,190 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
     return progressed
 
 
+def _completion_origin(url: str) -> str:
+    value = url.rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
+def _unbounded_native_tool_request(payload: Mapping[str, Any]) -> bool:
+    if not payload.get("tools"):
+        return False
+    try:
+        return int(payload.get("max_tokens", 0)) < 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _without_read_timeout(timeout: Any) -> Any:
+    import httpx
+
+    if not isinstance(timeout, httpx.Timeout):
+        return timeout
+    return httpx.Timeout(
+        connect=timeout.connect,
+        read=None,
+        write=timeout.write,
+        pool=timeout.pool,
+    )
+
+
+def _coerce_progress_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, parsed)
+
+
+def _slot_progress_from_payload(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, list):
+        return None
+    processing = [
+        slot
+        for slot in payload
+        if isinstance(slot, Mapping) and slot.get("is_processing") is True
+    ]
+    decoded_values = [
+        value
+        for slot in processing
+        if (value := _coerce_progress_int(slot.get("n_decoded"))) is not None
+    ]
+    prompt_values: list[int] = []
+    for slot in processing:
+        value = _coerce_progress_int(slot.get("n_prompt_tokens_processed"))
+        if value is None:
+            value = _coerce_progress_int(slot.get("n_prompt_tokens"))
+        if value is not None:
+            prompt_values.append(value)
+    return {
+        "processing_slots": len(processing),
+        "decoded": sum(decoded_values) if decoded_values else None,
+        "prompt_processed": sum(prompt_values) if prompt_values else None,
+    }
+
+
+def _probe_native_tool_progress(client: Any, completion_url: str) -> dict[str, Any]:
+    origin = _completion_origin(completion_url)
+    timeout = _positive_env_float(
+        "MMM_LLAMA_TOOL_PROBE_TIMEOUT_SECONDS",
+        _DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS,
+    )
+    try:
+        response = client.get(f"{origin}/slots", timeout=timeout)
+        if response.status_code == 200:
+            snapshot = _slot_progress_from_payload(response.json())
+            if snapshot is not None:
+                return {"state": "slots", **snapshot}
+    except Exception:
+        pass
+
+    try:
+        response = client.get(f"{origin}/health", timeout=timeout)
+        if response.status_code == 200:
+            return {"state": "healthy-unobservable"}
+        return {"state": f"health-http-{response.status_code}"}
+    except Exception:
+        return {"state": "probe-unavailable"}
+
+
+def _native_tool_liveness_reporter(
+    client: Any,
+    completion_url: str,
+    stop: threading.Event,
+    started: float,
+) -> None:
+    heartbeat = _positive_env_float(
+        "MMM_LLAMA_TOOL_LIVENESS_HEARTBEAT_SECONDS",
+        _DEFAULT_TOOL_LIVENESS_HEARTBEAT_SECONDS,
+    )
+    warning_after = _positive_env_float(
+        "MMM_LLAMA_TOOL_STALL_WARNING_SECONDS",
+        _DEFAULT_TOOL_STALL_WARNING_SECONDS,
+    )
+    last_progress_at = started
+    last_decoded: int | None = None
+    last_prompt: int | None = None
+    warning_reported = False
+
+    while not stop.wait(heartbeat):
+        now = time.monotonic()
+        snapshot = _probe_native_tool_progress(client, completion_url)
+        state = str(snapshot.get("state", "probe-unavailable"))
+        if state != "slots":
+            print(
+                "llama server: tool completion liveness",
+                f" state={state}",
+                " progress=unobservable",
+                f" elapsed={now - started:.1f}s",
+                sep="",
+                flush=True,
+            )
+            continue
+
+        processing = int(snapshot.get("processing_slots", 0) or 0)
+        decoded = snapshot.get("decoded")
+        prompt = snapshot.get("prompt_processed")
+        progressed = False
+        if isinstance(decoded, int) and (last_decoded is None or decoded > last_decoded):
+            progressed = True
+        if isinstance(prompt, int) and (last_prompt is None or prompt > last_prompt):
+            progressed = True
+        if progressed:
+            last_progress_at = now
+            warning_reported = False
+        if isinstance(decoded, int):
+            decoded_delta = (
+                decoded - last_decoded if isinstance(last_decoded, int) else decoded
+            )
+            last_decoded = decoded
+        else:
+            decoded_delta = None
+        if isinstance(prompt, int):
+            last_prompt = prompt
+
+        idle_for = max(0.0, now - last_progress_at)
+        if processing <= 0:
+            phase = "no-processing-slot"
+        elif isinstance(decoded, int) and decoded > 0:
+            phase = "generating" if progressed else "processing-no-new-decode"
+        elif isinstance(prompt, int):
+            phase = "prompting" if progressed else "processing-no-new-prompt"
+        else:
+            phase = "processing-progress-counter-unavailable"
+
+        fields = [
+            "llama server: tool completion liveness",
+            f" state={phase}",
+            f" slots={processing}",
+        ]
+        if isinstance(prompt, int):
+            fields.append(f" prompt_processed={prompt}")
+        if isinstance(decoded, int):
+            fields.append(f" decoded={decoded}")
+            if isinstance(decoded_delta, int) and decoded_delta > 0:
+                fields.append(f" decoded_delta=+{decoded_delta}")
+        fields.extend(
+            [
+                f" no_counter_progress={idle_for:.1f}s",
+                f" elapsed={now - started:.1f}s",
+            ]
+        )
+        print(*fields, sep="", flush=True)
+
+        if processing > 0 and idle_for >= warning_after and not warning_reported:
+            print(
+                "llama server: WARNING tool completion has no observed slot-counter progress",
+                f" for={idle_for:.1f}s",
+                " request_continues=true",
+                " classification=not-proven-stuck",
+                flush=True,
+            )
+            warning_reported = True
+
+
 class _StreamingCompletionClient:
     """Reuse one HTTP client and stream only non-tool chat completions."""
 
@@ -85,12 +286,44 @@ class _StreamingCompletionClient:
             not isinstance(payload, Mapping)
             or not url.rstrip("/").endswith("/chat/completions")
             or payload.get("stream") is True
-            or bool(payload.get("tools"))
         ):
-            # Tool turns must remain native OpenAI-compatible responses. Streaming
-            # tool-call deltas are incremental and cannot be treated as executable
-            # actions until llama.cpp has finished parsing the call.
             return self._client.post(url, **kwargs)
+
+        if bool(payload.get("tools")):
+            # Tool actions remain a single native OpenAI-compatible response. We only
+            # monitor llama.cpp's slot counters; partial tool output is never surfaced
+            # or made executable.
+            native_kwargs = dict(kwargs)
+            unbounded = _unbounded_native_tool_request(payload)
+            explicit_timeout = bool(
+                os.environ.get("MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS", "").strip()
+            )
+            if unbounded and not explicit_timeout:
+                native_kwargs["timeout"] = _without_read_timeout(
+                    native_kwargs.get("timeout")
+                )
+                print(
+                    "llama server: unbounded tool completion",
+                    " effective_read_timeout=none",
+                    " reason=max_tokens=-1",
+                    " liveness=slot-monitor",
+                    flush=True,
+                )
+
+            started = time.monotonic()
+            stop = threading.Event()
+            reporter = threading.Thread(
+                target=_native_tool_liveness_reporter,
+                args=(self._client, url, stop, started),
+                name="mmm-llama-tool-liveness",
+                daemon=True,
+            )
+            reporter.start()
+            try:
+                return self._client.post(url, **native_kwargs)
+            finally:
+                stop.set()
+                reporter.join(timeout=0.2)
 
         import httpx
 
@@ -529,7 +762,9 @@ __all__ = [
     "_active_decode_profile",
     "_client",
     "_native_timing_summary",
+    "_probe_native_tool_progress",
     "_report_server_connection",
+    "_slot_progress_from_payload",
     "_stream_idle_timeout_seconds",
     "install",
 ]
