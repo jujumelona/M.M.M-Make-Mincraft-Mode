@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 
 from minecraft_mod_ai import agent_tool_runtime
-from minecraft_mod_ai import small_model_execution_extensions_contract as execution_extensions
 from minecraft_mod_ai import source_edit_scalar_protocol_contract as scalar_protocol
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
@@ -17,67 +16,74 @@ def _project(workspace):
     return project
 
 
-def test_execution_extension_uses_scalar_protocol_as_single_schema_owner() -> None:
-    assert execution_extensions._SOURCE_EDIT_SCHEMA is scalar_protocol.SOURCE_EDIT_SCHEMA
+def test_scalar_protocol_is_the_single_source_edit_schema_owner() -> None:
+    schema = scalar_protocol.SOURCE_EDIT_SCHEMA
+    properties = schema["properties"]
 
-    properties = execution_extensions._SOURCE_EDIT_SCHEMA["properties"]
     assert "edits" not in properties
-    assert execution_extensions._SOURCE_EDIT_SCHEMA["required"] == ["operation", "path"]
-    assert set(properties["operation"]["enum"]) >= {
+    assert schema["required"] == ["operation", "path"]
+    assert set(properties["operation"]["enum"]) == {
         "replace_exact",
         "insert_before",
         "insert_after",
         "create_file",
-        "replace_file",
         "delete_file",
         "replace",
         "create",
         "delete",
     }
+    assert "replace_file" not in properties["operation"]["enum"]
+    assert "append_file" not in properties["operation"]["enum"]
 
 
-def test_scalar_protocol_install_validates_without_late_monkeypatch() -> None:
-    schema_before = execution_extensions._SOURCE_EDIT_SCHEMA
-    materializer_before = execution_extensions._materialize_model_source_edit
+def test_scalar_protocol_install_is_validation_only_and_idempotent() -> None:
+    schema_before = scalar_protocol.SOURCE_EDIT_SCHEMA
+    materializer_before = scalar_protocol.materialize_model_source_edit
 
-    scalar_protocol.install(execution_extensions, agent_tool_runtime)
+    scalar_protocol.install()
+    scalar_protocol.install()
 
-    assert execution_extensions._SOURCE_EDIT_SCHEMA is schema_before
-    assert execution_extensions._materialize_model_source_edit is materializer_before
-    assert execution_extensions._SOURCE_EDIT_SCHEMA is scalar_protocol.SOURCE_EDIT_SCHEMA
+    assert scalar_protocol.SOURCE_EDIT_SCHEMA is schema_before
+    assert scalar_protocol.materialize_model_source_edit is materializer_before
 
 
-def test_replace_file_materializes_transactional_replace_with_host_hash(tmp_path) -> None:
+def test_replace_exact_materializes_transactional_edit_with_host_hash(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
     before = "final class Example {}\n"
-    after = "final class Example { int value; }\n"
     source.write_text(before, encoding="utf-8")
 
-    payload = execution_extensions._materialize_model_source_edit(
+    payload = scalar_protocol.materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
-            "operation": "replace_file",
+            "operation": "replace_exact",
             "path": "src/main/java/example/Example.java",
-            "content": after,
+            "old": "Example {}",
+            "new": "Example { int value; }",
         },
     )
 
     assert payload["project_root"] == "demo"
     assert payload["operations"] == [
         {
-            "operation": "replace",
+            "operation": "edit",
             "path": "src/main/java/example/Example.java",
             "expected_sha256": "sha256:"
             + hashlib.sha256(source.read_bytes()).hexdigest(),
-            "content": after,
+            "replacements": [
+                {
+                    "old": "Example {}",
+                    "new": "Example { int value; }",
+                    "count": 1,
+                }
+            ],
         }
     ]
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
     assert receipt["status"] == "APPLIED"
-    assert source.read_text(encoding="utf-8") == after
+    assert source.read_text(encoding="utf-8") == "final class Example { int value; }\n"
 
 
 def test_delete_file_materializes_transactional_delete_with_host_hash(tmp_path) -> None:
@@ -87,7 +93,7 @@ def test_delete_file_materializes_transactional_delete_with_host_hash(tmp_path) 
     before = "final class Obsolete {}\n"
     source.write_text(before, encoding="utf-8")
 
-    payload = execution_extensions._materialize_model_source_edit(
+    payload = scalar_protocol.materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -109,14 +115,13 @@ def test_delete_file_materializes_transactional_delete_with_host_hash(tmp_path) 
     assert not source.exists()
 
 
-def test_whole_file_aliases_keep_single_scalar_protocol(tmp_path) -> None:
+def test_lossless_aliases_stay_inside_single_scalar_protocol(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
-    before = "final class Example {}\n"
-    source.write_text(before, encoding="utf-8")
+    source.write_text("final class Example {}\n", encoding="utf-8")
 
-    replace_payload = execution_extensions._materialize_model_source_edit(
+    delete_payload = scalar_protocol.materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -125,4 +130,4 @@ def test_whole_file_aliases_keep_single_scalar_protocol(tmp_path) -> None:
         },
     )
 
-    assert replace_payload["operations"][0]["operation"] == "delete"
+    assert delete_payload["operations"][0]["operation"] == "delete"
