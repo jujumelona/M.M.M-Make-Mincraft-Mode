@@ -3,12 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-import pytest
-
 from minecraft_mod_ai.causal_frontier_adapter import CausalFrontierAdapter
 from minecraft_mod_ai.causal_state_ledger import CausalStateLedger
 from minecraft_mod_ai.coder_tool_route_integrity_contract import _WritableProgressAdapter
-from minecraft_mod_ai.model_adapters import GenerationRequest, ModelConfigurationError
+from minecraft_mod_ai.model_adapters import GenerationRequest
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -124,15 +122,6 @@ class _RecordingAdapter:
         )
 
 
-class _NeverCalledAdapter:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def generate_turn(self, request: GenerationRequest):
-        self.calls += 1
-        raise AssertionError(f"model should not be called again: {request.tool_choice!r}")
-
-
 def test_repeated_safe_edit_failures_open_corrective_evidence_epoch() -> None:
     """Live composition must recover through evidence instead of leaking to round 12."""
 
@@ -188,15 +177,15 @@ def test_repeated_safe_edit_failures_open_corrective_evidence_epoch() -> None:
     }
 
 
-def test_patch_transport_success_without_applied_receipt_consumes_retry() -> None:
-    """Completion and retry accounting must use the same mutation-proof contract."""
+def test_patch_transport_failures_do_not_create_adapter_local_retry_budget() -> None:
+    """Mutation retry ownership stays in CausalStateLedger, not the transport wrapper."""
 
     patch = _schema("apply_source_patch")
     observations = (
         _patch_observation(applied=False, call_id="patch-1"),
         _patch_observation(applied=False, call_id="patch-2"),
     )
-    inner = _NeverCalledAdapter()
+    inner = _RecordingAdapter()
     adapter = _WritableProgressAdapter(inner)
     request = GenerationRequest(
         messages=(_implement_message(), *observations),
@@ -209,10 +198,11 @@ def test_patch_transport_success_without_applied_receipt_consumes_retry() -> Non
         parallel_tool_calls=False,
     )
 
-    with pytest.raises(ModelConfigurationError, match="bounded mutation retry budget"):
-        adapter.generate_turn(request)
+    turn = adapter.generate_turn(request)
 
-    assert inner.calls == 0
+    assert turn.tool_calls[0].name == "apply_source_patch"
+    assert len(inner.requests) == 1
+    assert inner.requests[0].tool_choice == request.tool_choice
 
 
 def test_causal_state_requires_the_same_applied_mutation_proof() -> None:
