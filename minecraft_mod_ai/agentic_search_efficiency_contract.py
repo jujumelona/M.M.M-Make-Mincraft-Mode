@@ -87,6 +87,27 @@ def _parallel_workers(router: Any, width: int, config: Any | None) -> int:
     return max(1, min(width, _active_parallel_slots()))
 
 
+def _base_repair_candidate_count(candidate_count: Any) -> Any:
+    """Return the deepest risk function below transport/capacity policy wrappers.
+
+    Candidate breadth has one live owner here. Older runtime layers may still wrap the
+    risk function for compatibility and copy ``__dict__`` markers through
+    ``functools.wraps``. Auto mode must not feed those policy wrappers back into the
+    slot-aware owner or a historical single-lane decision will permanently clamp a
+    later multi-slot runtime to one candidate.
+    """
+
+    current = candidate_count
+    seen: set[int] = set()
+    while callable(current) and id(current) not in seen:
+        seen.add(id(current))
+        wrapped = getattr(current, "__wrapped__", None)
+        if not callable(wrapped) or wrapped is current:
+            break
+        current = wrapped
+    return current
+
+
 def _install_parallel_repair_search(agentic_module: Any) -> None:
     """Parallelize repair candidates while committing only one verified winner."""
     current_installer = agentic_module._install_repair_search_and_memory
@@ -246,6 +267,7 @@ def install(agentic_module: Any) -> None:
     """Install repair-only candidate parallelism; planner Best-of-N is retired."""
     current_repair_count = agentic_module._repair_candidate_count
     if not has_contract_marker(current_repair_count, "_mmm_failure_gated_search"):
+        risk_candidate_count = _base_repair_candidate_count(current_repair_count)
 
         def repair_candidate_count(
             self: Any,
@@ -267,7 +289,7 @@ def install(agentic_module: Any) -> None:
                 return 1
             risk_width = max(
                 1,
-                min(3, int(current_repair_count(self, evidence, memory))),
+                min(3, int(risk_candidate_count(self, evidence, memory))),
             )
             return min(slots, risk_width)
 
