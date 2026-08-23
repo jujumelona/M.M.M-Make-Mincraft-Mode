@@ -346,7 +346,8 @@ def test_output_exhaustion_continues_from_same_staged_workspace_until_success(
     assert continuation["continuation"]["continuation_index"] == 1
     assert continuation["continuation"]["preserved_path_count"] == 1
     assert "initial_exact_source_context" not in continuation
-    assert any("append_file" in rule for rule in continuation["rules"])
+    assert any("create_java_type" in rule for rule in continuation["rules"])
+    assert all("append_file" not in rule for rule in continuation["rules"])
 
 
 def test_repeated_exact_stage_uses_partial_hint_for_bounded_scalar_split(
@@ -376,9 +377,10 @@ def test_repeated_exact_stage_uses_partial_hint_for_bounded_scalar_split(
             if kwargs["response_format"] == "json":
                 return json.dumps(
                     {
-                        "operation": "create_file",
+                        "operation": "create_java_type",
                         "path": "src/main/java/example/Recovered.java",
-                        "content": "package example;\nfinal class Recovered {}\n",
+                        "package_name": "example",
+                        "declaration": "final class Recovered",
                     }
                 )
             if len(self.calls) <= 2:
@@ -406,10 +408,9 @@ def test_repeated_exact_stage_uses_partial_hint_for_bounded_scalar_split(
     assert result["bounded_scalar_obligations"] == 1
     assert (root / "src/main/java/example/Recovered.java").read_text(
         encoding="utf-8"
-    ) == "package example;\nfinal class Recovered {}\n"
+    ) == "package example;\n\nfinal class Recovered {\n}\n"
     scalar_request = json.loads(router.messages[2][-1]["content"])
     assert scalar_request["truncated_action_receipt"]["safe_header_hint"] == {
-        "operation": "create_file",
         "path": "src/main/java/example/Recovered.java",
     }
     assert "x" * 100 not in router.messages[2][-1]["content"]
@@ -591,23 +592,30 @@ def test_context_pressure_without_partial_output_is_not_consumed(tmp_path: Path)
 
 
 @pytest.mark.parametrize(
-    ("operation", "missing_payload"),
+    ("operation", "path", "missing_payload"),
     [
-        ("replace_exact", {"old": "x"}),
-        ("insert_before", {"anchor": "x"}),
-        ("insert_after", {"content": "x"}),
-        ("create_file", {}),
-        ("append_file", {}),
+        ("replace_exact", "src/main/java/example/Schema.java", {"old": "x"}),
+        ("insert_before", "src/main/java/example/Schema.java", {"anchor": "x"}),
+        ("insert_after", "src/main/java/example/Schema.java", {"content": "x"}),
+        ("create_file", "src/main/resources/example/schema.json", {}),
+        (
+            "create_java_type",
+            "src/main/java/example/Schema.java",
+            {"package_name": "example"},
+        ),
+        ("add_java_import", "src/main/java/example/Schema.java", {}),
+        ("insert_java_member", "src/main/java/example/Schema.java", {}),
     ],
 )
 def test_bounded_scalar_schema_requires_operation_specific_fields(
     operation: str,
+    path: str,
     missing_payload: dict[str, str],
 ) -> None:
     schema = _bounded_scalar_obligation_schema({})
     payload = {
         "operation": operation,
-        "path": "src/main/java/example/Schema.java",
+        "path": path,
         **missing_payload,
     }
     with pytest.raises(StructuredOutputValidationError):
@@ -621,7 +629,7 @@ def test_bounded_scalar_schema_requires_operation_specific_fields(
 def test_bounded_scalar_schema_narrows_required_fields_for_safe_hint() -> None:
     schema = _bounded_scalar_obligation_schema(
         {
-            "operation": "append_file",
+            "operation": "create_java_type",
             "path": "src/main/java/example/Chunked.java",
         }
     )
@@ -629,13 +637,24 @@ def test_bounded_scalar_schema_narrows_required_fields_for_safe_hint() -> None:
         validate_structured_output(
             json.dumps(
                 {
-                    "operation": "append_file",
+                    "operation": "create_java_type",
                     "path": "src/main/java/example/Chunked.java",
+                    "package_name": "example",
                 }
             ),
             response_format="json",
             response_schema=schema,
         )
+
+
+def test_bounded_scalar_java_schema_excludes_retired_whole_file_actions() -> None:
+    schema = _bounded_scalar_obligation_schema(
+        {"path": "src/main/java/example/Recovered.java"}
+    )
+    operations = set(schema["properties"]["operation"]["enum"])
+    assert "create_file" not in operations
+    assert "append_file" not in operations
+    assert {"create_java_type", "add_java_import", "insert_java_member"} <= operations
 
 
 def test_checkpoint_router_scope_binds_candidate_count_and_strategy_epoch() -> None:
