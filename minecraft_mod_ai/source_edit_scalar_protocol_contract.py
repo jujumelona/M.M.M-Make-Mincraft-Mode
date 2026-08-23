@@ -2,13 +2,14 @@ from __future__ import annotations
 
 """Canonical model-facing source edit protocol.
 
-One model action describes one executable edit. Existing files are changed through
-exact spans or anchors; a genuinely new file may be created in one action. The host
-resolves the project, validates the current file state, derives a SHA precondition and
-compiles the action into the internal transactional ``apply_source_patch`` primitive.
+One model action describes one executable semantic edit. Java source is never created
+as one giant model-authored file payload: the model creates a type shell, adds imports,
+and inserts one member per action. The host materializes those semantic actions into
+SHA-bound transactional patches. Non-Java resources may still be created directly.
 """
 
 import hashlib
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -18,6 +19,9 @@ _CANONICAL_OPERATIONS = (
     "insert_before",
     "insert_after",
     "create_file",
+    "create_java_type",
+    "add_java_import",
+    "insert_java_member",
     "delete_file",
 )
 _OPERATION_ALIASES = {
@@ -26,6 +30,14 @@ _OPERATION_ALIASES = {
     "delete": "delete_file",
 }
 _ACCEPTED_OPERATIONS = (*_CANONICAL_OPERATIONS, *_OPERATION_ALIASES)
+_JAVA_PATH_SUFFIX = ".java"
+_JAVA_PACKAGE = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
+_JAVA_TYPE_DECLARATION = re.compile(
+    r"\b(?:class|interface|enum|record|@interface)\s+[A-Za-z_$][\w$]*\b"
+)
+_JAVA_TYPE_OPEN = re.compile(
+    r"\b(?:class|interface|enum|record|@interface)\s+[A-Za-z_$][\w$]*[^;{]*\{"
+)
 
 SOURCE_EDIT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -36,14 +48,16 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": list(_ACCEPTED_OPERATIONS),
             "description": (
-                "Use replace_exact or insert_before/insert_after for an existing file, "
-                "create_file for a new file, and delete_file only when removal is intended."
+                "Perform exactly one semantic source action. For Java: create_java_type "
+                "creates only the empty type shell, add_java_import adds one import, and "
+                "insert_java_member adds one field/constructor/method/nested declaration. "
+                "Never emit an entire Java file as create_file content."
             ),
         },
         "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Project-relative source/resource path selected for this edit.",
+            "description": "Project-relative source/resource path selected for this action.",
         },
         "old": {
             "type": "string",
@@ -61,17 +75,49 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
         },
         "content": {
             "type": "string",
-            "description": "Inserted text, or complete content when creating a new file.",
+            "description": (
+                "Inserted text for anchor edits, or complete content only for a new "
+                "non-Java resource. Java files must use structural Java operations."
+            ),
         },
         "text": {
             "type": "string",
-            "description": "Lossless Qwen alias for new/content.",
+            "description": "Lossless Qwen alias for new/content/member.",
         },
         "count": {
             "type": "integer",
             "minimum": 1,
             "default": 1,
             "description": "Expected exact occurrence count for the selected span/anchor.",
+        },
+        "package_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Java package for create_java_type, e.g. com.example.mod.",
+        },
+        "declaration": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Java type header only, without braces or body, e.g. "
+                "'public final class Example implements ModInitializer'."
+            ),
+        },
+        "import_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "One Java import target without 'import' or trailing ';'. Prefix with "
+                "'static ' for a static import."
+            ),
+        },
+        "member": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Exactly one Java type member: one field, constructor, method, initializer, "
+                "or nested type. Do not include package/import declarations or the outer type."
+            ),
         },
     },
 }
@@ -107,7 +153,12 @@ def _normalize_operation(runtime_module: Any, value: Any) -> str:
 def _canonicalize_text_alias(payload: Mapping[str, Any], operation: str) -> Mapping[str, Any]:
     if operation == "delete_file" or "text" not in payload:
         return payload
-    canonical_key = "new" if operation == "replace_exact" else "content"
+    if operation == "replace_exact":
+        canonical_key = "new"
+    elif operation == "insert_java_member":
+        canonical_key = "member"
+    else:
+        canonical_key = "content"
     if canonical_key in payload:
         return payload
     normalized = dict(payload)
@@ -186,7 +237,6 @@ def _replacement_for_edit(
     runtime_module: Any,
     *,
     operation: str,
-    path: str,
     payload: Mapping[str, Any],
     count: int,
 ) -> dict[str, Any]:
@@ -198,6 +248,210 @@ def _replacement_for_edit(
     content = _required_text(runtime_module, payload, "content", allow_empty=True)
     new = content + anchor if operation == "insert_before" else anchor + content
     return {"old": anchor, "new": new, "count": count}
+
+
+def _read_utf8(runtime_module: Any, target: Path, normalized: str) -> tuple[bytes, str, str]:
+    raw = target.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise runtime_module.AgentToolRuntimeError(
+            f"Source edit target is not UTF-8 text: {normalized}"
+        ) from exc
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    return raw, text, digest
+
+
+def _host_replace(path: str, expected_sha256: str, content: str) -> dict[str, Any]:
+    return {
+        "operation": "replace",
+        "path": path,
+        "expected_sha256": expected_sha256,
+        "content": content,
+    }
+
+
+def _validate_java_path(runtime_module: Any, normalized: str) -> None:
+    if not normalized.endswith(_JAVA_PATH_SUFFIX):
+        raise runtime_module.AgentToolRuntimeError(
+            f"Java structural operation requires a .java path: {normalized}"
+        )
+
+
+def _create_java_type(
+    runtime_module: Any,
+    *,
+    normalized: str,
+    target: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    _validate_java_path(runtime_module, normalized)
+    if target.exists():
+        raise runtime_module.AgentToolRuntimeError(
+            f"create_java_type target already exists: {normalized}"
+        )
+    package_name = _required_text(runtime_module, payload, "package_name").strip()
+    if not _JAVA_PACKAGE.fullmatch(package_name):
+        raise runtime_module.AgentToolRuntimeError(
+            f"Invalid Java package_name: {package_name!r}"
+        )
+    declaration = " ".join(
+        _required_text(runtime_module, payload, "declaration").strip().split()
+    )
+    if "{" in declaration or "}" in declaration or ";" in declaration:
+        raise runtime_module.AgentToolRuntimeError(
+            "create_java_type declaration must be a type header without braces/body"
+        )
+    if not _JAVA_TYPE_DECLARATION.search(declaration):
+        raise runtime_module.AgentToolRuntimeError(
+            "create_java_type declaration must declare one class/interface/enum/record"
+        )
+    return {
+        "operation": "create",
+        "path": normalized,
+        "content": f"package {package_name};\n\n{declaration} {{\n}}\n",
+    }
+
+
+def _mask_java_noncode(text: str) -> str:
+    chars = list(text)
+    state = "code"
+    escape = False
+    index = 0
+    while index < len(chars):
+        char = chars[index]
+        nxt = chars[index + 1] if index + 1 < len(chars) else ""
+        if state == "code":
+            if char == "/" and nxt == "/":
+                chars[index] = chars[index + 1] = " "
+                state = "line_comment"
+                index += 2
+                continue
+            if char == "/" and nxt == "*":
+                chars[index] = chars[index + 1] = " "
+                state = "block_comment"
+                index += 2
+                continue
+            if char == '"':
+                chars[index] = " "
+                state = "string"
+                escape = False
+            elif char == "'":
+                chars[index] = " "
+                state = "char"
+                escape = False
+        elif state == "line_comment":
+            if char == "\n":
+                state = "code"
+            else:
+                chars[index] = " "
+        elif state == "block_comment":
+            if char == "*" and nxt == "/":
+                chars[index] = chars[index + 1] = " "
+                state = "code"
+                index += 2
+                continue
+            if char != "\n":
+                chars[index] = " "
+        else:
+            if char == "\n":
+                chars[index] = " "
+            else:
+                chars[index] = " "
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif (state == "string" and char == '"') or (
+                state == "char" and char == "'"
+            ):
+                state = "code"
+        index += 1
+    return "".join(chars)
+
+
+def _outer_type_close(runtime_module: Any, text: str, normalized: str) -> int:
+    masked = _mask_java_noncode(text)
+    match = _JAVA_TYPE_OPEN.search(masked)
+    if match is None:
+        raise runtime_module.AgentToolRuntimeError(
+            f"Could not find an outer Java type declaration in {normalized}"
+        )
+    opening = masked.find("{", match.start(), match.end())
+    depth = 0
+    for index in range(opening, len(masked)):
+        char = masked[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise runtime_module.AgentToolRuntimeError(
+        f"Outer Java type has unmatched braces in {normalized}"
+    )
+
+
+def _add_java_import(
+    runtime_module: Any,
+    *,
+    normalized: str,
+    text: str,
+    expected_sha256: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    _validate_java_path(runtime_module, normalized)
+    import_name = _required_text(runtime_module, payload, "import_name").strip()
+    if import_name.startswith("import ") or import_name.endswith(";") or "\n" in import_name:
+        raise runtime_module.AgentToolRuntimeError(
+            "import_name must omit the 'import' keyword, semicolon, and newlines"
+        )
+    statement = f"import {import_name};"
+    if re.search(rf"(?m)^\s*{re.escape(statement)}\s*$", text):
+        raise runtime_module.AgentToolRuntimeError(
+            f"Java import already exists in {normalized}: {import_name}"
+        )
+    package = re.search(r"(?m)^\s*package\s+[\w.$]+\s*;\s*$", text)
+    imports = list(re.finditer(r"(?m)^\s*import\s+[^;\n]+;\s*$", text))
+    if imports:
+        insert_at = imports[-1].end()
+        insertion = "\n" + statement
+    elif package:
+        insert_at = package.end()
+        insertion = "\n\n" + statement
+    else:
+        insert_at = 0
+        insertion = statement + "\n\n"
+    updated = text[:insert_at] + insertion + text[insert_at:]
+    return _host_replace(normalized, expected_sha256, updated)
+
+
+def _insert_java_member(
+    runtime_module: Any,
+    *,
+    normalized: str,
+    text: str,
+    expected_sha256: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    _validate_java_path(runtime_module, normalized)
+    member = _required_text(runtime_module, payload, "member").strip()
+    if re.search(r"(?m)^\s*(?:package|import)\s+", member):
+        raise runtime_module.AgentToolRuntimeError(
+            "insert_java_member may not contain package/import declarations"
+        )
+    close_at = _outer_type_close(runtime_module, text, normalized)
+    prefix = text[:close_at]
+    suffix = text[close_at:]
+    formatted_lines = []
+    for line in member.splitlines():
+        formatted_lines.append(("    " + line) if line else "")
+    formatted = "\n".join(formatted_lines).rstrip()
+    if not formatted:
+        raise runtime_module.AgentToolRuntimeError("member must contain Java source")
+    spacer = "" if prefix.endswith("\n\n") else "\n" if prefix.endswith("\n") else "\n\n"
+    updated = prefix + spacer + formatted + "\n" + suffix
+    return _host_replace(normalized, expected_sha256, updated)
 
 
 def materialize_model_source_edit(
@@ -225,18 +479,42 @@ def materialize_model_source_edit(
         workspace_root,
         bound_project_root,
     )
+    requires_existing = operation not in {"create_file", "create_java_type"}
     normalized, target = _normalize_model_target(
         runtime_module,
         root,
         path,
-        require_existing=operation != "create_file",
+        require_existing=requires_existing,
     )
 
+    if operation == "create_java_type":
+        forbidden = {"old", "new", "anchor", "content", "text", "count", "import_name", "member"}.intersection(payload)
+        if forbidden:
+            raise runtime_module.AgentToolRuntimeError(
+                f"Fields {sorted(forbidden)} are invalid for create_java_type"
+            )
+        return {
+            "project_root": project_root_argument,
+            "operations": [
+                _create_java_type(
+                    runtime_module,
+                    normalized=normalized,
+                    target=target,
+                    payload=payload,
+                )
+            ],
+        }
+
     if operation == "create_file":
-        forbidden = {"old", "new", "anchor", "count"}.intersection(payload)
+        forbidden = {"old", "new", "anchor", "count", "package_name", "declaration", "import_name", "member"}.intersection(payload)
         if forbidden:
             raise runtime_module.AgentToolRuntimeError(
                 f"Fields {sorted(forbidden)} are invalid for create_file"
+            )
+        if normalized.endswith(_JAVA_PATH_SUFFIX):
+            raise runtime_module.AgentToolRuntimeError(
+                "Java files cannot be created as one whole-file payload; use "
+                "create_java_type, then add_java_import / insert_java_member actions"
             )
         if target.exists():
             raise runtime_module.AgentToolRuntimeError(
@@ -250,11 +528,49 @@ def materialize_model_source_edit(
             ],
         }
 
-    raw_bytes = target.read_bytes()
-    expected_sha256 = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+    raw_bytes, text, expected_sha256 = _read_utf8(runtime_module, target, normalized)
+    del raw_bytes
+
+    if operation == "add_java_import":
+        forbidden = {"old", "new", "anchor", "content", "text", "count", "package_name", "declaration", "member"}.intersection(payload)
+        if forbidden:
+            raise runtime_module.AgentToolRuntimeError(
+                f"Fields {sorted(forbidden)} are invalid for add_java_import"
+            )
+        return {
+            "project_root": project_root_argument,
+            "operations": [
+                _add_java_import(
+                    runtime_module,
+                    normalized=normalized,
+                    text=text,
+                    expected_sha256=expected_sha256,
+                    payload=payload,
+                )
+            ],
+        }
+
+    if operation == "insert_java_member":
+        forbidden = {"old", "new", "anchor", "content", "count", "package_name", "declaration", "import_name"}.intersection(payload)
+        if forbidden:
+            raise runtime_module.AgentToolRuntimeError(
+                f"Fields {sorted(forbidden)} are invalid for insert_java_member"
+            )
+        return {
+            "project_root": project_root_argument,
+            "operations": [
+                _insert_java_member(
+                    runtime_module,
+                    normalized=normalized,
+                    text=text,
+                    expected_sha256=expected_sha256,
+                    payload=payload,
+                )
+            ],
+        }
 
     if operation == "delete_file":
-        forbidden = {"old", "new", "anchor", "content", "text", "count"}.intersection(payload)
+        forbidden = {"old", "new", "anchor", "content", "text", "count", "package_name", "declaration", "import_name", "member"}.intersection(payload)
         if forbidden:
             raise runtime_module.AgentToolRuntimeError(
                 f"Fields {sorted(forbidden)} are invalid for delete_file"
@@ -270,6 +586,11 @@ def materialize_model_source_edit(
             ],
         }
 
+    structural_fields = {"package_name", "declaration", "import_name", "member"}.intersection(payload)
+    if structural_fields:
+        raise runtime_module.AgentToolRuntimeError(
+            f"Fields {sorted(structural_fields)} are invalid for {operation}"
+        )
     count = payload.get("count", 1)
     if type(count) is not int or count < 1:
         raise runtime_module.AgentToolRuntimeError("count must be a positive integer")
@@ -286,16 +607,9 @@ def materialize_model_source_edit(
     replacement = _replacement_for_edit(
         runtime_module,
         operation=operation,
-        path=normalized,
         payload=payload,
         count=count,
     )
-    try:
-        text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise runtime_module.AgentToolRuntimeError(
-            f"Source edit target is not UTF-8 text: {normalized}"
-        ) from exc
     found = text.count(replacement["old"])
     if found != replacement["count"]:
         raise runtime_module.AgentToolRuntimeError(
