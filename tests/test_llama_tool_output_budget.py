@@ -8,7 +8,6 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     LlamaCompletionBoundaryError,
 )
-from minecraft_mod_ai.llama_tool_output_budget import tool_output_budget
 
 
 def _tool(name: str = "apply_source_edit") -> dict[str, object]:
@@ -25,6 +24,8 @@ def _tool(name: str = "apply_source_edit") -> dict[str, object]:
 def _adapter() -> SimpleNamespace:
     return SimpleNamespace(
         config=SimpleNamespace(
+            role="coder",
+            adapter="llama_cpp",
             model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
             extra={
                 "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
@@ -42,47 +43,48 @@ def _adapter() -> SimpleNamespace:
     )
 
 
-def _request(tool_name: str) -> SimpleNamespace:
+def _request(tool_name: str, *, tool_choice: object = "auto") -> SimpleNamespace:
     return SimpleNamespace(
         messages=({"role": "user", "content": "repair the source"},),
-        response_format="json",
+        response_format="text",
         response_schema=None,
         tools=(_tool(tool_name),),
-        tool_choice="auto",
+        tool_choice=tool_choice,
         parallel_tool_calls=False,
     )
 
 
-def test_fully_composed_qwen_tool_turn_uses_native_unlimited_output(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
-    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
-    adapter = _adapter()
+def test_read_tool_turn_keeps_native_runtime_output_allowance() -> None:
+    payload = hardware_policy._server_payload(_adapter(), _request("search_code_rag"))
 
-    payload = hardware_policy._server_payload(adapter, _request("search_code_rag"))
-
-    assert tool_output_budget(adapter.config) == 4096
     assert payload["max_tokens"] == -1
+    assert payload["tool_choice"] == "auto"
 
 
-def test_payload_heavy_source_mutation_keeps_model_runtime_budget(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "-1")
-    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
-    adapter = _adapter()
+def test_source_mutation_turn_keeps_native_runtime_output_allowance() -> None:
+    payload = hardware_policy._server_payload(_adapter(), _request("apply_source_edit"))
 
-    payload = hardware_policy._server_payload(adapter, _request("apply_source_edit"))
-
-    # The compact 4K policy must never become a second owner for a source payload.
     assert payload["max_tokens"] == -1
+    assert payload["tool_choice"] == "auto"
 
 
-def test_tool_output_override_remains_hard_bounded(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_LLAMA_TOOL_MAX_TOKENS", "999999")
-    config = SimpleNamespace(max_new_tokens=32768)
+def test_named_required_action_uses_required_wire_contract_without_token_cap() -> None:
+    choice = {
+        "type": "function",
+        "function": {"name": "apply_source_edit"},
+    }
+    payload = hardware_policy._server_payload(
+        _adapter(),
+        _request("apply_source_edit", tool_choice=choice),
+    )
 
-    assert tool_output_budget(config) == 16384
+    assert payload["max_tokens"] == -1
+    assert payload["tool_choice"] == "required"
+    assert payload["temperature"] == 0.0
+    assert len(payload["tools"]) == 1
 
 
-def test_length_recovery_preserves_existing_tool_output_budget(monkeypatch) -> None:
+def test_length_recovery_preserves_existing_runtime_output_allowance(monkeypatch) -> None:
     attempts: list[dict[str, object]] = []
 
     def completion(_server_url: str, payload: dict[str, object]):
@@ -109,12 +111,12 @@ def test_length_recovery_preserves_existing_tool_output_budget(monkeypatch) -> N
                 {"role": "user", "content": "x" * 50_000},
                 {"role": "tool", "content": "y" * 10_000},
             ],
-            "max_tokens": 4096,
+            "max_tokens": -1,
             "tools": [_tool("search_code_rag")],
         },
     )
 
     assert result == {"content": "ok"}
     assert len(attempts) == 2
-    assert attempts[1]["max_tokens"] == 4096
+    assert attempts[1]["max_tokens"] == -1
     assert len(str(attempts[1]["messages"])) < len(str(attempts[0]["messages"]))
