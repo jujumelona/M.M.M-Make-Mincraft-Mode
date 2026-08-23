@@ -55,10 +55,6 @@ def _effective_context_tokens(config: Any) -> int:
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
     if adapter == "llama_cpp":
-        # Keep prompt fitting and llama-server launch on one context policy. Qwen3.5
-        # advertises a 262K model capacity but the T4 runtime intentionally launches a
-        # 32K slot; using the registry maximum here lets oversized prompts bypass the
-        # compactor and fail only after an expensive decode has started.
         from .llama_server_runtime_tuning import _per_request_context
 
         return max(0, int(_per_request_context(config)))
@@ -69,7 +65,14 @@ def _effective_context_tokens(config: Any) -> int:
 
 
 def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
-    """Return a conservative message-byte budget with tool/output space reserved."""
+    """Return a conservative input budget without inventing a tool-output cap.
+
+    Local llama tool turns terminate at the semantic action boundary, so prompt fitting
+    must not reserve a second arbitrary prediction budget. We reserve only the shared
+    context guard plus the actual serialized tool schemas. Non-llama adapters retain
+    their configured output reservation because they do not use this semantic stream
+    boundary.
+    """
 
     default = _default_context_bytes()
     try:
@@ -81,20 +84,8 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
         return default
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
-    if adapter == "llama_cpp" and tools:
-        # Native text turns may use unlimited prediction, but tool turns are explicitly
-        # bounded. Reserve the exact same positive tool budget that the final server
-        # payload will receive so input compaction cannot consume its decode headroom.
-        from .llama_tool_output_budget import tool_output_budget
+    reserved_output_tokens = 0 if adapter == "llama_cpp" else max_new_tokens
 
-        reserved_output_tokens = tool_output_budget(config)
-    elif adapter == "llama_cpp":
-        reserved_output_tokens = 0
-    else:
-        reserved_output_tokens = max_new_tokens
-
-    # Byte accounting is intentionally conservative for code/JSON-heavy turns.
-    # Tool schemas consume the same server context but are not part of messages.
     available_input_tokens = max(
         2048,
         max_context - reserved_output_tokens - _CONTEXT_TOKEN_GUARD,
@@ -205,8 +196,6 @@ def _compact_tool_messages(
         original = dict(values[index])
         archive = _archive_transcript((original,))
         if not bool(archive.get("available")):
-            # Keep the research contract lossless. A failed archive must never be
-            # disguised as successful context compaction.
             continue
         replacement = dict(original)
         replacement["content"] = _summary_payload(
@@ -214,9 +203,6 @@ def _compact_tool_messages(
             archive=archive,
             preview_bytes=preview_bytes,
         )
-        # The outer message list shape is unchanged, so its canonical size changes by
-        # exactly the serialized size delta of the one replaced message. Tracking that
-        # delta avoids re-serializing the entire history after every tool compaction.
         current_size += _canonical_size(replacement) - _canonical_size(original)
         values[index] = replacement
         if current_size <= budget:
@@ -312,8 +298,6 @@ def fit_messages_to_context(
     if _canonical_size(values) <= budget:
         return values
 
-    # First pass keeps enough evidence text for code decisions while removing the
-    # pathological 48 KiB-per-tool accumulation seen after parallel RAG/LSP reads.
     values = _compact_tool_messages(values, budget=budget, preview_bytes=8 * 1024)
     if _canonical_size(values) <= budget:
         return values
@@ -322,8 +306,6 @@ def fit_messages_to_context(
     if _canonical_size(values) <= budget:
         return values
 
-    # Emergency second pass still keeps an exact archive pointer and a useful head/
-    # tail evidence sample, but makes the protocol fit before spending decode time.
     return _compact_tool_messages(values, budget=budget, preview_bytes=4 * 1024)
 
 
@@ -332,7 +314,7 @@ def emergency_fit_messages(
     *,
     budget_bytes: int = 40 * 1024,
 ) -> tuple[Mapping[str, Any], ...]:
-    """Bound a retry payload when a backend reports finish_reason='length'."""
+    """Bound a retry payload when a backend reports context pressure."""
 
     budget = max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, int(budget_bytes)))
     values = _compact_tool_messages(messages, budget=budget, preview_bytes=4 * 1024)
