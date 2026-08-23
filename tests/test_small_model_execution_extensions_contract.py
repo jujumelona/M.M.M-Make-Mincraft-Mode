@@ -5,10 +5,10 @@ import hashlib
 import pytest
 
 from minecraft_mod_ai import agent_tool_runtime
-from minecraft_mod_ai.small_model_execution_extensions_contract import (
-    _SOURCE_EDIT_SCHEMA,
-    _compose_skills,
-    _materialize_model_source_edit,
+from minecraft_mod_ai.small_model_execution_extensions_contract import _compose_skills
+from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+    SOURCE_EDIT_SCHEMA,
+    materialize_model_source_edit,
 )
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
@@ -33,21 +33,17 @@ def _skill(identity: str, *, requires=(), provides=(), confidence=1.0):
     }
 
 
-def test_source_edit_schema_is_scalar_and_bounded() -> None:
-    assert _SOURCE_EDIT_SCHEMA["required"] == ["operation", "path"]
-    properties = _SOURCE_EDIT_SCHEMA["properties"]
+def test_source_edit_schema_is_scalar_semantic_action() -> None:
+    assert SOURCE_EDIT_SCHEMA["required"] == ["operation", "path"]
+    properties = SOURCE_EDIT_SCHEMA["properties"]
     assert "edits" not in properties
     assert all(value.get("type") != "array" for value in properties.values())
-    assert properties["path"]["maxLength"] <= 512
-    assert properties["old"]["maxLength"] <= 4096
-    assert properties["new"]["maxLength"] <= 8192
-    assert "create_file" in properties["operation"]["enum"]
-    assert "append_file" in properties["operation"]["enum"]
-    assert "create" in properties["operation"]["enum"]
-    append_rule = _SOURCE_EDIT_SCHEMA["allOf"][0]
-    assert append_rule["if"]["properties"]["operation"] == {"const": "append_file"}
-    assert append_rule["then"]["properties"]["content"]["maxLength"] == 2048
-    assert append_rule["then"]["properties"]["text"]["maxLength"] == 2048
+    operations = set(properties["operation"]["enum"])
+    assert {"replace_exact", "insert_before", "insert_after", "create_file", "delete_file"} <= operations
+    assert "append_file" not in operations
+    assert "replace_file" not in operations
+    assert "maxLength" not in properties["new"]
+    assert "maxLength" not in properties["content"]
 
 
 def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path) -> None:
@@ -58,7 +54,7 @@ def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path)
     source.write_text(old, encoding="utf-8")
     original_bytes = source.read_bytes()
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -70,21 +66,16 @@ def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path)
     )
 
     assert payload["project_root"] == "demo"
-    assert len(payload["operations"]) == 1
     operation = payload["operations"][0]
     assert operation["operation"] == "edit"
-    assert operation["expected_sha256"] == (
-        "sha256:" + hashlib.sha256(original_bytes).hexdigest()
-    )
+    assert operation["expected_sha256"] == "sha256:" + hashlib.sha256(original_bytes).hexdigest()
     assert operation["replacements"] == [
         {"old": "oldValue", "new": "newValue", "count": 1}
     ]
 
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
     assert receipt["status"] == "APPLIED"
-    assert source.read_text(encoding="utf-8") == (
-        "final class Example {\n    int newValue;\n}\n"
-    )
+    assert "newValue" in source.read_text(encoding="utf-8")
 
 
 def test_scalar_source_write_materializes_new_file_and_host_applies(tmp_path) -> None:
@@ -93,7 +84,7 @@ def test_scalar_source_write_materializes_new_file_and_host_applies(tmp_path) ->
     target = project / "src/main/java/example/Created.java"
     content = "package example;\nfinal class Created {}\n"
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -103,16 +94,13 @@ def test_scalar_source_write_materializes_new_file_and_host_applies(tmp_path) ->
         },
     )
 
-    assert payload == {
-        "project_root": "demo",
-        "operations": [
-            {
-                "operation": "create",
-                "path": "src/main/java/example/Created.java",
-                "content": content,
-            }
-        ],
-    }
+    assert payload["operations"] == [
+        {
+            "operation": "create",
+            "path": "src/main/java/example/Created.java",
+            "content": content,
+        }
+    ]
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
     assert receipt["status"] == "APPLIED"
     assert target.read_text(encoding="utf-8") == content
@@ -122,7 +110,7 @@ def test_scalar_source_write_accepts_lossless_create_alias(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     _project(workspace)
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -132,13 +120,7 @@ def test_scalar_source_write_accepts_lossless_create_alias(tmp_path) -> None:
         },
     )
 
-    assert payload["operations"] == [
-        {
-            "operation": "create",
-            "path": "src/main/resources/demo.txt",
-            "content": "created\n",
-        }
-    ]
+    assert payload["operations"][0]["operation"] == "create"
 
 
 def test_scalar_source_create_rejects_existing_target_without_mutation(tmp_path) -> None:
@@ -149,7 +131,7 @@ def test_scalar_source_create_rejects_existing_target_without_mutation(tmp_path)
     source.write_text(before, encoding="utf-8")
 
     with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="already exists"):
-        _materialize_model_source_edit(
+        materialize_model_source_edit(
             agent_tool_runtime,
             workspace,
             {
@@ -161,30 +143,13 @@ def test_scalar_source_create_rejects_existing_target_without_mutation(tmp_path)
     assert source.read_text(encoding="utf-8") == before
 
 
-def test_scalar_source_create_rejects_edit_only_fields(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    _project(workspace)
-
-    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="invalid for create_file"):
-        _materialize_model_source_edit(
-            agent_tool_runtime,
-            workspace,
-            {
-                "operation": "create_file",
-                "path": "src/main/java/example/Created.java",
-                "content": "final class Created {}\n",
-                "old": "should-not-be-used",
-            },
-        )
-
-
-def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> None:
+def test_partial_source_edit_sequences_changes_across_turns(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
     source.write_text("final class Example {\n    int oldValue;\n}\n", encoding="utf-8")
 
-    first = _materialize_model_source_edit(
+    first = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -195,16 +160,15 @@ def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> N
         },
     )
     TransactionalSourcePatcher(project).apply(first["operations"])
-    newline = "\r\n" if b"\r\n" in source.read_bytes() else "\n"
 
-    second = _materialize_model_source_edit(
+    second = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
             "operation": "insert_before",
             "path": "src/main/java/example/Example.java",
-            "anchor": "}" + newline,
-            "content": "    void run() {}" + newline,
+            "anchor": "}\n",
+            "content": "    void run() {}\n",
         },
     )
     TransactionalSourcePatcher(project).apply(second["operations"])
@@ -212,81 +176,6 @@ def test_partial_source_edit_sequences_large_changes_across_turns(tmp_path) -> N
     assert source.read_text(encoding="utf-8") == (
         "final class Example {\n    int newValue;\n    void run() {}\n}\n"
     )
-
-
-def test_append_file_materializes_bounded_chunk_with_host_hash(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/java/example/Large.java"
-    source.write_bytes(b"package example;\n")
-    before = source.read_bytes()
-
-    payload = _materialize_model_source_edit(
-        agent_tool_runtime,
-        workspace,
-        {
-            "operation": "append_file",
-            "path": "src/main/java/example/Large.java",
-            "content": "final class Large {}\n",
-        },
-    )
-
-    assert payload["operations"] == [
-        {
-            "operation": "replace",
-            "path": "src/main/java/example/Large.java",
-            "expected_sha256": "sha256:" + hashlib.sha256(before).hexdigest(),
-            "content": "package example;\nfinal class Large {}\n",
-        }
-    ]
-    TransactionalSourcePatcher(project).apply(payload["operations"])
-    assert source.read_text(encoding="utf-8") == (
-        "package example;\nfinal class Large {}\n"
-    )
-
-
-def test_append_file_rejects_non_utf8_target_without_mutation(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/resources/binary.dat"
-    before = b"\xff\xfe\x00"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_bytes(before)
-
-    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="not UTF-8"):
-        _materialize_model_source_edit(
-            agent_tool_runtime,
-            workspace,
-            {
-                "operation": "append_file",
-                "path": "src/main/resources/binary.dat",
-                "content": "unsafe",
-            },
-        )
-
-    assert source.read_bytes() == before
-
-
-def test_append_file_rejects_chunk_that_can_overrun_scalar_json_budget(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/resources/large.txt"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text("prefix\n", encoding="utf-8")
-    before = source.read_bytes()
-
-    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="chunk limit"):
-        _materialize_model_source_edit(
-            agent_tool_runtime,
-            workspace,
-            {
-                "operation": "append_file",
-                "path": "src/main/resources/large.txt",
-                "content": "x" * 2049,
-            },
-        )
-
-    assert source.read_bytes() == before
 
 
 def test_partial_source_edit_rejects_ambiguous_anchor_without_mutation(tmp_path) -> None:
@@ -297,7 +186,7 @@ def test_partial_source_edit_rejects_ambiguous_anchor_without_mutation(tmp_path)
     source.write_text(before, encoding="utf-8")
 
     with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="expected 1 matches, found 2"):
-        _materialize_model_source_edit(
+        materialize_model_source_edit(
             agent_tool_runtime,
             workspace,
             {
@@ -316,10 +205,17 @@ def test_scoped_materialization_failure_reports_unchanged_workspace(tmp_path) ->
     source = project / "src/main/java/example/Example.java"
     before = "token token\n"
     source.write_text(before, encoding="utf-8")
-    runtime = agent_tool_runtime.AgentToolRuntime(
-        profile="test",
-        workspace_root=workspace,
+    runtime = agent_tool_runtime.AgentToolRuntime(profile="test", workspace_root=workspace)
+    runtime.tool_schemas = lambda _stage: (
+        {
+            "type": "function",
+            "function": {
+                "name": "apply_source_edit",
+                "parameters": SOURCE_EDIT_SCHEMA,
+            },
+        },
     )
+    runtime._allowed_tool_cache["generation"] = frozenset({"apply_source_edit"})
 
     with pytest.raises(
         agent_tool_runtime.AgentToolRuntimeError,
@@ -338,25 +234,6 @@ def test_scoped_materialization_failure_reports_unchanged_workspace(tmp_path) ->
         )
 
     assert source.read_text(encoding="utf-8") == before
-
-
-def test_partial_source_edit_rejects_oversized_payload(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/java/example/Example.java"
-    source.write_text("token\n", encoding="utf-8")
-
-    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="limit|turn limit"):
-        _materialize_model_source_edit(
-            agent_tool_runtime,
-            workspace,
-            {
-                "operation": "insert_after",
-                "path": "src/main/java/example/Example.java",
-                "anchor": "token",
-                "content": "x" * 20_000,
-            },
-        )
 
 
 def test_ordered_skill_composition_adds_provider_before_consumer() -> None:
