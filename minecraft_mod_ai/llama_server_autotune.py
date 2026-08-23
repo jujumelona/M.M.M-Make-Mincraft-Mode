@@ -20,7 +20,7 @@ _MANAGED_PROCESS: subprocess.Popen[bytes] | None = None
 _MANAGED_URL: str | None = None
 _MANAGED_KEY: str | None = None
 _ATTEMPTED_KEYS: set[str] = set()
-_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v2-compact"
+_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v3-native-tools"
 _BENCHMARK_OUTPUT_TOKENS = 96
 
 
@@ -112,8 +112,6 @@ def _choose_variant(
     if baseline is None or baseline.predicted_tps <= 0:
         return None
 
-    # Greedy speculative decoding is eligible only when it commits byte-identical
-    # output to the baseline on the same deterministic probe.
     eligible = [baseline]
     eligible.extend(
         probe
@@ -364,17 +362,12 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         kv,
         "--load-mode",
         "none",
-        # Tool-capable OpenAI chat requests require the Jinja chat engine.
-        # This belongs to the server launch contract itself because autotune,
-        # planner/coder priming and adapters can all be the first launch owner.
+        # Keep llama.cpp's native Jinja tool grammar/parser active. In particular,
+        # tool_choice=required with one visible schema is enforced by the server and
+        # returned as a complete OpenAI-compatible tool_calls message.
         "--jinja",
-        # Keep Jinja prompt rendering (including the current tool schemas) but return
-        # reasoning/tool markup in message.content. MMM validates and parses that raw
-        # model protocol on the host instead of accepting llama.cpp-parsed tool calls.
-        "--skip-chat-parsing",
-        # Output-exhausted non-thinking actions are resumed by appending the exact
-        # partial assistant turn. Pin the server capability explicitly rather than
-        # depending on a build default that could change across Colab upgrades.
+        # Plain output-exhaustion recovery may still use assistant prefill. Tool
+        # turns never paginate an unfinished action.
         "--prefill-assistant",
         "--no-ui",
         "--log-disable",
@@ -555,7 +548,6 @@ def _benchmark(
     preferred_port = _env_int("MMM_LLAMA_AUTOTUNE_PORT", 18910)
     probes: list[ProbeResult] = []
 
-    # Width selection remains exhaustive. Only irrelevant prompt-prefill work is cut.
     for variant in _candidate_variants():
         port = _free_port(preferred_port)
         process: subprocess.Popen[bytes] | None = None
