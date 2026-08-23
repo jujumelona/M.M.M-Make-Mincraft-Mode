@@ -11,7 +11,11 @@ def _schemas() -> dict[str, dict[str, object]]:
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "operation": {"type": "string"},
+                "operation": {
+                    "type": "string",
+                    "enum": ["replace", "insert", "delete"],
+                },
+                "content": {"type": "string"},
             },
             "required": ["path", "operation"],
             "additionalProperties": False,
@@ -19,15 +23,20 @@ def _schemas() -> dict[str, dict[str, object]]:
     }
 
 
-def test_apply_source_edit_file_alias_normalizes_to_path() -> None:
+def _parse(parameters: str):
     text = (
         "<tool_call><function=apply_source_edit>"
-        "<parameter=file>src/main/java/example/Test.java</parameter>"
-        "<parameter=action>replace</parameter>"
+        f"{parameters}"
         "</function></tool_call>"
     )
+    return _parse_qwen_tool_markup(text, _schemas())
 
-    visible, calls = _parse_qwen_tool_markup(text, _schemas())
+
+def test_apply_source_edit_file_alias_normalizes_to_path() -> None:
+    visible, calls = _parse(
+        "<parameter=file>src/main/java/example/Test.java</parameter>"
+        "<parameter=action>replace</parameter>"
+    )
 
     assert visible == ""
     assert len(calls) == 1
@@ -37,27 +46,74 @@ def test_apply_source_edit_file_alias_normalizes_to_path() -> None:
     }
 
 
-def test_apply_source_edit_rejects_file_and_path_together() -> None:
-    text = (
-        "<function=apply_source_edit>"
-        "<parameter=file>src/A.java</parameter>"
-        "<parameter=path>src/B.java</parameter>"
-        "<parameter=operation>replace</parameter>"
-        "</function>"
+def test_apply_source_edit_apply_alias_normalizes_to_operation() -> None:
+    visible, calls = _parse(
+        "<parameter=path>src/A.java</parameter>"
+        "<parameter=apply>replace</parameter>"
     )
 
-    with pytest.raises(RuntimeError, match="both alias 'file'.*canonical parameter 'path'"):
-        _parse_qwen_tool_markup(text, _schemas())
+    assert visible == ""
+    assert calls[0].arguments == {"path": "src/A.java", "operation": "replace"}
+
+
+def test_apply_source_edit_apply_object_wrapper_is_unwrapped() -> None:
+    visible, calls = _parse(
+        '<parameter=apply>{"file":"src/A.java","action":"replace","content":"x"}</parameter>'
+    )
+
+    assert visible == ""
+    assert calls[0].arguments == {
+        "path": "src/A.java",
+        "operation": "replace",
+        "content": "x",
+    }
+
+
+def test_apply_source_edit_arguments_wrapper_is_unwrapped() -> None:
+    _, calls = _parse(
+        '<parameter=arguments>{"target_path":"src/A.java","op":"replace"}</parameter>'
+    )
+    assert calls[0].arguments == {"path": "src/A.java", "operation": "replace"}
+
+
+def test_nested_argument_wrappers_are_bounded_and_normalized() -> None:
+    _, calls = _parse(
+        '<parameter=arguments>{"params":{"file":"src/A.java","apply":"replace"}}</parameter>'
+    )
+    assert calls[0].arguments == {"path": "src/A.java", "operation": "replace"}
+
+
+def test_apply_source_edit_rejects_file_and_path_together() -> None:
+    with pytest.raises(RuntimeError, match="conflicting sources.*parameter 'path'"):
+        _parse(
+            "<parameter=file>src/A.java</parameter>"
+            "<parameter=path>src/B.java</parameter>"
+            "<parameter=operation>replace</parameter>"
+        )
 
 
 def test_apply_source_edit_still_rejects_unknown_parameters() -> None:
-    text = (
-        "<function=apply_source_edit>"
-        "<parameter=path>src/A.java</parameter>"
-        "<parameter=operation>replace</parameter>"
-        "<parameter=bogus>nope</parameter>"
-        "</function>"
-    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"unknown parameter 'bogus'.*allowed=.*required=.*accepted_aliases=",
+    ):
+        _parse(
+            "<parameter=path>src/A.java</parameter>"
+            "<parameter=operation>replace</parameter>"
+            "<parameter=bogus>nope</parameter>"
+        )
 
+
+def test_unknown_nested_parameter_is_not_dropped() -> None:
     with pytest.raises(RuntimeError, match="unknown parameter 'bogus'"):
-        _parse_qwen_tool_markup(text, _schemas())
+        _parse(
+            '<parameter=apply>{"file":"src/A.java","action":"replace","bogus":1}</parameter>'
+        )
+
+
+def test_recovered_operation_still_obeys_schema_enum() -> None:
+    with pytest.raises(RuntimeError, match="outside enum.*parameter 'operation'"):
+        _parse(
+            "<parameter=path>src/A.java</parameter>"
+            "<parameter=apply>not-an-operation</parameter>"
+        )
