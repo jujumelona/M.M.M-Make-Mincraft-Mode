@@ -1,0 +1,31 @@
+name: Delete stale branch once
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-stale-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete DO_NOT_CREATE branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: 'heads/DO_NOT_CREATE'
+              });
+              core.info('Deleted DO_NOT_CREATE');
+            } catch (error) {
+              if (error.status === 422 || error.status === 404) {
+                core.info('DO_NOT_CREATE already absent');
+              } else {
+                throw error;
+              }
+            }
