@@ -245,7 +245,7 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
 def install(agentic_module: Any) -> None:
     """Install repair-only candidate parallelism; planner Best-of-N is retired."""
     current_repair_count = agentic_module._repair_candidate_count
-    if not getattr(current_repair_count, "_mmm_failure_gated_search", False):
+    if not has_contract_marker(current_repair_count, "_mmm_failure_gated_search"):
 
         def repair_candidate_count(
             self: Any,
