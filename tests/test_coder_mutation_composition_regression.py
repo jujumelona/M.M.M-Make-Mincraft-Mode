@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.causal_frontier_adapter import CausalFrontierAdapter
+from minecraft_mod_ai.causal_state_ledger import CausalStateLedger
 from minecraft_mod_ai.coder_tool_route_integrity_contract import _WritableProgressAdapter
 from minecraft_mod_ai.model_adapters import GenerationRequest, ModelConfigurationError
 
@@ -67,6 +68,36 @@ def _failed_edit(index: int) -> dict[str, object]:
                     "AgentToolRuntimeError: exact edit did not match "
                     "[workspace_impact=unchanged]"
                 ),
+            }
+        ),
+    }
+
+
+def _patch_observation(*, applied: bool, call_id: str) -> dict[str, object]:
+    if applied:
+        result = {
+            "schema_version": "mmm/source-patch-receipt-v1",
+            "status": "APPLIED",
+            "operations": [
+                {
+                    "path": "src/main/java/example/Test.java",
+                    "operation": "edit",
+                    "before_sha256": "sha256:" + "1" * 64,
+                    "after_sha256": "sha256:" + "2" * 64,
+                }
+            ],
+        }
+    else:
+        result = {"status": "PASS"}
+    return {
+        "role": "tool",
+        "name": "apply_source_patch",
+        "tool_call_id": call_id,
+        "content": json.dumps(
+            {
+                "ok": True,
+                "tool": "apply_source_patch",
+                "result": result,
             }
         ),
     }
@@ -161,20 +192,9 @@ def test_patch_transport_success_without_applied_receipt_consumes_retry() -> Non
     """Completion and retry accounting must use the same mutation-proof contract."""
 
     patch = _schema("apply_source_patch")
-    observations = tuple(
-        {
-            "role": "tool",
-            "name": "apply_source_patch",
-            "tool_call_id": f"patch-{index}",
-            "content": json.dumps(
-                {
-                    "ok": True,
-                    "tool": "apply_source_patch",
-                    "result": {"status": "PASS"},
-                }
-            ),
-        }
-        for index in (1, 2)
+    observations = (
+        _patch_observation(applied=False, call_id="patch-1"),
+        _patch_observation(applied=False, call_id="patch-2"),
     )
     inner = _NeverCalledAdapter()
     adapter = _WritableProgressAdapter(inner)
@@ -193,3 +213,38 @@ def test_patch_transport_success_without_applied_receipt_consumes_retry() -> Non
         adapter.generate_turn(request)
 
     assert inner.calls == 0
+
+
+def test_causal_state_requires_the_same_applied_mutation_proof() -> None:
+    """Transport-only PASS must never synthesize the repaired/project_changed facts."""
+
+    rag = _schema("search_code_rag")
+    patch = _schema("apply_source_patch")
+    schemas = (rag, patch)
+    ledger = CausalStateLedger()
+    transport_only = (
+        _implement_message(),
+        _rag_observation(),
+        _patch_observation(applied=False, call_id="patch-unproved"),
+    )
+
+    unproved = ledger.resolve(
+        transport_only,
+        schemas,
+        require_fresh_evidence=True,
+        query_fn=lambda _messages: "repair",
+    )
+
+    assert "repaired" not in unproved.state
+    assert "project_changed" not in unproved.state
+    assert "evidence_ready" not in unproved.state
+
+    proved = ledger.resolve(
+        (*transport_only, _rag_observation("rag-after-unproved"), _patch_observation(applied=True, call_id="patch-proved")),
+        schemas,
+        require_fresh_evidence=True,
+        query_fn=lambda _messages: "repair",
+    )
+
+    assert "repaired" in proved.state
+    assert "project_changed" in proved.state

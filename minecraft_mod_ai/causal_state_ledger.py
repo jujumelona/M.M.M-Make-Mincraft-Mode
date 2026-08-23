@@ -8,17 +8,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
 from . import causal_tool_graph as _graph
-from .causal_tool_graph import transition_for_schema, verified_state_from_messages
+from .causal_tool_graph import transition_for_schema
 from .grounding_policy import host_baseline_causal_facts
+from .source_mutation_contract import SOURCE_MUTATION_NAMES, mutation_payload_applied
 
-_SOURCE_MUTATION_NAMES = frozenset(
-    {
-        "apply_source_patch",
-        "apply_source_edit",
-        "apply_java_operations",
-        "repair_project",
-    }
-)
 _STALE_EVIDENCE_FACTS = frozenset(
     {
         "code_evidence",
@@ -67,12 +60,11 @@ def _message_anchor(message: Mapping[str, Any]) -> str:
 def _is_failed_source_mutation(message: Mapping[str, Any]) -> bool:
     if str(message.get("role", "")).strip().casefold() != "tool":
         return False
-    if str(message.get("name", "")).strip() not in _SOURCE_MUTATION_NAMES:
+    name = str(message.get("name", "")).strip()
+    if name not in SOURCE_MUTATION_NAMES:
         return False
     payload = _graph._payload(message)
-    if payload is None:
-        return False
-    return payload.get("ok") is not True or _graph._has_explicit_semantic_failure(payload)
+    return payload is not None and not mutation_payload_applied(name, payload)
 
 
 def _workspace_impact_from_error(error: str) -> str:
@@ -161,7 +153,7 @@ def _advance_verified_state(
     messages: Sequence[Mapping[str, Any]],
     schemas: Sequence[Mapping[str, Any]],
 ) -> frozenset[str]:
-    """Advance only new observations while reusing causal_tool_graph semantics."""
+    """Advance only new observations while reusing causal-tool semantics."""
 
     transitions = _transitions(schemas)
     facts = set(state)
@@ -176,6 +168,8 @@ def _advance_verified_state(
         if transition is None or not transition.reviewed:
             continue
         if not transition.preconditions.issubset(facts):
+            continue
+        if name in SOURCE_MUTATION_NAMES and not mutation_payload_applied(name, payload):
             continue
         facts.update(_graph._semantic_effects(name, payload, set(transition.effects)))
     return frozenset(facts)
@@ -337,10 +331,11 @@ class CausalStateLedger:
         require_fresh_evidence: bool,
         query_fn: Callable[[Sequence[Mapping[str, Any]]], str],
     ) -> CausalStateSnapshot:
-        self._verified_state = verified_state_from_messages(
+        del require_fresh_evidence
+        self._verified_state = _advance_verified_state(
+            frozenset({"workspace_bound"}),
             messages,
             schemas,
-            require_fresh_evidence=require_fresh_evidence,
         )
         self._baseline_state = frozenset(host_baseline_causal_facts(messages))
         self._query = query_fn(messages)

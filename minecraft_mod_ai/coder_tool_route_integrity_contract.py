@@ -24,11 +24,11 @@ from .causal_frontier_adapter import (
 from .causal_state_ledger import supplies_fresh_evidence
 from .causal_tool_frontier_contract import _FrontierRuntimeProxy
 from .causal_tool_graph import shortest_causal_path
+from .source_mutation_contract import mutation_observation_applied
 
 _MARKER = "_mmm_coder_tool_route_integrity_v1"
 _QUERY_MARKER = "_mmm_user_only_tool_routing_query_v1"
 _GOAL_MARKER = "_mmm_implementation_goal_priority_v1"
-_HOST_MUTATION_PROOF_KEY = "_mmm_source_mutation"
 _MUTATION_PRIORITY = (
     "apply_source_patch",
     "apply_source_edit",
@@ -37,21 +37,6 @@ _MUTATION_PRIORITY = (
 )
 _MUTATION_TOOLS = frozenset(_MUTATION_PRIORITY)
 _MUTATION_FAILURE_LIMIT = 2
-_FAILURE_STATUSES = frozenset(
-    {
-        "FAIL",
-        "FAILED",
-        "ERROR",
-        "UNAVAILABLE",
-        "PARTIAL",
-        "BLOCKED",
-        "INVALID",
-        "REJECTED",
-        "CANCELLED",
-        "CANCELED",
-        "TIMEOUT",
-    }
-)
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -112,96 +97,10 @@ def _is_implementation_request(messages: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
-def _tool_payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    content = message.get("content")
-    if isinstance(content, Mapping):
-        return content
-    if not isinstance(content, str) or not content.strip():
-        return None
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, Mapping) else None
-
-
-def _walk_mappings(value: Any):
-    pending = [value]
-    seen: set[int] = set()
-    while pending:
-        current = pending.pop()
-        if isinstance(current, Mapping):
-            marker = id(current)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            yield current
-            pending.extend(current.values())
-        elif isinstance(current, Sequence) and not isinstance(
-            current, (str, bytes, bytearray)
-        ):
-            pending.extend(current)
-
-
-def _has_applied_patch_receipt(payload: Mapping[str, Any]) -> bool:
-    """Require the transaction receipt that is emitted only after a real source diff."""
-
-    for item in _walk_mappings(payload):
-        if str(item.get("schema_version", "")) != "mmm/source-patch-receipt-v1":
-            continue
-        if str(item.get("status", "")).strip().upper() != "APPLIED":
-            continue
-        operations = item.get("operations")
-        if isinstance(operations, Sequence) and not isinstance(
-            operations, (str, bytes, bytearray)
-        ) and len(operations) > 0:
-            return True
-    return False
-
-
-def _has_host_mutation_proof(payload: Mapping[str, Any], name: str) -> bool:
-    """Accept only the host-loop marker created after first-party mutation returned."""
-
-    proof = payload.get(_HOST_MUTATION_PROOF_KEY)
-    if not isinstance(proof, Mapping):
-        return False
-    return (
-        name == "apply_source_patch"
-        and str(proof.get("tool", "")).strip() == name
-        and str(proof.get("status", "")).strip() == "APPLIED_BY_HOST_RUNTIME"
-    )
-
-
 def _source_mutation_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Return true only for a successful mutation observation already seen by the host loop."""
+    """Consume the canonical host mutation proof instead of transport success."""
 
-    for message in reversed(messages):
-        if str(message.get("role", "")).strip().casefold() != "tool":
-            continue
-        name = str(message.get("name", "")).strip()
-        if name not in _MUTATION_TOOLS:
-            continue
-        payload = _tool_payload(message)
-        if payload is None or payload.get("ok") is not True:
-            continue
-        if _has_host_mutation_proof(payload, name):
-            return True
-        if _has_applied_patch_receipt(payload):
-            return True
-        # Older reviewed mutation tools may expose a different receipt envelope.
-        # Accept them only when the transport succeeded and no nested result reports
-        # an explicit semantic failure. `apply_source_patch` is stricter because its
-        # source-patch receipt or host mutation proof is the production custom-coder
-        # write contract.
-        if name == "apply_source_patch":
-            continue
-        failed = any(
-            str(item.get("status", "")).strip().upper() in _FAILURE_STATUSES
-            for item in _walk_mappings(payload)
-        )
-        if not failed:
-            return True
-    return False
+    return any(mutation_observation_applied(message) for message in reversed(messages))
 
 
 def _latest_fresh_evidence_index(
@@ -229,10 +128,7 @@ def _failed_mutation_attempts(
             continue
         if str(message.get("name", "")).strip() != name:
             continue
-        payload = _tool_payload(message)
-        if payload is None:
-            continue
-        if not _source_mutation_applied((message,)):
+        if not mutation_observation_applied(message):
             failures += 1
     return failures
 
@@ -452,7 +348,7 @@ def _run_with_dynamic_frontier(
     # Freeze the same authorization and request state as the canonical causal-loop
     # wrapper.  This late route-integrity wrapper replaces that live loop, so omitting
     # these values would make the adapter consult mutable compatibility ContextVars on
-    # every turn.  Nested retrieval can update those ContextVars and otherwise change
+    # every turn. Nested retrieval can update those ContextVars and otherwise change
     # the transition schema mid-loop, forcing the state ledger to replay history
     # against a different surface and lose already verified code evidence.
     host_request = replace(
