@@ -249,10 +249,6 @@ def _tool_server_payload(
 def _merge_text_progress(previous: Any, current: Any) -> str:
     first = previous if isinstance(previous, str) else ""
     second = current if isinstance(current, str) else ""
-    # The pinned llama.cpp assistant-prefill response contains only newly generated
-    # completion bytes; the prefilled assistant content is prompt state. Never infer
-    # cumulative/overlap semantics from source or XML text, because repeated boundary
-    # bytes are valid output and must remain lossless.
     return first + second
 
 
@@ -306,14 +302,6 @@ def _normalize_assistant_prefill_suffix(
     continuation_page: bool,
     template_prefix: str,
 ) -> dict[str, Any]:
-    """Remove one live-calibrated, template-owned continuation prefix.
-
-    No model-family constant is trusted here.  The exact prefix is measured against
-    the same live server immediately before this semantic turn is continued with a
-    trailing assistant message.  Removing exactly one copy preserves a legitimate
-    identical prefix authored by the model immediately after it.
-    """
-
     result = dict(message)
     content = result.get("content")
     if not continuation_page or not template_prefix:
@@ -329,8 +317,6 @@ def _normalize_assistant_prefill_suffix(
 def _assistant_prefill_calibration_payload(
     original: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build a zero-decode probe for the exact active Qwen template branch."""
-
     payload: dict[str, Any] = {
         "model": original.get("model", "local"),
         "messages": [
@@ -359,13 +345,6 @@ def _calibrate_assistant_prefill_generation_prompt(
     server_url: str,
     original: Mapping[str, Any],
 ) -> str:
-    """Measure template-owned bytes on the live server without generating a token.
-
-    The result is deliberately not cached.  Every exhausted semantic turn is bound to
-    the currently running server/model/template combination, so a server restart or
-    template change cannot reuse stale normalization state.
-    """
-
     response = _post_completion(
         server_url,
         _assistant_prefill_calibration_payload(original),
@@ -407,14 +386,6 @@ def _completion_message_with_prefill(
     server_url: str,
     payload: Mapping[str, Any],
 ) -> Mapping[str, Any]:
-    """Continue output exhaustion through llama.cpp assistant-prefill.
-
-    There is no retry-count limit. Continuation remains live only while every
-    exhausted response grows the cumulative UTF-8 receipt. The server's typed context
-    boundary is the terminal capacity signal. Tool markup is parsed only after a final
-    non-length response has completed the assistant turn.
-    """
-
     from ..llama_finish_reason_contract import (
         CONTEXT_PRESSURE,
         LlamaCompletionBoundaryError,
@@ -458,7 +429,6 @@ def _completion_message_with_prefill(
             boundary = completion_boundary_error(exc)
             if boundary is None:
                 raise
-
             try:
                 partial = _normalize_assistant_prefill_suffix(
                     boundary.partial_message,
@@ -468,10 +438,6 @@ def _completion_message_with_prefill(
             except RuntimeError as prefix_exc:
                 if not accumulated:
                     raise
-                # A prompt-too-large HTTP 400 legitimately has no response suffix.
-                # Preserve every previously verified partial byte and hand the typed
-                # boundary to the same-workspace scalar splitter; never downgrade it
-                # to a generic transport error or concatenate uncalibrated bytes.
                 message = _CONTEXT_ERROR if boundary.kind == CONTEXT_PRESSURE else _OUTPUT_ERROR
                 raise LlamaCompletionBoundaryError(
                     message
@@ -485,7 +451,6 @@ def _completion_message_with_prefill(
                 ) from prefix_exc
             _reject_partial_server_tool_calls(partial)
             merged = _merge_partial_messages(accumulated, partial)
-
             if boundary.kind == CONTEXT_PRESSURE:
                 raise LlamaCompletionBoundaryError(
                     _CONTEXT_ERROR
@@ -500,11 +465,7 @@ def _completion_message_with_prefill(
             if boundary.kind != OUTPUT_EXHAUSTED:
                 raise
             if qwen_thinking_page:
-                # The pinned llama.cpp server rejects trailing-assistant prefill while
-                # enable_thinking is active. Preserve the typed partial for the
-                # section/work producer instead of constructing an invalid request.
                 raise
-
             next_bytes, next_sha256 = partial_message_receipt(merged)
             if next_bytes <= progress_bytes or next_sha256 == progress_sha256:
                 raise LlamaCompletionBoundaryError(
@@ -517,7 +478,6 @@ def _completion_message_with_prefill(
                     completion_tokens=boundary.completion_tokens,
                     max_tokens=boundary.max_tokens,
                 ) from exc
-
             accumulated = merged
             progress_bytes = next_bytes
             progress_sha256 = next_sha256
@@ -541,10 +501,7 @@ def _completion_message_with_prefill(
                         completion_tokens=boundary.completion_tokens,
                         max_tokens=boundary.max_tokens,
                     ) from calibration_exc
-            current_payload = _assistant_prefill_payload(
-                original_payload,
-                accumulated,
-            )
+            current_payload = _assistant_prefill_payload(original_payload, accumulated)
             continue
 
         try:
@@ -593,7 +550,6 @@ def _qwen_tool_generation_response(
             "llama-server returned server-parsed tool_calls even though managed "
             "--skip-chat-parsing requires raw host-validated markup"
         )
-
     schemas = _tool_schema_map(request.tools)
     content_value = message.get("content")
     content_raw = content_value if isinstance(content_value, str) else ""
@@ -601,12 +557,10 @@ def _qwen_tool_generation_response(
     server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
     embedded_reasoning, content_raw = _split_qwen_reasoning_markup(content_raw)
     reasoning_raw = _merge_reasoning(server_reasoning, embedded_reasoning)
-
     reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
     content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
     calls = (*reasoning_calls, *content_calls)
     _validate_tool_choice(request, calls)
-
     return GenerationResponse(
         content=content.strip(),
         tool_calls=tuple(calls),
@@ -615,8 +569,6 @@ def _qwen_tool_generation_response(
 
 
 def _split_qwen_reasoning_markup(text: str) -> tuple[str, str]:
-    """Split one leading Qwen ``<think>`` block from pure-content transport."""
-
     if not text:
         return "", ""
     stripped = text.lstrip()
@@ -655,17 +607,8 @@ def _parse_qwen_tool_markup(
     text: str,
     schemas: Mapping[str, Mapping[str, Any]],
 ) -> tuple[str, tuple[ToolCall, ...]]:
-    """Parse Qwen3.5 native tagged tool calls without regex or PEG.
-
-    Both the official ``<tool_call><function=...>`` form and the wrapper-omitted
-    ``<function=...>`` form are accepted. Parameter terminators are recognized only
-    at structural boundaries so Java/source strings containing XML-looking text are
-    not truncated merely because they contain ``</parameter>``.
-    """
-
     if not text:
         return "", ()
-
     calls: list[ToolCall] = []
     spans: list[tuple[int, int]] = []
     cursor = 0
@@ -684,7 +627,6 @@ def _parse_qwen_tool_markup(
                 raise RuntimeError("Qwen tool_call block does not begin with a function")
             cursor = start + 1
             continue
-
         call, end = _parse_qwen_function(
             text,
             function_at,
@@ -699,12 +641,10 @@ def _parse_qwen_tool_markup(
         calls.append(call)
         spans.append((start, end))
         cursor = end
-
     for marker in _STRUCTURAL_MARKERS:
         pos = text.find(marker)
         if pos >= 0 and not any(begin <= pos < end for begin, end in spans):
             raise RuntimeError(f"unparsed Qwen tool markup begins at {marker!r}")
-
     if not spans:
         return text, ()
     visible: list[str] = []
@@ -738,9 +678,7 @@ def _parse_qwen_function(
     properties = properties_value if isinstance(properties_value, Mapping) else {}
     required_value = schema.get("required", ())
     required: set[str] = set()
-    if isinstance(required_value, Sequence) and not isinstance(
-        required_value, (str, bytes)
-    ):
+    if isinstance(required_value, Sequence) and not isinstance(required_value, (str, bytes)):
         required = {str(value) for value in required_value}
     additional = schema.get("additionalProperties", True)
 
@@ -757,7 +695,6 @@ def _parse_qwen_function(
             raise RuntimeError(
                 f"Qwen tool {name!r} emitted invalid parameter structure near {snippet!r}"
             )
-
         key_start = pos + len(_PARAMETER_OPEN)
         key_end = text.find(">", key_start)
         if key_end < 0:
@@ -772,11 +709,17 @@ def _parse_qwen_function(
             and "operation" in properties
             and "action" not in properties
         ):
-            # Qwen sometimes labels the scalar edit discriminator ``action`` even
-            # though the exposed ACI calls it ``operation``.  This is a lossless,
-            # tool-specific field-name alias: decode exactly once against the
-            # canonical operation schema, then keep every existing type/enum check.
             key = "operation"
+        elif (
+            name == "apply_source_edit"
+            and emitted_key == "file"
+            and "path" in properties
+            and "file" not in properties
+        ):
+            # Qwen commonly uses ``file`` for source-edit targets. Normalize only
+            # when this exact tool schema exposes canonical ``path`` and does not
+            # itself define ``file``; all downstream schema/type checks remain strict.
+            key = "path"
         if key in arguments:
             previous = argument_sources[key]
             if {previous, emitted_key} == {"action", "operation"}:
@@ -784,12 +727,16 @@ def _parse_qwen_function(
                     "Qwen tool 'apply_source_edit' emitted both alias 'action' "
                     "and canonical parameter 'operation'"
                 )
+            if {previous, emitted_key} == {"file", "path"}:
+                raise RuntimeError(
+                    "Qwen tool 'apply_source_edit' emitted both alias 'file' "
+                    "and canonical parameter 'path'"
+                )
             raise RuntimeError(f"Qwen tool {name!r} repeated parameter {emitted_key!r}")
         if key not in properties and additional is False:
             raise RuntimeError(
                 f"Qwen tool {name!r} emitted unknown parameter {emitted_key!r}"
             )
-
         value_start = key_end + 1
         close_at = _find_parameter_close(text, value_start)
         if close_at < 0:
@@ -810,12 +757,7 @@ def _parse_qwen_function(
         raise RuntimeError(
             f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}"
         )
-
-    raw_arguments = json.dumps(
-        arguments,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(
         f"{call_index}\0{name}\0{raw_arguments}".encode("utf-8")
     ).hexdigest()[:16]
@@ -891,11 +833,7 @@ def _decode_parameter_value(
             if expected == "array" and not isinstance(value, list):
                 raise ValueError("not an array")
         else:
-            if compact.startswith(("{", "[", '"')) or compact in {
-                "true",
-                "false",
-                "null",
-            }:
+            if compact.startswith(("{", "[", '"')) or compact in {"true", "false", "null"}:
                 value = json.loads(compact)
             else:
                 value = raw
@@ -904,7 +842,6 @@ def _decode_parameter_value(
             f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
             f"for parameter {key!r}"
         ) from exc
-
     enum = schema.get("enum")
     if isinstance(enum, list) and enum and value not in enum:
         raise RuntimeError(
@@ -959,13 +896,9 @@ def _json_type(value: Any) -> str:
     return ""
 
 
-def _validate_tool_choice(
-    request: GenerationRequest,
-    calls: Sequence[ToolCall],
-) -> None:
+def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall]) -> None:
     if not request.parallel_tool_calls and len(calls) > 1:
         raise RuntimeError("model emitted parallel tool calls when they are disabled")
-
     choice = request.tool_choice
     if choice is None or choice == "auto":
         return
@@ -1018,11 +951,7 @@ def _reasoning_continuation_request(
             {"role": "user", "content": _REASONING_CONTINUATION},
         ]
     )
-    return replace(
-        request,
-        messages=tuple(messages),
-        media_paths=(),
-    )
+    return replace(request, messages=tuple(messages), media_paths=())
 
 
 def _merge_reasoning(first: str, second: str) -> str:
@@ -1095,8 +1024,6 @@ def _payload_content_chars(payload: Mapping[str, Any]) -> int:
 
 
 def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
-    """POST one native completion with bounded idle time and visible liveness."""
-
     endpoint = f"{server_url}/chat/completions"
     read_timeout = _positive_env_float(
         "MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS",
@@ -1111,7 +1038,6 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
     input_chars = _payload_content_chars(payload)
     max_tokens = payload.get("max_tokens", "?")
     tool_count = len(payload.get("tools", ()) or ())
-
     print(
         "llama server: completion request",
         f" input_chars={input_chars}",
@@ -1140,12 +1066,7 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
         daemon=True,
     )
     reporter.start()
-    timeout = httpx.Timeout(
-        connect=30.0,
-        read=read_timeout,
-        write=30.0,
-        pool=30.0,
-    )
+    timeout = httpx.Timeout(connect=30.0, read=read_timeout, write=30.0, pool=30.0)
     try:
         if httpx.post is not _DEFAULT_HTTPX_POST:
             return httpx.post(endpoint, json=payload, timeout=timeout)
