@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-"""Make host-forced tool choices executable, not advisory.
+"""Enforce exact host-selected tool turns with one transport contract.
 
-Several production paths can require one exact function call: writable source mutation,
-mandatory RAG retrieval, and structured decisions. Every transport must therefore make
-that requirement visible to the model before validating it after generation.
-
-Remote OpenAI-compatible endpoints can use their native ``required`` transport after
-narrowing the visible surface to one function. Local llama.cpp also narrows to one
-schema and records the selected name in host metadata; its hardware transport renders
-wire ``required`` while managed pure-content parsing returns raw Qwen markup for host
-validation. Causal stale-tool recovery owns validation-only historical tools, so this
-layer returns those calls unchanged instead of multiplying full model decodes.
+When the causal planner selects one exact function, every adapter receives the same
+request shape: one visible schema, ``tool_choice='required'`` and serial execution.
+There is no local-only auto/metadata/prompt detour. A malformed result may receive one
+protocol-correction retry; causal stale-tool recovery remains the owner of stale calls.
 """
 
 import hashlib
@@ -20,23 +14,17 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
-_MARKER = "_mmm_forced_tool_execution_v1"
-_LOCAL_MARKER = "_mmm_local_forced_tool_execution_v1"
+_MARKER = "_mmm_forced_tool_execution_v2"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
-_HOST_FORCED_TOOL_METADATA_KEY = "_mmm_host_forced_tool"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
 _SOURCE_MUTATION_TOOLS = frozenset(
-    {"apply_source_edit", "apply_source_patch", "apply_java_operations", "repair_project"}
-)
-_FIRST_LOCAL_INSTRUCTION = (
-    "The host requires the only available function for this turn. Call it exactly once "
-    "with schema-valid arguments. Do not answer in prose instead of the required call."
+    {"apply_source_edit", "apply_java_operations", "repair_project"}
 )
 _RETRY_INSTRUCTION = (
-    "The previous assistant turn did not satisfy the host-required function call. "
-    "Call the only available function exactly once now. Do not answer in prose."
+    "The previous assistant turn did not satisfy the required function call. "
+    "Call the only available function exactly once with schema-valid arguments."
 )
 
 
@@ -48,8 +36,6 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
 
 
 def forced_tool_name(tool_choice: Any) -> str:
-    """Return the exact host-required function name, or an empty string for auto/none."""
-
     if not isinstance(tool_choice, Mapping):
         return ""
     if str(tool_choice.get("type", "")).strip() != "function":
@@ -58,15 +44,6 @@ def forced_tool_name(tool_choice: Any) -> str:
     if not isinstance(function, Mapping):
         return ""
     return str(function.get("name", "")).strip()
-
-
-def host_forced_tool_name(request: Any) -> str:
-    """Return the local prompt-forced tool retained in host-only request metadata."""
-
-    metadata = getattr(request, "metadata", None)
-    if not isinstance(metadata, Mapping):
-        return ""
-    return str(metadata.get(_HOST_FORCED_TOOL_METADATA_KEY, "")).strip()
 
 
 def _selected_schema(request: Any, name: str) -> tuple[Mapping[str, Any], ...]:
@@ -97,16 +74,12 @@ def _schema_names(schemas: Any) -> frozenset[str]:
 
 
 def _validation_only_tool_names(request: Any) -> frozenset[str]:
-    """Return parseable historical tools that are not executable this turn."""
-
     visible = _schema_names(getattr(request, "tools", ()))
     validation = _schema_names(getattr(request, "tool_validation_schemas", ()))
     return validation - visible
 
 
 def _is_validation_only_stale_turn(request: Any, turn: Any) -> bool:
-    """Whether the turn belongs to the outer causal stale-tool recovery owner."""
-
     calls = tuple(getattr(turn, "tool_calls", ()) or ())
     if not calls:
         return False
@@ -121,8 +94,6 @@ def _narrow_capability_context(
     messages: Sequence[Mapping[str, Any]],
     selected: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, Any], ...]:
-    """Keep textual routing guidance aligned with the one executable forced schema."""
-
     from .agent_capability_context import build_agent_capability_context
 
     narrowed: list[dict[str, Any]] = []
@@ -153,39 +124,23 @@ def _narrow_capability_context(
     return tuple(narrowed)
 
 
-def _single_tool_request(
-    request: Any,
-    name: str,
-    *,
-    retry: bool,
-    native_required: bool,
-) -> Any:
-    """Reduce one forced turn to one schema without dropping request metadata."""
+def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
+    """Narrow one exact action without changing its required semantics."""
 
     selected = _selected_schema(request, name)
     messages: Sequence[Mapping[str, Any]] = _narrow_capability_context(
         request.messages,
         selected,
     )
-    instruction = _RETRY_INSTRUCTION if retry else _FIRST_LOCAL_INSTRUCTION
-    if retry or not native_required:
-        messages = (*tuple(messages), {"role": "system", "content": instruction})
-
-    # Remote endpoints retain required directly. Local llama.cpp keeps this host-facing
-    # request as auto plus selected-name metadata; its hardware layer converts the one
-    # schema to wire required while the raw Qwen result remains host-validated.
-    changes: dict[str, Any] = {
-        "messages": messages,
-        "tools": selected,
-        "tool_choice": "required" if native_required else "auto",
-        "parallel_tool_calls": False,
-    }
-    if not native_required and hasattr(request, "metadata"):
-        raw_metadata = getattr(request, "metadata", None)
-        metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
-        metadata[_HOST_FORCED_TOOL_METADATA_KEY] = name
-        changes["metadata"] = metadata
-    return replace(request, **changes)
+    if retry:
+        messages = (*tuple(messages), {"role": "system", "content": _RETRY_INSTRUCTION})
+    return replace(
+        request,
+        messages=messages,
+        tools=selected,
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
 
 
 def _json_mapping(value: Any) -> Mapping[str, Any] | None:
@@ -224,8 +179,6 @@ def _structured_task(content: str) -> str:
 
 
 def _latest_failed_mutation_context(messages: Sequence[Mapping[str, Any]]) -> str:
-    """Return safe repair anchors, never source/replacement bodies."""
-
     selected_index = -1
     selected: Mapping[str, Any] | None = None
     tool_name = ""
@@ -283,14 +236,8 @@ def _latest_failed_mutation_context(messages: Sequence[Mapping[str, Any]]) -> st
 
 
 def _bounded_task_query(request: Any) -> str:
-    """Derive one deterministic repair query from host-owned request context."""
-
     base = ""
-    candidates = (
-        getattr(request, "task", ""),
-        getattr(request, "prompt", ""),
-    )
-    for raw in candidates:
+    for raw in (getattr(request, "task", ""), getattr(request, "prompt", "")):
         value = " ".join(str(raw or "").split())
         if value:
             base = _redacted_text(value, limit=_MAX_FALLBACK_QUERY_CHARS)
@@ -315,9 +262,7 @@ def _bounded_task_query(request: Any) -> str:
                 base = value
                 break
     failure = _latest_failed_mutation_context(messages)
-    return " ".join(value for value in (base, failure) if value)[
-        :_MAX_FALLBACK_QUERY_CHARS
-    ]
+    return " ".join(value for value in (base, failure) if value)[:_MAX_FALLBACK_QUERY_CHARS]
 
 
 def _metadata_value(request: Any, key: str) -> str:
@@ -350,14 +295,11 @@ def _metadata_value(request: Any, key: str) -> str:
 
 
 def _schema_formats_supported(schema: Mapping[str, Any], checker: Any) -> bool:
-    """Reject unknown formats before jsonschema treats them as annotations."""
-
     available = getattr(checker, "checkers", {})
     if "format" in schema:
         name = schema.get("format")
         if not isinstance(name, str) or name not in available:
             return False
-
     for keyword in ("$defs", "definitions", "properties", "patternProperties", "dependentSchemas"):
         children = schema.get(keyword)
         if isinstance(children, Mapping):
@@ -389,8 +331,6 @@ def _schema_formats_supported(schema: Mapping[str, Any], checker: Any) -> bool:
 
 
 def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, Any]) -> bool:
-    """Validate a complete host-synthesized call against its declared JSON Schema."""
-
     try:
         from jsonschema import validators
         from jsonschema.exceptions import SchemaError
@@ -406,14 +346,10 @@ def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, A
     except (SchemaError, TypeError, ValueError, KeyError, RecursionError):
         return False
     except Exception:
-        # Resolution errors and unsupported schema extensions must not authorize a
-        # fabricated host call. Model decoding remains the fail-closed fallback.
         return False
 
 
 def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | None:
-    """Build only schema-proven, read-only arguments; unknown requirements fail closed."""
-
     if name not in _DETERMINISTIC_READ_TOOLS:
         return None
     selected = _selected_schema(request, name)
@@ -439,12 +375,8 @@ def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | N
     minecraft_version = _metadata_value(request, "minecraft_version")
     if minecraft_version:
         known["minecraft_version"] = minecraft_version
-
     if "query" not in properties or not query:
         return None
-    # Project RAG is exact-version retrieval. Even if a transport schema exposes a
-    # host-side default, never synthesize this call without the structured approved
-    # target carried by the request.
     if name == "search_project_rag" and (
         "minecraft_version" not in properties or not minecraft_version
     ):
@@ -457,11 +389,8 @@ def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | N
             if not isinstance(schema_value, Mapping):
                 return None
             arguments[property_name] = known[property_name]
-
     if any(key not in arguments for key in required):
         return None
-    # A malformed schema cannot authorize a fabricated call. In particular, do not
-    # manufacture arguments when it declares required names outside properties.
     if any(key not in properties for key in required):
         return None
     if not _arguments_match_schema(arguments, raw_parameters):
@@ -470,8 +399,6 @@ def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | N
 
 
 def deterministic_forced_read_turn(request: Any, name: str) -> Any | None:
-    """Return a host-derived read-only tool call, or ``None`` when not provable."""
-
     arguments = _deterministic_read_arguments(request, name)
     if arguments is None:
         return None
@@ -508,7 +435,12 @@ def _call_names(turn: Any) -> str:
     ) or "<prose>"
 
 
-def _install_remote_adapter_class(cls: Any) -> None:
+def _install_adapter_class(
+    cls: Any,
+    *,
+    transport_name: str,
+    deterministic_stale_read: bool,
+) -> None:
     current = cls.generate_turn
     if getattr(current, _MARKER, False):
         return
@@ -521,39 +453,22 @@ def _install_remote_adapter_class(cls: Any) -> None:
         if not name:
             return current(self, request)
 
-        first = current(
-            self,
-            _single_tool_request(
-                request,
-                name,
-                retry=False,
-                native_required=True,
-            ),
-        )
+        first = current(self, _single_tool_request(request, name, retry=False))
         if _contains_exact_call(first, name):
             return first
-        # Causal stale recovery deliberately keeps previously authorized tools
-        # parseable through tool_validation_schemas while exposing only the current
-        # frontier in request.tools. It owns discard/re-sync for those calls. Retrying
-        # here would hide the stale result from that owner and duplicate full decodes.
         if _is_validation_only_stale_turn(request, first):
+            if deterministic_stale_read:
+                deterministic = deterministic_forced_read_turn(request, name)
+                if deterministic is not None:
+                    return deterministic
             return first
 
-        second = current(
-            self,
-            _single_tool_request(
-                request,
-                name,
-                retry=True,
-                native_required=True,
-            ),
-        )
+        second = current(self, _single_tool_request(request, name, retry=True))
         if _contains_exact_call(second, name):
             return second
-
         raise ModelConfigurationError(
-            "Remote model violated the host-forced single-tool contract after the "
-            f"bounded retry for {name!r}; first={_call_names(first)}, "
+            f"{transport_name} violated the required single-tool contract after one "
+            f"protocol correction for {name!r}; first={_call_names(first)}, "
             f"retry={_call_names(second)}."
         )
 
@@ -561,77 +476,22 @@ def _install_remote_adapter_class(cls: Any) -> None:
     generate_turn._mmm_forced_tool_single_surface = True
     generate_turn._mmm_forced_tool_single_context = True
     generate_turn._mmm_forced_tool_required_transport = True
-    generate_turn._mmm_forced_tool_bounded_retry = True
-    cls.generate_turn = generate_turn
-
-
-def _install_local_adapter_class(cls: Any) -> None:
-    current = cls.generate_turn
-    if getattr(current, _LOCAL_MARKER, False):
-        return
-
-    @wraps(current)
-    def generate_turn(self: Any, request: Any) -> Any:
-        from .model_adapters import ModelConfigurationError
-
-        name = forced_tool_name(getattr(request, "tool_choice", None))
-        if not name:
-            return current(self, request)
-
-        first = current(
-            self,
-            _single_tool_request(
-                request,
-                name,
-                retry=False,
-                native_required=False,
-            ),
-        )
-        if _contains_exact_call(first, name):
-            return first
-        if _is_validation_only_stale_turn(request, first):
-            deterministic = deterministic_forced_read_turn(request, name)
-            if deterministic is not None:
-                return deterministic
-            return first
-
-        second = current(
-            self,
-            _single_tool_request(
-                request,
-                name,
-                retry=True,
-                native_required=False,
-            ),
-        )
-        if _contains_exact_call(second, name):
-            return second
-
-        raise ModelConfigurationError(
-            "Local llama model violated the host-forced single-tool contract after the "
-            f"bounded prompt-enforced retry for {name!r}; first={_call_names(first)}, "
-            f"retry={_call_names(second)}."
-        )
-
-    setattr(generate_turn, _LOCAL_MARKER, True)
-    generate_turn._mmm_forced_tool_single_surface = True
-    generate_turn._mmm_forced_tool_single_context = True
-    generate_turn._mmm_forced_tool_prompt_transport = True
-    generate_turn._mmm_forced_tool_bounded_retry = True
+    generate_turn._mmm_forced_tool_protocol_retry = True
     cls.generate_turn = generate_turn
 
 
 def install(*, openai_compatible_module: Any, llama_cpp_module: Any | None = None) -> None:
-    """Install one exact-tool forcing policy across remote and local transports."""
-
-    _install_remote_adapter_class(openai_compatible_module.OpenAICompatibleAdapter)
+    _install_adapter_class(
+        openai_compatible_module.OpenAICompatibleAdapter,
+        transport_name="Remote model",
+        deterministic_stale_read=False,
+    )
     if llama_cpp_module is not None:
-        _install_local_adapter_class(llama_cpp_module.LlamaCppAdapter)
+        _install_adapter_class(
+            llama_cpp_module.LlamaCppAdapter,
+            transport_name="Local llama model",
+            deterministic_stale_read=True,
+        )
 
 
-__all__ = [
-    "deterministic_forced_read_turn",
-    "forced_tool_name",
-    "host_forced_tool_name",
-    "install",
-]
+__all__ = ["deterministic_forced_read_turn", "forced_tool_name", "install"]
