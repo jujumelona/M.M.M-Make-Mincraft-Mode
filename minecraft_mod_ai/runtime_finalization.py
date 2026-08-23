@@ -62,6 +62,7 @@ def finalize_runtime() -> None:
         from .complete_orchestrator import CompleteProductionOrchestrator
         from .completion_boundary_work_recovery import install as install_completion_boundary_work_recovery
         from .context_budget_preflight import run_context_budget_preflight
+        from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
         from .external_mcp_binding_concurrency_contract import (
             install as install_external_mcp_binding_concurrency,
         )
@@ -149,6 +150,7 @@ def finalize_runtime() -> None:
         run_context_budget_preflight()
         run_runtime_live_path_preflight()
         run_runtime_preflight()
+        install_evidence_first_pipeline()
         _FINALIZED = True
         _FINALIZING = False
 
