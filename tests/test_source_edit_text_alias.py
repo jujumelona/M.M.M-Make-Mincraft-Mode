@@ -5,9 +5,9 @@ import hashlib
 import pytest
 
 from minecraft_mod_ai import agent_tool_runtime
-from minecraft_mod_ai.small_model_execution_extensions_contract import (
-    _SOURCE_EDIT_SCHEMA,
-    _materialize_model_source_edit,
+from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+    SOURCE_EDIT_SCHEMA,
+    materialize_model_source_edit,
 )
 
 
@@ -19,10 +19,15 @@ def _project(workspace):
 
 
 def test_source_edit_schema_accepts_only_explicit_text_alias() -> None:
-    assert _SOURCE_EDIT_SCHEMA["additionalProperties"] is False
-    properties = _SOURCE_EDIT_SCHEMA["properties"]
+    assert SOURCE_EDIT_SCHEMA["additionalProperties"] is False
+    properties = SOURCE_EDIT_SCHEMA["properties"]
     assert properties["text"]["type"] == "string"
-    assert properties["text"]["maxLength"] == properties["new"]["maxLength"]
+    operations = set(properties["operation"]["enum"])
+    assert "replace_exact" in operations
+    assert "create_file" in operations
+    assert "delete_file" in operations
+    assert "append_file" not in operations
+    assert "replace_file" not in operations
 
 
 def test_replace_exact_materializes_qwen_text_as_new(tmp_path) -> None:
@@ -31,7 +36,7 @@ def test_replace_exact_materializes_qwen_text_as_new(tmp_path) -> None:
     source = project / "src/main/java/example/Example.java"
     source.write_text("final class Example { int oldValue; }\n", encoding="utf-8")
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -51,7 +56,7 @@ def test_create_file_materializes_qwen_text_as_content(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     _project(workspace)
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -76,7 +81,7 @@ def test_canonical_replacement_field_wins_over_text_alias(tmp_path) -> None:
     source = project / "src/main/java/example/Example.java"
     source.write_text("final class Example { int oldValue; }\n", encoding="utf-8")
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -98,7 +103,7 @@ def test_source_edit_still_rejects_unlisted_parameters(tmp_path) -> None:
     source.write_text("final class Example { int oldValue; }\n", encoding="utf-8")
 
     with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="Unknown model-facing"):
-        _materialize_model_source_edit(
+        materialize_model_source_edit(
             agent_tool_runtime,
             workspace,
             {
@@ -111,42 +116,14 @@ def test_source_edit_still_rejects_unlisted_parameters(tmp_path) -> None:
         )
 
 
-def test_replace_file_materializes_hash_guarded_whole_file_replace(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    project = _project(workspace)
-    source = project / "src/main/java/example/Example.java"
-    before = "final class Example { int oldValue; }\n"
-    source.write_text(before, encoding="utf-8")
-
-    payload = _materialize_model_source_edit(
-        agent_tool_runtime,
-        workspace,
-        {
-            "operation": "replace_file",
-            "path": "src/main/java/example/Example.java",
-            "text": "final class Example { int newValue; }\n",
-        },
-    )
-
-    assert payload["operations"] == [
-        {
-            "operation": "replace",
-            "path": "src/main/java/example/Example.java",
-            "expected_sha256": "sha256:"
-            + hashlib.sha256(source.read_bytes()).hexdigest(),
-            "content": "final class Example { int newValue; }\n",
-        }
-    ]
-
-
 def test_delete_file_materializes_hash_guarded_delete(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
-    before = "final class Example {}\n"
-    source.write_text(before, encoding="utf-8")
+    source.write_text("final class Example {}\n", encoding="utf-8")
+    before = source.read_bytes()
 
-    payload = _materialize_model_source_edit(
+    payload = materialize_model_source_edit(
         agent_tool_runtime,
         workspace,
         {
@@ -159,7 +136,6 @@ def test_delete_file_materializes_hash_guarded_delete(tmp_path) -> None:
         {
             "operation": "delete",
             "path": "src/main/java/example/Example.java",
-            "expected_sha256": "sha256:"
-            + hashlib.sha256(source.read_bytes()).hexdigest(),
+            "expected_sha256": "sha256:" + hashlib.sha256(before).hexdigest(),
         }
     ]
