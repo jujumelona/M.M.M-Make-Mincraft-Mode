@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from minecraft_mod_ai.causal_tool_graph import executable_frontier
 from minecraft_mod_ai.coder_tool_route_integrity_contract import _WritableProgressAdapter
 from minecraft_mod_ai.model_adapters import (
     GenerationRequest,
     GenerationResponse,
-    ModelConfigurationError,
     ToolCall,
 )
 
@@ -89,7 +86,7 @@ def test_writable_coder_prefers_hardened_patch_over_schema_order() -> None:
     }
 
 
-def test_writable_coder_fails_over_after_two_explicit_patch_failures() -> None:
+def test_writable_coder_does_not_locally_fail_over_after_patch_failures() -> None:
     inner = _RecordingAdapter()
     adapter = _WritableProgressAdapter(inner)
     request = GenerationRequest(
@@ -102,11 +99,11 @@ def test_writable_coder_fails_over_after_two_explicit_patch_failures() -> None:
 
     assert inner.requests[0].tool_choice == {
         "type": "function",
-        "function": {"name": "apply_source_edit"},
+        "function": {"name": "apply_source_patch"},
     }
 
 
-def test_writable_coder_stops_when_visible_mutation_routes_are_exhausted() -> None:
+def test_writable_coder_does_not_own_retry_exhaustion() -> None:
     inner = _RecordingAdapter()
     adapter = _WritableProgressAdapter(inner)
     request = GenerationRequest(
@@ -120,7 +117,10 @@ def test_writable_coder_stops_when_visible_mutation_routes_are_exhausted() -> No
         tool_choice="auto",
     )
 
-    with pytest.raises(ModelConfigurationError, match="bounded mutation retry budget"):
-        adapter.generate_turn(request)
+    adapter.generate_turn(request)
 
-    assert inner.requests == []
+    assert len(inner.requests) == 1
+    assert inner.requests[0].tool_choice == {
+        "type": "function",
+        "function": {"name": "apply_source_patch"},
+    }
