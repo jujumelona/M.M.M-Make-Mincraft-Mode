@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.model_adapters import GenerationRequest, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter, _agent_tool_round_limit
+from minecraft_mod_ai.progress_aware_tool_loop import generate_with_tools
 
 
 def _tool_schema(name: str) -> dict[str, object]:
@@ -86,7 +87,8 @@ def test_progressing_tool_loop_can_run_beyond_legacy_twelve_round_cutoff(monkeyp
         adapter="llama_cpp",
     )
 
-    result = router._generate_with_tools(
+    result = generate_with_tools(
+        router,
         config=config,
         adapter=adapter,
         request=request,
