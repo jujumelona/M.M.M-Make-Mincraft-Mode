@@ -76,7 +76,12 @@ def _tool() -> dict[str, object]:
         "function": {
             "name": "lookup",
             "description": "lookup",
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+                "additionalProperties": False,
+            },
         },
     }
 
@@ -147,7 +152,7 @@ def test_generate_turn_accepts_final_content_while_native_tools_are_available(mo
     assert payload["repeat_penalty"] == 1.0
 
 
-def test_generate_turn_rejects_server_parsed_openai_tool_calls(monkeypatch) -> None:
+def test_generate_turn_accepts_host_validated_server_parsed_openai_tool_calls(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
@@ -183,10 +188,49 @@ def test_generate_turn_rejects_server_parsed_openai_tool_calls(monkeypatch) -> N
         parallel_tool_calls=True,
     )
 
-    with pytest.raises(ModelBackendError, match="server-parsed tool_calls"):
-        _adapter().generate_turn(request)
+    turn = _adapter().generate_turn(request)
+    assert turn.content == ""
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].id == "call_7"
+    assert turn.tool_calls[0].name == "lookup"
+    assert turn.tool_calls[0].arguments == {"q": "x"}
     assert captured["payload"]["tools"] == [_tool()]
     assert captured["payload"]["tool_choice"] == "auto"
+
+
+def test_generate_turn_rejects_schema_invalid_server_parsed_tool_calls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *args, **kwargs: _CompletionResponse(
+            status_code=200,
+            payload={
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_bad",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"q":7}',
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            },
+        ),
+    )
+
+    with pytest.raises(ModelBackendError, match="schema-invalid arguments"):
+        _adapter().generate_turn(
+            GenerationRequest(
+                messages=({"role": "user", "content": "look it up"},),
+                tools=(_tool(),),
+                tool_choice="required",
+            )
+        )
 
 
 def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatch) -> None:
