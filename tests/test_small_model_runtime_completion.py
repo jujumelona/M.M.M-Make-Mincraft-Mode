@@ -6,6 +6,8 @@ from pathlib import Path
 
 from minecraft_mod_ai import model_router
 from minecraft_mod_ai.production_tools import ProductionToolService
+from minecraft_mod_ai.runtime_contract_wrappers import wrapped_layers
+from minecraft_mod_ai.small_model_compacting_adapter import _is_live_compaction_wrapper
 from minecraft_mod_ai.small_model_context_compaction import compact_messages
 from minecraft_mod_ai.small_model_rag_relations import derive_relations
 
@@ -133,9 +135,8 @@ def test_context_compaction_preserves_exact_facts_and_recent_protocol(
     assert compacted[-2]["role"] == "assistant"
 
 
-def test_bootstrap_bound_context_compaction() -> None:
-    assert getattr(
-        model_router.ModelRouter._generate_with_tools,
-        "_mmm_lossless_context_compaction",
-        False,
-    )
+def test_bootstrap_binds_exactly_one_context_compaction_owner() -> None:
+    layers = wrapped_layers(model_router.ModelRouter._generate_with_tools)
+    owners = [layer for layer in layers if _is_live_compaction_wrapper(layer)]
+    assert len(owners) == 1
+    assert getattr(owners[0], "_mmm_lossless_context_compaction", False)

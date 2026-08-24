@@ -7,6 +7,7 @@ from functools import wraps
 from typing import Any
 
 from .model_context_budget import fit_messages_to_context
+from .runtime_contract_wrappers import wrapped_layers
 from .small_model_context_compaction import compact_messages
 
 
@@ -39,8 +40,6 @@ def _trim_record_tail(
     current_bytes: int,
     byte_budget: int,
 ) -> int:
-    """Trim one record list without repeatedly serializing the full payload."""
-
     records = value.get(key)
     if not isinstance(records, list):
         return current_bytes
@@ -48,28 +47,17 @@ def _trim_record_tail(
         removed = records.pop()
         current_bytes -= _json_bytes(removed)
         if records:
-            # Canonical JSON has one comma between adjacent list elements.
             current_bytes -= 1
     return current_bytes
 
 
 def _bounded_exact_source_seed(value: Any, *, byte_budget: int) -> Any:
-    """Bound the first exact-source seed while preserving host receipt metadata.
-
-    Supplemental workspace/RAG tools remain available after the first decode.  The
-    seed therefore needs representative exact source, not an entire project page on
-    every subsequent tool turn.  Records are removed whole so byte ranges and hashes
-    are never rewritten or turned into approximate evidence.
-    """
-
     if not isinstance(value, dict):
         return value
     current_bytes = _json_bytes(value)
     if current_bytes <= byte_budget:
         return value
 
-    # The seed came from json.loads in the live path, so deepcopy preserves the same
-    # JSON-compatible structure without paying for another encode/decode round trip.
     bounded = copy.deepcopy(value)
     original_records = sum(
         len(bounded.get(key, ()))
@@ -101,14 +89,6 @@ def _bounded_exact_source_seed(value: Any, *, byte_budget: int) -> Any:
 
 
 def _compact_implementation_seed(messages: Any) -> tuple[dict[str, Any], ...]:
-    """Canonicalize duplicated host evidence in one ``implement_module`` request.
-
-    ``host_grounding`` already carries the authoritative manifest/source/research
-    receipts, and the research router injects its own bounded live research bundle.
-    Re-sending the raw receipts and research payload beside those owners made every
-    tool round re-prefill tens of kilobytes of duplicate context.
-    """
-
     compacted: list[dict[str, Any]] = []
     for raw_message in messages:
         message = dict(raw_message)
@@ -154,9 +134,6 @@ class CompactingAdapter:
         return getattr(self.inner, name)
 
     def generate_turn(self, request: Any) -> Any:
-        # Canonicalize the immutable implementation seed before historical exchange
-        # compaction.  This shrinks the prefix reused by every tool round instead of
-        # waiting until the context window is nearly exhausted.
         messages = _compact_implementation_seed(request.messages)
         messages = compact_messages(messages)
         messages = fit_messages_to_context(
@@ -166,22 +143,10 @@ class CompactingAdapter:
         )
         if messages == tuple(request.messages):
             return self.inner.generate_turn(request)
-
-        # Clone the frozen GenerationRequest instead of reconstructing it field by
-        # field. This preserves task/prompt/metadata and any future request fields
-        # added by another runtime contract while changing only the compacted history.
         return self.inner.generate_turn(replace(request, messages=messages))
 
 
 def _is_live_compaction_wrapper(value: Any) -> bool:
-    """Identify the actual wrapper implementation, not inherited marker metadata.
-
-    ``functools.wraps`` copies the immediate wrapper metadata, but late composition can
-    place another wrapper above a callable whose ``_mmm_*`` marker is used as an
-    executable contract by independent validators. The code object cannot be copied by
-    ``wraps`` and is the authoritative owner check for this runtime boundary.
-    """
-
     code = getattr(value, "__code__", None)
     if code is None:
         return False
@@ -193,9 +158,8 @@ def _is_live_compaction_wrapper(value: Any) -> bool:
 
 
 def install(model_router_module: Any) -> None:
-    """Bind lossless tool-context compaction at the live model-router boundary."""
     current = model_router_module.ModelRouter._generate_with_tools
-    if _is_live_compaction_wrapper(current):
+    if any(_is_live_compaction_wrapper(layer) for layer in wrapped_layers(current)):
         return
 
     @wraps(current)
