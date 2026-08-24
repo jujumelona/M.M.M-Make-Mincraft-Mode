@@ -7,7 +7,7 @@ from threading import RLock
 from . import runtime_contract_composer as _contract_composer
 
 _BOOTSTRAP_LOCK = RLock()
-_RUNTIME_COMPOSITION_VERSION = 4
+_RUNTIME_COMPOSITION_VERSION = 5
 _INITIALIZED = False
 
 
@@ -85,6 +85,7 @@ def _install_model_runtime_contracts() -> None:
     from .colab_gpu_handoff_contract import install as install_gpu_handoff
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .gpu_resource_contract import install as install_gpu_resource
+    from .llama_generation_budget import install as install_llama_generation_budget
     from .llama_prefill_telemetry_contract import install as install_llama_prefill_telemetry
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
@@ -101,11 +102,9 @@ def _install_model_runtime_contracts() -> None:
         hardware_policy=llama_server_hardware_policy,
         runtime_tuning=llama_server_runtime_tuning,
     )
-    from . import causal_frontier_adapter, causal_stale_tool_recovery_contract
-
+    install_llama_generation_budget(llama_server_hardware_policy)
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
-    causal_stale_tool_recovery_contract.install(causal_frontier_adapter)
     start_colab_prefetch(model_registry)
 
 
