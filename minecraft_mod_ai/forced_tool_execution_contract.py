@@ -5,7 +5,8 @@ from __future__ import annotations
 When the causal planner selects one exact function, every adapter receives the same
 request shape: one visible schema, ``tool_choice='required'`` and serial execution.
 There is no local-only auto/metadata/prompt detour. A malformed result may receive one
-protocol-correction retry; causal stale-tool recovery remains the owner of stale calls.
+protocol-correction retry; once an action is host-forced, this contract owns any
+non-selected tool output instead of handing it back to outer stale-tool recovery.
 """
 
 import hashlib
@@ -460,7 +461,10 @@ def _install_adapter_class(
                 deterministic = deterministic_forced_read_turn(request, name)
                 if deterministic is not None:
                     return deterministic
-            return first
+            # The host already selected one exact action. Handing this stale call
+            # back to outer causal resync would consume two owners' retry budgets
+            # for one protocol violation and can create the fatal recovery cycle.
+            # Fall through to this owner's single bounded protocol correction.
 
         second = current(self, _single_tool_request(request, name, retry=True))
         if _contains_exact_call(second, name):
