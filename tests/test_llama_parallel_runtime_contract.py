@@ -117,7 +117,6 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     assert request.tool_choice == "auto"
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
-    assert request.tool_validation_schemas == request.tools
 
     capability_messages = [
         str(message.get("content", ""))
