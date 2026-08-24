@@ -6,16 +6,11 @@ from pathlib import Path
 from typing import Any
 
 _INSTALL_MARKER = "__mmm_progress_aware_retrieval_v1__"
-_GROUNDING_MARKER = "__mmm_repository_grounding_v1__"
+_GROUNDING_MARKER = "__mmm_repository_grounding_v2_live_context__"
 
 
 def install(model_router_module: Any) -> None:
-    """Install adaptive retrieval, repository grounding and inference-time scaling.
-
-    The router module remains the canonical owner of ModelRouter and all of its
-    globals. Late hardening happens after generation/repair candidate owners are
-    installed, so their isolation, staging and fail-closed semantics remain intact.
-    """
+    """Install adaptive retrieval, repository grounding and inference-time scaling."""
     from .adaptive_execution_hardening import harden_adaptive_execution
     from .agent_tool_allowlist_hardening import harden_agent_tool_allowlist
     from .hybrid_route_hardening import harden_code_search_routes
@@ -35,14 +30,6 @@ def install(model_router_module: Any) -> None:
 
 
 def _inherit_boolean_contract_markers(current: Any) -> None:
-    """Expose verified wrapper contracts on the final composed callable.
-
-    ``functools.wraps`` copies the immediate wrapper metadata, but late composition can
-    place another wrapper above a callable whose ``_mmm_*`` marker is used as an
-    executable contract by independent validators. Walk only the explicit
-    ``__wrapped__`` chain and copy true boolean contract markers; no behavior or
-    authority is inferred from names or prose.
-    """
     wrapped = getattr(current, "__wrapped__", None)
     while callable(wrapped):
         for name, value in vars(wrapped).items():
@@ -63,9 +50,6 @@ def _install_router_loop(model_router_module: Any) -> None:
     if getattr(current, _INSTALL_MARKER, False):
         return
 
-    # This is a semantic replacement, not a delegating decorator: it deliberately
-    # does not call ``current``. Do not copy ``current.__dict__`` because that would
-    # falsely advertise inner _mmm_* contracts whose implementation is bypassed.
     @wraps(current, updated=())
     def _generate_with_tools(
         self: Any,
@@ -93,6 +77,25 @@ def _install_router_loop(model_router_module: Any) -> None:
     router_cls._generate_with_tools = _generate_with_tools
 
 
+def _runtime_grounding_budget(router: Any, requested: int, *, role: str) -> int:
+    """Reserve most of the live model window for task/tool traffic, not source dumps."""
+
+    requested = max(1024, int(requested))
+    registry = getattr(router, "registry", None)
+    resolve = getattr(registry, "role", None)
+    profile = str(getattr(router, "profile", "") or "").strip()
+    if not callable(resolve) or not profile:
+        return min(requested, 32 * 1024)
+    try:
+        config = resolve(profile, role)
+        from .model_context_budget import request_message_budget
+
+        live_request_bytes = request_message_budget(config, ())
+    except Exception:
+        return min(requested, 32 * 1024)
+    return min(requested, max(4 * 1024, live_request_bytes // 2))
+
+
 def _install_repository_grounding() -> None:
     from . import custom_module_generator, repair_engine
     from .repository_grounding import (
@@ -117,7 +120,11 @@ def _install_repository_grounding() -> None:
                     router,
                     index,
                     query=query,
-                    byte_budget=byte_budget,
+                    byte_budget=_runtime_grounding_budget(
+                        router,
+                        byte_budget,
+                        role="coder",
+                    ),
                     diagnostic_paths=diagnostic_paths,
                 )
             except ValueError as exc:
@@ -168,7 +175,11 @@ def _install_repository_grounding() -> None:
             index,
             query=query,
             diagnostic_paths=diagnostic_paths,
-            byte_budget=self.policy.model_context_bytes,
+            byte_budget=_runtime_grounding_budget(
+                self.router,
+                self.policy.model_context_bytes,
+                role="coder_safe",
+            ),
         )
 
     setattr(_context, _GROUNDING_MARKER, True)
