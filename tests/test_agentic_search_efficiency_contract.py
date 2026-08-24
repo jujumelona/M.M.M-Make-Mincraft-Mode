@@ -12,13 +12,8 @@ from minecraft_mod_ai import agentic_search_efficiency_contract as efficiency
 from minecraft_mod_ai.agentic_search_efficiency_contract import install
 
 
-def test_auto_repair_search_uses_native_slots_for_complex_failure(monkeypatch) -> None:
-    install(agentic)
-    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
-    monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    engine = SimpleNamespace(_signature=lambda _evidence: "same-signature")
-    evidence = {
+def _complex_failure() -> dict:
+    return {
         "diagnostics": {
             "diagnostics": [
                 {"path": "A.java", "message": "error one"},
@@ -27,7 +22,15 @@ def test_auto_repair_search_uses_native_slots_for_complex_failure(monkeypatch) -
         },
         "build": {"status": "FAIL", "error": "x" * 200},
     }
-    assert agentic._repair_candidate_count(engine, evidence, ()) == 2
+
+
+def test_auto_repair_search_uses_native_slots_for_complex_failure(monkeypatch) -> None:
+    install(agentic)
+    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "auto")
+    monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    engine = SimpleNamespace(_signature=lambda _evidence: "same-signature")
+    assert agentic._repair_candidate_count(engine, _complex_failure(), ()) == 2
 
 
 def test_explicit_repair_search_is_owned_by_efficiency_policy(monkeypatch) -> None:
@@ -37,20 +40,23 @@ def test_explicit_repair_search_is_owned_by_efficiency_policy(monkeypatch) -> No
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
     monkeypatch.setattr(agentic, "_mode", lambda: "auto")
     engine = SimpleNamespace(_signature=lambda _evidence: "same-signature")
-    evidence = {
-        "diagnostics": {
-            "diagnostics": [
-                {"path": "A.java", "message": "error one"},
-                {"path": "B.java", "message": "error two"},
-            ]
-        },
-        "build": {"status": "FAIL", "error": "x" * 200},
-    }
-    assert agentic._repair_candidate_count(engine, evidence, ()) == 2
+    assert agentic._repair_candidate_count(engine, _complex_failure(), ()) == 2
     assert (
         getattr(agentic._repair_candidate_count, "_mmm_failure_gated_search_epoch", "")
-        == "mmm/failure-gated-search-v2"
+        == "mmm/failure-gated-search-v3"
     )
+
+
+def test_installed_repair_policy_isolated_from_mutable_module_helpers(monkeypatch) -> None:
+    install(agentic)
+    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
+    monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
+    monkeypatch.setattr(efficiency, "_search_mode", lambda: "off")
+    monkeypatch.setattr(efficiency, "_repair_search_width", lambda: 1)
+    monkeypatch.setattr(efficiency, "_active_parallel_slots", lambda: 1)
+    engine = SimpleNamespace(_signature=lambda _evidence: "same-signature")
+    assert agentic._repair_candidate_count(engine, _complex_failure(), ()) == 2
 
 
 def test_auto_repair_search_does_not_duplicate_serial_decode(monkeypatch) -> None:
