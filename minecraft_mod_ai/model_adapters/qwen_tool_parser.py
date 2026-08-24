@@ -1,18 +1,20 @@
 """Strict Qwen native tool-markup parser with schema-guided argument recovery.
 
 Qwen family models sometimes wrap a function's argument object in a synthetic
-parameter (for example ``apply``/``arguments``), or use conventional aliases such
-as ``file`` for a schema's ``path``. Recovery here is deliberately bounded: only
-known aliases and object containers are normalized, every recovered value is
-validated against the exposed JSON schema, conflicts are rejected, and unknown
-keys remain errors when ``additionalProperties`` is false.
+parameter (for example ``apply``/``arguments``), use conventional aliases such as
+``file`` for a schema's ``path``, emit the canonical permission identity instead of a
+narrow model-facing alias, or format a string enum harmlessly differently. Recovery is
+bounded by the currently exposed schema: unknown tools and keys remain errors and
+``additionalProperties`` stays authoritative.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
+from ..model_tool_aliases import resolve_exposed_model_tool
 from .base import ToolCall
 
 _TOOL_CALL_OPEN = "<tool_call>"
@@ -105,12 +107,13 @@ def _parse_qwen_function(
     name_end = text.find(">", name_start)
     if name_end < 0:
         raise RuntimeError("Qwen function tag is missing '>'")
-    name = text[name_start:name_end].strip()
-    if not name:
+    emitted_name = text[name_start:name_end].strip()
+    if not emitted_name:
         raise RuntimeError("Qwen function tag has an empty tool name")
-    schema = schemas.get(name)
-    if schema is None:
-        raise RuntimeError(f"Qwen requested an unexposed tool {name!r}")
+    name = resolve_exposed_model_tool(emitted_name, schemas.keys())
+    if name is None:
+        raise RuntimeError(f"Qwen requested an unexposed tool {emitted_name!r}")
+    schema = schemas[name]
     properties_value = schema.get("properties", {})
     properties = properties_value if isinstance(properties_value, Mapping) else {}
     required_value = schema.get("required", ())
@@ -401,11 +404,50 @@ def _validate_decoded_value(
             f"for parameter {key!r}"
         )
     enum = schema.get("enum")
-    if isinstance(enum, list) and enum and value not in enum:
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
-        )
+    if isinstance(enum, list) and enum:
+        if isinstance(value, str) and all(isinstance(item, str) for item in enum):
+            canonical = _canonical_string_enum(value, enum)
+            if canonical is None:
+                raise RuntimeError(
+                    f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
+                )
+            return canonical
+        if value not in enum:
+            raise RuntimeError(
+                f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
+            )
     return value
+
+
+def _enum_key(value: str) -> str:
+    compact = value.strip()
+    compact = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", compact)
+    compact = re.sub(r"[\s-]+", "_", compact.casefold())
+    return re.sub(r"_+", "_", compact)
+
+
+def _string_enum_candidates(value: str) -> tuple[str, ...]:
+    candidates = [value, value.strip()]
+    compact = value.strip()
+    if len(compact) >= 2 and compact[0] == compact[-1] == '"':
+        try:
+            decoded = json.loads(compact)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, str):
+            candidates.append(decoded)
+    return tuple(dict.fromkeys(candidates))
+
+
+def _canonical_string_enum(value: str, allowed: Sequence[str]) -> str | None:
+    for candidate in _string_enum_candidates(value):
+        if candidate in allowed:
+            return candidate
+        key = _enum_key(candidate)
+        matches = tuple(item for item in allowed if _enum_key(item) == key)
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 def _schema_value_type(schema: Mapping[str, Any]) -> str:
