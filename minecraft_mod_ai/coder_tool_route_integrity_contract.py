@@ -129,8 +129,6 @@ def _force_tool_choice(request: Any, tool_name: str) -> Any:
         for schema in request.tools
         if _tool_name(schema) != tool_name
     )
-    # Preserve validation-only historical schemas, task metadata, and any future
-    # request fields. This helper owns only execution ordering and force semantics.
     return replace(
         request,
         tools=selected + remainder,
@@ -173,20 +171,46 @@ def _require_mutation_surface(
         )
 
 
+class _ForcedToolExecutionProxy:
+    """Route any adapter through the canonical forced-tool transport contract.
+
+    Concrete adapters are normally patched during finalization. Runtime composition can
+    still place an unpatched wrapper between the writable coder and that concrete
+    transport. Applying the canonical contract to this stable proxy closes that gap
+    without adding another retry/validation implementation or mutating the wrapped
+    adapter class.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    def generate_turn(self, request: Any) -> Any:
+        return self.inner.generate_turn(request)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+def _execute_forced_frontier_turn(inner: Any, request: Any) -> Any:
+    from .forced_tool_execution_contract import _install_adapter_class
+
+    _install_adapter_class(
+        _ForcedToolExecutionProxy,
+        transport_name="Writable coder",
+        deterministic_stale_read=False,
+    )
+    return _ForcedToolExecutionProxy(inner).generate_turn(request)
+
+
 class _WritableProgressAdapter:
     """Keep an implementation turn alive until a reviewed source mutation succeeds.
 
-    Prerequisite retrieval remains ``auto`` on the first attempt. If a small model
-    answers in prose instead of taking one of the already-authorized causal actions,
-    retry exactly once with the first visible frontier action forced. Mutation actions
-    are forced by explicit host priority only until one reviewed mutation succeeds;
-    after that proof exists, the model returns to auto/final synthesis instead of being
-    forced into redundant source writes. Final synthesis is rejected until a successful
-    mutation observation is present in the transcript.
-
-    Mutation retry/evidence refresh policy is intentionally not implemented here.
-    ``CausalStateLedger`` is the single owner of that state transition so this wrapper
-    cannot terminate a valid recovery path with a second, drifting retry budget.
+    The causal frontier owns which action is legal. The canonical forced-tool transport
+    contract owns exact single-tool emission and its one protocol-correction retry.
+    Causal stale-tool recovery owns evidence refresh. The outer progress-aware tool loop
+    owns the final successful-mutation receipt invariant. This adapter only composes
+    those owners and must not implement a second retry budget or accept prose in place
+    of a legal source mutation.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -210,27 +234,14 @@ class _WritableProgressAdapter:
         if request.tool_choice != "auto" and forced_name not in _MUTATION_TOOLS:
             return self.inner.generate_turn(request)
 
-        # Once the host transcript proves a real source mutation succeeded, forcing
-        # another mutation is no longer progress. Let the ordinary causal/model loop
-        # decide whether another action is genuinely needed or whether to finalize.
         if _source_mutation_applied(request.messages):
             return self.inner.generate_turn(request)
 
         mutation = forced_name or _preferred_visible_mutation(request.tools)
         if mutation:
             forced = request if forced_name == mutation else _force_tool_choice(request, mutation)
-            turn = self.inner.generate_turn(forced)
-            if not turn.tool_calls or mutation not in {call.name for call in turn.tool_calls}:
-                raise ModelConfigurationError(
-                    f"Writable coder did not execute required source-mutation action {mutation!r}; "
-                    "refusing a prose-only implementation turn after mutation became causal/legal."
-                )
-            return turn
+            return _execute_forced_frontier_turn(self.inner, forced)
 
-        # Observation/retrieval frontiers remain model-owned on the first attempt.
-        # If the model refuses every visible action and emits prose, that prose is not
-        # a valid implementation result: make bounded causal progress by forcing only
-        # an action that the outer CausalFrontierAdapter already exposed and fenced.
         turn = self.inner.generate_turn(request)
         if turn.tool_calls:
             return turn
@@ -242,14 +253,10 @@ class _WritableProgressAdapter:
             raise ModelConfigurationError(
                 "Writable coder causal frontier contained no executable named tool."
             )
-        forced = _force_tool_choice(request, fallback)
-        retry = self.inner.generate_turn(forced)
-        if not retry.tool_calls or fallback not in {call.name for call in retry.tool_calls}:
-            raise ModelConfigurationError(
-                f"Writable coder returned prose twice instead of executing causal action {fallback!r}; "
-                "refusing to terminate before source mutation."
-            )
-        return retry
+        return _execute_forced_frontier_turn(
+            self.inner,
+            _force_tool_choice(request, fallback),
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
@@ -276,12 +283,6 @@ def _run_with_dynamic_frontier(
         stage=stage,
         role=role,
     )
-    # Freeze the same authorization and request state as the canonical causal-loop
-    # wrapper.  This late route-integrity wrapper replaces that live loop, so omitting
-    # these values would make the adapter consult mutable compatibility ContextVars on
-    # every turn. Nested retrieval can update those ContextVars and otherwise change
-    # the transition schema mid-loop, forcing the state ledger to replay history
-    # against a different surface and lose already verified code evidence.
     host_request = replace(
         request,
         tools=complete_surface,
@@ -340,12 +341,6 @@ def _install_implementation_goal_priority(causal_module: Any) -> None:
 
     @wraps(current)
     def goals_for_query(query: str) -> tuple[str, ...]:
-        # Host custom generation embeds evidence/tool metadata in the user JSON. The
-        # explicit phase is stronger terminal intent than incidental strings such as
-        # "external MCP" appearing inside that metadata. Use the existing `repair`
-        # terminal fact because it is produced only by reviewed source-edit tools;
-        # the broader `act/project_changed` goal could terminate on unrelated project
-        # mutation and recreate the empty-source-diff failure.
         if "implement_module" in str(query).casefold():
             return ("repair",)
         return tuple(current(query))
