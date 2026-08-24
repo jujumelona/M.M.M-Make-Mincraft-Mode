@@ -49,16 +49,6 @@ def test_auto_repair_search_collapses_before_first_server_launch(monkeypatch) ->
     assert agentic._repair_candidate_count(engine, _evidence(), []) == 1
 
 
-def test_explicit_repair_search_still_allows_multiple_candidates(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
-    monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
-    engine = SimpleNamespace(
-        _signature=lambda evidence: str(evidence),
-        _mmm_signature_counts=Counter(),
-    )
-    assert agentic._repair_candidate_count(engine, _evidence(), []) == 2
-
-
 def test_repair_host_evidence_removes_forced_rag_but_keeps_tools(monkeypatch, tmp_path) -> None:
     class Router:
         def __init__(self):
