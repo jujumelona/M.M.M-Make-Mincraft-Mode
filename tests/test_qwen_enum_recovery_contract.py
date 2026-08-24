@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,115 +50,129 @@ def test_canonical_string_enum_fails_closed_on_ambiguous_normalization() -> None
     )
 
 
-def _outside_enum_error(tool_name: str, key: str) -> RuntimeError:
-    return RuntimeError(
-        f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
+@dataclass(frozen=True)
+class _FakeCall:
+    id: str
+    name: str
+    arguments: dict[str, object]
+    raw_arguments: str
+
+
+def _fake_module(argument: str):
+    decode = object()
+    seen_schemas = []
+
+    def original_parse(text, start, schemas, *, call_index):
+        del start, call_index
+        seen_schemas.append(schemas)
+        name_start = len("<function=")
+        name_end = text.find(">", name_start)
+        name = text[name_start:name_end]
+        schema = schemas[name]
+        operation_schema = schema["properties"]["operation"]
+        assert "enum" not in operation_schema
+        return (
+            _FakeCall(
+                id="raw",
+                name=name,
+                arguments={"operation": argument},
+                raw_arguments="{}",
+            ),
+            len(text),
+        )
+
+    return (
+        SimpleNamespace(
+            _FUNCTION_OPEN="<function=",
+            _parse_qwen_function=original_parse,
+            _decode_parameter_value=decode,
+        ),
+        decode,
+        seen_schemas,
     )
 
 
-def test_install_canonicalizes_quoted_string_before_original_decoder() -> None:
-    def original_decode(tool_name, key, raw, schema):
-        if raw not in schema["enum"]:
-            raise _outside_enum_error(tool_name, key)
-        return raw
+def _schema():
+    return {
+        "apply_source_edit": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["replace_exact", "delete_file"],
+                }
+            },
+        }
+    }
 
-    def original_completion(adapter, server_url, request):
-        return "unused"
 
-    fake_module = SimpleNamespace(
-        _decode_parameter_value=original_decode,
-        _tool_semantic_completion=original_completion,
-    )
+def test_install_uses_one_parser_hook_and_leaves_decoder_owner_untouched() -> None:
+    fake_module, original_decode, seen_schemas = _fake_module('"replace_exact"')
     qwen_enum_recovery.install(fake_module)
 
-    assert (
-        fake_module._decode_parameter_value(
-            "apply_source_edit",
-            "operation",
-            '"replace_exact"',
-            {"type": "string", "enum": ["replace_exact", "insert_before"]},
-        )
-        == "replace_exact"
+    call, _end = fake_module._parse_qwen_function(
+        "<function=apply_source_edit></function>",
+        0,
+        _schema(),
+        call_index=0,
     )
-    assert fake_module._tool_semantic_completion is original_completion
+
+    assert call.name == "apply_source_edit"
+    assert call.arguments == {"operation": "replace_exact"}
+    assert fake_module._decode_parameter_value is original_decode
+    assert len(seen_schemas) == 1
 
 
 def test_removed_whole_file_alias_is_not_canonicalized() -> None:
-    def original_decode(tool_name, key, raw, schema):
-        if raw not in schema["enum"]:
-            raise _outside_enum_error(tool_name, key)
-        return raw
-
-    fake_module = SimpleNamespace(
-        _decode_parameter_value=original_decode,
-        _tool_semantic_completion=lambda *args, **kwargs: "unchanged",
-    )
+    fake_module, _original_decode, _seen_schemas = _fake_module("update_file")
     qwen_enum_recovery.install(fake_module)
 
     with pytest.raises(qwen_enum_recovery.QwenEnumValueError):
-        fake_module._decode_parameter_value(
-            "apply_source_edit",
-            "operation",
-            "update_file",
-            {"type": "string", "enum": ["replace_exact", "delete_file"]},
+        fake_module._parse_qwen_function(
+            "<function=apply_source_edit></function>",
+            0,
+            _schema(),
+            call_index=0,
         )
 
 
-def test_invalid_semantic_enum_becomes_typed_protocol_error_without_retry() -> None:
-    def original_decode(tool_name, key, raw, schema):
-        raise _outside_enum_error(tool_name, key)
+def test_canonical_permission_name_is_rewritten_to_exposed_alias_before_parse() -> None:
+    fake_module, _original_decode, _seen_schemas = _fake_module("delete_file")
+    qwen_enum_recovery.install(fake_module)
 
-    calls = 0
+    call, _end = fake_module._parse_qwen_function(
+        "<function=apply_source_patch></function>",
+        0,
+        _schema(),
+        call_index=0,
+    )
 
-    def original_completion(adapter, server_url, request):
-        nonlocal calls
-        calls += 1
-        return "not-owned-here"
+    assert call.name == "apply_source_edit"
+    assert call.arguments == {"operation": "delete_file"}
+
+
+def test_unrelated_unexposed_tool_is_still_rejected_by_original_parser() -> None:
+    def original_parse(text, start, schemas, *, call_index):
+        del start, call_index
+        name_start = len("<function=")
+        name_end = text.find(">", name_start)
+        name = text[name_start:name_end]
+        if name not in schemas:
+            raise RuntimeError(f"Qwen requested an unexposed tool {name!r}")
+        raise AssertionError("unexpected exposed tool")
 
     fake_module = SimpleNamespace(
-        _decode_parameter_value=original_decode,
-        _tool_semantic_completion=original_completion,
+        _FUNCTION_OPEN="<function=",
+        _parse_qwen_function=original_parse,
+        _decode_parameter_value=object(),
     )
     qwen_enum_recovery.install(fake_module)
 
-    with pytest.raises(qwen_enum_recovery.QwenEnumValueError) as captured:
-        fake_module._decode_parameter_value(
-            "apply_source_edit",
-            "operation",
-            "edit",
-            {
-                "type": "string",
-                "enum": ["replace_exact", "insert_before", "insert_after", "replace"],
-            },
+    with pytest.raises(RuntimeError, match="unexposed tool 'other_tool'"):
+        fake_module._parse_qwen_function(
+            "<function=other_tool></function>",
+            0,
+            _schema(),
+            call_index=0,
         )
-
-    assert captured.value.tool_name == "apply_source_edit"
-    assert captured.value.parameter_name == "operation"
-    assert captured.value.raw_value == "edit"
-    assert calls == 0
-    assert fake_module._tool_semantic_completion is original_completion
-
-
-def test_unknown_parameter_remains_parser_error_for_causal_recovery_owner() -> None:
-    def original_decode(tool_name, key, raw, schema):
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted unknown parameter {key!r}"
-        )
-
-    def original_completion(adapter, server_url, request):
-        return "unchanged"
-
-    fake_module = SimpleNamespace(
-        _decode_parameter_value=original_decode,
-        _tool_semantic_completion=original_completion,
-    )
-    qwen_enum_recovery.install(fake_module)
-
-    with pytest.raises(RuntimeError, match="unknown parameter"):
-        fake_module._decode_parameter_value(
-            "apply_source_edit",
-            "after_line",
-            "12",
-            {"type": "integer"},
-        )
-    assert fake_module._tool_semantic_completion is original_completion
