@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Persistent llama.cpp HTTP/SSE transport with bounded liveness.
+"""Persistent llama.cpp HTTP/SSE transport with bounded inactivity.
 
-Tool turns stay native, non-streaming OpenAI-compatible responses so partial tool
-markup is never executable. Unlike the legacy transport, a tool request can never
-silently disable its read deadline: every request has a finite inactivity ceiling and
-large actions continue through the model adapter's bounded completion paging.
+All chat completions, including tool turns, use SSE. Tool-call deltas are transport
+fragments only: they are buffered until the server emits ``[DONE]`` and are never
+exposed for execution while partial. The completed OpenAI-compatible message is then
+returned to the model adapter, where MMM performs the canonical host allowlist/schema
+validation before any tool action can run.
 """
 
 import json
@@ -30,7 +31,7 @@ _DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 class LlamaToolLivenessTimeout(TimeoutError):
-    """A native tool response produced no readable transport progress in time."""
+    """A streamed native tool response produced no readable transport progress in time."""
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -99,6 +100,81 @@ def _bounded_timeout(timeout: Any, *, read_seconds: float) -> Any:
     )
 
 
+def _tool_call_index(value: Any) -> int:
+    try:
+        index = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("llama server streamed a tool call without a valid index") from exc
+    if index < 0:
+        raise RuntimeError("llama server streamed a negative tool-call index")
+    return index
+
+
+def _empty_tool_call() -> dict[str, Any]:
+    return {
+        "id": "",
+        "type": "function",
+        "function": {"name": "", "arguments": ""},
+    }
+
+
+def _append_tool_call_deltas(message: dict[str, Any], raw_calls: Any) -> int:
+    if raw_calls is None:
+        return 0
+    if not isinstance(raw_calls, list):
+        raise RuntimeError("llama server streamed tool_calls in a non-list shape")
+    calls = message.setdefault("tool_calls", [])
+    if not isinstance(calls, list):
+        raise RuntimeError("internal streamed tool-call accumulator is invalid")
+
+    progressed = 0
+    for raw_call in raw_calls:
+        if not isinstance(raw_call, Mapping):
+            raise RuntimeError("llama server streamed an invalid tool-call delta")
+        index = _tool_call_index(raw_call.get("index", 0))
+        while len(calls) <= index:
+            calls.append(_empty_tool_call())
+        target = calls[index]
+        if not isinstance(target, dict):
+            raise RuntimeError("internal streamed tool-call entry is invalid")
+
+        call_id = raw_call.get("id")
+        if call_id is not None:
+            if not isinstance(call_id, str):
+                raise RuntimeError("llama server streamed a non-string tool-call id")
+            if call_id:
+                previous_id = target.get("id")
+                target["id"] = (previous_id if isinstance(previous_id, str) else "") + call_id
+                progressed += len(call_id)
+
+        call_type = raw_call.get("type")
+        if call_type is not None:
+            if not isinstance(call_type, str):
+                raise RuntimeError("llama server streamed a non-string tool-call type")
+            target["type"] = call_type
+
+        raw_function = raw_call.get("function")
+        if raw_function is None:
+            continue
+        if not isinstance(raw_function, Mapping):
+            raise RuntimeError("llama server streamed invalid tool-call function metadata")
+        function = target.setdefault("function", {"name": "", "arguments": ""})
+        if not isinstance(function, dict):
+            raise RuntimeError("internal streamed tool-call function accumulator is invalid")
+        for key in ("name", "arguments"):
+            value = raw_function.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise RuntimeError(
+                    f"llama server streamed non-string tool-call function {key}"
+                )
+            previous = function.get(key)
+            function[key] = (previous if isinstance(previous, str) else "") + value
+            progressed += len(value)
+    return progressed
+
+
 def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> int:
     progressed = 0
     role = delta.get("role")
@@ -111,6 +187,7 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
         previous = message.get(key)
         message[key] = (previous if isinstance(previous, str) else "") + value
         progressed += len(value)
+    progressed += _append_tool_call_deltas(message, delta.get("tool_calls"))
     return progressed
 
 
@@ -258,14 +335,14 @@ def _native_tool_liveness_reporter(
             print(
                 "llama server: WARNING tool completion has no observed slot-counter progress",
                 f" for={idle_for:.1f}s",
-                " bounded_transport=true",
+                " streamed_transport=true",
                 flush=True,
             )
             warned = True
 
 
 class _StreamingCompletionClient:
-    """Reuse one HTTP client, stream text, and bound native tool inactivity."""
+    """Reuse one HTTP client and aggregate every chat completion through SSE."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
@@ -293,7 +370,10 @@ class _StreamingCompletionClient:
         ):
             return self._client.post(url, **kwargs)
 
-        if bool(payload.get("tools")):
+        has_tools = bool(payload.get("tools"))
+        if has_tools and not hasattr(self._client, "stream"):
+            # Compatibility for minimal test/dummy clients. Production httpx.Client
+            # always provides stream(), so native tool turns use the SSE path below.
             import httpx
 
             native_kwargs = dict(kwargs)
@@ -302,15 +382,6 @@ class _StreamingCompletionClient:
                 native_kwargs.get("timeout"),
                 read_seconds=deadline,
             )
-            started = time.monotonic()
-            stop = threading.Event()
-            reporter = threading.Thread(
-                target=_native_tool_liveness_reporter,
-                args=(self._client, url, stop, started),
-                name="mmm-llama-tool-liveness",
-                daemon=True,
-            )
-            reporter.start()
             timeout_exc = getattr(httpx, "TimeoutException", None)
             if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
                 timeout_exc = ()
@@ -321,9 +392,6 @@ class _StreamingCompletionClient:
                     "native llama-server tool completion produced no readable transport "
                     f"progress for {deadline:.0f}s; request aborted"
                 ) from exc
-            finally:
-                stop.set()
-                reporter.join(timeout=0.2)
 
         import httpx
 
@@ -332,9 +400,12 @@ class _StreamingCompletionClient:
         streamed_payload["stream_options"] = {"include_usage": True}
         stream_kwargs = dict(kwargs)
         stream_kwargs["json"] = streamed_payload
+        read_seconds = (
+            _tool_idle_timeout_seconds() if has_tools else _stream_idle_timeout_seconds()
+        )
         stream_kwargs["timeout"] = _bounded_timeout(
             stream_kwargs.get("timeout"),
-            read_seconds=_stream_idle_timeout_seconds(),
+            read_seconds=read_seconds,
         )
         request = httpx.Request("POST", url)
         message: dict[str, Any] = {"role": "assistant", "content": ""}
@@ -342,53 +413,79 @@ class _StreamingCompletionClient:
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
+        started = time.monotonic()
+        stop = threading.Event()
+        reporter: threading.Thread | None = None
+        if has_tools:
+            reporter = threading.Thread(
+                target=_native_tool_liveness_reporter,
+                args=(self._client, url, stop, started),
+                name="mmm-llama-tool-liveness",
+                daemon=True,
+            )
+            reporter.start()
 
-        with self._client.stream("POST", url, **stream_kwargs) as response:
-            if response.status_code >= 400:
-                body = response.read()
-                return httpx.Response(
-                    response.status_code,
-                    headers=response.headers,
-                    content=body,
-                    request=request,
-                )
-            for raw_line in response.iter_lines():
-                line = raw_line.strip()
-                if not line or line.startswith(":") or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data:
-                    continue
-                if data == "[DONE]":
-                    saw_done = True
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError("llama server returned malformed SSE JSON") from exc
-                if not isinstance(chunk, dict):
-                    continue
-                chunk_usage = chunk.get("usage")
-                if isinstance(chunk_usage, dict):
-                    usage = chunk_usage
-                chunk_timings = chunk.get("timings")
-                if isinstance(chunk_timings, dict):
-                    timings = chunk_timings
-                choices = chunk.get("choices")
-                if not isinstance(choices, list) or not choices:
-                    continue
-                choice = choices[0]
-                if not isinstance(choice, Mapping):
-                    continue
-                current_finish = choice.get("finish_reason")
-                if current_finish is not None:
-                    finish_reason = current_finish
-                delta = choice.get("delta")
-                if not isinstance(delta, Mapping):
-                    candidate = choice.get("message")
-                    delta = candidate if isinstance(candidate, Mapping) else None
-                if delta is not None:
-                    _append_message_delta(message, delta)
+        timeout_exc = getattr(httpx, "TimeoutException", None)
+        if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
+            timeout_exc = ()
+        try:
+            with self._client.stream("POST", url, **stream_kwargs) as response:
+                if response.status_code >= 400:
+                    body = response.read()
+                    return httpx.Response(
+                        response.status_code,
+                        headers=response.headers,
+                        content=body,
+                        request=request,
+                    )
+                for raw_line in response.iter_lines():
+                    line = raw_line.strip()
+                    if not line or line.startswith(":") or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data:
+                        continue
+                    if data == "[DONE]":
+                        saw_done = True
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError("llama server returned malformed SSE JSON") from exc
+                    if not isinstance(chunk, dict):
+                        continue
+                    chunk_usage = chunk.get("usage")
+                    if isinstance(chunk_usage, dict):
+                        usage = chunk_usage
+                    chunk_timings = chunk.get("timings")
+                    if isinstance(chunk_timings, dict):
+                        timings = chunk_timings
+                    choices = chunk.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    choice = choices[0]
+                    if not isinstance(choice, Mapping):
+                        continue
+                    current_finish = choice.get("finish_reason")
+                    if current_finish is not None:
+                        finish_reason = current_finish
+                    delta = choice.get("delta")
+                    if not isinstance(delta, Mapping):
+                        candidate = choice.get("message")
+                        delta = candidate if isinstance(candidate, Mapping) else None
+                    if delta is not None:
+                        _append_message_delta(message, delta)
+        except timeout_exc as exc:
+            if has_tools:
+                raise LlamaToolLivenessTimeout(
+                    "native llama-server streamed tool completion produced no readable SSE "
+                    f"progress for {read_seconds:.0f}s; request aborted"
+                ) from exc
+            raise
+        finally:
+            stop.set()
+            if reporter is not None:
+                reporter.join(timeout=0.2)
 
         if not saw_done:
             raise RuntimeError("llama server stream ended before the [DONE] marker")
@@ -658,6 +755,7 @@ def install(hardware_module: Any) -> None:
 __all__ = [
     "LlamaToolLivenessTimeout",
     "_active_decode_profile",
+    "_append_message_delta",
     "_bounded_timeout",
     "_client",
     "_native_timing_summary",
