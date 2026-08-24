@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -17,7 +14,6 @@ from .model_adapters import (
     ModelConfigurationError,
     OpenAICompatibleAdapter,
     RerankerAdapter,
-    ToolCall,
     TransformersMultimodalAdapter,
     TransformersTextAdapter,
 )
@@ -273,10 +269,7 @@ class ModelRouter:
             response_format="text",
             response_schema=None,
             tools=(schema,),
-            tool_choice={
-                "type": "function",
-                "function": {"name": name},
-            },
+            tool_choice={"type": "function", "function": {"name": name}},
             parallel_tool_calls=False,
         )
         with self._generation_scope(config):
@@ -351,345 +344,19 @@ class ModelRouter:
         stage: str,
         role: str,
     ) -> str:
-        """Run retrieve/act/observe production until semantic convergence."""
+        """Delegate to the single production retrieve/act/observe loop owner."""
 
-        from .agent_capability_context import (
-            reviewed_mcp_servers_for_model_role,
-            skills_for_tool,
+        from .progress_aware_tool_loop import generate_with_tools
+
+        return generate_with_tools(
+            self,
+            config=config,
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage=stage,
+            role=role,
         )
-
-        messages: list[dict[str, Any]] = [dict(message) for message in request.messages]
-        exposed_tools = frozenset(_tool_schema_names(request.tools))
-        previous_exchange_state: str | None = None
-        weak_fixed_point_seen = False
-        rag_evidence_seen = False
-        round_index = 0
-        round_limit = _agent_tool_round_limit()
-        require_rag = bool(
-            self._agent_require_fresh_evidence and role in {"coder", "coder_safe"}
-        )
-        reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
-
-        def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
-            route_metadata: dict[str, Any] = {
-                "skills": list(skills_for_tool(stage, call.name, model_role=role))
-            }
-            if call.name == "external_mcp_call":
-                capability = str(call.arguments.get("capability", "")).strip()
-                if capability:
-                    route_metadata["external_mcp_capability"] = capability
-            try:
-                if call.name not in exposed_tools:
-                    raise ModelConfigurationError(
-                        f"Agent attempted hidden tool {call.name!r} outside its "
-                        f"reviewed role routes for {role!r}/{stage!r}."
-                    )
-                scoped_call = getattr(runtime, "call_scoped", None)
-                if callable(scoped_call):
-                    result = scoped_call(
-                        stage,
-                        call.name,
-                        call.arguments,
-                        external_server_ids=reviewed_external_servers,
-                    )
-                elif call.name.startswith("external_mcp_"):
-                    raise ModelConfigurationError(
-                        "External MCP execution requires a role-scoped agent runtime."
-                    )
-                else:
-                    result = runtime.call(stage, call.name, call.arguments)
-                payload: Mapping[str, Any] = {
-                    "ok": True,
-                    "tool": call.name,
-                    **route_metadata,
-                    "result": result,
-                }
-            except Exception as exc:
-                payload = {
-                    "ok": False,
-                    "tool": call.name,
-                    **route_metadata,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            return call, payload
-
-        if require_rag:
-            if _MANDATORY_CODE_RAG_TOOL not in exposed_tools:
-                raise ModelConfigurationError(
-                    "Fresh production evidence requires the reviewed search_code_rag "
-                    "tool; search_project_rag cannot be host-forced without an explicit "
-                    "Minecraft version."
-                )
-            rag_arguments = {"query": _required_code_rag_query(messages)}
-            raw_rag_arguments = json.dumps(
-                rag_arguments,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            required_rag_call = ToolCall(
-                id=(
-                    "host_rag_"
-                    + hashlib.sha256(raw_rag_arguments.encode("utf-8")).hexdigest()[:16]
-                ),
-                name=_MANDATORY_CODE_RAG_TOOL,
-                arguments=rag_arguments,
-                raw_arguments=raw_rag_arguments,
-            )
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": required_rag_call.id,
-                            "type": "function",
-                            "function": {
-                                "name": required_rag_call.name,
-                                "arguments": required_rag_call.raw_arguments,
-                            },
-                        }
-                    ],
-                }
-            )
-            _, required_rag_payload = execute(required_rag_call)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": required_rag_call.id,
-                    "name": required_rag_call.name,
-                    "content": json.dumps(
-                        required_rag_payload,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        default=str,
-                    ),
-                }
-            )
-            rag_evidence_seen = bool(
-                required_rag_payload.get("ok")
-                and _usable_rag_result(required_rag_payload.get("result"))
-            )
-            if not rag_evidence_seen:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "The host-required initial code RAG observation is not usable "
-                            "fresh evidence. Use its receipt/error to reformulate the query or "
-                            "use another reviewed evidence source before finalizing. Do not "
-                            "guess exact Minecraft/Fabric/mapping/dependency/Java API facts."
-                        ),
-                    }
-                )
-
-        while True:
-            if round_limit is not None and round_index >= round_limit:
-                if require_rag and not rag_evidence_seen:
-                    raise ModelConfigurationError(
-                        "Agent tool budget exhausted after "
-                        f"{round_limit} rounds without usable fresh RAG evidence."
-                    )
-                final_messages = [
-                    *messages,
-                    {
-                        "role": "system",
-                        "content": (
-                            "The host tool budget is exhausted after "
-                            f"{round_limit} rounds. Do not call more tools. Return the "
-                            "final answer using only observations already present."
-                        ),
-                    },
-                ]
-                final_request = replace(
-                    request,
-                    messages=tuple(final_messages),
-                    media_paths=(),
-                    tools=(),
-                    tool_validation_schemas=(),
-                    tool_choice=None,
-                    parallel_tool_calls=False,
-                )
-                with self._generation_scope(config):
-                    final_turn = adapter.generate_turn(final_request)
-                if final_turn.tool_calls:
-                    raise ModelConfigurationError(
-                        "Agent emitted tool calls after the host disabled tools at the "
-                        "explicit round budget."
-                    )
-                final_content = final_turn.content.strip()
-                if not final_content:
-                    raise ModelConfigurationError(
-                        "Agent returned an empty final response at the explicit tool-round budget."
-                    )
-                return final_content
-
-            turn_request = replace(
-                request,
-                messages=tuple(messages),
-                media_paths=request.media_paths if round_index == 0 else (),
-            )
-            with self._generation_scope(config):
-                turn = adapter.generate_turn(turn_request)
-            if not turn.tool_calls:
-                content = turn.content.strip()
-                if not content:
-                    raise ModelConfigurationError(
-                        "Tool-capable model returned an empty final response."
-                    )
-                if require_rag and not rag_evidence_seen:
-                    raise ModelConfigurationError(
-                        "Production coder attempted to finalize without usable fresh RAG "
-                        "evidence after the host precondition and adaptive evidence loop."
-                    )
-                return content
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": turn.content or None,
-                    "tool_calls": [
-                        {
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": call.raw_arguments
-                                or json.dumps(
-                                    dict(call.arguments),
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                ),
-                            },
-                        }
-                        for call in turn.tool_calls
-                    ],
-                }
-            )
-
-            calls = tuple(turn.tool_calls)
-            executed = _execute_tool_waves(calls, execute)
-            observations: list[dict[str, Any]] = []
-            weak_rag_in_round = False
-            for call, payload in executed:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "name": call.name,
-                        "content": json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            default=str,
-                        ),
-                    }
-                )
-                observations.append(
-                    {
-                        "name": call.name,
-                        "arguments": dict(call.arguments),
-                        "observation": payload,
-                    }
-                )
-                if not bool(payload.get("ok")):
-                    continue
-                if call.name in _RAG_EVIDENCE_TOOLS:
-                    usable_rag = _usable_rag_result(payload.get("result"))
-                elif call.name == "external_mcp_call" and _external_rag_capability(
-                    call.arguments
-                ):
-                    usable_rag = _usable_external_rag_result(
-                        call.arguments,
-                        payload.get("result"),
-                    )
-                else:
-                    continue
-                if usable_rag:
-                    rag_evidence_seen = True
-                else:
-                    weak_rag_in_round = True
-            if require_rag and weak_rag_in_round and not rag_evidence_seen:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "The latest RAG observation is not usable fresh evidence. "
-                            "Use its receipt/correction fields to reformulate the query, or "
-                            "switch between current code RAG and reviewed exact-version "
-                            "project/API evidence. Do not finalize and do not repeat the "
-                            "identical weak retrieval."
-                        ),
-                    }
-                )
-            exchange_state = hashlib.sha256(
-                json.dumps(
-                    {
-                        "assistant_content": turn.content or "",
-                        "tool_exchanges": observations,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode("utf-8")
-            ).hexdigest()
-            if exchange_state == previous_exchange_state:
-                if require_rag and not rag_evidence_seen:
-                    if weak_fixed_point_seen:
-                        raise ModelConfigurationError(
-                            "Production RAG converged without usable fresh evidence after "
-                            "a corrective retrieval instruction."
-                        )
-                    weak_fixed_point_seen = True
-                    previous_exchange_state = None
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                "An identical weak retrieval repeated. Change the query "
-                                "substantively or use a different reviewed evidence source "
-                                "before attempting a final production patch."
-                            ),
-                        }
-                    )
-                    round_index += 1
-                    continue
-                final_messages = [
-                    *messages,
-                    {
-                        "role": "system",
-                        "content": (
-                            "Tool use has converged after usable evidence was gathered. "
-                            "Do not call more tools. Return the final answer using only the "
-                            "evidence already present. Preserve the requested response format "
-                            "and do not mention this convergence instruction."
-                        ),
-                    },
-                ]
-                final_request = replace(
-                    request,
-                    messages=tuple(final_messages),
-                    media_paths=(),
-                    tools=(),
-                    tool_validation_schemas=(),
-                    tool_choice=None,
-                    parallel_tool_calls=False,
-                )
-                with self._generation_scope(config):
-                    final_turn = adapter.generate_turn(final_request)
-                if final_turn.tool_calls:
-                    raise ModelConfigurationError(
-                        "Agent emitted tool calls after tools were disabled at an exact "
-                        "no-progress fixed point."
-                    )
-                final_content = final_turn.content.strip()
-                if not final_content:
-                    raise ModelConfigurationError(
-                        "Agent returned an empty final response after exact tool "
-                        "fixed-point convergence."
-                    )
-                return final_content
-            previous_exchange_state = exchange_state
-            round_index += 1
 
     def _tool_runtime(self) -> Any:
         runtime = self._agent_tool_runtime
@@ -833,14 +500,14 @@ class ModelRouter:
             yield
 
 
-# The canonical router now owns these semantics. The markers keep runtime-bootstrap
-# compatibility while making the old monkey-patch installer a no-op.
+# Public runtime markers are attached to the methods that actually own the behavior.
 ModelRouter.generation_session._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_preserves_agent_tools = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_preserves_response_schema = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_uses_canonical_request_preparation = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_parallel_router_contract_version = 3  # type: ignore[attr-defined]
+ModelRouter._generate_with_tools._mmm_progress_aware_tool_loop_owner = True  # type: ignore[attr-defined]
 
 
 def _agent_tool_round_limit() -> int | None:
@@ -895,24 +562,6 @@ def _execute_tool_waves(
         completed.append(execute(call))
     flush_reads()
     return tuple(completed)
-
-
-def _required_code_rag_query(messages: Sequence[Mapping[str, Any]]) -> str:
-    """Use the current user task as the deterministic host-owned retrieval query."""
-
-    for message in reversed(messages):
-        if str(message.get("role", "")).strip().lower() != "user":
-            continue
-        content = message.get("content")
-        if not isinstance(content, str):
-            continue
-        query = " ".join(content.split())
-        if query:
-            return query
-    raise ModelConfigurationError(
-        "Fresh production evidence was requested but the generation request has no "
-        "non-empty user text to use as the host-owned code RAG query."
-    )
 
 
 def _external_rag_capability(arguments: Mapping[str, Any]) -> str:
@@ -1060,14 +709,3 @@ def _tool_schema_names(
         seen.add(name)
         names.append(name)
     return tuple(sorted(names))
-
-
-def _positive_env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        return default
-    return value if value > 0 else default
