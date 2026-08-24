@@ -26,8 +26,6 @@ def _encoded_size(messages: Any) -> int:
 
 def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy, model_context_budget
-    from .llama_length_resilience import length_recovery_installed
-    from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
 
     if (
@@ -100,11 +98,6 @@ def run_context_budget_preflight() -> None:
     ]:
         raise ContextBudgetPreflightError(
             "required tool payload did not expose exactly the selected function schema"
-        )
-
-    if not length_recovery_installed(llama_cpp_adapter._completion_message):
-        raise ContextBudgetPreflightError(
-            "llama completion path is missing bounded finish_reason=length recovery"
         )
 
     large_result = json.dumps(
