@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from minecraft_mod_ai import causal_frontier_adapter
 from minecraft_mod_ai import causal_stale_tool_recovery_contract as recovery
 from minecraft_mod_ai import causal_tool_frontier_contract
-from minecraft_mod_ai import coder_tool_route_integrity_contract
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 
 
@@ -40,10 +39,9 @@ def _turn(name: str):
     return SimpleNamespace(tool_calls=(SimpleNamespace(name=name),))
 
 
-def test_runtime_stale_recovery_reaches_prebound_coder_alias() -> None:
+def test_runtime_stale_recovery_reaches_canonical_frontier_adapter() -> None:
     canonical = causal_frontier_adapter.CausalFrontierAdapter
 
-    assert coder_tool_route_integrity_contract.CausalFrontierAdapter is canonical
     assert causal_tool_frontier_contract.CausalFrontierAdapter is canonical
     assert recovery.is_installed()
 
