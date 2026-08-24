@@ -114,7 +114,7 @@ def test_local_host_forced_qwen35_turn_is_required_and_deterministic_on_wire() -
             "function": {"name": "search_code_rag"},
         },
     )
-    request = _single_tool_request(named, "search_code_rag", retry=False)
+    request = _single_tool_request(named, "search_code_rag")
 
     payload = _server_payload(adapter, request)
 
