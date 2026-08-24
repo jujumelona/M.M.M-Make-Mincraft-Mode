@@ -56,6 +56,13 @@ def _messages() -> tuple[dict, ...]:
     )
 
 
+def _required_tool_name(request: GenerationRequest) -> str:
+    if request.tool_choice == "required":
+        assert len(request.tools) == 1
+        return str(request.tools[0]["function"]["name"])
+    return str(request.tool_choice["function"]["name"])
+
+
 class _BaseAdapter:
     def __init__(self) -> None:
         self.requests: list[GenerationRequest] = []
@@ -68,7 +75,7 @@ class _BaseAdapter:
         if request.tool_choice == "auto":
             return GenerationResponse(content="I can implement this from the context.")
 
-        name = str(request.tool_choice["function"]["name"])
+        name = _required_tool_name(request)
         if name == "search_code_rag":
             return GenerationResponse(
                 tool_calls=(
@@ -182,16 +189,17 @@ def test_prose_refusal_cannot_finish_before_source_patch_even_when_result_is_tru
 
     assert result == "implemented after source mutation"
     assert runtime.calls == ["search_code_rag", "apply_source_patch"]
-    choices = [item.tool_choice for item in base.requests]
-    assert choices[0] == "auto"
-    assert choices[1] == {
-        "type": "function",
-        "function": {"name": "search_code_rag"},
-    }
-    assert choices[2] == {
-        "type": "function",
-        "function": {"name": "apply_source_patch"},
-    }
+    assert [item.tool_choice for item in base.requests] == [
+        "auto",
+        "required",
+        "required",
+        None,
+    ]
+    assert [_required_tool_name(item) for item in base.requests[1:3]] == [
+        "search_code_rag",
+        "apply_source_patch",
+    ]
+    assert all(len(item.tools) == 1 for item in base.requests[1:3])
     assert base.requests[-1].tools == ()
 
 
@@ -272,7 +280,7 @@ def test_drift_refresh_discards_stale_edit_and_finishes_without_resync_decode(
                 )
                 name = "apply_source_edit" if failed_edit_seen else "search_code_rag"
             else:
-                name = str(request.tool_choice["function"]["name"])
+                name = _required_tool_name(request)
 
             self.emissions.append(name)
             if name == "search_code_rag":
