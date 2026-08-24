@@ -4,7 +4,6 @@ from collections import Counter
 from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_optimization_contract as agentic
-from minecraft_mod_ai import agentic_search_efficiency_contract
 from minecraft_mod_ai.planner_single_stream_search_contract import (
     _host_evidence_repair_router,
     _single_stream_active,
@@ -53,7 +52,6 @@ def test_auto_repair_search_collapses_before_first_server_launch(monkeypatch) ->
 def test_explicit_repair_search_still_allows_multiple_candidates(monkeypatch) -> None:
     monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
     monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
-    agentic_search_efficiency_contract.install(agentic)
     engine = SimpleNamespace(
         _signature=lambda evidence: str(evidence),
         _mmm_signature_counts=Counter(),
