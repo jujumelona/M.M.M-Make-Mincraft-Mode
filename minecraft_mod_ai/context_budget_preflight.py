@@ -26,7 +26,11 @@ def _encoded_size(messages: Any) -> int:
 
 def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy, model_context_budget
-    from .model_context_budget import fit_messages_to_context, request_message_budget
+    from .model_context_budget import (
+        fit_messages_to_context,
+        request_message_budget,
+        tool_action_token_budget,
+    )
 
     if (
         getattr(
@@ -81,7 +85,9 @@ def run_context_budget_preflight() -> None:
             response_format="json",
         ),
     )
-    if synthetic_tool_payload.get("max_tokens") != 8192:
+    if synthetic_tool_payload.get("max_tokens") != tool_action_token_budget(
+        synthetic_adapter.config
+    ):
         raise ContextBudgetPreflightError(
             "tool turns must preserve the bounded tool-action budget"
         )
