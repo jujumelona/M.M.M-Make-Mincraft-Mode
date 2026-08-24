@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
 _FAILURE_GATED_SEARCH_MARKER = "_mmm_failure_gated_search"
-_FAILURE_GATED_SEARCH_EPOCH = "mmm/failure-gated-search-v2"
+_FAILURE_GATED_SEARCH_EPOCH = "mmm/failure-gated-search-v3"
 
 
 def _active_parallel_slots() -> int:
@@ -134,6 +134,10 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
     if has_contract_marker(current_installer, "_mmm_parallel_repair_candidate_installer"):
         return
 
+    search_mode = _search_mode
+    prime_native_repair_slots = _prime_native_repair_slots
+    parallel_workers = _parallel_workers
+
     @wraps(current_installer)
     def install_repair_search(repair_module: Any) -> None:
         current_installer(repair_module)
@@ -163,14 +167,14 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
             )
 
             config = None
-            if _search_mode() != "off":
-                config = _prime_native_repair_slots(
+            if search_mode() != "off":
+                config = prime_native_repair_slots(
                     self.router,
                     evidence=evidence,
                     context=context,
                 )
             width = agentic_module._repair_candidate_count(self, evidence, memory)
-            workers = _parallel_workers(self.router, width, config)
+            workers = parallel_workers(self.router, width, config)
             generated: list[tuple[int, list[dict[str, Any]]]] = []
             errors: list[BaseException | None] = [None] * width
 
@@ -287,19 +291,22 @@ def install(agentic_module: Any) -> None:
     current_repair_count = agentic_module._repair_candidate_count
     if not _owns_current_repair_width_policy(current_repair_count):
         risk_candidate_count = _base_repair_candidate_count(current_repair_count)
+        search_mode = _search_mode
+        repair_search_width = _repair_search_width
+        active_parallel_slots = _active_parallel_slots
 
         def repair_candidate_count(
             self: Any,
             evidence: Mapping[str, Any],
             memory: Sequence[Mapping[str, Any]],
         ) -> int:
-            mode = _search_mode()
+            mode = search_mode()
             if mode == "off":
                 return 1
-            width = _repair_search_width()
+            width = repair_search_width()
             if mode == "on":
                 return width
-            slots = _active_parallel_slots()
+            slots = active_parallel_slots()
             if slots <= 1:
                 return 1
             risk_width = max(
