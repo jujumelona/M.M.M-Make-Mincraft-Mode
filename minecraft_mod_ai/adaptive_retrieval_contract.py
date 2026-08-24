@@ -5,7 +5,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-_GROUNDING_MARKER = "__mmm_repository_grounding_v2_live_context__"
+_GROUNDING_MARKER = "__mmm_repository_grounding_live_context__"
 
 
 def install(model_router_module: Any) -> None:
@@ -14,12 +14,12 @@ def install(model_router_module: Any) -> None:
     if not bool(
         getattr(
             model_router_module.ModelRouter._generate_with_tools,
-            "_mmm_progress_aware_tool_loop_owner",
+            "_mmm_dynamic_causal_frontier",
             False,
         )
     ):
         raise RuntimeError(
-            "ModelRouter must directly own the progress-aware production tool loop."
+            "ModelRouter must directly own the canonical causal production tool loop."
         )
 
     from .adaptive_execution_hardening import harden_adaptive_execution
@@ -107,7 +107,6 @@ def _install_repository_grounding() -> None:
                 raise custom_module_generator.CustomModuleGenerationError(str(exc)) from exc
 
         setattr(_collect_initial_observations, _GROUNDING_MARKER, True)
-        setattr(_collect_initial_observations, "__mmm_repository_grounding_v1__", True)
         custom_module_generator._collect_initial_observations = _collect_initial_observations
 
     current_context = repair_engine.RepairEngine._context
@@ -160,5 +159,4 @@ def _install_repository_grounding() -> None:
         )
 
     setattr(_context, _GROUNDING_MARKER, True)
-    setattr(_context, "__mmm_repository_grounding_v1__", True)
     repair_engine.RepairEngine._context = _context
