@@ -186,7 +186,7 @@ def test_qwen_canonical_tool_name_still_rejects_broad_patch_payload():
         )
 
 
-def test_qwen_unexposed_tool_is_preserved_for_causal_frontier():
+def test_qwen_canonical_tool_name_is_rejected_when_alias_is_not_exposed():
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
 
     search_tool = {
@@ -203,23 +203,18 @@ def test_qwen_unexposed_tool_is_preserved_for_causal_frontier():
         },
     }
     request = _tool_request(search_tool)
-    turn = llama_adapter_module._qwen_tool_generation_response(
-        {
-            "content": (
-                "<tool_call><function=stale_workspace_tool>"
-                "<parameter=operation>delete_file</parameter>"
-                "<parameter=path>src/main/java/example/Old.java</parameter>"
-                "</function></tool_call>"
-            )
-        },
-        request,
-    )
-
-    assert [call.name for call in turn.tool_calls] == ["stale_workspace_tool"]
-    assert turn.tool_calls[0].arguments == {
-        "operation": "delete_file",
-        "path": "src/main/java/example/Old.java",
-    }
+    with pytest.raises(RuntimeError, match="unexposed tool 'apply_source_patch'"):
+        llama_adapter_module._qwen_tool_generation_response(
+            {
+                "content": (
+                    "<tool_call><function=apply_source_patch>"
+                    "<parameter=operation>delete_file</parameter>"
+                    "<parameter=path>src/main/java/example/Old.java</parameter>"
+                    "</function></tool_call>"
+                )
+            },
+            request,
+        )
 
 
 def test_runtime_trajectory_retrieval_keeps_execution_context_contract():
