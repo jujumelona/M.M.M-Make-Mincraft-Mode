@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,12 +55,16 @@ def test_bound_production_coder_cannot_finalize_before_fresh_rag(monkeypatch, tm
             if self.count == 1:
                 return GenerationResponse(content="premature")
             if self.count == 2:
-                return GenerationResponse(tool_calls=(ToolCall(
-                    id="rag",
-                    name="search_code_rag",
-                    arguments={"query": "Registry.register"},
-                    raw_arguments='{"query":"Registry.register"}',
-                ),))
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="rag",
+                            name="search_code_rag",
+                            arguments={"query": "Registry.register"},
+                            raw_arguments='{"query":"Registry.register"}',
+                        ),
+                    )
+                )
             return GenerationResponse(content="evidence-backed final")
 
     adapter = Adapter()
@@ -85,26 +87,13 @@ def test_bound_production_coder_cannot_finalize_before_fresh_rag(monkeypatch, tm
     assert adapter.count == 3
 
 
-def test_independent_read_tools_execute_in_parallel(monkeypatch) -> None:
-    lock = threading.Lock()
-    active = 0
-    max_active = 0
-
-    # Both reads are equal-cost first steps for the observe frontier. This proves the
-    # executor still overlaps independent reads without requiring the causal planner
-    # to expose a redundant, non-minimal retrieval route merely for the test.
+def test_causal_frontier_never_mixes_retrieve_and_inspect_actions(monkeypatch) -> None:
     class Runtime:
         def tool_schemas(self, stage):
             return (_schema("search_code_rag"), _schema("java_workspace_symbols"))
 
         def call(self, stage, name, arguments):
-            nonlocal active, max_active
-            with lock:
-                active += 1
-                max_active = max(max_active, active)
-            time.sleep(0.08)
-            with lock:
-                active -= 1
+            assert name == "java_workspace_symbols"
             return {"evidence": name}
 
     class Adapter:
@@ -114,23 +103,20 @@ def test_independent_read_tools_execute_in_parallel(monkeypatch) -> None:
         def generate_turn(self, request):
             self.count += 1
             if self.count == 1:
-                assert {
-                    item["function"]["name"] for item in request.tools
-                } == {"search_code_rag", "java_workspace_symbols"}
-                return GenerationResponse(tool_calls=(
-                    ToolCall(
-                        id="a",
-                        name="search_code_rag",
-                        arguments={"query": "a"},
-                        raw_arguments='{"query":"a"}',
-                    ),
-                    ToolCall(
-                        id="b",
-                        name="java_workspace_symbols",
-                        arguments={"query": "b"},
-                        raw_arguments='{"query":"b"}',
-                    ),
-                ))
+                assert [item["function"]["name"] for item in request.tools] == [
+                    "java_workspace_symbols"
+                ]
+                assert request.parallel_tool_calls is False
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="symbols",
+                            name="java_workspace_symbols",
+                            arguments={},
+                            raw_arguments="{}",
+                        ),
+                    )
+                )
             return GenerationResponse(content="done")
 
     adapter = Adapter()
@@ -146,10 +132,8 @@ def test_independent_read_tools_execute_in_parallel(monkeypatch) -> None:
         agent_tool_runtime_factory=lambda **_: runtime,
     )
     assert router.generate_text(
-        "coder",
-        [{"role": "user", "content": "x"}],
+        "coder", [{"role": "user", "content": "inspect project symbols"}]
     ) == "done"
-    assert max_active == 2
 
 
 def test_generation_stage_exposes_required_evidence_and_quality_stays_narrow() -> None:
