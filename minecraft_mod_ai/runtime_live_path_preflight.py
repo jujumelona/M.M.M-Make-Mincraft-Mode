@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-"""Model-free checks for semantic ownership of the final live model-call path.
-
-Marker-only checks are insufficient because ``functools.wraps`` copies a wrapped
-callable's ``__dict__``. A replacement wrapper can therefore inherit an integration
-marker while bypassing the callable that actually implemented that integration.
-This preflight identifies wrapper implementations from their code objects and checks
-ordering on the executable ``__wrapped__`` chain.
-"""
+"""Model-free ownership checks for the final live model/tool path."""
 
 from typing import Any
 
@@ -39,11 +32,16 @@ def _chain(value: Any) -> tuple[Any, ...]:
 
 
 def run_runtime_live_path_preflight() -> None:
+    """Require one executable progress loop plus outer context compaction.
+
+    Per-turn causal routing and writable forced-tool wrappers are intentionally not
+    part of the production path. Tool selection happens before this loop and the same
+    reviewed set remains authoritative throughout retrieve/act/observe execution.
+    """
+
     from .model_router import ModelRouter
 
-    chain = _chain(ModelRouter._generate_with_tools)
-    implementations = tuple(_implementation(layer) for layer in chain)
-
+    implementations = tuple(_implementation(layer) for layer in _chain(ModelRouter._generate_with_tools))
     compaction = tuple(
         index
         for index, item in enumerate(implementations)
@@ -54,40 +52,13 @@ def run_runtime_live_path_preflight() -> None:
         for index, item in enumerate(implementations)
         if item == ("adaptive_retrieval_contract.py", "_generate_with_tools")
     )
-    route_integrity = tuple(
-        index
-        for index, item in enumerate(implementations)
-        if item == ("coder_tool_route_integrity_contract.py", "generate_with_route_integrity")
-    )
-
     if not compaction:
-        raise RuntimeLivePathError(
-            "live ModelRouter tool path has no executable context-compaction wrapper"
-        )
+        raise RuntimeLivePathError("live ModelRouter tool path has no executable context-compaction wrapper")
     if not adaptive:
-        raise RuntimeLivePathError(
-            "live ModelRouter tool path has no adaptive retrieval owner"
-        )
-    if not route_integrity:
-        raise RuntimeLivePathError(
-            "live ModelRouter tool path has no coder route-integrity wrapper"
-        )
-
-    # adaptive_retrieval deliberately replaces the old loop and does not delegate to
-    # its ``__wrapped__`` callable. Any compaction layer below it is therefore dead.
-    # The live compaction wrapper must be outside the adaptive owner.
+        raise RuntimeLivePathError("live ModelRouter tool path has no adaptive retrieval owner")
     if min(compaction) > min(adaptive):
         raise RuntimeLivePathError(
-            "context compaction exists only below the adaptive replacement loop and "
-            "is therefore not on the executable model path"
-        )
-
-    # Route integrity delegates to its captured current callable, so either order is
-    # executable, but finalization intentionally places compaction outermost to make
-    # every causal/tool turn pass through context fitting before decode.
-    if min(compaction) > min(route_integrity):
-        raise RuntimeLivePathError(
-            "context compaction is not the final owner around coder route integrity"
+            "context compaction exists only below the adaptive replacement loop and is not executable"
         )
 
 

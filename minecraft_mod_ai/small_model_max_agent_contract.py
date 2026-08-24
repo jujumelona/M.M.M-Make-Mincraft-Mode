@@ -5,7 +5,7 @@ from __future__ import annotations
 This module does not add another generative model or another orchestration owner.
 It composes the existing MMM contracts at their established boundaries:
 
-* role/security filtering remains authoritative, then query-specific tool retrieval
+* role/security filtering remains authoritative, then one query-specific tool selector
   reduces the action surface seen by the local model;
 * the existing ProjectRAGIndex remains the only code-RAG implementation, while
   semantic retrieval and reranking are enabled when the index can support them;
@@ -25,10 +25,12 @@ import re
 import stat
 import threading
 from contextvars import ContextVar
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from .agent_intent import is_implementation_intent, structured_user_intent
 
 
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
@@ -41,6 +43,12 @@ _RESOURCE_ID = re.compile(r"\b[a-z0-9_.-]+:[a-z0-9_./-]+\b")
 _VERSION = re.compile(r"\b(?:\d+\.){1,3}\d+(?:[-+._][A-Za-z0-9]+)*\b")
 _RAG_ROUTER: ContextVar[Any | None] = ContextVar("mmm_small_agent_rag_router", default=None)
 _FAILURE_LOCK = threading.RLock()
+_SOURCE_MUTATION_PRIORITY = (
+    "apply_source_edit",
+    "apply_source_patch",
+    "apply_java_operations",
+    "repair_project",
+)
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -77,19 +85,9 @@ def _tool_document(schema: Mapping[str, Any]) -> str:
 
 
 def _request_query(messages: Sequence[Mapping[str, Any]]) -> str:
-    """Build a bounded routing query without carrying the full reasoning history."""
+    """Project only terminal user intent into the tool-retrieval query."""
 
-    parts: list[str] = []
-    for message in reversed(messages):
-        role = str(message.get("role", "")).strip().lower()
-        if role not in {"user", "system", "tool"}:
-            continue
-        value = message.get("content")
-        if isinstance(value, str) and value.strip():
-            parts.append(value.strip())
-        if sum(len(item) for item in parts) >= 12_000:
-            break
-    return "\n".join(reversed(parts))[-12_000:]
+    return structured_user_intent(messages)
 
 
 def select_tool_schemas(
@@ -100,11 +98,12 @@ def select_tool_schemas(
     tool_schemas: Sequence[Mapping[str, Any]],
     require_fresh_evidence: bool = False,
 ) -> tuple[Mapping[str, Any], ...]:
-    """Retrieve a small action surface from an already security-filtered tool set.
+    """Retrieve one stable action surface from an already security-filtered tool set.
 
-    Security/stage/Skill filtering MUST run before this function.  It never expands
-    the supplied set.  A CPU reranker is used when available; deterministic lexical
-    scoring remains an explicit fallback rather than a second policy owner.
+    Security/stage/Skill filtering MUST run before this function. It never expands
+    the supplied set. A CPU reranker is used when available; deterministic lexical
+    scoring is the fallback. Mandatory capabilities are preserved inside this one
+    selector instead of being re-routed by a second per-turn policy.
     """
 
     tools = tuple(tool_schemas)
@@ -113,11 +112,17 @@ def select_tool_schemas(
         return tools
 
     query_tokens = _tokens(query)
+    available_names = {_tool_name(schema) for schema in tools}
     mandatory_names: list[str] = []
     if require_fresh_evidence and role in {"coder", "coder_safe"}:
         for name in ("search_code_rag", "search_project_rag"):
-            if any(_tool_name(schema) == name for schema in tools):
+            if name in available_names:
                 mandatory_names.append(name)
+    if role in {"coder", "coder_safe"} and is_implementation_intent(query):
+        for name in _SOURCE_MUTATION_PRIORITY:
+            if name in available_names:
+                mandatory_names.append(name)
+                break
 
     rows: list[dict[str, Any]] = []
     for index, schema in enumerate(tools):
@@ -140,9 +145,6 @@ def select_tool_schemas(
             }
         )
 
-    # Rerank only a bounded lexical shortlist plus mandatory evidence tools. This
-    # keeps the small-model action selector cheaper than presenting the full schema
-    # catalogue to the generative model.
     shortlist_size = min(len(rows), max(top_k * 3, 12))
     lexical_ranked = sorted(rows, key=lambda item: (-float(item["score"]), item["index"]))
     shortlisted = lexical_ranked[:shortlist_size]
@@ -185,9 +187,6 @@ def select_tool_schemas(
         if len(selected) >= top_k:
             break
 
-    # External MCP execution is a three-step meta-tool family.  If one member is
-    # selected, keep the schema/capability helpers when capacity permits so the model
-    # is never given a call tool whose live arguments it cannot inspect.
     external = {"external_mcp_capabilities", "external_mcp_schema", "external_mcp_call"}
     if selected_names & external:
         for name in ("external_mcp_schema", "external_mcp_call", "external_mcp_capabilities"):
@@ -222,7 +221,12 @@ def _install_tool_retrieval(model_router_module: Any) -> None:
         return
 
     @wraps(current)
-    def prepare_with_retrieved_tools(self: Any, role: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any):
+    def prepare_with_retrieved_tools(
+        self: Any,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        **kwargs: Any,
+    ):
         stage, runtime, tools, request = current(self, role, messages, **kwargs)
         if not tools:
             return stage, runtime, tools, request
@@ -238,7 +242,6 @@ def _install_tool_retrieval(model_router_module: Any) -> None:
             return stage, runtime, tools, request
 
         from .agent_capability_context import build_agent_capability_context
-        from .model_adapters import GenerationRequest
 
         cleaned_messages = [
             dict(message)
@@ -253,12 +256,11 @@ def _install_tool_retrieval(model_router_module: Any) -> None:
             cleaned_messages,
             build_agent_capability_context(stage, selected, model_role=role),
         )
-        rebuilt = GenerationRequest(
-            messages=rebuilt_messages,
-            media_paths=request.media_paths,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
+        rebuilt = replace(
+            request,
+            messages=tuple(rebuilt_messages),
             tools=selected,
+            tool_validation_schemas=selected,
             tool_choice="auto" if selected else None,
             parallel_tool_calls=True if selected else False,
         )
@@ -338,14 +340,18 @@ def _install_code_rag(pre_design_module: Any, production_tools_module: Any) -> N
         search_hybrid.__wrapped__ = search  # type: ignore[attr-defined]
         pre_design_module._search_code_index = search_hybrid
 
-    # Repair creates the authoritative repo index immediately before a coder turn.
-    # Build embeddings there so the coder's subsequent search_code_rag can actually
-    # use semantic retrieval instead of merely having an embedding model in registry.
     cls = production_tools_module.ProductionToolService
     index_project = cls.index_project_rag
     if not getattr(index_project, "_mmm_small_model_semantic_repair_index", False):
         @wraps(index_project)
-        def index_with_semantics(self: Any, roots: Sequence[str], *, index_path: str = "rag/project-index.json", metadata: dict[str, Any], semantic: bool = False):
+        def index_with_semantics(
+            self: Any,
+            roots: Sequence[str],
+            *,
+            index_path: str = "rag/project-index.json",
+            metadata: dict[str, Any],
+            semantic: bool = False,
+        ):
             repair_like = bool(metadata.get("source_commit")) and str(metadata.get("license", "")) == "project-local"
             return index_project(
                 self,
@@ -420,7 +426,12 @@ def _regular_memory_path(path: Path) -> bool:
     return stat.S_ISREG(info.st_mode)
 
 
-def _failure_row(self: Any, evidence: Mapping[str, Any], operations: Sequence[Mapping[str, Any]], verifier: Mapping[str, Any]) -> dict[str, Any]:
+def _failure_row(
+    self: Any,
+    evidence: Mapping[str, Any],
+    operations: Sequence[Mapping[str, Any]],
+    verifier: Mapping[str, Any],
+) -> dict[str, Any]:
     signature = self._signature(dict(evidence))
     pattern: list[dict[str, Any]] = []
     for item in operations[:16]:
@@ -552,7 +563,12 @@ def _install_repair_context(repair_module: Any, optimization_module: Any) -> Non
     verify = optimization_module._verify_repair_candidate
     if not getattr(verify, "_mmm_verified_failure_memory", False):
         @wraps(verify)
-        def verify_and_record(self: Any, root: Path | None, operations: Sequence[Mapping[str, Any]], evidence: Mapping[str, Any]):
+        def verify_and_record(
+            self: Any,
+            root: Path | None,
+            operations: Sequence[Mapping[str, Any]],
+            evidence: Mapping[str, Any],
+        ):
             score, verifier = verify(self, root, operations, evidence)
             try:
                 error_count = int(verifier.get("jdt_error_count"))
@@ -579,11 +595,11 @@ def install(
     repair_module: Any,
     optimization_module: Any,
 ) -> None:
-    """Compose all missing frozen-small-model inference amplifiers exactly once."""
+    """Compose frozen-small-model inference amplifiers exactly once."""
 
     _install_tool_retrieval(model_router_module)
     _install_code_rag(pre_design_rag_module, production_tools_module)
     _install_repair_context(repair_module, optimization_module)
 
 
-__all__ = ["install", "select_tool_schemas", "_exact_fact_ledger"]
+__all__ = ["install", "select_tool_schemas", "_exact_fact_ledger", "_request_query"]
