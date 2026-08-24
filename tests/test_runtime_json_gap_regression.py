@@ -127,10 +127,8 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
 
 
 def test_qwen_canonical_permission_name_maps_back_to_exposed_source_edit():
-    from minecraft_mod_ai import qwen_enum_recovery_contract
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
 
-    qwen_enum_recovery_contract.install(llama_adapter_module)
     request = _tool_request(_source_edit_tool())
     turn = llama_adapter_module._qwen_tool_generation_response(
         {
@@ -152,12 +150,10 @@ def test_qwen_canonical_permission_name_maps_back_to_exposed_source_edit():
 
 
 def test_qwen_canonical_tool_name_does_not_revive_removed_whole_file_operation():
-    from minecraft_mod_ai import qwen_enum_recovery_contract
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
 
-    qwen_enum_recovery_contract.install(llama_adapter_module)
     request = _tool_request(_source_edit_tool())
-    with pytest.raises(qwen_enum_recovery_contract.QwenEnumValueError):
+    with pytest.raises(RuntimeError, match="value outside enum"):
         llama_adapter_module._qwen_tool_generation_response(
             {
                 "content": (
@@ -172,10 +168,8 @@ def test_qwen_canonical_tool_name_does_not_revive_removed_whole_file_operation()
 
 
 def test_qwen_canonical_tool_name_still_rejects_broad_patch_payload():
-    from minecraft_mod_ai import qwen_enum_recovery_contract
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
 
-    qwen_enum_recovery_contract.install(llama_adapter_module)
     request = _tool_request(_source_edit_tool())
     with pytest.raises(RuntimeError, match="unknown parameter 'patch'"):
         llama_adapter_module._qwen_tool_generation_response(
@@ -193,10 +187,8 @@ def test_qwen_canonical_tool_name_still_rejects_broad_patch_payload():
 
 
 def test_qwen_canonical_tool_name_is_rejected_when_alias_is_not_exposed():
-    from minecraft_mod_ai import qwen_enum_recovery_contract
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
 
-    qwen_enum_recovery_contract.install(llama_adapter_module)
     search_tool = {
         "type": "function",
         "function": {
