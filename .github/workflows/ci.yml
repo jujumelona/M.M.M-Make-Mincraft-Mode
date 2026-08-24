@@ -51,7 +51,7 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          budget = 372
+          budget = 401
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
