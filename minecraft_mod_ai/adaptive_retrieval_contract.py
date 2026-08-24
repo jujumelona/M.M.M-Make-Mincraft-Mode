@@ -85,7 +85,6 @@ def _install_repository_grounding() -> None:
 
         @wraps(current_collect)
         def _collect_initial_observations(
-            router: Any,
             index: Any,
             *,
             query: str,
@@ -94,11 +93,11 @@ def _install_repository_grounding() -> None:
         ) -> dict[str, Any]:
             try:
                 return build_repository_observation_ledger(
-                    router,
+                    None,
                     index,
                     query=query,
                     byte_budget=_runtime_grounding_budget(
-                        router,
+                        None,
                         byte_budget,
                         role="coder",
                     ),
