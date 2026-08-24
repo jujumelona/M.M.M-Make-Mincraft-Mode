@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import json
-from typing import Any
-
-from minecraft_mod_ai import causal_frontier_adapter as frontier_module
-from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse
 from minecraft_mod_ai.retrieval_progress import _stable_value, evidence_fingerprint
 from minecraft_mod_ai.runtime_preflight import run_runtime_preflight
 
