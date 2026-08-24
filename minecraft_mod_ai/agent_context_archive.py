@@ -229,7 +229,6 @@ def context_ledger(
         {value for value in _RESOURCE.findall(rendered.casefold()) if len(value) <= 256}
     )[:256]
     return {
-        "schema_version": "mmm/agent-context-compaction-v3",
         "raw_history": dict(archive),
         "paths": paths,
         "sha256": sorted({value.casefold() for value in _SHA.findall(rendered)})[:256],
