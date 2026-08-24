@@ -195,6 +195,49 @@ def test_prose_refusal_cannot_finish_before_source_patch_even_when_result_is_tru
     assert base.requests[-1].tools == ()
 
 
+def test_unpatched_adapter_gets_canonical_forced_edit_protocol_retry() -> None:
+    class ProseThenEditAdapter:
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return GenerationResponse(content="I will edit the source now.")
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="edit-after-correction",
+                        name="apply_source_edit",
+                        arguments={},
+                    ),
+                )
+            )
+
+    inner = ProseThenEditAdapter()
+    request = GenerationRequest(
+        messages=_messages(),
+        tools=(_schema("apply_source_edit"),),
+        tool_choice={
+            "type": "function",
+            "function": {"name": "apply_source_edit"},
+        },
+        parallel_tool_calls=False,
+    )
+
+    turn = _WritableProgressAdapter(inner).generate_turn(request)
+
+    assert [call.name for call in turn.tool_calls] == ["apply_source_edit"]
+    assert len(inner.requests) == 2
+    assert all(item.tool_choice == "required" for item in inner.requests)
+    assert all(len(item.tools) == 1 for item in inner.requests)
+    assert inner.requests[0].parallel_tool_calls is False
+    assert inner.requests[1].parallel_tool_calls is False
+    assert "previous assistant turn did not satisfy" in str(
+        inner.requests[1].messages[-1]["content"]
+    ).casefold()
+
+
 def test_drift_refresh_discards_stale_edit_and_finishes_without_resync_decode(
     monkeypatch,
 ) -> None:
@@ -351,8 +394,6 @@ def test_drift_refresh_discards_stale_edit_and_finishes_without_resync_decode(
         "search_code_rag",
         "apply_source_edit",
     ]
-    # The model emitted three edits, but the stale middle edit was discarded before
-    # runtime execution. The refresh read was synthesized without another model turn.
     assert adapter.emissions == [
         "search_code_rag",
         "apply_source_edit",
