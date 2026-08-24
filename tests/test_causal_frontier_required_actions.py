@@ -97,4 +97,4 @@ def test_read_only_single_frontier_stays_auto(monkeypatch):
     adapter.generate_turn(request)
 
     assert inner.request.tool_choice == "auto"
-    assert inner.request.parallel_tool_calls is True
+    assert inner.request.parallel_tool_calls is False
