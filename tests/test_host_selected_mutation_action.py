@@ -34,14 +34,41 @@ def _schema(name: str) -> dict[str, object]:
     }
 
 
+def _query_schema(name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": name,
+            "parameters": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+
+
 def _mutation_request() -> GenerationRequest:
     edit = _schema("apply_source_edit")
-    stale = _schema("java_workspace_symbols")
+    stale = _query_schema("java_workspace_symbols")
     return GenerationRequest(
         messages=({"role": "user", "content": "repair the source"},),
         tools=(edit,),
         tool_validation_schemas=(edit, stale),
         tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+        parallel_tool_calls=False,
+    )
+
+
+def _forced_query_request(name: str) -> GenerationRequest:
+    schema = _query_schema(name)
+    return GenerationRequest(
+        messages=({"role": "user", "content": "inspect the workspace"},),
+        tools=(schema,),
+        tool_validation_schemas=(schema,),
+        tool_choice={"type": "function", "function": {"name": name}},
         parallel_tool_calls=False,
     )
 
@@ -164,6 +191,94 @@ def test_argument_page_never_executes_stale_tool_call() -> None:
     assert len(adapter.requests) == 2
     assert all(request.tools == () for request in adapter.requests)
     assert all(request.tool_validation_schemas == () for request in adapter.requests)
+
+
+def test_failed_native_required_probe_falls_back_to_argument_page() -> None:
+    target = "java_workspace_symbols"
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def _server_url(self, request: GenerationRequest) -> str:
+            return "http://probe-fallback.test"
+
+        def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return GenerationResponse(content="native required was not enforced")
+            return GenerationResponse(content='{"query":"workspace"}')
+
+    _install_adapter_class(
+        Adapter,
+        transport_name="Local regression model",
+        deterministic_stale_read=False,
+        probe_native_required=True,
+    )
+    adapter = Adapter()
+
+    result = adapter.generate_turn(_forced_query_request(target))
+
+    assert len(adapter.requests) == 2
+    probe, fallback = adapter.requests
+    assert probe.tool_choice == "required"
+    assert probe.tools[0]["function"]["name"] == "mmm_required_tool_probe"
+    assert fallback.tools == ()
+    assert fallback.tool_choice is None
+    assert fallback.response_format == "json"
+    assert [call.name for call in result.tool_calls] == [target]
+    assert result.tool_calls[0].id.startswith("host_action_")
+
+
+def test_successful_native_required_probe_uses_native_action_once() -> None:
+    target = "java_workspace_symbols"
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def _server_url(self, request: GenerationRequest) -> str:
+            return "http://probe-native.test"
+
+        def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="probe",
+                            name="mmm_required_tool_probe",
+                            arguments={"nonce": "mmm"},
+                            raw_arguments='{"nonce":"mmm"}',
+                        ),
+                    )
+                )
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="native",
+                        name=target,
+                        arguments={"query": "workspace"},
+                        raw_arguments='{"query":"workspace"}',
+                    ),
+                )
+            )
+
+    _install_adapter_class(
+        Adapter,
+        transport_name="Local regression model",
+        deterministic_stale_read=False,
+        probe_native_required=True,
+    )
+    adapter = Adapter()
+
+    result = adapter.generate_turn(_forced_query_request(target))
+
+    assert len(adapter.requests) == 2
+    assert adapter.requests[1].tool_choice == "required"
+    assert [item["function"]["name"] for item in adapter.requests[1].tools] == [target]
+    assert [call.name for call in result.tool_calls] == [target]
+    assert result.tool_calls[0].id == "native"
 
 
 def test_causal_action_class_is_host_derived() -> None:
