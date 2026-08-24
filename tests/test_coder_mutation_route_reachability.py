@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from minecraft_mod_ai.coder_tool_route_integrity_contract import _require_mutation_surface
-from minecraft_mod_ai.model_adapters import ModelConfigurationError
 
 
 def _schema(name: str) -> dict:
@@ -33,14 +30,13 @@ def _messages() -> tuple[dict, ...]:
     )
 
 
-def test_mutation_tool_without_prerequisite_route_fails_before_inference() -> None:
-    with pytest.raises(ModelConfigurationError, match="no reachable causal route"):
-        _require_mutation_surface(
-            (_schema("apply_source_patch"),),
-            messages=_messages(),
-            stage="generation",
-            role="coder",
-        )
+def test_retired_route_preflight_does_not_reject_selector_owned_surface() -> None:
+    _require_mutation_surface(
+        (_schema("apply_source_patch"),),
+        messages=_messages(),
+        stage="generation",
+        role="coder",
+    )
 
 
 def test_complete_source_mutation_route_is_accepted() -> None:
