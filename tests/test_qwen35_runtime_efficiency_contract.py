@@ -24,7 +24,7 @@ def _config():
     )
 
 
-def test_qwen_output_is_unlimited_by_default_and_operator_can_override(monkeypatch) -> None:
+def test_qwen_output_preserves_native_budget_and_operator_can_override(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     hardware = SimpleNamespace(
         _server_payload=lambda adapter, request: {"max_tokens": 1234}
@@ -32,7 +32,7 @@ def test_qwen_output_is_unlimited_by_default_and_operator_can_override(monkeypat
     contract._install_output_policy(hardware)
     adapter = SimpleNamespace(config=_config())
 
-    assert hardware._server_payload(adapter, object())["max_tokens"] == -1
+    assert hardware._server_payload(adapter, object())["max_tokens"] == 1234
 
     monkeypatch.setenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", "24576")
     assert hardware._server_payload(adapter, object())["max_tokens"] == 24576
@@ -43,9 +43,9 @@ def test_qwen_output_is_unlimited_by_default_and_operator_can_override(monkeypat
 
 @pytest.mark.parametrize(
     ("operator_limit", "expected"),
-    ((None, -1), ("1536", 1536), ("24576", 24576), ("-1", -1)),
+    ((None, 1234), ("1536", 1536), ("24576", 24576), ("-1", -1)),
 )
-def test_research_note_has_no_transport_output_cap(
+def test_research_note_preserves_transport_budget_unless_overridden(
     monkeypatch, operator_limit, expected
 ) -> None:
     if operator_limit is None:
@@ -68,7 +68,7 @@ def test_research_note_has_no_transport_output_cap(
     )["max_tokens"] == expected
 
 
-def test_non_research_schema_uses_native_unlimited_output(monkeypatch) -> None:
+def test_non_research_schema_preserves_native_output_budget(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     hardware = SimpleNamespace(
         _server_payload=lambda adapter, request: {"max_tokens": 1234}
@@ -83,7 +83,7 @@ def test_non_research_schema_uses_native_unlimited_output(monkeypatch) -> None:
 
     assert hardware._server_payload(
         SimpleNamespace(config=_config()), request
-    )["max_tokens"] == -1
+    )["max_tokens"] == 1234
 
 
 def test_output_limit_rejects_zero_and_invalid_values(monkeypatch) -> None:
