@@ -7,7 +7,7 @@ from threading import RLock
 from . import runtime_contract_composer as _contract_composer
 
 _BOOTSTRAP_LOCK = RLock()
-_RUNTIME_COMPOSITION_VERSION = 5
+_RUNTIME_COMPOSITION_VERSION = 6
 _INITIALIZED = False
 
 
@@ -84,11 +84,13 @@ def _install_model_runtime_contracts() -> None:
     )
     from .colab_gpu_handoff_contract import install as install_gpu_handoff
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
+    from .forced_tool_execution_contract import install as install_forced_tool_execution
     from .gpu_resource_contract import install as install_gpu_resource
     from .llama_generation_budget import install as install_llama_generation_budget
     from .llama_prefill_telemetry_contract import install as install_llama_prefill_telemetry
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
+    from .model_adapters import llama_cpp_adapter, openai_compatible
     from .model_runtime_performance import install as install_model_runtime_performance
 
     install_gpu_resource(model_registry)
@@ -105,6 +107,10 @@ def _install_model_runtime_contracts() -> None:
     install_llama_generation_budget(llama_server_hardware_policy)
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
+    install_forced_tool_execution(
+        openai_compatible_module=openai_compatible,
+        llama_cpp_module=llama_cpp_adapter,
+    )
     start_colab_prefetch(model_registry)
 
 
