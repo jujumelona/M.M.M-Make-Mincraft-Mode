@@ -85,7 +85,6 @@ def finalize_runtime() -> None:
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
-        from .qwen_enum_recovery_contract import install as install_qwen_enum_recovery
         from .retrieval_cpu_budget_contract import install as install_retrieval_cpu_budget
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_hot_path_contract import (
@@ -141,7 +140,6 @@ def finalize_runtime() -> None:
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_llama_unbounded_generation(llama_server_hardware_policy)
         install_tool_validation_surface()
-        install_qwen_enum_recovery(llama_cpp_adapter)
         install_llama_finish_reason(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
         install_llama_length_resilience(llama_cpp_adapter)
