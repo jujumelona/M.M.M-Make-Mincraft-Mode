@@ -5,12 +5,23 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-_INSTALL_MARKER = "__mmm_progress_aware_retrieval_v1__"
 _GROUNDING_MARKER = "__mmm_repository_grounding_v2_live_context__"
 
 
 def install(model_router_module: Any) -> None:
-    """Install adaptive retrieval, repository grounding and inference-time scaling."""
+    """Install repository grounding and adaptive execution hardening."""
+
+    if not bool(
+        getattr(
+            model_router_module.ModelRouter._generate_with_tools,
+            "_mmm_progress_aware_tool_loop_owner",
+            False,
+        )
+    ):
+        raise RuntimeError(
+            "ModelRouter must directly own the progress-aware production tool loop."
+        )
+
     from .adaptive_execution_hardening import harden_adaptive_execution
     from .agent_tool_allowlist_hardening import harden_agent_tool_allowlist
     from .hybrid_route_hardening import harden_code_search_routes
@@ -18,7 +29,6 @@ def install(model_router_module: Any) -> None:
     from .runtime_composer_hardening import harden_runtime_composer_identity
     from .temporary_skill_compatibility import harden_temporary_skill_transport
 
-    _install_router_loop(model_router_module)
     _install_repository_grounding()
     harden_runtime()
     harden_adaptive_execution()
@@ -42,39 +52,6 @@ def _expose_composed_repair_contracts() -> None:
     from .repair_engine import RepairEngine
 
     _inherit_boolean_contract_markers(RepairEngine._signature)
-
-
-def _install_router_loop(model_router_module: Any) -> None:
-    router_cls = model_router_module.ModelRouter
-    current = router_cls._generate_with_tools
-    if getattr(current, _INSTALL_MARKER, False):
-        return
-
-    @wraps(current, updated=())
-    def _generate_with_tools(
-        self: Any,
-        *,
-        config: Any,
-        adapter: Any,
-        request: Any,
-        runtime: Any,
-        stage: str,
-        role: str,
-    ) -> str:
-        from .progress_aware_tool_loop import generate_with_tools
-
-        return generate_with_tools(
-            self,
-            config=config,
-            adapter=adapter,
-            request=request,
-            runtime=runtime,
-            stage=stage,
-            role=role,
-        )
-
-    setattr(_generate_with_tools, _INSTALL_MARKER, True)
-    router_cls._generate_with_tools = _generate_with_tools
 
 
 def _runtime_grounding_budget(router: Any, requested: int, *, role: str) -> int:
