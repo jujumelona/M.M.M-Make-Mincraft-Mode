@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 from .model_context_budget import effective_context_tokens, tool_action_token_budget
 
-_MARKER = "_mmm_finite_generation_budget_v3"
+_MARKER = "_mmm_finite_generation_budget"
 
 
 def _positive_override(name: str) -> int | None:
