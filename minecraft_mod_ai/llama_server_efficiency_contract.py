@@ -89,7 +89,6 @@ def _read_decision_entries(path: Path) -> dict[str, dict[str, Any]]:
             if isinstance(key, str) and isinstance(value, dict)
         }
 
-    # Backward-compatible migration from the historical single-decision cache.
     fingerprint = payload.get("fingerprint")
     selected = payload.get("selected")
     if isinstance(fingerprint, str) and fingerprint and isinstance(selected, dict):
@@ -150,6 +149,32 @@ def _decision_payload(autotune_module: Any, decision: Any) -> dict[str, Any]:
     }
 
 
+def _tool_action_token_budget(config: Any) -> int:
+    """Bound one function-call page without constraining the whole coding job."""
+
+    raw = os.environ.get("MMM_LLAMA_TOOL_MAX_TOKENS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError("MMM_LLAMA_TOOL_MAX_TOKENS must be a positive integer") from exc
+        if value <= 0:
+            raise ValueError("MMM_LLAMA_TOOL_MAX_TOKENS must be a positive integer")
+        return value
+    try:
+        from .llama_server_runtime_tuning import _per_request_context
+
+        context = max(0, int(_per_request_context(config)))
+    except Exception:
+        try:
+            context = max(0, int(getattr(config, "max_context", 0) or 0))
+        except (TypeError, ValueError):
+            context = 0
+    if context <= 0:
+        return 4096
+    return max(2048, min(8192, context // 4))
+
+
 def install(autotune_module: Any, hardware_policy_module: Any) -> None:
     """Install native llama-server efficiency primitives owned by this module only.
 
@@ -174,11 +199,21 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
 
         @wraps(current_payload)
         def payload_with_prompt_cache(adapter: Any, request: Any) -> dict[str, Any]:
-            payload = current_payload(adapter, request)
+            payload = dict(current_payload(adapter, request))
+            if getattr(request, "tools", ()):
+                try:
+                    current_max = int(payload.get("max_tokens", 0) or 0)
+                except (TypeError, ValueError):
+                    current_max = 0
+                if current_max <= 0:
+                    payload["max_tokens"] = _tool_action_token_budget(
+                        getattr(adapter, "config", None)
+                    )
             payload["cache_prompt"] = True
             return payload
 
         payload_with_prompt_cache._mmm_prompt_cache_reuse = True  # type: ignore[attr-defined]
+        payload_with_prompt_cache._mmm_bounded_tool_action_decode = True  # type: ignore[attr-defined]
         hardware_policy_module._server_payload = payload_with_prompt_cache
 
     current_model_resolver = autotune_module._resolve_model_path
@@ -344,8 +379,6 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
 
         @wraps(current_ensure)
         def ensure_managed_server_first(config: Any, request: Any) -> str:
-            # The managed process is authoritative after MMM launches it. Avoid a
-            # redundant local HTTP health request before every generation call.
             with autotune_module._AUTOTUNE_LOCK:
                 process = autotune_module._MANAGED_PROCESS
                 if process is not None and process.poll() is None:
