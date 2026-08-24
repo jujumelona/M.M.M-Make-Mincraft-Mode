@@ -101,7 +101,6 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.vulture]
-# These are compatibility inputs to the checkpoint identity helper. They are
-# intentionally excluded from the stable identity so unrelated observation/grounding
-# refreshes do not orphan resumable work; the function docstring records that policy.
-ignore_names = ["observation_receipt", "host_grounding"]
+# The staged-operation helper keeps this positional compatibility input while the
+# canonical recovery refactor removes the legacy protocol around it.
+ignore_names = ["original_root"]
