@@ -2,31 +2,14 @@ from __future__ import annotations
 
 """Fail-closed composition kernel for runtime monkey-patch contracts.
 
-MMM intentionally keeps individual runtime policies small, but many of those policies
-wrap the same production callables. The dangerous case is not a clean first install;
-it is a *partial* install followed by re-entry after a later stage failed. Replaying
-already-mutated functions can duplicate wrappers, change ownership order, and surface
-as an unrelated TypeError/AttributeError much later.
+MMM keeps individual runtime policies small, but many policies wrap the same production
+callables. A partial install followed by re-entry is dangerous because replaying already
+mutated functions can duplicate wrappers and change ownership order.
 
-This module gives the two approved composition owners (runtime bootstrap and the
-native llama tuning pipeline) one shared execution contract:
-
-* completed stages are receipted immediately and are not replayed;
-* a stage that raises poisons the composition owner for the rest of the process;
-* one owner may use only one composition version and one declared stage/boundary graph
-  for the process lifetime;
-* stage graph identity includes installer code plus immutable/callable dependencies,
-  while deliberately excluding mutable execution state and runtime-installed markers;
-* recursive/re-entrant composition is rejected with the exact owner/stage;
-* watched callables may be wrapped, but may not disappear, become non-callable, or
-  stop accepting explicitly declared production call shapes;
-* state is stored on the composition owner, making failures inspectable without a
-  second global registry.
-
-There is deliberately no rollback or in-process upgrade. Python monkey-patching is
-not transactionally reversible once an installer has performed arbitrary side
-effects. A clean process restart is the only safe boundary for another composition
-version or graph.
+Composition is pinned by the actual stage/boundary graph, not an arbitrary numeric
+release tag. Completed stages are receipted immediately, failures poison the owner for
+the process lifetime, graph drift requires a clean process restart, and watched callable
+boundaries must preserve their declared production call shapes.
 """
 
 import hashlib
@@ -107,7 +90,7 @@ def _static_callable_identity(value: Any) -> str:
 
 
 def _callable_identity(value: Any) -> str:
-    """Diagnostic identity; unlike graph identity this intentionally includes markers."""
+    """Diagnostic identity; graph identity deliberately ignores mutable markers."""
 
     base = _static_callable_identity(value)
     if not callable(value):
@@ -134,7 +117,7 @@ def _code_digest(value: Any) -> str:
 
 
 def _dependency_identity(value: Any) -> Any:
-    """Return a stable implementation identity, never mutable execution contents."""
+    """Return stable implementation identity, never mutable execution contents."""
 
     if inspect.ismodule(value):
         return ("module", str(getattr(value, "__name__", "")))
@@ -173,9 +156,6 @@ def _dependency_identity(value: Any) -> Any:
             "frozenset",
             tuple(sorted(repr(_dependency_identity(item)) for item in value)),
         )
-    # Lists/dicts/sets and arbitrary stateful objects are intentionally represented
-    # only by type. Their contents can legitimately change while an installer runs;
-    # graph identity must describe implementation wiring, not execution state.
     return ("object-type", type(value).__module__, type(value).__qualname__)
 
 
@@ -233,9 +213,8 @@ def _graph_signature(
     )
 
 
-def _fresh_state(version: int, graph_signature: tuple[Any, ...]) -> dict[str, Any]:
+def _fresh_state(graph_signature: tuple[Any, ...]) -> dict[str, Any]:
     return {
-        "version": int(version),
         "graph_signature": graph_signature,
         "completed": [],
         "receipts": [],
@@ -255,7 +234,6 @@ def composition_state(state_owner: Any, owner_name: str) -> dict[str, Any] | Non
     if not isinstance(value, dict):
         return None
     return {
-        "version": value.get("version"),
         "graph_signature": value.get("graph_signature"),
         "completed": tuple(value.get("completed", ())),
         "receipts": tuple(value.get("receipts", ())),
@@ -337,8 +315,7 @@ def _verify_boundaries(
         if was_callable and not is_callable:
             raise ContractCompositionError(
                 f"contract composition {owner_name!r} stage {stage_name!r} destroyed "
-                f"callable boundary {boundary.label!r} "
-                f"({boundary.attribute!r})"
+                f"callable boundary {boundary.label!r} ({boundary.attribute!r})"
             )
         if is_callable:
             _verify_call_shapes(
@@ -354,7 +331,6 @@ def _verify_boundaries(
 def compose_contract_stages(
     *,
     owner_name: str,
-    version: int,
     state_owner: Any,
     stages: Iterable[ContractStage],
     boundaries: Iterable[CallableBoundary] = (),
@@ -363,8 +339,6 @@ def compose_contract_stages(
 
     if not owner_name.strip():
         raise ValueError("owner_name must be non-empty")
-    if int(version) <= 0:
-        raise ValueError("composition version must be positive")
 
     stage_values = tuple(stages)
     names = tuple(stage.name for stage in stage_values)
@@ -380,29 +354,21 @@ def compose_contract_stages(
         states = _state_map(state_owner)
         prior_state = states.get(owner_name)
         if isinstance(prior_state, dict):
-            prior_version = int(prior_state.get("version", 0) or 0)
-            if prior_version != int(version):
-                raise ContractCompositionError(
-                    f"contract composition {owner_name!r} already owns version "
-                    f"{prior_version}; process restart is required before requesting "
-                    f"version {int(version)}"
-                )
             if prior_state.get("graph_signature") != requested_graph:
                 raise ContractCompositionError(
-                    f"contract composition {owner_name!r} graph changed while still "
-                    f"declaring version {int(version)}; bump the composition version "
-                    "and restart the process before installing the new graph"
+                    f"contract composition {owner_name!r} graph changed after runtime "
+                    "composition began; restart the process before installing a different graph"
                 )
             if prior_state.get("failed"):
                 failure = prior_state["failed"]
                 raise ContractCompositionError(
                     f"contract composition {owner_name!r} is poisoned by prior failure "
-                    f"in version {prior_version} at stage {failure.get('stage')!r}: "
-                    f"{failure.get('error')}; process restart is required"
+                    f"at stage {failure.get('stage')!r}: {failure.get('error')}; "
+                    "process restart is required"
                 )
             state = prior_state
         else:
-            state = _fresh_state(int(version), requested_graph)
+            state = _fresh_state(requested_graph)
             states[owner_name] = state
 
         if state.get("active"):
