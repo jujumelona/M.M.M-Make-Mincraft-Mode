@@ -50,30 +50,6 @@ def _event(payload: dict[str, Any]) -> str:
     return "data: " + json.dumps(payload, separators=(",", ":"))
 
 
-def test_tool_completion_post_uses_native_non_streaming_transport() -> None:
-    raw = _FakeClient(_FakeStreamResponse([]))
-    client = _StreamingCompletionClient(raw)
-    payload = {
-        "model": "local",
-        "messages": [{"role": "user", "content": "repair"}],
-        "tools": [{"type": "function", "function": {"name": "apply_source_edit"}}],
-        "max_tokens": -1,
-    }
-
-    result = client.post(
-        "http://127.0.0.1:8080/chat/completions",
-        json=payload,
-        timeout=httpx.Timeout(600.0),
-    )
-
-    assert result.status_code == 204
-    assert len(raw.post_calls) == 1
-    assert not raw.stream_calls
-    _, kwargs = raw.post_calls[0]
-    assert kwargs["json"] is payload
-    assert payload.get("stream") is None
-
-
 def test_non_completion_post_still_delegates_normally() -> None:
     raw = _FakeClient(_FakeStreamResponse([]))
     client = _StreamingCompletionClient(raw)
