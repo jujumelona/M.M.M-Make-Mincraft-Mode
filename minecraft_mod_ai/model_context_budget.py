@@ -92,15 +92,18 @@ def tool_action_token_budget(config: Any) -> int:
 
 
 def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
-    """Return a conservative input budget from the slot that actually serves the turn.
+    """Return the input budget that the active runtime can actually serve.
 
-    A tool page reserves the same finite action allowance used by the transport, so
-    prompt fitting and decode can never independently spend the same context window.
+    The model capability stays untouched. A request is bounded by the live runtime
+    context, any explicit input cap, the finite output allowance, a small guard, and the
+    serialized tool surface. These are request-packing limits, not model capability
+    rewrites.
     """
 
     default = _default_context_bytes()
     try:
         max_context = effective_context_tokens(config)
+        max_input_tokens = max(0, int(getattr(config, "max_input_tokens", 0) or 0))
         max_new_tokens = max(0, int(getattr(config, "max_new_tokens", 0) or 0))
     except (TypeError, ValueError):
         return default
@@ -112,10 +115,12 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
         reserved_output_tokens = tool_action_token_budget(config) if tools else max_new_tokens
     else:
         reserved_output_tokens = max_new_tokens
-    available_input_tokens = max(
-        2048,
-        max_context - reserved_output_tokens - _CONTEXT_TOKEN_GUARD,
-    )
+
+    runtime_input_tokens = max(2048, max_context - reserved_output_tokens)
+    if max_input_tokens > 0:
+        runtime_input_tokens = min(runtime_input_tokens, max_input_tokens)
+    available_input_tokens = max(2048, runtime_input_tokens - _CONTEXT_TOKEN_GUARD)
+
     context_bytes = available_input_tokens * _BYTES_PER_TOKEN_BUDGET
     tool_bytes = _canonical_size(tuple(tools)) if tools else 0
     derived = context_bytes - tool_bytes
@@ -248,7 +253,6 @@ def _summary_payload(
 
     summary: dict[str, Any] = {
         "_mmm_context_compaction": {
-            "schema_version": "mmm/tool-observation-context-v2",
             "raw_observation": dict(archive),
             "original_bytes": len(raw_bytes),
             "sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
