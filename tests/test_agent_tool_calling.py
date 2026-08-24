@@ -86,7 +86,7 @@ def test_coder_calls_generation_tool_and_reinjects_result(monkeypatch) -> None:
     assert runtime.calls == [("generation", "search_code_rag", {"query": "register block"})]
     assert len(adapter.requests) == 2
     assert adapter.requests[0].tool_choice == "auto"
-    assert adapter.requests[0].parallel_tool_calls is True
+    assert adapter.requests[0].parallel_tool_calls is False
     assert adapter.requests[0].tools[0]["function"]["name"] == "search_code_rag"
     reinjected = adapter.requests[1].messages
     assistant = reinjected[-2]
@@ -240,9 +240,9 @@ def test_host_owned_grounding_satisfies_baseline_without_forced_rag(monkeypatch)
     assert runtime.calls == []
     assert len(adapter.requests) == 1
     request = adapter.requests[0]
-    assert [item["function"]["name"] for item in request.tools] == ["search_code_rag"]
-    assert request.tool_choice == "auto"
-    assert request.parallel_tool_calls is True
+    assert request.tools == ()
+    assert request.tool_choice is None
+    assert request.parallel_tool_calls is False
 
 
 def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> None:
