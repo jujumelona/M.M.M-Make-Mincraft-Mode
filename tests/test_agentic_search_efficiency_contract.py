@@ -43,7 +43,7 @@ def test_explicit_repair_search_is_owned_by_efficiency_policy(monkeypatch) -> No
     assert agentic._repair_candidate_count(engine, _complex_failure(), ()) == 2
     assert (
         getattr(agentic._repair_candidate_count, "_mmm_failure_gated_search_epoch", "")
-        == "mmm/failure-gated-search-v4"
+        == "mmm/failure-gated-search-v5"
     )
 
 
