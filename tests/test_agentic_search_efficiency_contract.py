@@ -43,11 +43,11 @@ def test_explicit_repair_search_is_owned_by_efficiency_policy(monkeypatch) -> No
     assert agentic._repair_candidate_count(engine, _complex_failure(), ()) == 2
     assert (
         getattr(agentic._repair_candidate_count, "_mmm_failure_gated_search_epoch", "")
-        == "mmm/failure-gated-search-v3"
+        == "mmm/failure-gated-search-v4"
     )
 
 
-def test_installed_repair_policy_isolated_from_mutable_module_helpers(monkeypatch) -> None:
+def test_installed_repair_policy_isolated_from_mutable_module_globals(monkeypatch) -> None:
     install(agentic)
     monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
     monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "2")
@@ -55,6 +55,7 @@ def test_installed_repair_policy_isolated_from_mutable_module_helpers(monkeypatc
     monkeypatch.setattr(efficiency, "_search_mode", lambda: "off")
     monkeypatch.setattr(efficiency, "_repair_search_width", lambda: 1)
     monkeypatch.setattr(efficiency, "_active_parallel_slots", lambda: 1)
+    monkeypatch.setattr(efficiency, "os", SimpleNamespace(environ={}))
     engine = SimpleNamespace(_signature=lambda _evidence: "same-signature")
     assert agentic._repair_candidate_count(engine, _complex_failure(), ()) == 2
 
