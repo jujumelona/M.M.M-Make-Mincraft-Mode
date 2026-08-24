@@ -8,6 +8,7 @@ request-budget and live-history fitting owner. Durable transcript persistence li
 ``agent_context_archive`` and never competes with fitting policy.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -23,6 +24,14 @@ _CONTEXT_TOKEN_GUARD = 2048
 _TOOL_HEAD_BYTES = 6144
 _TOOL_TAIL_BYTES = 2048
 _MIN_TOOL_PREVIEW_BYTES = 2048
+_IMPLEMENTATION_SOURCE_SEED_BYTES = 12 * 1024
+_REDUNDANT_IMPLEMENTATION_FIELDS = frozenset(
+    {
+        "project_manifest",
+        "source_observation_receipt",
+        "research_context",
+    }
+)
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -111,6 +120,100 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
     tool_bytes = _canonical_size(tuple(tools)) if tools else 0
     derived = context_bytes - tool_bytes
     return max(_MIN_CONTEXT_BYTES, min(default, derived))
+
+
+def _trim_record_tail(
+    value: dict[str, Any],
+    key: str,
+    *,
+    current_bytes: int,
+    byte_budget: int,
+) -> int:
+    records = value.get(key)
+    if not isinstance(records, list):
+        return current_bytes
+    while records and current_bytes > byte_budget:
+        removed = records.pop()
+        current_bytes -= _canonical_size(removed)
+        if records:
+            current_bytes -= 1
+    return current_bytes
+
+
+def _bounded_exact_source_seed(value: Any, *, byte_budget: int) -> Any:
+    """Keep the first coding turn small while preserving host-owned retrieval receipts."""
+
+    if not isinstance(value, dict) or _canonical_size(value) <= byte_budget:
+        return value
+    bounded = copy.deepcopy(value)
+    original_records = sum(
+        len(bounded.get(key, ()))
+        for key in ("global_anchors", "page_observations")
+        if isinstance(bounded.get(key), list)
+    )
+    current_bytes = _canonical_size(bounded)
+    for key in ("page_observations", "global_anchors"):
+        current_bytes = _trim_record_tail(
+            bounded,
+            key,
+            current_bytes=current_bytes,
+            byte_budget=byte_budget,
+        )
+        if current_bytes <= byte_budget:
+            break
+    bounded["global_anchor_count"] = len(bounded.get("global_anchors", ()))
+    retained_records = sum(
+        len(bounded.get(key, ()))
+        for key in ("global_anchors", "page_observations")
+        if isinstance(bounded.get(key), list)
+    )
+    bounded["model_seed_compaction"] = {
+        "bounded_bytes": int(byte_budget),
+        "omitted_record_count": max(0, original_records - retained_records),
+        "supplemental_retrieval_available": True,
+    }
+    return bounded
+
+
+def _compact_implementation_seed(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    """Remove duplicated host receipts and bound exact-source seed on coder first turn."""
+
+    compacted: list[Mapping[str, Any]] = []
+    for raw_message in messages:
+        message = dict(raw_message)
+        content = message.get("content")
+        if (
+            str(message.get("role", "")).casefold() != "user"
+            or not isinstance(content, str)
+            or not content.lstrip().startswith("{")
+        ):
+            compacted.append(message)
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            compacted.append(message)
+            continue
+        if not isinstance(payload, dict) or payload.get("phase") != "implement_module":
+            compacted.append(message)
+            continue
+        for key in _REDUNDANT_IMPLEMENTATION_FIELDS:
+            payload.pop(key, None)
+        if "initial_exact_source_context" in payload:
+            payload["initial_exact_source_context"] = _bounded_exact_source_seed(
+                payload["initial_exact_source_context"],
+                byte_budget=_IMPLEMENTATION_SOURCE_SEED_BYTES,
+            )
+        message["content"] = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        compacted.append(message)
+    return tuple(compacted)
 
 
 def _tool_preview(
@@ -364,10 +467,10 @@ def fit_messages_to_context(
     config: Any,
     tools: Sequence[Any] = (),
 ) -> tuple[Mapping[str, Any], ...]:
-    """Fit a model turn before decode, including the first assistant/tool exchange."""
+    """Fit every model turn through the single canonical context owner."""
 
     budget = request_message_budget(config, tools)
-    values = tuple(messages)
+    values = _compact_implementation_seed(messages)
     if _canonical_size(values) <= budget:
         return values
 
@@ -390,13 +493,16 @@ def emergency_fit_messages(
     """Bound a retry payload when a backend reports context pressure."""
 
     budget = max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, int(budget_bytes)))
-    values = _compact_tool_messages(messages, budget=budget, preview_bytes=4 * 1024)
+    values = _compact_implementation_seed(messages)
+    values = _compact_tool_messages(values, budget=budget, preview_bytes=4 * 1024)
     if _canonical_size(values) <= budget:
         return values
     return _compact_old_exchanges(values, budget=budget)
 
 
 __all__ = [
+    "_bounded_exact_source_seed",
+    "_compact_implementation_seed",
     "bounded_tool_message",
     "effective_context_tokens",
     "emergency_fit_messages",
