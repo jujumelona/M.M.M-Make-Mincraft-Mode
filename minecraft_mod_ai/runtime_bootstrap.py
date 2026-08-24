@@ -7,7 +7,7 @@ from threading import RLock
 from . import runtime_contract_composer as _contract_composer
 
 _BOOTSTRAP_LOCK = RLock()
-_RUNTIME_COMPOSITION_VERSION = 3
+_RUNTIME_COMPOSITION_VERSION = 4
 _INITIALIZED = False
 
 
@@ -384,7 +384,6 @@ def _install_post_bootstrap_contracts() -> None:
     from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .adaptive_retrieval_contract import install as install_adaptive_retrieval
     from .agent_security_contract import install as install_agent_security
-    from .causal_tool_frontier_contract import install as install_causal_tool_frontier
     from .external_procedural_skill_contract import (
         install as install_external_procedural_skill,
     )
@@ -404,7 +403,6 @@ def _install_post_bootstrap_contracts() -> None:
     from .small_model_retrieval_efficiency_contract import (
         install as install_small_model_retrieval_efficiency,
     )
-    from .small_model_tool_guard_contract import install as install_small_model_tool_guard
     from .temporary_skill_contract import install as install_temporary_skill
     from .unified_trajectory_memory_contract import (
         install as install_unified_trajectory_memory,
@@ -422,8 +420,6 @@ def _install_post_bootstrap_contracts() -> None:
         repair_module=repair_engine,
         optimization_module=agentic_optimization_contract,
     )
-    install_small_model_tool_guard(install_small_model_max_agent)
-    install_causal_tool_frontier(install_small_model_max_agent)
     install_small_model_relation_index(production_tools)
     install_small_model_hybrid_search(production_tools)
     install_small_model_retrieval_efficiency()
