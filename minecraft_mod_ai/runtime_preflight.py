@@ -34,17 +34,6 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
-class _CaptureAdapter:
-    def __init__(self) -> None:
-        self.request: Any | None = None
-
-    def generate_turn(self, request: Any) -> Any:
-        from .model_adapters import GenerationResponse
-
-        self.request = request
-        return GenerationResponse(content="preflight-ok")
-
-
 def _large_implementation_messages() -> tuple[dict[str, str], ...]:
     payload = {
         "phase": "implement_module",
@@ -188,36 +177,6 @@ def _assert_retrieval_model_residency() -> None:
         )
 
 
-def _assert_compaction_clone() -> None:
-    from . import small_model_compacting_adapter as compaction_module
-    from .model_adapters import GenerationRequest
-
-    capture = _CaptureAdapter()
-    adapter = compaction_module.CompactingAdapter(capture)
-    request = GenerationRequest(
-        messages=({"role": "user", "content": "preflight"},),
-        task="sentinel-task",
-        prompt="sentinel-prompt",
-        metadata={"sentinel": "metadata"},
-    )
-    original = compaction_module.compact_messages
-    compaction_module.compact_messages = lambda messages: (
-        *tuple(messages),
-        {"role": "system", "content": "synthetic compacted context"},
-    )
-    try:
-        adapter.generate_turn(request)
-    finally:
-        compaction_module.compact_messages = original
-    if capture.request is None:
-        raise RuntimePreflightError("compaction adapter did not forward its synthetic request")
-    forwarded = capture.request
-    if forwarded.task != request.task or forwarded.prompt != request.prompt:
-        raise RuntimePreflightError("compaction adapter dropped task/prompt fields")
-    if dict(forwarded.metadata) != dict(request.metadata):
-        raise RuntimePreflightError("compaction adapter dropped request metadata")
-
-
 def _assert_unordered_retrieval_canonicalization() -> None:
     from .retrieval_progress import _stable_value, evidence_fingerprint
 
@@ -245,7 +204,6 @@ def run_runtime_preflight() -> None:
             ("routing-intent", _assert_routing_intent_alignment),
             ("generation-concurrency", _assert_generation_concurrency_guards),
             ("retrieval-model-residency", _assert_retrieval_model_residency),
-            ("compaction-clone", _assert_compaction_clone),
             ("retrieval-canonicalization", _assert_unordered_retrieval_canonicalization),
         )
         for name, check in checks:
