@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-"""Persistent llama.cpp HTTP/SSE transport for ordinary text completions.
+"""Persistent llama.cpp HTTP/SSE transport with bounded liveness.
 
-Tool turns deliberately do not use this module's SSE text aggregation. They are sent
-through llama.cpp's native chat parser so a completed structured ``tool_calls`` message
-is the semantic boundary returned to the agent loop. This module accelerates ordinary
-text completions and monitors native tool turns without changing their semantic
-transport.
+Tool turns stay native, non-streaming OpenAI-compatible responses so partial tool
+markup is never executable. Unlike the legacy transport, a tool request can never
+silently disable its read deadline: every request has a finite inactivity ceiling and
+large actions continue through the model adapter's bounded completion paging.
 """
 
 import json
@@ -23,10 +22,15 @@ _CLIENTS: dict[str, Any] = {}
 _CLIENT_LIMIT = 4
 _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
-_DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 300.0
+_DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
+_DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS = 120.0
 _DEFAULT_TOOL_LIVENESS_HEARTBEAT_SECONDS = 15.0
-_DEFAULT_TOOL_STALL_WARNING_SECONDS = 120.0
+_DEFAULT_TOOL_STALL_WARNING_SECONDS = 60.0
 _DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS = 2.0
+
+
+class LlamaToolLivenessTimeout(TimeoutError):
+    """A native tool response produced no readable transport progress in time."""
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -50,20 +54,45 @@ def _positive_env_float(name: str, default: float) -> float:
 
 
 def _stream_idle_timeout_seconds() -> float:
-    raw = os.environ.get("MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS", "").strip()
-    if not raw:
-        return _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise ValueError(
-            "MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS must be a positive finite number."
-        ) from exc
-    if not math.isfinite(value) or value <= 0.0:
-        raise ValueError(
-            "MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS must be a positive finite number."
+    return _positive_env_float(
+        "MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS",
+        _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS,
+    )
+
+
+def _tool_idle_timeout_seconds() -> float:
+    return _positive_env_float(
+        "MMM_LLAMA_TOOL_IDLE_TIMEOUT_SECONDS",
+        _DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS,
+    )
+
+
+def _bounded_timeout(timeout: Any, *, read_seconds: float) -> Any:
+    """Preserve stricter caller settings while forbidding an infinite read timeout."""
+
+    import httpx
+
+    if isinstance(timeout, httpx.Timeout):
+        caller_read = timeout.read
+        read = (
+            min(float(caller_read), read_seconds)
+            if caller_read is not None and float(caller_read) > 0.0
+            else read_seconds
         )
-    return value
+        return httpx.Timeout(
+            connect=timeout.connect if timeout.connect is not None else 30.0,
+            read=read,
+            write=timeout.write if timeout.write is not None else 30.0,
+            pool=timeout.pool if timeout.pool is not None else 30.0,
+        )
+    if isinstance(timeout, (int, float)) and float(timeout) > 0.0:
+        read_seconds = min(read_seconds, float(timeout))
+    return httpx.Timeout(
+        connect=30.0,
+        read=read_seconds,
+        write=30.0,
+        pool=30.0,
+    )
 
 
 def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> int:
@@ -87,28 +116,6 @@ def _completion_origin(url: str) -> str:
         if value.endswith(suffix):
             return value[: -len(suffix)]
     return value
-
-
-def _unbounded_native_tool_request(payload: Mapping[str, Any]) -> bool:
-    if not payload.get("tools"):
-        return False
-    try:
-        return int(payload.get("max_tokens", 0)) < 0
-    except (TypeError, ValueError):
-        return False
-
-
-def _without_read_timeout(timeout: Any) -> Any:
-    import httpx
-
-    if not isinstance(timeout, httpx.Timeout):
-        return timeout
-    return httpx.Timeout(
-        connect=timeout.connect,
-        read=None,
-        write=timeout.write,
-        pool=timeout.pool,
-    )
 
 
 def _coerce_progress_int(value: Any) -> int | None:
@@ -160,7 +167,6 @@ def _probe_native_tool_progress(client: Any, completion_url: str) -> dict[str, A
                 return {"state": "slots", **snapshot}
     except Exception:
         pass
-
     try:
         response = client.get(f"{origin}/health", timeout=timeout)
         if response.status_code == 200:
@@ -180,14 +186,17 @@ def _native_tool_liveness_reporter(
         "MMM_LLAMA_TOOL_LIVENESS_HEARTBEAT_SECONDS",
         _DEFAULT_TOOL_LIVENESS_HEARTBEAT_SECONDS,
     )
-    warning_after = _positive_env_float(
-        "MMM_LLAMA_TOOL_STALL_WARNING_SECONDS",
-        _DEFAULT_TOOL_STALL_WARNING_SECONDS,
+    warning_after = min(
+        _positive_env_float(
+            "MMM_LLAMA_TOOL_STALL_WARNING_SECONDS",
+            _DEFAULT_TOOL_STALL_WARNING_SECONDS,
+        ),
+        _tool_idle_timeout_seconds(),
     )
     last_progress_at = started
     last_decoded: int | None = None
     last_prompt: int | None = None
-    warning_reported = False
+    warned = False
 
     while not stop.wait(heartbeat):
         now = time.monotonic()
@@ -199,6 +208,7 @@ def _native_tool_liveness_reporter(
                 f" state={state}",
                 " progress=unobservable",
                 f" elapsed={now - started:.1f}s",
+                f" read_deadline={_tool_idle_timeout_seconds():.0f}s",
                 sep="",
                 flush=True,
             )
@@ -207,21 +217,15 @@ def _native_tool_liveness_reporter(
         processing = int(snapshot.get("processing_slots", 0) or 0)
         decoded = snapshot.get("decoded")
         prompt = snapshot.get("prompt_processed")
-        progressed = False
-        if isinstance(decoded, int) and (last_decoded is None or decoded > last_decoded):
-            progressed = True
-        if isinstance(prompt, int) and (last_prompt is None or prompt > last_prompt):
-            progressed = True
+        progressed = bool(
+            (isinstance(decoded, int) and (last_decoded is None or decoded > last_decoded))
+            or (isinstance(prompt, int) and (last_prompt is None or prompt > last_prompt))
+        )
         if progressed:
             last_progress_at = now
-            warning_reported = False
+            warned = False
         if isinstance(decoded, int):
-            decoded_delta = (
-                decoded - last_decoded if isinstance(last_decoded, int) else decoded
-            )
             last_decoded = decoded
-        else:
-            decoded_delta = None
         if isinstance(prompt, int):
             last_prompt = prompt
 
@@ -234,39 +238,30 @@ def _native_tool_liveness_reporter(
             phase = "prompting" if progressed else "processing-no-new-prompt"
         else:
             phase = "processing-progress-counter-unavailable"
-
-        fields = [
+        print(
             "llama server: tool completion liveness",
             f" state={phase}",
             f" slots={processing}",
-        ]
-        if isinstance(prompt, int):
-            fields.append(f" prompt_processed={prompt}")
-        if isinstance(decoded, int):
-            fields.append(f" decoded={decoded}")
-            if isinstance(decoded_delta, int) and decoded_delta > 0:
-                fields.append(f" decoded_delta=+{decoded_delta}")
-        fields.extend(
-            [
-                f" no_counter_progress={idle_for:.1f}s",
-                f" elapsed={now - started:.1f}s",
-            ]
+            f" prompt_processed={prompt if isinstance(prompt, int) else 'unknown'}",
+            f" decoded={decoded if isinstance(decoded, int) else 'unknown'}",
+            f" no_counter_progress={idle_for:.1f}s",
+            f" elapsed={now - started:.1f}s",
+            f" read_deadline={_tool_idle_timeout_seconds():.0f}s",
+            sep="",
+            flush=True,
         )
-        print(*fields, sep="", flush=True)
-
-        if processing > 0 and idle_for >= warning_after and not warning_reported:
+        if processing > 0 and idle_for >= warning_after and not warned:
             print(
                 "llama server: WARNING tool completion has no observed slot-counter progress",
                 f" for={idle_for:.1f}s",
-                " request_continues=true",
-                " classification=not-proven-stuck",
+                " bounded_transport=true",
                 flush=True,
             )
-            warning_reported = True
+            warned = True
 
 
 class _StreamingCompletionClient:
-    """Reuse one HTTP client and stream only non-tool chat completions."""
+    """Reuse one HTTP client, stream text, and bound native tool inactivity."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
@@ -278,7 +273,12 @@ class _StreamingCompletionClient:
         return self._client.close()
 
     def stream(self, method: str, url: str, **kwargs: Any) -> Any:
-        return self._client.stream(method, url, **kwargs)
+        stream_kwargs = dict(kwargs)
+        stream_kwargs["timeout"] = _bounded_timeout(
+            stream_kwargs.get("timeout"),
+            read_seconds=_stream_idle_timeout_seconds(),
+        )
+        return self._client.stream(method, url, **stream_kwargs)
 
     def post(self, url: str, **kwargs: Any) -> Any:
         payload = kwargs.get("json")
@@ -290,26 +290,14 @@ class _StreamingCompletionClient:
             return self._client.post(url, **kwargs)
 
         if bool(payload.get("tools")):
-            # Tool actions remain a single native OpenAI-compatible response. We only
-            # monitor llama.cpp's slot counters; partial tool output is never surfaced
-            # or made executable.
-            native_kwargs = dict(kwargs)
-            unbounded = _unbounded_native_tool_request(payload)
-            explicit_timeout = bool(
-                os.environ.get("MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS", "").strip()
-            )
-            if unbounded and not explicit_timeout:
-                native_kwargs["timeout"] = _without_read_timeout(
-                    native_kwargs.get("timeout")
-                )
-                print(
-                    "llama server: unbounded tool completion",
-                    " effective_read_timeout=none",
-                    " reason=max_tokens=-1",
-                    " liveness=slot-monitor",
-                    flush=True,
-                )
+            import httpx
 
+            native_kwargs = dict(kwargs)
+            deadline = _tool_idle_timeout_seconds()
+            native_kwargs["timeout"] = _bounded_timeout(
+                native_kwargs.get("timeout"),
+                read_seconds=deadline,
+            )
             started = time.monotonic()
             stop = threading.Event()
             reporter = threading.Thread(
@@ -321,6 +309,11 @@ class _StreamingCompletionClient:
             reporter.start()
             try:
                 return self._client.post(url, **native_kwargs)
+            except httpx.TimeoutException as exc:
+                raise LlamaToolLivenessTimeout(
+                    "native llama-server tool completion produced no readable transport "
+                    f"progress for {deadline:.0f}s; request aborted"
+                ) from exc
             finally:
                 stop.set()
                 reporter.join(timeout=0.2)
@@ -332,16 +325,16 @@ class _StreamingCompletionClient:
         streamed_payload["stream_options"] = {"include_usage": True}
         stream_kwargs = dict(kwargs)
         stream_kwargs["json"] = streamed_payload
+        stream_kwargs["timeout"] = _bounded_timeout(
+            stream_kwargs.get("timeout"),
+            read_seconds=_stream_idle_timeout_seconds(),
+        )
         request = httpx.Request("POST", url)
-        started = time.monotonic()
-        last_report = started
-        first_delta_reported = False
         message: dict[str, Any] = {"role": "assistant", "content": ""}
         finish_reason: Any = None
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
-        progress_chars = 0
 
         with self._client.stream("POST", url, **stream_kwargs) as response:
             if response.status_code >= 400:
@@ -352,7 +345,6 @@ class _StreamingCompletionClient:
                     content=body,
                     request=request,
                 )
-
             for raw_line in response.iter_lines():
                 line = raw_line.strip()
                 if not line or line.startswith(":") or not line.startswith("data:"):
@@ -388,32 +380,11 @@ class _StreamingCompletionClient:
                 if not isinstance(delta, Mapping):
                     candidate = choice.get("message")
                     delta = candidate if isinstance(candidate, Mapping) else None
-                if delta is None:
-                    continue
-                progressed = _append_message_delta(message, delta)
-                if progressed <= 0:
-                    continue
-                progress_chars += progressed
-                now = time.monotonic()
-                if not first_delta_reported:
-                    print(
-                        "llama server: completion first output delta",
-                        f" elapsed={now - started:.1f}s",
-                        flush=True,
-                    )
-                    first_delta_reported = True
-                if now - last_report >= 15.0:
-                    print(
-                        "llama server: completion stream progress",
-                        f" chars={progress_chars}",
-                        f" elapsed={now - started:.1f}s",
-                        flush=True,
-                    )
-                    last_report = now
+                if delta is not None:
+                    _append_message_delta(message, delta)
 
         if not saw_done:
             raise RuntimeError("llama server stream ended before the [DONE] marker")
-
         result: dict[str, Any] = {
             "choices": [
                 {
@@ -482,7 +453,6 @@ def _native_timing_summary(timings: Any) -> dict[str, float | int] | None:
         predicted_per_second = 0.0
     if predicted_per_second > 0.0:
         result["predicted_per_second"] = predicted_per_second
-
     try:
         draft_n = max(0, int(timings.get("draft_n", 0) or 0))
         accepted = max(0, int(timings.get("draft_n_accepted", 0) or 0))
@@ -535,7 +505,7 @@ def _commit_usage(
 
 
 def install(hardware_module: Any) -> None:
-    """Install the SSE fast path for plain text generation only."""
+    """Install the bounded SSE fast path for plain text generation."""
 
     current = hardware_module._strict_server_generate
     if getattr(current, "_mmm_sse_usage_fast_path", False):
@@ -551,22 +521,15 @@ def install(hardware_module: Any) -> None:
         try:
             payload = hardware_module._server_payload(adapter, request)
             if payload.get("tools"):
-                # Tool turns are semantic OpenAI chat responses, not text streams.
                 return current(adapter, request, server_url)
-
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
             endpoint = f"{server_url.rstrip('/')}/chat/completions"
             client = _client(server_url)
-
             pieces: list[str] = []
-            generated_chars = 0
             reasoning_chars = 0
-            output_events = 0
             request_started = time.monotonic()
             first_output_time: float | None = None
-            last_progress_report = request_started
-            first_output_reported = False
             saw_done = False
             final_usage: dict[str, Any] | None = None
             final_timings: dict[str, Any] | None = None
@@ -581,24 +544,15 @@ def install(hardware_module: Any) -> None:
                         f"llama server returned HTTP {response.status_code}"
                         + (f": {body}" if body else "")
                     )
-
                 _report_server_connection(server_url)
-                structured = getattr(request, "response_format", None) == "json"
-                reasoning_disabled = payload.get("reasoning_effort") == "none"
-                spec_type, draft_n_max, draft_p_min = _active_decode_profile()
                 print(
                     "llama server: request accepted; streaming",
                     f" input_chars={hardware_module._request_content_chars(payload)}",
                     f" max_tokens={payload['max_tokens']}",
-                    f" structured={'json-host-validated' if structured else 'text'}",
-                    f" reasoning={'disabled' if reasoning_disabled else 'model-default'}",
-                    f" spec={spec_type}",
-                    f" n_max={draft_n_max}",
-                    f" p_min={draft_p_min}",
+                    f" idle_timeout={_stream_idle_timeout_seconds():.0f}s",
                     sep="",
                     flush=True,
                 )
-
                 for raw_line in response.iter_lines():
                     line = raw_line.strip()
                     if not line or line.startswith(":") or not line.startswith("data:"):
@@ -630,34 +584,10 @@ def install(hardware_module: Any) -> None:
                     reasoning, content = hardware_module._stream_delta_parts(choice)
                     if reasoning:
                         reasoning_chars += len(reasoning)
-                        output_events += 1
                     if content:
                         pieces.append(content)
-                        generated_chars += len(content)
-                        output_events += 1
-                    if not reasoning and not content:
-                        continue
-
-                    now = time.monotonic()
-                    if not first_output_reported:
-                        first_output_time = now
-                        print(
-                            "llama server: first output delta",
-                            f" elapsed={now - request_started:.1f}s",
-                            f" kind={'content' if content else 'reasoning'}",
-                            flush=True,
-                        )
-                        first_output_reported = True
-                    if now - last_progress_report >= 15.0:
-                        print(
-                            "llama server: progress",
-                            f" content_chars={generated_chars}",
-                            f" reasoning_chars={reasoning_chars}",
-                            f" events={output_events}",
-                            f" elapsed={now - request_started:.1f}s",
-                            flush=True,
-                        )
-                        last_progress_report = now
+                    if (reasoning or content) and first_output_time is None:
+                        first_output_time = time.monotonic()
 
             if not saw_done:
                 raise RuntimeError("llama server stream ended before the [DONE] marker")
@@ -680,68 +610,28 @@ def install(hardware_module: Any) -> None:
                 else None
             )
             native = _native_timing_summary(final_timings)
-            spec_type, _, _ = _active_decode_profile()
             if committed is not None:
-                request_total = int(committed["prompt_tokens"]) + int(
-                    committed["output_tokens"]
-                )
-                cumulative_total = int(committed["cumulative_prompt_tokens"]) + int(
-                    committed["cumulative_output_tokens"]
-                )
-                wall_tps = (
-                    float(committed["output_tokens"]) / max(1e-9, generation_elapsed)
-                    if int(committed["output_tokens"]) > 0
-                    else 0.0
-                )
-                cumulative_tps = (
-                    float(committed["cumulative_output_tokens"])
-                    / max(1e-9, float(committed["cumulative_generation_seconds"]))
-                    if int(committed["cumulative_output_tokens"]) > 0
-                    else 0.0
-                )
                 native_tps = (
                     float(native["predicted_per_second"])
                     if native is not None and "predicted_per_second" in native
-                    else wall_tps
+                    else float(committed["output_tokens"]) / max(1e-9, generation_elapsed)
                 )
-                telemetry_fields = [
+                print(
                     "llama server: generation complete",
                     f" prompt_tokens={int(committed['prompt_tokens'])}",
                     f" output_tokens={int(committed['output_tokens'])}",
-                    f" request_tokens={request_total}",
                     f" tok_s={native_tps:.2f}",
-                    f" wall_tok_s={wall_tps:.2f}",
-                    f" cumulative_tokens={cumulative_total}",
-                    f" cumulative_tok_s={cumulative_tps:.2f}",
-                ]
-                if native is not None and "draft_n" in native:
-                    telemetry_fields.extend(
-                        [
-                            f" mtp_accept={int(native['draft_n_accepted'])}/{int(native['draft_n'])}",
-                            f" mtp_accept_pct={float(native['draft_acceptance_pct']):.1f}%",
-                        ]
-                    )
-                elif native is None or "predicted_per_second" not in native:
-                    telemetry_fields.append(" native_timing=unavailable")
-                telemetry_fields.append(f" elapsed={elapsed:.1f}s")
-                print(*telemetry_fields, sep="", flush=True)
-
-                if (
-                    spec_type == "draft-mtp"
-                    and final_timings is not None
-                    and (native is None or "draft_n" not in native)
-                ):
-                    print(
-                        "llama server: warning MTP configured but native timings "
-                        "reported no draft counters",
-                        flush=True,
-                    )
+                    f" elapsed={elapsed:.1f}s",
+                    sep="",
+                    flush=True,
+                )
             else:
                 print(
                     "llama server: generation complete",
-                    f" content_chars={generated_chars}",
+                    f" content_chars={len(content)}",
                     f" elapsed={elapsed:.1f}s",
                     " token_telemetry=unavailable",
+                    sep="",
                     flush=True,
                 )
             return content
@@ -759,12 +649,15 @@ def install(hardware_module: Any) -> None:
 
 
 __all__ = [
+    "LlamaToolLivenessTimeout",
     "_active_decode_profile",
+    "_bounded_timeout",
     "_client",
     "_native_timing_summary",
     "_probe_native_tool_progress",
     "_report_server_connection",
     "_slot_progress_from_payload",
     "_stream_idle_timeout_seconds",
+    "_tool_idle_timeout_seconds",
     "install",
 ]
