@@ -91,6 +91,18 @@ def _request(tools: tuple[dict, ...]) -> GenerationRequest:
     )
 
 
+def _selected_tool_name(request: GenerationRequest) -> str:
+    if request.tool_choice == "required":
+        assert len(request.tools) == 1
+        function = request.tools[0]["function"]
+        assert isinstance(function, dict)
+        return str(function["name"])
+    assert isinstance(request.tool_choice, dict)
+    function = request.tool_choice["function"]
+    assert isinstance(function, dict)
+    return str(function["name"])
+
+
 def test_final_runtime_recomposes_progress_and_dynamic_causal_frontier() -> None:
     method = ModelRouter._generate_with_tools
     assert getattr(method, "_mmm_progress_aware_causal_composed", False) is True
@@ -216,7 +228,7 @@ def test_live_coder_freezes_surface_across_nested_selector_state_changes() -> No
     class Adapter:
         def generate_turn(self, request):
             model_requests.append(request)
-            forced = request.tool_choice["function"]["name"]
+            forced = _selected_tool_name(request)
             return SimpleNamespace(
                 tool_calls=(SimpleNamespace(name=forced),),
                 content="",
@@ -257,9 +269,14 @@ def test_live_coder_freezes_surface_across_nested_selector_state_changes() -> No
 
     assert result == "ok"
     assert len(model_requests) == 2
-    assert [
-        request.tool_choice["function"]["name"] for request in model_requests
-    ] == ["apply_source_edit", "apply_source_edit"]
+    assert [request.tool_choice for request in model_requests] == [
+        "required",
+        "required",
+    ]
+    assert [_selected_tool_name(request) for request in model_requests] == [
+        "apply_source_edit",
+        "apply_source_edit",
+    ]
 
 
 def test_writable_progress_keeps_prerequisite_auto_then_forces_only_after_prose() -> None:
@@ -270,7 +287,7 @@ def test_writable_progress_keeps_prerequisite_auto_then_forces_only_after_prose(
             requests.append(request)
             if request.tool_choice == "auto":
                 return SimpleNamespace(tool_calls=(), content="draft before retrieval")
-            chosen = request.tool_choice["function"]["name"]
+            chosen = _selected_tool_name(request)
             return SimpleNamespace(
                 tool_calls=(SimpleNamespace(name=chosen),),
                 content="",
@@ -295,10 +312,8 @@ def test_writable_progress_keeps_prerequisite_auto_then_forces_only_after_prose(
     assert len(requests) == 2
     assert requests[0].tool_choice == "auto"
     assert requests[0].parallel_tool_calls is True
-    assert requests[1].tool_choice == {
-        "type": "function",
-        "function": {"name": "search_code_rag"},
-    }
+    assert requests[1].tool_choice == "required"
+    assert _selected_tool_name(requests[1]) == "search_code_rag"
     assert requests[1].parallel_tool_calls is False
     assert turn.tool_calls[0].name == "search_code_rag"
 
@@ -339,7 +354,7 @@ def test_writable_progress_forces_visible_causal_action() -> None:
         def generate_turn(self, request):
             captured["request"] = request
             captured["tool_choice"] = request.tool_choice
-            chosen = request.tool_choice["function"]["name"]
+            chosen = _selected_tool_name(request)
             return SimpleNamespace(
                 tool_calls=(SimpleNamespace(name=chosen),),
                 content="",
@@ -363,10 +378,8 @@ def test_writable_progress_forces_visible_causal_action() -> None:
             metadata={"trace": "metadata-sentinel"},
         )
     )
-    assert captured["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "apply_source_patch"},
-    }
+    assert captured["tool_choice"] == "required"
+    assert _selected_tool_name(captured["request"]) == "apply_source_patch"
     assert turn.tool_calls[0].name == "apply_source_patch"
     assert captured["request"].tool_validation_schemas == (edit, historical)
     assert captured["request"].task == "task-sentinel"
@@ -381,7 +394,7 @@ def test_writable_progress_rejects_prose_only_mutation_turn() -> None:
             return SimpleNamespace(tool_calls=(), content="done")
 
     wrapped = _WritableProgressAdapter(Adapter())
-    with pytest.raises(ModelConfigurationError, match="prose-only implementation turn"):
+    with pytest.raises(ModelConfigurationError, match="required single-tool contract"):
         wrapped.generate_turn(
             GenerationRequest(
                 messages=_implement_messages(),
