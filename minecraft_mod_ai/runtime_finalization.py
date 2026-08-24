@@ -44,7 +44,6 @@ def finalize_runtime() -> None:
         from . import external_mcp_router
         from . import external_procedural_skill_contract
         from . import llama_server_autotune
-        from . import llama_server_hardware_policy
         from . import llama_server_runtime_tuning
         from . import mcp_transport_pool
         from . import model_router
@@ -64,7 +63,6 @@ def finalize_runtime() -> None:
         from .external_mcp_binding_contract import install as install_external_mcp_binding
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_finish_reason_contract import install as install_llama_finish_reason
-        from .llama_generation_budget import install as install_llama_generation_budget
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_server_response_resilience import (
             install as install_llama_server_response_resilience,
@@ -114,7 +112,6 @@ def finalize_runtime() -> None:
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
-        install_llama_generation_budget(llama_server_hardware_policy)
         install_tool_validation_surface()
         install_llama_finish_reason(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
