@@ -13,7 +13,6 @@ from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerator,
     CustomModuleGenerationError,
     _CHECKPOINT_SCHEMA,
-    _bounded_scalar_obligation_schema,
     _checkpoint_router_scope,
     _generation_checkpoint_identity,
     _prepare_generation_checkpoint,
@@ -28,10 +27,6 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
 from minecraft_mod_ai.model_adapters.base import ModelBackendError, ModelConfigurationError
 from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.scale_policy import ScalePolicy
-from minecraft_mod_ai.structured_output import (
-    StructuredOutputValidationError,
-    validate_structured_output,
-)
 
 
 def _implement_request(messages) -> dict:
@@ -346,232 +341,20 @@ def test_output_exhaustion_continues_from_same_staged_workspace_until_success(
     assert continuation["continuation"]["continuation_index"] == 1
     assert continuation["continuation"]["preserved_path_count"] == 1
     assert "initial_exact_source_context" not in continuation
-    assert any("create_java_type" in rule for rule in continuation["rules"])
-    assert all("append_file" not in rule for rule in continuation["rules"])
+    assert any("apply_source_edit" in rule for rule in continuation["rules"])
+    assert any("append_file" in rule for rule in continuation["rules"])
 
 
-def test_repeated_exact_stage_uses_partial_hint_for_bounded_scalar_split(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "project"
-    root.mkdir()
-    (root / "settings.gradle").write_text(
-        'rootProject.name = "project"\n',
-        encoding="utf-8",
-    )
-    (root / "src/main/java").mkdir(parents=True)
-    partial = {
-        "role": "assistant",
-        "content": (
-            "<tool_call><function=apply_source_edit>"
-            "<parameter=operation>create_file</parameter>"
-            "<parameter=path>src/main/java/example/Recovered.java</parameter>"
-            "<parameter=content>" + ("x" * 9000)
-        ),
-    }
-
-    class _NoProgressRouter(_AgenticRouter):
-        def generate_text(self, role, messages, **kwargs):
-            self.calls.append(dict(kwargs))
-            self.messages.append([dict(message) for message in messages])
-            if kwargs["response_format"] == "json":
-                return json.dumps(
-                    {
-                        "operation": "create_java_type",
-                        "path": "src/main/java/example/Recovered.java",
-                        "package_name": "example",
-                        "declaration": "final class Recovered",
-                    }
-                )
-            if len(self.calls) <= 2:
-                raise _output_exhausted_error(partial_message=partial)
-            return "Completed after the bounded scalar split."
-
-    router = _NoProgressRouter()
-    target = adapter_for_target("1.20.1", "fabric")
-    result = CustomModuleGenerator(
-        router,
-        policy=ScalePolicy(model_context_bytes=4096),
-    ).generate(
-        root,
-        module=ProductionModule(
-            "stalled_output",
-            "custom_java",
-            {"feature": "must not loop"},
-        ),
-        minecraft_version=target.minecraft_version,
-        loader=target.loader,
-        mappings=target.yarn_mappings,
-    )
-
-    assert len(router.calls) == 4
-    assert result["bounded_scalar_obligations"] == 1
-    assert (root / "src/main/java/example/Recovered.java").read_text(
-        encoding="utf-8"
-    ) == "package example;\n\nfinal class Recovered {\n}\n"
-    scalar_request = json.loads(router.messages[2][-1]["content"])
-    assert scalar_request["truncated_action_receipt"]["safe_header_hint"] == {
-        "path": "src/main/java/example/Recovered.java",
-    }
-    assert "x" * 100 not in router.messages[2][-1]["content"]
-
-
-def test_cumulative_partial_context_pressure_becomes_one_safe_scalar_edit(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "project"
-    source = root / "src/main/java/example/Existing.java"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "package example;\nfinal class Existing { int value = 1; }\n",
-        encoding="utf-8",
-    )
-    oversized_body = "never_execute_partial_body" * 900
-    partial = {
-        "role": "assistant",
-        "content": (
-            "<tool_call><function=apply_source_edit>"
-            "<parameter=operation>replace_file</parameter>"
-            "<parameter=path>src/main/java/example/Existing.java</parameter>"
-            "<parameter=content>" + oversized_body
-        ),
-    }
-
-    class _ContextSplitRouter(_AgenticRouter):
-        def generate_text(self, role, messages, **kwargs):
-            self.calls.append(dict(kwargs))
-            self.messages.append([dict(message) for message in messages])
-            if kwargs["response_format"] == "json":
-                return json.dumps(
-                    {
-                        "operation": "replace_exact",
-                        "path": "src/main/java/example/Existing.java",
-                        "old": "int value = 1;",
-                        "new": "int value = 2;",
-                    }
-                )
-            if len(self.calls) == 1:
-                raise _output_exhausted_error(
-                    partial_message=partial,
-                    kind=CONTEXT_PRESSURE,
-                )
-            return "Completed after context-boundary scalar recovery."
-
-    router = _ContextSplitRouter()
-    platform = adapter_for_target("1.20.1", "fabric")
-    result = CustomModuleGenerator(
-        router,
-        policy=ScalePolicy(model_context_bytes=4096),
-    ).generate(
-        root,
-        module=ProductionModule(
-            "context_boundary_split",
-            "custom_java",
-            {"feature": "bounded existing-file repair"},
-        ),
-        minecraft_version=platform.minecraft_version,
-        loader=platform.loader,
-        mappings=platform.yarn_mappings,
-    )
-
-    assert result["bounded_scalar_obligations"] == 1
-    assert result["output_exhaustion_continuations"] == 1
-    assert len(router.calls) == 3
-    assert source.read_text(encoding="utf-8") == (
-        "package example;\nfinal class Existing { int value = 2; }\n"
-    )
-    scalar_request = json.loads(router.messages[1][-1]["content"])
-    assert scalar_request["truncated_action_receipt"]["safe_header_hint"] == {
-        "path": "src/main/java/example/Existing.java",
-    }
-    assert "int value = 1;" in scalar_request["hinted_source_context"]["source"]
-    assert oversized_body[:256] not in router.messages[1][-1]["content"]
-    continuation = _implement_request(router.messages[2])
-    assert continuation["continuation"]["boundary_kind"] == CONTEXT_PRESSURE
-    assert "context_boundary" in continuation["continuation"]["reason"]
-
-
-def test_bounded_scalar_semantic_rejection_corrects_without_restarting_node(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "project"
-    source = root / "src/main/java/example/Correct.java"
-    source.parent.mkdir(parents=True)
-    source.write_text("final class Correct { int value = 1; }\n", encoding="utf-8")
-    partial = {
-        "role": "assistant",
-        "content": (
-            "<tool_call><function=apply_source_edit>"
-            "<parameter=operation>replace_exact</parameter>"
-            "<parameter=path>src/main/java/example/Correct.java</parameter>"
-            "<parameter=old>unfinished"
-        ),
-    }
-
-    class _CorrectingRouter(_AgenticRouter):
-        json_calls = 0
-
-        def generate_text(self, role, messages, **kwargs):
-            self.calls.append(dict(kwargs))
-            self.messages.append([dict(message) for message in messages])
-            if kwargs["response_format"] == "json":
-                self.json_calls += 1
-                old = "not present" if self.json_calls == 1 else "int value = 1;"
-                return json.dumps(
-                    {
-                        "operation": "replace_exact",
-                        "path": "src/main/java/example/Correct.java",
-                        "old": old,
-                        "new": "int value = 2;",
-                    }
-                )
-            if len(self.calls) == 1:
-                raise _output_exhausted_error(
-                    partial_message=partial,
-                    kind=CONTEXT_PRESSURE,
-                )
-            return "Completed after correcting one stale scalar precondition."
-
-    router = _CorrectingRouter()
-    platform = adapter_for_target("1.20.1", "fabric")
-    result = CustomModuleGenerator(
-        router,
-        policy=ScalePolicy(model_context_bytes=4096),
-    ).generate(
-        root,
-        module=ProductionModule(
-            "semantic_scalar_correction",
-            "custom_java",
-            {"feature": "correct stale exact match"},
-        ),
-        minecraft_version=platform.minecraft_version,
-        loader=platform.loader,
-        mappings=platform.yarn_mappings,
-    )
-
-    assert router.json_calls == 2
-    assert len(router.calls) == 4
-    assert result["bounded_scalar_obligations"] == 1
-    assert source.read_text(encoding="utf-8") == (
-        "final class Correct { int value = 2; }\n"
-    )
-    correction = json.loads(router.messages[2][-1]["content"])
-    assert correction["previous_rejection"]["error_type"]
-    assert "not present" not in correction["previous_rejection"].get(
-        "instruction", ""
-    )
-
-
-def test_context_pressure_without_partial_output_is_not_consumed(tmp_path: Path) -> None:
+def test_context_pressure_raises_directly_without_masking(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
 
-    class _PromptPressureRouter(_AgenticRouter):
+    class _ContextPressureRouter(_AgenticRouter):
         def generate_text(self, role, messages, **kwargs):
             self.calls.append(dict(kwargs))
             raise _output_exhausted_error(kind=CONTEXT_PRESSURE)
 
-    router = _PromptPressureRouter()
+    router = _ContextPressureRouter()
     platform = adapter_for_target("1.20.1", "fabric")
     with pytest.raises(ModelBackendError):
         CustomModuleGenerator(
@@ -580,81 +363,15 @@ def test_context_pressure_without_partial_output_is_not_consumed(tmp_path: Path)
         ).generate(
             root,
             module=ProductionModule(
-                "ordinary_prompt_pressure",
+                "context_pressure_unmasked",
                 "custom_java",
-                {"feature": "no partial prefill"},
+                {"feature": "no tool-disabled side channel"},
             ),
             minecraft_version=platform.minecraft_version,
             loader=platform.loader,
             mappings=platform.yarn_mappings,
         )
     assert len(router.calls) == 1
-
-
-@pytest.mark.parametrize(
-    ("operation", "path", "missing_payload"),
-    [
-        ("replace_exact", "src/main/java/example/Schema.java", {"old": "x"}),
-        ("insert_before", "src/main/java/example/Schema.java", {"anchor": "x"}),
-        ("insert_after", "src/main/java/example/Schema.java", {"content": "x"}),
-        ("create_file", "src/main/resources/example/schema.json", {}),
-        (
-            "create_java_type",
-            "src/main/java/example/Schema.java",
-            {"package_name": "example"},
-        ),
-        ("add_java_import", "src/main/java/example/Schema.java", {}),
-        ("insert_java_member", "src/main/java/example/Schema.java", {}),
-    ],
-)
-def test_bounded_scalar_schema_requires_operation_specific_fields(
-    operation: str,
-    path: str,
-    missing_payload: dict[str, str],
-) -> None:
-    schema = _bounded_scalar_obligation_schema({})
-    payload = {
-        "operation": operation,
-        "path": path,
-        **missing_payload,
-    }
-    with pytest.raises(StructuredOutputValidationError):
-        validate_structured_output(
-            json.dumps(payload),
-            response_format="json",
-            response_schema=schema,
-        )
-
-
-def test_bounded_scalar_schema_narrows_required_fields_for_safe_hint() -> None:
-    schema = _bounded_scalar_obligation_schema(
-        {
-            "operation": "create_java_type",
-            "path": "src/main/java/example/Chunked.java",
-        }
-    )
-    with pytest.raises(StructuredOutputValidationError):
-        validate_structured_output(
-            json.dumps(
-                {
-                    "operation": "create_java_type",
-                    "path": "src/main/java/example/Chunked.java",
-                    "package_name": "example",
-                }
-            ),
-            response_format="json",
-            response_schema=schema,
-        )
-
-
-def test_bounded_scalar_java_schema_excludes_retired_whole_file_actions() -> None:
-    schema = _bounded_scalar_obligation_schema(
-        {"path": "src/main/java/example/Recovered.java"}
-    )
-    operations = set(schema["properties"]["operation"]["enum"])
-    assert "create_file" not in operations
-    assert "append_file" not in operations
-    assert {"create_java_type", "add_java_import", "insert_java_member"} <= operations
 
 
 def test_checkpoint_router_scope_binds_candidate_count_and_strategy_epoch() -> None:

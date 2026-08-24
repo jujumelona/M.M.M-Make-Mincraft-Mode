@@ -108,6 +108,7 @@ def _install_repository_grounding() -> None:
                 raise custom_module_generator.CustomModuleGenerationError(str(exc)) from exc
 
         setattr(_collect_initial_observations, _GROUNDING_MARKER, True)
+        setattr(_collect_initial_observations, "__mmm_repository_grounding_v1__", True)
         custom_module_generator._collect_initial_observations = _collect_initial_observations
 
     current_context = repair_engine.RepairEngine._context
@@ -160,4 +161,5 @@ def _install_repository_grounding() -> None:
         )
 
     setattr(_context, _GROUNDING_MARKER, True)
+    setattr(_context, "__mmm_repository_grounding_v1__", True)
     repair_engine.RepairEngine._context = _context

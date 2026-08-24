@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import minecraft_mod_ai
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher

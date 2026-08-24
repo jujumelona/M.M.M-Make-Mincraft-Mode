@@ -148,10 +148,12 @@ def _install_gradle_metadata_scope(module_api: Any) -> None:
     if getattr(current, "_mmm_live_gradle_metadata_scope", False):
         return
 
+    @wraps(current)
     def validate_operations(
         self: Any,
         operations: list[dict[str, Any]],
     ) -> None:
+        current(self, operations)
         gradle_metadata = {
             "build.gradle",
             "build.gradle.kts",
@@ -196,7 +198,7 @@ def _install_gradle_metadata_scope(module_api: Any) -> None:
                     f"Custom module path is outside the allowed scope: {path}"
                 )
 
-    validate_operations._mmm_live_gradle_metadata_scope = True
+    setattr(validate_operations, "_mmm_live_gradle_metadata_scope", True)
     cls._validate_operations = validate_operations
 
 

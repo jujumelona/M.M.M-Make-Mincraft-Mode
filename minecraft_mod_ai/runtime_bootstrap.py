@@ -101,8 +101,11 @@ def _install_model_runtime_contracts() -> None:
         hardware_policy=llama_server_hardware_policy,
         runtime_tuning=llama_server_runtime_tuning,
     )
+    from . import causal_frontier_adapter, causal_stale_tool_recovery_contract
+
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
+    causal_stale_tool_recovery_contract.install(causal_frontier_adapter)
     start_colab_prefetch(model_registry)
 
 

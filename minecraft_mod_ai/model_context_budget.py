@@ -474,11 +474,11 @@ def fit_messages_to_context(
     if _canonical_size(values) <= budget:
         return values
 
-    values = _compact_tool_messages(values, budget=budget, preview_bytes=8 * 1024)
+    values = _compact_old_exchanges(values, budget=budget)
     if _canonical_size(values) <= budget:
         return values
 
-    values = _compact_old_exchanges(values, budget=budget)
+    values = _compact_tool_messages(values, budget=budget, preview_bytes=8 * 1024)
     if _canonical_size(values) <= budget:
         return values
 
@@ -494,10 +494,10 @@ def emergency_fit_messages(
 
     budget = max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, int(budget_bytes)))
     values = _compact_implementation_seed(messages)
-    values = _compact_tool_messages(values, budget=budget, preview_bytes=4 * 1024)
+    values = _compact_old_exchanges(values, budget=budget)
     if _canonical_size(values) <= budget:
         return values
-    return _compact_old_exchanges(values, budget=budget)
+    return _compact_tool_messages(values, budget=budget, preview_bytes=4 * 1024)
 
 
 __all__ = [

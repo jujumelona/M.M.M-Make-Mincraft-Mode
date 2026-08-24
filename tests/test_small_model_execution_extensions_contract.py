@@ -158,7 +158,7 @@ def test_partial_source_edit_sequences_changes_across_turns(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
-    source.write_text("final class Example {\n    int oldValue;\n}\n", encoding="utf-8")
+    source.write_bytes(b"final class Example {\n    int oldValue;\n}\n")
 
     first = materialize_model_source_edit(
         agent_tool_runtime,

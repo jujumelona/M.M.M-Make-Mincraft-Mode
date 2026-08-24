@@ -158,7 +158,11 @@ def preflight_source_patch_operations(
                 after = patcher._edit(before or b"", item).encode("utf-8")
             else:
                 continue
-            if before == after:
+            if before == after or (
+                before is not None
+                and after is not None
+                and before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n")
+            ):
                 raise SourcePatchError(
                     f"Patch operation makes no change: {item['path']}"
                 )

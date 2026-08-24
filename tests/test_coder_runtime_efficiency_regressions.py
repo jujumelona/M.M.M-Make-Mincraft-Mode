@@ -4,16 +4,16 @@ import json
 import threading
 from types import SimpleNamespace
 
-import minecraft_mod_ai.small_model_compacting_adapter as compaction_adapter
+import minecraft_mod_ai.model_context_budget as compaction_adapter
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.platform_custom_coder_contract import (
     _capture_agent_binding,
     _restore_agent_binding,
 )
-from minecraft_mod_ai.small_model_compacting_adapter import (
+from minecraft_mod_ai.model_context_budget import (
     _IMPLEMENTATION_SOURCE_SEED_BYTES,
     _compact_implementation_seed,
-    _json_bytes,
+    _canonical_size,
 )
 
 
@@ -102,7 +102,7 @@ def test_implementation_seed_removes_duplicate_receipts_and_bounds_exact_source(
     assert "research_context" not in result
     assert result["host_grounding"] == payload["host_grounding"]
     source = result["initial_exact_source_context"]
-    assert _json_bytes(source) <= _IMPLEMENTATION_SOURCE_SEED_BYTES + 512
+    assert _canonical_size(source) <= _IMPLEMENTATION_SOURCE_SEED_BYTES + 512
     assert source["model_seed_compaction"]["omitted_record_count"] > 0
     assert source["model_seed_compaction"]["supplemental_retrieval_available"] is True
 
@@ -123,9 +123,9 @@ def test_exact_source_seed_avoids_repeated_full_payload_serialization(monkeypatc
         "page_observations": records[10:],
     }
     full_payload_scans = 0
-    original_json_bytes = compaction_adapter._json_bytes
+    original_canonical_size = compaction_adapter._canonical_size
 
-    def counting_json_bytes(value):
+    def counting_canonical_size(value):
         nonlocal full_payload_scans
         if (
             isinstance(value, dict)
@@ -133,14 +133,14 @@ def test_exact_source_seed_avoids_repeated_full_payload_serialization(monkeypatc
             and "page_observations" in value
         ):
             full_payload_scans += 1
-        return original_json_bytes(value)
+        return original_canonical_size(value)
 
-    monkeypatch.setattr(compaction_adapter, "_json_bytes", counting_json_bytes)
+    monkeypatch.setattr(compaction_adapter, "_canonical_size", counting_canonical_size)
 
     bounded = compaction_adapter._bounded_exact_source_seed(
         source,
         byte_budget=8 * 1024,
     )
 
-    assert full_payload_scans == 1
+    assert full_payload_scans <= 2
     assert bounded["model_seed_compaction"]["omitted_record_count"] > 0

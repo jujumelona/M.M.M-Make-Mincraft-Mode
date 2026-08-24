@@ -10,7 +10,7 @@ def test_mcfunction_is_indexed_with_host_owned_sha_and_exact_source(tmp_path: Pa
     function = tmp_path / "src/main/resources/data/example/functions/start.mcfunction"
     function.parent.mkdir(parents=True)
     content = "say ready\nfunction example:next\n"
-    function.write_text(content, encoding="utf-8")
+    function.write_bytes(content.encode("utf-8"))
 
     index = ProjectIndex(tmp_path)
     relative = function.relative_to(tmp_path).as_posix()
@@ -32,12 +32,12 @@ def test_mcfunction_is_indexed_with_host_owned_sha_and_exact_source(tmp_path: Pa
 def test_incremental_mcfunction_update_refreshes_snapshot_sha(tmp_path: Path) -> None:
     function = tmp_path / "src/main/resources/data/example/functions/start.mcfunction"
     function.parent.mkdir(parents=True)
-    function.write_text("say one\n", encoding="utf-8")
+    function.write_bytes(b"say one\n")
     index = ProjectIndex(tmp_path)
     relative = function.relative_to(tmp_path).as_posix()
     before = index._by_path[relative].sha256
 
-    function.write_text("say two\n", encoding="utf-8")
+    function.write_bytes(b"say two\n")
     index.update_files((function,))
 
     after = index._by_path[relative].sha256

@@ -674,9 +674,23 @@ class CustomModuleGenerator:
             )
 
 
+_GRADLE_METADATA_FILES = {
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "gradle/libs.versions.toml",
+}
+
+
 def _agent_mutable_path(path: str) -> bool:
     normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
-    return any(normalized.startswith(prefix) for prefix in _AGENT_MUTABLE_PREFIXES)
+    return (
+        any(normalized.startswith(prefix) for prefix in _AGENT_MUTABLE_PREFIXES)
+        or normalized.startswith(".minecraft_ai/")
+        or normalized in _GRADLE_METADATA_FILES
+    )
 
 
 def _stage_ignore(_directory: str, names: list[str]) -> set[str]:

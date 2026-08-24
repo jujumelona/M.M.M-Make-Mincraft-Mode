@@ -72,18 +72,22 @@ def _bounded_timeout(timeout: Any, *, read_seconds: float) -> Any:
 
     import httpx
 
-    if isinstance(timeout, httpx.Timeout):
-        caller_read = timeout.read
+    timeout_cls = getattr(httpx, "Timeout", None)
+    if (isinstance(timeout_cls, type) and isinstance(timeout, timeout_cls)) or hasattr(timeout, "read"):
+        caller_read = getattr(timeout, "read", None)
         read = (
             min(float(caller_read), read_seconds)
             if caller_read is not None and float(caller_read) > 0.0
             else read_seconds
         )
+        connect = getattr(timeout, "connect", None)
+        write = getattr(timeout, "write", None)
+        pool = getattr(timeout, "pool", None)
         return httpx.Timeout(
-            connect=timeout.connect if timeout.connect is not None else 30.0,
+            connect=connect if connect is not None else 30.0,
             read=read,
-            write=timeout.write if timeout.write is not None else 30.0,
-            pool=timeout.pool if timeout.pool is not None else 30.0,
+            write=write if write is not None else 30.0,
+            pool=pool if pool is not None else 30.0,
         )
     if isinstance(timeout, (int, float)) and float(timeout) > 0.0:
         read_seconds = min(read_seconds, float(timeout))
@@ -307,9 +311,12 @@ class _StreamingCompletionClient:
                 daemon=True,
             )
             reporter.start()
+            timeout_exc = getattr(httpx, "TimeoutException", None)
+            if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
+                timeout_exc = ()
             try:
                 return self._client.post(url, **native_kwargs)
-            except httpx.TimeoutException as exc:
+            except timeout_exc as exc:
                 raise LlamaToolLivenessTimeout(
                     "native llama-server tool completion produced no readable transport "
                     f"progress for {deadline:.0f}s; request aborted"

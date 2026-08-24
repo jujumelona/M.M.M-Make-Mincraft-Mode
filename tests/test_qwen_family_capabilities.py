@@ -188,7 +188,7 @@ def test_fully_composed_qwen38_tool_payload_never_leaks_reasoning_none() -> None
     assert "reasoning_effort" not in payload
     assert payload["tools"] == list(request.tools)
     assert payload["tool_choice"] == "auto"
-    assert payload["max_tokens"] == -1
+    assert payload["max_tokens"] == 8192
 
 
 @pytest.mark.parametrize(
@@ -196,7 +196,7 @@ def test_fully_composed_qwen38_tool_payload_never_leaks_reasoning_none() -> None
     ("Qwen3.5-9B_6GB", "Qwen3.6-35B_23GB", "Qwen3.8-27B_18GB"),
 )
 @pytest.mark.parametrize("request_kind", ("plain", "json", "tool"))
-def test_all_local_qwen_families_use_native_unlimited_completion(
+def test_all_local_qwen_families_use_finite_bounded_completion(
     monkeypatch, profile: str, request_kind: str
 ) -> None:
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
@@ -223,8 +223,8 @@ def test_all_local_qwen_families_use_native_unlimited_completion(
         SimpleNamespace(config=config), request
     )
 
-    assert config.max_new_tokens == -1
-    assert payload["max_tokens"] == -1
+    assert config.max_new_tokens == 8192
+    assert payload["max_tokens"] == (2048 if request_kind == "json" else 8192)
 
 
 def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> None:

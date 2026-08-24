@@ -55,7 +55,7 @@ def test_persistent_client_has_bounded_idle_read_timeout() -> None:
     timeout = client.timeout
     assert isinstance(timeout, httpx.Timeout)
     assert timeout.connect == 30.0
-    assert timeout.read == 300.0
+    assert timeout.read == 120.0
     assert timeout.write == 30.0
     assert timeout.pool == 30.0
 

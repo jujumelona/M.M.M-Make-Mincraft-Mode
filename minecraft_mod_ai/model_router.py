@@ -358,6 +358,8 @@ class ModelRouter:
             role=role,
         )
 
+    _generate_with_tools._mmm_dynamic_causal_frontier = True
+
     def _tool_runtime(self) -> Any:
         runtime = self._agent_tool_runtime
         if runtime is not None:

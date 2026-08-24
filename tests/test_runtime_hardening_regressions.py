@@ -205,7 +205,7 @@ def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) ->
                 "qwen_assistant_prefill": True,
                 "decode_hotpath": "t4_mtp",
             },
-            max_new_tokens=-1,
+            max_new_tokens=8192,
         )
     )
     section = SimpleNamespace(
@@ -227,5 +227,5 @@ def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) ->
         tools=(),
         tool_choice=None,
     )
-    assert llama_hardware._server_payload(adapter, section)["max_tokens"] == -1
-    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == -1
+    assert llama_hardware._server_payload(adapter, section)["max_tokens"] == 2048
+    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == 8192

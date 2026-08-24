@@ -220,12 +220,18 @@ def _materialize_aliases(
                 raise RuntimeError(
                     f"prebuilt native llama alias mismatch: {relative} -> {current}"
                 )
-            continue
         if alias.exists():
+            if not alias.is_symlink():
+                continue
             raise RuntimeError(
                 f"prebuilt native llama alias path is occupied by a regular file: {relative}"
             )
-        alias.symlink_to(expected_link)
+        try:
+            alias.symlink_to(expected_link)
+        except OSError:
+            import shutil
+
+            shutil.copyfile(target, alias)
 
 
 def _validate_bundle(root: Path, *, cuda_arch: str, source_ref: str) -> Path:

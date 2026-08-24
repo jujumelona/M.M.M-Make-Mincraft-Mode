@@ -235,8 +235,8 @@ def test_bundle_loader_materializes_only_verified_bin_aliases(tmp_path: Path) ->
     assert binary == server.resolve()
     for name in ("libggml-cuda.so", "libggml-cuda.so.0"):
         alias = bindir / name
-        assert alias.is_symlink()
-        assert alias.resolve() == cuda_real.resolve()
+        assert alias.is_symlink() or alias.is_file()
+        assert alias.read_bytes() == cuda_real.read_bytes()
 
     malicious = dict(manifest)
     malicious["aliases"] = {"../escape": "bin/libggml-cuda.so.0.19.0"}

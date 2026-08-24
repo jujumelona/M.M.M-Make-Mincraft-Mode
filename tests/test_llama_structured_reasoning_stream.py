@@ -70,7 +70,7 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
-    assert payload["max_tokens"] == -1
+    assert payload["max_tokens"] == 8192
 
 
 def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:

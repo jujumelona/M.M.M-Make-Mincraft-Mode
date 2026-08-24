@@ -173,7 +173,11 @@ class TransactionalSourcePatcher:
                     after = None
                 else:  # pragma: no cover - normalized above
                     raise SourcePatchError(f"Unsupported operation: {item['operation']}")
-            if before == after:
+            if before == after or (
+                before is not None
+                and after is not None
+                and before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n")
+            ):
                 raise SourcePatchError(f"Patch operation makes no change: {item['path']}")
             staged[path] = after
             receipts.append(

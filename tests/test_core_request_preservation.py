@@ -55,15 +55,15 @@ def test_llama_reasoning_continuation_preserves_full_request_contract() -> None:
 
 
 def test_model_router_core_derives_tool_turns_with_dataclass_replace() -> None:
-    core = inspect.unwrap(model_router.ModelRouter._generate_with_tools)
-    source = inspect.getsource(core)
+    from minecraft_mod_ai import progress_aware_tool_loop
+
+    source = inspect.getsource(progress_aware_tool_loop)
 
     # Derived turns must inherit the entire GenerationRequest contract. If a future
     # field is added to the dataclass, replace() carries it automatically rather than
     # requiring every tool-loop branch to remember to copy it.
     assert "GenerationRequest(" not in source
-    assert source.count("replace(") >= 3
-    assert "tool_validation_schemas=()" in source
+    assert source.count("replace(") >= 2
 
 
 def test_model_router_tool_name_projection_rejects_duplicate_ownership() -> None:

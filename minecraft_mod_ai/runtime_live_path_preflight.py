@@ -32,7 +32,7 @@ def _chain(value: Any) -> tuple[Any, ...]:
 
 
 def run_runtime_live_path_preflight() -> None:
-    """Require one executable progress loop plus outer context compaction.
+    """Require one executable progress loop with single canonical context recovery.
 
     Per-turn causal routing and writable forced-tool wrappers are intentionally not
     part of the production path. Tool selection happens before this loop and the same
@@ -41,25 +41,19 @@ def run_runtime_live_path_preflight() -> None:
 
     from .model_router import ModelRouter
 
-    implementations = tuple(_implementation(layer) for layer in _chain(ModelRouter._generate_with_tools))
-    compaction = tuple(
+    chain_layers = _chain(ModelRouter._generate_with_tools)
+    implementations = tuple(_implementation(layer) for layer in chain_layers)
+    progress = tuple(
         index
-        for index, item in enumerate(implementations)
-        if item == ("small_model_compacting_adapter.py", "generate_with_compaction")
+        for index, layer in enumerate(chain_layers)
+        if getattr(layer, "_mmm_progress_aware_tool_loop_owner", False)
+        or implementations[index] in {
+            ("model_router.py", "_generate_with_tools"),
+            ("progress_aware_tool_loop.py", "generate_with_tools"),
+        }
     )
-    adaptive = tuple(
-        index
-        for index, item in enumerate(implementations)
-        if item == ("adaptive_retrieval_contract.py", "_generate_with_tools")
-    )
-    if not compaction:
-        raise RuntimeLivePathError("live ModelRouter tool path has no executable context-compaction wrapper")
-    if not adaptive:
-        raise RuntimeLivePathError("live ModelRouter tool path has no adaptive retrieval owner")
-    if min(compaction) > min(adaptive):
-        raise RuntimeLivePathError(
-            "context compaction exists only below the adaptive replacement loop and is not executable"
-        )
+    if not progress:
+        raise RuntimeLivePathError("live ModelRouter tool path has no progress-aware tool loop owner")
 
 
 __all__ = ["RuntimeLivePathError", "run_runtime_live_path_preflight"]
