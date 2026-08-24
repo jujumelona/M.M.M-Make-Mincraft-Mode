@@ -11,10 +11,7 @@ def _acquire(fd: int) -> None:
     if os.name == "nt":
         import msvcrt
 
-        if os.fstat(fd).st_size < 1:
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, b"\0")
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, 0x7FFFFFFF, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         return
 
@@ -27,7 +24,7 @@ def _release(fd: int) -> None:
     if os.name == "nt":
         import msvcrt
 
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, 0x7FFFFFFF, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         return
 

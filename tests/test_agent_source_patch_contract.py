@@ -143,7 +143,7 @@ def test_host_materializes_unique_span_with_exact_sha(tmp_path) -> None:
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
     old = "package example;\nfinal class Example {}\n"
-    source.write_text(old, encoding="utf-8")
+    source.write_bytes(old.encode("utf-8"))
 
     payload = materialize_model_source_edit(
         agent_tool_runtime,

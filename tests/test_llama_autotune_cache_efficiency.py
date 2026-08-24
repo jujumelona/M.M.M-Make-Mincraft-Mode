@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_autotune as autotune
@@ -56,7 +57,7 @@ def test_autotune_model_resolution_delegates_to_process_prefetch(monkeypatch) ->
     monkeypatch.setattr(parallel_runtime, "resolve_model_path", resolve_model_path)
     config = SimpleNamespace(model_id="repo/model", extra={})
 
-    assert autotune._resolve_model_path(config) == "/tmp/model.gguf"
+    assert Path(autotune._resolve_model_path(config)) == Path("/tmp/model.gguf").resolve()
     assert captured["config"] is config
     assert captured["resolver"] is autotune._resolve_model_path_direct
     assert isinstance(parallel_runtime._PREFETCH_FUTURES, dict)

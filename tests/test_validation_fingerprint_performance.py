@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 from minecraft_mod_ai import validation_execution_contract as validation
 from minecraft_mod_ai import research_validation_fingerprint_performance as perf
 
@@ -57,6 +58,7 @@ def test_build_fingerprint_reuses_unchanged_file_digests(
     assert java not in calls[first_count:]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows NTFS ctime is creation time, not metadata change time")
 def test_same_size_content_change_with_restored_mtime_is_not_stale(
     tmp_path: Path,
     monkeypatch,
