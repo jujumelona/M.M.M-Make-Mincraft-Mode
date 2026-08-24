@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from typing import Any, Mapping
 
+from .agent_intent import implementation_requested
 from .llama_finish_reason_contract import CONTEXT_PRESSURE, completion_boundary_kind
 from .model_adapters import GenerationRequest, ModelConfigurationError
 from .model_context_budget import (
@@ -13,6 +14,7 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .retrieval_progress import RetrievalDecision, RetrievalObservation, RetrievalProgress
+from .source_mutation_contract import mutation_history_applied
 
 
 def _replace_live_messages(
@@ -87,8 +89,6 @@ def _generate_turn_with_context_recovery(
                 return adapter.generate_turn(retry_request)
         except BaseException as retry_exc:
             if completion_boundary_kind(retry_exc) == CONTEXT_PRESSURE:
-                # Preserve the first typed boundary as the public/root failure. The
-                # retry remains available through its cause chain for diagnostics.
                 raise exc from retry_exc
             raise
 
@@ -112,10 +112,6 @@ def generate_with_tools(
     actually serve it, while exact oversized tool observations remain host-archived.
     """
     from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
-    from .coder_tool_route_integrity_contract import (
-        _is_implementation_request,
-        _source_mutation_applied,
-    )
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
@@ -144,7 +140,7 @@ def generate_with_tools(
     implementation_requires_mutation = bool(
         role in {"coder", "coder_safe"}
         and stage == "generation"
-        and _is_implementation_request(request.messages)
+        and implementation_requested(request.messages)
     )
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
@@ -155,7 +151,7 @@ def generate_with_tools(
                     "Agent reached the explicit tool-round limit before required "
                     "evidence became available."
                 )
-            if implementation_requires_mutation and not _source_mutation_applied(messages):
+            if implementation_requires_mutation and not mutation_history_applied(messages):
                 raise ModelConfigurationError(
                     "Writable coder reached the explicit tool-round limit before a "
                     "reviewed source mutation was applied; refusing a prose-only implementation."
@@ -236,7 +232,7 @@ def generate_with_tools(
                 ])
                 round_index += 1
                 continue
-            if implementation_requires_mutation and not _source_mutation_applied(messages):
+            if implementation_requires_mutation and not mutation_history_applied(messages):
                 raise ModelConfigurationError(
                     "Writable coder returned a final prose answer before a reviewed source mutation "
                     "was applied; implementation completion requires a real source diff."
@@ -379,7 +375,7 @@ def generate_with_tools(
                 weak_retrieval = True
 
         if retrieval_no_progress and progress.has_fresh_evidence:
-            if implementation_requires_mutation and not _source_mutation_applied(messages):
+            if implementation_requires_mutation and not mutation_history_applied(messages):
                 messages.append(
                     {
                         "role": "system",
