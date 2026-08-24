@@ -27,7 +27,7 @@ from .qwen_tool_parser import parse_qwen_tool_markup as _parse_qwen_tool_markup
 
 
 _DEFAULT_HTTPX_POST = httpx.post
-_DEFAULT_COMPLETION_TIMEOUT_SECONDS = 600.0
+_DEFAULT_COMPLETION_TIMEOUT_SECONDS = 120.0
 _DEFAULT_COMPLETION_HEARTBEAT_SECONDS = 15.0
 _REASONING_CONTINUATION = (
     "Continue from the reasoning above and complete this same assistant turn now. "
