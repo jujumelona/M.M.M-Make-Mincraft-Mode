@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -13,6 +14,10 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     completion_boundary_kind,
     context_recovery_exhausted,
     mark_context_recovery_exhausted,
+)
+from minecraft_mod_ai.llama_generation_budget import (
+    apply_generation_budget,
+    apply_structured_output_constraint,
 )
 from minecraft_mod_ai.llama_stream_efficiency_contract import (
     _bounded_timeout,
@@ -95,6 +100,26 @@ def test_default_transport_liveness_is_finite_and_below_legacy_stall(monkeypatch
 
     stricter = httpx.Timeout(connect=30.0, read=17.0, write=30.0, pool=30.0)
     assert _bounded_timeout(stricter, read_seconds=120.0).read == 17.0
+
+
+def test_structured_action_page_uses_json_schema_and_finite_budget() -> None:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    request = SimpleNamespace(response_format="json", response_schema=schema)
+    constrained = apply_structured_output_constraint(
+        {"model": "local", "max_tokens": -1},
+        request=request,
+    )
+    response_format = constrained["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["schema"] == schema
+
+    bounded = apply_generation_budget(constrained, config=_config())
+    assert 0 < bounded["max_tokens"] <= 8_192
 
 
 def test_exhausted_context_recovery_preserves_original_boundary_identity() -> None:
@@ -203,7 +228,19 @@ def test_model_router_has_one_direct_tool_loop_owner() -> None:
     assert "while True" not in source
 
 
+def test_runtime_sources_have_no_legacy_unbounded_llama_transport() -> None:
+    root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    adapter = (root / "model_adapters" / "llama_cpp_adapter.py").read_text()
+    hardware = (root / "llama_server_hardware_policy.py").read_text()
+    bootstrap = (root / "runtime_bootstrap.py").read_text()
+
+    assert "_DEFAULT_COMPLETION_TIMEOUT_SECONDS = 600.0" not in adapter
+    assert "read=None" not in hardware
+    assert "install_forced_tool_execution" in bootstrap
+
+
 def test_superseded_context_and_coder_route_modules_are_deleted() -> None:
     root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     assert not (root / "small_model_context_compaction.py").exists()
     assert not (root / "coder_tool_route_integrity_contract.py").exists()
+    assert not (root / "causal_stale_tool_recovery_contract.py").exists()
