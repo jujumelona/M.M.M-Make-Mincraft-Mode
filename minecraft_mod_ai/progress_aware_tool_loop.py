@@ -5,7 +5,11 @@ from dataclasses import replace
 from typing import Any, Mapping
 
 from .agent_intent import implementation_requested
-from .llama_finish_reason_contract import CONTEXT_PRESSURE, completion_boundary_kind
+from .llama_finish_reason_contract import (
+    CONTEXT_PRESSURE,
+    completion_boundary_kind,
+    mark_context_recovery_exhausted,
+)
 from .model_adapters import GenerationRequest, ModelConfigurationError
 from .model_context_budget import (
     bounded_tool_message,
@@ -71,6 +75,7 @@ def _generate_turn_with_context_recovery(
             budget_bytes=emergency_budget,
         )
         if not _replace_live_messages(messages, emergency):
+            mark_context_recovery_exhausted(exc)
             raise
 
         retry_request = replace(
@@ -89,6 +94,11 @@ def _generate_turn_with_context_recovery(
                 return adapter.generate_turn(retry_request)
         except BaseException as retry_exc:
             if completion_boundary_kind(retry_exc) == CONTEXT_PRESSURE:
+                # Preserve the first provider boundary as the public/root failure.
+                # The retry remains chained for diagnosis, but outer generators must
+                # not start a second recovery protocol after canonical compaction has
+                # already been exhausted.
+                mark_context_recovery_exhausted(exc)
                 raise exc from retry_exc
             raise
 
