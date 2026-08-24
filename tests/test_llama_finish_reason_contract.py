@@ -90,7 +90,7 @@ def test_successful_completion_is_returned_unchanged() -> None:
     assert module._completion_message("http://localhost", {"max_tokens": 8192}) == message
 
 
-def test_v3_installer_does_not_accept_a_stale_v2_hot_reload_marker() -> None:
+def test_unversioned_installer_does_not_accept_a_stale_versioned_hot_reload_marker() -> None:
     module = _module(
         {
             "choices": [{"finish_reason": "stop", "message": {"content": "new"}}],
@@ -101,7 +101,7 @@ def test_v3_installer_does_not_accept_a_stale_v2_hot_reload_marker() -> None:
     install(module)
 
     assert module._completion_message("http://localhost", {}) == {"content": "new"}
-    assert module._mmm_llama_finish_reason_classifier_v3 is True
+    assert module._mmm_llama_finish_reason_classifier is True
 
 
 def test_pinned_llama_http_context_error_is_typed_without_echoing_body() -> None:
