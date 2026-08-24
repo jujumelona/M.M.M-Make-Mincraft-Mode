@@ -2,12 +2,9 @@ from __future__ import annotations
 
 """Context-budget fitting for tool-capable small/local model turns.
 
-The ordinary history compactor is exchange-oriented: it can replace older assistant
-rounds with a recoverable ledger. The first tool round is different because there is
-no *older* assistant exchange to drop yet. Large RAG/LSP observations can therefore
-fill the server context before the second assistant turn. This module handles that
-first-round boundary by archiving exact tool observations and keeping a bounded,
-recoverable evidence preview in the protocol-preserving tool message.
+Large projects remain host-indexed and retrieval-driven; the model only sees the
+bounded source/evidence needed for the current action. This module is the shared
+request-budget owner for both live history fitting and native tool action decode.
 """
 
 import hashlib
@@ -50,7 +47,7 @@ def _default_context_bytes() -> int:
     return max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, value))
 
 
-def _effective_context_tokens(config: Any) -> int:
+def effective_context_tokens(config: Any) -> int:
     """Return the context of the runtime slot that will actually serve the request."""
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
@@ -64,18 +61,35 @@ def _effective_context_tokens(config: Any) -> int:
         return 0
 
 
+def tool_action_token_budget(config: Any) -> int:
+    """Return one bounded function-call page budget, not a whole-job limit."""
+
+    raw = os.environ.get("MMM_LLAMA_TOOL_MAX_TOKENS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError("MMM_LLAMA_TOOL_MAX_TOKENS must be a positive integer") from exc
+        if value <= 0:
+            raise ValueError("MMM_LLAMA_TOOL_MAX_TOKENS must be a positive integer")
+        return value
+    context = effective_context_tokens(config)
+    if context <= 0:
+        return 4096
+    return max(2048, min(8192, context // 4))
+
+
 def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
     """Return a conservative input budget from the slot that actually serves the turn.
 
-    Local llama action pages are bounded separately by the transport. Prompt fitting
-    therefore reserves the shared context guard plus the serialized tool schemas, not
-    the registry's theoretical model context. This is what makes a T4 32K slot remain
-    authoritative even when the GGUF advertises a 262K model maximum.
+    A tool page reserves the same finite action allowance used by the transport, so
+    prompt fitting and decode can never independently spend the same context window.
+    Non-tool llama pages keep their existing semantic/unlimited output policy.
     """
 
     default = _default_context_bytes()
     try:
-        max_context = _effective_context_tokens(config)
+        max_context = effective_context_tokens(config)
         max_new_tokens = max(0, int(getattr(config, "max_new_tokens", 0) or 0))
     except (TypeError, ValueError):
         return default
@@ -83,7 +97,10 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
         return default
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
-    reserved_output_tokens = 0 if adapter == "llama_cpp" else max_new_tokens
+    if adapter == "llama_cpp":
+        reserved_output_tokens = tool_action_token_budget(config) if tools else 0
+    else:
+        reserved_output_tokens = max_new_tokens
     available_input_tokens = max(
         2048,
         max_context - reserved_output_tokens - _CONTEXT_TOKEN_GUARD,
@@ -172,12 +189,7 @@ def bounded_tool_message(
     config: Any,
     tools: Sequence[Any] = (),
 ) -> Mapping[str, Any]:
-    """Archive one oversized tool observation before it enters live history.
-
-    The full result remains content-addressable on the host; the model receives a
-    protocol-valid tool message containing the observation receipt and a bounded
-    head/tail preview. Recent small results are untouched.
-    """
+    """Archive one oversized tool observation before it enters live history."""
 
     original = dict(message)
     if str(original.get("role", "")) != "tool" or not isinstance(
@@ -391,7 +403,9 @@ def emergency_fit_messages(
 
 __all__ = [
     "bounded_tool_message",
+    "effective_context_tokens",
     "emergency_fit_messages",
     "fit_messages_to_context",
     "request_message_budget",
+    "tool_action_token_budget",
 ]
