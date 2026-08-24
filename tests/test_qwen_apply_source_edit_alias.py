@@ -117,3 +117,36 @@ def test_recovered_operation_still_obeys_schema_enum() -> None:
             "<parameter=path>src/A.java</parameter>"
             "<parameter=apply>not-an-operation</parameter>"
         )
+
+
+def test_patch_file_alias_resolves_only_to_exposed_source_edit() -> None:
+    text = (
+        "<tool_call><function=patch_file>"
+        "<parameter=file>src/A.java</parameter>"
+        "<parameter=action>replace</parameter>"
+        "<parameter=content>x</parameter>"
+        "</function></tool_call>"
+    )
+
+    visible, calls = _parse_qwen_tool_markup(text, _schemas())
+
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0].name == "apply_source_edit"
+    assert calls[0].arguments == {
+        "path": "src/A.java",
+        "operation": "replace",
+        "content": "x",
+    }
+
+
+def test_patch_file_alias_remains_unauthorized_when_source_edit_is_not_exposed() -> None:
+    text = (
+        "<tool_call><function=patch_file>"
+        "<parameter=file>src/A.java</parameter>"
+        "<parameter=action>replace</parameter>"
+        "</function></tool_call>"
+    )
+
+    with pytest.raises(RuntimeError, match="unexposed tool 'patch_file'"):
+        _parse_qwen_tool_markup(text, {})
