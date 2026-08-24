@@ -1,8 +1,32 @@
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
+from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+
+def _source_edit_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "Apply one narrow semantic source edit.",
+            "parameters": SOURCE_EDIT_SCHEMA,
+        },
+    }
+
+
+def _tool_request(tool: dict) -> GenerationRequest:
+    return GenerationRequest(
+        messages=({"role": "user", "content": "use the tool"},),
+        tools=(tool,),
+        tool_choice="auto",
+        parallel_tool_calls=False,
+        response_format="json",
+    )
 
 
 def test_json_requests_never_enable_native_llama_grammar():
@@ -100,6 +124,105 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     rendered = "\n".join(str(message.get("content", "")) for message in payload["messages"])
     assert "mmm/host-tool-envelope" not in rendered
+
+
+def test_qwen_canonical_permission_name_maps_back_to_exposed_source_edit():
+    from minecraft_mod_ai import qwen_enum_recovery_contract
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
+
+    qwen_enum_recovery_contract.install(llama_adapter_module)
+    request = _tool_request(_source_edit_tool())
+    turn = llama_adapter_module._qwen_tool_generation_response(
+        {
+            "content": (
+                "<tool_call><function=apply_source_patch>"
+                "<parameter=action>delete_file</parameter>"
+                "<parameter=file>src/main/java/example/Old.java</parameter>"
+                "</function></tool_call>"
+            )
+        },
+        request,
+    )
+
+    assert [call.name for call in turn.tool_calls] == ["apply_source_edit"]
+    assert turn.tool_calls[0].arguments == {
+        "operation": "delete_file",
+        "path": "src/main/java/example/Old.java",
+    }
+
+
+def test_qwen_canonical_tool_name_does_not_revive_removed_whole_file_operation():
+    from minecraft_mod_ai import qwen_enum_recovery_contract
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
+
+    qwen_enum_recovery_contract.install(llama_adapter_module)
+    request = _tool_request(_source_edit_tool())
+    with pytest.raises(qwen_enum_recovery_contract.QwenEnumValueError):
+        llama_adapter_module._qwen_tool_generation_response(
+            {
+                "content": (
+                    "<tool_call><function=apply_source_patch>"
+                    "<parameter=operation>update_file</parameter>"
+                    "<parameter=path>src/main/java/example/Old.java</parameter>"
+                    "</function></tool_call>"
+                )
+            },
+            request,
+        )
+
+
+def test_qwen_canonical_tool_name_still_rejects_broad_patch_payload():
+    from minecraft_mod_ai import qwen_enum_recovery_contract
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
+
+    qwen_enum_recovery_contract.install(llama_adapter_module)
+    request = _tool_request(_source_edit_tool())
+    with pytest.raises(RuntimeError, match="unknown parameter 'patch'"):
+        llama_adapter_module._qwen_tool_generation_response(
+            {
+                "content": (
+                    "<tool_call><function=apply_source_patch>"
+                    "<parameter=operation>replace_exact</parameter>"
+                    "<parameter=path>src/main/java/example/Old.java</parameter>"
+                    "<parameter=patch>whole file</parameter>"
+                    "</function></tool_call>"
+                )
+            },
+            request,
+        )
+
+
+def test_qwen_canonical_tool_name_is_rejected_when_alias_is_not_exposed():
+    from minecraft_mod_ai import qwen_enum_recovery_contract
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama_adapter_module
+
+    qwen_enum_recovery_contract.install(llama_adapter_module)
+    search_tool = {
+        "type": "function",
+        "function": {
+            "name": "search_code_rag",
+            "description": "search",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    request = _tool_request(search_tool)
+    with pytest.raises(RuntimeError, match="unexposed tool 'apply_source_patch'"):
+        llama_adapter_module._qwen_tool_generation_response(
+            {
+                "content": (
+                    "<tool_call><function=apply_source_patch>"
+                    "<parameter=operation>delete_file</parameter>"
+                    "<parameter=path>src/main/java/example/Old.java</parameter>"
+                    "</function></tool_call>"
+                )
+            },
+            request,
+        )
 
 
 def test_runtime_trajectory_retrieval_keeps_execution_context_contract():
