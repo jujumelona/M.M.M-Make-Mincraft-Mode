@@ -101,21 +101,25 @@ def _patch_observation(*, applied: bool, call_id: str) -> dict[str, object]:
     }
 
 
+def _selected_tool_name(request: GenerationRequest) -> str:
+    if request.tool_choice in {"auto", "required"}:
+        assert len(request.tools) == 1
+        function = request.tools[0]["function"]
+        assert isinstance(function, dict)
+        return str(function["name"])
+    assert isinstance(request.tool_choice, dict)
+    function = request.tool_choice["function"]
+    assert isinstance(function, dict)
+    return str(function["name"])
+
+
 class _RecordingAdapter:
     def __init__(self) -> None:
         self.requests: list[GenerationRequest] = []
 
     def generate_turn(self, request: GenerationRequest):
         self.requests.append(request)
-        if request.tool_choice == "auto":
-            function = request.tools[0]["function"]
-            assert isinstance(function, dict)
-            name = str(function["name"])
-        else:
-            assert isinstance(request.tool_choice, dict)
-            function = request.tool_choice["function"]
-            assert isinstance(function, dict)
-            name = str(function["name"])
+        name = _selected_tool_name(request)
         return SimpleNamespace(
             tool_calls=(SimpleNamespace(name=name),),
             content="",
@@ -171,10 +175,8 @@ def test_repeated_safe_edit_failures_open_corrective_evidence_epoch() -> None:
 
     assert edit_turn.tool_calls[0].name == "apply_source_edit"
     assert len(inner.requests) == 2
-    assert inner.requests[1].tool_choice == {
-        "type": "function",
-        "function": {"name": "apply_source_edit"},
-    }
+    assert inner.requests[1].tool_choice == "required"
+    assert _selected_tool_name(inner.requests[1]) == "apply_source_edit"
 
 
 def test_patch_transport_failures_do_not_create_adapter_local_retry_budget() -> None:
@@ -202,7 +204,8 @@ def test_patch_transport_failures_do_not_create_adapter_local_retry_budget() -> 
 
     assert turn.tool_calls[0].name == "apply_source_patch"
     assert len(inner.requests) == 1
-    assert inner.requests[0].tool_choice == request.tool_choice
+    assert inner.requests[0].tool_choice == "required"
+    assert _selected_tool_name(inner.requests[0]) == "apply_source_patch"
 
 
 def test_causal_state_requires_the_same_applied_mutation_proof() -> None:
