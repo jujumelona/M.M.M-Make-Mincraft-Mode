@@ -19,7 +19,7 @@ from typing import Any, Mapping, Sequence
 from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_TOOLS
 from .structured_output import StructuredOutputValidationError, validate_structured_output
 
-_MARKER = "_mmm_forced_tool_execution_v4"
+_MARKER = "_mmm_forced_tool_execution"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
