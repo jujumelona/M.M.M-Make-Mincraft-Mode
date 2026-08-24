@@ -250,6 +250,29 @@ def _compact_tool_messages(
     return tuple(values)
 
 
+def _last_mutation_exchange_start(
+    messages: Sequence[Mapping[str, Any]],
+) -> int | None:
+    """Return the assistant boundary that owns the latest proven source mutation."""
+
+    from .source_mutation_contract import mutation_observation_applied
+
+    latest_tool_index: int | None = None
+    for index, message in enumerate(messages):
+        if mutation_observation_applied(message):
+            latest_tool_index = index
+    if latest_tool_index is None:
+        return None
+    for index in range(latest_tool_index - 1, -1, -1):
+        message = messages[index]
+        if str(message.get("role", "")) != "assistant":
+            continue
+        calls = message.get("tool_calls")
+        if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes, bytearray)):
+            return index
+    return None
+
+
 def _compact_old_exchanges(
     messages: Sequence[Mapping[str, Any]],
     *,
@@ -273,10 +296,13 @@ def _compact_old_exchanges(
     )
 
     first = assistants[0]
+    mutation_start = _last_mutation_exchange_start(original)
     for keep in (2, 1):
         if len(assistants) <= keep:
             continue
         start = assistants[-keep]
+        if mutation_start is not None and first <= mutation_start < start:
+            start = mutation_start
         dropped = original[first:start]
         if not dropped:
             continue
