@@ -7,7 +7,7 @@ from typing import Any
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
 _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
-_PAYLOAD_MARKER = "_mmm_qwen_native_unlimited_output_v6"
+_PAYLOAD_MARKER = "_mmm_qwen_native_output_policy_v7"
 _CACHE_MARKER = "_mmm_qwen35_skip_cold_cache_reuse_probe_v1"
 _KV_MARKER = "_mmm_qwen35_skip_main_kv_probe_v1"
 _PROBE_MARKER = "_mmm_qwen35_fast_primary_probe_v1"
@@ -69,13 +69,15 @@ def _install_output_policy(hardware_policy: Any) -> None:
 
     @wraps(current)
     def payload(adapter: Any, request: Any) -> dict[str, Any]:
-        result = current(adapter, request)
+        result = dict(current(adapter, request))
         if _is_qwen35_mtp(getattr(adapter, "config", None)):
-            # Qwen production turns use llama.cpp's native unlimited prediction.
-            # Semantic task/page owners decide what work belongs in a turn; the
-            # transport must not truncate a valid response at an arbitrary host cap.
+            # Keep the base transport/request budget by default. In particular, tool
+            # turns must not be silently changed to unlimited prediction; they are
+            # short control responses and unbounded decode can dominate agent latency.
+            # An explicit operator override remains available for deliberate runs.
             operator_limit = _output_token_limit()
-            result["max_tokens"] = -1 if operator_limit is None else operator_limit
+            if operator_limit is not None:
+                result["max_tokens"] = operator_limit
         return result
 
     setattr(payload, _PAYLOAD_MARKER, True)
