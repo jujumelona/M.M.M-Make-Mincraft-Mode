@@ -3,14 +3,17 @@ from __future__ import annotations
 """Context-budget fitting for tool-capable small/local model turns.
 
 Large projects remain host-indexed and retrieval-driven; the model only sees the
-bounded source/evidence needed for the current action. This module is the shared
-request-budget owner for both live history fitting and native tool action decode.
+bounded source/evidence needed for the current action. This module is the single
+request-budget and live-history fitting owner. Durable transcript persistence lives in
+``agent_context_archive`` and never competes with fitting policy.
 """
 
 import hashlib
 import json
 import os
 from typing import Any, Mapping, Sequence
+
+from .agent_context_archive import archive_preview, archive_transcript, context_ledger
 
 _DEFAULT_CONTEXT_BYTES = 96 * 1024
 _MIN_CONTEXT_BYTES = 12 * 1024
@@ -84,7 +87,6 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
 
     A tool page reserves the same finite action allowance used by the transport, so
     prompt fitting and decode can never independently spend the same context window.
-    Non-tool llama pages keep their existing semantic/unlimited output policy.
     """
 
     default = _default_context_bytes()
@@ -98,7 +100,7 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
     if adapter == "llama_cpp":
-        reserved_output_tokens = tool_action_token_budget(config) if tools else 0
+        reserved_output_tokens = tool_action_token_budget(config) if tools else max_new_tokens
     else:
         reserved_output_tokens = max_new_tokens
     available_input_tokens = max(
@@ -143,7 +145,7 @@ def _summary_payload(
 
     summary: dict[str, Any] = {
         "_mmm_context_compaction": {
-            "schema_version": "mmm/tool-observation-context-v1",
+            "schema_version": "mmm/tool-observation-context-v2",
             "raw_observation": dict(archive),
             "original_bytes": len(raw_bytes),
             "sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
@@ -206,9 +208,7 @@ def bounded_tool_message(
     if len(raw_bytes) <= allowance:
         return original
 
-    from .small_model_context_compaction import _archive_transcript
-
-    archive = _archive_transcript((original,))
+    archive = archive_transcript((original,))
     if not bool(archive.get("available")):
         return original
     replacement = dict(original)
@@ -231,8 +231,6 @@ def _compact_tool_messages(
     if current_size <= budget:
         return tuple(values)
 
-    from .small_model_context_compaction import _archive_transcript
-
     candidates = sorted(
         (
             (len(str(message.get("content", "")).encode("utf-8")), index)
@@ -246,7 +244,7 @@ def _compact_tool_messages(
         if raw_size <= preview_bytes:
             continue
         original = dict(values[index])
-        archive = _archive_transcript((original,))
+        archive = archive_transcript((original,))
         if not bool(archive.get("available")):
             continue
         replacement = dict(original)
@@ -285,6 +283,33 @@ def _last_mutation_exchange_start(
     return None
 
 
+def _compacted_context_message(
+    dropped: Sequence[Mapping[str, Any]],
+    *,
+    archive: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    ledger = context_ledger(dropped, archive=archive)
+    ledger["context_window"] = {
+        "window_id": str(archive.get("sha256", "")),
+        "archived_bytes": int(archive.get("bytes", 0) or 0),
+        "continuation": True,
+    }
+    return {
+        "role": "system",
+        "content": (
+            "HOST COMPACTED VERIFIED CONTEXT. Exact prior tool observations are "
+            "recoverable from raw_history. Preserve the current task, latest proven "
+            "source mutation, and recent tool protocol; do not replay archived work.\n"
+            + json.dumps(
+                ledger,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        ),
+    }
+
+
 def _compact_old_exchanges(
     messages: Sequence[Mapping[str, Any]],
     *,
@@ -301,12 +326,6 @@ def _compact_old_exchanges(
     if len(assistants) < 2:
         return original
 
-    from .small_model_context_compaction import (
-        _archive_preview,
-        _archive_transcript,
-        _ledger,
-    )
-
     first = assistants[0]
     mutation_start = _last_mutation_exchange_start(original)
     for keep in (2, 1):
@@ -318,21 +337,8 @@ def _compact_old_exchanges(
         dropped = original[first:start]
         if not dropped:
             continue
-        archive = _archive_preview(dropped)
-        context = {
-            "role": "system",
-            "content": (
-                "HOST COMPACTED VERIFIED CONTEXT. Exact prior tool observations are "
-                "recoverable from raw_history; retain the current task and recent "
-                "tool protocol exactly.\n"
-                + json.dumps(
-                    _ledger(dropped, archive=archive),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-            ),
-        }
+        archive = archive_preview(dropped)
+        context = _compacted_context_message(dropped, archive=archive)
         compacted: tuple[Mapping[str, Any], ...] = (
             *original[:first],
             context,
@@ -340,25 +346,14 @@ def _compact_old_exchanges(
         )
         if _canonical_size(compacted) > budget:
             continue
-        persisted = _archive_transcript(dropped)
+        persisted = archive_transcript(dropped)
         if not bool(persisted.get("available")):
             return original
         if persisted != archive:
-            context = {
-                "role": "system",
-                "content": (
-                    "HOST COMPACTED VERIFIED CONTEXT. Exact prior tool observations "
-                    "are recoverable from raw_history; retain the current task and "
-                    "recent tool protocol exactly.\n"
-                    + json.dumps(
-                        _ledger(dropped, archive=persisted),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                ),
-            }
+            context = _compacted_context_message(dropped, archive=persisted)
             compacted = (*original[:first], context, *original[start:])
+            if _canonical_size(compacted) > budget:
+                return original
         return compacted
     return original
 
