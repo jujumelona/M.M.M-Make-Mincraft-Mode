@@ -130,11 +130,6 @@ def _candidate_surfaces(
         self.authorized_surface or tuple(request.tools)
     )
     by_name = {_name(schema): schema for schema in candidates if _name(schema)}
-    # The execution gate is loop-owner state shared with worker threads. A nested
-    # model/retrieval call can overwrite the compatibility ContextVar between the
-    # causal adapter publishing its frontier and this post-generation validation.
-    # Prefer the owner-local gate; retain the ContextVar only for legacy/fake adapters
-    # that do not carry one.
     frontier = None
     execution_gate = getattr(self, "execution_gate", None)
     visible_names = getattr(execution_gate, "visible_names", None)
@@ -203,21 +198,16 @@ def _resync_once(
     protocol_detail: str = "",
 ) -> Any:
     from .model_adapters import ModelConfigurationError
-    from .forced_tool_execution_contract import deterministic_forced_read_turn
+    from .forced_tool_execution_contract import (
+        deterministic_forced_read_turn,
+        mark_causal_resync_request,
+    )
 
-    # A stale model action can occur immediately after a source-edit precondition
-    # failure changes the live frontier back to repository evidence.  Do not spend a
-    # second full-context decode asking the same model to spell a read-only call that
-    # the host can derive exactly from the request and its reviewed schema. Prefer the
-    # code RAG route when project RAG cannot prove an exact Minecraft target.
     deterministic_turn = None
     rejected_names = frozenset(
         name.strip() for name in rejected.split(",") if name.strip()
     )
     if rejected_names.intersection(_SOURCE_MUTATION_TOOLS):
-        # A failed edit needs current local anchors, even when exact target metadata
-        # would also make project/API RAG constructible. Keep the originally forced
-        # action next as a fallback for surfaces without code RAG.
         read_order = ("search_code_rag", forced_name, "search_project_rag")
     else:
         read_order = (forced_name, *_DETERMINISTIC_READ_PRIORITY)
@@ -271,16 +261,18 @@ def _resync_once(
         role=self.role,
         tools=forced_tools,
     )
-    retry_request = replace(
-        request,
-        messages=retry_messages,
-        tools=forced_tools,
-        tool_validation_schemas=tuple(candidates),
-        tool_choice={
-            "type": "function",
-            "function": {"name": forced_name},
-        },
-        parallel_tool_calls=False,
+    retry_request = mark_causal_resync_request(
+        replace(
+            request,
+            messages=retry_messages,
+            tools=forced_tools,
+            tool_validation_schemas=tuple(candidates),
+            tool_choice={
+                "type": "function",
+                "function": {"name": forced_name},
+            },
+            parallel_tool_calls=False,
+        )
     )
     self._publish_frontier((forced_name,))
     print(
@@ -358,8 +350,6 @@ def _install_generate_turn(base: type[Any]) -> None:
                 protocol_detail=message,
             )
 
-        # The causal adapter publishes the exact frontier while executing ``current``.
-        # Read it afterwards, never before, so a nested/prior turn cannot steer recovery.
         visible, candidates, by_name = _candidate_surfaces(self, request)
         authorized = frozenset(by_name)
         visible_set = frozenset(visible)
@@ -399,13 +389,6 @@ def _install_generate_turn(base: type[Any]) -> None:
 
 
 def is_installed() -> bool:
-    """Return whether this owner is bound to the canonical live adapter.
-
-    Callers must use this semantic predicate instead of copying the private versioned
-    marker name into tests or preflights. That keeps marker versioning local to the
-    contract owner while still checking both the class alias and executable method.
-    """
-
     canonical = causal_frontier_adapter_module.CausalFrontierAdapter
     return bool(
         getattr(canonical, _MARKER, False)
