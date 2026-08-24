@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-"""Execute host-selected tool actions without re-asking the model for the tool name.
+"""Execute host-selected actions without re-asking the model for an action name.
 
-The causal frontier owns action selection.  When that frontier has selected a source
-mutation, the model is used only to materialize schema-valid arguments on a tool-free
-JSON page.  The host then synthesizes the ToolCall.  This avoids relying on backend
-named-tool enforcement for writable actions and prevents stale tool-name retries from
-becoming a second routing owner.
+The causal frontier owns action selection. Source mutations always use an argument-only
+JSON-schema page and are synthesized into ToolCall objects by the host. Local llama.cpp
+may use native ``required`` tool decoding for other exact actions only after a live
+behavioral probe succeeds for the active server/model. A failed probe falls back to the
+same schema-constrained argument-page protocol rather than repeating tool-name choice.
 """
 
 import hashlib
 import json
+import threading
 from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
@@ -18,12 +19,14 @@ from typing import Any, Mapping, Sequence
 from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_TOOLS
 from .structured_output import StructuredOutputValidationError, validate_structured_output
 
-_MARKER = "_mmm_forced_tool_execution_v3"
-_CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
+_MARKER = "_mmm_forced_tool_execution_v4"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
 _MAX_ARGUMENT_ERROR_CHARS = 1600
+_NATIVE_PROBE_TOOL = "mmm_required_tool_probe"
+_NATIVE_PROBE_LOCK = threading.RLock()
+_NATIVE_PROBE_CACHE: dict[tuple[str, str], bool] = {}
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -280,8 +283,7 @@ def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, A
 def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | None:
     if name not in _DETERMINISTIC_READ_TOOLS:
         return None
-    schema = _selected_schema(request, name)
-    raw_parameters = _parameters(schema)
+    raw_parameters = _parameters(_selected_schema(request, name))
     raw_properties = raw_parameters.get("properties", {})
     properties = raw_properties if isinstance(raw_properties, Mapping) else {}
     raw_required = raw_parameters.get("required", ())
@@ -350,21 +352,17 @@ def deterministic_forced_read_turn(request: Any, name: str) -> Any | None:
     return _response_for_call(name, arguments, prefix="host_read")
 
 
-def _focused_argument_messages(request: Any, name: str, *, repair_error: str = "") -> tuple[dict[str, Any], ...]:
-    messages: list[dict[str, Any]] = []
-    for raw in tuple(getattr(request, "messages", ()) or ()):
-        if not isinstance(raw, Mapping):
-            continue
-        copied = dict(raw)
-        content = copied.get("content")
-        if (
-            str(copied.get("role", "")).strip().casefold() == "system"
-            and isinstance(content, str)
-            and content.startswith(_CAPABILITY_PREFIX)
-        ):
-            continue
-        messages.append(copied)
-
+def _focused_argument_messages(
+    request: Any,
+    name: str,
+    *,
+    repair_error: str = "",
+) -> tuple[dict[str, Any], ...]:
+    messages = [
+        dict(raw)
+        for raw in tuple(getattr(request, "messages", ()) or ())
+        if isinstance(raw, Mapping)
+    ]
     instruction = (
         f"HOST ACTION IS FIXED: {name}. Do not choose or emit a tool/function name. "
         "Return exactly one JSON object containing only the arguments for that host action. "
@@ -379,7 +377,13 @@ def _focused_argument_messages(request: Any, name: str, *, repair_error: str = "
     return tuple(messages)
 
 
-def _argument_page_request(request: Any, name: str, parameters: Mapping[str, Any], *, repair_error: str = "") -> Any:
+def _argument_page_request(
+    request: Any,
+    name: str,
+    parameters: Mapping[str, Any],
+    *,
+    repair_error: str = "",
+) -> Any:
     return replace(
         request,
         messages=_focused_argument_messages(request, name, repair_error=repair_error),
@@ -392,7 +396,10 @@ def _argument_page_request(request: Any, name: str, parameters: Mapping[str, Any
     )
 
 
-def _argument_failure(turn: Any, parameters: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, str, str]:
+def _argument_failure(
+    turn: Any,
+    parameters: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, str, str]:
     calls = tuple(getattr(turn, "tool_calls", ()) or ())
     content = str(getattr(turn, "content", "") or "").strip()
     if calls:
@@ -419,41 +426,89 @@ def _argument_failure(turn: Any, parameters: Mapping[str, Any]) -> tuple[Mapping
     return None, reason, fingerprint
 
 
-def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
-    """Materialize one host-selected mutation from arguments only.
+def _structured_exception_failure(
+    exc: BaseException,
+) -> tuple[Mapping[str, Any] | None, str, str] | None:
+    candidate: Any = exc
+    cause = getattr(exc, "cause", None)
+    if isinstance(cause, StructuredOutputValidationError):
+        candidate = cause
+    if not isinstance(candidate, StructuredOutputValidationError):
+        return None
+    reason = "; ".join(candidate.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
+    fingerprint = hashlib.sha256(
+        f"{candidate.output}\0{reason}".encode("utf-8")
+    ).hexdigest()
+    return None, reason, fingerprint
 
-    The model never receives a tool schema on these pages, so an old tool name from
-    history cannot be executed or re-selected as the routing decision.  One bounded
-    repair is permitted for malformed arguments; a repeated fingerprint is a causal
-    fixed point and is surfaced without a third model call.
-    """
+
+def _argument_attempt(
+    current: Any,
+    adapter: Any,
+    page_request: Any,
+    parameters: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, str, str]:
+    try:
+        turn = current(adapter, page_request)
+    except BaseException as exc:
+        structured = _structured_exception_failure(exc)
+        if structured is None:
+            raise
+        return structured
+    return _argument_failure(turn, parameters)
+
+
+def host_selected_argument_turn(
+    current: Any,
+    adapter: Any,
+    request: Any,
+    name: str,
+    *,
+    prefix: str = "host_action",
+) -> Any:
+    """Generate only arguments for one already-selected action with one repair page."""
 
     from .model_adapters import ModelConfigurationError
 
-    schema = _selected_schema(request, name)
-    parameters = _parameters(schema)
-    first_request = _argument_page_request(request, name, parameters)
-    first = current(adapter, first_request)
-    arguments, error, first_fingerprint = _argument_failure(first, parameters)
+    parameters = _parameters(_selected_schema(request, name))
+    first = _argument_page_request(request, name, parameters)
+    arguments, error, first_fingerprint = _argument_attempt(
+        current, adapter, first, parameters
+    )
     if arguments is not None:
-        return _response_for_call(name, arguments, prefix="host_mutation")
+        return _response_for_call(name, arguments, prefix=prefix)
 
-    second_request = _argument_page_request(
+    repair = _argument_page_request(
         request,
         name,
         parameters,
         repair_error=error,
     )
-    second = current(adapter, second_request)
-    repaired, repair_error, second_fingerprint = _argument_failure(second, parameters)
+    repaired, repair_error, second_fingerprint = _argument_attempt(
+        current, adapter, repair, parameters
+    )
     if repaired is not None:
-        return _response_for_call(name, repaired, prefix="host_mutation")
+        return _response_for_call(name, repaired, prefix=prefix)
 
     fixed_point = first_fingerprint == second_fingerprint
-    suffix = " repeated-invalid-argument fixed point" if fixed_point else " bounded argument repair exhausted"
+    suffix = (
+        "repeated-invalid-argument fixed point"
+        if fixed_point
+        else "bounded argument repair exhausted"
+    )
     raise ModelConfigurationError(
-        f"Host-selected mutation {name!r}{suffix}; first={first_fingerprint[:12]} "
+        f"Host-selected action {name!r} {suffix}; first={first_fingerprint[:12]} "
         f"retry={second_fingerprint[:12]} error={repair_error or error}."
+    )
+
+
+def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
+    return host_selected_argument_turn(
+        current,
+        adapter,
+        request,
+        name,
+        prefix="host_mutation",
     )
 
 
@@ -462,6 +517,7 @@ def _single_tool_request(request: Any, name: str) -> Any:
     return replace(
         request,
         tools=selected,
+        tool_validation_schemas=selected,
         tool_choice="required",
         parallel_tool_calls=False,
     )
@@ -479,11 +535,109 @@ def _call_names(turn: Any) -> str:
     ) or "<prose>"
 
 
+def _native_probe_request(request: Any) -> Any:
+    schema = {
+        "type": "function",
+        "function": {
+            "name": _NATIVE_PROBE_TOOL,
+            "description": "MMM startup/preflight required-tool capability probe",
+            "parameters": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"nonce": {"type": "string", "const": "mmm"}},
+                "required": ["nonce"],
+            },
+        },
+    }
+    return replace(
+        request,
+        messages=(
+            {
+                "role": "system",
+                "content": "Capability probe. Call the only available function exactly once.",
+            },
+            {
+                "role": "user",
+                "content": "Call the available function with nonce set to mmm.",
+            },
+        ),
+        tools=(schema,),
+        tool_validation_schemas=(schema,),
+        tool_choice="required",
+        parallel_tool_calls=False,
+        response_format="text",
+        response_schema=None,
+        media_paths=(),
+    )
+
+
+def _native_probe_key(adapter: Any, request: Any) -> tuple[str, str] | None:
+    try:
+        endpoint = str(adapter._server_url(request)).strip().rstrip("/")
+    except Exception:
+        return None
+    model_id = str(getattr(getattr(adapter, "config", None), "model_id", "local"))
+    return (endpoint, model_id) if endpoint else None
+
+
+def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool:
+    key = _native_probe_key(adapter, request)
+    if key is None:
+        return False
+    with _NATIVE_PROBE_LOCK:
+        cached = _NATIVE_PROBE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    supported = False
+    try:
+        turn = current(adapter, _native_probe_request(request))
+        if _contains_exact_call(turn, _NATIVE_PROBE_TOOL):
+            call = tuple(getattr(turn, "tool_calls", ()) or ())[0]
+            arguments = getattr(call, "arguments", {})
+            supported = isinstance(arguments, Mapping) and arguments.get("nonce") == "mmm"
+    except Exception:
+        supported = False
+
+    with _NATIVE_PROBE_LOCK:
+        _NATIVE_PROBE_CACHE[key] = supported
+    print(
+        "llama native forced-tool preflight:",
+        f" supported={'yes' if supported else 'no'}",
+        f" model={key[1]}",
+        flush=True,
+    )
+    return supported
+
+
+def _mark_native_unsupported(adapter: Any, request: Any) -> None:
+    key = _native_probe_key(adapter, request)
+    if key is not None:
+        with _NATIVE_PROBE_LOCK:
+            _NATIVE_PROBE_CACHE[key] = False
+
+
+def _native_protocol_failure(exc: BaseException) -> bool:
+    cause = getattr(exc, "cause", exc)
+    if not isinstance(cause, RuntimeError):
+        return False
+    text = str(cause).casefold()
+    markers = (
+        "did not emit a tool call",
+        "violated named tool_choice",
+        "no semantic action",
+        "tool continuation without a semantic action",
+        "unexpected empty grammar stack",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _install_adapter_class(
     cls: Any,
     *,
     transport_name: str,
     deterministic_stale_read: bool,
+    probe_native_required: bool = False,
 ) -> None:
     current = cls.generate_turn
     if getattr(current, _MARKER, False):
@@ -505,9 +659,21 @@ def _install_adapter_class(
             if deterministic is not None:
                 return deterministic
 
-        turn = current(self, _single_tool_request(request, name))
+        if probe_native_required and not _native_required_supported(current, self, request):
+            return host_selected_argument_turn(current, self, request, name)
+
+        try:
+            turn = current(self, _single_tool_request(request, name))
+        except BaseException as exc:
+            if probe_native_required and _native_protocol_failure(exc):
+                _mark_native_unsupported(self, request)
+                return host_selected_argument_turn(current, self, request, name)
+            raise
         if _contains_exact_call(turn, name):
             return turn
+        if probe_native_required:
+            _mark_native_unsupported(self, request)
+            return host_selected_argument_turn(current, self, request, name)
         raise ModelConfigurationError(
             f"{transport_name} failed the host-selected action {name!r}; received "
             f"{_call_names(turn)}. The host will not repeat the same tool-name selection."
@@ -518,6 +684,7 @@ def _install_adapter_class(
     generate_turn._mmm_forced_tool_single_context = True
     generate_turn._mmm_forced_tool_required_transport = True
     generate_turn._mmm_host_selected_mutation_arguments = True
+    generate_turn._mmm_native_forced_tool_preflight = probe_native_required
     cls.generate_turn = generate_turn
 
 
@@ -532,12 +699,14 @@ def install(*, openai_compatible_module: Any, llama_cpp_module: Any | None = Non
             llama_cpp_module.LlamaCppAdapter,
             transport_name="Local llama model",
             deterministic_stale_read=True,
+            probe_native_required=True,
         )
 
 
 __all__ = [
     "deterministic_forced_read_turn",
     "forced_tool_name",
+    "host_selected_argument_turn",
     "host_selected_mutation_turn",
     "install",
 ]
