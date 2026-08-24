@@ -26,26 +26,24 @@ def _encoded_size(messages: Any) -> int:
 
 def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy, model_context_budget
+    from .llama_generation_budget import plain_action_token_budget
     from .model_context_budget import (
         fit_messages_to_context,
         request_message_budget,
         tool_action_token_budget,
     )
 
-    if (
-        getattr(
-            llama_server_hardware_policy._server_payload,
-            "_mmm_finite_generation_budget_v1",
-            False,
-        )
-        is not True
-    ):
-        raise ContextBudgetPreflightError(
-            "llama-server payload is missing the finite generation budget policy"
-        )
-
+    # Validate behavior, not a versioned monkey-patch marker. The payload owner is
+    # intentionally allowed to evolve as long as the live transport can never receive
+    # an unbounded max_tokens value and preserves the requested tool semantics.
     synthetic_adapter = SimpleNamespace(
-        config=SimpleNamespace(max_new_tokens=8192, model_id="synthetic", extra={})
+        config=SimpleNamespace(
+            adapter="llama_cpp",
+            max_context=262144,
+            max_new_tokens=-1,
+            model_id="synthetic",
+            extra={"runtime_context_default": 32768},
+        )
     )
     synthetic_payload = llama_server_hardware_policy._server_payload(
         synthetic_adapter,
@@ -55,11 +53,17 @@ def run_context_budget_preflight() -> None:
             tool_choice=None,
             parallel_tool_calls=False,
             response_format="text",
+            response_schema=None,
         ),
     )
-    if synthetic_payload.get("max_tokens") != 8192:
+    expected_text_budget = plain_action_token_budget(synthetic_adapter.config)
+    if synthetic_payload.get("max_tokens") != expected_text_budget:
         raise ContextBudgetPreflightError(
             "llama-server non-tool production payload is not using the finite text budget"
+        )
+    if int(synthetic_payload.get("max_tokens", 0) or 0) <= 0:
+        raise ContextBudgetPreflightError(
+            "llama-server production payload still permits an unbounded max_tokens value"
         )
 
     tool_schema = {
@@ -83,6 +87,14 @@ def run_context_budget_preflight() -> None:
             tool_choice="required",
             parallel_tool_calls=False,
             response_format="json",
+            response_schema={
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "path": {"type": "string"},
+                },
+                "required": ["operation", "path"],
+            },
         ),
     )
     if synthetic_tool_payload.get("max_tokens") != tool_action_token_budget(
@@ -90,6 +102,10 @@ def run_context_budget_preflight() -> None:
     ):
         raise ContextBudgetPreflightError(
             "tool turns must preserve the bounded tool-action budget"
+        )
+    if int(synthetic_tool_payload.get("max_tokens", 0) or 0) <= 0:
+        raise ContextBudgetPreflightError(
+            "tool turns still permit an unbounded max_tokens value"
         )
     if synthetic_tool_payload.get("tool_choice") != "required":
         raise ContextBudgetPreflightError(
@@ -104,6 +120,11 @@ def run_context_budget_preflight() -> None:
     ]:
         raise ContextBudgetPreflightError(
             "required tool payload did not expose exactly the selected function schema"
+        )
+    structured = synthetic_tool_payload.get("response_format")
+    if not isinstance(structured, dict) or structured.get("type") != "json_schema":
+        raise ContextBudgetPreflightError(
+            "host-selected JSON action page is missing the llama-server JSON-Schema constraint"
         )
 
     large_result = json.dumps(
