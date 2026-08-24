@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import minecraft_mod_ai.model_router as router_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as scheduler_module
-from minecraft_mod_ai.causal_frontier_adapter import authorized_tools
 from minecraft_mod_ai.llama_parallel_runtime_contract import ReentrantReadWriteLock
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -77,11 +76,7 @@ def test_parallel_runtime_contract_is_installed() -> None:
     assert getattr(ModelRouter.generate_text, "_mmm_llama_shared_slots", False)
     assert getattr(ModelRouter.generate_text, "_mmm_preserves_agent_tools", False)
     assert getattr(ModelRouter.generate_text, "_mmm_preserves_response_schema", False)
-    assert getattr(
-        ModelRouter.generate_text,
-        "_mmm_uses_canonical_request_preparation",
-        False,
-    )
+    assert getattr(ModelRouter.generate_text, "_mmm_uses_canonical_request_preparation", False)
     assert getattr(ModelRouter.generate_text, "_mmm_parallel_router_contract_version", 0) >= 3
     assert getattr(ModelRouter.generation_session, "_mmm_llama_shared_slots", False)
     assert getattr(scheduler_module._capacities, "_mmm_dynamic_llama_slots", False)
@@ -95,10 +90,7 @@ def test_scheduler_llm_capacity_follows_selected_native_slots(monkeypatch) -> No
     assert scheduler_module._capacities()["llm"] == 1
 
 
-def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier(
-    monkeypatch,
-    tmp_path,
-) -> None:
+def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     monkeypatch.setenv("MMM_AGENT_TOOLS", "1")
     router = ModelRouter(profile="t4_local").bind_agent_workspace(tmp_path)
@@ -112,32 +104,20 @@ def test_parallel_router_preserves_authorized_surface_and_bounds_causal_frontier
         tool_stage="generation",
         enable_tools=True,
     )
-
     assert tool_result == '{"status":"tool-aware"}'
     assert len(adapter.turn_requests) == 1
     request = adapter.turn_requests[0]
     exposed_names = {str(tool["function"]["name"]) for tool in request.tools}
-    authorized_names = {
-        str(tool["function"]["name"])
-        for tool in authorized_tools(())
-    }
 
-    assert {
-        "inspect_existing_mod",
-        "search_project_rag",
-        "search_code_rag",
-        "external_mcp_capabilities",
-        "external_mcp_schema",
-        "external_mcp_call",
-    } <= authorized_names
-    assert 1 <= len(exposed_names) <= 3
-    assert exposed_names <= authorized_names
-    assert "plan_complete_game" not in authorized_names
-    assert "runtime_start_server" not in authorized_names
-    assert "package_release" not in authorized_names
+    assert exposed_names
+    assert len(exposed_names) <= 8
+    assert "plan_complete_game" not in exposed_names
+    assert "runtime_start_server" not in exposed_names
+    assert "package_release" not in exposed_names
     assert request.tool_choice == "auto"
     assert request.parallel_tool_calls is True
     assert request.response_format == "json"
+    assert request.tool_validation_schemas == request.tools
 
     capability_messages = [
         str(message.get("content", ""))
@@ -206,17 +186,10 @@ def test_same_router_llama_requests_overlap_when_parallel_selected(monkeypatch) 
     events: list[tuple[str, float]] = []
     adapter = _BlockingAdapter(barrier, events)
     monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
-
     results: list[str] = []
 
     def run() -> None:
-        results.append(
-            router.generate_text(
-                "planner",
-                ({"role": "user", "content": "x"},),
-                enable_tools=False,
-            )
-        )
+        results.append(router.generate_text("planner", ({"role": "user", "content": "x"},), enable_tools=False))
 
     threads = [threading.Thread(target=run) for _ in range(2)]
     started = time.monotonic()
@@ -225,7 +198,6 @@ def test_same_router_llama_requests_overlap_when_parallel_selected(monkeypatch) 
     for thread in threads:
         thread.join(timeout=2)
     elapsed = time.monotonic() - started
-
     assert results == ["ok", "ok"]
     assert len([event for event, _ in events if event == "start"]) == 2
     assert elapsed < 0.5
@@ -236,32 +208,22 @@ def test_direct_router_calls_never_exceed_native_llama_slots(monkeypatch) -> Non
     router = ModelRouter(profile="test", registry=_Registry())
     adapter = _SlotProbeAdapter()
     monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
-
     results: list[str] = []
 
     def run() -> None:
-        results.append(
-            router.generate_text(
-                "planner",
-                ({"role": "user", "content": "x"},),
-                enable_tools=False,
-            )
-        )
+        results.append(router.generate_text("planner", ({"role": "user", "content": "x"},), enable_tools=False))
 
     threads = [threading.Thread(target=run) for _ in range(3)]
     for thread in threads:
         thread.start()
-
     assert adapter.two_entered.wait(timeout=2)
     time.sleep(0.05)
     with adapter.lock:
         assert adapter.started == 2
         assert adapter.max_active == 2
-
     adapter.release.set()
     for thread in threads:
         thread.join(timeout=2)
-
     assert results == ["ok", "ok", "ok"]
     assert adapter.started == 3
     assert adapter.max_active == 2

@@ -71,39 +71,23 @@ class _Adapter:
             )
         return GenerationResponse(content="finished from tool evidence")
 
-    def generate(self, request):  # pragma: no cover - tool path must use generate_turn
+    def generate(self, request):
         raise AssertionError("text-only generate() must not run when tools are available")
 
 
 def test_coder_calls_generation_tool_and_reinjects_result(monkeypatch) -> None:
     adapter = _Adapter()
     runtime = _ToolRuntime()
-    monkeypatch.setattr(
-        ModelRouter,
-        "_new_text_adapter",
-        staticmethod(lambda config, *, role: adapter),
-    )
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_: runtime,
-    )
-
-    result = router.generate_text(
-        "coder",
-        [{"role": "user", "content": "Implement block registration"}],
-    )
-
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
+    result = router.generate_text("coder", [{"role": "user", "content": "Implement block registration"}])
     assert result == "finished from tool evidence"
     assert runtime.schema_stages == ["generation"]
-    assert runtime.calls == [
-        ("generation", "search_code_rag", {"query": "register block"})
-    ]
+    assert runtime.calls == [("generation", "search_code_rag", {"query": "register block"})]
     assert len(adapter.requests) == 2
     assert adapter.requests[0].tool_choice == "auto"
     assert adapter.requests[0].parallel_tool_calls is True
     assert adapter.requests[0].tools[0]["function"]["name"] == "search_code_rag"
-
     reinjected = adapter.requests[1].messages
     assistant = reinjected[-2]
     tool_result = reinjected[-1]
@@ -124,35 +108,17 @@ def test_tool_failure_is_observation_and_model_can_finish(monkeypatch) -> None:
             raise RuntimeError("provider unavailable")
 
     runtime = BrokenRuntime()
-    monkeypatch.setattr(
-        ModelRouter,
-        "_new_text_adapter",
-        staticmethod(lambda config, *, role: adapter),
-    )
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_: runtime,
-    )
-
-    assert router.generate_text("coder", [{"role": "user", "content": "fix it"}]) == (
-        "finished from tool evidence"
-    )
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
+    assert router.generate_text("coder", [{"role": "user", "content": "fix it"}]) == "finished from tool evidence"
     failure = json.loads(adapter.requests[1].messages[-1]["content"])
     assert failure["ok"] is False
     assert "provider unavailable" in failure["error"]
 
 
 def test_external_bridge_tools_are_stage_scoped() -> None:
-    generation = {
-        item["function"]["name"]
-        for item in ExternalAgentBridge.tool_schemas("generation")
-    }
-    assert generation == {
-        "external_mcp_capabilities",
-        "external_mcp_schema",
-        "external_mcp_call",
-    }
+    generation = {item["function"]["name"] for item in ExternalAgentBridge.tool_schemas("generation")}
+    assert generation == {"external_mcp_capabilities", "external_mcp_schema", "external_mcp_call"}
     assert ExternalAgentBridge.tool_schemas("release") == ()
 
 
@@ -178,10 +144,7 @@ def test_llama_qwen_tool_markup_parser_accepts_schema_typed_arguments() -> None:
     assert visible == ""
     assert len(calls) == 1
     assert calls[0].name == "external_mcp_call"
-    assert calls[0].arguments == {
-        "capability": "mapping_resolution",
-        "arguments": {"class_name": "Block"},
-    }
+    assert calls[0].arguments == {"capability": "mapping_resolution", "arguments": {"class_name": "Block"}}
 
 
 def test_agent_can_exceed_eight_tool_rounds_when_evidence_keeps_changing(monkeypatch) -> None:
@@ -194,14 +157,7 @@ def test_agent_can_exceed_eight_tool_rounds_when_evidence_keeps_changing(monkeyp
             if self.count <= 12:
                 query = f"evidence_{self.count}"
                 return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id=f"call_{self.count}",
-                            name="search_code_rag",
-                            arguments={"query": query},
-                            raw_arguments=json.dumps({"query": query}),
-                        ),
-                    )
+                    tool_calls=(ToolCall(id=f"call_{self.count}", name="search_code_rag", arguments={"query": query}, raw_arguments=json.dumps({"query": query})),)
                 )
             return GenerationResponse(content="enough evidence")
 
@@ -209,30 +165,13 @@ def test_agent_can_exceed_eight_tool_rounds_when_evidence_keeps_changing(monkeyp
         def call(self, stage: str, name: str, arguments):
             payload = dict(arguments)
             self.calls.append((stage, name, payload))
-            return {
-                "hits": [
-                    {
-                        "path": f"{payload['query']}.java",
-                        "line": len(self.calls),
-                    }
-                ]
-            }
+            return {"hits": [{"path": f"{payload['query']}.java", "line": len(self.calls)}]}
 
     adapter = LongAdapter()
     runtime = NovelRuntime()
-    monkeypatch.setattr(
-        ModelRouter,
-        "_new_text_adapter",
-        staticmethod(lambda config, *, role: adapter),
-    )
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_: runtime,
-    )
-    assert router.generate_text(
-        "coder", [{"role": "user", "content": "research deeply"}]
-    ) == "enough evidence"
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
+    assert router.generate_text("coder", [{"role": "user", "content": "research deeply"}]) == "enough evidence"
     assert len(runtime.calls) == 12
 
 
@@ -245,14 +184,7 @@ def test_duplicate_retrieval_query_is_not_executed_twice(monkeypatch) -> None:
             self.requests.append(request)
             if len(self.requests) <= 2:
                 return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id=f"call_{len(self.requests)}",
-                            name="search_code_rag",
-                            arguments={"query": "same"},
-                            raw_arguments='{"query":"same"}',
-                        ),
-                    )
+                    tool_calls=(ToolCall(id=f"call_{len(self.requests)}", name="search_code_rag", arguments={"query": "same"}, raw_arguments='{"query":"same"}'),)
                 )
             assert request.tools == ()
             assert request.tool_choice is None
@@ -264,19 +196,9 @@ def test_duplicate_retrieval_query_is_not_executed_twice(monkeypatch) -> None:
 
     adapter = LoopAdapter()
     runtime = _ToolRuntime()
-    monkeypatch.setattr(
-        ModelRouter,
-        "_new_text_adapter",
-        staticmethod(lambda config, *, role: adapter),
-    )
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_: runtime,
-    )
-    assert router.generate_text(
-        "coder", [{"role": "user", "content": "research"}]
-    ) == "final answer from converged evidence"
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
+    assert router.generate_text("coder", [{"role": "user", "content": "research"}]) == "final answer from converged evidence"
     assert len(runtime.calls) == 1
     assert len(adapter.requests) == 3
 
@@ -310,34 +232,17 @@ def test_host_owned_grounding_satisfies_baseline_without_forced_rag(monkeypatch)
     }
     adapter = FinalAdapter()
     runtime = _ToolRuntime()
-    monkeypatch.setattr(
-        ModelRouter,
-        "_new_text_adapter",
-        staticmethod(lambda config, *, role: adapter),
-    )
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_: runtime,
-    )
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
     router._agent_require_fresh_evidence = True
-
-    result = router.generate_text(
-        "coder",
-        [
-            {
-                "role": "user",
-                "content": json.dumps({"host_grounding": grounding}),
-            }
-        ],
-    )
-
+    result = router.generate_text("coder", [{"role": "user", "content": json.dumps({"host_grounding": grounding})}])
     assert result == "implemented from host grounding"
     assert runtime.calls == []
     assert len(adapter.requests) == 1
-    assert adapter.requests[0].tools == ()
-    assert adapter.requests[0].tool_choice is None
-    assert adapter.requests[0].parallel_tool_calls is False
+    request = adapter.requests[0]
+    assert [item["function"]["name"] for item in request.tools] == ["search_code_rag"]
+    assert request.tool_choice == "auto"
+    assert request.parallel_tool_calls is True
 
 
 def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> None:
@@ -345,13 +250,7 @@ def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> 
         def call(self, stage: str, name: str, arguments):
             payload = dict(arguments)
             self.calls.append((stage, name, payload))
-            return {
-                "receipt": {
-                    "result_count": 0,
-                    "coverage_score": 0.0,
-                    "relevance_score": 0.0,
-                }
-            }
+            return {"receipt": {"result_count": 0, "coverage_score": 0.0, "relevance_score": 0.0}}
 
     class ExhaustAdapter:
         def __init__(self) -> None:
@@ -362,41 +261,18 @@ def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> 
             if len(self.requests) == 1:
                 return GenerationResponse(content="draft without evidence")
             if len(self.requests) == 2:
-                assert request.tool_choice == {
-                    "type": "function",
-                    "function": {"name": "search_code_rag"},
-                }
+                assert request.tool_choice == {"type": "function", "function": {"name": "search_code_rag"}}
                 return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="forced_1",
-                            name="search_code_rag",
-                            arguments={"query": "missing registration api"},
-                            raw_arguments='{"query":"missing registration api"}',
-                        ),
-                    )
+                    tool_calls=(ToolCall(id="forced_1", name="search_code_rag", arguments={"query": "missing registration api"}, raw_arguments='{"query":"missing registration api"}'),)
                 )
             return GenerationResponse(content="no reviewed evidence route remains")
 
     adapter = ExhaustAdapter()
     runtime = WeakRuntime()
-    monkeypatch.setattr(
-        ModelRouter,
-        "_new_text_adapter",
-        staticmethod(lambda config, *, role: adapter),
-    )
-    router = ModelRouter(
-        profile="test",
-        registry=_Registry(),
-        agent_tool_runtime_factory=lambda **_: runtime,
-    )
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
     router._agent_require_fresh_evidence = True
-
     with pytest.raises(ModelConfigurationError, match="Required production evidence is unavailable"):
-        router.generate_text(
-            "coder",
-            [{"role": "user", "content": "implement unknown API"}],
-        )
-
+        router.generate_text("coder", [{"role": "user", "content": "implement unknown API"}])
     assert len(runtime.calls) == 1
     assert len(adapter.requests) == 3

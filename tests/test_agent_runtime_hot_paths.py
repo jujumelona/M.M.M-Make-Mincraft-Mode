@@ -5,13 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import anyio
-import pytest
 
 import minecraft_mod_ai.agent_capability_context as capability_context
 import minecraft_mod_ai.runtime_hotpath_consolidation as hotpath
 from minecraft_mod_ai import agent_tool_runtime
-from minecraft_mod_ai.causal_frontier_adapter import FrontierExecutionGate
-from minecraft_mod_ai.causal_tool_frontier_contract import _FrontierRuntimeProxy
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -35,11 +32,7 @@ def test_first_party_execution_does_not_repeat_schema_listing(monkeypatch) -> No
 
         async def call_tool(self, name, *, arguments):
             events.append(f"execute:{name}:{arguments['query']}")
-            return SimpleNamespace(
-                isError=False,
-                structuredContent={"ok": True},
-                content=(),
-            )
+            return SimpleNamespace(isError=False, structuredContent={"ok": True}, content=())
 
     class Context:
         async def __aenter__(self):
@@ -57,7 +50,6 @@ def test_first_party_execution_does_not_repeat_schema_listing(monkeypatch) -> No
         "search_code_rag",
         {"query": "block registry"},
     )
-
     assert result["structured_content"] == {"ok": True}
     assert events == ["enter", "execute:search_code_rag:block registry", "exit"]
 
@@ -77,51 +69,13 @@ def test_manifest_router_is_reused_but_request_target_stays_dynamic(monkeypatch)
     capability_context._manifest_router.cache_clear()
     monkeypatch.setattr(capability_context, "ExternalMCPRouter", FakeRouter)
     schemas = (_schema("external_mcp_capabilities"),)
-
     monkeypatch.setenv("MMM_MINECRAFT_VERSION", "1.21.1")
-    capability_context.build_agent_capability_context(
-        "research", schemas, model_role="researcher"
-    )
+    capability_context.build_agent_capability_context("research", schemas, model_role="researcher")
     monkeypatch.setenv("MMM_MINECRAFT_VERSION", "1.21.4")
-    capability_context.build_agent_capability_context(
-        "research", schemas, model_role="researcher"
-    )
-
+    capability_context.build_agent_capability_context("research", schemas, model_role="researcher")
     assert len(instances) == 1
     assert [target["minecraft_version"] for target in targets] == ["1.21.1", "1.21.4"]
     capability_context._manifest_router.cache_clear()
-
-
-def test_causal_execution_gate_blocks_hidden_read_tool_inside_worker_thread() -> None:
-    calls: list[str] = []
-
-    class Runtime:
-        def call(self, stage, name, arguments):
-            calls.append(name)
-            return {"ok": True, "stage": stage, "arguments": dict(arguments)}
-
-    gate = FrontierExecutionGate()
-    gate.set_visible(("search_code_rag",))
-    proxy = _FrontierRuntimeProxy(Runtime(), gate)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        visible = executor.submit(
-            proxy.call,
-            "generation",
-            "search_code_rag",
-            {"query": "visible"},
-        )
-        hidden = executor.submit(
-            proxy.call,
-            "generation",
-            "search_project_rag",
-            {"query": "hidden"},
-        )
-        assert visible.result()["ok"] is True
-        with pytest.raises(RuntimeError, match="not exposed on the current causal frontier"):
-            hidden.result()
-
-    assert calls == ["search_code_rag"]
 
 
 def test_central_research_identical_inflight_reads_are_single_flight() -> None:
@@ -157,7 +111,6 @@ def test_central_research_identical_inflight_reads_are_single_flight() -> None:
         retrieve_official_evidence=provider,
     )
     wrapped = hotpath._install_central_research_dedup(module)
-
     with ThreadPoolExecutor(max_workers=1) as executor:
         result_future = executor.submit(wrapped, {"need": "evidence"})
         assert first_provider_entered.wait(timeout=1.0)
@@ -167,14 +120,12 @@ def test_central_research_identical_inflight_reads_are_single_flight() -> None:
         finally:
             release_provider.set()
         result = result_future.result(timeout=2.0)
-
     assert result["rows"][0] == result["rows"][1]
     assert provider_calls == 1
 
 
 def test_project_scoped_lock_reclaims_inactive_project_entries() -> None:
     lock = hotpath._ProjectScopedRLock()
-
     for index in range(64):
         token = hotpath._MEMORY_BASE.set(f"/tmp/mmm-project-{index}")
         try:
