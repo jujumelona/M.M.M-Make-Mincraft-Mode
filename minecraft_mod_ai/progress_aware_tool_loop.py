@@ -43,12 +43,7 @@ def _generate_turn_with_context_recovery(
     tool_choice: Any,
     parallel_tool_calls: bool,
 ) -> Any:
-    """Fit one live agent turn and retry context pressure exactly once.
-
-    Context recovery remains tool-capable and deterministic. It never re-enters the
-    coder through a tool-disabled side channel, so fresh-evidence policy cannot mask
-    the original backend boundary.
-    """
+    """Fit one live agent turn and retry context pressure exactly once."""
 
     fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
     _replace_live_messages(messages, fitted)
@@ -94,10 +89,6 @@ def _generate_turn_with_context_recovery(
                 return adapter.generate_turn(retry_request)
         except BaseException as retry_exc:
             if completion_boundary_kind(retry_exc) == CONTEXT_PRESSURE:
-                # Preserve the first provider boundary as the public/root failure.
-                # The retry remains chained for diagnosis, but outer generators must
-                # not start a second recovery protocol after canonical compaction has
-                # already been exhausted.
                 mark_context_recovery_exhausted(exc)
                 raise exc from retry_exc
             raise
@@ -113,15 +104,17 @@ def generate_with_tools(
     stage: str,
     role: str,
 ) -> str:
-    """Run retrieve/act/observe with semantic and context progress.
+    """Run the canonical host-planned retrieve/inspect/mutate/verify loop.
 
-    Semantic progress owns normal liveness. A round budget only applies when the
-    operator explicitly configures one. Mandatory evidence is satisfied by validated
-    host grounding when present; otherwise the host may force each internal RAG
-    source at most once. Every backend turn is fitted to the runtime slot that will
-    actually serve it, while exact oversized tool observations remain host-archived.
+    One causal ledger computes the legal executable frontier every round. The host then
+    chooses one action class before model generation. Mutation frontiers collapse to one
+    deterministic writable tool and the model generates only that tool's arguments.
+    Every tool call is checked again against the published frontier immediately before
+    execution, so stale authorized tools are observations of invalid model behavior,
+    never executable actions.
     """
     from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
+    from .causal_frontier_adapter import CausalFrontierAdapter, FrontierExecutionGate
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
@@ -137,7 +130,6 @@ def generate_with_tools(
     exposed_tools = frozenset(_tool_schema_names(request.tools))
     progress = RetrievalProgress()
     forced_rag_tool: str | None = None
-    forced_rag_attempts = 0
     round_index = 0
     round_limit = _agent_tool_round_limit()
     host_grounded = host_baseline_evidence_ready(request.messages)
@@ -154,6 +146,17 @@ def generate_with_tools(
     )
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
+    execution_gate = FrontierExecutionGate()
+    causal_adapter = CausalFrontierAdapter(
+        adapter,
+        stage=stage,
+        role=role,
+        require_fresh_evidence=bool(router._agent_require_fresh_evidence),
+        execution_gate=execution_gate,
+        authorized_surface=request.tools,
+        request_template=request,
+    )
+
     while True:
         if round_limit is not None and round_index >= round_limit:
             if require_rag and not progress.has_fresh_evidence:
@@ -169,7 +172,7 @@ def generate_with_tools(
             return _finalize_without_tools(
                 router,
                 config,
-                adapter,
+                causal_adapter,
                 request,
                 messages,
                 instruction=(
@@ -188,7 +191,7 @@ def generate_with_tools(
         turn = _generate_turn_with_context_recovery(
             router,
             config=config,
-            adapter=adapter,
+            adapter=causal_adapter,
             request=request,
             messages=messages,
             media_paths=request.media_paths if round_index == 0 else (),
@@ -201,21 +204,10 @@ def generate_with_tools(
             if not content:
                 raise ModelConfigurationError("Tool-capable model returned an empty final response.")
             if forced_rag_tool is not None:
-                forced_rag_attempts += 1
-                if forced_rag_attempts >= 2:
-                    raise ModelConfigurationError(
-                        f"Production coder did not honor host-forced RAG tool choice {forced_rag_tool!r} "
-                        "after two bounded attempts."
-                    )
-                messages.extend([
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "system",
-                        "content": f"Call the required function {forced_rag_tool} exactly once now. Do not answer in prose.",
-                    },
-                ])
-                round_index += 1
-                continue
+                raise ModelConfigurationError(
+                    f"Host-selected RAG action {forced_rag_tool!r} returned prose instead of one "
+                    "schema-valid action; tool-name selection is never retried."
+                )
             if require_rag and not progress.has_fresh_evidence:
                 forced_rag_tool = progress.next_untried_internal_tool(
                     exposed_tools,
@@ -227,19 +219,18 @@ def generate_with_tools(
                         "RAG source was already attempted without novel usable evidence, and "
                         "the model selected no other reviewed retrieval route."
                     )
-                forced_rag_attempts = 0
-                messages.extend([
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Baseline production evidence is still required. Call {forced_rag_tool} "
-                            "exactly once with a concrete query for the current implementation need. "
-                            "After its observation, choose any further retrieval only if it can add "
-                            "materially new evidence; do not repeat exhausted queries."
-                        ),
-                    },
-                ])
+                messages.extend(
+                    [
+                        {"role": "assistant", "content": content},
+                        {
+                            "role": "system",
+                            "content": (
+                                "The host selected the next evidence action. Generate only its "
+                                "schema-valid arguments; do not choose another tool name."
+                            ),
+                        },
+                    ]
+                )
                 round_index += 1
                 continue
             if implementation_requires_mutation and not mutation_history_applied(messages):
@@ -253,32 +244,38 @@ def generate_with_tools(
             if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_rag_tool:
                 called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
                 raise ModelConfigurationError(
-                    f"Production coder violated host-forced RAG tool choice {forced_rag_tool!r}; received {called}."
+                    f"Host-selected RAG action {forced_rag_tool!r} produced {called}; "
+                    "refusing tool-name reselection."
                 )
             forced_rag_tool = None
-            forced_rag_attempts = 0
 
-        messages.append({
-            "role": "assistant",
-            "content": turn.content or None,
-            "tool_calls": [
-                {
-                    "id": call.id,
-                    "type": "function",
-                    "function": {
-                        "name": call.name,
-                        "arguments": call.raw_arguments or json.dumps(
-                            dict(call.arguments), ensure_ascii=False, separators=(",", ":")
-                        ),
-                    },
-                }
-                for call in turn.tool_calls
-            ],
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": turn.content or None,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.raw_arguments
+                            or json.dumps(
+                                dict(call.arguments),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
+                    }
+                    for call in turn.tool_calls
+                ],
+            }
+        )
 
         def is_retrieval(call: Any) -> bool:
             return call.name in _RAG_EVIDENCE_TOOLS or (
-                call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments))
+                call.name == "external_mcp_call"
+                and bool(_external_rag_capability(call.arguments))
             )
 
         def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
@@ -289,24 +286,31 @@ def generate_with_tools(
                 capability = str(call.arguments.get("capability", "")).strip()
                 if capability:
                     route_metadata["external_mcp_capability"] = capability
-            if is_retrieval(call):
-                decision = progress.begin(call.name, call.arguments)
-                if decision is not RetrievalDecision.EXECUTE:
-                    return call, {
-                        "ok": False,
-                        "tool": call.name,
-                        **route_metadata,
-                        "error": "RetrievalNoProgress: " + (
-                            "equivalent query already attempted for this evidence need"
-                            if decision is RetrievalDecision.DUPLICATE_QUERY
-                            else "retrieval source reached a repeated-evidence fixed point"
-                        ),
-                    }
             try:
+                visible = execution_gate.visible_names()
+                if visible is not None and call.name not in visible:
+                    raise ModelConfigurationError(
+                        "IllegalAction: tool is authorized for the role but illegal at the "
+                        f"current causal frontier: {call.name!r}; visible={','.join(visible)}"
+                    )
                 if call.name not in exposed_tools:
                     raise ModelConfigurationError(
                         f"Agent attempted hidden tool {call.name!r} outside its reviewed role routes for {role!r}/{stage!r}."
                     )
+                if is_retrieval(call):
+                    decision = progress.begin(call.name, call.arguments)
+                    if decision is not RetrievalDecision.EXECUTE:
+                        return call, {
+                            "ok": False,
+                            "tool": call.name,
+                            **route_metadata,
+                            "error": "RetrievalNoProgress: "
+                            + (
+                                "equivalent query already attempted for this evidence need"
+                                if decision is RetrievalDecision.DUPLICATE_QUERY
+                                else "retrieval source reached a repeated-evidence fixed point"
+                            ),
+                        }
                 scoped_call = getattr(runtime, "call_scoped", None)
                 if callable(scoped_call):
                     result = scoped_call(
@@ -352,7 +356,12 @@ def generate_with_tools(
                 "role": "tool",
                 "tool_call_id": call.id,
                 "name": call.name,
-                "content": json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+                "content": json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
             }
             messages.append(
                 dict(
@@ -372,7 +381,10 @@ def generate_with_tools(
             if call.name in _RAG_EVIDENCE_TOOLS:
                 usable = _usable_rag_result(payload.get("result"))
             else:
-                usable = _usable_external_rag_result(call.arguments, payload.get("result"))
+                usable = _usable_external_rag_result(
+                    call.arguments,
+                    payload.get("result"),
+                )
             observation = progress.observe(
                 call.name,
                 call.arguments,
@@ -391,8 +403,7 @@ def generate_with_tools(
                         "role": "system",
                         "content": (
                             "Retrieval has converged and usable evidence is already available. "
-                            "Do not finalize: proceed to the reviewed source-mutation action for "
-                            "the implementation now."
+                            "Do not finalize: proceed to the host-selected source-mutation action."
                         ),
                     }
                 )
@@ -401,7 +412,7 @@ def generate_with_tools(
             return _finalize_without_tools(
                 router,
                 config,
-                adapter,
+                causal_adapter,
                 request,
                 messages,
                 instruction=(
@@ -411,15 +422,19 @@ def generate_with_tools(
                 empty_error="Agent returned an empty final response after retrieval convergence.",
             )
 
-        if require_rag and not progress.has_fresh_evidence and (weak_retrieval or retrieval_no_progress):
-            messages.append({
-                "role": "system",
-                "content": (
-                    "The latest retrieval added no usable novel evidence. Inspect its receipt and "
-                    "choose a materially different reviewed retrieval route only if one can add new "
-                    "information. Repeating an equivalent query or repeated-evidence source is not progress."
-                ),
-            })
+        if require_rag and not progress.has_fresh_evidence and (
+            weak_retrieval or retrieval_no_progress
+        ):
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "The latest retrieval added no usable novel evidence. Inspect its receipt and "
+                        "choose a materially different reviewed retrieval route only if one can add new "
+                        "information. Repeating an equivalent query or repeated-evidence source is not progress."
+                    ),
+                }
+            )
         round_index += 1
 
 
