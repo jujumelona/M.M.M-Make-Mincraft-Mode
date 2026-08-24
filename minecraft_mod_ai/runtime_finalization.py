@@ -95,6 +95,7 @@ def finalize_runtime() -> None:
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
+        from .small_model_compacting_adapter import install as install_small_model_compaction
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
         from .tool_validation_surface_contract import install as install_tool_validation_surface
@@ -135,6 +136,7 @@ def finalize_runtime() -> None:
         )
         install_retrieval_residency(model_router_module=model_router)
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
+        install_small_model_compaction(model_router)
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_llama_unbounded_generation(llama_server_hardware_policy)
