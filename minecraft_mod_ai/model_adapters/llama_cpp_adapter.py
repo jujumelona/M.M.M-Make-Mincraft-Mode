@@ -7,7 +7,6 @@ transport/parser change cannot bypass the same host validation boundary.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
@@ -24,6 +23,7 @@ from .base import (
     ModelBackendError,
     ToolCall,
 )
+from .qwen_tool_parser import parse_qwen_tool_markup as _parse_qwen_tool_markup
 
 
 _DEFAULT_HTTPX_POST = httpx.post
@@ -34,22 +34,8 @@ _REASONING_CONTINUATION = (
     "Call an available tool if evidence or an action is required; otherwise return "
     "the requested final answer. Do not return another reasoning-only response."
 )
-_TOOL_CALL_OPEN = "<tool_call>"
-_TOOL_CALL_CLOSE = "</tool_call>"
-_FUNCTION_OPEN = "<function="
-_FUNCTION_CLOSE = "</function>"
-_PARAMETER_OPEN = "<parameter="
-_PARAMETER_CLOSE = "</parameter>"
 _PREFILL_CALIBRATION_SENTINEL = "MMM_ASSISTANT_PREFILL_CALIBRATION_V1"
 _MAX_PREFILL_TEMPLATE_BYTES = 512
-_STRUCTURAL_MARKERS = (
-    _TOOL_CALL_OPEN,
-    _TOOL_CALL_CLOSE,
-    _FUNCTION_OPEN,
-    _FUNCTION_CLOSE,
-    _PARAMETER_OPEN,
-    _PARAMETER_CLOSE,
-)
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -596,296 +582,6 @@ def _tool_schema_map(
     return result
 
 
-def _parse_qwen_tool_markup(
-    text: str,
-    schemas: Mapping[str, Mapping[str, Any]],
-) -> tuple[str, tuple[ToolCall, ...]]:
-    if not text:
-        return "", ()
-    calls: list[ToolCall] = []
-    spans: list[tuple[int, int]] = []
-    cursor = 0
-    while cursor < len(text):
-        wrapped_at = text.find(_TOOL_CALL_OPEN, cursor)
-        direct_at = text.find(_FUNCTION_OPEN, cursor)
-        starts = [value for value in (wrapped_at, direct_at) if value >= 0]
-        if not starts:
-            break
-        start = min(starts)
-        wrapped = wrapped_at == start
-        function_at = start + len(_TOOL_CALL_OPEN) if wrapped else start
-        function_at = _skip_space(text, function_at)
-        if not text.startswith(_FUNCTION_OPEN, function_at):
-            if wrapped:
-                raise RuntimeError("Qwen tool_call block does not begin with a function")
-            cursor = start + 1
-            continue
-        call, end = _parse_qwen_function(
-            text,
-            function_at,
-            schemas,
-            call_index=len(calls),
-        )
-        if wrapped:
-            close_at = _skip_space(text, end)
-            if not text.startswith(_TOOL_CALL_CLOSE, close_at):
-                raise RuntimeError("Qwen tool_call block is missing </tool_call>")
-            end = close_at + len(_TOOL_CALL_CLOSE)
-        calls.append(call)
-        spans.append((start, end))
-        cursor = end
-    for marker in _STRUCTURAL_MARKERS:
-        pos = text.find(marker)
-        if pos >= 0 and not any(begin <= pos < end for begin, end in spans):
-            raise RuntimeError(f"unparsed Qwen tool markup begins at {marker!r}")
-    if not spans:
-        return text, ()
-    visible: list[str] = []
-    previous = 0
-    for begin, end in spans:
-        visible.append(text[previous:begin])
-        previous = end
-    visible.append(text[previous:])
-    return "".join(visible), tuple(calls)
-
-
-def _parse_qwen_function(
-    text: str,
-    start: int,
-    schemas: Mapping[str, Mapping[str, Any]],
-    *,
-    call_index: int,
-) -> tuple[ToolCall, int]:
-    name_start = start + len(_FUNCTION_OPEN)
-    name_end = text.find(">", name_start)
-    if name_end < 0:
-        raise RuntimeError("Qwen function tag is missing '>'")
-    name = text[name_start:name_end].strip()
-    if not name:
-        raise RuntimeError("Qwen function tag has an empty tool name")
-    schema = schemas.get(name)
-    if schema is None:
-        raise RuntimeError(f"Qwen requested an unexposed tool {name!r}")
-
-    properties_value = schema.get("properties", {})
-    properties = properties_value if isinstance(properties_value, Mapping) else {}
-    required_value = schema.get("required", ())
-    required: set[str] = set()
-    if isinstance(required_value, Sequence) and not isinstance(required_value, (str, bytes)):
-        required = {str(value) for value in required_value}
-    additional = schema.get("additionalProperties", True)
-
-    arguments: dict[str, Any] = {}
-    argument_sources: dict[str, str] = {}
-    pos = name_end + 1
-    while True:
-        pos = _skip_space(text, pos)
-        if text.startswith(_FUNCTION_CLOSE, pos):
-            end = pos + len(_FUNCTION_CLOSE)
-            break
-        if not text.startswith(_PARAMETER_OPEN, pos):
-            snippet = " ".join(text[pos : pos + 120].split())
-            raise RuntimeError(
-                f"Qwen tool {name!r} emitted invalid parameter structure near {snippet!r}"
-            )
-        key_start = pos + len(_PARAMETER_OPEN)
-        key_end = text.find(">", key_start)
-        if key_end < 0:
-            raise RuntimeError(f"Qwen tool {name!r} parameter tag is missing '>'")
-        emitted_key = text[key_start:key_end].strip()
-        if not emitted_key:
-            raise RuntimeError(f"Qwen tool {name!r} emitted an empty parameter name")
-        key = emitted_key
-        if (
-            name == "apply_source_edit"
-            and emitted_key == "action"
-            and "operation" in properties
-            and "action" not in properties
-        ):
-            key = "operation"
-        elif (
-            name == "apply_source_edit"
-            and emitted_key == "file"
-            and "path" in properties
-            and "file" not in properties
-        ):
-            key = "path"
-        if key in arguments:
-            previous = argument_sources[key]
-            if {previous, emitted_key} == {"action", "operation"}:
-                raise RuntimeError(
-                    "Qwen tool 'apply_source_edit' emitted conflicting sources for "
-                    "parameter 'operation': alias 'action' and canonical 'operation'"
-                )
-            if {previous, emitted_key} == {"file", "path"}:
-                raise RuntimeError(
-                    "Qwen tool 'apply_source_edit' emitted conflicting sources for "
-                    "parameter 'path': alias 'file' and canonical 'path'"
-                )
-            raise RuntimeError(f"Qwen tool {name!r} repeated parameter {emitted_key!r}")
-        if key not in properties and additional is False:
-            raise RuntimeError(
-                f"Qwen tool {name!r} emitted unknown parameter {emitted_key!r}"
-            )
-        value_start = key_end + 1
-        close_at = _find_parameter_close(text, value_start)
-        if close_at < 0:
-            raise RuntimeError(
-                f"Qwen tool {name!r} parameter {key!r} is missing a structural "
-                "</parameter> terminator"
-            )
-        raw = _unwrap_parameter_text(text[value_start:close_at])
-        value_schema = properties.get(key, {})
-        if not isinstance(value_schema, Mapping):
-            value_schema = {}
-        arguments[key] = _decode_parameter_value(name, key, raw, value_schema)
-        argument_sources[key] = emitted_key
-        pos = close_at + len(_PARAMETER_CLOSE)
-
-    missing = sorted(required - arguments.keys())
-    if missing:
-        raise RuntimeError(
-            f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}"
-        )
-    raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
-    digest = hashlib.sha256(
-        f"{call_index}\0{name}\0{raw_arguments}".encode("utf-8")
-    ).hexdigest()[:16]
-    return (
-        ToolCall(
-            id=f"call_{digest}",
-            name=name,
-            arguments=arguments,
-            raw_arguments=raw_arguments,
-        ),
-        end,
-    )
-
-
-def _find_parameter_close(text: str, start: int) -> int:
-    search = start
-    while True:
-        candidate = text.find(_PARAMETER_CLOSE, search)
-        if candidate < 0:
-            return -1
-        after = _skip_space(text, candidate + len(_PARAMETER_CLOSE))
-        if (
-            text.startswith(_PARAMETER_OPEN, after)
-            or text.startswith(_FUNCTION_CLOSE, after)
-            or text.startswith(_TOOL_CALL_CLOSE, after)
-        ):
-            return candidate
-        search = candidate + len(_PARAMETER_CLOSE)
-
-
-def _unwrap_parameter_text(value: str) -> str:
-    if value.startswith("\r\n"):
-        value = value[2:]
-    elif value.startswith("\n"):
-        value = value[1:]
-    if value.endswith("\r\n"):
-        value = value[:-2]
-    elif value.endswith("\n"):
-        value = value[:-1]
-    return value
-
-
-def _decode_parameter_value(
-    tool_name: str,
-    key: str,
-    raw: str,
-    schema: Mapping[str, Any],
-) -> Any:
-    expected = _schema_value_type(schema)
-    compact = raw.strip()
-    try:
-        if expected == "string":
-            value: Any = raw
-        elif expected == "integer":
-            if not compact or any(ch in compact.lower() for ch in (".", "e")):
-                raise ValueError("not an integer")
-            value = int(compact)
-        elif expected == "number":
-            value = float(compact)
-        elif expected == "boolean":
-            lowered = compact.lower()
-            if lowered not in {"true", "false"}:
-                raise ValueError("not a boolean")
-            value = lowered == "true"
-        elif expected == "null":
-            if compact.lower() != "null":
-                raise ValueError("not null")
-            value = None
-        elif expected in {"object", "array"}:
-            value = json.loads(compact)
-            if expected == "object" and not isinstance(value, Mapping):
-                raise ValueError("not an object")
-            if expected == "array" and not isinstance(value, list):
-                raise ValueError("not an array")
-        else:
-            if compact.startswith(("{", "[", '"')) or compact in {"true", "false", "null"}:
-                value = json.loads(compact)
-            else:
-                value = raw
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
-            f"for parameter {key!r}"
-        ) from exc
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum and value not in enum:
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
-        )
-    return value
-
-
-def _schema_value_type(schema: Mapping[str, Any]) -> str:
-    raw_type = schema.get("type")
-    if isinstance(raw_type, str):
-        return raw_type
-    if isinstance(raw_type, list):
-        non_null = [str(value) for value in raw_type if str(value) != "null"]
-        if len(non_null) == 1:
-            return non_null[0]
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        kinds = {_json_type(value) for value in enum if value is not None}
-        if len(kinds) == 1:
-            return next(iter(kinds))
-    for keyword in ("oneOf", "anyOf"):
-        choices = schema.get(keyword)
-        if isinstance(choices, list):
-            kinds = {
-                _schema_value_type(choice)
-                for choice in choices
-                if isinstance(choice, Mapping)
-            }
-            kinds.discard("")
-            kinds.discard("null")
-            if len(kinds) == 1:
-                return next(iter(kinds))
-    return ""
-
-
-def _json_type(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if isinstance(value, Mapping):
-        return "object"
-    if isinstance(value, list):
-        return "array"
-    if value is None:
-        return "null"
-    return ""
-
-
 def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall]) -> None:
     if not request.parallel_tool_calls and len(calls) > 1:
         raise RuntimeError("model emitted parallel tool calls when they are disabled")
@@ -914,12 +610,6 @@ def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall])
             )
         return
     raise RuntimeError(f"unsupported tool_choice contract: {choice!r}")
-
-
-def _skip_space(text: str, position: int) -> int:
-    while position < len(text) and text[position].isspace():
-        position += 1
-    return position
 
 
 def _has_semantic_action(turn: GenerationResponse) -> bool:
