@@ -1124,6 +1124,20 @@ def _collect_staged_operations(
     return operations, touched, discarded
 
 
+def _extract_json(text: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise CustomModuleGenerationError("Model output did not contain one parseable JSON object.")
+
+
 def _is_stale_project_index_error(exc: ValueError) -> bool:
     return str(exc).startswith("Project source changed after its context index was built:")
 
