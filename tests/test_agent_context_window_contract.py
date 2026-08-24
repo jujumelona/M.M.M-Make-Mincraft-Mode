@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import inspect
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
+import yaml
 
+import minecraft_mod_ai.progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     LlamaCompletionBoundaryError,
@@ -20,11 +24,13 @@ from minecraft_mod_ai.llama_generation_budget import (
     apply_structured_output_constraint,
 )
 from minecraft_mod_ai.llama_stream_efficiency_contract import (
+    LlamaToolLivenessTimeout,
+    _StreamingCompletionClient,
     _bounded_timeout,
     _stream_idle_timeout_seconds,
     _tool_idle_timeout_seconds,
 )
-from minecraft_mod_ai.model_adapters import AdapterConfig
+from minecraft_mod_ai.model_adapters import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_context_budget import (
     effective_context_tokens,
     emergency_fit_messages,
@@ -102,6 +108,26 @@ def test_default_transport_liveness_is_finite_and_below_legacy_stall(monkeypatch
     assert _bounded_timeout(stricter, read_seconds=120.0).read == 17.0
 
 
+def test_native_tool_timeout_becomes_typed_liveness_failure() -> None:
+    class TimeoutClient:
+        def post(self, url: str, **kwargs):
+            del kwargs
+            raise httpx.ReadTimeout(
+                "synthetic timeout",
+                request=httpx.Request("POST", url),
+            )
+
+    client = _StreamingCompletionClient(TimeoutClient())
+    timeout = httpx.Timeout(connect=1.0, read=120.0, write=1.0, pool=1.0)
+
+    with pytest.raises(LlamaToolLivenessTimeout, match="request aborted"):
+        client.post(
+            "http://llama.test/v1/chat/completions",
+            json={"messages": [], "tools": [{"type": "function"}]},
+            timeout=timeout,
+        )
+
+
 def test_structured_action_page_uses_json_schema_and_finite_budget() -> None:
     schema = {
         "type": "object",
@@ -135,6 +161,82 @@ def test_exhausted_context_recovery_preserves_original_boundary_identity() -> No
     assert context_recovery_exhausted(boundary)
     assert completion_boundary_error(boundary) is boundary
     assert completion_boundary_kind(boundary) == ""
+
+
+def test_context_retry_keeps_tools_and_reraises_first_boundary(monkeypatch) -> None:
+    first = LlamaCompletionBoundaryError(
+        "first context boundary",
+        kind=CONTEXT_PRESSURE,
+        prompt_tokens=24_000,
+        max_tokens=8_192,
+    )
+    second = LlamaCompletionBoundaryError(
+        "retry context boundary",
+        kind=CONTEXT_PRESSURE,
+        prompt_tokens=20_000,
+        max_tokens=8_192,
+    )
+
+    monkeypatch.setattr(
+        tool_loop,
+        "fit_messages_to_context",
+        lambda messages, *, config, tools: tuple(messages),
+    )
+    monkeypatch.setattr(
+        tool_loop,
+        "emergency_fit_messages",
+        lambda messages, *, budget_bytes: (
+            *tuple(messages),
+            {"role": "system", "content": "deterministically compacted"},
+        ),
+    )
+
+    class Router:
+        @staticmethod
+        def _generation_scope(config):
+            del config
+            return nullcontext()
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def generate_turn(self, request: GenerationRequest):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                raise first
+            raise second
+
+    tool = _tool_schema()
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "continue implementation"},),
+        tools=tool,
+        tool_validation_schemas=tool,
+        tool_choice="auto",
+        parallel_tool_calls=False,
+    )
+    messages = [dict(message) for message in request.messages]
+    adapter = Adapter()
+
+    with pytest.raises(LlamaCompletionBoundaryError) as caught:
+        tool_loop._generate_turn_with_context_recovery(
+            Router(),
+            config=_config(),
+            adapter=adapter,
+            request=request,
+            messages=messages,
+            media_paths=(),
+            tool_choice="auto",
+            parallel_tool_calls=False,
+        )
+
+    assert caught.value is first
+    assert caught.value.__cause__ is second
+    assert context_recovery_exhausted(first)
+    assert len(adapter.requests) == 2
+    assert all(item.tools == tool for item in adapter.requests)
+    assert all(item.tool_validation_schemas == tool for item in adapter.requests)
+    assert all(item.tool_choice == "auto" for item in adapter.requests)
 
 
 def test_compaction_preserves_tool_pairs_latest_mutation_and_archives_old_history(
@@ -221,11 +323,22 @@ def test_compaction_preserves_tool_pairs_latest_mutation_and_archives_old_histor
     assert list((tmp_path / "context").glob("*.json"))
 
 
+def test_t4_registry_keeps_model_capability_and_finite_runtime_page() -> None:
+    root = Path(__file__).resolve().parents[1]
+    registry = yaml.safe_load((root / "config" / "model_registry.yaml").read_text())
+    coder = registry["profiles"]["Qwen3.5-9B_6GB"]["roles"]["coder"]
+
+    assert coder["max_context"] == 262_144
+    assert coder["runtime_context_default"] == 32_768
+    assert coder["max_new_tokens"] == 8_192
+
+
 def test_model_router_has_one_direct_tool_loop_owner() -> None:
     source = inspect.getsource(ModelRouter._generate_with_tools)
     assert "progress_aware_tool_loop" in source
     assert "generate_with_tools(" in source
     assert "while True" not in source
+    assert ModelRouter._generate_with_tools._mmm_dynamic_causal_frontier is True
 
 
 def test_runtime_sources_have_no_legacy_unbounded_llama_transport() -> None:
@@ -241,6 +354,14 @@ def test_runtime_sources_have_no_legacy_unbounded_llama_transport() -> None:
 
 def test_superseded_context_and_coder_route_modules_are_deleted() -> None:
     root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
-    assert not (root / "small_model_context_compaction.py").exists()
-    assert not (root / "coder_tool_route_integrity_contract.py").exists()
-    assert not (root / "causal_stale_tool_recovery_contract.py").exists()
+    retired = (
+        "small_model_context_compaction",
+        "coder_tool_route_integrity_contract",
+        "causal_stale_tool_recovery_contract",
+    )
+    for module_name in retired:
+        assert not (root / f"{module_name}.py").exists()
+    for path in root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for module_name in retired:
+            assert module_name not in source, f"retired module referenced by {path}"
