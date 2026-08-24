@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.forced_tool_execution_contract import _install_adapter_class
+from minecraft_mod_ai.forced_tool_execution_contract import (
+    _install_adapter_class,
+    mark_causal_resync_request,
+)
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
     GenerationResponse,
@@ -52,7 +55,7 @@ def _request(*, forced: str, stale: str) -> GenerationRequest:
     )
 
 
-def test_validation_only_stale_call_inside_forced_action_uses_one_local_correction() -> None:
+def test_validation_only_stale_call_inside_causal_resync_uses_one_local_correction() -> None:
     forced = "required_workspace_action"
     stale = "stale_workspace_action"
 
@@ -71,8 +74,9 @@ def test_validation_only_stale_call_inside_forced_action_uses_one_local_correcti
         deterministic_stale_read=False,
     )
     adapter = Adapter()
+    request = mark_causal_resync_request(_request(forced=forced, stale=stale))
 
-    result = adapter.generate_turn(_request(forced=forced, stale=stale))
+    result = adapter.generate_turn(request)
 
     assert [call.name for call in result.tool_calls] == [forced]
     assert len(adapter.requests) == 2
@@ -85,7 +89,7 @@ def test_validation_only_stale_call_inside_forced_action_uses_one_local_correcti
     assert "only available function" in adapter.requests[1].messages[-1]["content"]
 
 
-def test_forced_action_stale_mismatch_remains_bounded_after_one_correction() -> None:
+def test_causal_resync_stale_mismatch_remains_bounded_after_one_correction() -> None:
     forced = "required_workspace_action"
     stale = "stale_workspace_action"
 
@@ -103,8 +107,9 @@ def test_forced_action_stale_mismatch_remains_bounded_after_one_correction() -> 
         deterministic_stale_read=False,
     )
     adapter = Adapter()
+    request = mark_causal_resync_request(_request(forced=forced, stale=stale))
 
     with pytest.raises(ModelConfigurationError, match="after one protocol correction"):
-        adapter.generate_turn(_request(forced=forced, stale=stale))
+        adapter.generate_turn(request)
 
     assert len(adapter.requests) == 2
