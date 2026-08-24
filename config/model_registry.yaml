@@ -160,7 +160,7 @@ _qwen35_9b: &qwen35_9b
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
-  max_new_tokens: -1
+  max_new_tokens: 8192
   min_free_vram_mb: 1000
   exclusive_gpu: true
 
