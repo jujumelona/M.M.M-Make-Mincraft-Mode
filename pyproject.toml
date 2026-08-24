@@ -47,7 +47,10 @@ rag = [
   "numpy>=1.26,<3",
   "sentence-transformers>=3.0,<6",
 ]
-ui = ["gradio>=5.0,<6"]
+# Colab currently ships Gradio 6.x. Keep MMM on that compatible line instead of
+# downgrading to Gradio 5.50, which pins gradio-client 1.14, pydantic<=2.12.3 and
+# starlette<1 and conflicts with the current Colab/Hugging Face/Google stack.
+ui = ["gradio>=6.24,<7"]
 image = [
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
   "diffusers>=0.39,<1",
