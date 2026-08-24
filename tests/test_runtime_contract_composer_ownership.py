@@ -6,23 +6,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "minecraft_mod_ai"
-_APPROVED = {
-    "runtime_bootstrap.py",
-    "llama_tuning_pipeline.py",
-}
+_APPROVED = {"runtime_bootstrap.py", "llama_tuning_pipeline.py"}
 _COMPOSER_MODULE = "runtime_contract_composer"
 _COMPOSER_FUNCTION = "compose_contract_stages"
 
 
 def _is_composer_module(name: str | None) -> bool:
-    if not name:
-        return False
-    return name.rsplit(".", 1)[-1] == _COMPOSER_MODULE
+    return bool(name) and name.rsplit(".", 1)[-1] == _COMPOSER_MODULE
 
 
 def _composer_references(path: Path) -> list[int]:
-    """Find composer imports/references, not only calls, so aliases cannot bypass ownership."""
-
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     lines: set[int] = set()
     for node in ast.walk(tree):
@@ -53,11 +46,7 @@ def test_only_explicit_runtime_owners_may_reference_contract_composer() -> None:
         references = _composer_references(path)
         if references:
             actual[path.name] = references
-
-    assert set(actual) == _APPROVED, (
-        "contract composer ownership changed; import/reference composition only "
-        f"through the approved runtime owners: {actual}"
-    )
+    assert set(actual) == _APPROVED
 
 
 def test_aliases_cannot_hide_composer_ownership(tmp_path: Path) -> None:
@@ -65,22 +54,21 @@ def test_aliases_cannot_hide_composer_ownership(tmp_path: Path) -> None:
     direct_alias.write_text(
         "from minecraft_mod_ai.runtime_contract_composer import "
         "compose_contract_stages as compose\n"
-        "compose(owner_name='x', version=1, state_owner=object(), stages=())\n",
+        "compose(owner_name='x', state_owner=object(), stages=())\n",
         encoding="utf-8",
     )
     module_alias = tmp_path / "module_alias.py"
     module_alias.write_text(
         "import minecraft_mod_ai.runtime_contract_composer as runtime_contract\n"
         "compose = runtime_contract.compose_contract_stages\n"
-        "compose(owner_name='x', version=1, state_owner=object(), stages=())\n",
+        "compose(owner_name='x', state_owner=object(), stages=())\n",
         encoding="utf-8",
     )
-
     assert _composer_references(direct_alias)
     assert _composer_references(module_alias)
 
 
-def test_package_bootstrap_phase_order_is_explicit_and_stable() -> None:
+def test_package_bootstrap_phase_order_is_explicit_and_graph_owned() -> None:
     source = (PACKAGE / "runtime_bootstrap.py").read_text(encoding="utf-8")
     order = (
         'ContractStage("prebootstrap"',
@@ -102,18 +90,21 @@ def test_package_bootstrap_phase_order_is_explicit_and_stable() -> None:
     assert source.index('ContractStage("integrity"') > source.index(
         'ContractStage("postbootstrap"'
     )
-    # v6 records the executable host-selected causal action transport.
-    assert "_RUNTIME_COMPOSITION_VERSION = 6" in source
+    assert "_RUNTIME_COMPOSITION_VERSION" not in source
+    assert "version=" not in source
     assert "verify_installed_wrappers" in source
     assert "state_owner=_contract_composer" in source
 
 
-def test_llama_pipeline_uses_same_fail_closed_kernel() -> None:
+def test_llama_pipeline_uses_same_graph_owned_fail_closed_kernel() -> None:
     source = (PACKAGE / "llama_tuning_pipeline.py").read_text(encoding="utf-8")
     assert 'owner_name="native-llama-tuning"' in source
     assert "compose_contract_stages(" in source
     assert "boundaries=self._callable_boundaries()" in source
     assert "_mmm_tuning_pipeline_receipts" in source
+    assert "_TUNING_PIPELINE_VERSION" not in source
+    assert "_mmm_tuning_pipeline_version" not in source
+    assert "version=" not in source
 
 
 def test_llama_runtime_types_are_owned_before_any_tuning_wrapper() -> None:
@@ -121,9 +112,7 @@ def test_llama_runtime_types_are_owned_before_any_tuning_wrapper() -> None:
     runtime_types = source.index('TuningStage("runtime-types"')
     hardware = source.index('TuningStage("hardware"')
     runtime = source.index('TuningStage("runtime"')
-
     assert runtime_types < hardware < runtime
-    assert "_TUNING_PIPELINE_VERSION = 35" in source
     assert "_install_runtime_type_ownership" in source
     assert "_mmm_runtime_tuning_type_owner" in source
     assert '"autotune.server_variant"' in source
