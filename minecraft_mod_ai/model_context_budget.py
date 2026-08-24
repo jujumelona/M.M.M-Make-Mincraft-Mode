@@ -65,13 +65,12 @@ def _effective_context_tokens(config: Any) -> int:
 
 
 def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
-    """Return a conservative input budget without inventing a tool-output cap.
+    """Return a conservative input budget from the slot that actually serves the turn.
 
-    Local llama tool turns terminate at the semantic action boundary, so prompt fitting
-    must not reserve a second arbitrary prediction budget. We reserve only the shared
-    context guard plus the actual serialized tool schemas. Non-llama adapters retain
-    their configured output reservation because they do not use this semantic stream
-    boundary.
+    Local llama action pages are bounded separately by the transport. Prompt fitting
+    therefore reserves the shared context guard plus the serialized tool schemas, not
+    the registry's theoretical model context. This is what makes a T4 32K slot remain
+    authoritative even when the GGUF advertises a 262K model maximum.
     """
 
     default = _default_context_bytes()
@@ -85,7 +84,6 @@ def request_message_budget(config: Any, tools: Sequence[Any] = ()) -> int:
 
     adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
     reserved_output_tokens = 0 if adapter == "llama_cpp" else max_new_tokens
-
     available_input_tokens = max(
         2048,
         max_context - reserved_output_tokens - _CONTEXT_TOKEN_GUARD,
@@ -138,7 +136,7 @@ def _summary_payload(
         "preview": _tool_preview(raw, allowance=preview_bytes, encoded=raw_bytes),
     }
     if isinstance(parsed, Mapping):
-        for key in ("ok", "tool", "error"):
+        for key in ("ok", "tool", "error", "_mmm_source_mutation"):
             if key in parsed:
                 value = parsed.get(key)
                 if key == "error" and isinstance(value, str):
@@ -166,6 +164,48 @@ def _summary_payload(
         separators=(",", ":"),
         default=str,
     )
+
+
+def bounded_tool_message(
+    message: Mapping[str, Any],
+    *,
+    config: Any,
+    tools: Sequence[Any] = (),
+) -> Mapping[str, Any]:
+    """Archive one oversized tool observation before it enters live history.
+
+    The full result remains content-addressable on the host; the model receives a
+    protocol-valid tool message containing the observation receipt and a bounded
+    head/tail preview. Recent small results are untouched.
+    """
+
+    original = dict(message)
+    if str(original.get("role", "")) != "tool" or not isinstance(
+        original.get("content"), str
+    ):
+        return original
+    raw = str(original["content"])
+    raw_bytes = raw.encode("utf-8")
+    request_budget = request_message_budget(config, tools)
+    allowance = max(
+        _MIN_TOOL_PREVIEW_BYTES,
+        min(16 * 1024, max(_MIN_TOOL_PREVIEW_BYTES, request_budget // 4)),
+    )
+    if len(raw_bytes) <= allowance:
+        return original
+
+    from .small_model_context_compaction import _archive_transcript
+
+    archive = _archive_transcript((original,))
+    if not bool(archive.get("available")):
+        return original
+    replacement = dict(original)
+    replacement["content"] = _summary_payload(
+        original,
+        archive=archive,
+        preview_bytes=min(8 * 1024, allowance),
+    )
+    return replacement
 
 
 def _compact_tool_messages(
@@ -324,6 +364,7 @@ def emergency_fit_messages(
 
 
 __all__ = [
+    "bounded_tool_message",
     "emergency_fit_messages",
     "fit_messages_to_context",
     "request_message_budget",
