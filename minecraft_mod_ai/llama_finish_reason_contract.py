@@ -30,6 +30,7 @@ _HTTP_CONTEXT_MARKERS = (
     '"type":"exceed_context_size"',
     '"type": "exceed_context_size"',
 )
+_CONTEXT_RECOVERY_EXHAUSTED_ATTR = "_mmm_context_recovery_exhausted"
 
 
 class LlamaCompletionBoundaryError(RuntimeError):
@@ -77,11 +78,45 @@ def completion_boundary_error(
     return None
 
 
-def completion_boundary_kind(exc: BaseException) -> str:
-    """Return a typed completion-boundary kind through wrapper chains."""
+def mark_context_recovery_exhausted(exc: BaseException) -> None:
+    """Mark one context boundary as already recovered by the canonical tool loop.
+
+    The boundary object itself is preserved so callers still receive the original
+    backend exception and its partial-message receipt. Only outer recovery-policy
+    classification is disabled, preventing legacy layers from starting a second,
+    tool-disabled recovery path after deterministic compaction already failed.
+    """
 
     boundary = completion_boundary_error(exc)
-    return boundary.kind if boundary is not None else ""
+    if boundary is not None and boundary.kind == CONTEXT_PRESSURE:
+        setattr(boundary, _CONTEXT_RECOVERY_EXHAUSTED_ATTR, True)
+
+
+def context_recovery_exhausted(exc: BaseException) -> bool:
+    """Return whether canonical deterministic context recovery already ran."""
+
+    boundary = completion_boundary_error(exc)
+    return bool(
+        boundary is not None
+        and getattr(boundary, _CONTEXT_RECOVERY_EXHAUSTED_ATTR, False)
+    )
+
+
+def completion_boundary_kind(exc: BaseException) -> str:
+    """Return a recoverable completion-boundary kind through wrapper chains.
+
+    A context boundary whose one canonical overflow-recovery attempt is exhausted is
+    deliberately no longer advertised as recoverable. The original typed exception
+    remains discoverable through :func:`completion_boundary_error` and is re-raised
+    unchanged by outer layers.
+    """
+
+    boundary = completion_boundary_error(exc)
+    if boundary is None:
+        return ""
+    if getattr(boundary, _CONTEXT_RECOVERY_EXHAUSTED_ATTR, False):
+        return ""
+    return boundary.kind
 
 
 def _int_value(value: Any) -> int:
@@ -228,6 +263,8 @@ __all__ = [
     "_length_error",
     "completion_boundary_error",
     "completion_boundary_kind",
+    "context_recovery_exhausted",
     "install",
+    "mark_context_recovery_exhausted",
     "partial_message_receipt",
 ]
