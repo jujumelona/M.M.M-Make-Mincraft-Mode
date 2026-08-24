@@ -25,8 +25,7 @@ def _encoded_size(messages: Any) -> int:
 
 
 def run_context_budget_preflight() -> None:
-    from . import llama_server_hardware_policy
-    from . import small_model_context_compaction as archive_module
+    from . import llama_server_hardware_policy, model_context_budget
     from .llama_length_resilience import length_recovery_installed
     from .model_adapters import llama_cpp_adapter
     from .model_context_budget import fit_messages_to_context, request_message_budget
@@ -34,13 +33,13 @@ def run_context_budget_preflight() -> None:
     if (
         getattr(
             llama_server_hardware_policy._server_payload,
-            "_mmm_unbounded_llama_completion_v3",
+            "_mmm_finite_generation_budget_v1",
             False,
         )
         is not True
     ):
         raise ContextBudgetPreflightError(
-            "llama-server payload is missing the bounded-tool/unbounded-text completion policy"
+            "llama-server payload is missing the finite generation budget policy"
         )
 
     synthetic_adapter = SimpleNamespace(
@@ -56,9 +55,9 @@ def run_context_budget_preflight() -> None:
             response_format="text",
         ),
     )
-    if synthetic_payload.get("max_tokens") != -1:
+    if synthetic_payload.get("max_tokens") != 8192:
         raise ContextBudgetPreflightError(
-            "llama-server non-tool production payload is still capped by max_new_tokens"
+            "llama-server non-tool production payload is not using the finite text budget"
         )
 
     tool_schema = {
@@ -86,7 +85,7 @@ def run_context_budget_preflight() -> None:
     )
     if synthetic_tool_payload.get("max_tokens") != 8192:
         raise ContextBudgetPreflightError(
-            "tool turns must preserve the base bounded output budget"
+            "tool turns must preserve the bounded tool-action budget"
         )
     if synthetic_tool_payload.get("tool_choice") != "required":
         raise ContextBudgetPreflightError(
@@ -186,8 +185,8 @@ def run_context_budget_preflight() -> None:
             "synthetic first-tool-round fixture no longer exceeds its context budget"
         )
 
-    original_archive = archive_module._archive_transcript
-    archive_module._archive_transcript = lambda values: {
+    original_archive = model_context_budget.archive_transcript
+    model_context_budget.archive_transcript = lambda values: {
         "available": True,
         "sha256": "sha256:" + "0" * 64,
         "bytes": _encoded_size(values),
@@ -197,7 +196,7 @@ def run_context_budget_preflight() -> None:
     try:
         fitted = fit_messages_to_context(messages, config=config, tools=tools)
     finally:
-        archive_module._archive_transcript = original_archive
+        model_context_budget.archive_transcript = original_archive
 
     if _encoded_size(fitted) > budget:
         raise ContextBudgetPreflightError(
