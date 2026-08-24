@@ -192,7 +192,7 @@ def test_required_single_tool_turn_does_not_restore_agent_thinking() -> None:
             "function": {"name": "read_project_file"},
         }
     )
-    local = _single_tool_request(original, "read_project_file", retry=False)
+    local = _single_tool_request(original, "read_project_file")
 
     payload = hardware._server_payload(_Adapter(), local)
 
