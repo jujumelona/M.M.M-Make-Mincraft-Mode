@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import secrets
 import shutil
 import stat
@@ -15,17 +14,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .complete_spec import ProductionModule
-from .host_grounding import (
-    build_coder_grounding,
-    custom_module_path_allowed,
-    custom_module_path_protected,
-)
-from .llama_finish_reason_contract import (
-    CONTEXT_PRESSURE,
-    OUTPUT_EXHAUSTED,
-    completion_boundary_error,
-    completion_boundary_kind,
-)
+from .host_grounding import build_coder_grounding, custom_module_path_protected
+from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_kind
+from .model_context_budget import request_message_budget
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
@@ -38,45 +29,18 @@ class CustomModuleGenerationError(RuntimeError):
     pass
 
 
-_OBSERVATION_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,127}")
-_ANCHOR_TERMS = {
-    "api",
-    "contract",
-    "dependency",
-    "implements",
-    "interface",
-    "public",
-    "register",
-    "required",
-    "schema",
-}
-_FABRIC_ROOT_METADATA_PATH = "fabric.mod.json"
-_FABRIC_CANONICAL_METADATA_PATH = "src/main/resources/fabric.mod.json"
-_MAX_CUSTOM_MODULE_REPAIR_ATTEMPTS = 2
 _AGENT_MUTABLE_PREFIXES = (
     "src/main/java/",
     "src/main/resources/",
     "src/test/java/",
     "src/gametest/",
 )
-# Host ledgers/trajectory stores are neither implementation source nor model evidence.
-# Excluding them also keeps resumable source checkpoints stable when telemetry changes.
 _STAGE_IGNORED_DIRS = {".git", ".gradle", ".minecraft_ai", "build", "run"}
 _CONTINUATION_PATH_PREVIEW = 64
 _CHECKPOINT_DIRECTORY = ".mmm-custom-checkpoints"
 _CHECKPOINT_SCHEMA = "mmm/custom-module-checkpoint-v2"
-_CHECKPOINT_KEY = re.compile(r"^[0-9a-f]{64}$")
+_CHECKPOINT_KEY = __import__("re").compile(r"^[0-9a-f]{64}$")
 _CHECKPOINT_STRATEGY_EPOCH = "mmm/custom-candidate-strategy-v1"
-_RECOVERY_CHUNK_CHARS = 2048
-_RECOVERY_SOURCE_CONTEXT_BYTES = 4096
-_RECOVERY_SOURCE_EDIT_OPERATIONS = (
-    "replace_exact",
-    "insert_before",
-    "insert_after",
-    "create_file",
-    "append_file",
-)
-_PARTIAL_FUNCTION = re.compile(r"<function=\s*apply_source_edit\s*>")
 _CHECKPOINT_ACTIVE_LOCK = threading.RLock()
 _CHECKPOINT_ACTIVE_PATHS: set[Path] = set()
 _CHECKPOINT_LEASE_SCOPE = threading.local()
@@ -105,8 +69,6 @@ class _GenerationCheckpointLease:
 
 
 def _checkpoint_lease_scoped(method):
-    """Release every untransferred lease when generation exits or raises."""
-
     @wraps(method)
     def guarded(*args: Any, **kwargs: Any):
         previous = getattr(_CHECKPOINT_LEASE_SCOPE, "leases", None)
@@ -153,8 +115,6 @@ def _active_checkpoint_persistence(
     staged_root: Path,
     identity_sha256: str,
 ):
-    """Expose one exact staged workspace to the post-patch durability hook."""
-
     previous = getattr(_CHECKPOINT_PERSISTENCE_SCOPE, "state", None)
     _CHECKPOINT_PERSISTENCE_SCOPE.state = (
         checkpoint_root,
@@ -174,7 +134,7 @@ def _active_checkpoint_persistence(
 
 
 def persist_active_generation_checkpoint(project_root: str | Path) -> bool:
-    """Fsync the active manifest immediately after one staged source transaction."""
+    """Persist the exact active staged workspace after a source transaction."""
 
     state = getattr(_CHECKPOINT_PERSISTENCE_SCOPE, "state", None)
     if not isinstance(state, tuple) or len(state) != 3:
@@ -200,11 +160,11 @@ def _coder_project_context_budget(
     *,
     fast_mode: bool,
 ) -> int:
-    """Size exact-source grounding from the active coder model's input window."""
+    """Bound source grounding by the live request capacity, not model capability."""
+
     hard_cap = max(1024, int(policy.model_context_bytes))
     if fast_mode:
         return min(hard_cap, 4 * 1024)
-
     fallback = min(hard_cap, 12 * 1024)
     registry = getattr(router, "registry", None)
     resolve_role = getattr(registry, "role", None)
@@ -213,29 +173,23 @@ def _coder_project_context_budget(
         return fallback
     try:
         config = resolve_role(profile, "coder")
+        live_request_bytes = int(request_message_budget(config, ()))
     except Exception:
         return fallback
-
-    max_context = int(getattr(config, "max_context", 0) or 0)
-    max_input = int(getattr(config, "max_input_tokens", 0) or 0)
-    max_new = int(getattr(config, "max_new_tokens", 0) or 0)
-    input_tokens = max_input if max_input > 0 else max(0, max_context - max_new)
-    if input_tokens <= 0:
+    if live_request_bytes <= 0:
         return fallback
-
-    reserve_tokens = max(2048, min(8192, max_new // 2 if max_new > 0 else 4096))
-    evidence_tokens = max(512, input_tokens - reserve_tokens)
-    return min(hard_cap, max(1024, evidence_tokens * 2))
+    # Exact-source grounding is only one component of the request. The model can
+    # retrieve more source from the host index after the first turn.
+    return min(hard_cap, max(1024, live_request_bytes // 2))
 
 
 class CustomModuleGenerator:
-    """Implement one approved module as a tool-using coding agent.
+    """Implement one approved module through the canonical tool-capable coder loop.
 
-    The coder receives the feature goal, exact-source grounding and approved research, then
-    inspects and edits a disposable project workspace with normal MCP tools. It is never asked
-    to predict a file plan, patch protocol state, SHA values, cursors or completion metadata.
-    The host validates the staged diff and transactionally applies only module source/resource
-    changes to the real project.
+    The host owns indexing, source receipts, checkpointing, validation and transactional
+    application. The model sees bounded exact source and research receipts, retrieves
+    more evidence on demand, and performs edits with normal tools. There is no second
+    file-plan, cursor, scalar-repair or tool-disabled recovery protocol here.
     """
 
     def __init__(
@@ -256,9 +210,7 @@ class CustomModuleGenerator:
             project_index.root if project_index is not None else None
         )
         self._checkpoint_root = (
-            Path(checkpoint_root).expanduser()
-            if checkpoint_root is not None
-            else None
+            Path(checkpoint_root).expanduser() if checkpoint_root is not None else None
         )
         self._checkpoint_cleanup_lock = threading.RLock()
         self._checkpoint_cleanup_tokens: dict[
@@ -285,8 +237,7 @@ class CustomModuleGenerator:
             )
 
         requested = tuple(
-            str(value or "").strip()
-            for value in (minecraft_version, loader, mappings)
+            str(value or "").strip() for value in (minecraft_version, loader, mappings)
         )
         if any(requested):
             if not all(requested):
@@ -337,18 +288,12 @@ class CustomModuleGenerator:
             self.policy,
             fast_mode=self.fast_mode,
         )
-        if self.fast_mode:
-            print(
-                "🚀 [Fast-Path] host exact-source grounding limited to 4 KiB.",
-                flush=True,
-            )
 
         observation_ledger: dict[str, Any] | None = None
         last_snapshot_error: ValueError | None = None
         for snapshot_attempt in range(3):
             try:
                 observation_ledger = _collect_initial_observations(
-                    self.router,
                     index,
                     query=query,
                     byte_budget=project_context_budget,
@@ -362,15 +307,14 @@ class CustomModuleGenerator:
                 self._cached_index = index
                 self._cached_root = root
                 print(
-                    "↻ [CustomModule] ProjectIndex snapshot changed during parallel generation; "
-                    f"refreshed context ({snapshot_attempt + 1}/3).",
+                    "custom module: refreshed changing ProjectIndex snapshot",
+                    f"attempt={snapshot_attempt + 1}/3",
                     flush=True,
                 )
         if observation_ledger is None:
             raise CustomModuleGenerationError(
-                "Project source kept changing while custom-module context was being captured; "
-                "refusing to generate from a stale snapshot. "
-                f"Last error: {last_snapshot_error}"
+                "Project source kept changing while custom-module context was captured; "
+                f"last error: {last_snapshot_error}"
             )
 
         observation_pages = _observation_context_pages(
@@ -381,7 +325,7 @@ class CustomModuleGenerator:
         research_context = select_module_research_context(
             research_modules,
             query=query,
-            byte_budget=8 * 1024,
+            byte_budget=min(8 * 1024, project_context_budget),
         )
         host_grounding = build_coder_grounding(
             module_kind=module.kind,
@@ -394,14 +338,11 @@ class CustomModuleGenerator:
 
         before = _project_snapshot(root)
         checkpoint_identity = _generation_checkpoint_identity(
-            root=root,
             module_query=query,
             minecraft_version=minecraft_version,
             loader=loader,
             mappings=mappings,
-            observation_receipt=observation_ledger["receipt"],
             research_context=research_context,
-            host_grounding=host_grounding,
             router=self.router,
         )
         checkpoint_root, staged_root, checkpoint_resumed, checkpoint_lease = (
@@ -432,66 +373,61 @@ class CustomModuleGenerator:
                     identity_sha256=checkpoint_identity,
                 )
                 checkpoint_resumed = False
-        self.router.bind_agent_workspace(
-            staged_root,
-            require_fresh_evidence=True,
-        )
+
+        self.router.bind_agent_workspace(staged_root, require_fresh_evidence=True)
         request = {
-                "phase": "implement_module",
-                "task": "Implement the approved Minecraft/Fabric mod feature in the current project.",
-                "workspace_project_root": ".",
-                "target": {
-                    "minecraft_version": minecraft_version,
-                    "loader": loader,
-                    "mappings": mappings,
-                    "java": java_version,
-                },
-                "module": {
-                    "module_id": module.module_id,
-                    "kind": module.kind,
-                    "config": module.config,
-                    "depends_on": list(module.depends_on),
-                    "required_gates": list(module.required_gates),
-                },
-                "project_manifest": index.manifest_receipt(),
-                "source_observation_receipt": observation_ledger["receipt"],
-                "initial_exact_source_context": observation_pages[0],
-                "research_context": research_context,
-                "host_grounding": host_grounding,
-                "checkpoint": {
-                    "resumed": checkpoint_resumed,
-                    "source_state_sha256": _mutable_stage_state_sha256(staged_root),
-                },
-                "rules": [
-                    "Implement the feature; do not return or invent a file-plan protocol.",
-                    "Use available workspace/RAG/MCP tools to inspect any source or research you need before editing.",
-                    "Apply real edits with the available source patch tool; your final text is only a short work summary.",
-                    "Custom-module edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
-                    "Build infrastructure, Gradle wrapper/settings, shell scripts and host-owned ledgers are read-only for this task.",
-                    "Do not delete files. If a tool action is rejected, inspect the project and recover with a valid source/resource edit.",
-                    "Use only the selected Minecraft/loader/mappings/Java target and preserve existing project conventions.",
-                    "Keep gameplay state server-authoritative and persistent where the approved feature requires it.",
-                    "Preserve valid source/resource work already present in a resumed checkpoint; inspect before replacing it.",
-                ],
+            "phase": "implement_module",
+            "task": "Implement the approved Minecraft/Fabric mod feature in the current project.",
+            "workspace_project_root": ".",
+            "target": {
+                "minecraft_version": minecraft_version,
+                "loader": loader,
+                "mappings": mappings,
+                "java": java_version,
+            },
+            "module": {
+                "module_id": module.module_id,
+                "kind": module.kind,
+                "config": module.config,
+                "depends_on": list(module.depends_on),
+                "required_gates": list(module.required_gates),
+            },
+            "project_manifest": index.manifest_receipt(),
+            "source_observation_receipt": observation_ledger["receipt"],
+            "initial_exact_source_context": observation_pages[0],
+            "research_context": research_context,
+            "host_grounding": host_grounding,
+            "checkpoint": {
+                "resumed": checkpoint_resumed,
+                "source_state_sha256": _mutable_stage_state_sha256(staged_root),
+            },
+            "rules": [
+                "Implement the feature directly; do not return a file-plan protocol.",
+                "Use workspace/RAG/MCP tools to retrieve exact source as needed instead of asking for the whole repository.",
+                "Apply real edits with the source-edit tool; final text is only a short work summary.",
+                "Edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
+                "Build infrastructure, Gradle configuration and host-owned ledgers are read-only.",
+                "Do not delete files. Preserve valid source already present in a resumed checkpoint.",
+                "Use only the selected Minecraft/loader/mappings/Java target and preserve project conventions.",
+            ],
         }
-        messages = [
+        initial_messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are the implementation coder for one approved Minecraft/Fabric mod module. "
-                    "Work directly in the supplied project with MCP tools: inspect the existing code, "
-                    "retrieve relevant evidence when needed, and implement the requested feature. "
-                    "Do not design a separate file-plan/JSON patch protocol. The host owns safety, "
-                    "scope, transactional application and verification."
+                    "You are the implementation coder for one approved Minecraft/Fabric module. "
+                    "The host keeps the complete project indexed. Retrieve only source needed for "
+                    "the current action, edit the staged workspace with tools, and do not invent "
+                    "a second patch/file-plan protocol."
                 ),
             },
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ]
+
         summary = ""
         continuation_count = 0
-        scalar_obligation_count = 0
-        exhausted_states: set[str] = set()
-        active_messages = messages
+        seen_output_states: set[str] = set()
+        active_messages = initial_messages
         while True:
             try:
                 with _active_checkpoint_persistence(
@@ -526,75 +462,28 @@ class CustomModuleGenerator:
                         f"error={type(checkpoint_exc).__name__}",
                         flush=True,
                     )
-                boundary = completion_boundary_error(exc)
+
+                # Context-pressure recovery belongs exclusively to the canonical
+                # progress-aware tool loop. If it bubbles out, preserve the original
+                # boundary error instead of re-entering coder with tools disabled.
                 boundary_kind = completion_boundary_kind(exc)
-                partial_context_pressure = bool(
-                    boundary_kind == CONTEXT_PRESSURE
-                    and boundary is not None
-                    and int(getattr(boundary, "partial_bytes", 0) or 0) > 0
-                )
-                if boundary_kind != OUTPUT_EXHAUSTED and not partial_context_pressure:
+                if boundary_kind != OUTPUT_EXHAUSTED:
                     raise
 
-                # A tool-aware completion may have committed several bounded edits
-                # before its final assistant action hit the decode ceiling. Keep the
-                # same isolated workspace alive, validate all progress observed so
-                # far, and continue from that exact state. Re-copying the project or
-                # replaying the durable work node would discard work and can repeat
-                # the identical oversized action.
                 progress_operations, progress_paths, discarded_paths = (
                     _collect_staged_operations(root, staged_root, before)
                 )
                 if progress_operations:
                     self._validate_operations(progress_operations)
                     self._validate_total_patch_bytes(progress_operations)
-
                 state_sha256 = _mutable_stage_state_sha256(staged_root)
-                if partial_context_pressure or state_sha256 in exhausted_states:
-                    # The transport already attempted safe assistant-prefill. If the
-                    # exact source state still repeats, convert the incomplete large
-                    # action into one schema-bounded scalar obligation. This remains a
-                    # model-authored edit, is materialized by the canonical scalar
-                    # protocol, and is applied only inside the isolated checkpoint.
-                    with _active_checkpoint_persistence(
-                        checkpoint_root,
-                        staged_root,
-                        checkpoint_identity,
-                    ):
-                        obligation_receipt = _apply_bounded_scalar_obligation(
-                            self.router,
-                            staged_root=staged_root,
-                            module=module,
-                            minecraft_version=minecraft_version,
-                            loader=loader,
-                            mappings=mappings,
-                            java_version=java_version,
-                            state_sha256=state_sha256,
-                            boundary=boundary,
-                        )
-                    scalar_obligation_count += 1
-                    _persist_generation_checkpoint(
-                        checkpoint_root,
-                        staged_root,
-                        identity_sha256=checkpoint_identity,
-                    )
-                    next_state_sha256 = _mutable_stage_state_sha256(staged_root)
-                    if next_state_sha256 == state_sha256:
-                        raise CustomModuleGenerationError(
-                            "Bounded scalar obligation made no staged source progress."
-                        )
-                    state_sha256 = next_state_sha256
-                    progress_operations, progress_paths, discarded_paths = (
-                        _collect_staged_operations(root, staged_root, before)
-                    )
-                    self._validate_operations(progress_operations)
-                    self._validate_total_patch_bytes(progress_operations)
-                else:
-                    exhausted_states.add(state_sha256)
-                    obligation_receipt = None
+                if state_sha256 in seen_output_states:
+                    raise CustomModuleGenerationError(
+                        "Output continuation reached a no-source-progress fixed point."
+                    ) from exc
+                seen_output_states.add(state_sha256)
                 continuation_count += 1
                 active_messages = _output_exhaustion_continuation_messages(
-                    staged_root=staged_root,
                     module=module,
                     minecraft_version=minecraft_version,
                     loader=loader,
@@ -604,23 +493,20 @@ class CustomModuleGenerator:
                     state_sha256=state_sha256,
                     touched_paths=progress_paths,
                     discarded_paths=discarded_paths,
-                    obligation_receipt=obligation_receipt,
-                    boundary_kind=boundary_kind,
                 )
                 print(
-                    "custom module: bounded continuation",
+                    "custom module: bounded output continuation",
                     f"module={module.module_id}",
                     f"continuation={continuation_count}",
-                    f"boundary={boundary_kind}",
                     f"preserved_paths={len(progress_paths)}",
                     flush=True,
                 )
+
         operations, touched_paths, discarded_paths = _collect_staged_operations(
             root,
             staged_root,
             before,
         )
-
         if not operations:
             discarded = ", ".join(discarded_paths[:8]) if discarded_paths else "none"
             raise CustomModuleGenerationError(
@@ -652,14 +538,14 @@ class CustomModuleGenerator:
             "status": "SOURCE_GENERATED",
             "patch_receipt": receipt,
             "operation_count": len(operations),
-            "runtime_tests": ["Verify the approved mod functionality, compilation, and runtime behavior without crash."],
+            "runtime_tests": [
+                "Verify approved mod functionality, compilation, and runtime behavior without crash."
+            ],
             "source_observation_receipt": observation_ledger["receipt"],
             "touched_paths": touched_paths,
             "discarded_out_of_scope_paths": discarded_paths,
             "agent_summary": str(summary or "").strip()[:4096],
             "output_exhaustion_continuations": continuation_count,
-            "completion_boundary_continuations": continuation_count,
-            "bounded_scalar_obligations": scalar_obligation_count,
             "generation_checkpoint_resumed": checkpoint_resumed,
             "generation_checkpoint": {
                 "schema_version": _CHECKPOINT_SCHEMA,
@@ -688,16 +574,12 @@ class CustomModuleGenerator:
         return token
 
     def acknowledge_generation_checkpoint(self, result: Any) -> bool:
-        """Clean one owned checkpoint only after an outer live-project commit."""
-
         if not isinstance(result, dict):
             return False
         checkpoint = result.get("generation_checkpoint")
         if not isinstance(checkpoint, dict):
             return False
-        if (
-            checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA
-        ):
+        if checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA:
             return False
         if checkpoint.get("status") == "CLEANED_AFTER_LIVE_COMMIT":
             return "cleanup_token" not in checkpoint
@@ -705,74 +587,35 @@ class CustomModuleGenerator:
             return False
         token = checkpoint.get("cleanup_token")
         identity = checkpoint.get("identity_sha256")
-        if (
-            not isinstance(token, str)
-            or not _CHECKPOINT_KEY.fullmatch(token)
-            or not isinstance(identity, str)
-        ):
+        if not isinstance(token, str) or not _CHECKPOINT_KEY.fullmatch(token) or not isinstance(identity, str):
             return False
         with self._checkpoint_cleanup_lock:
             owned = self._checkpoint_cleanup_tokens.get(token)
             if owned is None or owned[0] != identity:
-                # Never return an opaque cleanup capability in a durable/public
-                # receipt when this generator cannot prove ownership of it.
                 checkpoint["status"] = "UNACKNOWLEDGED_AFTER_LIVE_COMMIT"
                 checkpoint.pop("cleanup_token", None)
                 return False
-            checkpoint_root = owned[1]
-            checkpoint_lease = owned[2]
             try:
-                _remove_generation_checkpoint(checkpoint_root)
+                _remove_generation_checkpoint(owned[1])
             except (CustomModuleGenerationError, OSError):
-                # The live patch has already committed. A cleanup failure must not
-                # retain an in-process capability lease forever and block every later
-                # generation with the same identity. Preserve the on-disk checkpoint,
-                # revoke the opaque token, and release only the lease.
                 self._checkpoint_cleanup_tokens.pop(token, None)
-                checkpoint_lease.close()
+                owned[2].close()
                 checkpoint["status"] = "PRESERVED_AFTER_CLEANUP_FAILURE"
                 checkpoint.pop("cleanup_token", None)
                 return False
             self._checkpoint_cleanup_tokens.pop(token, None)
-            checkpoint_lease.close()
+            owned[2].close()
         checkpoint["status"] = "CLEANED_AFTER_LIVE_COMMIT"
         checkpoint.pop("cleanup_token", None)
         return True
 
     def release_generation_checkpoint(self, result: Any) -> bool:
-        """Release a failed/losing candidate while preserving its staged work."""
-
-        if not isinstance(result, dict):
-            return False
-        checkpoint = result.get("generation_checkpoint")
-        if not isinstance(checkpoint, dict):
-            return False
-        if (
-            checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA
-            or checkpoint.get("status") != "AWAITING_LIVE_COMMIT"
-        ):
-            return False
-        token = checkpoint.get("cleanup_token")
-        identity = checkpoint.get("identity_sha256")
-        if (
-            not isinstance(token, str)
-            or not _CHECKPOINT_KEY.fullmatch(token)
-            or not isinstance(identity, str)
-        ):
-            return False
-        with self._checkpoint_cleanup_lock:
-            owned = self._checkpoint_cleanup_tokens.get(token)
-            if owned is None or owned[0] != identity:
-                return False
-            self._checkpoint_cleanup_tokens.pop(token, None)
-            owned[2].close()
-        checkpoint["status"] = "PRESERVED_FOR_RESUME"
-        checkpoint.pop("cleanup_token", None)
-        return True
+        return self._finish_generation_checkpoint(result, delete=False)
 
     def discard_generation_checkpoint(self, result: Any) -> bool:
-        """Delete a losing checkpoint after another candidate commits live."""
+        return self._finish_generation_checkpoint(result, delete=True)
 
+    def _finish_generation_checkpoint(self, result: Any, *, delete: bool) -> bool:
         if not isinstance(result, dict):
             return False
         checkpoint = result.get("generation_checkpoint")
@@ -785,11 +628,7 @@ class CustomModuleGenerator:
             return False
         token = checkpoint.get("cleanup_token")
         identity = checkpoint.get("identity_sha256")
-        if (
-            not isinstance(token, str)
-            or not _CHECKPOINT_KEY.fullmatch(token)
-            or not isinstance(identity, str)
-        ):
+        if not isinstance(token, str) or not _CHECKPOINT_KEY.fullmatch(token) or not isinstance(identity, str):
             checkpoint.pop("cleanup_token", None)
             return False
         with self._checkpoint_cleanup_lock:
@@ -799,57 +638,21 @@ class CustomModuleGenerator:
                 checkpoint.pop("cleanup_token", None)
                 return False
             self._checkpoint_cleanup_tokens.pop(token, None)
+            removed = False
             try:
-                _remove_generation_checkpoint(owned[1])
+                if delete:
+                    _remove_generation_checkpoint(owned[1])
+                    checkpoint["status"] = "DISCARDED_AFTER_OTHER_WINNER"
+                    removed = True
+                else:
+                    checkpoint["status"] = "PRESERVED_FOR_RESUME"
+                    removed = True
             except (CustomModuleGenerationError, OSError):
                 checkpoint["status"] = "PRESERVED_AFTER_CLEANUP_FAILURE"
-                removed = False
-            else:
-                checkpoint["status"] = "DISCARDED_AFTER_OTHER_WINNER"
-                removed = True
             finally:
                 owned[2].close()
                 checkpoint.pop("cleanup_token", None)
         return removed
-
-    def _validate_file_plan(
-        self,
-        payload: dict[str, Any],
-    ) -> tuple[list[dict[str, str]], list[str]]:
-        """Legacy trace validator; production generation no longer asks for a file plan."""
-        if not isinstance(payload, dict):
-            raise CustomModuleGenerationError("Custom-module file plan must be an object.")
-        raw_files = payload.get("files")
-        if not isinstance(raw_files, list) or not raw_files:
-            raise CustomModuleGenerationError(
-                "Custom-module file plan must contain at least one file."
-            )
-        planned: list[dict[str, str]] = []
-        seen: set[str] = set()
-        for item in raw_files:
-            if not isinstance(item, dict):
-                raise CustomModuleGenerationError("Custom-module planned file must be an object.")
-            path = _canonicalize_planned_path(item.get("path"))
-            purpose = str(item.get("purpose", "")).strip()
-            if not purpose:
-                raise CustomModuleGenerationError(
-                    f"Custom-module planned file needs a non-empty purpose: {path}"
-                )
-            if custom_module_path_protected(path):
-                raise CustomModuleGenerationError(
-                    "Model file planning may not modify the code-owned research/context ledgers."
-                )
-            if not custom_module_path_allowed(path):
-                raise CustomModuleGenerationError(
-                    f"Custom module path is outside the allowed scope: {path}"
-                )
-            if path not in seen:
-                seen.add(path)
-                planned.append({"path": path, "purpose": purpose})
-        tests_value = payload.get("runtime_tests", [])
-        if not isinstance(tests_value, list) or any(not isinstance(v, str) for v in tests_value):
-            raise CustomModuleGenerationError("File plan runtime_tests must be a list of strings.")
-        return planned, [value.strip() for value in tests_value if value.strip()]
 
     def _validate_operations(self, operations: list[dict[str, Any]]) -> None:
         for item in operations:
@@ -858,11 +661,7 @@ class CustomModuleGenerator:
             if item.get("operation") not in {"create", "replace", "edit"}:
                 raise CustomModuleGenerationError("Custom module may not delete files.")
             path = _normalized_operation_path(item)
-            if custom_module_path_protected(path):
-                raise CustomModuleGenerationError(
-                    "Model patches may not modify the code-owned research ledger or context-observation ledger."
-                )
-            if not _agent_mutable_path(path):
+            if custom_module_path_protected(path) or not _agent_mutable_path(path):
                 raise CustomModuleGenerationError(
                     f"Custom module path is outside the source/resource scope: {path}"
                 )
@@ -871,7 +670,7 @@ class CustomModuleGenerator:
         size = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))
         if size > self.policy.max_patch_bytes:
             raise CustomModuleGenerationError(
-                "Custom module patch exceeds MMM_MAX_PATCH_BYTES; raise the explicit host resource policy or split the feature into dependency-linked modules."
+                "Custom module patch exceeds MMM_MAX_PATCH_BYTES; split the feature or raise explicit host policy."
             )
 
 
@@ -896,8 +695,6 @@ def _sha256_json(value: Any) -> str:
 
 
 def _checkpoint_router_scope(router: Any) -> dict[str, Any]:
-    """Find only stable candidate-search identity; never serialize a router object."""
-
     current = router
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
@@ -916,7 +713,7 @@ def _checkpoint_router_scope(router: Any) -> dict[str, Any]:
                 and 0 <= candidate_index < candidate_count
             ):
                 raise CustomModuleGenerationError(
-                    "Candidate checkpoint identity requires a valid index, count, and strategy."
+                    "Candidate checkpoint identity requires valid index/count/strategy."
                 )
             return {
                 "mode": "candidate",
@@ -926,15 +723,10 @@ def _checkpoint_router_scope(router: Any) -> dict[str, Any]:
                 "strategy": strategy.strip(),
             }
         current = getattr(current, "_router", None)
-    return {
-        "mode": "single",
-        "strategy_epoch": _CHECKPOINT_STRATEGY_EPOCH,
-    }
+    return {"mode": "single", "strategy_epoch": _CHECKPOINT_STRATEGY_EPOCH}
 
 
 def _checkpoint_tree_state_sha256(root: Path) -> str:
-    """Bind a checkpoint to files and symlink metadata without following symlinks."""
-
     rows: list[tuple[str, str, str]] = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root)
@@ -944,13 +736,7 @@ def _checkpoint_tree_state_sha256(root: Path) -> str:
         if path.is_symlink():
             rows.append((normalized, "symlink", str(path.readlink())))
         elif path.is_file():
-            rows.append(
-                (
-                    normalized,
-                    "file",
-                    "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
-                )
-            )
+            rows.append((normalized, "file", "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()))
         elif path.is_dir():
             rows.append((normalized, "directory", ""))
     return _sha256_json(rows)
@@ -958,23 +744,13 @@ def _checkpoint_tree_state_sha256(root: Path) -> str:
 
 def _generation_checkpoint_identity(
     *,
-    root: Path,
     module_query: str,
     minecraft_version: str,
     loader: str,
     mappings: str,
-    observation_receipt: Any,
     research_context: Any,
-    host_grounding: Any,
     router: Any,
 ) -> str:
-    """Bind resumable work to the obligation, target, research, and candidate.
-
-    The live source tree and source-observation receipt deliberately do not form the
-    key. They are versioned in the checkpoint manifest and three-way rebased on open,
-    so an unrelated module committing in parallel cannot orphan completed work.
-    """
-
     return _sha256_json(
         {
             "schema_version": _CHECKPOINT_SCHEMA,
@@ -1008,13 +784,9 @@ def _checkpoint_base(checkpoint_root: Path) -> Path:
 def _checkpoint_directory(root: Path, configured_root: Path | None = None) -> Path:
     base = configured_root if configured_root is not None else root.parent / _CHECKPOINT_DIRECTORY
     if base.parent.exists() and base.parent.is_symlink():
-        raise CustomModuleGenerationError(
-            "Custom-module checkpoint parent may not be a symlink."
-        )
+        raise CustomModuleGenerationError("Custom-module checkpoint parent may not be a symlink.")
     if base.exists() and (base.is_symlink() or not base.is_dir()):
-        raise CustomModuleGenerationError(
-            "Custom-module checkpoint root must be a regular host directory."
-        )
+        raise CustomModuleGenerationError("Custom-module checkpoint root must be a regular host directory.")
     base.mkdir(parents=True, exist_ok=True)
     return base.resolve()
 
@@ -1026,35 +798,19 @@ def _safe_checkpoint_path(base: Path, key: str) -> Path:
     try:
         checkpoint_root.resolve().relative_to(base)
     except ValueError as exc:
-        raise CustomModuleGenerationError(
-            "Custom-module checkpoint escaped its host-owned root."
-        ) from exc
+        raise CustomModuleGenerationError("Custom-module checkpoint escaped its host-owned root.") from exc
     return checkpoint_root
 
 
 def _remove_generation_checkpoint(checkpoint_root: Path) -> None:
-    """Remove only a validated host-owned checkpoint after the patch commits."""
-
     declared_base = checkpoint_root.parent
     if declared_base.is_symlink() or not declared_base.is_dir():
-        raise CustomModuleGenerationError(
-            "Refusing to remove a checkpoint through an unsafe host root."
-        )
+        raise CustomModuleGenerationError("Refusing to remove checkpoint through unsafe host root.")
     base = declared_base.resolve()
-    if base != declared_base:
-        raise CustomModuleGenerationError(
-            "Refusing to remove a checkpoint through a redirected host root."
-        )
-    if base.name != _CHECKPOINT_DIRECTORY or not _CHECKPOINT_KEY.fullmatch(
-        checkpoint_root.name
-    ):
-        raise CustomModuleGenerationError(
-            "Refusing to remove an unrecognized custom-module checkpoint path."
-        )
-    if checkpoint_root.is_symlink():
-        raise CustomModuleGenerationError(
-            "Refusing to remove a symlinked custom-module checkpoint."
-        )
+    if base != declared_base or base.name != _CHECKPOINT_DIRECTORY:
+        raise CustomModuleGenerationError("Refusing to remove unrecognized checkpoint path.")
+    if not _CHECKPOINT_KEY.fullmatch(checkpoint_root.name) or checkpoint_root.is_symlink():
+        raise CustomModuleGenerationError("Refusing to remove unsafe checkpoint path.")
     if checkpoint_root.exists():
         checkpoint_root.resolve().relative_to(base)
         shutil.rmtree(checkpoint_root)
@@ -1070,18 +826,11 @@ def _persist_generation_checkpoint(
     *,
     identity_sha256: str,
 ) -> None:
-    try:
-        checkpoint_stat = checkpoint_root.lstat()
-        staged_stat = staged_root.lstat()
-        base_root = _checkpoint_base(checkpoint_root)
-        base_stat = base_root.lstat()
-    except OSError as exc:
-        raise ValueError("Custom-module checkpoint staging root is missing") from exc
-    if (
-        not stat.S_ISDIR(checkpoint_stat.st_mode)
-        or not stat.S_ISDIR(staged_stat.st_mode)
-        or not stat.S_ISDIR(base_stat.st_mode)
-    ):
+    checkpoint_stat = checkpoint_root.lstat()
+    staged_stat = staged_root.lstat()
+    base_root = _checkpoint_base(checkpoint_root)
+    base_stat = base_root.lstat()
+    if not all(stat.S_ISDIR(item.st_mode) for item in (checkpoint_stat, staged_stat, base_stat)):
         raise ValueError("Custom-module checkpoint staging root is unsafe")
     payload = {
         "schema_version": _CHECKPOINT_SCHEMA,
@@ -1090,50 +839,18 @@ def _persist_generation_checkpoint(
         "stage_tree_sha256": _checkpoint_tree_state_sha256(staged_root),
     }
     manifest = _checkpoint_manifest(checkpoint_root)
-    legacy_temporary = checkpoint_root / ".checkpoint.json.tmp"
-    if legacy_temporary.is_symlink():
-        raise ValueError("Custom-module checkpoint temporary may not be a symlink")
     if manifest.is_symlink():
         raise ValueError("Custom-module checkpoint manifest may not be a symlink")
-    if manifest.exists() and not stat.S_ISREG(manifest.lstat().st_mode):
-        raise ValueError("Custom-module checkpoint manifest must be a regular file")
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    descriptor = -1
-    temporary_name = ""
-    temporary_stat: os.stat_result | None = None
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".checkpoint-", suffix=".tmp", dir=checkpoint_root)
     try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=".checkpoint-",
-            suffix=".tmp",
-            dir=checkpoint_root,
-        )
-        temporary_stat = os.fstat(descriptor)
-        if not stat.S_ISREG(temporary_stat.st_mode):
-            raise ValueError("Custom-module checkpoint temporary is not regular")
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = -1
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-
-        current_checkpoint_stat = checkpoint_root.lstat()
-        current_temporary_stat = os.lstat(temporary_name)
-        if (
-            not stat.S_ISDIR(current_checkpoint_stat.st_mode)
-            or current_checkpoint_stat.st_dev != checkpoint_stat.st_dev
-            or current_checkpoint_stat.st_ino != checkpoint_stat.st_ino
-            or temporary_stat.st_dev != current_temporary_stat.st_dev
-            or temporary_stat.st_ino != current_temporary_stat.st_ino
-            or not stat.S_ISREG(current_temporary_stat.st_mode)
-        ):
-            raise ValueError("Custom-module checkpoint directory changed during persistence")
-        if manifest.is_symlink():
-            raise ValueError("Custom-module checkpoint manifest became a symlink")
+        if checkpoint_root.is_symlink() or manifest.is_symlink():
+            raise ValueError("Custom-module checkpoint changed during persistence")
         os.replace(temporary_name, manifest)
         temporary_name = ""
         try:
@@ -1161,52 +878,22 @@ def _read_generation_checkpoint_manifest(checkpoint_root: Path) -> dict[str, Any
     manifest = _checkpoint_manifest(checkpoint_root)
     if manifest.is_symlink():
         raise ValueError("Custom-module checkpoint manifest may not be a symlink")
-    descriptor = os.open(
-        manifest,
-        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
-    )
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise ValueError("Custom-module checkpoint manifest must be regular")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            descriptor = -1
-            raw = json.load(handle)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+    with manifest.open("r", encoding="utf-8") as handle:
+        raw = json.load(handle)
     if not isinstance(raw, dict):
         raise ValueError("Custom-module checkpoint manifest must be an object")
     return raw
 
 
-def _initialize_generation_checkpoint(
-    root: Path,
-    checkpoint_root: Path,
-    *,
-    identity_sha256: str,
-) -> Path:
+def _initialize_generation_checkpoint(root: Path, checkpoint_root: Path, *, identity_sha256: str) -> Path:
     checkpoint_root.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_root.mkdir(parents=False, exist_ok=False)
     base_root = _checkpoint_base(checkpoint_root)
     staged_root = checkpoint_root / "project"
     try:
-        shutil.copytree(
-            root,
-            base_root,
-            symlinks=True,
-            ignore=_stage_ignore,
-        )
-        shutil.copytree(
-            base_root,
-            staged_root,
-            symlinks=True,
-        )
-        _persist_generation_checkpoint(
-            checkpoint_root,
-            staged_root,
-            identity_sha256=identity_sha256,
-        )
+        shutil.copytree(root, base_root, symlinks=True, ignore=_stage_ignore)
+        shutil.copytree(base_root, staged_root, symlinks=True)
+        _persist_generation_checkpoint(checkpoint_root, staged_root, identity_sha256=identity_sha256)
     except BaseException:
         if checkpoint_root.exists() and not checkpoint_root.is_symlink():
             shutil.rmtree(checkpoint_root, ignore_errors=True)
@@ -1214,49 +901,24 @@ def _initialize_generation_checkpoint(
     return staged_root
 
 
-def _checkpoint_patch_operations(
-    base_root: Path,
-    staged_root: Path,
-) -> list[dict[str, Any]]:
+def _checkpoint_patch_operations(base_root: Path, staged_root: Path) -> list[dict[str, Any]]:
     operations, _touched, discarded = _collect_staged_operations(
-        base_root,
-        staged_root,
-        _project_snapshot(base_root),
+        base_root, staged_root, _project_snapshot(base_root)
     )
     if discarded:
-        raise CustomModuleGenerationError(
-            "Resumable checkpoint contains out-of-scope source changes."
-        )
-    for operation in operations:
-        path = _normalized_operation_path(operation)
-        if custom_module_path_protected(path) or not _agent_mutable_path(path):
-            raise CustomModuleGenerationError(
-                "Resumable checkpoint contains a protected source change."
-            )
+        raise CustomModuleGenerationError("Resumable checkpoint contains out-of-scope source changes.")
     return operations
 
 
-def _fresh_checkpoint_child(checkpoint_root: Path, prefix: str) -> Path:
-    child = Path(tempfile.mkdtemp(prefix=prefix, dir=checkpoint_root))
-    child.rmdir()
-    return child
-
-
-def _rebase_generation_checkpoint(
-    root: Path,
-    checkpoint_root: Path,
-    *,
-    identity_sha256: str,
-) -> Path:
-    """Replay only checkpoint-authored edits over a newer unrelated base tree."""
-
+def _rebase_generation_checkpoint(root: Path, checkpoint_root: Path, *, identity_sha256: str) -> Path:
     base_root = _checkpoint_base(checkpoint_root)
     staged_root = checkpoint_root / "project"
     operations = _checkpoint_patch_operations(base_root, staged_root)
-    next_base: Path | None = _fresh_checkpoint_child(checkpoint_root, ".base-rebase-")
-    next_stage: Path | None = _fresh_checkpoint_child(checkpoint_root, ".project-rebase-")
+    next_base = Path(tempfile.mkdtemp(prefix=".base-rebase-", dir=checkpoint_root))
+    next_stage = Path(tempfile.mkdtemp(prefix=".project-rebase-", dir=checkpoint_root))
+    next_base.rmdir()
+    next_stage.rmdir()
     try:
-        assert next_base is not None and next_stage is not None
         shutil.copytree(root, next_base, symlinks=True, ignore=_stage_ignore)
         shutil.copytree(next_base, next_stage, symlinks=True)
         if operations:
@@ -1264,18 +926,12 @@ def _rebase_generation_checkpoint(
         shutil.rmtree(base_root)
         shutil.rmtree(staged_root)
         os.replace(next_base, base_root)
-        next_base = None
         os.replace(next_stage, staged_root)
-        next_stage = None
-        _persist_generation_checkpoint(
-            checkpoint_root,
-            staged_root,
-            identity_sha256=identity_sha256,
-        )
+        _persist_generation_checkpoint(checkpoint_root, staged_root, identity_sha256=identity_sha256)
         return staged_root
     finally:
         for temporary in (next_base, next_stage):
-            if temporary is not None and temporary.exists() and not temporary.is_symlink():
+            if temporary.exists() and not temporary.is_symlink():
                 shutil.rmtree(temporary, ignore_errors=True)
 
 
@@ -1285,59 +941,40 @@ def _prepare_generation_checkpoint(
     identity_sha256: str,
     configured_root: Path | None = None,
 ) -> tuple[Path, Path, bool, _GenerationCheckpointLease]:
-    """Open an exact resumable workspace or replace a stale owned checkpoint."""
-
     base = _checkpoint_directory(root, configured_root)
     checkpoint_root = _safe_checkpoint_path(base, _checkpoint_key(identity_sha256))
     lease = _GenerationCheckpointLease(checkpoint_root)
     try:
         staged_root = checkpoint_root / "project"
         if checkpoint_root.exists():
-            if checkpoint_root.is_symlink() or not checkpoint_root.is_dir():
-                raise CustomModuleGenerationError(
-                    "Custom-module checkpoint path is not a regular directory."
-                )
+            reusable = False
             try:
                 raw = _read_generation_checkpoint_manifest(checkpoint_root)
                 base_root = _checkpoint_base(checkpoint_root)
                 reusable = (
                     raw.get("schema_version") == _CHECKPOINT_SCHEMA
                     and raw.get("identity_sha256") == identity_sha256
-                    and isinstance(raw.get("base_tree_sha256"), str)
-                    and isinstance(raw.get("stage_tree_sha256"), str)
                     and base_root.is_dir()
                     and not base_root.is_symlink()
                     and staged_root.is_dir()
                     and not staged_root.is_symlink()
-                    and raw["base_tree_sha256"]
-                    == _checkpoint_tree_state_sha256(base_root)
-                    and raw["stage_tree_sha256"]
-                    == _checkpoint_tree_state_sha256(staged_root)
+                    and raw.get("base_tree_sha256") == _checkpoint_tree_state_sha256(base_root)
+                    and raw.get("stage_tree_sha256") == _checkpoint_tree_state_sha256(staged_root)
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 reusable = False
+            if reusable and raw.get("base_tree_sha256") != _checkpoint_tree_state_sha256(root):
+                try:
+                    staged_root = _rebase_generation_checkpoint(
+                        root, checkpoint_root, identity_sha256=identity_sha256
+                    )
+                except (CustomModuleGenerationError, OSError, SourcePatchError, ValueError):
+                    reusable = False
             if reusable:
-                if raw["base_tree_sha256"] != _checkpoint_tree_state_sha256(root):
-                    try:
-                        staged_root = _rebase_generation_checkpoint(
-                            root,
-                            checkpoint_root,
-                            identity_sha256=identity_sha256,
-                        )
-                    except (
-                        CustomModuleGenerationError,
-                        OSError,
-                        SourcePatchError,
-                        ValueError,
-                    ):
-                        reusable = False
-                if reusable:
-                    return checkpoint_root, staged_root, True, lease
+                return checkpoint_root, staged_root, True, lease
             _remove_generation_checkpoint(checkpoint_root)
         staged_root = _initialize_generation_checkpoint(
-            root,
-            checkpoint_root,
-            identity_sha256=identity_sha256,
+            root, checkpoint_root, identity_sha256=identity_sha256
         )
     except BaseException:
         lease.close()
@@ -1358,445 +995,16 @@ def _project_snapshot(root: Path) -> dict[str, str]:
 
 
 def _mutable_stage_state_sha256(staged_root: Path) -> str:
-    """Hash only source/resource state that the coding agent is allowed to mutate."""
-
     snapshot = {
         path: digest
         for path, digest in _project_snapshot(staged_root).items()
         if _agent_mutable_path(path) and not custom_module_path_protected(path)
     }
-    encoded = json.dumps(
-        snapshot,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _completed_partial_parameter(text: str, key: str, *, maximum: int) -> str:
-    marker = f"<parameter={key}>"
-    start = text.find(marker)
-    if start < 0:
-        return ""
-    value_start = start + len(marker)
-    end = text.find("</parameter>", value_start)
-    if end < 0:
-        return ""
-    value = text[value_start:end].strip()
-    if not value or len(value) > maximum or "<parameter=" in value:
-        return ""
-    tail = text[end + len("</parameter>") :].lstrip()
-    if tail and not tail.startswith(("<parameter=", "</function>", "</tool_call>")):
-        return ""
-    return value
-
-
-def _partial_source_edit_hint(boundary: Any) -> dict[str, str]:
-    """Extract only completed operation/path headers; never expose partial source."""
-
-    partial = getattr(boundary, "partial_message", {})
-    if not isinstance(partial, dict):
-        return {}
-    hints: list[dict[str, str]] = []
-    for field in ("reasoning_content", "reasoning", "content"):
-        text = partial.get(field)
-        if not isinstance(text, str):
-            continue
-        match = _PARTIAL_FUNCTION.search(text)
-        if match is None:
-            continue
-        fragment = text[match.end() :]
-        payload_starts = [
-            value
-            for value in (
-                fragment.find("<parameter=old>"),
-                fragment.find("<parameter=new>"),
-                fragment.find("<parameter=anchor>"),
-                fragment.find("<parameter=content>"),
-                fragment.find("<parameter=text>"),
-            )
-            if value >= 0
-        ]
-        header = fragment[: min(payload_starts)] if payload_starts else fragment
-        operation = _completed_partial_parameter(header, "operation", maximum=32)
-        path = _completed_partial_parameter(header, "path", maximum=512)
-        hint: dict[str, str] = {}
-        aliases = {
-            "replace": "replace_exact",
-            "create": "create_file",
-        }
-        operation = aliases.get(operation, operation)
-        if operation in _RECOVERY_SOURCE_EDIT_OPERATIONS:
-            hint["operation"] = operation
-        if path:
-            try:
-                normalized = _canonicalize_planned_path(path)
-            except CustomModuleGenerationError:
-                normalized = ""
-            if (
-                normalized
-                and _agent_mutable_path(normalized)
-                and not custom_module_path_protected(normalized)
-            ):
-                hint["path"] = normalized
-        if hint:
-            hints.append(hint)
-    if not hints:
-        return {}
-    first = hints[0]
-    for hint in hints[1:]:
-        for key in tuple(first):
-            if key in hint and hint[key] != first[key]:
-                first.pop(key, None)
-    return first
-
-
-def _bounded_scalar_obligation_schema(hint: dict[str, str]) -> dict[str, Any]:
-    required_by_operation = {
-        "replace_exact": ["old", "new"],
-        "insert_before": ["anchor", "content"],
-        "insert_after": ["anchor", "content"],
-        "create_file": ["content"],
-        "append_file": ["content"],
-    }
-    operation: dict[str, Any] = {
-        "type": "string",
-        "enum": list(_RECOVERY_SOURCE_EDIT_OPERATIONS),
-    }
-    path: dict[str, Any] = {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 512,
-    }
-    if hint.get("operation") in _RECOVERY_SOURCE_EDIT_OPERATIONS:
-        operation["const"] = hint["operation"]
-    if hint.get("path"):
-        path["const"] = hint["path"]
-    required = ["operation", "path"]
-    hinted_operation = hint.get("operation")
-    if hinted_operation in required_by_operation:
-        required.extend(required_by_operation[hinted_operation])
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": required,
-        "properties": {
-            "operation": operation,
-            "path": path,
-            "old": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": _RECOVERY_CHUNK_CHARS,
-            },
-            "new": {"type": "string", "maxLength": _RECOVERY_CHUNK_CHARS},
-            "anchor": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": _RECOVERY_CHUNK_CHARS,
-            },
-            "content": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": _RECOVERY_CHUNK_CHARS,
-            },
-            "count": {"type": "integer", "const": 1, "default": 1},
-        },
-    }
-    if hinted_operation not in required_by_operation:
-        schema["allOf"] = [
-            {
-                "if": {
-                    "properties": {"operation": {"const": operation_name}},
-                    "required": ["operation"],
-                },
-                "then": {"required": fields},
-            }
-            for operation_name, fields in required_by_operation.items()
-        ]
-    return schema
-
-
-def _bounded_recovery_source_context(
-    staged_root: Path,
-    hint: dict[str, str],
-) -> dict[str, Any]:
-    """Expose only a small exact excerpt for a validated hinted project path."""
-
-    relative = hint.get("path", "")
-    if not relative:
-        return {}
-    parts = PurePosixPath(relative).parts
-    cursor = staged_root
-    for part in parts:
-        cursor = cursor / part
-        if cursor.is_symlink():
-            return {"path": relative, "status": "SYMLINK_REJECTED"}
-    target = staged_root.joinpath(*parts)
-    if target.is_symlink() or not target.is_file():
-        return {"path": relative, "status": "NOT_AN_EXISTING_REGULAR_FILE"}
-    try:
-        descriptor = os.open(
-            target,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_BINARY", 0),
-        )
-    except OSError:
-        return {"path": relative, "status": "UNREADABLE"}
-    hasher = hashlib.sha256()
-    with os.fdopen(descriptor, "rb") as handle:
-        opened = os.fstat(handle.fileno())
-        if not stat.S_ISREG(opened.st_mode):
-            return {"path": relative, "status": "NON_REGULAR_REJECTED"}
-        byte_count = opened.st_size
-        while chunk := handle.read(64 * 1024):
-            hasher.update(chunk)
-        if byte_count <= _RECOVERY_SOURCE_CONTEXT_BYTES:
-            handle.seek(0)
-            excerpt_bytes = handle.read(_RECOVERY_SOURCE_CONTEXT_BYTES)
-            excerpt_kind = "complete"
-        else:
-            half = _RECOVERY_SOURCE_CONTEXT_BYTES // 2
-            handle.seek(0)
-            head = handle.read(half)
-            handle.seek(max(0, byte_count - half))
-            tail = handle.read(half)
-            excerpt_bytes = head + b"\n...<host excerpt gap>...\n" + tail
-            excerpt_kind = "head_tail"
-    digest = "sha256:" + hasher.hexdigest()
-    try:
-        excerpt = excerpt_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        return {
-            "path": relative,
-            "status": "NON_UTF8",
-            "sha256": digest,
-            "byte_count": byte_count,
-        }
-    return {
-        "path": relative,
-        "status": "EXACT_UTF8_EXCERPT",
-        "sha256": digest,
-        "byte_count": byte_count,
-        "excerpt_kind": excerpt_kind,
-        "source": excerpt,
-    }
-
-
-def _apply_bounded_scalar_obligation(
-    router: Any,
-    *,
-    staged_root: Path,
-    module: ProductionModule,
-    minecraft_version: str,
-    loader: str,
-    mappings: str,
-    java_version: int,
-    state_sha256: str,
-    boundary: Any,
-) -> dict[str, Any]:
-    """Request and apply one small model-authored edit in the isolated checkpoint."""
-
-    hint = _partial_source_edit_hint(boundary)
-    active_hint = dict(hint)
-    partial_bytes = int(getattr(boundary, "partial_bytes", 0) or 0)
-    partial_sha = str(getattr(boundary, "partial_sha256", "") or "")
-    schema = _bounded_scalar_obligation_schema(active_hint)
-    request = {
-        "phase": "implement_module_scalar_obligation",
-        "task": (
-            "Return exactly one small source edit that advances the approved module. "
-            "This is an internal bounded recovery action, not a file plan."
-        ),
-        "workspace_project_root": ".",
-        "target": {
-            "minecraft_version": minecraft_version,
-            "loader": loader,
-            "mappings": mappings,
-            "java": java_version,
-        },
-        "module": {
-            "module_id": module.module_id,
-            "kind": module.kind,
-            "config": module.config,
-        },
-        "preserved_source_state_sha256": state_sha256,
-        "hinted_source_context": _bounded_recovery_source_context(staged_root, hint),
-        "truncated_action_receipt": {
-            "partial_bytes": partial_bytes,
-            "partial_sha256": "sha256:" + partial_sha if partial_sha else "",
-            "safe_header_hint": hint,
-        },
-        "rules": [
-            "Return one JSON object matching the supplied schema and nothing else.",
-            "Touch exactly one source/resource path and do not delete or replace a whole large file.",
-            f"Every old, new, anchor, or content string must be at most {_RECOVERY_CHUNK_CHARS} characters.",
-            "Use create_file for a small new-file prefix, append_file for the next chunk, or a bounded exact/anchor edit for an existing file.",
-            "Do not repeat or quote the truncated source payload.",
-        ],
-    }
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Produce one bounded Minecraft source-edit obligation. The host will "
-                "validate its schema, path, hash preconditions, and isolated scope."
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                request,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-        },
-    ]
-    # The approved research bundle was already consumed by the interrupted coder
-    # turn. Avoid the research-evolution wrapper here: it can turn one bounded JSON
-    # obligation into another full coder generation and recreate the same bottleneck.
-    from .custom_generation_research import _strip_research_router
-
-    obligation_router = _strip_research_router(router)
-    from .structured_output import (
-        StructuredOutputValidationError,
-        validate_structured_output,
-    )
-    from . import agent_tool_runtime
-    from .source_edit_scalar_protocol_contract import materialize_model_source_edit
-
-    seen_rejections: set[str] = set()
-    corrective_messages = messages
-    while True:
-        raw = obligation_router.generate_text(
-            "coder",
-            corrective_messages,
-            response_format="json",
-            response_schema=schema,
-            tool_stage="generation",
-            enable_tools=False,
-        )
-        model_edit: dict[str, Any] = {}
-        try:
-            validated = validate_structured_output(
-                str(raw or ""),
-                response_format="json",
-                response_schema=schema,
-            )
-            decoded = json.loads(validated)
-            if not isinstance(decoded, dict):
-                raise CustomModuleGenerationError(
-                    "Bounded scalar obligation must decode to one object."
-                )
-            model_edit = decoded
-            if active_hint.get("operation") and model_edit.get("operation") != active_hint["operation"]:
-                raise CustomModuleGenerationError(
-                    "Bounded scalar obligation changed the host-bound operation hint."
-                )
-            if active_hint.get("path") and model_edit.get("path") != active_hint["path"]:
-                raise CustomModuleGenerationError(
-                    "Bounded scalar obligation changed the host-bound path hint."
-                )
-
-            # This is not a synthesized MCP call: the model authors the complete
-            # scalar object, while the canonical protocol supplies only project
-            # discovery, scope, and current SHA-256 preconditions.
-            patch = materialize_model_source_edit(
-                agent_tool_runtime,
-                staged_root,
-                model_edit,
-                bound_project_root=staged_root,
-            )
-            operations = patch.get("operations")
-            if not isinstance(operations, list) or len(operations) != 1:
-                raise CustomModuleGenerationError(
-                    "Bounded scalar recovery must materialize exactly one source operation."
-                )
-            receipt = TransactionalSourcePatcher(staged_root).apply(operations)
-        except (
-            agent_tool_runtime.AgentToolRuntimeError,
-            CustomModuleGenerationError,
-            json.JSONDecodeError,
-            SourcePatchError,
-            StructuredOutputValidationError,
-            ValueError,
-        ) as exc:
-            redacted = agent_tool_runtime._redact_text(str(exc))
-            compact_error = " ".join(redacted.split())[:512]
-            rejection = {
-                "schema_version": "mmm/bounded-scalar-rejection-v1",
-                "operation": str(model_edit.get("operation", ""))[:32],
-                "path": str(model_edit.get("path", ""))[:512],
-                "candidate_sha256": _sha256_json(str(raw or "")),
-                "error_type": type(exc).__name__,
-                "error_sha256": _sha256_json(compact_error),
-            }
-            rejection_progress = _sha256_json(
-                {
-                    "stage_state_sha256": _mutable_stage_state_sha256(staged_root),
-                    "error_type": type(exc).__name__,
-                    "operation": rejection["operation"],
-                    "path": rejection["path"],
-                }
-            )
-            if rejection_progress in seen_rejections:
-                raise CustomModuleGenerationError(
-                    "Bounded scalar correction reached a no-source-progress fixed point."
-                ) from exc
-            seen_rejections.add(rejection_progress)
-            if isinstance(
-                exc,
-                (agent_tool_runtime.AgentToolRuntimeError, SourcePatchError),
-            ) and active_hint.get("operation"):
-                # A completed partial header is only a hint. Once the host proves its
-                # operation precondition stale, keep the validated path but permit the
-                # model to choose another bounded operation on that same path.
-                active_hint.pop("operation", None)
-                schema = _bounded_scalar_obligation_schema(active_hint)
-            correction_request = dict(request)
-            correction_request["hinted_source_context"] = (
-                _bounded_recovery_source_context(staged_root, active_hint)
-            )
-            correction_request["truncated_action_receipt"] = {
-                **request["truncated_action_receipt"],
-                "safe_header_hint": active_hint,
-            }
-            correction_request["previous_rejection"] = {
-                **rejection,
-                "instruction": (
-                    "Return a different schema-valid scalar edit that matches the "
-                    "current exact source context and host preconditions."
-                ),
-            }
-            corrective_messages = [
-                messages[0],
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        correction_request,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                },
-            ]
-            continue
-        return {
-            "schema_version": "mmm/bounded-scalar-obligation-receipt-v1",
-            "operation": str(model_edit.get("operation", "")),
-            "path": str(model_edit.get("path", "")),
-            "partial_bytes": partial_bytes,
-            "partial_sha256": "sha256:" + partial_sha if partial_sha else "",
-            "correction_count": len(seen_rejections),
-            "patch_receipt": receipt,
-        }
+    return _sha256_json(snapshot)
 
 
 def _output_exhaustion_continuation_messages(
     *,
-    staged_root: Path,
     module: ProductionModule,
     minecraft_version: str,
     loader: str,
@@ -1806,23 +1014,12 @@ def _output_exhaustion_continuation_messages(
     state_sha256: str,
     touched_paths: Iterable[str],
     discarded_paths: Iterable[str],
-    obligation_receipt: dict[str, Any] | None = None,
-    boundary_kind: str = OUTPUT_EXHAUSTED,
 ) -> list[dict[str, str]]:
-    """Build a compact, work-preserving continuation after a truncated tool action.
-
-    The prior assistant bytes are not trusted or replayed. Only edits already present
-    in the isolated workspace and their host-observed hashes constitute progress.
-    """
-
     touched = sorted({str(path) for path in touched_paths})
     discarded = sorted({str(path) for path in discarded_paths})
     request = {
         "phase": "implement_module",
-        "task": (
-            "Continue the approved module from the current staged workspace. "
-            "Do not restart completed work."
-        ),
+        "task": "Continue the approved module from the preserved staged workspace; do not restart completed work.",
         "workspace_project_root": ".",
         "target": {
             "minecraft_version": minecraft_version,
@@ -1838,50 +1035,31 @@ def _output_exhaustion_continuation_messages(
             "required_gates": list(module.required_gates),
         },
         "continuation": {
-            "reason": (
-                "partial_source_tool_action_reached_context_boundary"
-                if boundary_kind == CONTEXT_PRESSURE
-                else "previous_source_tool_action_exhausted_output"
-            ),
-            "boundary_kind": boundary_kind,
+            "reason": "previous_tool_enabled_page_exhausted_output",
             "continuation_index": continuation_index,
             "preserved_source_state_sha256": state_sha256,
             "preserved_path_count": len(touched),
             "preserved_paths_preview": touched[:_CONTINUATION_PATH_PREVIEW],
             "discarded_out_of_scope_path_count": len(discarded),
-            "bounded_scalar_obligation": {
-                key: obligation_receipt[key]
-                for key in ("schema_version", "operation", "path")
-                if obligation_receipt is not None and key in obligation_receipt
-            },
         },
         "rules": [
-            "Inspect the current workspace state and preserve every correct existing edit.",
-            "The next tool call must be exactly one apply_source_edit action for exactly one project-relative path.",
-            "Keep each later apply_source_edit call to one bounded scalar action; never emit a whole large file or multiple files in one tool call.",
-            "For a large new file, create a prefix of at most 2048 characters and use append_file chunks of at most 2048 characters across tool turns.",
-            "For an existing file, prefer replace_exact, insert_before or insert_after over replace_file.",
-            "Do not repeat the truncated action. Do not put source code in the final summary.",
-            "Continue tool turns until the approved module is implemented, then return only a concise summary.",
+            "Inspect the current staged workspace before editing; correct prior edits are already persisted.",
+            "Retrieve source by path/symbol/RAG only as needed; never reconstruct the whole repository in context.",
+            "Use bounded tool actions and continue across tool turns until the module is complete.",
+            "Do not repeat an exhausted action and do not put source code in the final summary.",
         ],
     }
     return [
         {
             "role": "system",
             "content": (
-                "You are continuing one interrupted Minecraft mod implementation. "
-                "The host preserved and hash-checked the isolated workspace. Resume "
-                "with bounded source-edit tools; never reconstruct completed work from memory."
+                "Continue one interrupted Minecraft mod implementation. The host preserved "
+                "and hash-checked the staged workspace; resume with normal source/RAG tools."
             ),
         },
         {
             "role": "user",
-            "content": json.dumps(
-                request,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
+            "content": json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         },
     ]
 
@@ -1921,11 +1099,6 @@ def _collect_staged_operations(
         if old_sha is None:
             operation = {"operation": "create", "path": path, "content": content}
         else:
-            original = original_root / Path(path)
-            if original.is_symlink() or not original.is_file():
-                raise CustomModuleGenerationError(
-                    f"Custom-module original target is not a regular file: {path}"
-                )
             operation = {
                 "operation": "replace",
                 "path": path,
@@ -1937,250 +1110,17 @@ def _collect_staged_operations(
     return operations, touched, discarded
 
 
-def _file_plan_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["files", "runtime_tests"],
-        "properties": {
-            "files": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["path", "purpose"],
-                    "properties": {
-                        "path": {"type": "string", "minLength": 1},
-                        "purpose": {"type": "string", "minLength": 1},
-                    },
-                },
-            },
-            "runtime_tests": {"type": "array", "items": {"type": "string"}},
-        },
-    }
-
-
-def _file_content_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["content", "runtime_tests"],
-        "properties": {
-            "content": {"type": "string"},
-            "runtime_tests": {"type": "array", "items": {"type": "string"}},
-        },
-    }
-
-
-def _validate_file_content_payload(payload: dict[str, Any]) -> tuple[str, list[str]]:
-    if not isinstance(payload, dict):
-        raise CustomModuleGenerationError("Custom-module file content must be an object.")
-    content = payload.get("content")
-    if not isinstance(content, str):
-        raise CustomModuleGenerationError("Custom-module file content must be UTF-8 text.")
-    tests = payload.get("runtime_tests", [])
-    if not isinstance(tests, list) or any(not isinstance(value, str) for value in tests):
-        raise CustomModuleGenerationError("File runtime_tests must be a list of strings.")
-    return content, [value.strip() for value in tests if value.strip()]
-
-
-def _canonicalize_planned_path(value: Any) -> str:
-    raw = str(value or "").strip().replace("\\", "/")
-    if not raw:
-        raise CustomModuleGenerationError("Custom-module planned path must not be empty.")
-    pure = PurePosixPath(raw)
-    if pure.is_absolute() or ".." in pure.parts:
-        raise CustomModuleGenerationError(
-            f"Custom-module planned path must remain project-relative: {raw}"
-        )
-    path = pure.as_posix()
-    if path == _FABRIC_ROOT_METADATA_PATH:
-        return _FABRIC_CANONICAL_METADATA_PATH
-    return path
-
-
-def _select_file_context(
-    ledger: dict[str, Any],
-    *,
-    path: str,
-    purpose: str,
-    byte_budget: int,
-) -> dict[str, Any]:
-    records = list(ledger.get("records", []))
-    query_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(f"{path} {purpose}")}
-    ranked = sorted(
-        records,
-        key=lambda record: (
-            -_observation_score(record, query_tokens),
-            0 if str(record.get("path", "")) == path else 1,
-            str(record.get("path", "")),
-            int(record.get("content_start_bytes", 0)),
-        ),
-    )
-    selected: list[dict[str, Any]] = []
-    base = {
-        "schema_version": "mmm/file-source-context-v1",
-        "ledger_receipt": ledger.get("receipt", {}),
-        "target_path": path,
-        "records": selected,
-    }
-    safe_budget = max(1024, byte_budget - 256)
-    for record in ranked:
-        selected.append(record)
-        if _json_size(base) > safe_budget:
-            selected.pop()
-            break
-    return base
-
-
-# Legacy parsing/state helpers remain for compatibility tests and old persisted traces.
-def _canonicalize_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise CustomModuleGenerationError("Custom-module response must be a JSON object.")
-    normalized = dict(payload)
-    if "tests" in normalized and "runtime_tests" not in normalized:
-        normalized["runtime_tests"] = normalized.pop("tests")
-    if "cursor" in normalized and "next_cursor" not in normalized:
-        normalized["next_cursor"] = normalized.pop("cursor")
-    if "patch_operations" in normalized and "operations" not in normalized:
-        normalized["operations"] = normalized.pop("patch_operations")
-    if "patches" in normalized and "operations" not in normalized:
-        normalized["operations"] = normalized.pop("patches")
-    operations_value = normalized.get("operations", [])
-    if not isinstance(operations_value, list):
-        raise CustomModuleGenerationError("Response 'operations' must be a JSON list.")
-    normalized["operations"] = [_canonicalize_custom_module_operation(item) for item in operations_value]
-    tests_value = normalized.get("runtime_tests", ["Verify mod functionality and compilation without crash."])
-    if not isinstance(tests_value, list):
-        raise CustomModuleGenerationError("Response 'runtime_tests' must be a JSON list.")
-    normalized["runtime_tests"] = tests_value
-    complete_value = normalized.get("complete", True)
-    if not isinstance(complete_value, bool):
-        raise CustomModuleGenerationError("Response 'complete' must be a JSON boolean.")
-    normalized["complete"] = complete_value
-    next_cursor_value = normalized.get("next_cursor", "")
-    if next_cursor_value is None:
-        next_cursor_value = ""
-    if not isinstance(next_cursor_value, str):
-        raise CustomModuleGenerationError("Response 'next_cursor' must be a JSON string.")
-    normalized["next_cursor"] = next_cursor_value.strip()
-    if "context_page_complete" in normalized:
-        page_complete_value = normalized["context_page_complete"]
-        if not isinstance(page_complete_value, bool):
-            raise CustomModuleGenerationError("Response 'context_page_complete' must be a JSON boolean.")
-    else:
-        page_complete_value = bool(normalized["operations"]) and not normalized["next_cursor"]
-    normalized["context_page_complete"] = page_complete_value
-    return normalized
-
-
-def _generation_fragment_action(
-    payload: dict[str, Any],
-    *,
-    is_last_page: bool,
-    has_accumulated_operations: bool,
-    current_cursor: str,
-    seen_cursors: set[str],
-) -> str:
-    operations = payload["operations"]
-    next_cursor = payload["next_cursor"]
-    page_complete = payload["context_page_complete"]
-    if next_cursor:
-        if next_cursor == current_cursor or next_cursor in seen_cursors:
-            raise CustomModuleGenerationError("Custom-module response repeated next_cursor without protocol progress.")
-        if page_complete:
-            raise CustomModuleGenerationError("Response cannot set context_page_complete=true while also returning an advancing next_cursor for the same observation page.")
-        return "cursor"
-    if page_complete:
-        if is_last_page and not has_accumulated_operations:
-            raise CustomModuleGenerationError("Final observation page completed before any patch operation was accumulated.")
-        return "page_complete"
-    if operations:
-        raise CustomModuleGenerationError("Patch operations were returned with context_page_complete=false but without an advancing next_cursor; the response cannot make further progress.")
-    keys_str = ", ".join(payload.keys())
-    raise CustomModuleGenerationError(
-        "Custom-module response fragment made no protocol progress: received object with keys "
-        f"[{keys_str}] but no operations, advancing next_cursor, or context_page_complete=true transition."
-    )
-
-
-def _repair_generation_messages(
-    generation_messages: list[dict[str, str]],
-    error_reason: str,
-) -> list[dict[str, str]]:
-    return [
-        *generation_messages,
-        {
-            "role": "user",
-            "content": (
-                "Execution & Validation Failure: the previous response failed host protocol "
-                f"validation with reason: {error_reason}. The invalid assistant payload is intentionally omitted so you do not copy its shape. "
-                "Repair only the JSON/patch/cursor transition for the host-selected target. A valid response must make progress using patch operations, "
-                "a new next_cursor, or an explicit context_page_complete=true transition. Do not emit range-only {start,end} objects. "
-                "Fabric metadata belongs at src/main/resources/fabric.mod.json. Do not retrieve new RAG/MCP evidence and do not change the approved feature scope. "
-                "Return exactly one valid JSON object using only the supplied host evidence."
-            ),
-        },
-    ]
-
-
-def _canonicalize_custom_module_operation(item: Any) -> Any:
-    if not isinstance(item, dict):
-        return item
-    canonical = dict(item)
-    operation = str(canonical.get("operation", "")).strip().lower()
-    path = _normalized_operation_path(canonical)
-    if operation == "create" and path == _FABRIC_ROOT_METADATA_PATH:
-        canonical["path"] = _FABRIC_CANONICAL_METADATA_PATH
-    return canonical
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    cleaned = text
-    if "</think>" in cleaned:
-        cleaned = cleaned.split("</think>")[-1]
-    if "<|channel|>" in cleaned:
-        cleaned = cleaned.split("<|channel|>")[-1]
-    cleaned_strip = cleaned.strip()
-    if "```" in cleaned_strip:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned_strip, re.DOTALL)
-        if match:
-            cleaned = match.group(1)
-    decoder = json.JSONDecoder()
-    for index, character in enumerate(cleaned):
-        if character != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(cleaned[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    curly_match = re.search(r"\{.*\}", text, re.DOTALL)
-    if curly_match:
-        try:
-            value = json.loads(curly_match.group(0))
-            if isinstance(value, dict):
-                return value
-        except Exception:
-            pass
-    raise CustomModuleGenerationError("Model output did not contain one parseable JSON object; refusing a fake complete fallback.")
-
-
 def _is_stale_project_index_error(exc: ValueError) -> bool:
     return str(exc).startswith("Project source changed after its context index was built:")
 
 
 def _collect_initial_observations(
-    router: ModelRouter,
     index: ProjectIndex,
     *,
     query: str,
     byte_budget: int,
     diagnostic_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
-    del router
     records: list[dict[str, Any]] = []
     record_keys: set[tuple[str, int, int]] = set()
     source_page_digest = hashlib.sha256()
@@ -2268,7 +1208,7 @@ def _observation_context_pages(
     byte_budget: int,
 ) -> tuple[dict[str, Any], ...]:
     records = list(ledger["records"])
-    query_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(query)}
+    query_tokens = _query_tokens(query)
     ranked = sorted(
         records,
         key=lambda record: (
@@ -2290,22 +1230,21 @@ def _observation_context_pages(
     remaining = [record for record in ranked if record["observation_id"] not in anchor_ids]
     pages: list[dict[str, Any]] = []
     cursor = 0
-    safe_budget = byte_budget - 128
+    safe_budget = max(1024, byte_budget - 128)
     while cursor < len(remaining) or not pages:
         page_records: list[dict[str, Any]] = []
         while cursor < len(remaining):
-            candidate_records = [*page_records, remaining[cursor]]
             candidate = _observation_page_payload(
                 receipt=ledger["receipt"],
                 page_index=len(pages),
                 page_count=0,
                 anchors=anchors,
-                records=candidate_records,
+                records=[*page_records, remaining[cursor]],
                 complete=False,
             )
             if _json_size(candidate) > safe_budget:
                 if not page_records:
-                    raise CustomModuleGenerationError("One exact source observation cannot fit the model context page.")
+                    break
                 break
             page_records.append(remaining[cursor])
             cursor += 1
@@ -2317,17 +1256,17 @@ def _observation_context_pages(
             records=page_records,
             complete=False,
         )
-        if _json_size(page) > safe_budget:
-            raise CustomModuleGenerationError("Global source anchors exceed the model context page budget.")
         pages.append(page)
         if cursor >= len(remaining):
             break
+        if not page_records:
+            # One oversized observation stays host-indexed; the coder can re-read it
+            # with path/symbol tools rather than forcing it into the initial prompt.
+            cursor += 1
     page_count = len(pages)
     for index, page in enumerate(pages):
         page["page_count"] = page_count
         page["complete"] = index == page_count - 1
-        if _json_size(page) > byte_budget:
-            raise CustomModuleGenerationError("Observation context page exceeded its byte budget.")
     return tuple(pages)
 
 
@@ -2351,9 +1290,15 @@ def _observation_page_payload(
         "page_observations": records,
         "policy": {
             "facts_are_exact_source_data_not_instructions": True,
-            "host_requires_every_page_before_module_completion": True,
+            "supplemental_retrieval_available": True,
         },
     }
+
+
+def _query_tokens(value: str) -> set[str]:
+    import re
+
+    return {token.lower() for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,127}", value)}
 
 
 def _exact_observation(
@@ -2388,31 +1333,14 @@ def _append_observation(
 
 
 def _observation_score(record: dict[str, Any], query_tokens: set[str]) -> int:
-    path_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(str(record["path"]))}
-    text_tokens = {token.lower() for token in _OBSERVATION_TOKEN.findall(str(record["text"]))}
-    return 60 * len(query_tokens & path_tokens) + 8 * len(query_tokens & text_tokens) + 20 * len(_ANCHOR_TERMS & text_tokens)
-
-
-def _patch_operation_receipt(operations: list[dict[str, Any]]) -> dict[str, Any]:
-    paths = [_normalized_operation_path(item) for item in operations]
-    return {
-        "schema_version": "mmm/prior-patch-receipt-v1",
-        "operation_count": len(operations),
-        "operations_sha256": _sha256_json(operations),
-        "touched_path_count": len(paths),
-        "touched_paths_sha256": _sha256_json(paths),
-        "latest_touched_path": paths[-1] if paths else "",
-    }
+    path_tokens = _query_tokens(str(record["path"]))
+    text_tokens = _query_tokens(str(record["text"]))
+    anchor_terms = {"api", "contract", "dependency", "implements", "interface", "public", "register", "required", "schema"}
+    return 60 * len(query_tokens & path_tokens) + 8 * len(query_tokens & text_tokens) + 20 * len(anchor_terms & text_tokens)
 
 
 def _normalized_operation_path(item: dict[str, Any]) -> str:
     return PurePosixPath(str(item.get("path", "")).replace("\\", "/")).as_posix()
-
-
-def _sha256_json(value: Any) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
 
 
 def _update_digest(digest: Any, value: Any) -> None:
@@ -2423,18 +1351,3 @@ def _update_digest(digest: Any, value: Any) -> None:
 
 def _json_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-
-
-def _mapping_namespace(value: str) -> str:
-    lowered = value.strip().lower()
-    if "intermediary" in lowered:
-        return "intermediary"
-    if "official" in lowered or "mojang" in lowered:
-        return "official"
-    return "yarn"
-
-
-def _normalized_generation_failure(value: str) -> str:
-    compact = " ".join(value.lower().split())
-    compact = re.sub(r"0x[0-9a-f]+|[0-9]+", "#", compact)
-    return compact[:2048]
