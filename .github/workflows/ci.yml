@@ -41,6 +41,23 @@ jobs:
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Audit internal imports and bootstrap contracts
         run: python .github/scripts/debug_repo_audit.py
+      - name: Audit runtime mutation budget
+        run: |
+          python .github/scripts/audit_runtime_mutations.py --output "$RUNNER_TEMP/runtime-mutation-audit.json"
+          python - "$RUNNER_TEMP/runtime-mutation-audit.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          behavioral = int(payload["behavioral_count"])
+          budget = 372
+          print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
+          if behavioral > budget:
+              raise SystemExit(
+                  f"runtime mutation surface grew from reviewed budget {budget} to {behavioral}"
+              )
+          PY
       - name: Compile Python sources
         run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
       - name: Enforce dead-code and control-flow hygiene

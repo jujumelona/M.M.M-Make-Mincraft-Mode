@@ -16,3 +16,5 @@ pdf_full_text.txt
 .ipynb_checkpoints/
 audit/
 tools/.complete_patch/
+runtime_mutation_audit.json
+runtime_mutation_summary.json
