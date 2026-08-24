@@ -9,11 +9,11 @@ unbounded decode from llama-server.
 
 import os
 from functools import wraps
-from typing import Any
+from typing import Any, Mapping
 
 from .model_context_budget import effective_context_tokens, tool_action_token_budget
 
-_MARKER = "_mmm_finite_generation_budget_v1"
+_MARKER = "_mmm_finite_generation_budget_v2"
 
 
 def _positive_override(name: str) -> int | None:
@@ -44,8 +44,39 @@ def plain_action_token_budget(config: Any) -> int:
     return max(4096, min(16384, context // 2))
 
 
+def action_token_budget(config: Any, *, has_tools: bool) -> int:
+    return (
+        tool_action_token_budget(config)
+        if has_tools
+        else plain_action_token_budget(config)
+    )
+
+
+def apply_generation_budget(
+    payload: Mapping[str, Any],
+    *,
+    config: Any,
+) -> dict[str, Any]:
+    """Clamp one payload at construction time; ``-1`` is never a transport value."""
+
+    bounded = dict(payload)
+    budget = action_token_budget(config, has_tools=bool(bounded.get("tools")))
+    try:
+        requested = int(bounded.get("max_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        requested = 0
+    if requested <= 0 or requested > budget:
+        bounded["max_tokens"] = budget
+    return bounded
+
+
 def install(hardware_module: Any) -> None:
-    """Make the canonical server payload finite for both tool and plain pages."""
+    """Compatibility installer for runtimes not yet calling the direct helper.
+
+    New code should call :func:`apply_generation_budget` while constructing the
+    payload.  This wrapper remains idempotent so older composition orders cannot
+    resurrect an unbounded decode while bootstrap migration is in progress.
+    """
 
     current = hardware_module._server_payload
     if bool(getattr(current, _MARKER, False)):
@@ -53,21 +84,18 @@ def install(hardware_module: Any) -> None:
 
     @wraps(current)
     def bounded_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-        payload = current(adapter, request)
-        if payload.get("tools"):
-            budget = tool_action_token_budget(adapter.config)
-        else:
-            budget = plain_action_token_budget(adapter.config)
-        try:
-            current_budget = int(payload.get("max_tokens", 0) or 0)
-        except (TypeError, ValueError):
-            current_budget = 0
-        if current_budget <= 0 or current_budget > budget:
-            payload["max_tokens"] = budget
-        return payload
+        return apply_generation_budget(
+            current(adapter, request),
+            config=adapter.config,
+        )
 
     setattr(bounded_server_payload, _MARKER, True)
     hardware_module._server_payload = bounded_server_payload
 
 
-__all__ = ["install", "plain_action_token_budget"]
+__all__ = [
+    "action_token_budget",
+    "apply_generation_budget",
+    "install",
+    "plain_action_token_budget",
+]
