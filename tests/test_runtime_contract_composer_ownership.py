@@ -102,8 +102,8 @@ def test_package_bootstrap_phase_order_is_explicit_and_stable() -> None:
     assert source.index('ContractStage("integrity"') > source.index(
         'ContractStage("postbootstrap"'
     )
-    # v4 records the removal of duplicate causal bootstrap routing owners.
-    assert "_RUNTIME_COMPOSITION_VERSION = 4" in source
+    # v6 records the executable host-selected causal action transport.
+    assert "_RUNTIME_COMPOSITION_VERSION = 6" in source
     assert "verify_installed_wrappers" in source
     assert "state_owner=_contract_composer" in source
 
