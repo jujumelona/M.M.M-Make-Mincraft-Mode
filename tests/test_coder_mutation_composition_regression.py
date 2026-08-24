@@ -102,7 +102,7 @@ def _patch_observation(*, applied: bool, call_id: str) -> dict[str, object]:
 
 
 def _selected_tool_name(request: GenerationRequest) -> str:
-    if request.tool_choice in {"auto", "required"}:
+    if isinstance(request.tool_choice, str) and request.tool_choice in {"auto", "required"}:
         assert len(request.tools) == 1
         function = request.tools[0]["function"]
         assert isinstance(function, dict)
