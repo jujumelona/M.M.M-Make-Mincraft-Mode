@@ -55,8 +55,6 @@ def finalize_runtime() -> None:
         from . import small_model_max_agent_contract
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
-        from .complete_orchestrator import CompleteProductionOrchestrator
-        from .completion_boundary_work_recovery import install as install_completion_boundary_work_recovery
         from .context_budget_preflight import run_context_budget_preflight
         from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
         from .evidence_task_receipt_contract import install as install_evidence_task_receipts
@@ -112,7 +110,6 @@ def finalize_runtime() -> None:
         )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
-        install_completion_boundary_work_recovery(CompleteProductionOrchestrator)
         install_retrieval_residency(model_router_module=model_router)
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
