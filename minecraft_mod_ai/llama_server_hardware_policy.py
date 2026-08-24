@@ -77,17 +77,7 @@ def _required_tool_name(request: Any) -> str:
     named = _named_tool_choice_name(request)
     if named:
         return named
-
-    # Local named forcing narrows the visible schema first and retains the semantic
-    # name in host-only metadata while the model-facing request remains parseable as
-    # auto. With pure-content server parsing, required now accurately renders that
-    # one-schema requirement into the Jinja prompt without delegating validation.
-    try:
-        from .forced_tool_execution_contract import host_forced_tool_name
-
-        return host_forced_tool_name(request)
-    except ImportError:
-        return ""
+    return ""
 
 
 def _server_tool_choice(request: Any) -> str:
@@ -124,14 +114,11 @@ def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-    """Build the authoritative OpenAI-compatible llama-server chat payload.
+    """Build the base OpenAI-compatible llama-server chat payload.
 
-    The managed server runs with ``--skip-chat-parsing``. Tool-capable turns therefore
-    keep the model's native Jinja ``tools`` prompt and truthful ``auto``/``required``
-    choice while returning raw Qwen markup in ``message.content``. The semantic tool
-    contract remains host-owned and is validated after markup parsing. JSON
-    syntax/schema validation for ordinary structured output is router-owned, so no
-    sampler grammar is sent.
+    Tool-capable turns keep the model's native Jinja tools prompt and host-validated raw
+    markup. Final finite token budgets and structured JSON-schema constraints are added
+    by the single llama generation payload contract during runtime bootstrap.
     """
 
     payload: dict[str, Any] = {
@@ -165,8 +152,6 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     elif getattr(request, "response_format", None) == "json":
-        # Never ask llama.cpp to compile JSON/JSON-Schema into a sampler grammar.
-        # Final JSON syntax and schema validation belong to ModelRouter.
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     return _enforce_required_tool_sampling(payload)
@@ -349,6 +334,7 @@ def _reject_tool_stream_request(adapter: Any, request: Any) -> None:
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     """Stream one native text-only server turn with native token telemetry."""
 
+    from .llama_stream_efficiency_contract import _stream_idle_timeout_seconds
     from .model_adapters import ModelBackendError
 
     _reject_tool_stream_request(adapter, request)
@@ -361,7 +347,12 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         client = httpx.Client()
         payload = _server_payload(adapter, request)
         payload["stream"] = True
-        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+        timeout = httpx.Timeout(
+            connect=30.0,
+            read=_stream_idle_timeout_seconds(),
+            write=30.0,
+            pool=30.0,
+        )
         endpoint = f"{server_url.rstrip('/')}/chat/completions"
         pieces: list[str] = []
         generated_chars = 0
@@ -546,8 +537,6 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             )
         return content
     except Exception as exc:
-        # Count native work consumed by a failed request too when exact server counters
-        # are still available. This makes cumulative usage reflect retries/failures.
         if not metrics_committed and client is not None and metrics_before is not None:
             try:
                 metrics_after = _metrics_snapshot(client, server_url)
