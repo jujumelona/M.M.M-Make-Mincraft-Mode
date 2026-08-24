@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
 _FAILURE_GATED_SEARCH_MARKER = "_mmm_failure_gated_search"
-_FAILURE_GATED_SEARCH_EPOCH = "mmm/failure-gated-search-v4"
+_FAILURE_GATED_SEARCH_EPOCH = "mmm/failure-gated-search-v5"
 
 
 def _active_parallel_slots() -> int:
@@ -129,18 +129,40 @@ def _owns_current_repair_width_policy(value: Any) -> bool:
     return filename.endswith("/agentic_search_efficiency_contract.py")
 
 
+def _live_search_mode() -> str:
+    import os as runtime_os
+
+    value = runtime_os.environ.get("MMM_AGENTIC_SEARCH", "auto").strip().casefold()
+    return value if value in {"off", "auto", "on"} else "auto"
+
+
+def _live_repair_search_width() -> int:
+    import os as runtime_os
+
+    raw = runtime_os.environ.get("MMM_REPAIR_SEARCH_WIDTH", "2").strip()
+    try:
+        return max(1, min(3, int(raw)))
+    except ValueError:
+        return 2
+
+
+def _live_active_parallel_slots() -> int:
+    import os as runtime_os
+
+    raw = runtime_os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
+    try:
+        return max(1, min(8, int(raw)))
+    except ValueError:
+        return 1
+
+
 def _install_parallel_repair_search(agentic_module: Any) -> None:
     current_installer = agentic_module._install_repair_search_and_memory
     if has_contract_marker(current_installer, "_mmm_parallel_repair_candidate_installer"):
         return
 
-    env_get = os.environ.get
     prime_native_repair_slots = _prime_native_repair_slots
     parallel_workers = _parallel_workers
-
-    def installed_search_mode() -> str:
-        value = str(env_get("MMM_AGENTIC_SEARCH", "auto")).strip().casefold()
-        return value if value in {"off", "auto", "on"} else "auto"
 
     @wraps(current_installer)
     def install_repair_search(repair_module: Any) -> None:
@@ -171,7 +193,7 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
             )
 
             config = None
-            if installed_search_mode() != "off":
+            if _live_search_mode() != "off":
                 config = prime_native_repair_slots(
                     self.router,
                     evidence=evidence,
@@ -295,38 +317,19 @@ def install(agentic_module: Any) -> None:
     current_repair_count = agentic_module._repair_candidate_count
     if not _owns_current_repair_width_policy(current_repair_count):
         risk_candidate_count = _base_repair_candidate_count(current_repair_count)
-        env_get = os.environ.get
-
-        def read_search_mode() -> str:
-            value = str(env_get("MMM_AGENTIC_SEARCH", "auto")).strip().casefold()
-            return value if value in {"off", "auto", "on"} else "auto"
-
-        def read_repair_search_width() -> int:
-            raw = str(env_get("MMM_REPAIR_SEARCH_WIDTH", "2")).strip()
-            try:
-                return max(1, min(3, int(raw)))
-            except ValueError:
-                return 2
-
-        def read_active_parallel_slots() -> int:
-            raw = str(env_get("MMM_LLAMA_ACTIVE_PARALLEL", "1")).strip()
-            try:
-                return max(1, min(8, int(raw)))
-            except ValueError:
-                return 1
 
         def repair_candidate_count(
             self: Any,
             evidence: Mapping[str, Any],
             memory: Sequence[Mapping[str, Any]],
         ) -> int:
-            mode = read_search_mode()
+            mode = _live_search_mode()
             if mode == "off":
                 return 1
-            width = read_repair_search_width()
+            width = _live_repair_search_width()
             if mode == "on":
                 return width
-            slots = read_active_parallel_slots()
+            slots = _live_active_parallel_slots()
             if slots <= 1:
                 return 1
             risk_width = max(
