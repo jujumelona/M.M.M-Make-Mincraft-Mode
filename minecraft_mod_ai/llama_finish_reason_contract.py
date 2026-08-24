@@ -14,7 +14,7 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-_MARKER = "_mmm_llama_finish_reason_classifier_v3"
+_MARKER = "_mmm_llama_finish_reason_classifier"
 CONTEXT_PRESSURE = "context_pressure"
 OUTPUT_EXHAUSTED = "output_exhausted"
 _CONTEXT_ERROR = (
