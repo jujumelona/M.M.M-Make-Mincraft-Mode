@@ -8,7 +8,6 @@ from typing import Any
 
 from .model_context_budget import fit_messages_to_context
 from .runtime_contract_wrappers import wrapped_layers
-from .small_model_context_compaction import compact_messages
 
 
 _MARKER = "_mmm_lossless_context_compaction"
@@ -135,7 +134,6 @@ class CompactingAdapter:
 
     def generate_turn(self, request: Any) -> Any:
         messages = _compact_implementation_seed(request.messages)
-        messages = compact_messages(messages)
         messages = fit_messages_to_context(
             messages,
             config=getattr(self.inner, "config", None),
