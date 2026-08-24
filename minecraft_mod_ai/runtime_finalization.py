@@ -67,7 +67,6 @@ def finalize_runtime() -> None:
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_generation_budget import install as install_llama_generation_budget
-        from .llama_length_resilience import install as install_llama_length_resilience
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_server_response_resilience import (
             install as install_llama_server_response_resilience,
@@ -122,7 +121,6 @@ def finalize_runtime() -> None:
         install_tool_validation_surface()
         install_llama_finish_reason(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
-        install_llama_length_resilience(llama_cpp_adapter)
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
             external_mcp_router_module=external_mcp_router,
