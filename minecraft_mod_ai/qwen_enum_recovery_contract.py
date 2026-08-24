@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-"""Deterministic parser repair for Qwen tagged enum parameters.
+"""Deterministic parser repair for Qwen tagged tool output.
 
-Qwen's tagged fallback format places scalar values directly inside parameter blocks.
-Small local models occasionally serialize string enums with harmless formatting drift.
+Qwen's tagged fallback format places tool names and scalar values directly inside tagged
+blocks. Small local models occasionally serialize string enums with harmless formatting
+drift or emit the canonical permission name instead of the narrower model-facing alias.
 
-This module performs only deterministic syntactic canonicalization. It never invents
-semantic aliases and never asks the model to generate again. Malformed calls that
-cannot be repaired without changing meaning are raised as typed protocol errors;
-causal_stale_tool_recovery_contract remains the sole owner of bounded re-synchronization.
+This module performs only deterministic, request-scoped canonicalization. It never
+invents semantic enum aliases, never exposes a broader host schema, and never asks the
+model to generate again. Malformed calls that cannot be repaired without changing
+meaning are raised as typed protocol errors; causal_stale_tool_recovery_contract remains
+the sole owner of bounded re-synchronization.
 """
 
 import json
@@ -16,7 +18,8 @@ import re
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
-_MARKER = "_mmm_qwen_enum_recovery_v3"
+_ENUM_MARKER = "_mmm_qwen_enum_recovery_v3"
+_TOOL_NAME_MARKER = "_mmm_qwen_tool_name_recovery_v1"
 _NO_MATCH = object()
 _MAX_VALUE_PREVIEW = 160
 
@@ -88,11 +91,9 @@ def canonical_string_enum(raw: str, allowed_values: Sequence[Any]) -> Any:
     return _NO_MATCH
 
 
-def install(llama_cpp_module: Any) -> None:
-    """Install fallback-parser enum canonicalization; never install a generation retry."""
-
+def _install_enum_recovery(llama_cpp_module: Any) -> None:
     current_decode = llama_cpp_module._decode_parameter_value
-    if bool(getattr(current_decode, _MARKER, False)):
+    if bool(getattr(current_decode, _ENUM_MARKER, False)):
         return
 
     @wraps(current_decode)
@@ -119,8 +120,59 @@ def install(llama_cpp_module: Any) -> None:
                 ) from exc
             raise
 
-    setattr(decode_parameter_value, _MARKER, True)
+    setattr(decode_parameter_value, _ENUM_MARKER, True)
     llama_cpp_module._decode_parameter_value = decode_parameter_value
+
+
+def _install_tool_name_recovery(llama_cpp_module: Any) -> None:
+    current_parse = getattr(llama_cpp_module, "_parse_qwen_function", None)
+    if not callable(current_parse) or bool(getattr(current_parse, _TOOL_NAME_MARKER, False)):
+        return
+
+    @wraps(current_parse)
+    def parse_qwen_function(
+        text: str,
+        start: int,
+        schemas: Mapping[str, Mapping[str, Any]],
+        *,
+        call_index: int,
+    ):
+        function_open = str(getattr(llama_cpp_module, "_FUNCTION_OPEN", "<function="))
+        name_start = start + len(function_open)
+        name_end = text.find(">", name_start)
+        if name_end < 0:
+            return current_parse(text, start, schemas, call_index=call_index)
+
+        raw_name = text[name_start:name_end]
+        emitted_name = raw_name.strip()
+        if not emitted_name or emitted_name in schemas:
+            return current_parse(text, start, schemas, call_index=call_index)
+
+        from minecraft_mod_ai.model_tool_aliases import resolve_exposed_model_tool
+
+        exposed_name = resolve_exposed_model_tool(emitted_name, schemas.keys())
+        if exposed_name is None:
+            return current_parse(text, start, schemas, call_index=call_index)
+
+        rewritten = text[:name_start] + exposed_name + text[name_end:]
+        call, rewritten_end = current_parse(
+            rewritten,
+            start,
+            schemas,
+            call_index=call_index,
+        )
+        length_delta = len(exposed_name) - len(raw_name)
+        return call, rewritten_end - length_delta
+
+    setattr(parse_qwen_function, _TOOL_NAME_MARKER, True)
+    llama_cpp_module._parse_qwen_function = parse_qwen_function
+
+
+def install(llama_cpp_module: Any) -> None:
+    """Install deterministic Qwen parser canonicalization without generation retries."""
+
+    _install_enum_recovery(llama_cpp_module)
+    _install_tool_name_recovery(llama_cpp_module)
 
 
 __all__ = [
