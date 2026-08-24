@@ -1,10 +1,96 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Mapping
 
+from .llama_finish_reason_contract import CONTEXT_PRESSURE, completion_boundary_kind
 from .model_adapters import GenerationRequest, ModelConfigurationError
+from .model_context_budget import (
+    bounded_tool_message,
+    emergency_fit_messages,
+    fit_messages_to_context,
+    request_message_budget,
+)
 from .retrieval_progress import RetrievalDecision, RetrievalObservation, RetrievalProgress
+
+
+def _replace_live_messages(
+    messages: list[dict[str, Any]],
+    fitted: tuple[Mapping[str, Any], ...],
+) -> bool:
+    replacement = [dict(message) for message in fitted]
+    if replacement == messages:
+        return False
+    messages[:] = replacement
+    return True
+
+
+def _generate_turn_with_context_recovery(
+    router: Any,
+    *,
+    config: Any,
+    adapter: Any,
+    request: GenerationRequest,
+    messages: list[dict[str, Any]],
+    media_paths: tuple[Any, ...],
+    tool_choice: Any,
+    parallel_tool_calls: bool,
+) -> Any:
+    """Fit one live agent turn and retry context pressure exactly once.
+
+    Context recovery remains tool-capable and deterministic. It never re-enters the
+    coder through a tool-disabled side channel, so fresh-evidence policy cannot mask
+    the original backend boundary.
+    """
+
+    fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
+    _replace_live_messages(messages, fitted)
+    turn_request = replace(
+        request,
+        messages=tuple(messages),
+        media_paths=media_paths,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
+    )
+    try:
+        with router._generation_scope(config):
+            return adapter.generate_turn(turn_request)
+    except BaseException as exc:
+        if completion_boundary_kind(exc) != CONTEXT_PRESSURE:
+            raise
+
+        emergency_budget = min(
+            40 * 1024,
+            request_message_budget(config, request.tools),
+        )
+        emergency = emergency_fit_messages(
+            messages,
+            budget_bytes=emergency_budget,
+        )
+        if not _replace_live_messages(messages, emergency):
+            raise
+
+        retry_request = replace(
+            turn_request,
+            messages=tuple(messages),
+            media_paths=media_paths,
+        )
+        print(
+            "agent context: deterministic overflow recovery",
+            f"messages={len(messages)}",
+            f"budget_bytes={emergency_budget}",
+            flush=True,
+        )
+        try:
+            with router._generation_scope(config):
+                return adapter.generate_turn(retry_request)
+        except BaseException as retry_exc:
+            if completion_boundary_kind(retry_exc) == CONTEXT_PRESSURE:
+                # Preserve the first typed boundary as the public/root failure. The
+                # retry remains available through its cause chain for diagnostics.
+                raise exc from retry_exc
+            raise
 
 
 def generate_with_tools(
@@ -17,13 +103,13 @@ def generate_with_tools(
     stage: str,
     role: str,
 ) -> str:
-    """Run retrieve/act/observe with semantic retrieval progress.
+    """Run retrieve/act/observe with semantic and context progress.
 
     Semantic progress owns normal liveness. A round budget only applies when the
     operator explicitly configures one. Mandatory evidence is satisfied by validated
     host grounding when present; otherwise the host may force each internal RAG
-    source at most once. Supplemental retrieval remains model-driven and repeated
-    queries/evidence never count as progress.
+    source at most once. Every backend turn is fitted to the runtime slot that will
+    actually serve it, while exact oversized tool observations remain host-archived.
     """
     from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
     from .coder_tool_route_integrity_contract import (
@@ -92,20 +178,17 @@ def generate_with_tools(
         if forced_rag_tool is not None:
             tool_choice = {"type": "function", "function": {"name": forced_rag_tool}}
             parallel_tool_calls = False
-        turn_request = GenerationRequest(
+
+        turn = _generate_turn_with_context_recovery(
+            router,
+            config=config,
+            adapter=adapter,
+            request=request,
             messages=messages,
             media_paths=request.media_paths if round_index == 0 else (),
-            response_format=request.response_format,
-            response_schema=request.response_schema,
-            tools=request.tools,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
-            task=getattr(request, "task", ""),
-            prompt=getattr(request, "prompt", ""),
-            metadata=getattr(request, "metadata", {}),
         )
-        with router._generation_scope(config):
-            turn = adapter.generate_turn(turn_request)
 
         if not turn.tool_calls:
             content = turn.content.strip()
@@ -238,11 +321,6 @@ def generate_with_tools(
                     **route_metadata,
                     "result": result,
                 }
-                # This proof is host-owned: first-party apply_source_patch raises on
-                # invalid/no-op/failed transactions, so reaching here means a real
-                # staged source mutation returned successfully. Keep the proof beside
-                # the potentially size-bounded tool result so result truncation cannot
-                # erase the implementation completion fact.
                 if call.name == "apply_source_patch":
                     payload = {
                         **payload,
@@ -264,12 +342,21 @@ def generate_with_tools(
         retrieval_no_progress = False
         weak_retrieval = False
         for call, payload in executed:
-            messages.append({
+            tool_message = {
                 "role": "tool",
                 "tool_call_id": call.id,
                 "name": call.name,
                 "content": json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
-            })
+            }
+            messages.append(
+                dict(
+                    bounded_tool_message(
+                        tool_message,
+                        config=config,
+                        tools=request.tools,
+                    )
+                )
+            )
             if not is_retrieval(call):
                 continue
             if not bool(payload.get("ok")):
@@ -340,20 +427,26 @@ def _finalize_without_tools(
     instruction: str,
     empty_error: str,
 ) -> str:
-    final_request = GenerationRequest(
-        messages=[*messages, {"role": "system", "content": instruction}],
+    final_messages = [*messages, {"role": "system", "content": instruction}]
+    final_request = replace(
+        request,
+        messages=tuple(final_messages),
         media_paths=(),
-        response_format=request.response_format,
-        response_schema=request.response_schema,
         tools=(),
         tool_choice=None,
         parallel_tool_calls=False,
-        task=getattr(request, "task", ""),
-        prompt=getattr(request, "prompt", ""),
-        metadata=getattr(request, "metadata", {}),
     )
-    with router._generation_scope(config):
-        final_turn = adapter.generate_turn(final_request)
+    final_messages_mutable = [dict(message) for message in final_messages]
+    final_turn = _generate_turn_with_context_recovery(
+        router,
+        config=config,
+        adapter=adapter,
+        request=final_request,
+        messages=final_messages_mutable,
+        media_paths=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
     if final_turn.tool_calls:
         raise ModelConfigurationError("Agent emitted tool calls after the host disabled tools.")
     content = final_turn.content.strip()
