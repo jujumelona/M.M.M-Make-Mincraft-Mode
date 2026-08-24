@@ -34,7 +34,7 @@ def test_native_tool_completion_has_bounded_idle_read_timeout(monkeypatch) -> No
 
     assert response is client.response
     assert client.timeout is not None
-    assert client.timeout.read == 600.0
+    assert client.timeout.read == 120.0
     assert client.timeout.connect == 30.0
     assert client.timeout.write == 30.0
     assert client.timeout.pool == 30.0
