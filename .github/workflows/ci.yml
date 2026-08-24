@@ -161,7 +161,7 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev,ui]'
+        run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Run deterministic pytest shard
         env:
           SHARD: ${{ matrix.shard }}
