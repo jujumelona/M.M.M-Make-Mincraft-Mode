@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-"""Enforce exact host-selected tool turns with one transport contract.
+"""Execute host-selected tool actions without re-asking the model for the tool name.
 
-When the causal planner selects one exact function, every adapter receives the same
-request shape: one visible schema, ``tool_choice='required'`` and serial execution.
-There is no local-only auto/metadata/prompt detour. A malformed result may receive one
-protocol-correction retry. Normal stale calls remain owned by causal recovery; a forced
-turn that is itself the causal recovery attempt cannot delegate its mismatch outward.
+The causal frontier owns action selection.  When that frontier has selected a source
+mutation, the model is used only to materialize schema-valid arguments on a tool-free
+JSON page.  The host then synthesizes the ToolCall.  This avoids relying on backend
+named-tool enforcement for writable actions and prevents stale tool-name retries from
+becoming a second routing owner.
 """
 
 import hashlib
@@ -16,17 +16,14 @@ from functools import wraps
 from typing import Any, Mapping, Sequence
 
 from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_TOOLS
+from .structured_output import StructuredOutputValidationError, validate_structured_output
 
-_MARKER = "_mmm_forced_tool_execution_v2"
+_MARKER = "_mmm_forced_tool_execution_v3"
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
-_CAUSAL_RESYNC_METADATA_KEY = "mmm_causal_resync_attempt"
-_RETRY_INSTRUCTION = (
-    "The previous assistant turn did not satisfy the required function call. "
-    "Call the only available function exactly once with schema-valid arguments."
-)
+_MAX_ARGUMENT_ERROR_CHARS = 1600
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -47,117 +44,31 @@ def forced_tool_name(tool_choice: Any) -> str:
     return str(function.get("name", "")).strip()
 
 
-def mark_causal_resync_request(request: Any) -> Any:
-    """Mark one host-forced request as already consuming causal resync ownership."""
-
-    metadata = dict(getattr(request, "metadata", {}) or {})
-    metadata[_CAUSAL_RESYNC_METADATA_KEY] = True
-    return replace(request, metadata=metadata)
-
-
-def _is_causal_resync_request(request: Any) -> bool:
-    metadata = getattr(request, "metadata", None)
-    return bool(
-        isinstance(metadata, Mapping)
-        and metadata.get(_CAUSAL_RESYNC_METADATA_KEY) is True
-    )
-
-
-def _selected_schema(request: Any, name: str) -> tuple[Mapping[str, Any], ...]:
+def _selected_schema(request: Any, name: str) -> Mapping[str, Any]:
     from .model_adapters import ModelConfigurationError
 
     selected = tuple(
         schema
-        for schema in request.tools
+        for schema in tuple(getattr(request, "tools", ()) or ())
         if isinstance(schema, Mapping) and _tool_name(schema) == name
     )
     if len(selected) != 1:
         raise ModelConfigurationError(
-            f"Host-forced tool {name!r} does not resolve to exactly one exposed schema."
+            f"Host-selected tool {name!r} does not resolve to exactly one exposed schema."
         )
-    return selected
+    return selected[0]
 
 
-def _schema_names(schemas: Any) -> frozenset[str]:
-    try:
-        candidates = tuple(schemas or ())
-    except TypeError:
-        return frozenset()
-    return frozenset(
-        name
-        for schema in candidates
-        if isinstance(schema, Mapping) and (name := _tool_name(schema))
-    )
+def _parameters(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+    from .model_adapters import ModelConfigurationError
 
-
-def _validation_only_tool_names(request: Any) -> frozenset[str]:
-    visible = _schema_names(getattr(request, "tools", ()))
-    validation = _schema_names(getattr(request, "tool_validation_schemas", ()))
-    return validation - visible
-
-
-def _is_validation_only_stale_turn(request: Any, turn: Any) -> bool:
-    calls = tuple(getattr(turn, "tool_calls", ()) or ())
-    if not calls:
-        return False
-    stale = _validation_only_tool_names(request)
-    return bool(
-        stale
-        and all(str(getattr(call, "name", "")).strip() in stale for call in calls)
-    )
-
-
-def _narrow_capability_context(
-    messages: Sequence[Mapping[str, Any]],
-    selected: Sequence[Mapping[str, Any]],
-) -> tuple[dict[str, Any], ...]:
-    from .agent_capability_context import build_agent_capability_context
-
-    narrowed: list[dict[str, Any]] = []
-    for message in messages:
-        copied = dict(message)
-        content = copied.get("content")
-        if (
-            str(copied.get("role", "")).strip() == "system"
-            and isinstance(content, str)
-            and content.startswith(_CAPABILITY_PREFIX)
-        ):
-            try:
-                payload = json.loads(content[len(_CAPABILITY_PREFIX) :])
-            except json.JSONDecodeError:
-                payload = None
-            if isinstance(payload, Mapping):
-                stage = str(payload.get("stage", "")).strip()
-                model_role = str(
-                    payload.get("execution_model_role", payload.get("model_role", ""))
-                ).strip()
-                if stage:
-                    copied["content"] = build_agent_capability_context(
-                        stage,
-                        selected,
-                        model_role=model_role,
-                    )
-        narrowed.append(copied)
-    return tuple(narrowed)
-
-
-def _single_tool_request(request: Any, name: str, *, retry: bool) -> Any:
-    """Narrow one exact action without changing its required semantics."""
-
-    selected = _selected_schema(request, name)
-    messages: Sequence[Mapping[str, Any]] = _narrow_capability_context(
-        request.messages,
-        selected,
-    )
-    if retry:
-        messages = (*tuple(messages), {"role": "system", "content": _RETRY_INSTRUCTION})
-    return replace(
-        request,
-        messages=messages,
-        tools=selected,
-        tool_choice="required",
-        parallel_tool_calls=False,
-    )
+    function = schema.get("function")
+    if not isinstance(function, Mapping):
+        raise ModelConfigurationError("Host-selected tool schema is missing function metadata.")
+    parameters = function.get("parameters")
+    if not isinstance(parameters, Mapping):
+        raise ModelConfigurationError("Host-selected tool schema is missing JSON parameters.")
+    return parameters
 
 
 def _json_mapping(value: Any) -> Mapping[str, Any] | None:
@@ -369,13 +280,8 @@ def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, A
 def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | None:
     if name not in _DETERMINISTIC_READ_TOOLS:
         return None
-    selected = _selected_schema(request, name)
-    function = selected[0].get("function")
-    if not isinstance(function, Mapping):
-        return None
-    raw_parameters = function.get("parameters", {})
-    if not isinstance(raw_parameters, Mapping):
-        return None
+    schema = _selected_schema(request, name)
+    raw_parameters = _parameters(schema)
     raw_properties = raw_parameters.get("properties", {})
     properties = raw_properties if isinstance(raw_properties, Mapping) else {}
     raw_required = raw_parameters.get("required", ())
@@ -415,14 +321,11 @@ def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | N
     return arguments
 
 
-def deterministic_forced_read_turn(request: Any, name: str) -> Any | None:
-    arguments = _deterministic_read_arguments(request, name)
-    if arguments is None:
-        return None
+def _response_for_call(name: str, arguments: Mapping[str, Any], *, prefix: str) -> Any:
     from .model_adapters.base import GenerationResponse, ToolCall
 
     raw_arguments = json.dumps(
-        arguments,
+        dict(arguments),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -431,12 +334,136 @@ def deterministic_forced_read_turn(request: Any, name: str) -> Any | None:
     return GenerationResponse(
         tool_calls=(
             ToolCall(
-                id=f"host_read_{digest}",
+                id=f"{prefix}_{digest}",
                 name=name,
-                arguments=arguments,
+                arguments=dict(arguments),
                 raw_arguments=raw_arguments,
             ),
         )
+    )
+
+
+def deterministic_forced_read_turn(request: Any, name: str) -> Any | None:
+    arguments = _deterministic_read_arguments(request, name)
+    if arguments is None:
+        return None
+    return _response_for_call(name, arguments, prefix="host_read")
+
+
+def _focused_argument_messages(request: Any, name: str, *, repair_error: str = "") -> tuple[dict[str, Any], ...]:
+    messages: list[dict[str, Any]] = []
+    for raw in tuple(getattr(request, "messages", ()) or ()):
+        if not isinstance(raw, Mapping):
+            continue
+        copied = dict(raw)
+        content = copied.get("content")
+        if (
+            str(copied.get("role", "")).strip().casefold() == "system"
+            and isinstance(content, str)
+            and content.startswith(_CAPABILITY_PREFIX)
+        ):
+            continue
+        messages.append(copied)
+
+    instruction = (
+        f"HOST ACTION IS FIXED: {name}. Do not choose or emit a tool/function name. "
+        "Return exactly one JSON object containing only the arguments for that host action. "
+        "Use the supplied JSON schema exactly. The host will execute the action after validation."
+    )
+    if repair_error:
+        instruction += (
+            " The previous argument object was invalid. Repair the arguments only; do not repeat the "
+            f"same invalid object. Validation: {repair_error[:_MAX_ARGUMENT_ERROR_CHARS]}"
+        )
+    messages.append({"role": "system", "content": instruction})
+    return tuple(messages)
+
+
+def _argument_page_request(request: Any, name: str, parameters: Mapping[str, Any], *, repair_error: str = "") -> Any:
+    return replace(
+        request,
+        messages=_focused_argument_messages(request, name, repair_error=repair_error),
+        tools=(),
+        tool_validation_schemas=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+        response_format="json",
+        response_schema=dict(parameters),
+    )
+
+
+def _argument_failure(turn: Any, parameters: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, str, str]:
+    calls = tuple(getattr(turn, "tool_calls", ()) or ())
+    content = str(getattr(turn, "content", "") or "").strip()
+    if calls:
+        names = ",".join(str(getattr(call, "name", "")).strip() for call in calls)
+        reason = f"argument-only page emitted tool calls instead of JSON arguments: {names or '<unknown>'}"
+        fingerprint = hashlib.sha256(reason.encode("utf-8")).hexdigest()
+        return None, reason, fingerprint
+    try:
+        validate_structured_output(
+            content,
+            response_format="json",
+            response_schema=parameters,
+        )
+        decoded = json.loads(content)
+        if not isinstance(decoded, Mapping):
+            raise TypeError("host action arguments must be a JSON object")
+        raw = json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return dict(decoded), "", hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    except StructuredOutputValidationError as exc:
+        reason = "; ".join(exc.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        reason = f"{type(exc).__name__}: {exc}"[:_MAX_ARGUMENT_ERROR_CHARS]
+    fingerprint = hashlib.sha256(f"{content}\0{reason}".encode("utf-8")).hexdigest()
+    return None, reason, fingerprint
+
+
+def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
+    """Materialize one host-selected mutation from arguments only.
+
+    The model never receives a tool schema on these pages, so an old tool name from
+    history cannot be executed or re-selected as the routing decision.  One bounded
+    repair is permitted for malformed arguments; a repeated fingerprint is a causal
+    fixed point and is surfaced without a third model call.
+    """
+
+    from .model_adapters import ModelConfigurationError
+
+    schema = _selected_schema(request, name)
+    parameters = _parameters(schema)
+    first_request = _argument_page_request(request, name, parameters)
+    first = current(adapter, first_request)
+    arguments, error, first_fingerprint = _argument_failure(first, parameters)
+    if arguments is not None:
+        return _response_for_call(name, arguments, prefix="host_mutation")
+
+    second_request = _argument_page_request(
+        request,
+        name,
+        parameters,
+        repair_error=error,
+    )
+    second = current(adapter, second_request)
+    repaired, repair_error, second_fingerprint = _argument_failure(second, parameters)
+    if repaired is not None:
+        return _response_for_call(name, repaired, prefix="host_mutation")
+
+    fixed_point = first_fingerprint == second_fingerprint
+    suffix = " repeated-invalid-argument fixed point" if fixed_point else " bounded argument repair exhausted"
+    raise ModelConfigurationError(
+        f"Host-selected mutation {name!r}{suffix}; first={first_fingerprint[:12]} "
+        f"retry={second_fingerprint[:12]} error={repair_error or error}."
+    )
+
+
+def _single_tool_request(request: Any, name: str) -> Any:
+    selected = (_selected_schema(request, name),)
+    return replace(
+        request,
+        tools=selected,
+        tool_choice="required",
+        parallel_tool_calls=False,
     )
 
 
@@ -470,34 +497,27 @@ def _install_adapter_class(
         if not name:
             return current(self, request)
 
-        first = current(self, _single_tool_request(request, name, retry=False))
-        if _contains_exact_call(first, name):
-            return first
-        if _is_validation_only_stale_turn(request, first):
-            if deterministic_stale_read:
-                deterministic = deterministic_forced_read_turn(request, name)
-                if deterministic is not None:
-                    return deterministic
-            if not _is_causal_resync_request(request):
-                return first
-            # This request is already the causal frontier's sole recovery attempt.
-            # Returning the stale call outward would make that owner reject its own
-            # forced action. Keep the existing single bounded protocol correction here.
+        if name in _SOURCE_MUTATION_TOOLS:
+            return host_selected_mutation_turn(current, self, request, name)
 
-        second = current(self, _single_tool_request(request, name, retry=True))
-        if _contains_exact_call(second, name):
-            return second
+        if deterministic_stale_read:
+            deterministic = deterministic_forced_read_turn(request, name)
+            if deterministic is not None:
+                return deterministic
+
+        turn = current(self, _single_tool_request(request, name))
+        if _contains_exact_call(turn, name):
+            return turn
         raise ModelConfigurationError(
-            f"{transport_name} violated the required single-tool contract after one "
-            f"protocol correction for {name!r}; first={_call_names(first)}, "
-            f"retry={_call_names(second)}."
+            f"{transport_name} failed the host-selected action {name!r}; received "
+            f"{_call_names(turn)}. The host will not repeat the same tool-name selection."
         )
 
     setattr(generate_turn, _MARKER, True)
     generate_turn._mmm_forced_tool_single_surface = True
     generate_turn._mmm_forced_tool_single_context = True
     generate_turn._mmm_forced_tool_required_transport = True
-    generate_turn._mmm_forced_tool_protocol_retry = True
+    generate_turn._mmm_host_selected_mutation_arguments = True
     cls.generate_turn = generate_turn
 
 
@@ -518,6 +538,6 @@ def install(*, openai_compatible_module: Any, llama_cpp_module: Any | None = Non
 __all__ = [
     "deterministic_forced_read_turn",
     "forced_tool_name",
+    "host_selected_mutation_turn",
     "install",
-    "mark_causal_resync_request",
 ]
