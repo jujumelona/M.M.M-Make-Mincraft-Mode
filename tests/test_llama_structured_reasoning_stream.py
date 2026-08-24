@@ -46,7 +46,7 @@ def _adapter(
     )
 
 
-def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
+def test_json_request_uses_server_schema_and_keeps_host_validation() -> None:
     schema = {
         "type": "object",
         "properties": {"value": {"type": "string"}},
@@ -64,16 +64,22 @@ def test_json_request_keeps_schema_on_host_not_llama_transport() -> None:
     )
     payload = _server_payload(_adapter(), request)
     assert request.response_schema == schema
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_host_action_arguments",
+            "strict": True,
+            "schema": schema,
+        },
+    }
     assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
-    assert payload["max_tokens"] == 8192
+    assert payload["max_tokens"] == 4096
 
 
-def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
+def test_native_tool_request_keeps_tools_visible_with_structured_action_page() -> None:
     tool = {
         "type": "function",
         "function": {
@@ -82,13 +88,14 @@ def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
             "parameters": {"type": "object", "properties": {}},
         },
     }
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+    }
     request = SimpleNamespace(
         messages=({"role": "user", "content": "inspect then plan"},),
         response_format="json",
-        response_schema={
-            "type": "object",
-            "properties": {"value": {"type": "string"}},
-        },
+        response_schema=schema,
         tools=(tool,),
         tool_choice="auto",
         parallel_tool_calls=True,
@@ -105,8 +112,14 @@ def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
     assert payload["tools"] == [tool]
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_host_action_arguments",
+            "strict": True,
+            "schema": schema,
+        },
+    }
     assert "grammar" not in payload
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
@@ -116,6 +129,7 @@ def test_native_tool_request_keeps_tools_visible_for_host_parser() -> None:
     assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
+    assert payload["max_tokens"] == 4096
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
