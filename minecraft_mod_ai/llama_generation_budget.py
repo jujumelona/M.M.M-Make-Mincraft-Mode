@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Finite native llama.cpp decode-page budgeting.
+"""Finite native llama.cpp action-page budgeting and structured constraints.
 
-One model action is always bounded by the live server context. Long tasks continue
-through the normal assistant/tool continuation machinery instead of requesting an
-unbounded decode from llama-server.
+Every model action is bounded by the live server context. Host-selected JSON action
+pages additionally carry the request schema to llama-server so its JSON-Schema-to-GBNF
+path constrains decoding before MMM performs its independent host-side validation.
 """
 
 import os
@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 from .model_context_budget import effective_context_tokens, tool_action_token_budget
 
-_MARKER = "_mmm_finite_generation_budget_v2"
+_MARKER = "_mmm_finite_generation_budget_v3"
 
 
 def _positive_override(name: str) -> int | None:
@@ -44,12 +44,38 @@ def plain_action_token_budget(config: Any) -> int:
     return max(4096, min(16384, context // 2))
 
 
-def action_token_budget(config: Any, *, has_tools: bool) -> int:
+def action_token_budget(config: Any, *, constrained_action: bool) -> int:
     return (
         tool_action_token_budget(config)
-        if has_tools
+        if constrained_action
         else plain_action_token_budget(config)
     )
+
+
+def apply_structured_output_constraint(
+    payload: Mapping[str, Any],
+    *,
+    request: Any,
+) -> dict[str, Any]:
+    """Transmit structured-output constraints to llama-server, never prompt-only JSON."""
+
+    constrained = dict(payload)
+    if getattr(request, "response_format", None) != "json":
+        return constrained
+
+    schema = getattr(request, "response_schema", None)
+    if isinstance(schema, Mapping):
+        constrained["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "mmm_host_action_arguments",
+                "strict": True,
+                "schema": dict(schema),
+            },
+        }
+    else:
+        constrained["response_format"] = {"type": "json_object"}
+    return constrained
 
 
 def apply_generation_budget(
@@ -60,7 +86,10 @@ def apply_generation_budget(
     """Clamp one payload at construction time; ``-1`` is never a transport value."""
 
     bounded = dict(payload)
-    budget = action_token_budget(config, has_tools=bool(bounded.get("tools")))
+    constrained_action = bool(bounded.get("tools")) or isinstance(
+        bounded.get("response_format"), Mapping
+    )
+    budget = action_token_budget(config, constrained_action=constrained_action)
     try:
         requested = int(bounded.get("max_tokens", 0) or 0)
     except (TypeError, ValueError):
@@ -71,12 +100,7 @@ def apply_generation_budget(
 
 
 def install(hardware_module: Any) -> None:
-    """Compatibility installer for runtimes not yet calling the direct helper.
-
-    New code should call :func:`apply_generation_budget` while constructing the
-    payload.  This wrapper remains idempotent so older composition orders cannot
-    resurrect an unbounded decode while bootstrap migration is in progress.
-    """
+    """Own final llama-server payload constraints in one idempotent boundary."""
 
     current = hardware_module._server_payload
     if bool(getattr(current, _MARKER, False)):
@@ -84,10 +108,11 @@ def install(hardware_module: Any) -> None:
 
     @wraps(current)
     def bounded_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-        return apply_generation_budget(
+        payload = apply_structured_output_constraint(
             current(adapter, request),
-            config=adapter.config,
+            request=request,
         )
+        return apply_generation_budget(payload, config=adapter.config)
 
     setattr(bounded_server_payload, _MARKER, True)
     hardware_module._server_payload = bounded_server_payload
@@ -96,6 +121,7 @@ def install(hardware_module: Any) -> None:
 __all__ = [
     "action_token_budget",
     "apply_generation_budget",
+    "apply_structured_output_constraint",
     "install",
     "plain_action_token_budget",
 ]
