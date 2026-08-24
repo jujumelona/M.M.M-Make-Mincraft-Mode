@@ -13,6 +13,7 @@ from types import MappingProxyType
 _TOOL_PERMISSION_ALIASES = MappingProxyType(
     {
         "apply_source_edit": "apply_source_patch",
+        "patch_file": "apply_source_patch",
     }
 )
 
@@ -30,7 +31,7 @@ def resolve_exposed_model_tool(
     emitted_name: str,
     exposed_names: Iterable[str],
 ) -> str | None:
-    """Resolve a canonical permission name only through this request's exposed aliases."""
+    """Resolve one emitted name through canonical identity to an actually exposed tool."""
 
     emitted = str(emitted_name).strip()
     exposed = tuple(
@@ -42,10 +43,11 @@ def resolve_exposed_model_tool(
     )
     if emitted in exposed:
         return emitted
+    emitted_canonical = canonical_model_tool(emitted)
     matches = tuple(
         candidate
         for candidate in exposed
-        if canonical_model_tool(candidate) == emitted
+        if canonical_model_tool(candidate) == emitted_canonical
     )
     return matches[0] if len(matches) == 1 else None
 
