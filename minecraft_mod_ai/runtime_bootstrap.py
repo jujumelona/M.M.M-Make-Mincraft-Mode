@@ -392,7 +392,6 @@ def _install_post_bootstrap_contracts() -> None:
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
-    from .small_model_compacting_adapter import install as install_small_model_compaction
     from .small_model_execution_extensions_contract import (
         install as install_small_model_execution_extensions,
     )
@@ -434,7 +433,6 @@ def _install_post_bootstrap_contracts() -> None:
         repair_module=repair_engine,
     )
     install_active_repair_verifier(agentic_optimization_contract)
-    install_small_model_compaction(model_router)
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
     install_small_model_execution_extensions()
