@@ -34,13 +34,13 @@ def run_context_budget_preflight() -> None:
     if (
         getattr(
             llama_server_hardware_policy._server_payload,
-            "_mmm_unbounded_llama_completion_v2",
+            "_mmm_unbounded_llama_completion_v3",
             False,
         )
         is not True
     ):
         raise ContextBudgetPreflightError(
-            "llama-server payload is missing the native unbounded completion policy"
+            "llama-server payload is missing the bounded-tool/unbounded-text completion policy"
         )
 
     synthetic_adapter = SimpleNamespace(
@@ -58,7 +58,7 @@ def run_context_budget_preflight() -> None:
     )
     if synthetic_payload.get("max_tokens") != -1:
         raise ContextBudgetPreflightError(
-            "llama-server production payload is still capped by max_new_tokens"
+            "llama-server non-tool production payload is still capped by max_new_tokens"
         )
 
     tool_schema = {
@@ -84,9 +84,9 @@ def run_context_budget_preflight() -> None:
             response_format="json",
         ),
     )
-    if synthetic_tool_payload.get("max_tokens") != -1:
+    if synthetic_tool_payload.get("max_tokens") != 8192:
         raise ContextBudgetPreflightError(
-            "required tool turns must use semantic action completion, not an output cap"
+            "tool turns must preserve the base bounded output budget"
         )
     if synthetic_tool_payload.get("tool_choice") != "required":
         raise ContextBudgetPreflightError(
