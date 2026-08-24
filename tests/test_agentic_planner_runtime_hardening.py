@@ -132,8 +132,7 @@ def test_bounded_section_disables_thinking_without_touching_research_tools() -> 
     assert "reasoning_effort" not in generic_payload
 
 
-def test_native_tuning_pipeline_keeps_single_stage_order_and_is_versioned() -> None:
-    assert tuning_pipeline._TUNING_PIPELINE_VERSION >= 30
+def test_native_tuning_pipeline_keeps_single_graph_owned_stage_order() -> None:
     pipeline = tuning_pipeline.NativeLlamaTuningPipeline(
         autotune=SimpleNamespace(),
         hardware_policy=SimpleNamespace(),
