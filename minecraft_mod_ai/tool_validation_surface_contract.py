@@ -24,6 +24,7 @@ from typing import Any, Mapping, Sequence
 from .runtime_contract_wrappers import contract_wraps, has_contract_marker
 
 _PARSE_MARKER = "_mmm_authorized_tool_validation_surface"
+_CONTINUATION_MARKER = "_mmm_tool_validation_continuation"
 
 
 def _tool_name(schema: Any) -> str:
@@ -78,6 +79,14 @@ def _validation_surface(
 
 def install() -> None:
     from .model_adapters import llama_cpp_adapter
+
+    # Continuation cloning is now core-owned: _reasoning_continuation_request uses
+    # dataclasses.replace(request, ...), so every current and future request field is
+    # preserved unless the core function explicitly changes it. Keep only the
+    # metadata marker consumed by runtime preflight; do not add another wrapper.
+    current_continuation = llama_cpp_adapter._reasoning_continuation_request
+    if not has_contract_marker(current_continuation, _CONTINUATION_MARKER):
+        setattr(current_continuation, _CONTINUATION_MARKER, True)
 
     current_parse = llama_cpp_adapter._qwen_tool_generation_response
     if has_contract_marker(current_parse, _PARSE_MARKER):
