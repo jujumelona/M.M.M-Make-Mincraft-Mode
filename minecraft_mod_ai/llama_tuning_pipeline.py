@@ -23,10 +23,9 @@ from .runtime_contract_composer import (
 )
 
 
-_TUNING_PIPELINE_VERSION = 35
-_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority_v6"
+_PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority"
 _RUNTIME_TYPE_OWNER_MARKER = "_mmm_runtime_tuning_type_owner"
-_AUTOTUNE_LIVENESS_MARKER = "_mmm_autotune_wall_clock_guard_v1"
+_AUTOTUNE_LIVENESS_MARKER = "_mmm_autotune_wall_clock_guard"
 _AUTOTUNE_DEADLINE_LOCK = threading.RLock()
 _AUTOTUNE_DEADLINE: float | None = None
 
@@ -89,7 +88,7 @@ class TuningStage:
 
 
 class NativeLlamaTuningPipeline:
-    """Install the native llama tuning stack once per composition version."""
+    """Install one graph-pinned native llama tuning stack per process."""
 
     def __init__(self, *, autotune: Any, hardware_policy: Any, runtime_tuning: Any) -> None:
         self.autotune = autotune
@@ -97,14 +96,7 @@ class NativeLlamaTuningPipeline:
         self.runtime_tuning = runtime_tuning
 
     def _install_runtime_type_ownership(self) -> None:
-        """Publish the canonical extended tuning type before any wrapper captures it.
-
-        Historically ``llama_server_autotune`` started with a narrow ServerVariant and
-        ``llama_server_runtime_tuning.install`` replaced it later with the extended
-        runtime type. That made the public shape depend on import/bootstrap timing.
-        Type ownership is now an explicit first composition stage, so every later
-        tuning policy sees one stable production model from the start.
-        """
+        """Publish the canonical extended tuning type before any wrapper captures it."""
 
         for name in ("ServerVariant",):
             canonical = getattr(self.runtime_tuning, name, None)
@@ -121,11 +113,10 @@ class NativeLlamaTuningPipeline:
     def _context_value(config: Any) -> int:
         """Resolve the launch context from explicit operator or registry policy.
 
-        ``--ctx-size 0`` is still available for profiles that intentionally want the
-        model-native context. Resource-constrained profiles can instead declare a
-        ``runtime_context_default`` in registry metadata so a small request does not
-        allocate a huge native KV cache merely because the checkpoint advertises a
-        very large maximum context. Explicit operator overrides remain authoritative.
+        ``--ctx-size 0`` remains available for profiles that intentionally use the
+        model-native context. Resource-constrained profiles may declare a
+        ``runtime_context_default`` so runtime allocation can differ from the model's
+        advertised maximum without changing that model capability.
         """
 
         extra = getattr(config, "extra", {})
@@ -197,8 +188,13 @@ class NativeLlamaTuningPipeline:
         current_benchmark = getattr(self.autotune, "_benchmark", None)
         current_start_server = getattr(self.autotune, "_start_server", None)
         current_probe_server = getattr(self.autotune, "_probe_server", None)
-        if not all(callable(value) for value in (current_benchmark, current_start_server, current_probe_server)):
-            raise RuntimeError("native llama autotune liveness guard requires benchmark/start/probe owners")
+        if not all(
+            callable(value)
+            for value in (current_benchmark, current_start_server, current_probe_server)
+        ):
+            raise RuntimeError(
+                "native llama autotune liveness guard requires benchmark/start/probe owners"
+            )
         if getattr(current_benchmark, _AUTOTUNE_LIVENESS_MARKER, False):
             return
 
@@ -223,11 +219,15 @@ class NativeLlamaTuningPipeline:
                 previous_deadline = _AUTOTUNE_DEADLINE
                 _AUTOTUNE_DEADLINE = time.monotonic() + wall_seconds
             try:
-                current_start = int(previous_start_timeout) if previous_start_timeout else step_seconds
+                current_start = (
+                    int(previous_start_timeout) if previous_start_timeout else step_seconds
+                )
             except ValueError:
                 current_start = step_seconds
             try:
-                current_probe = int(previous_probe_timeout) if previous_probe_timeout else step_seconds
+                current_probe = (
+                    int(previous_probe_timeout) if previous_probe_timeout else step_seconds
+                )
             except ValueError:
                 current_probe = step_seconds
             os.environ["MMM_LLAMA_SERVER_START_TIMEOUT"] = str(
@@ -407,15 +407,11 @@ class NativeLlamaTuningPipeline:
         )
 
     def install(self) -> None:
-        installed_version = int(
-            getattr(self.autotune, "_mmm_tuning_pipeline_version", 0) or 0
-        )
-        if installed_version >= _TUNING_PIPELINE_VERSION:
+        if bool(getattr(self.autotune, "_mmm_tuning_pipeline_installed", False)):
             return
 
         receipts = compose_contract_stages(
             owner_name="native-llama-tuning",
-            version=_TUNING_PIPELINE_VERSION,
             state_owner=self.autotune,
             stages=(
                 ContractStage(stage.name, stage.install)
@@ -423,11 +419,11 @@ class NativeLlamaTuningPipeline:
             ),
             boundaries=self._callable_boundaries(),
         )
-        installed = tuple(receipt.name for receipt in receipts)
-        self.autotune._mmm_tuning_pipeline_stages = installed
+        self.autotune._mmm_tuning_pipeline_stages = tuple(
+            receipt.name for receipt in receipts
+        )
         self.autotune._mmm_tuning_pipeline_receipts = receipts
         self.autotune._mmm_tuning_pipeline_installed = True
-        self.autotune._mmm_tuning_pipeline_version = _TUNING_PIPELINE_VERSION
 
 
 def install_native_llama_tuning_pipeline(
