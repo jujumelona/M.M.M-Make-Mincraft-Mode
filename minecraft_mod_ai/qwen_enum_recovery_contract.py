@@ -8,18 +8,18 @@ drift or emit the canonical permission name instead of the narrower model-facing
 
 This module performs only deterministic, request-scoped canonicalization. It never
 invents semantic enum aliases, never exposes a broader host schema, and never asks the
-model to generate again. Malformed calls that cannot be repaired without changing
-meaning are raised as typed protocol errors; causal_stale_tool_recovery_contract remains
-the sole owner of bounded re-synchronization.
+model to generate again. One parser hook owns both recoveries so the runtime mutation
+surface does not grow for closely related Qwen syntax handling.
 """
 
+import hashlib
 import json
 import re
+from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
-_ENUM_MARKER = "_mmm_qwen_enum_recovery_v3"
-_TOOL_NAME_MARKER = "_mmm_qwen_tool_name_recovery_v1"
+_MARKER = "_mmm_qwen_parser_recovery_v4"
 _NO_MATCH = object()
 _MAX_VALUE_PREVIEW = 160
 
@@ -69,13 +69,7 @@ def _string_candidates(raw: str) -> tuple[str, ...]:
 
 
 def canonical_string_enum(raw: str, allowed_values: Sequence[Any]) -> Any:
-    """Return one formatting-equivalent enum member, or ``_NO_MATCH``.
-
-    Normalization is syntactic only: whitespace, hyphen/underscore, camel-case and an
-    optional JSON string wrapper may be normalized. Semantic synonyms are never mapped
-    because that would silently revive removed operations such as whole-file writes.
-    Ambiguous normalized schemas fail closed.
-    """
+    """Return one formatting-equivalent enum member, or ``_NO_MATCH``."""
 
     if not allowed_values or not all(isinstance(value, str) for value in allowed_values):
         return _NO_MATCH
@@ -91,42 +85,92 @@ def canonical_string_enum(raw: str, allowed_values: Sequence[Any]) -> Any:
     return _NO_MATCH
 
 
-def _install_enum_recovery(llama_cpp_module: Any) -> None:
-    current_decode = llama_cpp_module._decode_parameter_value
-    if bool(getattr(current_decode, _ENUM_MARKER, False)):
-        return
-
-    @wraps(current_decode)
-    def decode_parameter_value(
-        tool_name: str,
-        key: str,
-        raw: str,
-        schema: Mapping[str, Any],
-    ) -> Any:
-        enum = schema.get("enum")
-        if isinstance(enum, list) and enum:
-            canonical = canonical_string_enum(raw, enum)
-            if canonical is not _NO_MATCH:
-                return canonical
-        try:
-            return current_decode(tool_name, key, raw, schema)
-        except RuntimeError as exc:
-            if isinstance(enum, list) and enum and "emitted value outside enum" in str(exc):
-                raise QwenEnumValueError(
-                    tool_name=tool_name,
-                    parameter_name=key,
-                    raw_value=raw,
-                    allowed_values=enum,
-                ) from exc
-            raise
-
-    setattr(decode_parameter_value, _ENUM_MARKER, True)
-    llama_cpp_module._decode_parameter_value = decode_parameter_value
+def _relax_string_enums(
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    relaxed: dict[str, Mapping[str, Any]] = dict(schemas)
+    for tool_name, schema in schemas.items():
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            continue
+        updated_properties = dict(properties)
+        changed = False
+        for key, property_schema in properties.items():
+            if not isinstance(property_schema, Mapping):
+                continue
+            enum = property_schema.get("enum")
+            if not isinstance(enum, list) or not enum or not all(
+                isinstance(value, str) for value in enum
+            ):
+                continue
+            updated = dict(property_schema)
+            updated.pop("enum", None)
+            updated_properties[key] = updated
+            changed = True
+        if changed:
+            updated_schema = dict(schema)
+            updated_schema["properties"] = updated_properties
+            relaxed[tool_name] = updated_schema
+    return relaxed
 
 
-def _install_tool_name_recovery(llama_cpp_module: Any) -> None:
+def _canonicalize_call_enums(
+    call: Any,
+    schema: Mapping[str, Any],
+    *,
+    call_index: int,
+) -> Any:
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return call
+    arguments = dict(call.arguments)
+    changed = False
+    for key, value in tuple(arguments.items()):
+        property_schema = properties.get(key)
+        if not isinstance(property_schema, Mapping):
+            continue
+        enum = property_schema.get("enum")
+        if not isinstance(enum, list) or not enum or not all(
+            isinstance(item, str) for item in enum
+        ):
+            continue
+        if not isinstance(value, str):
+            raise QwenEnumValueError(
+                tool_name=call.name,
+                parameter_name=key,
+                raw_value=str(value),
+                allowed_values=enum,
+            )
+        canonical = canonical_string_enum(value, enum)
+        if canonical is _NO_MATCH:
+            raise QwenEnumValueError(
+                tool_name=call.name,
+                parameter_name=key,
+                raw_value=value,
+                allowed_values=enum,
+            )
+        if canonical != value:
+            arguments[key] = canonical
+            changed = True
+    if not changed:
+        return call
+    raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(
+        f"{call_index}\0{call.name}\0{raw_arguments}".encode("utf-8")
+    ).hexdigest()[:16]
+    return replace(
+        call,
+        id=f"call_{digest}",
+        arguments=arguments,
+        raw_arguments=raw_arguments,
+    )
+
+
+def install(llama_cpp_module: Any) -> None:
+    """Install one deterministic parser owner for tool names and string enums."""
+
     current_parse = getattr(llama_cpp_module, "_parse_qwen_function", None)
-    if not callable(current_parse) or bool(getattr(current_parse, _TOOL_NAME_MARKER, False)):
+    if not callable(current_parse) or bool(getattr(current_parse, _MARKER, False)):
         return
 
     @wraps(current_parse)
@@ -140,39 +184,39 @@ def _install_tool_name_recovery(llama_cpp_module: Any) -> None:
         function_open = str(getattr(llama_cpp_module, "_FUNCTION_OPEN", "<function="))
         name_start = start + len(function_open)
         name_end = text.find(">", name_start)
-        if name_end < 0:
-            return current_parse(text, start, schemas, call_index=call_index)
+        emitted_name = text[name_start:name_end].strip() if name_end >= 0 else ""
+        exposed_name = emitted_name
+        rewritten = text
+        length_delta = 0
 
-        raw_name = text[name_start:name_end]
-        emitted_name = raw_name.strip()
-        if not emitted_name or emitted_name in schemas:
-            return current_parse(text, start, schemas, call_index=call_index)
+        if emitted_name and emitted_name not in schemas:
+            from minecraft_mod_ai.model_tool_aliases import resolve_exposed_model_tool
 
-        from minecraft_mod_ai.model_tool_aliases import resolve_exposed_model_tool
+            resolved = resolve_exposed_model_tool(emitted_name, schemas.keys())
+            if resolved is not None:
+                exposed_name = resolved
+                raw_name = text[name_start:name_end]
+                rewritten = text[:name_start] + exposed_name + text[name_end:]
+                length_delta = len(exposed_name) - len(raw_name)
 
-        exposed_name = resolve_exposed_model_tool(emitted_name, schemas.keys())
-        if exposed_name is None:
-            return current_parse(text, start, schemas, call_index=call_index)
-
-        rewritten = text[:name_start] + exposed_name + text[name_end:]
+        relaxed = _relax_string_enums(schemas)
         call, rewritten_end = current_parse(
             rewritten,
             start,
-            schemas,
+            relaxed,
             call_index=call_index,
         )
-        length_delta = len(exposed_name) - len(raw_name)
+        original_schema = schemas.get(call.name)
+        if isinstance(original_schema, Mapping):
+            call = _canonicalize_call_enums(
+                call,
+                original_schema,
+                call_index=call_index,
+            )
         return call, rewritten_end - length_delta
 
-    setattr(parse_qwen_function, _TOOL_NAME_MARKER, True)
+    setattr(parse_qwen_function, _MARKER, True)
     llama_cpp_module._parse_qwen_function = parse_qwen_function
-
-
-def install(llama_cpp_module: Any) -> None:
-    """Install deterministic Qwen parser canonicalization without generation retries."""
-
-    _install_enum_recovery(llama_cpp_module)
-    _install_tool_name_recovery(llama_cpp_module)
 
 
 __all__ = [
