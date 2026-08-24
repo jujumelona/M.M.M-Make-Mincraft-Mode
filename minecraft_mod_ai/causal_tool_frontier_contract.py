@@ -11,8 +11,6 @@ selector, rewrites the live tool surface, or forces per-turn actions.
 
 from typing import Any, Mapping, Sequence
 
-from .causal_frontier_adapter import CausalFrontierAdapter
-
 
 def _contains(value: str, markers: Sequence[str]) -> bool:
     return any(marker in value for marker in markers)
