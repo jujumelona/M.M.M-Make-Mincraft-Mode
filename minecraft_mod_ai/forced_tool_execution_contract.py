@@ -5,8 +5,8 @@ from __future__ import annotations
 When the causal planner selects one exact function, every adapter receives the same
 request shape: one visible schema, ``tool_choice='required'`` and serial execution.
 There is no local-only auto/metadata/prompt detour. A malformed result may receive one
-protocol-correction retry; once an action is host-forced, this contract owns any
-non-selected tool output instead of handing it back to outer stale-tool recovery.
+protocol-correction retry. Normal stale calls remain owned by causal recovery; a forced
+turn that is itself the causal recovery attempt cannot delegate its mismatch outward.
 """
 
 import hashlib
@@ -22,6 +22,7 @@ _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
+_CAUSAL_RESYNC_METADATA_KEY = "mmm_causal_resync_attempt"
 _RETRY_INSTRUCTION = (
     "The previous assistant turn did not satisfy the required function call. "
     "Call the only available function exactly once with schema-valid arguments."
@@ -44,6 +45,22 @@ def forced_tool_name(tool_choice: Any) -> str:
     if not isinstance(function, Mapping):
         return ""
     return str(function.get("name", "")).strip()
+
+
+def mark_causal_resync_request(request: Any) -> Any:
+    """Mark one host-forced request as already consuming causal resync ownership."""
+
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    metadata[_CAUSAL_RESYNC_METADATA_KEY] = True
+    return replace(request, metadata=metadata)
+
+
+def _is_causal_resync_request(request: Any) -> bool:
+    metadata = getattr(request, "metadata", None)
+    return bool(
+        isinstance(metadata, Mapping)
+        and metadata.get(_CAUSAL_RESYNC_METADATA_KEY) is True
+    )
 
 
 def _selected_schema(request: Any, name: str) -> tuple[Mapping[str, Any], ...]:
@@ -461,10 +478,11 @@ def _install_adapter_class(
                 deterministic = deterministic_forced_read_turn(request, name)
                 if deterministic is not None:
                     return deterministic
-            # The host already selected one exact action. Handing this stale call
-            # back to outer causal resync would consume two owners' retry budgets
-            # for one protocol violation and can create the fatal recovery cycle.
-            # Fall through to this owner's single bounded protocol correction.
+            if not _is_causal_resync_request(request):
+                return first
+            # This request is already the causal frontier's sole recovery attempt.
+            # Returning the stale call outward would make that owner reject its own
+            # forced action. Keep the existing single bounded protocol correction here.
 
         second = current(self, _single_tool_request(request, name, retry=True))
         if _contains_exact_call(second, name):
@@ -497,4 +515,9 @@ def install(*, openai_compatible_module: Any, llama_cpp_module: Any | None = Non
         )
 
 
-__all__ = ["deterministic_forced_read_turn", "forced_tool_name", "install"]
+__all__ = [
+    "deterministic_forced_read_turn",
+    "forced_tool_name",
+    "install",
+    "mark_causal_resync_request",
+]
