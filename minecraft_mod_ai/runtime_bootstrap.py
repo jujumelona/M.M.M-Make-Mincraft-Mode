@@ -7,7 +7,6 @@ from threading import RLock
 from . import runtime_contract_composer as _contract_composer
 
 _BOOTSTRAP_LOCK = RLock()
-_RUNTIME_COMPOSITION_VERSION = 6
 _INITIALIZED = False
 
 
@@ -32,7 +31,6 @@ def _install_runtime_contracts() -> None:
 
     _contract_composer.compose_contract_stages(
         owner_name="package-runtime-bootstrap",
-        version=_RUNTIME_COMPOSITION_VERSION,
         state_owner=_contract_composer,
         stages=(
             _contract_composer.ContractStage("prebootstrap", install_prebootstrap),
