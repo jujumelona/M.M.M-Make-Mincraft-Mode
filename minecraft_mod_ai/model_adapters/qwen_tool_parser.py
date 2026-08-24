@@ -3,11 +3,9 @@
 Qwen family models sometimes wrap a function's argument object in a synthetic
 parameter (for example ``apply``/``arguments``), use conventional aliases such as
 ``file`` for a schema's ``path``, emit the canonical permission identity instead of a
-narrow model-facing alias, or format a string enum harmlessly differently. Recovery for
-exposed tools is bounded by the currently exposed schema and ``additionalProperties``
-stays authoritative. Unexposed tool names are preserved as unresolved calls so the
-causal frontier can reject or resynchronize stale model actions without the parser
-claiming execution authority.
+narrow model-facing alias, or format a string enum harmlessly differently. Recovery is
+bounded by the currently exposed schema: unknown tools and keys remain errors and
+``additionalProperties`` stays authoritative.
 """
 from __future__ import annotations
 
@@ -53,7 +51,7 @@ def parse_qwen_tool_markup(
     text: str,
     schemas: Mapping[str, Mapping[str, Any]],
 ) -> tuple[str, tuple[ToolCall, ...]]:
-    """Parse native Qwen function tags without weakening exposed-tool validation."""
+    """Parse native Qwen function tags without weakening the exposed tool schema."""
     if not text:
         return "", ()
     calls: list[ToolCall] = []
@@ -112,9 +110,10 @@ def _parse_qwen_function(
     emitted_name = text[name_start:name_end].strip()
     if not emitted_name:
         raise RuntimeError("Qwen function tag has an empty tool name")
-    resolved_name = resolve_exposed_model_tool(emitted_name, schemas.keys())
-    name = resolved_name or emitted_name
-    schema = schemas[resolved_name] if resolved_name is not None else {}
+    name = resolve_exposed_model_tool(emitted_name, schemas.keys())
+    if name is None:
+        raise RuntimeError(f"Qwen requested an unexposed tool {emitted_name!r}")
+    schema = schemas[name]
     properties_value = schema.get("properties", {})
     properties = properties_value if isinstance(properties_value, Mapping) else {}
     required_value = schema.get("required", ())
