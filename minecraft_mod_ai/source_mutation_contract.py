@@ -130,10 +130,17 @@ def mutation_observation_applied(message: Mapping[str, Any]) -> bool:
     return payload is not None and mutation_payload_applied(name, payload)
 
 
+def mutation_history_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
+    """Return true when the retained/compacted history contains a valid mutation proof."""
+
+    return any(mutation_observation_applied(message) for message in reversed(messages))
+
+
 __all__ = [
     "HOST_MUTATION_PROOF_KEY",
     "SOURCE_MUTATION_NAMES",
     "STRICT_RECEIPT_MUTATION_NAMES",
+    "mutation_history_applied",
     "mutation_observation_applied",
     "mutation_payload_applied",
     "tool_payload",
