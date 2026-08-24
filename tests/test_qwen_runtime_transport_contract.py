@@ -153,7 +153,9 @@ def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
     assert payload["tools"][0]["function"]["name"] == "mmm_transport_probe"
 
 
-def test_qwen35_tool_probe_rejects_server_parsed_tool_calls(monkeypatch) -> None:
+def test_qwen35_tool_probe_accepts_host_validated_server_parsed_tool_calls(
+    monkeypatch,
+) -> None:
     class Response:
         @staticmethod
         def raise_for_status() -> None:
@@ -171,8 +173,8 @@ def test_qwen35_tool_probe_rejects_server_parsed_tool_calls(monkeypatch) -> None
         _config("unsloth/Qwen3.5-9B-MTP-GGUF", family="qwen3.5"),
     )
 
-    assert ok is False
-    assert "server-parsed tool_calls" in error
+    assert ok is True
+    assert error == ""
 
 
 def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
