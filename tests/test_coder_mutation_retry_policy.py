@@ -43,19 +43,27 @@ def _messages(*failures: str) -> tuple[dict[str, object], ...]:
     return tuple(messages)
 
 
+def _selected_tool_name(request: GenerationRequest) -> str:
+    choice = request.tool_choice
+    if choice == "required":
+        assert len(request.tools) == 1
+        function = request.tools[0]["function"]
+        assert isinstance(function, dict)
+        return str(function.get("name", ""))
+    assert isinstance(choice, dict)
+    function = choice.get("function")
+    assert isinstance(function, dict)
+    return str(function.get("name", ""))
+
+
 class _RecordingAdapter:
     def __init__(self) -> None:
         self.requests: list[GenerationRequest] = []
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
         self.requests.append(request)
-        choice = request.tool_choice
-        assert isinstance(choice, dict)
-        function = choice.get("function")
-        assert isinstance(function, dict)
-        name = str(function.get("name", ""))
         return GenerationResponse(
-            tool_calls=(ToolCall(id="call-1", name=name),)
+            tool_calls=(ToolCall(id="call-1", name=_selected_tool_name(request)),)
         )
 
 
@@ -80,10 +88,8 @@ def test_writable_coder_prefers_hardened_patch_over_schema_order() -> None:
 
     adapter.generate_turn(request)
 
-    assert inner.requests[0].tool_choice == {
-        "type": "function",
-        "function": {"name": "apply_source_patch"},
-    }
+    assert inner.requests[0].tool_choice == "required"
+    assert _selected_tool_name(inner.requests[0]) == "apply_source_patch"
 
 
 def test_writable_coder_does_not_locally_fail_over_after_patch_failures() -> None:
@@ -97,10 +103,8 @@ def test_writable_coder_does_not_locally_fail_over_after_patch_failures() -> Non
 
     adapter.generate_turn(request)
 
-    assert inner.requests[0].tool_choice == {
-        "type": "function",
-        "function": {"name": "apply_source_patch"},
-    }
+    assert inner.requests[0].tool_choice == "required"
+    assert _selected_tool_name(inner.requests[0]) == "apply_source_patch"
 
 
 def test_writable_coder_does_not_own_retry_exhaustion() -> None:
@@ -120,7 +124,5 @@ def test_writable_coder_does_not_own_retry_exhaustion() -> None:
     adapter.generate_turn(request)
 
     assert len(inner.requests) == 1
-    assert inner.requests[0].tool_choice == {
-        "type": "function",
-        "function": {"name": "apply_source_patch"},
-    }
+    assert inner.requests[0].tool_choice == "required"
+    assert _selected_tool_name(inner.requests[0]) == "apply_source_patch"
