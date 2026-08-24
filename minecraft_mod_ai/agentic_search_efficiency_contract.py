@@ -11,6 +11,9 @@ from typing import Any, Mapping, Sequence
 
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
+_FAILURE_GATED_SEARCH_MARKER = "_mmm_failure_gated_search"
+_FAILURE_GATED_SEARCH_EPOCH = "mmm/failure-gated-search-v2"
+
 
 def _active_parallel_slots() -> int:
     raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
@@ -18,6 +21,19 @@ def _active_parallel_slots() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
+
+
+def _search_mode() -> str:
+    value = os.environ.get("MMM_AGENTIC_SEARCH", "auto").strip().casefold()
+    return value if value in {"off", "auto", "on"} else "auto"
+
+
+def _repair_search_width() -> int:
+    raw = os.environ.get("MMM_REPAIR_SEARCH_WIDTH", "2").strip()
+    try:
+        return max(1, min(3, int(raw)))
+    except ValueError:
+        return 2
 
 
 def _coder_config(router: Any) -> Any | None:
@@ -45,7 +61,6 @@ def _prime_native_repair_slots(
     evidence: Mapping[str, Any],
     context: Mapping[str, Any],
 ) -> Any | None:
-    """Prime the coder runtime before repair breadth is selected."""
     config = _coder_config(router)
     if not _is_local_native(config):
         return config
@@ -88,15 +103,6 @@ def _parallel_workers(router: Any, width: int, config: Any | None) -> int:
 
 
 def _base_repair_candidate_count(candidate_count: Any) -> Any:
-    """Return the deepest risk function below transport/capacity policy wrappers.
-
-    Candidate breadth has one live owner here. Older runtime layers may still wrap the
-    risk function for compatibility and copy ``__dict__`` markers through
-    ``functools.wraps``. Auto mode must not feed those policy wrappers back into the
-    slot-aware owner or a historical single-lane decision will permanently clamp a
-    later multi-slot runtime to one candidate.
-    """
-
     current = candidate_count
     seen: set[int] = set()
     while callable(current) and id(current) not in seen:
@@ -108,8 +114,22 @@ def _base_repair_candidate_count(candidate_count: Any) -> Any:
     return current
 
 
+def _owns_current_repair_width_policy(value: Any) -> bool:
+    if not owns_contract_marker(value, _FAILURE_GATED_SEARCH_MARKER):
+        return False
+    namespace = getattr(value, "__dict__", None)
+    if not isinstance(namespace, dict):
+        return False
+    if namespace.get("_mmm_failure_gated_search_epoch") != _FAILURE_GATED_SEARCH_EPOCH:
+        return False
+    code = getattr(value, "__code__", None)
+    if code is None or str(getattr(code, "co_name", "")) != "repair_candidate_count":
+        return False
+    filename = str(getattr(code, "co_filename", "")).replace("\\", "/")
+    return filename.endswith("/agentic_search_efficiency_contract.py")
+
+
 def _install_parallel_repair_search(agentic_module: Any) -> None:
-    """Parallelize repair candidates while committing only one verified winner."""
     current_installer = agentic_module._install_repair_search_and_memory
     if has_contract_marker(current_installer, "_mmm_parallel_repair_candidate_installer"):
         return
@@ -143,7 +163,7 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
             )
 
             config = None
-            if agentic_module._mode() != "off":
+            if _search_mode() != "off":
                 config = _prime_native_repair_slots(
                     self.router,
                     evidence=evidence,
@@ -264,9 +284,8 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
 
 
 def install(agentic_module: Any) -> None:
-    """Install repair-only candidate parallelism; planner Best-of-N is retired."""
     current_repair_count = agentic_module._repair_candidate_count
-    if not owns_contract_marker(current_repair_count, "_mmm_failure_gated_search"):
+    if not _owns_current_repair_width_policy(current_repair_count):
         risk_candidate_count = _base_repair_candidate_count(current_repair_count)
 
         def repair_candidate_count(
@@ -274,14 +293,10 @@ def install(agentic_module: Any) -> None:
             evidence: Mapping[str, Any],
             memory: Sequence[Mapping[str, Any]],
         ) -> int:
-            mode = agentic_module._mode()
+            mode = _search_mode()
             if mode == "off":
                 return 1
-            width = agentic_module._env_int(
-                "MMM_REPAIR_SEARCH_WIDTH",
-                2,
-                maximum=3,
-            )
+            width = _repair_search_width()
             if mode == "on":
                 return width
             slots = _active_parallel_slots()
@@ -293,7 +308,8 @@ def install(agentic_module: Any) -> None:
             )
             return min(slots, risk_width)
 
-        repair_candidate_count._mmm_failure_gated_search = True
+        setattr(repair_candidate_count, _FAILURE_GATED_SEARCH_MARKER, True)
+        repair_candidate_count._mmm_failure_gated_search_epoch = _FAILURE_GATED_SEARCH_EPOCH
         repair_candidate_count.__wrapped__ = risk_candidate_count
         agentic_module._repair_candidate_count = repair_candidate_count
 
