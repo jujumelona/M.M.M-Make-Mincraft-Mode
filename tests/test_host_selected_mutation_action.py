@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from minecraft_mod_ai.causal_action_state import CausalAction, classify_action
+from minecraft_mod_ai.causal_action_state import (
+    CausalAction,
+    classify_action,
+    select_action_frontier,
+)
 from minecraft_mod_ai.forced_tool_execution_contract import _install_adapter_class
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
@@ -287,3 +291,19 @@ def test_causal_action_class_is_host_derived() -> None:
     assert classify_action(("java_workspace_symbols",)) is CausalAction.INSPECT
     assert classify_action(("apply_source_edit",)) is CausalAction.MUTATE
     assert classify_action(("run_gradle_build",)) is CausalAction.VERIFY
+
+
+def test_ranked_frontier_selects_action_class_before_tool_surface() -> None:
+    action, names = select_action_frontier(
+        ("search_code_rag", "java_workspace_symbols", "search_project_rag")
+    )
+    assert action is CausalAction.RETRIEVE
+    assert names == ("search_code_rag", "search_project_rag")
+
+
+def test_mutation_frontier_collapses_to_one_host_tool() -> None:
+    action, names = select_action_frontier(
+        ("apply_source_edit", "apply_source_patch", "java_workspace_symbols")
+    )
+    assert action is CausalAction.MUTATE
+    assert names == ("apply_source_edit",)
