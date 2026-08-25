@@ -376,6 +376,34 @@ def test_qwen_tool_parser_tolerates_invalid_json_in_unknown_or_array_parameter()
     assert "invalid_json" in calls[0].arguments
 
 
+def test_repair_engine_handles_delete_and_aliases(tmp_path: Path) -> None:
+    """RepairEngine validates and executes delete operations and alias payloads cleanly."""
+    from minecraft_mod_ai.repair_engine import RepairEngine
+    from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
+
+    junk_file = tmp_path / "junk.java"
+    junk_file.write_text("class Junk {}", encoding="utf-8")
+
+    operations = [
+        {
+            "operation": "delete_file",
+            "path": "junk.java",
+            "explanation": "delete obsolete file",
+        }
+    ]
+
+    RepairEngine._hydrate_repair_preconditions(tmp_path, operations)
+    RepairEngine._validate_patch_scope(operations)
+    assert operations[0]["operation"] == "delete"
+    assert "expected_sha256" in operations[0]
+    assert "explanation" not in operations[0]
+
+    receipt = TransactionalSourcePatcher(tmp_path).apply(operations)
+    assert receipt["status"] == "APPLIED"
+    assert not junk_file.exists()
+
+
+
 
 
 

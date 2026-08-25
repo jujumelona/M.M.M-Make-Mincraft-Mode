@@ -299,9 +299,13 @@ class RepairEngine:
             response_format="json",
         )
         value = _extract_json(text)
-        if set(value) != {"operations"}:
-            raise RepairEngineError("Coder repair response must contain only operations.")
-        operations = value["operations"]
+        operations = None
+        if isinstance(value, dict):
+            operations = value.get("operations") or value.get("patch") or value.get("edits")
+            if not operations and "path" in value and ("operation" in value or "content" in value):
+                operations = [value]
+        elif isinstance(value, list):
+            operations = value
         if not isinstance(operations, list) or not operations:
             raise RepairEngineError("Coder did not return a non-empty operations list.")
         encoded = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))
@@ -317,8 +321,8 @@ class RepairEngine:
         for item in operations:
             if not isinstance(item, dict):
                 raise RepairEngineError("Repair operation must be an object.")
-            if item.get("operation") not in {"create", "replace", "edit"}:
-                raise RepairEngineError("Automated repair may not delete files.")
+            if item.get("operation") not in {"create", "replace", "edit", "delete"}:
+                raise RepairEngineError(f"Unsupported repair operation: {item.get('operation')}")
             path = Path(str(item.get("path", "")))
             if path.suffix not in _ALLOWED_SUFFIXES and path.name not in {
                 "build.gradle",
@@ -335,7 +339,7 @@ class RepairEngine:
 
     @staticmethod
     def _hydrate_repair_preconditions(root: Path, operations: list[dict[str, Any]]) -> None:
-        for item in operations:
+        for index, item in enumerate(operations):
             if not isinstance(item, dict):
                 continue
             rel_str = str(item.get("path", "")).strip().replace("\\", "/")
@@ -352,12 +356,24 @@ class RepairEngine:
             item["path"] = rel_str
 
             op = str(item.get("operation", "")).strip().lower()
-            if op in {"modify", "patch", "update", "write_file", "replace_exact"}:
+            if op in {"modify", "patch", "update", "write_file", "replace_exact", "insert", "insert_before", "insert_after", "append", "prepend", "insert_member", "insert_java_member", "add_member", "add_import", "add_java_import", "import"}:
                 op = "replace"
                 item["operation"] = op
-            elif op in {"write", "add", "create_file"}:
+            elif op in {"write", "add", "create_file", "create_class", "create_type", "create_java_type", "create_java_class"}:
                 op = "create"
                 item["operation"] = op
+            elif op in {"delete", "delete_file", "remove", "remove_file"}:
+                op = "delete"
+                item["operation"] = op
+
+            # Normalize content payload
+            if op in {"create", "replace"}:
+                if "content" not in item:
+                    alt_content = item.get("new") or item.get("new_text") or item.get("new_content") or item.get("code") or item.get("source") or item.get("body") or item.get("text")
+                    if alt_content is not None:
+                        item["content"] = str(alt_content)
+                    else:
+                        item["content"] = ""
 
             if op in {"replace", "edit", "delete"}:
                 expected = str(item.get("expected_sha256", "")).strip()
@@ -367,6 +383,18 @@ class RepairEngine:
                 if isinstance(item.get("content"), str):
                     item["operation"] = "replace"
                     item["expected_sha256"] = sha256_bytes(target.read_bytes())
+
+            # Strip disallowed metadata fields so TransactionalSourcePatcher strictly validates
+            allowed_fields = {
+                "create": {"operation", "path", "content"},
+                "replace": {"operation", "path", "expected_sha256", "content"},
+                "edit": {"operation", "path", "expected_sha256", "replacements"},
+                "delete": {"operation", "path", "expected_sha256"},
+            }.get(item.get("operation", ""), set())
+            if allowed_fields:
+                extra_keys = set(item.keys()) - allowed_fields
+                for k in extra_keys:
+                    item.pop(k, None)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
