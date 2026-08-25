@@ -13,13 +13,12 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+")
 _MINECRAFT_GAME_ID = 432
-_CURSEFORGE_LOADERS = {"forge": 1, "fabric": 4, "quilt": 5, "neoforge": 6}
 
 
 @dataclass
