@@ -299,12 +299,6 @@ def _insert_argument(
     arguments: dict[str, Any],
     argument_sources: dict[str, str],
 ) -> None:
-    if key in arguments:
-        previous = argument_sources[key]
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted conflicting sources for canonical "
-            f"parameter {key!r}: {previous!r} and {source!r}"
-        )
     arguments[key] = value
     argument_sources[key] = source
 
@@ -367,40 +361,46 @@ def _decode_parameter_value(
 ) -> Any:
     expected = _schema_value_type(schema)
     compact = raw.strip()
+    value: Any = raw
     try:
         if expected == "string":
-            value: Any = raw
+            value = raw
         elif expected == "integer":
             if not compact or any(ch in compact.lower() for ch in (".", "e")):
-                raise ValueError("not an integer")
-            value = int(compact)
+                value = raw
+            else:
+                value = int(compact)
         elif expected == "number":
-            value = float(compact)
+            try:
+                value = float(compact)
+            except ValueError:
+                value = raw
         elif expected == "boolean":
             lowered = compact.lower()
-            if lowered not in {"true", "false"}:
-                raise ValueError("not a boolean")
-            value = lowered == "true"
-        elif expected == "null":
-            if compact.lower() != "null":
-                raise ValueError("not null")
-            value = None
-        elif expected in {"object", "array"}:
-            value = json.loads(compact)
-            if expected == "object" and not isinstance(value, Mapping):
-                raise ValueError("not an object")
-            if expected == "array" and not isinstance(value, list):
-                raise ValueError("not an array")
-        else:
-            if compact.startswith(("{", "[", '"')) or compact in {"true", "false", "null"}:
-                value = json.loads(compact)
+            if lowered in {"true", "false"}:
+                value = lowered == "true"
             else:
                 value = raw
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
-            f"for parameter {key!r}"
-        ) from exc
+        elif expected == "null":
+            if compact.lower() == "null":
+                value = None
+            else:
+                value = raw
+        elif expected in {"object", "array"}:
+            try:
+                value = json.loads(compact)
+            except (ValueError, json.JSONDecodeError):
+                value = raw
+        else:
+            if compact.startswith(("{", "[", '"')) or compact in {"true", "false", "null"}:
+                try:
+                    value = json.loads(compact)
+                except (ValueError, json.JSONDecodeError):
+                    value = raw
+            else:
+                value = raw
+    except Exception:
+        value = raw
     return _validate_decoded_value(tool_name, key, value, schema)
 
 

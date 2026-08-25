@@ -356,6 +356,27 @@ def test_repair_engine_hydrates_missing_expected_sha256(tmp_path: Path) -> None:
     assert "1.7-SNAPSHOT" in gradle_file.read_text(encoding="utf-8")
 
 
+def test_qwen_tool_parser_tolerates_invalid_json_in_unknown_or_array_parameter() -> None:
+    """Qwen parser handles unescaped JSON strings in parameters without crashing."""
+    from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
+
+    schemas = {}
+    markup = (
+        "<tool_call>\n"
+        "<function=create_java_type>\n"
+        "<parameter=top_level_members>[\"public static final Item ITEM = new Item();\"]</parameter>\n"
+        "<parameter=invalid_json>[unescaped, 'quotes', {bad json</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    _visible, calls = parse_qwen_tool_markup(markup, schemas)
+    assert len(calls) == 1
+    assert calls[0].name == "create_java_type"
+    assert "top_level_members" in calls[0].arguments
+    assert "invalid_json" in calls[0].arguments
+
+
+
 
 
 
