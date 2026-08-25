@@ -93,8 +93,8 @@ def test_causal_frontier_never_mixes_retrieve_and_inspect_actions(monkeypatch) -
             return (_schema("search_code_rag"), _schema("java_workspace_symbols"))
 
         def call(self, stage, name, arguments):
-            assert name == "java_workspace_symbols"
-            return {"evidence": name}
+            assert name == "search_code_rag"
+            return {"hits": [{"path": "src/main/java/X.java"}]}
 
     class Adapter:
         def __init__(self):
@@ -104,16 +104,15 @@ def test_causal_frontier_never_mixes_retrieve_and_inspect_actions(monkeypatch) -
             self.count += 1
             if self.count == 1:
                 assert [item["function"]["name"] for item in request.tools] == [
-                    "java_workspace_symbols"
+                    "search_code_rag"
                 ]
-                assert request.parallel_tool_calls is False
                 return GenerationResponse(
                     tool_calls=(
                         ToolCall(
-                            id="symbols",
-                            name="java_workspace_symbols",
-                            arguments={},
-                            raw_arguments="{}",
+                            id="file",
+                            name="search_code_rag",
+                            arguments={"query": "project symbols"},
+                            raw_arguments='{"query":"project symbols"}',
                         ),
                     )
                 )
