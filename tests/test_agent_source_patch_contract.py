@@ -5,11 +5,13 @@ import hashlib
 import pytest
 
 from minecraft_mod_ai import agent_tool_runtime
+from minecraft_mod_ai import source_patch as source_patch_module
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime, AgentToolRuntimeError
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
     SOURCE_EDIT_SCHEMA,
     materialize_model_source_edit,
 )
+from minecraft_mod_ai.source_mutation_contract import mutation_payload_applied
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
 
@@ -161,7 +163,51 @@ def test_host_materializes_unique_span_with_exact_sha(tmp_path) -> None:
     assert operation["expected_sha256"] == "sha256:" + hashlib.sha256(old.encode("utf-8")).hexdigest()
     receipt = TransactionalSourcePatcher(project).apply(payload["operations"])
     assert receipt["status"] == "APPLIED"
+    assert receipt["changed_paths"] == ["src/main/java/example/Example.java"]
+    assert mutation_payload_applied("apply_source_patch", {"ok": True, "result": receipt}) is True
     assert "int value = 1" in source.read_text(encoding="utf-8")
+
+
+def test_noop_patch_skips_commit_and_does_not_prove_source_diff(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    project = _project(workspace)
+    source = project / "src/main/java/example/Example.java"
+    content = "final class Example { int value = 1; }\n"
+    source.write_text(content, encoding="utf-8")
+    expected = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    committed: list[object] = []
+
+    monkeypatch.setattr(
+        source_patch_module,
+        "_commit_staged_path",
+        lambda *args: committed.append(args),
+    )
+
+    receipt = TransactionalSourcePatcher(project).apply(
+        [
+            {
+                "operation": "replace",
+                "path": "src/main/java/example/Example.java",
+                "expected_sha256": expected,
+                "content": content,
+            }
+        ]
+    )
+
+    assert receipt["status"] == "UNCHANGED"
+    assert receipt["changed_paths"] == []
+    assert committed == []
+    assert mutation_payload_applied(
+        "apply_source_patch",
+        {
+            "ok": True,
+            "result": receipt,
+            "_mmm_source_mutation": {
+                "tool": "apply_source_patch",
+                "status": "APPLIED_BY_HOST_RUNTIME",
+            },
+        },
+    ) is False
 
 
 def test_source_edit_cannot_target_gradle_or_build_infrastructure(tmp_path) -> None:
