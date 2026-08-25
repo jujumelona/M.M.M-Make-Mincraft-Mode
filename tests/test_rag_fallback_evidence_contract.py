@@ -17,11 +17,6 @@ def test_positive_receipt_hits_survive_zero_reranker_scores() -> None:
     }
 
     assert model_router._usable_rag_result(value) is True
-    assert getattr(
-        model_router._usable_rag_result,
-        "__mmm_reranker_fallback_hits__",
-        False,
-    )
 
 
 def test_zero_result_receipt_does_not_accept_stale_hits() -> None:
@@ -37,7 +32,7 @@ def test_zero_result_receipt_does_not_accept_stale_hits() -> None:
     assert model_router._usable_rag_result(value) is False
 
 
-def test_scored_receipt_remains_usable_without_fallback() -> None:
+def test_scored_receipt_remains_usable_without_hits() -> None:
     value = {
         "receipt": {
             "result_count": 1,

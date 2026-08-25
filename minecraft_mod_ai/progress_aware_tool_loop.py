@@ -385,12 +385,7 @@ def generate_with_tools(
                     call.arguments,
                     payload.get("result"),
                 )
-            observation = progress.observe(
-                call.name,
-                call.arguments,
-                payload.get("result"),
-                usable=usable,
-            )
+            observation = progress.observe(payload.get("result"), usable=usable)
             if observation is RetrievalObservation.DUPLICATE_EVIDENCE:
                 retrieval_no_progress = True
             elif observation is RetrievalObservation.WEAK:

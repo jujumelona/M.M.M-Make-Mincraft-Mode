@@ -149,14 +149,7 @@ class RetrievalProgress:
             self.attempted_sources.add(source)
             return RetrievalDecision.EXECUTE
 
-    def observe(
-        self,
-        tool_name: str,
-        arguments: Mapping[str, Any],
-        value: Any,
-        *,
-        usable: bool,
-    ) -> RetrievalObservation:
+    def observe(self, value: Any, *, usable: bool) -> RetrievalObservation:
         if not usable:
             return self._record_no_progress(RetrievalObservation.WEAK)
         fingerprint = evidence_fingerprint(value)

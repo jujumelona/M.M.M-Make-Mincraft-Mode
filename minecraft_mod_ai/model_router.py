@@ -634,27 +634,31 @@ def _usable_external_rag_result(arguments: Mapping[str, Any], value: Any) -> boo
 
 
 def _usable_rag_result(value: Any) -> bool:
-    """Treat RAG receipts as authoritative and accept other non-empty evidence packs."""
+    """Accept scored RAG receipts and concrete hits when optional scoring is unavailable."""
 
     found_receipt = False
+    positive_receipt = False
     usable_receipt = False
     found_hits = False
 
     def visit(item: Any) -> None:
-        nonlocal found_receipt, usable_receipt, found_hits
+        nonlocal found_receipt, positive_receipt, usable_receipt, found_hits
         if isinstance(item, Mapping):
             receipt = item.get("receipt")
             if isinstance(receipt, Mapping):
                 found_receipt = True
                 try:
-                    if (
-                        int(receipt.get("result_count", 0) or 0) > 0
-                        and float(receipt.get("coverage_score", 0.0) or 0.0) > 0.0
-                        and float(receipt.get("relevance_score", 0.0) or 0.0) > 0.0
-                    ):
-                        usable_receipt = True
+                    result_count = int(receipt.get("result_count", 0) or 0)
+                    coverage_score = float(receipt.get("coverage_score", 0.0) or 0.0)
+                    relevance_score = float(receipt.get("relevance_score", 0.0) or 0.0)
                 except (TypeError, ValueError):
-                    pass
+                    result_count = 0
+                    coverage_score = 0.0
+                    relevance_score = 0.0
+                if result_count > 0:
+                    positive_receipt = True
+                    if coverage_score > 0.0 and relevance_score > 0.0:
+                        usable_receipt = True
             hits = item.get("hits")
             if (
                 isinstance(hits, Sequence)
@@ -670,7 +674,7 @@ def _usable_rag_result(value: Any) -> bool:
 
     visit(value)
     if found_receipt:
-        return usable_receipt
+        return usable_receipt or (positive_receipt and found_hits)
     if found_hits:
         return True
     if isinstance(value, Mapping):
