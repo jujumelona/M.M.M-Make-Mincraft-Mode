@@ -84,6 +84,10 @@ class PatchReceipt:
     before_sha256: str | None
     after_sha256: str | None
 
+    @property
+    def changed(self) -> bool:
+        return self.before_sha256 != self.after_sha256
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": self.path,
@@ -96,9 +100,10 @@ class PatchReceipt:
 class TransactionalSourcePatcher:
     """Apply exact, hash-guarded text patches inside one project root.
 
-    Operations are fully validated in memory before any file is changed. Writes use
-    atomic ``os.replace`` and all touched files are rolled back if any commit step
-    fails. Symlinks, path traversal and broad directory deletion are rejected.
+    Operations are fully validated in memory before any file is changed. Real writes
+    use atomic ``os.replace`` and all touched files are rolled back if any commit step
+    fails. No-op operations remain valid/idempotent but never rewrite or fsync the
+    unchanged file. Symlinks, path traversal and broad directory deletion are rejected.
     Concurrent transactions for the same project root are serialized so rollback from
     one transaction cannot overwrite another transaction's commit.
     """
@@ -189,7 +194,14 @@ class TransactionalSourcePatcher:
                 )
             )
 
-        ordered_staged = list(staged.items())
+        # Idempotent operations are part of the receipt but never hit the filesystem.
+        # This removes needless temp-file writes/fsyncs and keeps "APPLIED" reserved
+        # for transactions that actually changed at least one file.
+        ordered_staged = [
+            (path, after)
+            for path, after in staged.items()
+            if originals[path] != after
+        ]
         committed: set[Path] = set()
         errors: dict[Path, BaseException] = {}
         workers = _commit_worker_count(len(ordered_staged))
@@ -253,10 +265,12 @@ class TransactionalSourcePatcher:
                 workspace_impact="rolled_back",
             ) from first_error
 
+        changed_paths = [receipt.path for receipt in receipts if receipt.changed]
         return {
             "schema_version": "mmm/source-patch-receipt-v1",
-            "status": "APPLIED",
+            "status": "APPLIED" if changed_paths else "UNCHANGED",
             "project_root": str(self.project_root),
+            "changed_paths": changed_paths,
             "operations": [receipt.to_dict() for receipt in receipts],
         }
 
