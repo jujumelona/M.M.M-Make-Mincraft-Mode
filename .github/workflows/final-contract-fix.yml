@@ -1,0 +1,54 @@
+name: Final contract fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/final-contract-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply exact source fixes
+        run: python .github/scripts/apply_final_contract_fixes.py
+      - name: Run focused regressions
+        run: >-
+          python -m pytest -q
+          tests/test_source_edit_protocol_ownership_regression.py
+          tests/test_qwen_apply_source_edit_alias.py
+          tests/test_source_edit_alias_ownership.py
+          tests/test_source_edit_text_alias.py
+          tests/test_temporary_skill_reuse.py
+      - name: Validate changed Python
+        run: >-
+          python -m py_compile
+          minecraft_mod_ai/source_edit_scalar_protocol_contract.py
+          minecraft_mod_ai/model_adapters/qwen_tool_parser.py
+          minecraft_mod_ai/trajectory_memory.py
+      - name: Commit validated source fixes
+        shell: bash
+        run: |
+          git config user.name "jujumelona"
+          git config user.email "qasdaa025@gmail.com"
+          git add minecraft_mod_ai/source_edit_scalar_protocol_contract.py
+          git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py
+          git add minecraft_mod_ai/trajectory_memory.py
+          git add tests/test_temporary_skill_reuse.py
+          git add tests/test_source_edit_alias_ownership.py
+          git diff --cached --check
+          git commit -m "refactor(contracts): single-own source aliases and normalize java context"
+          git push origin HEAD:main
