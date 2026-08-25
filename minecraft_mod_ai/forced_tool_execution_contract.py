@@ -11,6 +11,7 @@ Other exact local actions use native ``required`` decoding after a live capabili
 
 import hashlib
 import json
+import re
 import threading
 from dataclasses import replace
 from functools import wraps
@@ -407,6 +408,34 @@ def _argument_page_request(
     )
 
 
+def _extract_fallback_mutation_args(text: str) -> dict[str, Any] | None:
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    candidate = match.group(1) if match else text
+    
+    path_match = re.search(r'["\']path["\']\s*:\s*["\']([^"\']+)["\']', candidate)
+    if not path_match:
+        return None
+    path_val = path_match.group(1)
+    
+    op_match = re.search(r'["\']operation["\']\s*:\s*["\']([^"\']+)["\']', candidate)
+    op_val = op_match.group(1) if op_match else "replace"
+    
+    content_match = re.search(r'["\']content["\']\s*:\s*["\']([\s\S]*?)["\']\s*(?:,\s*["\']|\})', candidate)
+    content_val = content_match.group(1) if content_match else ""
+    if not content_val:
+        java_match = re.search(r'(?:package\s+[a-zA-Z0-9_.]+;[\s\S]+)', candidate)
+        if java_match:
+            content_val = java_match.group(0).rstrip("}`\"' \t\n")
+    
+    if path_val and content_val:
+        return {
+            "operation": op_val,
+            "path": path_val,
+            "content": content_val.replace("\\n", "\n").replace('\\"', '"'),
+        }
+    return None
+
+
 def _argument_failure(
     turn: Any,
     parameters: Mapping[str, Any],
@@ -432,6 +461,18 @@ def _argument_failure(
     except StructuredOutputValidationError as exc:
         reason = "; ".join(exc.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        fallback = _extract_fallback_mutation_args(content)
+        if fallback is not None:
+            try:
+                validate_structured_output(
+                    json.dumps(fallback),
+                    response_format="json",
+                    response_schema=parameters,
+                )
+                raw = json.dumps(fallback, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                return fallback, "", hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            except Exception:
+                pass
         reason = f"{type(exc).__name__}: {exc}"[:_MAX_ARGUMENT_ERROR_CHARS]
     fingerprint = hashlib.sha256(f"{content}\0{reason}".encode("utf-8")).hexdigest()
     return None, reason, fingerprint

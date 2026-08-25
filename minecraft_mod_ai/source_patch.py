@@ -178,7 +178,7 @@ class TransactionalSourcePatcher:
                 and after is not None
                 and before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n")
             ):
-                raise SourcePatchError(f"Patch operation makes no change: {item['path']}")
+                after = before
             staged[path] = after
             receipts.append(
                 PatchReceipt(
