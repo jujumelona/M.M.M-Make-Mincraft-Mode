@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import sys
 import threading
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
-from .agent_intent import implementation_requested, structured_user_intent
+from .agent_intent import implementation_requested
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     completion_boundary_kind,
@@ -458,7 +456,6 @@ def generate_with_tools(
     )
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
-    # Determine initial phase
     if require_rag and not state.has_fresh_evidence:
         state.phase = LoopPhase.OBSERVE
     elif implementation_requires_mutation and not mutation_history_applied(messages):
@@ -469,7 +466,6 @@ def generate_with_tools(
     while True:
         state.step_index += 1
 
-        # Check explicit round limit
         if round_limit is not None and state.step_index > round_limit:
             if require_rag and not state.has_fresh_evidence:
                 raise ModelConfigurationError(
@@ -494,7 +490,6 @@ def generate_with_tools(
                 empty_error="Agent returned an empty final response at the explicit tool-round limit.",
             )
 
-        # Check no-progress cutoff: 2 consecutive zero-progress turns halts execution
         if forced_rag_tool is None and state.no_progress_streak >= 2:
             if require_rag and not state.has_fresh_evidence:
                 raise ModelConfigurationError(
@@ -520,7 +515,6 @@ def generate_with_tools(
                 empty_error="Agent returned an empty final response after no-progress convergence.",
             )
 
-        # Phase-based tool partitioning
         phase_tools = _filter_tools_for_phase(all_exposed_tools, state.phase, role)
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
 
@@ -533,7 +527,6 @@ def generate_with_tools(
         elif state.phase == LoopPhase.ACT:
             mutation_names = [n for n in phase_tool_names if n in _MUTATION_ACT_TOOLS]
             if len(mutation_names) == 1:
-                # Small model only needs to provide arguments for the single mutation tool
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
                 parallel_tool_calls = False
 
@@ -555,7 +548,6 @@ def generate_with_tools(
             parallel_tool_calls=parallel_tool_calls,
         )
 
-        # Handle prose return (no tool calls emitted)
         if not turn.tool_calls:
             content = turn.content.strip()
             if not content:
@@ -604,7 +596,6 @@ def generate_with_tools(
                 continue
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 if state.phase == LoopPhase.OBSERVE and (state.has_fresh_evidence or host_grounded):
-                    # Progress from OBSERVE to ACT
                     state.phase = LoopPhase.ACT
                     messages.extend([
                         {"role": "assistant", "content": content},
@@ -665,7 +656,6 @@ def generate_with_tools(
                 if capability:
                     route_metadata["external_mcp_capability"] = capability
 
-            # Check phase legality
             if call.name not in all_exposed_names:
                 return call, {
                     "ok": False,
@@ -744,22 +734,18 @@ def generate_with_tools(
                 )
             )
 
-            # Check mutation progress
             if call.name in _MUTATION_ACT_TOOLS:
                 if state.record_mutation(call.name, payload):
                     turn_made_progress = True
-                    # Advance phase to VERIFY if verify tools available
                     if all_exposed_names & _VERIFY_TOOLS:
                         state.phase = LoopPhase.VERIFY
                 elif not bool(payload.get("ok")):
-                    # Mutation failed; check if error is distinct
                     error_digest = hashlib.sha256(str(payload.get("error", "")).encode("utf-8")).hexdigest()[:16]
                     if error_digest != state.last_failure_digest:
                         state.last_failure_digest = error_digest
-                        turn_made_progress = True  # New meaningful failure diagnostic
+                        turn_made_progress = True
                 continue
 
-            # Check verification progress
             if call.name in _VERIFY_TOOLS:
                 status = "PASS" if bool(payload.get("ok")) else "FAIL"
                 if status != state.validation_status:
@@ -767,7 +753,6 @@ def generate_with_tools(
                     turn_made_progress = True
                 continue
 
-            # Check retrieval progress
             if is_retrieval(call):
                 if not bool(payload.get("ok")):
                     continue
