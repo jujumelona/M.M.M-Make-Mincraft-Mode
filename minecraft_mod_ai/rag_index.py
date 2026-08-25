@@ -1911,8 +1911,13 @@ def _cosine(
 
 
 def _is_sqlite(path: Path) -> bool:
-    with path.open("rb") as source:
-        return source.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
+    if not path.is_file():
+        return False
+    try:
+        with path.open("rb") as source:
+            return source.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
+    except (OSError, PermissionError):
+        return False
 
 
 def _canonical_json(value: Any) -> str:

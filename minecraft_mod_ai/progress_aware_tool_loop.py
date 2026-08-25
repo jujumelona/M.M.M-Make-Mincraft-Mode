@@ -378,6 +378,11 @@ class HostRunState:
         with self._lock:
             return sig in self.attempted_queries
 
+    def record_attempted_source(self, tool_name: str, arguments: Mapping[str, Any]) -> None:
+        source = retrieval_source_key(tool_name, arguments)
+        with self._lock:
+            self.attempted_sources.add(source)
+
     def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
         source = retrieval_source_key(tool_name, arguments)
         sig = retrieval_query_signature(tool_name, arguments)
@@ -1309,6 +1314,7 @@ def generate_with_tools(
                         **route_metadata,
                         "error": err_msg,
                     }
+                state.record_attempted_source(call.name, call.arguments)
 
             try:
                 if call.name.startswith("external_mcp_"):

@@ -721,6 +721,22 @@ def test_extract_mutation_context_ignores_documentation_source_id() -> None:
     assert ctx is None
 
 
+def test_search_code_rag_on_directory_via_production_service(tmp_path: Path) -> None:
+    """ProductionToolService.search_code_rag handles directory index_path without FileNotFoundError."""
+    from minecraft_mod_ai.production_tools import ProductionToolService
+
+    src_java = tmp_path / "src" / "main" / "java"
+    src_java.mkdir(parents=True, exist_ok=True)
+    mod_file = src_java / "Mod.java"
+    mod_file.write_text("public class Mod { public static void init() {} }", encoding="utf-8")
+
+    service = ProductionToolService(workspace_root=tmp_path)
+    result = service.search_code_rag("init", index_path="src/main/java")
+    assert isinstance(result, dict)
+    assert result.get("schema_version") == "mmm/code-rag-result-v1"
+
+
+
 
 
 

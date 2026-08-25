@@ -4,6 +4,7 @@ import copy
 import json
 import re
 from functools import wraps
+from pathlib import Path
 from threading import RLock
 from typing import Any, Mapping
 
@@ -134,6 +135,24 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
     return " ".join(token for _score, token in candidates[:8])
 
 
+def _resolve_index_target(service: Any, index_path: str) -> Path:
+    resolve_fn = getattr(service, "_resolve", None)
+    if callable(resolve_fn):
+        target = resolve_fn(index_path)
+    else:
+        target = Path(index_path).expanduser().resolve()
+    if target.is_dir():
+        canonical = target / "rag" / "project-index.json"
+        if canonical.is_file():
+            return canonical
+        return target
+    if not target.exists() and callable(resolve_fn):
+        canonical = resolve_fn("rag/project-index.json")
+        if canonical.is_file():
+            return canonical
+    return target
+
+
 def _search_cache_key(
     service: Any,
     *,
@@ -144,8 +163,14 @@ def _search_cache_key(
     rerank: bool,
     required_metadata: dict[str, Any] | None,
 ) -> tuple[Any, ...]:
-    target = service._existing_file(index_path)
-    stat = target.stat()
+    target = _resolve_index_target(service, index_path)
+    if target.exists():
+        stat = target.stat()
+        size = int(stat.st_size)
+        mtime = int(stat.st_mtime_ns)
+        ino = int(getattr(stat, "st_ino", 0) or 0)
+    else:
+        size, mtime, ino = 0, 0, 0
     metadata_key = json.dumps(
         required_metadata or {},
         ensure_ascii=False,
@@ -155,9 +180,9 @@ def _search_cache_key(
     )
     return (
         str(target),
-        int(stat.st_size),
-        int(stat.st_mtime_ns),
-        int(getattr(stat, "st_ino", 0) or 0),
+        size,
+        mtime,
+        ino,
         str(getattr(service, "profile", "")),
         query,
         int(limit),
@@ -270,7 +295,7 @@ def install(production_tools_module: Any) -> None:
                     q1_vector = adapt_query_vector(router, query, texts)
                     if q1_vector:
                         direct = direct_centroid_vector_search(
-                            self._existing_file(index_path),
+                            _resolve_index_target(self, index_path),
                             query=query,
                             q1_vector=q1_vector,
                             router=router,
