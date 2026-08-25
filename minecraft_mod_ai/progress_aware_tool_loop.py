@@ -185,6 +185,7 @@ class HostRunState:
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
+    concrete_source_grounded: bool = False
     applied_mutations: list[str] = field(default_factory=list)
     workspace_changed: bool = False
     validation_status: str = "PENDING"
@@ -215,6 +216,8 @@ class HostRunState:
         if fp is None:
             return False
         with self._lock:
+            if _extract_concrete_source_from_payload(value):
+                self.concrete_source_grounded = True
             if fp in self.evidence_fingerprints:
                 return False
             self.evidence_fingerprints.add(fp)
@@ -300,8 +303,96 @@ class RetrievalProgress:
         return self._state.next_untried_internal_tool(exposed_tools, preferred=preferred)
 
 
-def _has_concrete_target_source(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Return whether the message history already carries concrete target source context."""
+_CODE_MARKERS = frozenset({
+    "class ", "interface ", "enum ", "record ", "public ", "private ", "protected ",
+    "package ", "import ", "void ", "return ", "final ", "static ", "new ",
+    "extends ", "implements ", "override", "{", "}", ";", "(", ")",
+})
+
+
+def _is_code_bearing_text(text: Any) -> bool:
+    """Return whether a text snippet contains actual Java/source code structure."""
+    if not isinstance(text, str):
+        return False
+    stripped = text.strip()
+    if len(stripped) < 15:
+        return False
+    lower = stripped.casefold()
+    return any(marker in lower for marker in _CODE_MARKERS)
+
+
+def _is_new_file_creation(payload: Any) -> bool:
+    """Return whether the prompt is an explicit creation of a new target file."""
+    if isinstance(payload, Mapping):
+        op = str(payload.get("operation", "")).strip().casefold()
+        if op in ("create_file", "new_file"):
+            return bool(payload.get("path") or payload.get("target_path"))
+        target = payload.get("target_file")
+        if isinstance(target, Mapping) and target.get("create") is True:
+            return bool(target.get("path"))
+    return False
+
+
+def _extract_concrete_source_from_payload(payload: Any) -> bool:
+    """Walk an observation or prompt payload and return True if concrete code/source spans are present."""
+    if isinstance(payload, Mapping):
+        for key in ("content", "source", "code", "snippet", "body", "lines", "patch"):
+            val = payload.get(key)
+            if isinstance(val, str) and _is_code_bearing_text(val):
+                return True
+            if isinstance(val, (list, tuple)) and any(_is_code_bearing_text(str(x)) for x in val):
+                return True
+
+        files = payload.get("files")
+        if isinstance(files, Mapping):
+            for content in files.values():
+                if _is_code_bearing_text(str(content)):
+                    return True
+        elif isinstance(files, (list, tuple)):
+            for item in files:
+                if isinstance(item, Mapping):
+                    if any(_is_code_bearing_text(str(item.get(k))) for k in ("content", "source", "snippet", "code")):
+                        return True
+
+        symbols = payload.get("symbols")
+        if isinstance(symbols, (list, tuple)) and len(symbols) > 0:
+            for sym in symbols:
+                if isinstance(sym, Mapping) and (sym.get("signature") or sym.get("container") or sym.get("kind")):
+                    return True
+
+        hits = payload.get("hits") or payload.get("results")
+        if isinstance(hits, (list, tuple)):
+            for hit in hits:
+                if isinstance(hit, Mapping):
+                    for k in ("snippet", "content", "code", "source", "lines", "matched_lines"):
+                        if _is_code_bearing_text(str(hit.get(k, ""))):
+                            return True
+
+        exact = payload.get("initial_exact_source_context")
+        if exact is not None and exact is not payload and _extract_concrete_source_from_payload(exact):
+            return True
+
+        for k, child in payload.items():
+            if k != "initial_exact_source_context" and isinstance(child, (Mapping, list, tuple)):
+                if _extract_concrete_source_from_payload(child):
+                    return True
+
+    elif isinstance(payload, (list, tuple)) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            if _extract_concrete_source_from_payload(item):
+                return True
+
+    return False
+
+
+def is_mutation_ready(
+    messages: Sequence[Mapping[str, Any]],
+    state: HostRunState,
+) -> bool:
+    """Return true only when the host has verified concrete target source/symbol context."""
+    if state.concrete_source_grounded:
+        return True
+
     for message in messages:
         content = message.get("content")
         payload: Any = None
@@ -312,24 +403,13 @@ def _has_concrete_target_source(messages: Sequence[Mapping[str, Any]]) -> bool:
                 payload = json.loads(content)
             except (json.JSONDecodeError, ValueError):
                 continue
-        if isinstance(payload, Mapping):
-            exact = payload.get("initial_exact_source_context")
-            if isinstance(exact, Mapping) and (exact.get("files") or exact.get("source") or exact.get("snippets")):
+        if payload is not None:
+            if _is_new_file_creation(payload):
                 return True
-            if isinstance(exact, str) and len(exact.strip()) > 30:
+            if _extract_concrete_source_from_payload(payload):
                 return True
-            target = payload.get("target_file") or payload.get("target_source")
-            if target:
-                return True
+
     return False
-
-
-def is_mutation_ready(
-    messages: Sequence[Mapping[str, Any]],
-    state: HostRunState,
-) -> bool:
-    """Return true only when the host has grounded target source context for mutation."""
-    return state.has_fresh_evidence or _has_concrete_target_source(messages)
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:

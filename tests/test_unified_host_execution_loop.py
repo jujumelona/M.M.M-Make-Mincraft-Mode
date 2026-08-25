@@ -174,7 +174,7 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
     request = GenerationRequest(
         messages=(
             {"role": "system", "content": "grounded context"},
-            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": ["src/A.java"]}}'},
+            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -202,24 +202,51 @@ def test_mutation_ready_requires_concrete_source_or_fresh_evidence() -> None:
     from minecraft_mod_ai.progress_aware_tool_loop import is_mutation_ready
 
     state = HostRunState()
-    # High level hash receipt only without concrete files/source: NOT mutation ready
+    # 1. High level hash receipt only without concrete files/source: NOT mutation ready
     abstract_messages = [
         {"role": "user", "content": '{"project_sha256": "abc", "observations_sha256": "def"}'}
     ]
     assert is_mutation_ready(abstract_messages, state) is False
 
-    # Concrete source context in messages: mutation ready
-    concrete_messages = [
+    # 2. Bare file names without code/spans: NOT mutation ready (cannot edit without source)
+    bare_file_messages = [
         {
             "role": "user",
             "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": ["Main.java"]}}',
         }
     ]
-    assert is_mutation_ready(concrete_messages, state) is True
+    assert is_mutation_ready(bare_file_messages, state) is False
 
-    # Fresh evidence recorded dynamically: mutation ready
-    state.record_evidence({"files": ["Main.java"]}, usable=True)
+    # 3. Dynamic search result returning bare hit without code snippet: NOT mutation ready
+    state.record_evidence({"hits": [{"path": "Main.java"}]}, usable=True)
+    assert is_mutation_ready(abstract_messages, state) is False
+
+    # 4. Dynamic search result returning code snippet / lines: IS mutation ready
+    state.record_evidence(
+        {"hits": [{"path": "Main.java", "snippet": "public class Main { public static void init() {} }"}]},
+        usable=True,
+    )
     assert is_mutation_ready(abstract_messages, state) is True
+
+    # 5. Concrete source context in initial message: IS mutation ready
+    concrete_state = HostRunState()
+    concrete_messages = [
+        {
+            "role": "user",
+            "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/Main.java": "package com.example; public class Main {}"}}}',
+        }
+    ]
+    assert is_mutation_ready(concrete_messages, concrete_state) is True
+
+    # 6. Explicit new file creation target: IS mutation ready
+    new_file_state = HostRunState()
+    new_file_messages = [
+        {
+            "role": "user",
+            "content": '{"phase": "implement_module", "operation": "create_file", "path": "src/NewBlock.java"}',
+        }
+    ]
+    assert is_mutation_ready(new_file_messages, new_file_state) is True
 
 
 def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
@@ -269,14 +296,15 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     def mock_runtime_call(stage: str, name: str, args: dict) -> dict:
         if name == "apply_source_patch":
             raise ValueError("Patch rejected: target file not found")
-        return {"hits": [{"path": "Fix.java"}]}
+        # Return concrete source snippet so mutation_ready can be satisfied
+        return {"hits": [{"path": "Fix.java", "snippet": "public class Fix { void run() {} }"}]}
 
     runtime = MagicMock()
     runtime.call.side_effect = mock_runtime_call
 
     request = GenerationRequest(
         messages=(
-            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": ["src/A.java"]}}'},
+            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -285,7 +313,7 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
 
     # Initial turn: concrete context -> ACT phase (tools=[apply_source_patch])
     # Patch fails -> transitions to OBSERVE phase (tools=[search_code_rag])
-    # Turn 2: OBSERVE phase -> search_code_rag succeeds -> fresh evidence -> ACT phase
+    # Turn 2: OBSERVE phase -> search_code_rag returns concrete snippet -> fresh evidence -> ACT phase
     # Turn 3: ACT phase -> patch fails again -> no progress limit reached
     with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
         generate_with_tools(
