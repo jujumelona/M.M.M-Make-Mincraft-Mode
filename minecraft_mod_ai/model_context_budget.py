@@ -435,6 +435,9 @@ def _compact_old_exchanges(
 
     first = assistants[0]
     mutation_start = _last_mutation_exchange_start(original)
+    best_candidate = original
+    best_size = _canonical_size(original)
+
     for keep in (2, 1):
         if len(assistants) <= keep:
             continue
@@ -451,18 +454,17 @@ def _compact_old_exchanges(
             context,
             *original[start:],
         )
-        if _canonical_size(compacted) > budget:
-            continue
-        persisted = archive_transcript(dropped)
-        if not bool(persisted.get("available")):
-            return original
-        if persisted != archive:
-            context = _compacted_context_message(dropped, archive=persisted)
-            compacted = (*original[:first], context, *original[start:])
-            if _canonical_size(compacted) > budget:
-                return original
-        return compacted
-    return original
+        compacted_size = _canonical_size(compacted)
+        if compacted_size < best_size:
+            best_size = compacted_size
+            best_candidate = compacted
+        if compacted_size <= budget:
+            persisted = archive_transcript(dropped)
+            if bool(persisted.get("available")) and persisted != archive:
+                context = _compacted_context_message(dropped, archive=persisted)
+                compacted = (*original[:first], context, *original[start:])
+            return compacted
+    return best_candidate
 
 
 def fit_messages_to_context(
@@ -501,7 +503,25 @@ def emergency_fit_messages(
     values = _compact_old_exchanges(values, budget=budget)
     if _canonical_size(values) <= budget:
         return values
-    return _compact_tool_messages(values, budget=budget, preview_bytes=4 * 1024)
+    values = _compact_tool_messages(values, budget=budget, preview_bytes=2 * 1024)
+    if _canonical_size(values) <= budget:
+        return values
+
+    # Hard emergency truncation: keep initial system/user prefix and the most recent exchanges
+    original = list(values)
+    if len(original) > 6:
+        prefix: list[Mapping[str, Any]] = []
+        for msg in original[:3]:
+            if str(msg.get("role", "")) in {"system", "user"}:
+                prefix.append(msg)
+            else:
+                break
+        tail = original[-4:]
+        truncated = tuple(prefix + tail)
+        if _canonical_size(truncated) < _canonical_size(values):
+            return truncated
+
+    return values
 
 
 __all__ = [
