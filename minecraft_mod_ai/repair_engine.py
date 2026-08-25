@@ -176,7 +176,7 @@ class RepairEngine:
             }
         diagnostic_errors = [
             item
-            for item in diagnostics.get("diagnostics", {}).get("diagnostics", [])
+            for item in diagnostics.get("diagnostics", [])
             if isinstance(item, dict) and int(item.get("severity", 1)) <= 2
         ]
         return {
