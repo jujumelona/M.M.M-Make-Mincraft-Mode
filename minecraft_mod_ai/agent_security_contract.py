@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-_INSTALL_MARKER = "_mmm_agent_security_contract_v4"
+_INSTALL_MARKER = "_mmm_agent_security_contract_v5"
 _SLICE_MARKER = "_mmm_scoped_forced_rag_receipt_v1"
 _MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v3"
 _SKILL_MARKER = "_mmm_compact_skill_context_v1"
@@ -121,22 +121,27 @@ def _scoped_forced_receipt(
 
 
 def usable_rag_result(value: Any) -> bool:
-    """Accept only host-receipted or known legacy RAG evidence packs.
+    """Accept host-receipted evidence without discarding real unscored hits.
 
-    A receipt is authoritative when present. Observation metadata, truncation previews,
-    error text, or arbitrary non-empty dictionaries are never promoted to evidence.
+    A receipt remains authoritative when present. A positive host result count may pair
+    with concrete evidence hits when optional reranker scores are unavailable; a zero
+    result receipt can never be rescued by stale hits. Observation metadata, truncation
+    previews, error text, or arbitrary non-empty dictionaries are not evidence.
     """
 
     found_receipt = False
+    positive_receipt = False
     usable_receipt = False
     legacy_evidence = False
 
     def visit(item: Any) -> None:
-        nonlocal found_receipt, usable_receipt, legacy_evidence
+        nonlocal found_receipt, positive_receipt, usable_receipt, legacy_evidence
         if isinstance(item, Mapping):
             receipt = item.get("receipt")
             if isinstance(receipt, Mapping):
                 found_receipt = True
+                if _positive_receipt(receipt):
+                    positive_receipt = True
                 if _usable_receipt(receipt):
                     usable_receipt = True
             for key, child in item.items():
@@ -152,19 +157,30 @@ def usable_rag_result(value: Any) -> bool:
 
     visit(value)
     if found_receipt:
-        return usable_receipt
+        return usable_receipt or (positive_receipt and legacy_evidence)
     return legacy_evidence
 
 
-def _usable_receipt(receipt: Mapping[str, Any]) -> bool:
+def _receipt_warning_set(receipt: Mapping[str, Any]) -> set[str]:
     warnings = receipt.get("warnings", ())
     if isinstance(warnings, str):
-        warning_set = {warnings.strip()}
-    elif isinstance(warnings, Sequence):
-        warning_set = {str(item).strip() for item in warnings if str(item).strip()}
-    else:
-        warning_set = set()
-    if warning_set & _TERMINAL_RAG_WARNINGS:
+        return {warnings.strip()}
+    if isinstance(warnings, Sequence):
+        return {str(item).strip() for item in warnings if str(item).strip()}
+    return set()
+
+
+def _positive_receipt(receipt: Mapping[str, Any]) -> bool:
+    if _receipt_warning_set(receipt) & _TERMINAL_RAG_WARNINGS:
+        return False
+    try:
+        return int(receipt.get("result_count", 0) or 0) > 0
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _usable_receipt(receipt: Mapping[str, Any]) -> bool:
+    if _receipt_warning_set(receipt) & _TERMINAL_RAG_WARNINGS:
         return False
 
     try:
