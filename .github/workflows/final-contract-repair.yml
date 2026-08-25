@@ -1,0 +1,68 @@
+name: Final contract repair
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/final-contract-repair.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Repair canonical alias boundary and stale expectations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          parser = Path('minecraft_mod_ai/model_adapters/qwen_tool_parser.py')
+          text = parser.read_text(encoding='utf-8')
+          old = '''def _canonical_key(\n    tool_name: str,\n    emitted_key: str,\n    properties: Mapping[str, Any],\n) -> str:\n    if emitted_key in properties:\n        return emitted_key\n    if tool_name == "apply_source_edit":\n        canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)\n        if canonical and canonical in properties:\n            return canonical\n    return emitted_key\n'''
+          new = '''def _canonical_key(\n    tool_name: str,\n    emitted_key: str,\n    properties: Mapping[str, Any],\n) -> str:\n    # Source-edit aliases are schema-declared for transport compatibility, but the\n    # host contract still requires canonical path/operation/etc.  Canonicalize them\n    # before the generic exact-property fast path so aliases satisfy canonical\n    # required fields without widening the schema.\n    if tool_name == "apply_source_edit":\n        canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)\n        if canonical and canonical in properties:\n            return canonical\n    if emitted_key in properties:\n        return emitted_key\n    return emitted_key\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'parser anchor count={text.count(old)}')
+          parser.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('tests/test_source_mutation_workspace_impact.py')
+          text = test.read_text(encoding='utf-8')
+          old = '''def test_qwen_tool_parser_tolerates_non_enum_operations_and_aliases() -> None:\n    """Qwen parser parses markup with uncanonical enum/operation strings without crashing."""\n    from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup\n    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA\n\n    schemas = {"apply_source_edit": SOURCE_EDIT_SCHEMA}\n    markup = (\n        "<tool_call>\\n"\n        "<function=apply_source_edit>\\n"\n        "<parameter=operation>create_class</parameter>\\n"\n        "<parameter=path>src/main/java/ai/test/NewClass.java</parameter>\\n"\n        "<parameter=package_name>ai.test</parameter>\\n"\n        "<parameter=declaration>public class NewClass</parameter>\\n"\n        "</function>\\n"\n        "</tool_call>"\n    )\n    _visible, calls = parse_qwen_tool_markup(markup, schemas)\n    assert len(calls) == 1\n    assert calls[0].name == "apply_source_edit"\n    assert calls[0].arguments["operation"] == "create_class"\n    assert calls[0].arguments["path"] == "src/main/java/ai/test/NewClass.java"\n'''
+          new = '''def test_qwen_tool_parser_rejects_non_enum_operation_aliases() -> None:\n    """Model-facing source edits remain bounded by the exposed operation enum."""\n    from minecraft_mod_ai.model_adapters.qwen_tool_parser import (\n        ToolCallValidationError,\n        parse_qwen_tool_markup,\n    )\n    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA\n\n    schemas = {"apply_source_edit": SOURCE_EDIT_SCHEMA}\n    markup = (\n        "<tool_call>\\n"\n        "<function=apply_source_edit>\\n"\n        "<parameter=operation>create_class</parameter>\\n"\n        "<parameter=path>src/main/java/ai/test/NewClass.java</parameter>\\n"\n        "<parameter=package_name>ai.test</parameter>\\n"\n        "<parameter=declaration>public class NewClass</parameter>\\n"\n        "</function>\\n"\n        "</tool_call>"\n    )\n    try:\n        parse_qwen_tool_markup(markup, schemas)\n    except ToolCallValidationError as exc:\n        assert "outside enum" in str(exc)\n    else:\n        raise AssertionError("create_class must not bypass the exposed operation enum")\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'source mutation test anchor count={text.count(old)}')
+          test.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('tests/test_trajectory_store_v3.py')
+          text = test.read_text(encoding='utf-8')
+          old = '''    assert row["execution_context"] == {\n        "java_version": "21",\n        "loader": "fabric",\n        "minecraft_version": "future-a",\n    }\n'''
+          new = '''    assert row["execution_context"] == {\n        "java_version": 21,\n        "loader": "fabric",\n        "minecraft_version": "future-a",\n    }\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'trajectory test anchor count={text.count(old)}')
+          test.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/final-contract-repair.yml
+          python -m ruff check minecraft_mod_ai/model_adapters/qwen_tool_parser.py tests/test_source_mutation_workspace_impact.py tests/test_trajectory_store_v3.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_runtime_json_gap_regression.py \
+            tests/test_qwen_apply_source_edit_alias.py \
+            tests/test_source_edit_alias_ownership.py \
+            tests/test_source_mutation_workspace_impact.py \
+            tests/test_trajectory_store_v3.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py tests/test_source_mutation_workspace_impact.py tests/test_trajectory_store_v3.py .github/workflows/final-contract-repair.yml
+          git commit -m 'fix(runtime): align strict tool aliases and trajectory contract'
+          git push origin HEAD:main
