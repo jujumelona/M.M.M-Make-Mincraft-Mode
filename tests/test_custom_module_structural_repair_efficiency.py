@@ -341,8 +341,7 @@ def test_output_exhaustion_continues_from_same_staged_workspace_until_success(
     assert continuation["continuation"]["continuation_index"] == 1
     assert continuation["continuation"]["preserved_path_count"] == 1
     assert "initial_exact_source_context" not in continuation
-    assert any("apply_source_edit" in rule for rule in continuation["rules"])
-    assert any("append_file" in rule for rule in continuation["rules"])
+    assert any("bounded tool actions" in rule for rule in continuation["rules"])
 
 
 def test_context_pressure_raises_directly_without_masking(tmp_path: Path) -> None:
@@ -405,16 +404,13 @@ def test_checkpoint_identity_ignores_random_clone_path_but_not_candidate_width(
         source.parent.mkdir(parents=True)
         source.write_text("final class Base {}\n", encoding="utf-8")
 
-    def identity(root: Path, count: int) -> str:
+    def identity(_root: Path, count: int) -> str:
         return _generation_checkpoint_identity(
-            root=root,
             module_query='{"module_id":"same"}',
             minecraft_version="1.20.1",
             loader="fabric",
             mappings="1.20.1+build.10",
-            observation_receipt={"sha256": "same"},
             research_context={"receipt": "same"},
-            host_grounding={"receipt": "same"},
             router=SimpleNamespace(
                 _candidate_index=0,
                 _strategy="api_contract_first",
@@ -549,7 +545,7 @@ def test_checkpoint_same_file_conflict_reinitializes_instead_of_poisoning(tmp_pa
         _remove_generation_checkpoint(checkpoint_again)
 
 
-def test_checkpoint_persistence_rejects_legacy_temp_symlink(tmp_path: Path) -> None:
+def test_checkpoint_persistence_ignores_inert_legacy_temp_symlink(tmp_path: Path) -> None:
     checkpoint = tmp_path / ".mmm-custom-checkpoints" / ("2" * 64)
     (checkpoint / "base").mkdir(parents=True)
     staged = checkpoint / "project"
@@ -562,14 +558,14 @@ def test_checkpoint_persistence_rejects_legacy_temp_symlink(tmp_path: Path) -> N
     except OSError as exc:
         pytest.skip(f"symlink creation is unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="temporary may not be a symlink"):
-        _persist_generation_checkpoint(
-            checkpoint,
-            staged,
-            identity_sha256="sha256:" + ("2" * 64),
-        )
+    _persist_generation_checkpoint(
+        checkpoint,
+        staged,
+        identity_sha256="sha256:" + ("2" * 64),
+    )
     assert outside.read_text(encoding="utf-8") == "do not overwrite"
-    assert not (checkpoint / "checkpoint.json").exists()
+    assert legacy_temp.is_symlink()
+    assert (checkpoint / "checkpoint.json").is_file()
 
 
 def test_checkpoint_persistence_rejects_manifest_symlink(tmp_path: Path) -> None:
