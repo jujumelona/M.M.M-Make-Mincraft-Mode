@@ -249,6 +249,64 @@ def test_mutation_ready_requires_concrete_source_or_fresh_evidence() -> None:
     assert is_mutation_ready(new_file_messages, new_file_state) is True
 
 
+def test_hierarchical_localization_file_symbol_function_body() -> None:
+    """Agentless & AutoCodeRover style: File -> Symbol -> Function Body -> Mutation Ready."""
+    from minecraft_mod_ai.progress_aware_tool_loop import is_mutation_ready, TargetMutationContext
+
+    state = HostRunState()
+    base_messages = [{"role": "user", "content": '{"phase": "implement_module", "task": "fix drop logic"}'}]
+
+    # Step 1: File localization only -> NOT mutation ready
+    state.record_evidence({"hits": [{"path": "src/ModBlock.java"}]}, usable=True)
+    assert isinstance(state.mutation_context, TargetMutationContext)
+    assert state.mutation_context.target_path == "src/ModBlock.java"
+    assert state.mutation_context.source_body is None
+    assert is_mutation_ready(base_messages, state) is False
+
+    # Step 2: Symbol localization in file -> NOT mutation ready (body missing)
+    state.record_evidence(
+        {
+            "symbols": [
+                {
+                    "name": "getDroppedStacks",
+                    "containerName": "ModBlock",
+                    "location": {
+                        "uri": "file:///src/ModBlock.java",
+                        "range": {"start": {"line": 42}, "end": {"line": 58}},
+                    },
+                }
+            ]
+        },
+        usable=True,
+    )
+    assert state.mutation_context.target_symbol == "ModBlock#getDroppedStacks"
+    assert state.mutation_context.start_line == 42
+    assert state.mutation_context.source_body is None
+    assert is_mutation_ready(base_messages, state) is False
+
+    # Step 3: Function/Method body retrieved -> MUTATION READY!
+    state.record_evidence(
+        {
+            "hits": [
+                {
+                    "path": "src/ModBlock.java",
+                    "symbol": "getDroppedStacks",
+                    "snippet": (
+                        "public List<ItemStack> getDroppedStacks(BlockState state, LootContext.Builder builder) {\n"
+                        "    return Collections.singletonList(new ItemStack(Items.DIAMOND));\n"
+                        "}"
+                    ),
+                    "start_line": 42,
+                    "end_line": 46,
+                }
+            ]
+        },
+        usable=True,
+    )
+    assert state.mutation_context.is_mutation_ready is True
+    assert is_mutation_ready(base_messages, state) is True
+
+
 def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     """When a mutation fails, loop transitions to OBSERVE so agent can inspect diagnostics instead of repeating blindly."""
     router = MagicMock()

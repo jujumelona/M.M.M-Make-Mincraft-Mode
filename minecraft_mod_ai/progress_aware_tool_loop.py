@@ -175,6 +175,38 @@ def evidence_fingerprint(value: Any) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class TargetMutationContext:
+    """Target-bound mutation context enforcing hierarchical localization before ACT phase entry.
+
+    Adheres to Agentless (file -> symbol -> edit location -> concrete source span)
+    and 2026 repository-scale function-level repair findings.
+    """
+
+    target_path: str
+    target_symbol: str | None = None
+    source_body: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    is_new_file: bool = False
+    evidence_source: str | None = None
+    base_revision_sha: str | None = None
+
+    @property
+    def is_mutation_ready(self) -> bool:
+        """Return True only when the target is localized and bound to concrete source code/spans."""
+        if not self.target_path or not self.target_path.strip():
+            return False
+        if self.is_new_file:
+            return True
+        if not self.source_body or not _is_code_bearing_text(self.source_body):
+            return False
+        # Context must have a target symbol, concrete line span, or sufficient body lines
+        if self.target_symbol or self.start_line is not None or len(self.source_body.strip()) >= 30:
+            return True
+        return False
+
+
 @dataclass
 class HostRunState:
     """Unified single-owner state tracking execution, progress deltas, and bounds."""
@@ -185,7 +217,7 @@ class HostRunState:
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
-    concrete_source_grounded: bool = False
+    mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
     workspace_changed: bool = False
     validation_status: str = "PENDING"
@@ -216,8 +248,10 @@ class HostRunState:
         if fp is None:
             return False
         with self._lock:
-            if _extract_concrete_source_from_payload(value):
-                self.concrete_source_grounded = True
+            extracted_ctx = _extract_mutation_context_from_payload(value)
+            if extracted_ctx is not None:
+                if self.mutation_context is None or extracted_ctx.is_mutation_ready or not self.mutation_context.is_mutation_ready:
+                    self.mutation_context = extracted_ctx
             if fp in self.evidence_fingerprints:
                 return False
             self.evidence_fingerprints.add(fp)
@@ -333,65 +367,160 @@ def _is_new_file_creation(payload: Any) -> bool:
     return False
 
 
-def _extract_concrete_source_from_payload(payload: Any) -> bool:
-    """Walk an observation or prompt payload and return True if concrete code/source spans are present."""
-    if isinstance(payload, Mapping):
-        for key in ("content", "source", "code", "snippet", "body", "lines", "patch"):
-            val = payload.get(key)
-            if isinstance(val, str) and _is_code_bearing_text(val):
-                return True
-            if isinstance(val, (list, tuple)) and any(_is_code_bearing_text(str(x)) for x in val):
-                return True
+def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContext | None:
+    """Extract a target-bound MutationContext from a message payload or tool return.
 
-        files = payload.get("files")
-        if isinstance(files, Mapping):
-            for content in files.values():
-                if _is_code_bearing_text(str(content)):
-                    return True
-        elif isinstance(files, (list, tuple)):
-            for item in files:
-                if isinstance(item, Mapping):
-                    if any(_is_code_bearing_text(str(item.get(k))) for k in ("content", "source", "snippet", "code")):
-                        return True
+    Implements hierarchical localization: File -> Symbol -> Edit location -> Bound source body.
+    """
+    if not isinstance(payload, Mapping):
+        if isinstance(payload, (list, tuple)):
+            for item in payload:
+                ctx = _extract_mutation_context_from_payload(item)
+                if ctx is not None and ctx.is_mutation_ready:
+                    return ctx
+            for item in payload:
+                ctx = _extract_mutation_context_from_payload(item)
+                if ctx is not None:
+                    return ctx
+        return None
 
-        symbols = payload.get("symbols")
-        if isinstance(symbols, (list, tuple)) and len(symbols) > 0:
-            for sym in symbols:
-                if isinstance(sym, Mapping) and (sym.get("signature") or sym.get("container") or sym.get("kind")):
-                    return True
+    # 1. Explicit new file creation
+    if _is_new_file_creation(payload):
+        target_path = str(payload.get("path") or payload.get("target_path") or "")
+        if not target_path and isinstance(payload.get("target_file"), Mapping):
+            target_path = str(payload["target_file"].get("path", ""))
+        if target_path:
+            return TargetMutationContext(
+                target_path=target_path,
+                is_new_file=True,
+                evidence_source="new_file_spec",
+            )
 
-        hits = payload.get("hits") or payload.get("results")
-        if isinstance(hits, (list, tuple)):
-            for hit in hits:
-                if isinstance(hit, Mapping):
-                    for k in ("snippet", "content", "code", "source", "lines", "matched_lines"):
-                        if _is_code_bearing_text(str(hit.get(k, ""))):
-                            return True
+    # 2. Hits with snippet/code/lines from search_code_rag
+    hits = payload.get("hits") or payload.get("results")
+    if isinstance(hits, (list, tuple)):
+        # Look for a hit with concrete code snippet
+        for hit in hits:
+            if isinstance(hit, Mapping):
+                path = str(hit.get("path") or hit.get("file") or hit.get("uri") or "").strip()
+                if path:
+                    snippet = hit.get("snippet") or hit.get("code") or hit.get("content") or hit.get("source")
+                    if isinstance(snippet, (list, tuple)):
+                        snippet = "\n".join(str(s) for s in snippet)
+                    if isinstance(snippet, str) and _is_code_bearing_text(snippet):
+                        symbol = str(hit.get("symbol") or hit.get("function") or hit.get("name") or "").strip() or None
+                        start_line = hit.get("start_line") or hit.get("line")
+                        end_line = hit.get("end_line")
+                        return TargetMutationContext(
+                            target_path=path,
+                            target_symbol=symbol,
+                            source_body=snippet,
+                            start_line=int(start_line) if isinstance(start_line, int) else None,
+                            end_line=int(end_line) if isinstance(end_line, int) else None,
+                            evidence_source="search_code_rag",
+                        )
+        # If no snippet, record bare path hit (hierarchical step 1: file candidate only)
+        for hit in hits:
+            if isinstance(hit, Mapping):
+                path = str(hit.get("path") or hit.get("file") or hit.get("uri") or "").strip()
+                if path:
+                    return TargetMutationContext(
+                        target_path=path,
+                        source_body=None,
+                        evidence_source="search_code_rag_path_only",
+                    )
 
-        exact = payload.get("initial_exact_source_context")
-        if exact is not None and exact is not payload and _extract_concrete_source_from_payload(exact):
-            return True
+    # 3. Symbols from java_workspace_symbols (hierarchical step 2: symbol in file)
+    symbols = payload.get("symbols")
+    if isinstance(symbols, (list, tuple)) and len(symbols) > 0:
+        for sym in symbols:
+            if isinstance(sym, Mapping):
+                name = str(sym.get("name", "")).strip()
+                container = str(sym.get("containerName", "")).strip()
+                symbol_id = f"{container}#{name}" if container and name else (name or None)
+                location = sym.get("location")
+                path = ""
+                start_line = None
+                end_line = None
+                if isinstance(location, Mapping):
+                    uri = str(location.get("uri", ""))
+                    path = uri.replace("file:///", "").replace("file://", "")
+                    range_info = location.get("range")
+                    if isinstance(range_info, Mapping):
+                        start = range_info.get("start")
+                        end = range_info.get("end")
+                        if isinstance(start, Mapping):
+                            start_line = start.get("line")
+                        if isinstance(end, Mapping):
+                            end_line = end.get("line")
+                if path or symbol_id:
+                    return TargetMutationContext(
+                        target_path=path,
+                        target_symbol=symbol_id,
+                        source_body=None,
+                        start_line=int(start_line) if isinstance(start_line, int) else None,
+                        end_line=int(end_line) if isinstance(end_line, int) else None,
+                        evidence_source="java_workspace_symbols",
+                    )
 
-        for k, child in payload.items():
-            if k != "initial_exact_source_context" and isinstance(child, (Mapping, list, tuple)):
-                if _extract_concrete_source_from_payload(child):
-                    return True
+    # 4. Files mapping (path -> code or list of {path, content})
+    files = payload.get("files")
+    if isinstance(files, Mapping):
+        for path, content in files.items():
+            if _is_code_bearing_text(str(content)):
+                return TargetMutationContext(
+                    target_path=str(path),
+                    source_body=str(content),
+                    evidence_source="files_map",
+                )
+    elif isinstance(files, (list, tuple)):
+        for item in files:
+            if isinstance(item, Mapping):
+                path = str(item.get("path") or item.get("file") or "").strip()
+                content = item.get("content") or item.get("source") or item.get("code")
+                if path and isinstance(content, str) and _is_code_bearing_text(content):
+                    return TargetMutationContext(
+                        target_path=path,
+                        source_body=content,
+                        evidence_source="files_list",
+                    )
+        for item in files:
+            if isinstance(item, str) and item.strip():
+                return TargetMutationContext(
+                    target_path=item.strip(),
+                    source_body=None,
+                    evidence_source="files_names_only",
+                )
 
-    elif isinstance(payload, (list, tuple)) and not isinstance(payload, (str, bytes, bytearray)):
-        for item in payload:
-            if _extract_concrete_source_from_payload(item):
-                return True
+    # 5. Nested initial_exact_source_context
+    exact = payload.get("initial_exact_source_context")
+    if exact is not None and exact is not payload:
+        ctx = _extract_mutation_context_from_payload(exact)
+        if ctx is not None:
+            return ctx
 
-    return False
+    # 6. Direct target_file / target_source
+    target_file = payload.get("target_file")
+    if isinstance(target_file, str) and target_file.strip():
+        source_val = payload.get("source") or payload.get("content") or payload.get("code")
+        source_body = str(source_val) if isinstance(source_val, str) and _is_code_bearing_text(source_val) else None
+        return TargetMutationContext(
+            target_path=target_file.strip(),
+            source_body=source_body,
+            evidence_source="target_file_field",
+        )
+
+    return None
 
 
 def is_mutation_ready(
     messages: Sequence[Mapping[str, Any]],
     state: HostRunState,
 ) -> bool:
-    """Return true only when the host has verified concrete target source/symbol context."""
-    if state.concrete_source_grounded:
-        return True
+    """Return true only when the target is localized and bound to concrete source context."""
+    with state._lock:
+        if state.mutation_context is not None and state.mutation_context.is_mutation_ready:
+            return True
 
     for message in messages:
         content = message.get("content")
@@ -404,9 +533,11 @@ def is_mutation_ready(
             except (json.JSONDecodeError, ValueError):
                 continue
         if payload is not None:
-            if _is_new_file_creation(payload):
-                return True
-            if _extract_concrete_source_from_payload(payload):
+            ctx = _extract_mutation_context_from_payload(payload)
+            if ctx is not None and ctx.is_mutation_ready:
+                with state._lock:
+                    if state.mutation_context is None or not state.mutation_context.is_mutation_ready:
+                        state.mutation_context = ctx
                 return True
 
     return False
@@ -952,6 +1083,7 @@ __all__ = [
     "RetrievalNoProgressError",
     "RetrievalObservation",
     "RetrievalProgress",
+    "TargetMutationContext",
     "_MUTATION_ACT_TOOLS",
     "_READ_OBSERVE_TOOLS",
     "_VERIFY_TOOLS",
