@@ -558,19 +558,43 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                 evidence_source="new_file_spec",
             )
 
-    # 2. Hits with snippet/code/lines from search_code_rag or sources from search_project_rag
+    # 2. Hits with snippet/code/lines from search_code_rag
     hits = payload.get("hits") or payload.get("results")
     if isinstance(hits, (list, tuple)):
-        # Look for a hit with concrete code snippet
+        # Look for a hit with concrete code snippet / text
         for hit in hits:
             if isinstance(hit, Mapping):
-                path = str(hit.get("path") or hit.get("file") or hit.get("uri") or "").strip()
+                meta = hit.get("metadata") if isinstance(hit.get("metadata"), Mapping) else {}
+                path = str(
+                    hit.get("source_path")
+                    or hit.get("path")
+                    or hit.get("file")
+                    or hit.get("uri")
+                    or meta.get("path")
+                    or meta.get("source_path")
+                    or ""
+                ).strip()
                 if path and _is_workspace_file_path(path):
-                    snippet = hit.get("snippet") or hit.get("code") or hit.get("content") or hit.get("source")
+                    snippet = (
+                        hit.get("text")
+                        or hit.get("snippet")
+                        or hit.get("code")
+                        or hit.get("content")
+                        or hit.get("source")
+                    )
                     if isinstance(snippet, (list, tuple)):
                         snippet = "\n".join(str(s) for s in snippet)
                     if isinstance(snippet, str) and _is_code_bearing_text(snippet):
-                        symbol = str(hit.get("symbol") or hit.get("function") or hit.get("name") or "").strip() or None
+                        symbol = (
+                            str(
+                                hit.get("symbol")
+                                or hit.get("function")
+                                or hit.get("name")
+                                or meta.get("symbol")
+                                or ""
+                            ).strip()
+                            or None
+                        )
                         start_line = hit.get("start_line") or hit.get("line")
                         end_line = hit.get("end_line")
                         return TargetMutationContext(
@@ -581,10 +605,19 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                             end_line=int(end_line) if isinstance(end_line, int) else None,
                             evidence_source="search_code_rag",
                         )
-        # If no snippet, record bare path hit (hierarchical step 1: file candidate only)
+        # If no snippet, record bare path hit
         for hit in hits:
             if isinstance(hit, Mapping):
-                path = str(hit.get("path") or hit.get("file") or hit.get("uri") or "").strip()
+                meta = hit.get("metadata") if isinstance(hit.get("metadata"), Mapping) else {}
+                path = str(
+                    hit.get("source_path")
+                    or hit.get("path")
+                    or hit.get("file")
+                    or hit.get("uri")
+                    or meta.get("path")
+                    or meta.get("source_path")
+                    or ""
+                ).strip()
                 if path and _is_workspace_file_path(path):
                     return TargetMutationContext(
                         target_path=path,
@@ -1440,7 +1473,23 @@ def generate_with_tools(
                 before_ctx = state.mutation_context
                 recorded = state.record_evidence(payload.get("result"), usable=usable)
                 after_ctx = state.mutation_context
-                if recorded or (after_ctx != before_ctx):
+
+                ctx_progress = False
+                if after_ctx is not None:
+                    if before_ctx is None:
+                        ctx_progress = True
+                    elif after_ctx.localization_stage != before_ctx.localization_stage:
+                        ctx_progress = True
+                    elif after_ctx.target_path != before_ctx.target_path:
+                        ctx_progress = True
+                    elif after_ctx.target_symbol != before_ctx.target_symbol:
+                        ctx_progress = True
+                    elif after_ctx.source_body != before_ctx.source_body:
+                        ctx_progress = True
+
+                initial_evidence_progress = recorded and len(state.evidence_fingerprints) == 1
+
+                if ctx_progress or initial_evidence_progress or (not implementation_requires_mutation and recorded):
                     turn_made_progress = True
                     if state.phase == LoopPhase.OBSERVE and implementation_requires_mutation:
                         if is_mutation_ready(messages, state):

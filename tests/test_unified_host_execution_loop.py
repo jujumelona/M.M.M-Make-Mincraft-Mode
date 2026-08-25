@@ -736,6 +736,36 @@ def test_search_code_rag_on_directory_via_production_service(tmp_path: Path) -> 
     assert result.get("schema_version") == "mmm/code-rag-result-v1"
 
 
+def test_extract_mutation_context_from_rag_hit_source_path_and_text() -> None:
+    """_extract_mutation_context_from_payload correctly extracts source_path and text from search_code_rag hits."""
+    from minecraft_mod_ai.progress_aware_tool_loop import _extract_mutation_context_from_payload, LocalizationStage
+
+    payload = {
+        "hits": [
+            {
+                "chunk_id": "chunk_1",
+                "source_path": "src/main/java/ai/minecraft/generated/tide_works_mod/TideWorksMod.java",
+                "start_line": 1,
+                "end_line": 20,
+                "score": 0.95,
+                "text": "package ai.minecraft.generated.tide_works_mod;\npublic class TideWorksMod {\n    public void onInitialize() {}\n}",
+                "metadata": {
+                    "minecraft_version": "1.21.1",
+                    "loader": "fabric",
+                    "path": "src/main/java/ai/minecraft/generated/tide_works_mod/TideWorksMod.java",
+                },
+            }
+        ]
+    }
+    ctx = _extract_mutation_context_from_payload(payload)
+    assert ctx is not None
+    assert ctx.target_path == "src/main/java/ai/minecraft/generated/tide_works_mod/TideWorksMod.java"
+    assert "onInitialize" in str(ctx.source_body)
+    assert ctx.localization_stage == LocalizationStage.READY
+    assert ctx.is_mutation_ready is True
+
+
+
 
 
 
