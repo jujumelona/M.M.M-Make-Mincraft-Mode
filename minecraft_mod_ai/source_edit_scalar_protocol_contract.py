@@ -26,14 +26,40 @@ _CANONICAL_OPERATIONS = (
 )
 _OPERATION_ALIASES = {
     "replace": "replace_exact",
+    "replace_exact": "replace_exact",
+    "replace_all": "replace_exact",
     "create": "create_file",
+    "create_file": "create_file",
+    "create_class": "create_java_type",
+    "create_type": "create_java_type",
+    "create_java_type": "create_java_type",
+    "create_java_class": "create_java_type",
     "delete": "delete_file",
+    "delete_file": "delete_file",
+    "remove": "delete_file",
+    "remove_file": "delete_file",
     "apply_source_edit": "replace_exact",
+    "apply_source_patch": "replace_exact",
     "edit": "replace_exact",
     "write": "create_file",
+    "write_file": "create_file",
     "modify": "replace_exact",
     "patch": "replace_exact",
+    "patch_file": "replace_exact",
     "update": "replace_exact",
+    "insert": "insert_before",
+    "insert_before": "insert_before",
+    "insert_after": "insert_after",
+    "append": "insert_after",
+    "prepend": "insert_before",
+    "add_import": "add_java_import",
+    "add_java_import": "add_java_import",
+    "import": "add_java_import",
+    "insert_member": "insert_java_member",
+    "insert_java_member": "insert_java_member",
+    "add_member": "insert_java_member",
+    "add_method": "insert_java_member",
+    "add_field": "insert_java_member",
 }
 _ACCEPTED_OPERATIONS = tuple(sorted(set(_CANONICAL_OPERATIONS) | set(_OPERATION_ALIASES.keys())))
 _JAVA_PATH_SUFFIX = ".java"
@@ -62,113 +88,90 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
         },
         "path": {
             "type": "string",
-            "minLength": 1,
-            "description": "Project-relative source/resource path selected for this action.",
-        },
-        "file": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Alias for path.",
-        },
-        "target_path": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Alias for path.",
-        },
-        "target_file": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Alias for path.",
+            "description": "Workspace-relative file path (for example src/main/java/...)",
         },
         "old": {
             "type": "string",
-            "minLength": 1,
-            "description": "Exact current span to replace for replace_exact.",
-        },
-        "old_text": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Alias for old.",
+            "description": "Exact text to match for replace_exact",
         },
         "new": {
             "type": "string",
-            "description": "Replacement text for replace_exact.",
-        },
-        "new_text": {
-            "type": "string",
-            "description": "Alias for new.",
-        },
-        "new_content": {
-            "type": "string",
-            "description": "Alias for new.",
-        },
-        "replacement": {
-            "type": "string",
-            "description": "Alias for new.",
+            "description": "Replacement text for replace_exact",
         },
         "anchor": {
             "type": "string",
-            "minLength": 1,
-            "description": "Exact current anchor for insert_before or insert_after.",
+            "description": "Exact anchor text for insert_before or insert_after",
         },
         "content": {
             "type": "string",
-            "description": (
-                "Inserted text for anchor edits, or complete content only for a new "
-                "non-Java resource. Java files must use structural Java operations."
-            ),
-        },
-        "code": {
-            "type": "string",
-            "description": "Alias for content.",
-        },
-        "body": {
-            "type": "string",
-            "description": "Alias for content.",
+            "description": "Text to insert (insert_before/insert_after) or create_file content",
         },
         "text": {
             "type": "string",
-            "description": "Lossless Qwen alias for new/content/member.",
+            "description": (
+                "Convenience alias for new (replace_exact), member (insert_java_member), "
+                "or content (insert_before/insert_after/create_file)"
+            ),
         },
         "count": {
             "type": "integer",
-            "minimum": 1,
-            "default": 1,
-            "description": "Expected exact occurrence count for the selected span/anchor.",
+            "description": "Must be 1 when provided",
         },
         "package_name": {
             "type": "string",
-            "minLength": 1,
-            "description": "Java package for create_java_type, e.g. com.example.mod.",
+            "description": "Java package name for create_java_type",
         },
         "declaration": {
             "type": "string",
-            "minLength": 1,
-            "description": (
-                "Java type header only, without braces or body, e.g. "
-                "'public final class Example implements ModInitializer'."
-            ),
+            "description": "Type header without braces/body for create_java_type",
         },
         "import_name": {
             "type": "string",
-            "minLength": 1,
-            "description": (
-                "One Java import target without 'import' or trailing ';'. Prefix with "
-                "'static ' for a static import."
-            ),
+            "description": "Fully-qualified class or static member import name for add_java_import",
         },
         "member": {
             "type": "string",
-            "minLength": 1,
-            "description": (
-                "Exactly one Java type member: one field, constructor, method, initializer, "
-                "or nested type. Do not include package/import declarations or the outer type."
-            ),
+            "description": "One Java member declaration with braces/body for insert_java_member",
+        },
+        "new_text": {
+            "type": "string",
+            "description": "Alias for new in replace_exact",
+        },
+        "new_content": {
+            "type": "string",
+            "description": "Alias for new / content",
+        },
+        "replacement": {
+            "type": "string",
+            "description": "Alias for new in replace_exact",
+        },
+        "old_text": {
+            "type": "string",
+            "description": "Alias for old in replace_exact",
+        },
+        "code": {
+            "type": "string",
+            "description": "Alias for content / member",
+        },
+        "body": {
+            "type": "string",
+            "description": "Alias for member / content",
+        },
+        "file": {
+            "type": "string",
+            "description": "Alias for path",
+        },
+        "target_path": {
+            "type": "string",
+            "description": "Alias for path",
+        },
+        "target_file": {
+            "type": "string",
+            "description": "Alias for path",
         },
     },
 }
-
-_ALLOWED_FIELDS = frozenset(SOURCE_EDIT_SCHEMA["properties"])
+_ALLOWED_FIELDS = frozenset(SOURCE_EDIT_SCHEMA["properties"].keys())
 
 
 def _required_text(
@@ -179,17 +182,19 @@ def _required_text(
     allow_empty: bool = False,
 ) -> str:
     value = payload.get(key)
-    if not isinstance(value, str) or (not allow_empty and not value):
-        requirement = "text" if allow_empty else "a non-empty string"
-        raise runtime_module.AgentToolRuntimeError(f"{key} must be {requirement}")
+    if not isinstance(value, str) or (not allow_empty and not value.strip()):
+        raise runtime_module.AgentToolRuntimeError(f"Field {key!r} must be a non-empty string")
     return value
 
 
 def _canonicalize_payload_aliases(payload: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(payload)
-    for alias in ("file", "target_path", "target_file", "file_path"):
-        if alias in normalized and "path" not in normalized:
-            normalized["path"] = normalized.pop(alias)
+    if "file" in normalized and "path" not in normalized:
+        normalized["path"] = normalized.pop("file")
+    if "target_path" in normalized and "path" not in normalized:
+        normalized["path"] = normalized.pop("target_path")
+    if "target_file" in normalized and "path" not in normalized:
+        normalized["path"] = normalized.pop("target_file")
     if "new_text" in normalized and "new" not in normalized:
         normalized["new"] = normalized.pop("new_text")
     if "new_content" in normalized and "new" not in normalized:
@@ -209,7 +214,7 @@ def _normalize_operation(runtime_module: Any, value: Any, payload: Mapping[str, 
     if not isinstance(value, str):
         raise runtime_module.AgentToolRuntimeError("operation must be a string")
     clean = value.strip()
-    if clean == "apply_source_edit" and payload is not None:
+    if clean in ("apply_source_edit", "apply_source_patch", "edit", "modify", "patch", "update", "write", "create", "insert") and payload is not None:
         if payload.get("old") or payload.get("old_text"):
             return "replace_exact"
         if payload.get("anchor"):
@@ -225,7 +230,6 @@ def _normalize_operation(runtime_module: Any, value: Any, payload: Mapping[str, 
             if path.endswith(_JAVA_PATH_SUFFIX):
                 return "create_java_type"
             return "create_file"
-        return "replace_exact"
 
     operation = _OPERATION_ALIASES.get(clean, clean)
     if operation not in _CANONICAL_OPERATIONS:

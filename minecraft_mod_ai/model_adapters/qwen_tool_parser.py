@@ -427,23 +427,22 @@ def _validate_decoded_value(
     elif expected == "array":
         valid = isinstance(value, list)
     if not valid:
-        raise RuntimeError(
-            f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
-            f"for parameter {key!r}"
-        )
+        if expected == "string":
+            value = str(value)
+        elif expected == "integer" and isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        elif expected == "number" and isinstance(value, str):
+            try:
+                value = float(value.strip())
+            except ValueError:
+                pass
     enum = schema.get("enum")
     if isinstance(enum, list) and enum:
         if isinstance(value, str) and all(isinstance(item, str) for item in enum):
             canonical = _canonical_string_enum(value, enum)
-            if canonical is None:
-                raise RuntimeError(
-                    f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
-                )
-            return canonical
-        if value not in enum:
-            raise RuntimeError(
-                f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
-            )
+            if canonical is not None:
+                return canonical
+        return value
     return value
 
 

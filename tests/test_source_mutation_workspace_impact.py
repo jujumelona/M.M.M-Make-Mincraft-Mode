@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import source_patch as source_patch_module
-from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourcePatcher, sha256_bytes
+from minecraft_mod_ai.source_patch import (
+    SourcePatchError,
+    TransactionalSourcePatcher,
+    sha256_bytes,
+)
 
 
 def test_source_patch_sha_mismatch_reports_workspace_drift(tmp_path: Path) -> None:
@@ -139,7 +143,9 @@ def test_source_patch_failed_rollback_reports_uncertain_workspace(
 def test_materialize_model_source_edit_handles_apply_source_edit_and_aliases(tmp_path: Path) -> None:
     """materialize_model_source_edit accepts new_text/old_text aliases and operation='apply_source_edit'."""
     from minecraft_mod_ai import agent_tool_runtime as runtime_module
-    from minecraft_mod_ai.source_edit_scalar_protocol_contract import materialize_model_source_edit
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+        materialize_model_source_edit,
+    )
 
     (tmp_path / "build.gradle").write_text("// gradle\n", encoding="utf-8")
     file_path = tmp_path / "src" / "main" / "java" / "Mod.java"
@@ -178,10 +184,11 @@ def _run_e2e_patch(workspace_root: Path, project_root: Path, java_rel: str, java
 
     Returns the patched file path so callers can assert on its content.
     """
-    import sys
     import minecraft_mod_ai.agent_tool_runtime as rt_module
-    from minecraft_mod_ai.source_edit_scalar_protocol_contract import materialize_model_source_edit
     from minecraft_mod_ai.mcp_tools import MMMToolService
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+        materialize_model_source_edit,
+    )
 
     file_path = _make_gradle_project(project_root, java_rel, java_content)
 
@@ -262,10 +269,11 @@ def test_e2e_source_edit_alias_payload_project_is_workspace_root(tmp_path: Path)
     End-to-end with Qwen alias fields (operation='apply_source_edit', new_text/old_text):
     project root == workspace root. Verifies alias normalization + actual file diff.
     """
-    import sys
     import minecraft_mod_ai.agent_tool_runtime as rt_module
-    from minecraft_mod_ai.source_edit_scalar_protocol_contract import materialize_model_source_edit
     from minecraft_mod_ai.mcp_tools import MMMToolService
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+        materialize_model_source_edit,
+    )
 
     java_content = (
         "package ai.test;\n\npublic class SpaceMod {\n    // placeholder\n}\n"
@@ -292,6 +300,30 @@ def test_e2e_source_edit_alias_payload_project_is_workspace_root(tmp_path: Path)
     new_text = file_path.read_text(encoding="utf-8")
     assert "onInitialize" in new_text
     assert "// placeholder" not in new_text
+
+
+def test_qwen_tool_parser_tolerates_non_enum_operations_and_aliases() -> None:
+    """Qwen parser parses markup with uncanonical enum/operation strings without crashing."""
+    from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+    schemas = {"apply_source_edit": SOURCE_EDIT_SCHEMA}
+    markup = (
+        "<tool_call>\n"
+        "<function=apply_source_edit>\n"
+        "<parameter=operation>create_class</parameter>\n"
+        "<parameter=path>src/main/java/ai/test/NewClass.java</parameter>\n"
+        "<parameter=package_name>ai.test</parameter>\n"
+        "<parameter=declaration>public class NewClass</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    _visible, calls = parse_qwen_tool_markup(markup, schemas)
+    assert len(calls) == 1
+    assert calls[0].name == "apply_source_edit"
+    assert calls[0].arguments["operation"] == "create_class"
+    assert calls[0].arguments["path"] == "src/main/java/ai/test/NewClass.java"
+
 
 
 
