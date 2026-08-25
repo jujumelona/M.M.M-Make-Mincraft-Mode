@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .agent_intent import implementation_requested
@@ -119,10 +120,42 @@ def retrieval_source_key(tool_name: str, arguments: Mapping[str, Any]) -> str:
     return name
 
 
+def _is_workspace_file_path(path: str) -> bool:
+    if not path or not isinstance(path, str):
+        return False
+    clean = path.strip().replace("\\", "/")
+    if clean.startswith("http://") or clean.startswith("https://") or "://" in clean:
+        return False
+    suffix = Path(clean).suffix.casefold()
+    if "/" not in clean and suffix not in {".java", ".json", ".toml", ".gradle", ".properties", ".txt", ".md", ".kt", ".groovy"}:
+        return False
+    return True
+
+
 def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> str:
     name = str(tool_name or "").strip()
     norm_query = normalize_retrieval_query(arguments.get("query"))
-    return f"{name}:{norm_query}" if norm_query else name
+    target = str(
+        arguments.get("index_path")
+        or arguments.get("path")
+        or arguments.get("file")
+        or arguments.get("target_path")
+        or ""
+    ).strip().casefold()
+    symbol = str(
+        arguments.get("symbol")
+        or arguments.get("symbol_name")
+        or arguments.get("function")
+        or ""
+    ).strip().casefold()
+    parts = [name]
+    if target:
+        parts.append(f"target={target}")
+    if symbol:
+        parts.append(f"symbol={symbol}")
+    if norm_query:
+        parts.append(f"q={norm_query}")
+    return ":".join(parts)
 
 
 def _stable_value(value: Any, *, drop_volatile: bool) -> Any:
@@ -340,6 +373,11 @@ class HostRunState:
         with self._lock:
             return bool(self.evidence_fingerprints)
 
+    def is_query_attempted(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
+        sig = retrieval_query_signature(tool_name, arguments)
+        with self._lock:
+            return sig in self.attempted_queries
+
     def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
         source = retrieval_source_key(tool_name, arguments)
         sig = retrieval_query_signature(tool_name, arguments)
@@ -522,7 +560,7 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
         for hit in hits:
             if isinstance(hit, Mapping):
                 path = str(hit.get("path") or hit.get("file") or hit.get("uri") or "").strip()
-                if path:
+                if path and _is_workspace_file_path(path):
                     snippet = hit.get("snippet") or hit.get("code") or hit.get("content") or hit.get("source")
                     if isinstance(snippet, (list, tuple)):
                         snippet = "\n".join(str(s) for s in snippet)
@@ -542,7 +580,7 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
         for hit in hits:
             if isinstance(hit, Mapping):
                 path = str(hit.get("path") or hit.get("file") or hit.get("uri") or "").strip()
-                if path:
+                if path and _is_workspace_file_path(path):
                     return TargetMutationContext(
                         target_path=path,
                         source_body=None,
@@ -556,7 +594,7 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
             if isinstance(src, Mapping):
                 path = str(src.get("path") or src.get("file") or src.get("source_id") or src.get("url") or "").strip()
                 content = src.get("content") or src.get("snippet") or src.get("code") or src.get("text") or src.get("summary")
-                if path and isinstance(content, str) and _is_code_bearing_text(content):
+                if path and _is_workspace_file_path(path) and isinstance(content, str) and _is_code_bearing_text(content):
                     return TargetMutationContext(
                         target_path=path,
                         source_body=content,
@@ -565,7 +603,7 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
         for src in sources:
             if isinstance(src, Mapping):
                 path = str(src.get("path") or src.get("file") or src.get("source_id") or "").strip()
-                if path:
+                if path and _is_workspace_file_path(path):
                     return TargetMutationContext(
                         target_path=path,
                         source_body=None,
@@ -737,11 +775,10 @@ def _filter_tools_for_phase(
             if not selected_names:
                 selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
         elif stage == LocalizationStage.NEED_SYMBOL:
-            preferred = ("java_workspace_symbols",)
-            selected_names = [name for name in preferred if name in by_name]
-            if not selected_names and "search_code_rag" in by_name:
-                selected_names = ["search_code_rag"]
-            elif not selected_names:
+            preferred = ("java_workspace_symbols", "java_diagnostics", "search_code_rag", "search_project_rag")
+            untried = [name for name in preferred if name in by_name and name not in attempted_sources]
+            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]
+            if not selected_names:
                 selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
         elif stage == LocalizationStage.NEED_BODY:
             preferred = ("search_code_rag", "inspect_existing_mod")
@@ -1260,8 +1297,7 @@ def generate_with_tools(
                 }
 
             if is_evidence_tool(call):
-                is_new_query = state.record_query(call.name, call.arguments)
-                if not is_new_query:
+                if state.is_query_attempted(call.name, call.arguments):
                     err_msg = (
                         f"RetrievalNoProgress: equivalent query already attempted for {call.name} with "
                         f"args={json.dumps(dict(call.arguments), ensure_ascii=False)}"
@@ -1290,6 +1326,9 @@ def generate_with_tools(
                         )
                 else:
                     result = runtime.call(stage, call.name, call.arguments)
+
+                if is_evidence_tool(call):
+                    state.record_query(call.name, call.arguments)
 
                 payload: Mapping[str, Any] = {
                     "ok": True,

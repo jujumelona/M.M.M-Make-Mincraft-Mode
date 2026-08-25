@@ -691,6 +691,37 @@ def test_qwen_tool_parser_preserves_unexposed_tool_as_call() -> None:
     assert calls[0].arguments.get("path") == "src/Test.java"
 
 
+def test_retrieval_query_signature_distinguishes_target_and_symbol() -> None:
+    """retrieval_query_signature distinguishes queries with different index_path or symbol."""
+    from minecraft_mod_ai.progress_aware_tool_loop import retrieval_query_signature
+
+    sig1 = retrieval_query_signature("search_code_rag", {"query": "ModInitializer"})
+    sig2 = retrieval_query_signature(
+        "search_code_rag",
+        {"query": "ModInitializer", "index_path": "src/main/java/ai/minecraft/Mod.java"},
+    )
+    assert sig1 != sig2
+    assert "target=src/main/java/ai/minecraft/mod.java" in sig2
+
+
+def test_extract_mutation_context_ignores_documentation_source_id() -> None:
+    """_extract_mutation_context_from_payload does not treat documentation source_ids or URLs as target_path."""
+    from minecraft_mod_ai.progress_aware_tool_loop import _extract_mutation_context_from_payload
+
+    payload = {
+        "sources": [
+            {
+                "source_id": "fabric-building",
+                "url": "https://fabricmc.net/wiki/tutorial:setup",
+                "content": "Fabric building tutorial",
+            }
+        ]
+    }
+    ctx = _extract_mutation_context_from_payload(payload)
+    assert ctx is None
+
+
+
 
 
 
