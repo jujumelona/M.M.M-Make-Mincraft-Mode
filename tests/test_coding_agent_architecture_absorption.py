@@ -3,8 +3,6 @@
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 from minecraft_mod_ai.model_context_budget import (
     bounded_tool_message,
     emergency_fit_messages,
@@ -51,7 +49,6 @@ def test_gemini_cli_style_giant_tool_output_archived_and_previewed() -> None:
     bounded = bounded_tool_message(giant_message, config=config, tools=())
     content = str(bounded["content"])
 
-    # Must be compacted into summary payload
     assert len(content.encode("utf-8")) < 16 * 1024
     parsed = json.loads(content)
     assert "_mmm_context_compaction" in parsed
@@ -80,7 +77,6 @@ def test_cline_style_pre_request_fitting_and_emergency_recovery() -> None:
     fitted_size = len(json.dumps(fitted).encode("utf-8"))
     assert fitted_size <= budget
 
-    # Emergency overflow recovery trims even deeper to emergency budget
     emergency = emergency_fit_messages(fitted, budget_bytes=12 * 1024)
     emergency_size = len(json.dumps(emergency).encode("utf-8"))
     assert emergency_size <= 12 * 1024
@@ -117,5 +113,4 @@ def test_aider_and_codex_style_completed_history_rollover_with_mutation_proof() 
     fitted = fit_messages_to_context(messages, config=config, tools=())
     fitted_str = json.dumps(fitted)
 
-    # Older history is rolled over into verified compacted context
     assert "HOST COMPACTED VERIFIED CONTEXT" in fitted_str or len(fitted_str) <= request_message_budget(config)
