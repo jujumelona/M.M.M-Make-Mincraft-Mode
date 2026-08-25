@@ -176,7 +176,7 @@ class RepairEngine:
             }
         diagnostic_errors = [
             item
-            for item in diagnostics.get("diagnostics", [])
+            for item in diagnostics.get("diagnostics", {}).get("diagnostics", [])
             if isinstance(item, dict) and int(item.get("severity", 1)) <= 2
         ]
         return {
@@ -345,12 +345,7 @@ class RepairEngine:
             op = str(item.get("operation", "")).strip().lower()
             if op in {"replace", "edit", "delete"}:
                 expected = str(item.get("expected_sha256", "")).strip()
-                if not expected.startswith("sha256:") or len(expected) != 71:
-                    if target.is_file() and not target.is_symlink():
-                        item["expected_sha256"] = sha256_bytes(target.read_bytes())
-            elif op == "create" and target.is_file() and not target.is_symlink():
-                if isinstance(item.get("content"), str):
-                    item["operation"] = "replace"
+                if not expected and target.is_file() and not target.is_symlink():
                     item["expected_sha256"] = sha256_bytes(target.read_bytes())
 
 
