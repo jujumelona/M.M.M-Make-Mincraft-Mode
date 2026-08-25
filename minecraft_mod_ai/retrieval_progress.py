@@ -20,6 +20,10 @@ class RetrievalObservation(str, Enum):
     DUPLICATE_EVIDENCE = "duplicate_evidence"
 
 
+class RetrievalNoProgressError(RuntimeError):
+    """Raised when repeated successful retrievals still add no usable evidence."""
+
+
 _STOPWORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
     "in", "into", "is", "it", "of", "on", "or", "the", "to", "what", "when",
@@ -30,6 +34,7 @@ _VOLATILE_EVIDENCE_KEYS = frozenset({
     "normalized_query", "query", "relevance_score", "request_id", "result_count",
     "timestamp", "trace_id",
 })
+_DEFAULT_NO_PROGRESS_LIMIT = 8
 
 
 def normalize_retrieval_query(value: Any) -> str:
@@ -122,12 +127,16 @@ class RetrievalProgress:
 
     Retrieval progression is driven by novel queries and novel evidence. Duplicate
     evidence is local to the current observation and must never blacklist an entire
-    source, because a later distinct query can still produce new evidence.
+    source, because a later distinct query can still produce new evidence. A bounded
+    no-progress streak prevents arbitrarily many distinct weak queries from growing
+    the live model transcript until it reaches the physical context boundary.
     """
 
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
+    no_progress_limit: int = _DEFAULT_NO_PROGRESS_LIMIT
+    no_progress_observations: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def begin(self, tool_name: str, arguments: Mapping[str, Any]) -> RetrievalDecision:
@@ -149,15 +158,33 @@ class RetrievalProgress:
         usable: bool,
     ) -> RetrievalObservation:
         if not usable:
-            return RetrievalObservation.WEAK
+            return self._record_no_progress(RetrievalObservation.WEAK)
         fingerprint = evidence_fingerprint(value)
         if fingerprint is None:
-            return RetrievalObservation.WEAK
+            return self._record_no_progress(RetrievalObservation.WEAK)
         with self._lock:
             if fingerprint in self.evidence_fingerprints:
-                return RetrievalObservation.DUPLICATE_EVIDENCE
-            self.evidence_fingerprints.add(fingerprint)
-            return RetrievalObservation.FRESH
+                observation = RetrievalObservation.DUPLICATE_EVIDENCE
+            else:
+                self.evidence_fingerprints.add(fingerprint)
+                self.no_progress_observations = 0
+                return RetrievalObservation.FRESH
+        return self._record_no_progress(observation)
+
+    def _record_no_progress(
+        self,
+        observation: RetrievalObservation,
+    ) -> RetrievalObservation:
+        with self._lock:
+            self.no_progress_observations += 1
+            count = self.no_progress_observations
+            limit = max(1, int(self.no_progress_limit))
+        if count >= limit:
+            raise RetrievalNoProgressError(
+                "retrieval produced no novel usable evidence for "
+                f"{count} consecutive successful observations"
+            )
+        return observation
 
     @property
     def has_fresh_evidence(self) -> bool:
