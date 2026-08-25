@@ -141,7 +141,7 @@ def test_patch_file_alias_resolves_only_to_exposed_source_edit() -> None:
     }
 
 
-def test_patch_file_alias_remains_unauthorized_when_source_edit_is_not_exposed() -> None:
+def test_patch_file_alias_is_preserved_when_source_edit_is_not_exposed() -> None:
     text = (
         "<tool_call><function=patch_file>"
         "<parameter=file>src/A.java</parameter>"
@@ -149,8 +149,11 @@ def test_patch_file_alias_remains_unauthorized_when_source_edit_is_not_exposed()
         "</function></tool_call>"
     )
 
-    with pytest.raises(RuntimeError, match="unexposed tool 'patch_file'"):
-        _parse_qwen_tool_markup(text, {})
+    visible, calls = _parse_qwen_tool_markup(text, {})
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0].name == "patch_file"
+    assert calls[0].arguments == {"file": "src/A.java", "action": "replace"}
 
 
 def test_patch_file_is_not_a_permission_alias() -> None:
