@@ -150,11 +150,11 @@ def test_runtime_contract_installs_generation_and_repair_grounding() -> None:
 
     assert getattr(
         custom_module_generator._collect_initial_observations,
-        "__mmm_repository_grounding_v1__",
+        "__mmm_repository_grounding_live_context__",
         False,
     )
     assert getattr(
         repair_engine.RepairEngine._context,
-        "__mmm_repository_grounding_v1__",
+        "__mmm_repository_grounding_live_context__",
         False,
     )

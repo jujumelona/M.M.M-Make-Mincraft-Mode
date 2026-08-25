@@ -121,10 +121,18 @@ def run_context_budget_preflight() -> None:
         raise ContextBudgetPreflightError(
             "required tool payload did not expose exactly the selected function schema"
         )
-    structured = synthetic_tool_payload.get("response_format")
-    if not isinstance(structured, dict) or structured.get("type") != "json_schema":
+    # Structured-output validation is host-owned. Requiring a second JSON-Schema or
+    # grammar at the llama transport reintroduces the duplicate contract that caused
+    # Qwen/native-tool regressions. Preflight therefore fails if that surface leaks back.
+    leaked_constraints = tuple(
+        key
+        for key in ("response_format", "json_schema", "grammar")
+        if key in synthetic_tool_payload
+    )
+    if leaked_constraints:
         raise ContextBudgetPreflightError(
-            "host-selected JSON action page is missing the llama-server JSON-Schema constraint"
+            "host-selected JSON action page leaked llama-server structured constraints: "
+            + ",".join(leaked_constraints)
         )
 
     large_result = json.dumps(

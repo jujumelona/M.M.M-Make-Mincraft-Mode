@@ -131,7 +131,7 @@ def test_forced_rag_refusal_is_bounded_and_specific(monkeypatch, tmp_path) -> No
     runtime = _Runtime()
     router = _router(monkeypatch, adapter, runtime, tmp_path)
 
-    with pytest.raises(ModelConfigurationError, match="host-forced RAG tool choice"):
+    with pytest.raises(ModelConfigurationError, match="Host-selected RAG action"):
         router.generate_text(
             "coder",
             [{"role": "user", "content": "Implement the registration change"}],
