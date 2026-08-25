@@ -179,7 +179,9 @@ class MMMToolService:
         approved.validate()
         return {'status': approved.status.value, 'proposal': approved.to_dict(), 'approval_hash': approved.calculate_hash()}
 
-    def search_project_rag(self, query: str, minecraft_version: str, limit: int=6) -> dict[str, Any]:
+    def search_project_rag(self, query: str, minecraft_version: str = "1.21.1", limit: int = 6) -> dict[str, Any]:
+        if not minecraft_version:
+            minecraft_version = "1.21.1"
         if type(limit) is not int or limit < 1:
             raise SpecValidationError('limit must be a positive integer.')
         sources = AuthoritativeEvidenceRetriever().search(query, minecraft_version=minecraft_version, limit=limit)

@@ -63,3 +63,33 @@ def test_qwen_tool_markup_xml_parser() -> None:
     assert call.arguments["operation"] == "create"
     assert call.arguments["path"] == "src/main/java/Example.java"
     assert "public class Example {}" in call.arguments["content"]
+
+
+def test_qwen_tool_markup_search_project_rag_defaults_minecraft_version() -> None:
+    """Verify search_project_rag defaults minecraft_version when omitted."""
+    schemas = {
+        "search_project_rag": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "minecraft_version": {"type": "string"},
+            },
+            "required": ["query", "minecraft_version"],
+        }
+    }
+
+    raw = (
+        "<tool_call>\n"
+        "<function=search_project_rag>\n"
+        "<parameter=query>loadLevel mixin</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+
+    _, calls = parse_qwen_tool_markup(raw, schemas)
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.name == "search_project_rag"
+    assert call.arguments["query"] == "loadLevel mixin"
+    assert call.arguments.get("minecraft_version") == "1.21.1"
+

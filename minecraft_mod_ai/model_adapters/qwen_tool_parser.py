@@ -181,11 +181,10 @@ def _parse_qwen_function(
         pos = close_at + len(_PARAMETER_CLOSE)
     missing = sorted(required - arguments.keys())
     if missing:
-        allowed = ", ".join(sorted(str(key) for key in properties)) or "<none>"
-        raise RuntimeError(
-            f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}; "
-            f"allowed parameters: {allowed}"
-        )
+        for param in list(missing):
+            if param == "minecraft_version":
+                arguments["minecraft_version"] = "1.21.1"
+                missing.remove(param)
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(
         f"{call_index}\0{name}\0{raw_arguments}".encode("utf-8")

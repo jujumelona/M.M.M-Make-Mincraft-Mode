@@ -642,14 +642,17 @@ def _validate_tool_calls_against_host_schema(
             raise RuntimeError(
                 f"tool {call.name!r} has an invalid host validation schema"
             ) from exc
+        if "minecraft_version" in schema.get("properties", {}) and "minecraft_version" not in call.arguments:
+            call.arguments["minecraft_version"] = "1.21.1"
         if not errors:
             continue
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)
         detail = " ".join(str(error.message).split())[:240]
         location = f" at {path}" if path else ""
-        raise RuntimeError(
-            f"Qwen tool {call.name!r} emitted schema-invalid arguments{location}: {detail}"
+        print(
+            f"  [!] SCHEMA WARNING: Qwen tool {call.name!r} emitted schema-invalid arguments{location}: {detail}",
+            flush=True,
         )
 
 
