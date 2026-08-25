@@ -1,0 +1,50 @@
+name: Reuse-first one-shot runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/reuse-first-runner.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install repository test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Execute reviewed canonical upgrade script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          path = Path('.github/workflows/reuse-first-architecture.yml')
+          payload = yaml.safe_load(path.read_text(encoding='utf-8'))
+          steps = payload['jobs']['apply']['steps']
+          scripts = [
+              step['run']
+              for step in steps
+              if isinstance(step, dict)
+              and step.get('name') == 'Apply canonical reuse-first changes'
+          ]
+          if len(scripts) != 1:
+              raise SystemExit(f'expected exactly one canonical upgrade script, found {len(scripts)}')
+          subprocess.run(['bash', '-euo', 'pipefail', '-c', scripts[0]], check=True)
+          PY
