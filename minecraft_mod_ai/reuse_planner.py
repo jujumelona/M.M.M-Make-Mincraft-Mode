@@ -22,6 +22,7 @@ from .component_registry import (
     load_verified_components,
 )
 from .ecosystem_discovery import EcosystemDiscoveryClient
+from .reuse_discovery import discover_repositories_for_graph
 from .platform_catalog import PlatformAdapter, adapter_for_target, discover_target_keys
 from . import platform_optimizer as _platform
 from .source_transplant import (
@@ -87,6 +88,7 @@ class CapabilityGraph:
     nodes: tuple[str, ...]
     edges: tuple[tuple[str, str], ...]
     sources: tuple[tuple[str, str], ...]
+    search_terms: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +96,10 @@ class CapabilityGraph:
             "nodes": list(self.nodes),
             "edges": [{"from": left, "to": right} for left, right in self.edges],
             "sources": [{"capability": cap, "source": source} for cap, source in self.sources],
+            "search_terms": [
+                {"capability": cap, "terms": list(terms)}
+                for cap, terms in self.search_terms
+            ],
         }
 
 
@@ -114,6 +120,7 @@ def decompose_capability_graph(
     ordered: list[str] = []
     edges: list[tuple[str, str]] = []
     sources: dict[str, str] = {}
+    search_terms: dict[str, list[str]] = {}
     seen: set[str] = set()
     limit = _capability_graph_limit()
 
@@ -137,6 +144,15 @@ def decompose_capability_graph(
                     edges.append(edge)
         return anchor
 
+    def register_search_terms(capability: str, values: Iterable[Any]) -> None:
+        if not capability:
+            return
+        bucket = search_terms.setdefault(capability, [])
+        for raw in values:
+            value = " ".join(str(raw or "").split())
+            if value and value.casefold() not in {item.casefold() for item in bucket}:
+                bucket.append(value[:512])
+
     def walk(value: Any, source: str, parent: str = "", depth: int = 0) -> None:
         if at_limit():
             return
@@ -156,12 +172,34 @@ def decompose_capability_graph(
             for item in value:
                 walk(item, source, parent, depth + 1)
 
+    catalog_used = False
     if isinstance(design, Mapping):
-        for key, value in design.items():
-            if str(key).casefold() in _CAPABILITY_KEYS:
-                walk(value, f"design.{key}")
-    for kind in module_kinds:
-        add(kind, "module_kind")
+        catalog = design.get("_evidence_request_catalog")
+        requirements = catalog.get("requirements") if isinstance(catalog, Mapping) else None
+        if isinstance(requirements, Sequence) and not isinstance(requirements, (str, bytes)):
+            for requirement in requirements:
+                if not isinstance(requirement, Mapping):
+                    continue
+                capability = requirement.get("capability")
+                if not str(capability or "").strip():
+                    provides = requirement.get("provides")
+                    if isinstance(provides, Sequence) and not isinstance(provides, (str, bytes)):
+                        capability = next((item for item in provides if str(item or "").strip()), "")
+                source = f"evidence_request_catalog.{requirement.get('requirement_id') or 'requirement'}"
+                anchor = add(capability, source)
+                if anchor:
+                    register_search_terms(
+                        anchor,
+                        (capability, requirement.get("statement")),
+                    )
+                    catalog_used = True
+        if not catalog_used:
+            for key, value in design.items():
+                if str(key).casefold() in _CAPABILITY_KEYS:
+                    walk(value, f"design.{key}")
+    if not catalog_used:
+        for kind in module_kinds:
+            add(kind, "module_kind")
 
     if not ordered:
         words = {token.casefold() for token in _TOKEN.findall(str(prompt))}
@@ -173,6 +211,10 @@ def decompose_capability_graph(
         nodes=tuple(ordered),
         edges=tuple(edges),
         sources=tuple((node, sources[node]) for node in ordered),
+        search_terms=tuple(
+            (node, tuple(search_terms.get(node, (node.replace(".", " "),))))
+            for node in ordered
+        ),
     )
 
 
@@ -311,6 +353,24 @@ class TargetImplementationPlan:
                 **self.adapter.public_dict(),
             },
             "capabilities": [item.to_dict() for item in self.capabilities],
+            "reuse_ledger": [
+                {
+                    "capability": item.capability,
+                    "status": (
+                        "FRESH_REQUIRED"
+                        if item.mode == "fresh"
+                        else "PARTIAL_REUSE"
+                        if item.mode == "adapt"
+                        else "VERIFIED_REUSE"
+                    ),
+                    "mode": item.mode,
+                    "source_id": item.source_id,
+                    "fresh_generation_scope": (
+                        "full" if item.mode == "fresh" else "residual_only" if item.mode == "adapt" else "forbidden"
+                    ),
+                }
+                for item in self.capabilities
+            ],
             "weighted_verified_reuse": round(self.weighted_verified_reuse, 4),
             "fresh_work": round(self.fresh_work, 4),
             "adaptation_work": round(self.adaptation_work, 4),
@@ -403,7 +463,7 @@ def optimize_platform_and_reuse(
     # every executable target against the same pinned donor candidates. This avoids
     # the old capability x version public-search cross product.
     repository_candidates = (
-        _parallel_donor_repository_discovery(queries, client)
+        _parallel_donor_repository_discovery(queries, client, capability_graph=graph.to_dict())
         if discovery_mode != "off"
         else {capability: () for capability in queries}
     )
@@ -582,7 +642,9 @@ def plan_fixed_target(
         dict(repository_candidates)
         if isinstance(repository_candidates, Mapping)
         else (
-            _parallel_donor_repository_discovery(capabilities, client)
+            _parallel_donor_repository_discovery(
+                capabilities, client, capability_graph=capability_graph
+            )
             if allow_network
             else {capability: () for capability in capabilities}
         )
@@ -737,9 +799,17 @@ def _plan_target(
         for item in decisions
     )
     uncertainty = sum(item.uncertainty_penalty for item in decisions)
-    donor_count = sum(item.mode in {"source_transplant", "adapt"} for item in decisions)
+    donor_decisions = [item for item in decisions if item.mode in {"source_transplant", "adapt"}]
+    donor_sources = {item.source_id for item in donor_decisions if item.source_id}
+    donor_count = len(donor_sources)
+    cohesion_reuse = max(0, len(donor_decisions) - donor_count)
     dependency_edges = platform_evidence.dependency_edges if platform_evidence is not None else 0
-    cross_component = 0.15 * max(0, len(decisions) - 1) + 0.08 * donor_count
+    cross_component = max(
+        0.0,
+        0.15 * max(0, len(decisions) - 1)
+        + 0.08 * donor_count
+        - 0.05 * cohesion_reuse,
+    )
     platform_verify = 1.0 + 0.05 * dependency_edges
     maintenance_risk = (
         (platform_evidence.integration_risk if platform_evidence is not None else 0.0)
@@ -778,51 +848,16 @@ def _plan_target(
 def _parallel_donor_repository_discovery(
     capabilities: Sequence[str],
     client: EcosystemDiscoveryClient,
+    *,
+    capability_graph: Mapping[str, Any] | None = None,
 ) -> dict[str, tuple[str, ...]]:
-    """Search OSS once per capability, independent of Minecraft target version."""
+    """Discover source donors broadly, then deep-inspect only representative repos."""
 
-    result: dict[str, tuple[str, ...]] = {capability: () for capability in capabilities}
-
-    def run(capability: str) -> tuple[str, tuple[str, ...]]:
-        semantic = " ".join(_TOKEN.findall(capability.replace(".", " ")))
-        queries = [f"{semantic} minecraft mod source"]
-        if "trade" in capability.casefold():
-            queries.insert(0, f"{semantic} transaction service persistence minecraft")
-        repositories: list[str] = []
-        for query in queries:
-            try:
-                page = client.search("github", query, limit=8, target_profile="minecraft_mod")
-            except Exception:
-                continue
-            raw = page.get("candidates") if isinstance(page, Mapping) else None
-            if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-                continue
-            for candidate in raw:
-                if not isinstance(candidate, Mapping):
-                    continue
-                repository = repository_from_candidate(candidate)
-                if repository and repository not in repositories:
-                    repositories.append(repository)
-                if len(repositories) >= 8:
-                    break
-        return capability, tuple(repositories)
-
-    workers = min(_workers(), max(1, len(capabilities)))
-    if workers <= 1:
-        for capability in capabilities:
-            key, values = run(capability)
-            result[key] = values
-        return result
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-donor-search") as pool:
-        futures = {pool.submit(run, capability): capability for capability in capabilities}
-        for future in as_completed(futures):
-            capability = futures[future]
-            try:
-                key, values = future.result()
-                result[key] = values
-            except Exception:
-                result[capability] = ()
-    return result
+    return discover_repositories_for_graph(
+        capabilities,
+        client,
+        capability_graph=capability_graph,
+    )
 
 
 def _near_cost_targets(plans: Sequence[TargetImplementationPlan]) -> tuple[PlatformAdapter, ...]:
@@ -865,31 +900,46 @@ def _discover_best_donor(
     discovery_client: EcosystemDiscoveryClient,
     repositories: Sequence[str],
 ) -> DonorSlice | None:
-    # Repository discovery happened once per capability before target evaluation.
-    # Here we only test the same structural donor candidates against this target.
-    best: DonorSlice | None = None
-    for repository in repositories[:6]:
-        donor = inspect_repository_slice(
+    """Inspect shortlisted repositories concurrently and return the strongest slice."""
+
+    ordered = tuple(dict.fromkeys(repository for repository in repositories if repository))
+    if not ordered:
+        return None
+
+    def inspect(repository: str) -> DonorSlice | None:
+        return inspect_repository_slice(
             repository=repository,
             capability=capability,
             adapter=adapter,
             discovery_client=discovery_client,
         )
-        if donor is None:
-            continue
-        if best is None or (
+
+    donors: list[DonorSlice] = []
+    workers = min(_workers(), len(ordered))
+    if workers <= 1:
+        donors = [donor for donor in (inspect(repository) for repository in ordered) if donor is not None]
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-donor-inspect") as pool:
+            futures = [pool.submit(inspect, repository) for repository in ordered]
+            for future in as_completed(futures):
+                try:
+                    donor = future.result()
+                except Exception:
+                    continue
+                if donor is not None:
+                    donors.append(donor)
+    if not donors:
+        return None
+    return max(
+        donors,
+        key=lambda donor: (
             donor.exact_target,
             donor.confidence,
+            -len(donor.required_dependencies),
             -len(donor.files),
             donor.repository,
-        ) > (
-            best.exact_target,
-            best.confidence,
-            -len(best.files),
-            best.repository,
-        ):
-            best = donor
-    return best
+        ),
+    )
 
 
 def _fresh_cost(capability: str) -> tuple[float, float]:
