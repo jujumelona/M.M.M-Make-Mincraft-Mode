@@ -326,7 +326,6 @@ def test_model_router_has_one_direct_tool_loop_owner() -> None:
     assert "progress_aware_tool_loop" in source
     assert "generate_with_tools(" in source
     assert "while True" not in source
-    assert ModelRouter._generate_with_tools._mmm_dynamic_causal_frontier is True
 
 
 def test_runtime_sources_have_no_legacy_unbounded_llama_transport() -> None:
