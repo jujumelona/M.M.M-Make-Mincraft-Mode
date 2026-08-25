@@ -4,7 +4,6 @@ import inspect
 import json
 from contextlib import nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -19,10 +18,7 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     context_recovery_exhausted,
     mark_context_recovery_exhausted,
 )
-from minecraft_mod_ai.llama_generation_budget import (
-    apply_generation_budget,
-    apply_structured_output_constraint,
-)
+from minecraft_mod_ai.llama_generation_budget import apply_generation_budget
 from minecraft_mod_ai.llama_stream_efficiency_contract import (
     LlamaToolLivenessTimeout,
     _StreamingCompletionClient,
@@ -128,23 +124,15 @@ def test_native_tool_timeout_becomes_typed_liveness_failure() -> None:
         )
 
 
-def test_structured_action_page_uses_json_schema_and_finite_budget() -> None:
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {"query": {"type": "string"}},
-        "required": ["query"],
+def test_structured_action_page_keeps_host_owned_format_and_finite_budget() -> None:
+    payload = {
+        "model": "local",
+        "max_tokens": -1,
+        "tools": _tool_schema(),
     }
-    request = SimpleNamespace(response_format="json", response_schema=schema)
-    constrained = apply_structured_output_constraint(
-        {"model": "local", "max_tokens": -1},
-        request=request,
-    )
-    response_format = constrained["response_format"]
-    assert response_format["type"] == "json_schema"
-    assert response_format["json_schema"]["schema"] == schema
-
-    bounded = apply_generation_budget(constrained, config=_config())
+    bounded = apply_generation_budget(payload, config=_config())
+    assert "response_format" not in bounded
+    assert bounded["tools"] == payload["tools"]
     assert 0 < bounded["max_tokens"] <= 8_192
 
 
