@@ -34,6 +34,7 @@ _STRUCTURAL_MARKERS = (
 _ARGUMENT_CONTAINER_KEYS = frozenset(
     {"apply", "arguments", "args", "parameters", "params", "input"}
 )
+_HOST_OWNED_ARGUMENT_KEYS = frozenset({"workspace_root"})
 _APPLY_SOURCE_EDIT_ALIASES = {
     "file": "path",
     "file_path": "path",
@@ -164,6 +165,9 @@ def _parse_qwen_function(
                 )
                 pos = close_at + len(_PARAMETER_CLOSE)
                 continue
+        if _is_host_owned_argument(emitted_key, properties):
+            pos = close_at + len(_PARAMETER_CLOSE)
+            continue
         key = _canonical_key(name, emitted_key, properties)
         if key not in properties and additional is False:
             raise _unknown_parameter_error(name, emitted_key, properties, required)
@@ -190,6 +194,11 @@ def _parse_qwen_function(
         arguments=arguments,
         raw_arguments=raw_arguments,
     ), end
+
+
+def _is_host_owned_argument(emitted_key: str, properties: Mapping[str, Any]) -> bool:
+    """Ignore host-bound execution metadata unless a tool explicitly declares it."""
+    return emitted_key in _HOST_OWNED_ARGUMENT_KEYS and emitted_key not in properties
 
 
 def _canonical_key(tool_name: str, emitted_key: str, properties: Mapping[str, Any]) -> str:
@@ -245,6 +254,8 @@ def _merge_argument_container(
                 argument_sources,
                 depth=depth + 1,
             )
+            continue
+        if _is_host_owned_argument(emitted_key, properties):
             continue
         key = _canonical_key(tool_name, emitted_key, properties)
         if key not in properties and additional is False:
