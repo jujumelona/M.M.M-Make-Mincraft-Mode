@@ -67,12 +67,14 @@ def test_server_parsed_tool_call_rejects_schema_invalid_arguments() -> None:
         )
 
 
-def test_server_parsed_tool_call_rejects_unexposed_tool() -> None:
-    with pytest.raises(RuntimeError, match="unexposed tool"):
-        _qwen_tool_generation_response(
-            _native_message('{"q":"x"}', name="not_visible"),
-            _request(),
-        )
+def test_server_parsed_tool_call_preserves_unexposed_tool_for_host_phase_validation() -> None:
+    turn = _qwen_tool_generation_response(
+        _native_message('{"q":"x"}', name="not_visible"),
+        _request(),
+    )
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].name == "not_visible"
+    assert turn.tool_calls[0].arguments == {"q": "x"}
 
 
 def test_incomplete_server_parsed_tool_call_remains_non_executable() -> None:
