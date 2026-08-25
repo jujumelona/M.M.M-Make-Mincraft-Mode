@@ -25,7 +25,10 @@ from .base import (
     ModelBackendError,
     ToolCall,
 )
-from .qwen_tool_parser import parse_qwen_tool_markup as _parse_qwen_tool_markup
+from .qwen_tool_parser import (
+    ToolCallValidationError,
+    parse_qwen_tool_markup as _parse_qwen_tool_markup,
+)
 
 
 _DEFAULT_HTTPX_POST = httpx.post
@@ -175,12 +178,9 @@ def _tool_semantic_completion(
     if _has_semantic_action(turn):
         return turn
     if not turn.reasoning_content:
-        print(
-            "  [!] native llama-server returned neither visible content, reasoning, nor Qwen tool calls "
-            "(non-fatal: returning empty response for host loop to handle)",
-            flush=True,
+        raise RuntimeError(
+            "native llama-server returned neither visible content, reasoning, nor Qwen tool calls"
         )
-        return turn
 
     continuation_request = _reasoning_continuation_request(
         request,
@@ -193,18 +193,12 @@ def _tool_semantic_completion(
     )
     continued = _qwen_tool_generation_response(continued_message, continuation_request)
     if not _has_semantic_action(continued):
-        print(
-            "  [!] native llama-server returned no semantic action after reasoning continuation "
-            "(non-fatal: returning reasoning-only response)",
-            flush=True,
-        )
-        return GenerationResponse(
-            content="",
-            tool_calls=(),
-            reasoning_content=_merge_reasoning(
-                turn.reasoning_content,
-                continued.reasoning_content,
-            ),
+        if continued.reasoning_content:
+            raise RuntimeError(
+                "native llama-server returned a reasoning-only tool continuation without a semantic action"
+            )
+        raise RuntimeError(
+            "native llama-server returned no semantic action after a reasoning-only tool continuation"
         )
     return GenerationResponse(
         content=continued.content,
@@ -538,20 +532,12 @@ def _qwen_tool_generation_response(
     markup_calls = (*reasoning_calls, *content_calls)
     native_calls = _parse_native_tool_calls(message, schemas)
     if native_calls and markup_calls:
-        # Both sources present: prefer structured native tool_calls and discard markup
-        print(
-            "  [!] llama-server returned both structured tool_calls and raw Qwen tool markup; "
-            "using structured tool_calls",
-            flush=True,
+        raise ToolCallValidationError(
+            "llama-server returned both structured tool_calls and raw Qwen tool markup"
         )
-        calls: Sequence[ToolCall] = native_calls
-    else:
-        calls = native_calls or markup_calls
+    calls = native_calls or markup_calls
     _validate_tool_calls_against_host_schema(calls, schemas)
-    try:
-        _validate_tool_choice(request, calls)
-    except RuntimeError as exc:
-        print(f"  [!] tool_choice validation warning (non-fatal): {exc}", flush=True)
+    _validate_tool_choice(request, calls)
     return GenerationResponse(
         content=content.strip(),
         tool_calls=tuple(calls),
@@ -567,22 +553,22 @@ def _parse_native_tool_calls(
     if raw_calls is None:
         return ()
     if not isinstance(raw_calls, list):
-        raise RuntimeError("llama-server returned tool_calls in a non-list shape")
+        raise ToolCallValidationError("llama-server returned tool_calls in a non-list shape")
     calls: list[ToolCall] = []
     for index, raw_call in enumerate(raw_calls):
         if not isinstance(raw_call, Mapping):
-            raise RuntimeError("llama-server returned an invalid structured tool call")
+            raise ToolCallValidationError("llama-server returned an invalid structured tool call")
         call_type = str(raw_call.get("type", "function") or "function").strip()
         if call_type != "function":
-            raise RuntimeError(
+            raise ToolCallValidationError(
                 f"llama-server returned unsupported tool call type {call_type!r}"
             )
         function = raw_call.get("function")
         if not isinstance(function, Mapping):
-            raise RuntimeError("llama-server structured tool call lacks function metadata")
+            raise ToolCallValidationError("llama-server structured tool call lacks function metadata")
         name = str(function.get("name", "")).strip()
         if not name:
-            raise RuntimeError("llama-server structured tool call has an empty function name")
+            raise ToolCallValidationError("llama-server structured tool call has an empty function name")
         raw_arguments_value = function.get("arguments", "{}")
         if isinstance(raw_arguments_value, Mapping):
             arguments = dict(raw_arguments_value)
@@ -596,16 +582,16 @@ def _parse_native_tool_calls(
             try:
                 decoded = json.loads(raw_arguments.strip() or "{}")
             except json.JSONDecodeError as exc:
-                raise RuntimeError(
+                raise ToolCallValidationError(
                     f"llama-server structured tool {name!r} returned invalid JSON arguments"
                 ) from exc
             if not isinstance(decoded, Mapping):
-                raise RuntimeError(
+                raise ToolCallValidationError(
                     f"llama-server structured tool {name!r} arguments must be an object"
                 )
             arguments = dict(decoded)
         else:
-            raise RuntimeError(
+            raise ToolCallValidationError(
                 f"llama-server structured tool {name!r} arguments have an invalid shape"
             )
         call_id = str(raw_call.get("id", "")).strip()
@@ -631,14 +617,14 @@ def _validate_tool_calls_against_host_schema(
 ) -> None:
     try:
         from jsonschema.validators import validator_for
-    except Exception:
-        # jsonschema not installed: skip validation entirely (non-fatal)
-        return
+    except Exception as exc:
+        raise RuntimeError("host tool schema validation is unavailable") from exc
 
     for call in calls:
         schema = schemas.get(call.name)
         if schema is None:
-            # Unexposed / out-of-phase tool call: let host loop reject it with phase violation feedback
+            # Preserve unexposed/out-of-phase tool calls for the host phase gate. The
+            # adapter must not borrow a schema from another visible capability.
             continue
         try:
             validator_type = validator_for(schema)
@@ -648,24 +634,25 @@ def _validate_tool_calls_against_host_schema(
                 key=lambda error: tuple(str(part) for part in error.absolute_path),
             )
         except Exception as exc:
-            print(
-                f"  [!] tool {call.name!r} has an invalid host validation schema (non-fatal): {exc}",
-                flush=True,
-            )
-            continue
+            raise RuntimeError(
+                f"tool {call.name!r} has an invalid host validation schema"
+            ) from exc
         if "minecraft_version" in schema.get("properties", {}) and "minecraft_version" not in call.arguments:
             env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
             if env_ver:
                 call.arguments["minecraft_version"] = env_ver
+                errors = sorted(
+                    validator_type(schema).iter_errors(dict(call.arguments)),
+                    key=lambda error: tuple(str(part) for part in error.absolute_path),
+                )
         if not errors:
             continue
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)
         detail = " ".join(str(error.message).split())[:240]
         location = f" at {path}" if path else ""
-        print(
-            f"  [!] SCHEMA WARNING: Qwen tool {call.name!r} emitted schema-invalid arguments{location}: {detail}",
-            flush=True,
+        raise ToolCallValidationError(
+            f"Qwen tool {call.name!r} emitted schema-invalid arguments{location}: {detail}"
         )
 
 
