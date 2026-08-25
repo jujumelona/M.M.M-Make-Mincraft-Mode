@@ -23,7 +23,7 @@ def test_runtime_stability_defaults_bound_context_and_tool_rounds(monkeypatch) -
     install_runtime_stability_defaults()
 
     assert os.environ["MMM_AGENT_TOOL_ROUNDS"] == "12"
-    assert os.environ["MMM_SMALL_AGENT_CONTEXT_BYTES"] == str(24 * 1024)
+    assert os.environ["MMM_SMALL_AGENT_CONTEXT_BYTES"] == str(32 * 1024)
     assert os.environ["MMM_LLAMA_MTP_WIDTHS"] == ""
     assert os.environ["MMM_LLAMA_MTP_CONFIDENCE_WIDTHS"] == ""
     assert model_router._agent_tool_round_limit() == 12
