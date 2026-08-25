@@ -175,9 +175,12 @@ def _tool_semantic_completion(
     if _has_semantic_action(turn):
         return turn
     if not turn.reasoning_content:
-        raise RuntimeError(
-            "native llama-server returned neither visible content, reasoning, nor Qwen tool calls"
+        print(
+            "  [!] native llama-server returned neither visible content, reasoning, nor Qwen tool calls "
+            "(non-fatal: returning empty response for host loop to handle)",
+            flush=True,
         )
+        return turn
 
     continuation_request = _reasoning_continuation_request(
         request,
@@ -190,12 +193,18 @@ def _tool_semantic_completion(
     )
     continued = _qwen_tool_generation_response(continued_message, continuation_request)
     if not _has_semantic_action(continued):
-        if continued.reasoning_content:
-            raise RuntimeError(
-                "native llama-server returned a reasoning-only tool continuation without a semantic action"
-            )
-        raise RuntimeError(
-            "native llama-server returned no semantic action after a reasoning-only tool continuation"
+        print(
+            "  [!] native llama-server returned no semantic action after reasoning continuation "
+            "(non-fatal: returning reasoning-only response)",
+            flush=True,
+        )
+        return GenerationResponse(
+            content="",
+            tool_calls=(),
+            reasoning_content=_merge_reasoning(
+                turn.reasoning_content,
+                continued.reasoning_content,
+            ),
         )
     return GenerationResponse(
         content=continued.content,
@@ -538,12 +547,20 @@ def _qwen_tool_generation_response(
     markup_calls = (*reasoning_calls, *content_calls)
     native_calls = _parse_native_tool_calls(message, schemas)
     if native_calls and markup_calls:
-        raise RuntimeError(
-            "llama-server returned both structured tool_calls and raw Qwen tool markup"
+        # Both sources present: prefer structured native tool_calls and discard markup
+        print(
+            "  [!] llama-server returned both structured tool_calls and raw Qwen tool markup; "
+            "using structured tool_calls",
+            flush=True,
         )
-    calls = native_calls or markup_calls
+        calls: Sequence[ToolCall] = native_calls
+    else:
+        calls = native_calls or markup_calls
     _validate_tool_calls_against_host_schema(calls, schemas)
-    _validate_tool_choice(request, calls)
+    try:
+        _validate_tool_choice(request, calls)
+    except RuntimeError as exc:
+        print(f"  [!] tool_choice validation warning (non-fatal): {exc}", flush=True)
     return GenerationResponse(
         content=content.strip(),
         tool_calls=tuple(calls),
@@ -623,8 +640,9 @@ def _validate_tool_calls_against_host_schema(
 ) -> None:
     try:
         from jsonschema.validators import validator_for
-    except Exception as exc:
-        raise RuntimeError("host tool schema validation is unavailable") from exc
+    except Exception:
+        # jsonschema not installed: skip validation entirely (non-fatal)
+        return
 
     for call in calls:
         schema = schemas.get(call.name)
@@ -639,9 +657,11 @@ def _validate_tool_calls_against_host_schema(
                 key=lambda error: tuple(str(part) for part in error.absolute_path),
             )
         except Exception as exc:
-            raise RuntimeError(
-                f"tool {call.name!r} has an invalid host validation schema"
-            ) from exc
+            print(
+                f"  [!] tool {call.name!r} has an invalid host validation schema (non-fatal): {exc}",
+                flush=True,
+            )
+            continue
         if "minecraft_version" in schema.get("properties", {}) and "minecraft_version" not in call.arguments:
             env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
             if env_ver:

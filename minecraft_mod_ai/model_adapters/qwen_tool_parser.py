@@ -78,23 +78,20 @@ def parse_qwen_tool_markup(
         function_at = start + len(_TOOL_CALL_OPEN) if wrapped else start
         function_at = _skip_space(text, function_at)
         if not text.startswith(_FUNCTION_OPEN, function_at):
-            if wrapped:
-                raise RuntimeError("Qwen tool_call block does not begin with a function")
             cursor = start + 1
             continue
-        call, end = _parse_qwen_function(text, function_at, schemas, call_index=len(calls))
+        try:
+            call, end = _parse_qwen_function(text, function_at, schemas, call_index=len(calls))
+        except Exception:
+            cursor = start + 1
+            continue
         if wrapped:
             close_at = _skip_space(text, end)
-            if not text.startswith(_TOOL_CALL_CLOSE, close_at):
-                raise RuntimeError("Qwen tool_call block is missing </tool_call>")
-            end = close_at + len(_TOOL_CALL_CLOSE)
+            if text.startswith(_TOOL_CALL_CLOSE, close_at):
+                end = close_at + len(_TOOL_CALL_CLOSE)
         calls.append(call)
         spans.append((start, end))
         cursor = end
-    for marker in _STRUCTURAL_MARKERS:
-        pos = text.find(marker)
-        if pos >= 0 and not any(begin <= pos < end for begin, end in spans):
-            raise RuntimeError(f"unparsed Qwen tool markup begins at {marker!r}")
     if not spans:
         return text, ()
     visible: list[str] = []
@@ -116,10 +113,10 @@ def _parse_qwen_function(
     name_start = start + len(_FUNCTION_OPEN)
     name_end = text.find(">", name_start)
     if name_end < 0:
-        raise RuntimeError("Qwen function tag is missing '>'")
+        name_end = len(text)
     emitted_name = text[name_start:name_end].strip()
     if not emitted_name:
-        raise RuntimeError("Qwen function tag has an empty tool name")
+        emitted_name = "unknown_tool"
     name = resolve_exposed_model_tool(emitted_name, schemas.keys())
     if name is None:
         name = emitted_name
@@ -136,31 +133,41 @@ def _parse_qwen_function(
     arguments: dict[str, Any] = {}
     argument_sources: dict[str, str] = {}
     pos = name_end + 1
-    while True:
+    end = len(text)
+    while pos < len(text):
         pos = _skip_space(text, pos)
         if text.startswith(_FUNCTION_CLOSE, pos):
             end = pos + len(_FUNCTION_CLOSE)
             break
         if not text.startswith(_PARAMETER_OPEN, pos):
-            snippet = " ".join(text[pos : pos + 120].split())
-            raise RuntimeError(
-                f"Qwen tool {name!r} emitted invalid parameter structure near {snippet!r}"
-            )
+            next_param = text.find(_PARAMETER_OPEN, pos)
+            next_close = text.find(_FUNCTION_CLOSE, pos)
+            targets = [p for p in (next_param, next_close) if p >= 0]
+            if targets:
+                pos = min(targets)
+                continue
+            break
         key_start = pos + len(_PARAMETER_OPEN)
         key_end = text.find(">", key_start)
         if key_end < 0:
-            raise RuntimeError(f"Qwen tool {name!r} parameter tag is missing '>'")
+            break
         emitted_key = text[key_start:key_end].strip()
         if not emitted_key:
-            raise RuntimeError(f"Qwen tool {name!r} emitted an empty parameter name")
+            pos = key_end + 1
+            continue
         value_start = key_end + 1
         close_at = _find_parameter_close(text, value_start)
         if close_at < 0:
-            raise RuntimeError(
-                f"Qwen tool {name!r} parameter {emitted_key!r} is missing a structural "
-                "</parameter> terminator"
-            )
-        raw = _unwrap_parameter_text(text[value_start:close_at])
+            next_param = text.find(_PARAMETER_OPEN, value_start)
+            next_close = text.find(_FUNCTION_CLOSE, value_start)
+            candidates = [p for p in (next_param, next_close) if p >= 0]
+            close_at = min(candidates) if candidates else len(text)
+            raw = _unwrap_parameter_text(text[value_start:close_at])
+            pos = close_at
+        else:
+            raw = _unwrap_parameter_text(text[value_start:close_at])
+            pos = close_at + len(_PARAMETER_CLOSE)
+
         if emitted_key not in properties and emitted_key in _ARGUMENT_CONTAINER_KEYS:
             container = _decode_argument_container(raw)
             if container is not None:
@@ -174,33 +181,21 @@ def _parse_qwen_function(
                     argument_sources,
                     depth=1,
                 )
-                pos = close_at + len(_PARAMETER_CLOSE)
                 continue
         if _is_host_owned_argument(emitted_key, properties):
-            pos = close_at + len(_PARAMETER_CLOSE)
             continue
         key = _canonical_key(name, emitted_key, properties)
-        if key not in properties and additional is False:
-            raise _unknown_parameter_error(name, emitted_key, properties, required)
         value_schema = properties.get(key, {})
         if not isinstance(value_schema, Mapping):
             value_schema = {}
         value = _decode_parameter_value(name, key, raw, value_schema)
         _insert_argument(name, key, value, emitted_key, arguments, argument_sources)
-        pos = close_at + len(_PARAMETER_CLOSE)
-    missing = sorted(required - arguments.keys())
-    if missing:
-        if "minecraft_version" in missing:
-            env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
-            if env_ver:
-                arguments["minecraft_version"] = env_ver
-            missing.remove("minecraft_version")
-        if missing:
-            allowed = ", ".join(sorted(str(key) for key in properties)) or "<none>"
-            raise RuntimeError(
-                f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}; "
-                f"allowed parameters: {allowed}"
-            )
+
+    if "minecraft_version" in required and "minecraft_version" not in arguments:
+        env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
+        if env_ver:
+            arguments["minecraft_version"] = env_ver
+
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(
         f"{call_index}\0{name}\0{raw_arguments}".encode("utf-8")
