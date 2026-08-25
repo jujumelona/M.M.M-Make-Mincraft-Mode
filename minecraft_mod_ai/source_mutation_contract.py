@@ -4,7 +4,7 @@ from __future__ import annotations
 
 A successful transport is not a successful source mutation. Critical causal facts,
 retry accounting, and final implementation completion all consume this module so a
-single host-owned proof decides whether the workspace was actually changed.
+single host-owned receipt decides whether the workspace was actually changed.
 """
 
 import json
@@ -24,7 +24,12 @@ STRICT_RECEIPT_MUTATION_NAMES = frozenset(
         "apply_source_edit",
     }
 )
+
+# Retained for wire compatibility with older tool observations. This marker records
+# only that the host runtime executed a mutation primitive; it is not evidence that
+# file bytes changed. Strict mutation proof comes from source-patch receipts below.
 HOST_MUTATION_PROOF_KEY = "_mmm_source_mutation"
+
 _FAILURE_STATUSES = frozenset(
     {
         "FAIL",
@@ -74,30 +79,31 @@ def _walk_mappings(value: Any):
             pending.extend(current)
 
 
+def _receipt_operation_changed(operation: Any) -> bool:
+    if not isinstance(operation, Mapping):
+        return False
+    before = operation.get("before_sha256")
+    after = operation.get("after_sha256")
+    return before != after
+
+
 def _has_applied_patch_receipt(payload: Mapping[str, Any]) -> bool:
+    """Return true only for a host receipt that proves at least one byte-level diff."""
+
     for item in _walk_mappings(payload):
         if str(item.get("schema_version", "")) != "mmm/source-patch-receipt-v1":
             continue
         if str(item.get("status", "")).strip().upper() != "APPLIED":
             continue
         operations = item.get("operations")
-        if isinstance(operations, Sequence) and not isinstance(
+        if not isinstance(operations, Sequence) or isinstance(
             operations,
             (str, bytes, bytearray),
-        ) and len(operations) > 0:
+        ):
+            continue
+        if any(_receipt_operation_changed(operation) for operation in operations):
             return True
     return False
-
-
-def _has_host_patch_proof(payload: Mapping[str, Any], name: str) -> bool:
-    proof = payload.get(HOST_MUTATION_PROOF_KEY)
-    if not isinstance(proof, Mapping):
-        return False
-    return (
-        name == "apply_source_patch"
-        and str(proof.get("tool", "")).strip() == name
-        and str(proof.get("status", "")).strip() == "APPLIED_BY_HOST_RUNTIME"
-    )
 
 
 def _has_semantic_failure(payload: Mapping[str, Any]) -> bool:
@@ -113,8 +119,6 @@ def mutation_payload_applied(name: str, payload: Mapping[str, Any]) -> bool:
     normalized = str(name).strip()
     if normalized not in SOURCE_MUTATION_NAMES or payload.get("ok") is not True:
         return False
-    if _has_host_patch_proof(payload, normalized):
-        return True
     if _has_applied_patch_receipt(payload):
         return True
     if normalized in STRICT_RECEIPT_MUTATION_NAMES:
@@ -131,7 +135,7 @@ def mutation_observation_applied(message: Mapping[str, Any]) -> bool:
 
 
 def mutation_history_applied(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Return true when the retained/compacted history contains a valid mutation proof."""
+    """Return true when retained history contains a receipt-proven source diff."""
 
     return any(mutation_observation_applied(message) for message in reversed(messages))
 
