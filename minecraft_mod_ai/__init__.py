@@ -1,9 +1,5 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .runtime_stability_defaults import install_runtime_stability_defaults
-
-install_runtime_stability_defaults()
-
 from .evidence_request_guard import install_evidence_request_guard
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
