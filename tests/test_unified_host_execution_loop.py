@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -631,6 +632,65 @@ def test_execution_step_trace_records_immutable_trajectory_and_summary() -> None
     assert "Step 2 [OBSERVE:NEED_SYMBOL -> OBSERVE:NEED_BODY]" in summary
     assert "java_workspace_symbols" in summary
     assert "progress=True streak=0" in summary
+
+
+def test_search_code_rag_on_raw_source_file_never_crashes(tmp_path: Path) -> None:
+    """When a model passes a Java source file as index_path, search_code_rag reads it without JSONDecodeError."""
+    from minecraft_mod_ai.rag_index import ProjectRAGIndex
+
+    java_file = tmp_path / "TideWorksMod.java"
+    java_file.write_text(
+        "package ai.minecraft.generated.tide_works;\n\npublic class TideWorksMod {\n    public void onInitialize() {}\n}\n",
+        encoding="utf-8",
+    )
+
+    index = ProjectRAGIndex(java_file)
+    result = index.search_with_receipt("onInitialize")
+    assert len(result.hits) > 0
+    assert "onInitialize" in result.hits[0].text
+
+
+def test_extract_mutation_context_unwraps_structured_content_and_sources() -> None:
+    """_extract_mutation_context_from_payload unwraps structured_content and extracts sources."""
+    from minecraft_mod_ai.progress_aware_tool_loop import _extract_mutation_context_from_payload
+
+    payload = {
+        "structured_content": {
+            "schema_version": "mmm/rag-result-v2",
+            "query": "ModInitializer onInitialize",
+            "sources": [
+                {
+                    "source_id": "fabric_docs",
+                    "path": "src/main/java/ai/minecraft/Mod.java",
+                    "content": "public class Mod implements ModInitializer {\n    public void onInitialize() {}\n}",
+                }
+            ],
+        }
+    }
+    ctx = _extract_mutation_context_from_payload(payload)
+    assert ctx is not None
+    assert ctx.target_path == "src/main/java/ai/minecraft/Mod.java"
+    assert "onInitialize" in str(ctx.source_body)
+
+
+def test_qwen_tool_parser_preserves_unexposed_tool_as_call() -> None:
+    """qwen_tool_parser returns unexposed tool calls so host execution loop can handle phase violation."""
+    from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
+
+    text = "<tool_call>\n<function=write_file>\n<parameter=path>src/Test.java</parameter>\n<parameter=content>class Test {}</parameter>\n</function>\n</tool_call>"
+    schemas = {
+        "search_code_rag": {
+            "name": "search_code_rag",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        }
+    }
+    _, calls = parse_qwen_tool_markup(text, schemas)
+    assert len(calls) == 1
+    assert calls[0].name == "write_file"
+    assert calls[0].arguments.get("path") == "src/Test.java"
+
+
 
 
 

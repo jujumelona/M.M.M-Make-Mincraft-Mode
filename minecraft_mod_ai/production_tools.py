@@ -57,7 +57,14 @@ class ProductionToolService:
         )
 
     def search_code_rag(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
-        target = self._existing_file(index_path)
+        target = self._resolve(index_path)
+        if target.is_dir():
+            canonical = self._resolve('rag/project-index.json')
+            target = canonical if canonical.is_file() else target
+        elif not target.exists():
+            canonical = self._resolve('rag/project-index.json')
+            if canonical.is_file():
+                target = canonical
         router = ModelRouter(profile=self.profile) if semantic or rerank else None
         result = ProjectRAGIndex(target).search_with_receipt(query, limit=limit, router=router, semantic=semantic, rerank=rerank, required_metadata=required_metadata)
         return {'schema_version': 'mmm/code-rag-result-v1', 'query': query, 'hits': [asdict(hit) for hit in result.hits], 'receipt': asdict(result.receipt)}

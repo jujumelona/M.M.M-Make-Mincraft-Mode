@@ -113,8 +113,10 @@ def _parse_qwen_function(
         raise RuntimeError("Qwen function tag has an empty tool name")
     name = resolve_exposed_model_tool(emitted_name, schemas.keys())
     if name is None:
-        raise RuntimeError(f"Qwen requested an unexposed tool {emitted_name!r}")
-    schema = schemas[name]
+        name = emitted_name
+        schema = {}
+    else:
+        schema = schemas[name]
     properties_value = schema.get("properties", {})
     properties = properties_value if isinstance(properties_value, Mapping) else {}
     required_value = schema.get("required", ())

@@ -575,8 +575,6 @@ def _parse_native_tool_calls(
         name = str(function.get("name", "")).strip()
         if not name:
             raise RuntimeError("llama-server structured tool call has an empty function name")
-        if name not in schemas:
-            raise RuntimeError(f"Qwen requested an unexposed tool {name!r}")
         raw_arguments_value = function.get("arguments", "{}")
         if isinstance(raw_arguments_value, Mapping):
             arguments = dict(raw_arguments_value)
@@ -631,7 +629,8 @@ def _validate_tool_calls_against_host_schema(
     for call in calls:
         schema = schemas.get(call.name)
         if schema is None:
-            raise RuntimeError(f"Qwen requested an unexposed tool {call.name!r}")
+            # Unexposed / out-of-phase tool call: let host loop reject it with phase violation feedback
+            continue
         try:
             validator_type = validator_for(schema)
             validator_type.check_schema(schema)

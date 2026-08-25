@@ -495,6 +495,14 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                     return ctx
         return None
 
+    # Recursively unwrap envelope fields if present (e.g. MCP structured_content)
+    for wrapper_key in ("structured_content", "result", "data", "body"):
+        wrapped = payload.get(wrapper_key)
+        if isinstance(wrapped, (Mapping, list, tuple)) and wrapped is not payload:
+            ctx = _extract_mutation_context_from_payload(wrapped)
+            if ctx is not None:
+                return ctx
+
     # 1. Explicit new file creation
     if _is_new_file_creation(payload):
         target_path = str(payload.get("path") or payload.get("target_path") or "")
@@ -507,7 +515,7 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                 evidence_source="new_file_spec",
             )
 
-    # 2. Hits with snippet/code/lines from search_code_rag
+    # 2. Hits with snippet/code/lines from search_code_rag or sources from search_project_rag
     hits = payload.get("hits") or payload.get("results")
     if isinstance(hits, (list, tuple)):
         # Look for a hit with concrete code snippet
@@ -539,6 +547,29 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                         target_path=path,
                         source_body=None,
                         evidence_source="search_code_rag_path_only",
+                    )
+
+    # 2b. Sources from search_project_rag
+    sources = payload.get("sources")
+    if isinstance(sources, (list, tuple)):
+        for src in sources:
+            if isinstance(src, Mapping):
+                path = str(src.get("path") or src.get("file") or src.get("source_id") or src.get("url") or "").strip()
+                content = src.get("content") or src.get("snippet") or src.get("code") or src.get("text") or src.get("summary")
+                if path and isinstance(content, str) and _is_code_bearing_text(content):
+                    return TargetMutationContext(
+                        target_path=path,
+                        source_body=content,
+                        evidence_source="sources_code",
+                    )
+        for src in sources:
+            if isinstance(src, Mapping):
+                path = str(src.get("path") or src.get("file") or src.get("source_id") or "").strip()
+                if path:
+                    return TargetMutationContext(
+                        target_path=path,
+                        source_body=None,
+                        evidence_source="sources_path_only",
                     )
 
     # 3. Symbols from java_workspace_symbols (hierarchical step 2: symbol in file)

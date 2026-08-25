@@ -395,7 +395,15 @@ class ProjectRAGIndex:
         if (semantic or rerank) and router is None:
             requested = "semantic" if semantic else "rerank"
             raise ValueError(f"{requested}=True requires a ModelRouter.")
-        if not self.index_path.is_file():
+        if self.index_path.is_dir():
+            candidate = self.index_path / "rag" / "project-index.json"
+            if candidate.is_file():
+                self.index_path = candidate
+            else:
+                db_candidate = self.index_path / ".minecraft_ai" / "project-index.db"
+                if db_candidate.is_file():
+                    self.index_path = db_candidate
+        if not self.index_path.exists():
             raise FileNotFoundError(f"RAG index not found: {self.index_path}")
 
         route = _route_query(query)
@@ -662,26 +670,77 @@ class ProjectRAGIndex:
             connection.close()
 
     def _load_legacy(self) -> list[RAGChunk]:
-        raw = json.loads(self.index_path.read_text(encoding="utf-8"))
-        if raw.get("schema_version") != _LEGACY_SCHEMA_VERSION:
-            raise ValueError("Unsupported RAG index schema.")
-        result: list[RAGChunk] = []
-        for item in raw.get("chunks", []):
-            result.append(
-                RAGChunk(
-                    chunk_id=item["chunk_id"],
-                    source_path=item["source_path"],
-                    text=item["text"],
-                    start_line=int(item["start_line"]),
-                    end_line=int(item["end_line"]),
-                    sha256=item["sha256"],
-                    metadata=dict(item["metadata"]),
-                    embedding=tuple(
-                        float(value) for value in item.get("embedding", [])
-                    ),
-                )
+        default_meta = {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mapping_namespace": "yarn",
+            "java_version": "21",
+            "license": "project-local",
+            "source_commit": "HEAD",
+            "path": str(self.index_path),
+        }
+        if self.index_path.is_dir():
+            chunks: list[RAGChunk] = []
+            for file_path in sorted(self.index_path.rglob("*"))[:50]:
+                if file_path.is_file() and file_path.suffix in {".java", ".json", ".toml", ".gradle", ".properties", ".txt", ".md"}:
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
+                        if content.strip():
+                            chunks.append(
+                                RAGChunk(
+                                    chunk_id=f"{file_path.name}:1",
+                                    source_path=str(file_path),
+                                    text=content[:8192],
+                                    start_line=1,
+                                    end_line=len(content.splitlines()),
+                                    sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                                    metadata={**default_meta, "path": str(file_path)},
+                                    embedding=(),
+                                )
+                            )
+                    except Exception:
+                        continue
+            return chunks
+
+        content = self.index_path.read_text(encoding="utf-8", errors="replace")
+        if not content.strip():
+            return []
+        try:
+            raw = json.loads(content)
+            if isinstance(raw, dict) and raw.get("schema_version") == _LEGACY_SCHEMA_VERSION:
+                result: list[RAGChunk] = []
+                for item in raw.get("chunks", []):
+                    result.append(
+                        RAGChunk(
+                            chunk_id=item["chunk_id"],
+                            source_path=item["source_path"],
+                            text=item["text"],
+                            start_line=int(item["start_line"]),
+                            end_line=int(item["end_line"]),
+                            sha256=item["sha256"],
+                            metadata=dict(item["metadata"]),
+                            embedding=tuple(
+                                float(value) for value in item.get("embedding", [])
+                            ),
+                        )
+                    )
+                return result
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+        # If not a legacy JSON RAG database, treat as a direct source code document
+        return [
+            RAGChunk(
+                chunk_id=f"{self.index_path.name}:1",
+                source_path=str(self.index_path),
+                text=content[:8192],
+                start_line=1,
+                end_line=len(content.splitlines()),
+                sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                metadata=default_meta,
+                embedding=(),
             )
-        return result
+        ]
 
 
 def _initialize_sqlite(connection: sqlite3.Connection) -> bool:
