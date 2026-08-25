@@ -201,8 +201,10 @@ class AuthoritativeEvidenceRetriever:
             for record in _CATALOG_RECORDS
             if _applies(record, minecraft_version)
         ]
-        if type(limit) is not int or not 1 <= limit <= len(available):
-            raise SpecValidationError("Evidence search limit is outside the official-source range.")
+        if type(limit) is not int or limit < 1:
+            raise SpecValidationError("Evidence search limit must be a positive integer.")
+        if not available:
+            return ()
 
         terms = frozenset(re.findall(r"[a-z0-9_.-]+", query.lower()))
         ranked: list[tuple[int, str, EvidenceSource]] = []
@@ -213,7 +215,7 @@ class AuthoritativeEvidenceRetriever:
             score = len(terms & searchable)
             ranked.append((-score, record.source_id, _as_evidence(record)))
         ranked.sort(key=lambda item: (item[0], item[1]))
-        return tuple(item[2] for item in ranked[:limit])
+        return tuple(item[2] for item in ranked[: min(limit, len(available))])
 
 
 def validate_trusted_evidence(

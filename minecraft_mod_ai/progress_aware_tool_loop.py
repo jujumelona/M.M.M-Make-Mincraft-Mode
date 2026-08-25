@@ -890,6 +890,14 @@ def generate_with_tools(
         if forced_rag_tool is None and state.no_progress_streak >= 2:
             traj_summary = format_trajectory_summary(state.trajectory)
             reason_suffix = f": {state.last_failure_reason}" if state.last_failure_reason else ""
+            print(
+                f"\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+                f"[HOST NO-PROGRESS BOUNDARY HIT] Step={state.step_index} Streak={state.no_progress_streak}\n"
+                f"Reason: {state.last_failure_reason}\n"
+                f"Trajectory:\n{traj_summary}\n"
+                f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n",
+                flush=True,
+            )
             if require_rag and not state.has_fresh_evidence:
                 raise ModelConfigurationError(
                     "Required production evidence is unavailable: every host-forceable "
@@ -945,6 +953,17 @@ def generate_with_tools(
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
                 parallel_tool_calls = False
 
+        target_desc = (
+            f"path={state.mutation_context.target_path} symbol={state.mutation_context.target_symbol} has_body={bool(state.mutation_context.source_body)}"
+            if state.mutation_context
+            else "target=None"
+        )
+        print(
+            f"\n[HOST STEP {state.step_index}] role={role} phase={phase_before} stage={loc_stage_before} {target_desc}\n"
+            f"  exposed_tools={sorted(phase_tool_names)} tool_choice={tool_choice}",
+            flush=True,
+        )
+
         turn_request = replace(
             request,
             tools=phase_tools,
@@ -965,6 +984,7 @@ def generate_with_tools(
 
         if not turn.tool_calls:
             content = turn.content.strip()
+            print(f"  model emitted prose -> {content[:80]}...", flush=True)
             if not content:
                 raise ModelConfigurationError("Tool-capable model returned an empty final response.")
             if forced_rag_tool is not None:
@@ -1148,6 +1168,9 @@ def generate_with_tools(
                 )
             return content
 
+        calls_desc = [f"{c.name}({json.dumps(dict(c.arguments), ensure_ascii=False)[:80]})" for c in turn.tool_calls]
+        print(f"  model emitted calls -> {calls_desc}", flush=True)
+
         if forced_rag_tool is not None:
             if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_rag_tool:
                 called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
@@ -1193,24 +1216,31 @@ def generate_with_tools(
 
             # Check phase legality (fail-closed to phase_tool_names)
             if call.name not in phase_tool_names:
+                err_msg = (
+                    f"Agent attempted tool {call.name!r} outside its allowed phase {state.phase.value!r} "
+                    f"(allowed tools: {sorted(phase_tool_names)})."
+                )
+                print(f"  [!] PHASE VIOLATION: {call.name} -> {err_msg}", flush=True)
                 return call, {
                     "ok": False,
                     "tool": call.name,
                     **route_metadata,
-                    "error": (
-                        f"Agent attempted tool {call.name!r} outside its allowed phase {state.phase.value!r} "
-                        f"(allowed tools: {sorted(phase_tool_names)})."
-                    ),
+                    "error": err_msg,
                 }
 
             if is_evidence_tool(call):
                 is_new_query = state.record_query(call.name, call.arguments)
                 if not is_new_query:
+                    err_msg = (
+                        f"RetrievalNoProgress: equivalent query already attempted for {call.name} with "
+                        f"args={json.dumps(dict(call.arguments), ensure_ascii=False)}"
+                    )
+                    print(f"  [!] DUP QUERY REJECTED: {call.name} -> {err_msg}", flush=True)
                     return call, {
                         "ok": False,
                         "tool": call.name,
                         **route_metadata,
-                        "error": "RetrievalNoProgress: equivalent query already attempted for this evidence need",
+                        "error": err_msg,
                     }
 
             try:
@@ -1253,12 +1283,17 @@ def generate_with_tools(
                     "error": err_msg,
                 }
                 state.last_failure_reason = f"{call.name}: {err_msg}"
+                print(f"  [!] TOOL EXCEPTION: {call.name} -> {err_msg}", flush=True)
             return call, payload
 
         executed = _execute_tool_waves(tuple(turn.tool_calls), execute)
         turn_made_progress = False
 
         for call, payload in executed:
+            ok = payload.get("ok")
+            res_preview = str(payload.get("result", payload.get("error", "")))[:100].replace("\n", " ")
+            print(f"  tool result -> {call.name} ok={ok} payload={res_preview}", flush=True)
+
             tool_message = {
                 "role": "tool",
                 "tool_call_id": call.id,
@@ -1375,13 +1410,8 @@ def generate_with_tools(
         )
         state.trajectory.append(trace_entry)
         print(
-            f"host trajectory: step={state.step_index} "
-            f"phase={phase_before}->{phase_after} "
-            f"stage={loc_stage_before}->{loc_stage_after} "
-            f"exposed={sorted(phase_tool_names)} "
-            f"calls={[c.name for c in turn.tool_calls]} "
-            f"progress={turn_made_progress} "
-            f"streak={state.no_progress_streak}",
+            f"  step {state.step_index} finished: stage={loc_stage_before}->{loc_stage_after} "
+            f"phase={phase_before}->{phase_after} progress={turn_made_progress} streak={state.no_progress_streak}\n",
             flush=True,
         )
 

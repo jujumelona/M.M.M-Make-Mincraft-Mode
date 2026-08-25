@@ -581,6 +581,7 @@ class CompleteProductionOrchestrator:
                     try:
                         future.result()
                     except BaseException as exc:
+                        print(f"\n[ORCHESTRATOR ERROR] Node {node_id} failed with {type(exc).__name__}:\n{exc}\n", flush=True)
                         raise CompleteProductionError(f'Pipeline generation node failed: {node_id}: {type(exc).__name__}: {exc}') from exc
                 while True:
                     claimed = ledger.claim_ready(worker_id='mmm-orchestrator', stages=generation_stages, lease_seconds=lease_seconds)

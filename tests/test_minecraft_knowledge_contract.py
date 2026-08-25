@@ -435,3 +435,14 @@ def test_loader_leaf_rejects_unreceipted_host_activation() -> None:
                 }
             },
         )
+
+
+def test_authoritative_evidence_retriever_handles_large_limit() -> None:
+    """AuthoritativeEvidenceRetriever clamps limit when larger than catalog records without failing."""
+    from minecraft_mod_ai.knowledge import AuthoritativeEvidenceRetriever
+
+    retriever = AuthoritativeEvidenceRetriever()
+    results = retriever.search("item registry", minecraft_version="1.21.1", limit=100)
+    assert isinstance(results, tuple)
+    assert len(results) > 0
+
