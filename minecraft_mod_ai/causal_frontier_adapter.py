@@ -230,6 +230,24 @@ def _restore_derived_request(template: Any, derived: Any) -> Any:
     )
 
 
+def _call_signature(call: Any) -> tuple[str, str]:
+    """Fingerprint one stale call including arguments, not only its tool name."""
+
+    name = str(getattr(call, "name", "")).strip()
+    arguments = getattr(call, "arguments", {})
+    try:
+        encoded = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError, RecursionError):
+        encoded = repr(arguments)
+    return name, encoded
+
+
 class CausalFrontierAdapter:
     """Recalculate host causal state, action class, then executable tool surface."""
 
@@ -257,7 +275,9 @@ class CausalFrontierAdapter:
         _assert_unique_schema_names(surface, surface="causal-authorized")
         self.authorized_surface = surface
         self.preference = dict(preference or {})
-        self._last_stale_frontier: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+        self._last_stale_frontier: tuple[
+            tuple[str, ...], tuple[tuple[str, str], ...]
+        ] | None = None
         self._state_ledger = CausalStateLedger()
 
     def _publish_frontier(self, action: CausalAction, names: Sequence[str]) -> None:
@@ -384,20 +404,19 @@ class CausalFrontierAdapter:
             flush=True,
         )
         turn = self.inner.generate_turn(rebuilt)
-        stale_names = tuple(
-            sorted(
-                {
-                    str(call.name)
-                    for call in getattr(turn, "tool_calls", ())
-                    if str(call.name) in by_name and str(call.name) not in selected_names
-                }
-            )
+        stale_calls = tuple(
+            call
+            for call in getattr(turn, "tool_calls", ())
+            if str(getattr(call, "name", "")) in by_name
+            and str(getattr(call, "name", "")) not in selected_names
         )
-        if not stale_names:
+        if not stale_calls:
             self._reset_stale_guard()
             return turn
 
-        fingerprint = (selected_names, stale_names)
+        stale_names = tuple(sorted({str(call.name) for call in stale_calls}))
+        stale_signatures = tuple(sorted(_call_signature(call) for call in stale_calls))
+        fingerprint = (selected_names, stale_signatures)
         if fingerprint == self._last_stale_frontier:
             raise ModelConfigurationError(
                 "Model repeated an illegal action at the same causal frontier without progress: "
