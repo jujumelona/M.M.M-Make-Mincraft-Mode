@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Finite native llama.cpp action-page budgeting and structured constraints.
+"""Finite native llama.cpp action-page budgeting.
 
-Every model action is bounded by the live server context. Host-selected JSON action
-pages additionally carry the request schema to llama-server so its JSON-Schema-to-GBNF
-path constrains decoding before MMM performs its independent host-side validation.
+Every model action is bounded by the live server context. Structured-output semantics
+remain host-owned: this layer only decides a finite decode budget and never injects a
+second JSON-schema/grammar contract into llama-server.
 """
 
 import os
@@ -52,32 +52,6 @@ def action_token_budget(config: Any, *, constrained_action: bool) -> int:
     )
 
 
-def apply_structured_output_constraint(
-    payload: Mapping[str, Any],
-    *,
-    request: Any,
-) -> dict[str, Any]:
-    """Transmit structured-output constraints to llama-server, never prompt-only JSON."""
-
-    constrained = dict(payload)
-    if getattr(request, "response_format", None) != "json":
-        return constrained
-
-    schema = getattr(request, "response_schema", None)
-    if isinstance(schema, Mapping):
-        constrained["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "mmm_host_action_arguments",
-                "strict": True,
-                "schema": dict(schema),
-            },
-        }
-    else:
-        constrained["response_format"] = {"type": "json_object"}
-    return constrained
-
-
 def apply_generation_budget(
     payload: Mapping[str, Any],
     *,
@@ -86,9 +60,7 @@ def apply_generation_budget(
     """Clamp one payload at construction time; ``-1`` is never a transport value."""
 
     bounded = dict(payload)
-    constrained_action = bool(bounded.get("tools")) or isinstance(
-        bounded.get("response_format"), Mapping
-    )
+    constrained_action = bool(bounded.get("tools"))
     budget = action_token_budget(config, constrained_action=constrained_action)
     try:
         requested = int(bounded.get("max_tokens", 0) or 0)
@@ -100,7 +72,7 @@ def apply_generation_budget(
 
 
 def install(hardware_module: Any) -> None:
-    """Own final llama-server payload constraints in one idempotent boundary."""
+    """Own the finite llama-server generation budget in one idempotent boundary."""
 
     current = hardware_module._server_payload
     if bool(getattr(current, _MARKER, False)):
@@ -108,11 +80,7 @@ def install(hardware_module: Any) -> None:
 
     @wraps(current)
     def bounded_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-        payload = apply_structured_output_constraint(
-            current(adapter, request),
-            request=request,
-        )
-        return apply_generation_budget(payload, config=adapter.config)
+        return apply_generation_budget(current(adapter, request), config=adapter.config)
 
     setattr(bounded_server_payload, _MARKER, True)
     hardware_module._server_payload = bounded_server_payload
@@ -121,7 +89,6 @@ def install(hardware_module: Any) -> None:
 __all__ = [
     "action_token_budget",
     "apply_generation_budget",
-    "apply_structured_output_constraint",
     "install",
     "plain_action_token_budget",
 ]
