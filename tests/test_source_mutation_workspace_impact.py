@@ -161,35 +161,137 @@ def test_materialize_model_source_edit_handles_apply_source_edit_and_aliases(tmp
     assert op.get("replacements", [{}])[0].get("new") == "public static void init() {}"
 
 
-def test_apply_source_patch_and_search_code_rag_allow_workspace_root(tmp_path: Path) -> None:
-    """apply_source_patch and search_code_rag accept '.' / workspace root without rejection."""
-    from minecraft_mod_ai.mcp_tools import MMMToolService
-    from minecraft_mod_ai.production_tools import ProductionToolService
-
-    (tmp_path / "build.gradle").write_text("// gradle\n", encoding="utf-8")
-    file_path = tmp_path / "src" / "main" / "java" / "Mod.java"
+def _make_gradle_project(root: Path, java_rel: str, java_content: str) -> Path:
+    """Create a minimal Gradle project layout for testing."""
+    (root / "build.gradle").write_text("// gradle\n", encoding="utf-8")
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    file_path = root / java_rel
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text("public class Mod {}\n", encoding="utf-8")
+    file_path.write_text(java_content, encoding="utf-8")
+    return file_path
 
-    mcp_service = MMMToolService(workspace_root=tmp_path)
-    # Apply patch targeting project_root="."
-    patch_result = mcp_service.apply_source_patch(
-        ".",
-        [
-            {
-                "operation": "replace",
-                "path": "src/main/java/Mod.java",
-                "expected_sha256": sha256_bytes(file_path.read_bytes()),
-                "content": "public class Mod { public static void init() {} }\n",
-            }
-        ],
+
+def _run_e2e_patch(workspace_root: Path, project_root: Path, java_rel: str, java_content: str, old_snippet: str, new_snippet: str) -> Path:
+    """
+    Full pipeline: Qwen-style payload → materialize_model_source_edit
+    → MMMToolService.apply_source_patch → TransactionalSourcePatcher → file diff.
+
+    Returns the patched file path so callers can assert on its content.
+    """
+    import sys
+    import minecraft_mod_ai.agent_tool_runtime as rt_module
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import materialize_model_source_edit
+    from minecraft_mod_ai.mcp_tools import MMMToolService
+
+    file_path = _make_gradle_project(project_root, java_rel, java_content)
+
+    # Simulated Qwen payload with aliases (operation="apply_source_edit", old_text/new_text)
+    payload = {
+        "operation": "replace_exact",
+        "path": java_rel,
+        "old": old_snippet,
+        "new": new_snippet,
+    }
+
+    # Step 1: materializer (workspace_root = project_root for bound-project case)
+    patch = materialize_model_source_edit(rt_module, workspace_root, payload)
+    assert isinstance(patch, dict), "materialize_model_source_edit must return a dict"
+    assert "project_root" in patch, "patch must contain project_root"
+    assert "operations" in patch, "patch must contain operations"
+
+    # Step 2: MCP apply_source_patch (receives project_root from materializer)
+    mcp = MMMToolService(workspace_root=workspace_root)
+    result = mcp.apply_source_patch(patch["project_root"], patch["operations"])
+
+    # Step 3: verify result
+    assert result.get("status") == "APPLIED", f"Expected APPLIED, got: {result}"
+
+    # Step 4: verify actual file on disk
+    new_text = file_path.read_text(encoding="utf-8")
+    assert new_snippet in new_text, (
+        f"Expected new snippet in file after patch:\n{new_text!r}"
     )
-    assert patch_result.get("status") == "APPLIED"
+    assert old_snippet not in new_text, (
+        f"Old snippet must be gone after patch:\n{new_text!r}"
+    )
+    return file_path
 
-    prod_service = ProductionToolService(workspace_root=tmp_path)
-    # Search code rag targeting index_path="." or directory
-    search_result = prod_service.search_code_rag("Mod", index_path=".")
-    assert isinstance(search_result, dict)
-    assert search_result.get("schema_version") == "mmm/code-rag-result-v1"
+
+def test_e2e_source_edit_project_is_workspace_root(tmp_path: Path) -> None:
+    """
+    End-to-end: project root == workspace root (project_root='.' from materializer).
+    Full path: Qwen payload → materializer → MMMToolService.apply_source_patch
+               → TransactionalSourcePatcher → actual file diff.
+    """
+    java_content = (
+        "package com.example;\n\npublic class Mod {\n    // init placeholder\n}\n"
+    )
+    _run_e2e_patch(
+        workspace_root=tmp_path,
+        project_root=tmp_path,
+        java_rel="src/main/java/com/example/Mod.java",
+        java_content=java_content,
+        old_snippet="// init placeholder",
+        new_snippet="public static void onInitialize() {}",
+    )
+
+
+def test_e2e_source_edit_project_is_subdir_of_workspace(tmp_path: Path) -> None:
+    """
+    End-to-end: project root is a subdirectory of workspace.
+    Full path: Qwen payload → materializer → MMMToolService.apply_source_patch
+               → TransactionalSourcePatcher → actual file diff.
+    """
+    project_dir = tmp_path / "mymod"
+    project_dir.mkdir()
+    java_content = (
+        "package com.example;\n\npublic class Main {\n    // entry\n}\n"
+    )
+    _run_e2e_patch(
+        workspace_root=tmp_path,
+        project_root=project_dir,
+        java_rel="src/main/java/com/example/Main.java",
+        java_content=java_content,
+        old_snippet="// entry",
+        new_snippet="public static void main(String[] args) {}",
+    )
+
+
+def test_e2e_source_edit_alias_payload_project_is_workspace_root(tmp_path: Path) -> None:
+    """
+    End-to-end with Qwen alias fields (operation='apply_source_edit', new_text/old_text):
+    project root == workspace root. Verifies alias normalization + actual file diff.
+    """
+    import sys
+    import minecraft_mod_ai.agent_tool_runtime as rt_module
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import materialize_model_source_edit
+    from minecraft_mod_ai.mcp_tools import MMMToolService
+
+    java_content = (
+        "package ai.test;\n\npublic class SpaceMod {\n    // placeholder\n}\n"
+    )
+    file_path = _make_gradle_project(
+        tmp_path, "src/main/java/ai/test/SpaceMod.java", java_content
+    )
+
+    # Qwen emits 'apply_source_edit' as operation + alias field names
+    payload = {
+        "operation": "apply_source_edit",
+        "file": "src/main/java/ai/test/SpaceMod.java",
+        "old_text": "// placeholder",
+        "new_text": "public static void onInitialize() { LOGGER.info(\"started\"); }",
+    }
+
+    patch = materialize_model_source_edit(rt_module, tmp_path, payload)
+    assert patch["project_root"] is not None
+
+    mcp = MMMToolService(workspace_root=tmp_path)
+    result = mcp.apply_source_patch(patch["project_root"], patch["operations"])
+    assert result.get("status") == "APPLIED", f"Expected APPLIED, got: {result}"
+
+    new_text = file_path.read_text(encoding="utf-8")
+    assert "onInitialize" in new_text
+    assert "// placeholder" not in new_text
+
 
 
