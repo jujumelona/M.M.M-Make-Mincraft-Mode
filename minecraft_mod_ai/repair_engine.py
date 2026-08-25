@@ -11,7 +11,11 @@ from .model_router import ModelRouter
 from .project_index import ProjectIndex
 from .runner import GradleRunner
 from .scale_policy import ScalePolicy
-from .source_patch import SourcePatchError, TransactionalSourcePatcher
+from .source_patch import (
+    SourcePatchError,
+    TransactionalSourcePatcher,
+    sha256_bytes,
+)
 
 
 class RepairEngineError(RuntimeError):
@@ -135,6 +139,7 @@ class RepairEngine:
                 context = self._context(root, evidence)
                 patch = self._request_patch(evidence, context)
                 self._validate_patch_scope(patch)
+                self._hydrate_repair_preconditions(root, patch)
                 try:
                     receipt = TransactionalSourcePatcher(root).apply(patch)
                 except SourcePatchError as exc:
@@ -327,6 +332,26 @@ class RepairEngine:
             paths.append(normalized)
         if len(paths) != len(set(paths)):
             raise RepairEngineError("Repair must combine multiple edits to the same path.")
+
+    @staticmethod
+    def _hydrate_repair_preconditions(root: Path, operations: list[dict[str, Any]]) -> None:
+        for item in operations:
+            if not isinstance(item, dict):
+                continue
+            rel_str = str(item.get("path", "")).strip()
+            if not rel_str or rel_str.startswith("/") or ".." in rel_str:
+                continue
+            target = root / rel_str
+            op = str(item.get("operation", "")).strip().lower()
+            if op in {"replace", "edit", "delete"}:
+                expected = str(item.get("expected_sha256", "")).strip()
+                if not expected.startswith("sha256:") or len(expected) != 71:
+                    if target.is_file() and not target.is_symlink():
+                        item["expected_sha256"] = sha256_bytes(target.read_bytes())
+            elif op == "create" and target.is_file() and not target.is_symlink():
+                if isinstance(item.get("content"), str):
+                    item["operation"] = "replace"
+                    item["expected_sha256"] = sha256_bytes(target.read_bytes())
 
 
 def _extract_json(text: str) -> dict[str, Any]:

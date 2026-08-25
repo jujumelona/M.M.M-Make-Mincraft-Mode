@@ -325,5 +325,37 @@ def test_qwen_tool_parser_tolerates_non_enum_operations_and_aliases() -> None:
     assert calls[0].arguments["path"] == "src/main/java/ai/test/NewClass.java"
 
 
+def test_repair_engine_hydrates_missing_expected_sha256(tmp_path: Path) -> None:
+    """RepairEngine automatically hydrates missing expected_sha256 from disk files."""
+    from minecraft_mod_ai.repair_engine import RepairEngine
+    from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
+
+    gradle_file = tmp_path / "build.gradle"
+    gradle_file.write_text("plugins { id 'fabric-loom' }\n", encoding="utf-8")
+
+    operations = [
+        {
+            "operation": "replace",
+            "path": "build.gradle",
+            "content": "plugins { id 'fabric-loom' version '1.7-SNAPSHOT' }\n",
+        }
+    ]
+
+    # Without hydration, TransactionalSourcePatcher raises SourcePatchError because expected_sha256 is missing
+    with pytest.raises(Exception):
+        TransactionalSourcePatcher(tmp_path).apply(operations)
+
+    # With RepairEngine._hydrate_repair_preconditions, expected_sha256 is hydrated
+    RepairEngine._hydrate_repair_preconditions(tmp_path, operations)
+    assert "expected_sha256" in operations[0]
+    assert operations[0]["expected_sha256"].startswith("sha256:")
+
+    # Patcher now applies successfully
+    receipt = TransactionalSourcePatcher(tmp_path).apply(operations)
+    assert receipt["status"] == "APPLIED"
+    assert "1.7-SNAPSHOT" in gradle_file.read_text(encoding="utf-8")
+
+
+
 
 
