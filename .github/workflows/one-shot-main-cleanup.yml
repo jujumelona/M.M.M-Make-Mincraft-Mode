@@ -113,10 +113,21 @@ jobs:
           )
 
           smoke = Path(".github/workflows/fast-model-smoke.yml")
-          replace_once(
-              smoke,
-              "      MMM_CHECKPOINT_DIR: ${{ runner.temp }}/mmm-fast-model-smoke\n",
-              "",
+          smoke_text = smoke.read_text(encoding="utf-8")
+          checkpoint_lines = [
+              line
+              for line in smoke_text.splitlines(keepends=True)
+              if line.startswith("      MMM_CHECKPOINT_DIR:")
+              and "mmm-fast-model-smoke" in line
+          ]
+          if len(checkpoint_lines) != 1:
+              raise SystemExit(
+                  f"{smoke}: expected exactly one job-level checkpoint env line, "
+                  f"found {len(checkpoint_lines)}"
+              )
+          smoke.write_text(
+              smoke_text.replace(checkpoint_lines[0], "", 1),
+              encoding="utf-8",
           )
           setup_anchor = (
               "      - uses: actions/setup-python@v6\n"
@@ -185,7 +196,7 @@ jobs:
 
                   def test_fast_model_smoke_binds_runner_temp_at_runtime() -> None:
                       workflow = Path(".github/workflows/fast-model-smoke.yml").read_text(encoding="utf-8")
-                      assert "${{ runner.temp }}" not in workflow
+                      assert "runner.temp" not in workflow
                       assert "MMM_CHECKPOINT_DIR=$RUNNER_TEMP/mmm-fast-model-smoke" in workflow
                   '''
               ),
