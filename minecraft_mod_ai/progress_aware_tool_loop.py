@@ -175,6 +175,13 @@ def evidence_fingerprint(value: Any) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+class LocalizationStage(str, Enum):
+    NEED_FILE = "NEED_FILE"
+    NEED_SYMBOL = "NEED_SYMBOL"
+    NEED_BODY = "NEED_BODY"
+    READY = "READY"
+
+
 @dataclass(frozen=True)
 class TargetMutationContext:
     """Target-bound mutation context enforcing hierarchical localization before ACT phase entry.
@@ -183,7 +190,7 @@ class TargetMutationContext:
     and 2026 repository-scale function-level repair findings.
     """
 
-    target_path: str
+    target_path: str | None = None
     target_symbol: str | None = None
     source_body: str | None = None
     start_line: int | None = None
@@ -195,16 +202,37 @@ class TargetMutationContext:
     @property
     def is_mutation_ready(self) -> bool:
         """Return True only when the target is localized and bound to concrete source code/spans."""
-        if not self.target_path or not self.target_path.strip():
-            return False
+        return self.localization_stage == LocalizationStage.READY
+
+    @property
+    def localization_stage(self) -> LocalizationStage:
+        """Calculate the current hierarchical localization stage."""
         if self.is_new_file:
-            return True
+            return (
+                LocalizationStage.READY
+                if (self.target_path and self.target_path.strip())
+                else LocalizationStage.NEED_FILE
+            )
+        if not self.target_path or not self.target_path.strip():
+            return LocalizationStage.NEED_FILE
         if not self.source_body or not _is_code_bearing_text(self.source_body):
-            return False
-        # Context must have a target symbol, concrete line span, or sufficient body lines
-        if self.target_symbol or self.start_line is not None or len(self.source_body.strip()) >= 30:
-            return True
-        return False
+            if not self.target_symbol and self.start_line is None:
+                return LocalizationStage.NEED_SYMBOL
+            return LocalizationStage.NEED_BODY
+        return LocalizationStage.READY
+
+    def merge(self, other: "TargetMutationContext") -> "TargetMutationContext":
+        """Cumulatively accumulate localization discoveries across multiple retrieval turns."""
+        return TargetMutationContext(
+            target_path=other.target_path or self.target_path,
+            target_symbol=other.target_symbol or self.target_symbol,
+            source_body=other.source_body or self.source_body,
+            start_line=other.start_line if other.start_line is not None else self.start_line,
+            end_line=other.end_line if other.end_line is not None else self.end_line,
+            is_new_file=other.is_new_file or self.is_new_file,
+            evidence_source=other.evidence_source or self.evidence_source,
+            base_revision_sha=other.base_revision_sha or self.base_revision_sha,
+        )
 
 
 @dataclass
@@ -222,6 +250,7 @@ class HostRunState:
     workspace_changed: bool = False
     validation_status: str = "PENDING"
     last_failure_digest: str | None = None
+    last_failure_reason: str | None = None
     last_result_digest: str | None = None
     termination_reason: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -250,8 +279,10 @@ class HostRunState:
         with self._lock:
             extracted_ctx = _extract_mutation_context_from_payload(value)
             if extracted_ctx is not None:
-                if self.mutation_context is None or extracted_ctx.is_mutation_ready or not self.mutation_context.is_mutation_ready:
+                if self.mutation_context is None:
                     self.mutation_context = extracted_ctx
+                else:
+                    self.mutation_context = self.mutation_context.merge(extracted_ctx)
             if fp in self.evidence_fingerprints:
                 return False
             self.evidence_fingerprints.add(fp)
@@ -552,6 +583,8 @@ def _filter_tools_for_phase(
     exposed_tools: Sequence[Mapping[str, Any]],
     phase: LoopPhase,
     role: str,
+    *,
+    mutation_context: TargetMutationContext | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     del role
     by_name = {_tool_name(schema): schema for schema in exposed_tools if _tool_name(schema)}
@@ -559,10 +592,30 @@ def _filter_tools_for_phase(
         return ()
 
     if phase == LoopPhase.OBSERVE:
-        selected_names = [
-            name for name in by_name
-            if name in _READ_OBSERVE_TOOLS or (name not in _MUTATION_ACT_TOOLS and name not in _VERIFY_TOOLS)
-        ]
+        stage = (
+            mutation_context.localization_stage
+            if mutation_context is not None
+            else LocalizationStage.NEED_FILE
+        )
+        if stage == LocalizationStage.NEED_FILE:
+            preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")
+            selected_names = [name for name in preferred if name in by_name]
+            if not selected_names:
+                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+        elif stage == LocalizationStage.NEED_SYMBOL:
+            preferred = ("java_workspace_symbols", "java_diagnostics")
+            selected_names = [name for name in preferred if name in by_name]
+            if not selected_names and "search_code_rag" in by_name:
+                selected_names = ["search_code_rag"]
+            elif not selected_names:
+                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+        elif stage == LocalizationStage.NEED_BODY:
+            preferred = ("search_code_rag", "inspect_existing_mod")
+            selected_names = [name for name in preferred if name in by_name]
+            if not selected_names:
+                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+        else:
+            selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
     elif phase == LoopPhase.ACT:
         selected_names = [name for name in by_name if name in _MUTATION_ACT_TOOLS]
     elif phase in (LoopPhase.VERIFY, LoopPhase.RECOVER):
@@ -731,16 +784,17 @@ def generate_with_tools(
             )
 
         if forced_rag_tool is None and state.no_progress_streak >= 2:
+            reason_suffix = f": {state.last_failure_reason}" if state.last_failure_reason else ""
             if require_rag and not state.has_fresh_evidence:
                 raise ModelConfigurationError(
                     "Required production evidence is unavailable: every host-forceable "
                     "RAG source was already attempted without novel usable evidence, and "
-                    "the model selected no other reviewed retrieval route."
+                    f"the model selected no other reviewed retrieval route.{reason_suffix}"
                 )
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 raise ModelConfigurationError(
                     "Writable coder reached a no-progress boundary before a reviewed source "
-                    "mutation was applied; refusing a prose-only implementation."
+                    f"mutation was applied; refusing a prose-only implementation.{reason_suffix}"
                 )
             return _finalize_without_tools(
                 router,
@@ -755,7 +809,12 @@ def generate_with_tools(
                 empty_error="Agent returned an empty final response after no-progress convergence.",
             )
 
-        phase_tools = _filter_tools_for_phase(all_exposed_tools, state.phase, role)
+        phase_tools = _filter_tools_for_phase(
+            all_exposed_tools,
+            state.phase,
+            role,
+            mutation_context=state.mutation_context,
+        )
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
 
         tool_choice = request.tool_choice
@@ -806,7 +865,6 @@ def generate_with_tools(
                         "content": f"Call the required function {forced_rag_tool} exactly once now. Do not answer in prose.",
                     },
                 ])
-                state.no_progress_streak += 1
                 continue
             if require_rag and not state.has_fresh_evidence:
                 forced_rag_tool = state.next_untried_internal_tool(
@@ -832,7 +890,6 @@ def generate_with_tools(
                         ),
                     },
                 ])
-                state.no_progress_streak += 1
                 continue
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 if state.phase == LoopPhase.OBSERVE and is_mutation_ready(messages, state):
@@ -850,9 +907,33 @@ def generate_with_tools(
                     state.no_progress_streak = 0
                     continue
                 elif state.phase == LoopPhase.OBSERVE:
+                    loc_stage = (
+                        state.mutation_context.localization_stage
+                        if state.mutation_context is not None
+                        else LocalizationStage.NEED_FILE
+                    )
+                    if loc_stage == LocalizationStage.NEED_FILE:
+                        preferred = ("search_code_rag", "search_project_rag")
+                        prompt_msg = "Locate the target file path using {tool} before modifying source."
+                    elif loc_stage == LocalizationStage.NEED_SYMBOL:
+                        preferred = ("java_workspace_symbols", "java_diagnostics", "search_code_rag")
+                        target_p = state.mutation_context.target_path or "the target file"
+                        prompt_msg = f"Target file '{target_p}' identified. Call {{tool}} to inspect symbol declarations."
+                    elif loc_stage == LocalizationStage.NEED_BODY:
+                        preferred = ("search_code_rag", "inspect_existing_mod")
+                        target_s = (
+                            state.mutation_context.target_symbol
+                            or state.mutation_context.target_path
+                            or "the target symbol"
+                        )
+                        prompt_msg = f"Target symbol '{target_s}' located. Call {{tool}} to retrieve the concrete function/method source body."
+                    else:
+                        preferred = ("search_code_rag", "java_workspace_symbols", "search_project_rag")
+                        prompt_msg = "Call {tool} to inspect the target file or symbol before modifying source."
+
                     forced_tool = state.next_untried_internal_tool(
                         all_exposed_names,
-                        preferred=("search_code_rag", "java_workspace_symbols", "search_project_rag"),
+                        preferred=preferred,
                     )
                     if forced_tool is not None:
                         forced_rag_tool = forced_tool
@@ -861,13 +942,9 @@ def generate_with_tools(
                             {"role": "assistant", "content": content},
                             {
                                 "role": "system",
-                                "content": (
-                                    f"Target source context is not yet grounded for mutation. "
-                                    f"Call {forced_rag_tool} to inspect the target file or symbol before modifying source."
-                                ),
+                                "content": prompt_msg.format(tool=forced_rag_tool),
                             },
                         ])
-                        state.no_progress_streak += 1
                         continue
                 raise ModelConfigurationError(
                     "Writable coder returned a final prose answer before a reviewed source mutation "
@@ -970,12 +1047,14 @@ def generate_with_tools(
                         },
                     }
             except Exception as exc:
+                err_msg = f"{type(exc).__name__}: {exc}"
                 payload = {
                     "ok": False,
                     "tool": call.name,
                     **route_metadata,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": err_msg,
                 }
+                state.last_failure_reason = f"{call.name}: {err_msg}"
             return call, payload
 
         executed = _execute_tool_waves(tuple(turn.tool_calls), execute)
@@ -1006,7 +1085,9 @@ def generate_with_tools(
                 elif not bool(payload.get("ok")):
                     if all_exposed_names & _READ_OBSERVE_TOOLS:
                         state.phase = LoopPhase.OBSERVE
-                    error_digest = hashlib.sha256(str(payload.get("error", "")).encode("utf-8")).hexdigest()[:16]
+                    err_text = str(payload.get("error", "mutation failed"))
+                    state.last_failure_reason = f"{call.name}: {err_text}"
+                    error_digest = hashlib.sha256(err_text.encode("utf-8")).hexdigest()[:16]
                     if error_digest != state.last_failure_digest:
                         state.last_failure_digest = error_digest
                         turn_made_progress = True
@@ -1018,11 +1099,13 @@ def generate_with_tools(
                     state.validation_status = status
                     turn_made_progress = True
                 if status == "FAIL" and implementation_requires_mutation:
+                    state.last_failure_reason = f"{call.name}: {payload.get('error', 'verification FAIL')}"
                     state.phase = LoopPhase.ACT
                 continue
 
             if is_retrieval(call):
                 if not bool(payload.get("ok")):
+                    state.last_failure_reason = f"{call.name}: {payload.get('error', 'retrieval error')}"
                     continue
                 usable = _usable_rag_result(payload.get("result")) if call.name in _RAG_EVIDENCE_TOOLS else _usable_external_rag_result(call.arguments, payload.get("result"))
                 recorded = state.record_evidence(payload.get("result"), usable=usable)
@@ -1078,6 +1161,7 @@ def _finalize_without_tools(
 
 __all__ = [
     "HostRunState",
+    "LocalizationStage",
     "LoopPhase",
     "RetrievalDecision",
     "RetrievalNoProgressError",

@@ -390,3 +390,70 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     assert "search_code_rag" in seen_phases[1]
 
 
+def test_filter_tools_for_phase_hierarchical_localization_stages() -> None:
+    """The host controller dynamically filters read tools per hierarchical localization stage."""
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        LocalizationStage,
+        LoopPhase,
+        TargetMutationContext,
+        _filter_tools_for_phase,
+    )
+
+    file_tool = _tool_schema("search_code_rag")
+    symbol_tool = _tool_schema("java_workspace_symbols")
+    mutate_tool = _tool_schema("apply_source_patch")
+    all_tools = (file_tool, symbol_tool, mutate_tool)
+
+    # 1. NEED_FILE: Host exposes file discovery tool only
+    ctx_need_file = TargetMutationContext(target_path=None)
+    assert ctx_need_file.localization_stage == LocalizationStage.NEED_FILE
+    filtered = _filter_tools_for_phase(all_tools, LoopPhase.OBSERVE, "coder", mutation_context=ctx_need_file)
+    assert filtered == (file_tool,)
+
+    # 2. NEED_SYMBOL: Host exposes symbol discovery tool
+    ctx_need_symbol = TargetMutationContext(target_path="src/Main.java", target_symbol=None)
+    assert ctx_need_symbol.localization_stage == LocalizationStage.NEED_SYMBOL
+    filtered = _filter_tools_for_phase(all_tools, LoopPhase.OBSERVE, "coder", mutation_context=ctx_need_symbol)
+    assert filtered == (symbol_tool,)
+
+    # 3. NEED_BODY: Host exposes snippet/body tool
+    ctx_need_body = TargetMutationContext(target_path="src/Main.java", target_symbol="Main#init", source_body=None)
+    assert ctx_need_body.localization_stage == LocalizationStage.NEED_BODY
+    filtered = _filter_tools_for_phase(all_tools, LoopPhase.OBSERVE, "coder", mutation_context=ctx_need_body)
+    assert filtered == (file_tool,)
+
+    # 4. READY: In ACT phase, host exposes mutation tool
+    ctx_ready = TargetMutationContext(
+        target_path="src/Main.java",
+        target_symbol="Main#init",
+        source_body="public void init() { System.out.println(1); }",
+    )
+    assert ctx_ready.localization_stage == LocalizationStage.READY
+    filtered = _filter_tools_for_phase(all_tools, LoopPhase.ACT, "coder", mutation_context=ctx_ready)
+    assert filtered == (mutate_tool,)
+
+
+def test_target_mutation_context_cumulative_merge() -> None:
+    """TargetMutationContext merges step-by-step discoveries without losing prior fields."""
+    from minecraft_mod_ai.progress_aware_tool_loop import LocalizationStage, TargetMutationContext
+
+    ctx1 = TargetMutationContext(target_path="src/Item.java", evidence_source="search_code_rag")
+    assert ctx1.localization_stage == LocalizationStage.NEED_SYMBOL
+
+    ctx2 = TargetMutationContext(target_symbol="Item#use", start_line=20, end_line=35, evidence_source="java_workspace_symbols")
+    merged1 = ctx1.merge(ctx2)
+    assert merged1.target_path == "src/Item.java"
+    assert merged1.target_symbol == "Item#use"
+    assert merged1.start_line == 20
+    assert merged1.end_line == 35
+    assert merged1.localization_stage == LocalizationStage.NEED_BODY
+
+    ctx3 = TargetMutationContext(source_body="public ActionResult use(World w) { return PASS; }")
+    merged2 = merged1.merge(ctx3)
+    assert merged2.target_path == "src/Item.java"
+    assert merged2.target_symbol == "Item#use"
+    assert merged2.source_body == "public ActionResult use(World w) { return PASS; }"
+    assert merged2.localization_stage == LocalizationStage.READY
+
+
+
