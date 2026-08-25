@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 _GROUNDING_MARKER = "__mmm_repository_grounding_live_context__"
+_RAG_FALLBACK_MARKER = "__mmm_reranker_fallback_hits__"
 
 
 def install(model_router_module: Any) -> None:
@@ -29,6 +30,7 @@ def install(model_router_module: Any) -> None:
     from .runtime_composer_hardening import harden_runtime_composer_identity
     from .temporary_skill_compatibility import harden_temporary_skill_transport
 
+    _install_reranker_fallback_evidence(model_router_module)
     _install_repository_grounding()
     harden_runtime()
     harden_adaptive_execution()
@@ -37,6 +39,53 @@ def install(model_router_module: Any) -> None:
     harden_agent_tool_allowlist()
     harden_temporary_skill_transport()
     _expose_composed_repair_contracts()
+
+
+def _install_reranker_fallback_evidence(model_router_module: Any) -> None:
+    """Keep concrete RAG hits usable when optional dense reranking is unavailable."""
+
+    current = model_router_module._usable_rag_result
+    if bool(getattr(current, _RAG_FALLBACK_MARKER, False)):
+        return
+
+    @wraps(current)
+    def usable_rag_result(value: Any) -> bool:
+        if current(value):
+            return True
+
+        positive_receipt = False
+        nonempty_hits = False
+
+        def visit(item: Any) -> None:
+            nonlocal positive_receipt, nonempty_hits
+            if isinstance(item, Mapping):
+                receipt = item.get("receipt")
+                if isinstance(receipt, Mapping):
+                    try:
+                        if int(receipt.get("result_count", 0) or 0) > 0:
+                            positive_receipt = True
+                    except (TypeError, ValueError):
+                        pass
+                hits = item.get("hits")
+                if (
+                    isinstance(hits, Sequence)
+                    and not isinstance(hits, (str, bytes, bytearray))
+                    and bool(hits)
+                ):
+                    nonempty_hits = True
+                for child in item.values():
+                    visit(child)
+            elif isinstance(item, Sequence) and not isinstance(
+                item, (str, bytes, bytearray)
+            ):
+                for child in item:
+                    visit(child)
+
+        visit(value)
+        return positive_receipt and nonempty_hits
+
+    setattr(usable_rag_result, _RAG_FALLBACK_MARKER, True)
+    model_router_module._usable_rag_result = usable_rag_result
 
 
 def _inherit_boolean_contract_markers(current: Any) -> None:
