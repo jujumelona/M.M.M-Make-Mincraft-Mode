@@ -317,7 +317,7 @@ def bounded_tool_message(
 
     archive = archive_transcript((original,))
     if not bool(archive.get("available")):
-        return original
+        archive = archive_preview((original,))
     replacement = dict(original)
     replacement["content"] = _summary_payload(
         original,
@@ -353,7 +353,7 @@ def _compact_tool_messages(
         original = dict(values[index])
         archive = archive_transcript((original,))
         if not bool(archive.get("available")):
-            continue
+            archive = archive_preview((original,))
         replacement = dict(original)
         replacement["content"] = _summary_payload(
             original,
@@ -434,7 +434,6 @@ def _compact_old_exchanges(
         return original
 
     first = assistants[0]
-    mutation_start = _last_mutation_exchange_start(original)
     best_candidate = original
     best_size = _canonical_size(original)
 
@@ -442,12 +441,12 @@ def _compact_old_exchanges(
         if len(assistants) <= keep:
             continue
         start = assistants[-keep]
-        if mutation_start is not None and first < mutation_start < start:
-            start = mutation_start
         dropped = original[first:start]
         if not dropped:
             continue
-        archive = archive_preview(dropped)
+        archive = archive_transcript(dropped)
+        if not bool(archive.get("available")):
+            archive = archive_preview(dropped)
         context = _compacted_context_message(dropped, archive=archive)
         compacted: tuple[Mapping[str, Any], ...] = (
             *original[:first],
@@ -459,10 +458,6 @@ def _compact_old_exchanges(
             best_size = compacted_size
             best_candidate = compacted
         if compacted_size <= budget:
-            persisted = archive_transcript(dropped)
-            if bool(persisted.get("available")) and persisted != archive:
-                context = _compacted_context_message(dropped, archive=persisted)
-                compacted = (*original[:first], context, *original[start:])
             return compacted
     return best_candidate
 
@@ -507,16 +502,22 @@ def emergency_fit_messages(
     if _canonical_size(values) <= budget:
         return values
 
-    # Hard emergency truncation: keep initial system/user prefix and the most recent exchanges
+    # Hard emergency truncation: keep initial system/user prefix and the most recent valid exchanges
     original = list(values)
-    if len(original) > 6:
+    if len(original) > 4:
         prefix: list[Mapping[str, Any]] = []
-        for msg in original[:3]:
+        for msg in original[:2]:
             if str(msg.get("role", "")) in {"system", "user"}:
                 prefix.append(msg)
             else:
                 break
-        tail = original[-4:]
+
+        tail_start = len(original) - 1
+        for idx in range(max(len(prefix), len(original) - 6), len(original)):
+            if str(original[idx].get("role", "")) in {"user", "assistant"}:
+                tail_start = idx
+                break
+        tail = original[tail_start:]
         truncated = tuple(prefix + tail)
         if _canonical_size(truncated) < _canonical_size(values):
             return truncated
