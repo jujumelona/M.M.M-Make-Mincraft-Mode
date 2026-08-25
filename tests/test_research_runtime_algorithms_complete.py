@@ -4,7 +4,6 @@ import json
 import shutil
 from pathlib import Path
 
-from minecraft_mod_ai import model_router
 from minecraft_mod_ai.generated_counterexample_tests import (
     build_generated_test_spec,
     install_generated_junit,
