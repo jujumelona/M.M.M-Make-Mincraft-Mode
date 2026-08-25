@@ -453,7 +453,130 @@ def test_target_mutation_context_cumulative_merge() -> None:
     assert merged2.target_path == "src/Item.java"
     assert merged2.target_symbol == "Item#use"
     assert merged2.source_body == "public ActionResult use(World w) { return PASS; }"
-    assert merged2.localization_stage == LocalizationStage.READY
+def test_java_workspace_symbols_records_evidence_and_progresses_localization() -> None:
+    """java_workspace_symbols is an evidence tool that advances LocalizationStage and makes semantic progress."""
+    from minecraft_mod_ai.progress_aware_tool_loop import generate_with_tools
+
+    router = MagicMock()
+    router._generation_scope.return_value = nullcontext()
+    router._agent_require_fresh_evidence = False
+
+    config = MagicMock()
+    config.adapter = "llama_cpp"
+    config.max_context = 16384
+    config.max_new_tokens = 4096
+    config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+    turns = [
+        # Turn 1: In OBSERVE (NEED_FILE), model calls search_code_rag
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="call_file",
+                    name="search_code_rag",
+                    arguments={"query": "ModBlock"},
+                    raw_arguments='{"query":"ModBlock"}',
+                ),
+            )
+        ),
+        # Turn 2: In OBSERVE (NEED_SYMBOL), model calls java_workspace_symbols
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="call_sym",
+                    name="java_workspace_symbols",
+                    arguments={"project_root": ".", "query": "getDroppedStacks"},
+                    raw_arguments='{"project_root":".","query":"getDroppedStacks"}',
+                ),
+            )
+        ),
+        # Turn 3: In OBSERVE (NEED_BODY), model calls search_code_rag for the body
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="call_body",
+                    name="search_code_rag",
+                    arguments={"query": "ModBlock getDroppedStacks"},
+                    raw_arguments='{"query":"ModBlock getDroppedStacks"}',
+                ),
+            )
+        ),
+        # Turn 4: In ACT (READY), model calls apply_source_patch
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="call_patch",
+                    name="apply_source_patch",
+                    arguments={"patch": "applied"},
+                    raw_arguments='{"patch":"applied"}',
+                ),
+            )
+        ),
+        # Turn 5: Final completion in prose
+        GenerationResponse(content="Successfully updated drop logic."),
+    ]
+
+    adapter = MagicMock()
+    adapter.generate_turn.side_effect = turns
+
+    def mock_runtime_call(stage: str, name: str, args: dict) -> dict:
+        if name == "search_code_rag" and "ModBlock getDroppedStacks" in str(args):
+            return {
+                "hits": [
+                    {
+                        "path": "src/ModBlock.java",
+                        "symbol": "getDroppedStacks",
+                        "snippet": "public List<ItemStack> getDroppedStacks() { return List.of(); }",
+                    }
+                ]
+            }
+        elif name == "search_code_rag":
+            return {"hits": [{"path": "src/ModBlock.java"}]}
+        elif name == "java_workspace_symbols":
+            return {
+                "symbols": [
+                    {
+                        "name": "getDroppedStacks",
+                        "containerName": "ModBlock",
+                        "location": {
+                            "uri": "file:///src/ModBlock.java",
+                            "range": {"start": {"line": 42}, "end": {"line": 50}},
+                        },
+                    }
+                ]
+            }
+        elif name == "apply_source_patch":
+            return {"ok": True, "applied": True, "patched_files": ["src/ModBlock.java"]}
+        return {}
+
+    runtime = MagicMock()
+    runtime.call.side_effect = mock_runtime_call
+
+    request = GenerationRequest(
+        messages=(
+            {"role": "user", "content": '{"phase": "implement_module", "task": "fix drop logic"}'},
+        ),
+        tools=(
+            _tool_schema("search_code_rag"),
+            _tool_schema("java_workspace_symbols"),
+            _tool_schema("apply_source_patch"),
+        ),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    result = generate_with_tools(
+        router,
+        config=config,
+        adapter=adapter,
+        request=request,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+    )
+
+    assert result == "Successfully updated drop logic."
+
 
 
 

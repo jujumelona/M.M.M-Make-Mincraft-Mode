@@ -59,6 +59,13 @@ _VOLATILE_EVIDENCE_KEYS = frozenset({
     "timestamp", "trace_id",
 })
 
+_LOCALIZATION_EVIDENCE_TOOLS = frozenset({
+    "search_code_rag",
+    "search_project_rag",
+    "java_workspace_symbols",
+    "inspect_existing_mod",
+})
+
 _READ_OBSERVE_TOOLS = frozenset({
     "search_code_rag",
     "search_project_rag",
@@ -979,9 +986,11 @@ def generate_with_tools(
             ],
         })
 
-        def is_retrieval(call: Any) -> bool:
-            return call.name in _RAG_EVIDENCE_TOOLS or (
-                call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments))
+        def is_evidence_tool(call: Any) -> bool:
+            return (
+                call.name in _LOCALIZATION_EVIDENCE_TOOLS
+                or call.name in _RAG_EVIDENCE_TOOLS
+                or (call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments)))
             )
 
         def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
@@ -1005,7 +1014,7 @@ def generate_with_tools(
                     ),
                 }
 
-            if is_retrieval(call):
+            if is_evidence_tool(call):
                 is_new_query = state.record_query(call.name, call.arguments)
                 if not is_new_query:
                     return call, {
@@ -1085,6 +1094,18 @@ def generate_with_tools(
                 elif not bool(payload.get("ok")):
                     if all_exposed_names & _READ_OBSERVE_TOOLS:
                         state.phase = LoopPhase.OBSERVE
+                    # Invalidate stale source_body so agent re-reads fresh code/diagnostics
+                    if state.mutation_context is not None and state.mutation_context.source_body is not None:
+                        with state._lock:
+                            state.mutation_context = TargetMutationContext(
+                                target_path=state.mutation_context.target_path,
+                                target_symbol=state.mutation_context.target_symbol,
+                                source_body=None,
+                                start_line=state.mutation_context.start_line,
+                                end_line=state.mutation_context.end_line,
+                                is_new_file=state.mutation_context.is_new_file,
+                                evidence_source="invalidated_after_mutation_failure",
+                            )
                     err_text = str(payload.get("error", "mutation failed"))
                     state.last_failure_reason = f"{call.name}: {err_text}"
                     error_digest = hashlib.sha256(err_text.encode("utf-8")).hexdigest()[:16]
@@ -1103,13 +1124,23 @@ def generate_with_tools(
                     state.phase = LoopPhase.ACT
                 continue
 
-            if is_retrieval(call):
+            if is_evidence_tool(call):
                 if not bool(payload.get("ok")):
-                    state.last_failure_reason = f"{call.name}: {payload.get('error', 'retrieval error')}"
+                    state.last_failure_reason = f"{call.name}: {payload.get('error', 'evidence tool error')}"
                     continue
-                usable = _usable_rag_result(payload.get("result")) if call.name in _RAG_EVIDENCE_TOOLS else _usable_external_rag_result(call.arguments, payload.get("result"))
+                usable = (
+                    _usable_rag_result(payload.get("result"))
+                    if call.name in _RAG_EVIDENCE_TOOLS
+                    else (
+                        _usable_external_rag_result(call.arguments, payload.get("result"))
+                        if call.name == "external_mcp_call"
+                        else bool(payload.get("result"))
+                    )
+                )
+                before_ctx = state.mutation_context
                 recorded = state.record_evidence(payload.get("result"), usable=usable)
-                if recorded:
+                after_ctx = state.mutation_context
+                if recorded or (after_ctx != before_ctx):
                     turn_made_progress = True
                     if state.phase == LoopPhase.OBSERVE and implementation_requires_mutation:
                         if is_mutation_ready(messages, state):
@@ -1168,6 +1199,7 @@ __all__ = [
     "RetrievalObservation",
     "RetrievalProgress",
     "TargetMutationContext",
+    "_LOCALIZATION_EVIDENCE_TOOLS",
     "_MUTATION_ACT_TOOLS",
     "_READ_OBSERVE_TOOLS",
     "_VERIFY_TOOLS",
