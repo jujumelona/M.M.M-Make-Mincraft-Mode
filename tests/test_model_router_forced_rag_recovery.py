@@ -137,5 +137,5 @@ def test_forced_rag_refusal_is_bounded_and_specific(monkeypatch, tmp_path) -> No
             [{"role": "user", "content": "Implement the registration change"}],
         )
 
-    assert len(adapter.requests) == 3
+    assert len(adapter.requests) == 2
     assert runtime.calls == []
