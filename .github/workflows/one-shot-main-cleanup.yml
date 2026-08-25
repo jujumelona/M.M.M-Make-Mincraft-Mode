@@ -1,0 +1,165 @@
+name: One-shot main cleanup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-shot-main-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply exact ownership cleanup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          research = Path("minecraft_mod_ai/research_code_context.py")
+          research_owner_block = (
+              "        from . import research_coder_repair_reuse as reuse\n"
+              "        import sys\n"
+              "\n"
+              "        dependency = reuse._dependency_neighborhood_query(\n"
+              "            sys.modules[self.__class__.__module__], self, query, plan_step\n"
+              "        )\n"
+              "        if dependency:\n"
+              "            paths.append(dependency)\n"
+          )
+          replace_once(research, research_owner_block, "")
+
+          parser = Path("minecraft_mod_ai/model_adapters/qwen_tool_parser.py")
+          old_alias_block = (
+              "_APPLY_SOURCE_EDIT_ALIASES = {\n"
+              "    \"file\": \"path\",\n"
+              "    \"file_path\": \"path\",\n"
+              "    \"target\": \"path\",\n"
+              "    \"target_path\": \"path\",\n"
+              "    \"target_file\": \"path\",\n"
+              "    \"action\": \"operation\",\n"
+              "    \"apply\": \"operation\",\n"
+              "    \"op\": \"operation\",\n"
+              "    \"mode\": \"operation\",\n"
+              "    \"new_text\": \"new\",\n"
+              "    \"new_content\": \"new\",\n"
+              "    \"replacement\": \"new\",\n"
+              "    \"old_text\": \"old\",\n"
+              "    \"code\": \"content\",\n"
+              "    \"source\": \"content\",\n"
+              "    \"body\": \"content\",\n"
+              "}\n"
+          )
+          new_alias_block = (
+              "_APPLY_SOURCE_EDIT_TRANSPORT_ALIASES = {\n"
+              "    \"file_path\": \"path\",\n"
+              "    \"target\": \"path\",\n"
+              "    \"action\": \"operation\",\n"
+              "    \"apply\": \"operation\",\n"
+              "    \"op\": \"operation\",\n"
+              "    \"mode\": \"operation\",\n"
+              "    \"source\": \"content\",\n"
+              "}\n"
+          )
+          replace_once(parser, old_alias_block, new_alias_block)
+          text = parser.read_text(encoding="utf-8")
+          count = text.count("_APPLY_SOURCE_EDIT_ALIASES")
+          if count != 2:
+              raise SystemExit(
+                  f"{parser}: expected two remaining alias references, found {count}"
+              )
+          parser.write_text(
+              text.replace(
+                  "_APPLY_SOURCE_EDIT_ALIASES",
+                  "_APPLY_SOURCE_EDIT_TRANSPORT_ALIASES",
+              ),
+              encoding="utf-8",
+          )
+
+          ownership_test = Path("tests/test_source_edit_alias_ownership.py")
+          if ownership_test.exists():
+              raise SystemExit(f"unexpected existing file: {ownership_test}")
+          ownership_test.write_text(
+              dedent(
+                  '''\
+                  from __future__ import annotations
+
+                  import inspect
+
+                  import minecraft_mod_ai.model_adapters.qwen_tool_parser as qwen_tool_parser
+                  from minecraft_mod_ai import research_code_context
+                  from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+
+                  def test_dependency_query_has_one_runtime_owner() -> None:
+                      wrapped = research_code_context.ResearchCodeContext._query_paths
+                      base = getattr(wrapped, "__wrapped__", None)
+                      assert base is not None
+                      source = inspect.getsource(base)
+                      assert "research_coder_repair_reuse" not in source
+                      assert "_dependency_neighborhood_query" not in source
+
+
+                  def test_transport_aliases_do_not_duplicate_scalar_protocol_aliases() -> None:
+                      properties = set(SOURCE_EDIT_SCHEMA["properties"])
+                      transport = set(qwen_tool_parser._APPLY_SOURCE_EDIT_TRANSPORT_ALIASES)
+                      scalar_aliases = {
+                          "file",
+                          "target_path",
+                          "target_file",
+                          "new_text",
+                          "new_content",
+                          "replacement",
+                          "old_text",
+                          "code",
+                          "body",
+                      }
+                      assert transport.isdisjoint(properties)
+                      assert scalar_aliases <= properties
+                      assert scalar_aliases.isdisjoint(transport)
+                  '''
+              ),
+              encoding="utf-8",
+          )
+          PY
+      - name: Run focused ownership regressions
+        run: >-
+          python -m pytest -q
+          tests/test_research_coder_repair_performance.py
+          tests/test_source_edit_alias_ownership.py
+          tests/test_llama_cpp_adapter_request_contract.py
+          tests/test_source_edit_text_alias.py
+      - name: Commit cleanup to main
+        shell: bash
+        run: |
+          git config user.name "jujumelona"
+          git config user.email "qasdaa025@gmail.com"
+          git rm .github/workflows/one-shot-main-cleanup.yml
+          git add minecraft_mod_ai/research_code_context.py
+          git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py
+          git add tests/test_source_edit_alias_ownership.py
+          git diff --cached --check
+          git commit -m "refactor(clean): single-own dependency and source-edit aliases"
+          git push origin HEAD:main
