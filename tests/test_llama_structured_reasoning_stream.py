@@ -46,7 +46,7 @@ def _adapter(
     )
 
 
-def test_json_request_uses_server_schema_and_keeps_host_validation() -> None:
+def test_json_request_keeps_schema_host_side() -> None:
     schema = {
         "type": "object",
         "properties": {"value": {"type": "string"}},
@@ -64,22 +64,15 @@ def test_json_request_uses_server_schema_and_keeps_host_validation() -> None:
     )
     payload = _server_payload(_adapter(), request)
     assert request.response_schema == schema
-    assert payload["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mmm_host_action_arguments",
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    assert "response_format" not in payload
     assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
-    assert payload["max_tokens"] == 4096
+    assert payload["max_tokens"] == 8192
 
 
-def test_native_tool_request_keeps_tools_visible_with_structured_action_page() -> None:
+def test_native_tool_request_keeps_tools_visible_and_schema_host_side() -> None:
     tool = {
         "type": "function",
         "function": {
@@ -112,14 +105,7 @@ def test_native_tool_request_keeps_tools_visible_with_structured_action_page() -
     assert payload["tools"] == [tool]
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
-    assert payload["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mmm_host_action_arguments",
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    assert "response_format" not in payload
     assert "grammar" not in payload
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
@@ -129,7 +115,7 @@ def test_native_tool_request_keeps_tools_visible_with_structured_action_page() -
     assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
-    assert payload["max_tokens"] == 4096
+    assert payload["max_tokens"] == 8192
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
