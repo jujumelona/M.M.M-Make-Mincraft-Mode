@@ -26,7 +26,6 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .source_mutation_contract import (
-    SOURCE_MUTATION_NAMES,
     mutation_history_applied,
     mutation_payload_applied,
 )
@@ -419,6 +418,20 @@ class HostRunState:
                 self.workspace_changed = True
             return True
         return False
+
+    def record_failure(self, tool_name: str, error: Any) -> None:
+        """Record failure diagnostics without treating a new error string as progress."""
+
+        reason = f"{str(tool_name).strip()}: {str(error).strip()}"
+        digest = hashlib.sha256(reason.encode("utf-8")).hexdigest()[:16]
+        with self._lock:
+            self.last_failure_reason = reason
+            self.last_failure_digest = digest
+
+    def clear_failure(self) -> None:
+        with self._lock:
+            self.last_failure_reason = None
+            self.last_failure_digest = None
 
     def next_untried_internal_tool(
         self,
@@ -1337,12 +1350,12 @@ def generate_with_tools(
                 if capability:
                     route_metadata["external_mcp_capability"] = capability
 
-            # Check phase legality (fail-closed to phase_tool_names)
             if call.name not in phase_tool_names:
                 err_msg = (
                     f"Agent attempted tool {call.name!r} outside its allowed phase {state.phase.value!r} "
                     f"(allowed tools: {sorted(phase_tool_names)})."
                 )
+                state.record_failure(call.name, err_msg)
                 print(f"  [!] PHASE VIOLATION: {call.name} -> {err_msg}", flush=True)
                 return call, {
                     "ok": False,
@@ -1357,6 +1370,7 @@ def generate_with_tools(
                         f"RetrievalNoProgress: equivalent query already attempted for {call.name} with "
                         f"args={json.dumps(dict(call.arguments), ensure_ascii=False)}"
                     )
+                    state.record_failure(call.name, err_msg)
                     print(f"  [!] DUP QUERY REJECTED: {call.name} -> {err_msg}", flush=True)
                     return call, {
                         "ok": False,
@@ -1392,14 +1406,6 @@ def generate_with_tools(
                     **route_metadata,
                     "result": result,
                 }
-                if call.name in SOURCE_MUTATION_NAMES:
-                    payload = {
-                        **payload,
-                        "_mmm_source_mutation": {
-                            "tool": call.name,
-                            "status": "APPLIED_BY_HOST_RUNTIME",
-                        },
-                    }
             except Exception as exc:
                 err_msg = f"{type(exc).__name__}: {exc}"
                 payload = {
@@ -1408,7 +1414,7 @@ def generate_with_tools(
                     **route_metadata,
                     "error": err_msg,
                 }
-                state.last_failure_reason = f"{call.name}: {err_msg}"
+                state.record_failure(call.name, err_msg)
                 print(f"  [!] TOOL EXCEPTION: {call.name} -> {err_msg}", flush=True)
             return call, payload
 
@@ -1444,7 +1450,6 @@ def generate_with_tools(
                 elif not bool(payload.get("ok")):
                     if all_exposed_names & _READ_OBSERVE_TOOLS:
                         state.phase = LoopPhase.OBSERVE
-                    # Invalidate stale source_body so agent re-reads fresh code/diagnostics
                     if state.mutation_context is not None and state.mutation_context.source_body is not None:
                         with state._lock:
                             state.mutation_context = TargetMutationContext(
@@ -1456,12 +1461,7 @@ def generate_with_tools(
                                 is_new_file=state.mutation_context.is_new_file,
                                 evidence_source="invalidated_after_mutation_failure",
                             )
-                    err_text = str(payload.get("error", "mutation failed"))
-                    state.last_failure_reason = f"{call.name}: {err_text}"
-                    error_digest = hashlib.sha256(err_text.encode("utf-8")).hexdigest()[:16]
-                    if error_digest != state.last_failure_digest:
-                        state.last_failure_digest = error_digest
-                        turn_made_progress = True
+                    state.record_failure(call.name, payload.get("error", "mutation failed"))
                 continue
 
             if call.name in _VERIFY_TOOLS:
@@ -1470,13 +1470,13 @@ def generate_with_tools(
                     state.validation_status = status
                     turn_made_progress = True
                 if status == "FAIL" and implementation_requires_mutation:
-                    state.last_failure_reason = f"{call.name}: {payload.get('error', 'verification FAIL')}"
+                    state.record_failure(call.name, payload.get("error", "verification FAIL"))
                     state.phase = LoopPhase.ACT
                 continue
 
             if is_evidence_tool(call):
                 if not bool(payload.get("ok")):
-                    state.last_failure_reason = f"{call.name}: {payload.get('error', 'evidence tool error')}"
+                    state.record_failure(call.name, payload.get("error", "evidence tool error"))
                     continue
                 usable = (
                     _usable_rag_result(payload.get("result"))
@@ -1513,6 +1513,7 @@ def generate_with_tools(
                             state.phase = LoopPhase.ACT
 
         if turn_made_progress:
+            state.clear_failure()
             state.no_progress_streak = 0
         else:
             state.no_progress_streak += 1
