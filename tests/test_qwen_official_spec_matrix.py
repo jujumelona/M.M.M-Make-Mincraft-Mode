@@ -1,10 +1,7 @@
-﻿from __future__ import annotations
-
+from __future__ import annotations
 
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
-from minecraft_mod_ai.qwen_family_capabilities import (
-    _OFFICIAL_CAPABILITIES,
-)
+from minecraft_mod_ai.qwen_family_capabilities import _OFFICIAL_CAPABILITIES
 
 
 def test_qwen_official_capabilities_spec_matrix() -> None:

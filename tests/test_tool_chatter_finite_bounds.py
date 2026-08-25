@@ -18,15 +18,12 @@ def test_retrieval_progress_stops_duplicate_queries() -> None:
     """Verify that RetrievalProgress rejects repeated queries as duplicate."""
     progress = RetrievalProgress()
 
-    # First call: EXECUTE
     d1 = progress.begin("search_code_rag", {"query": "BlockRegistry"})
     assert d1 == RetrievalDecision.EXECUTE
 
-    # Simulate observation
     obs = progress.observe("search_code_rag", {"query": "BlockRegistry"}, {"results": ["BlockRegistry.java"]}, usable=True)
     assert obs == RetrievalObservation.FRESH
 
-    # Second call with same query: DUPLICATE_QUERY
     d2 = progress.begin("search_code_rag", {"query": "BlockRegistry"})
     assert d2 == RetrievalDecision.DUPLICATE_QUERY
 

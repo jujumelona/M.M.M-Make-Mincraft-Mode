@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
-
-
 from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerator,
     _output_exhaustion_continuation_messages,

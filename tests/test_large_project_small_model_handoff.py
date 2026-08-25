@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
-
-
 from minecraft_mod_ai.model_context_budget import (
     fit_messages_to_context,
     request_message_budget,
