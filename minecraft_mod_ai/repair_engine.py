@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
@@ -137,12 +138,18 @@ class RepairEngine:
                     }
 
                 context = self._context(root, evidence)
-                patch = self._request_patch(evidence, context)
-                self._hydrate_repair_preconditions(root, patch)
-                self._validate_patch_scope(patch)
                 try:
+                    patch = self._request_patch(evidence, context)
+                    if not patch:
+                        print("  [!] Repair attempt produced no patch operations (retrying)", flush=True)
+                        continue
+                    self._hydrate_repair_preconditions(root, patch)
+                    self._validate_patch_scope(patch)
+                    if not patch:
+                        print("  [!] Repair operations empty after scope validation (retrying)", flush=True)
+                        continue
                     receipt = TransactionalSourcePatcher(root).apply(patch)
-                except SourcePatchError as exc:
+                except (RepairEngineError, SourcePatchError) as exc:
                     print(
                         f"  [!] Repair patch application failed (retrying next attempt): {exc}",
                         flush=True,
@@ -224,22 +231,40 @@ class RepairEngine:
             message = item.get("message")
             if isinstance(message, str):
                 query_parts.append(message)
-        build = evidence.get("build", {})
-        if isinstance(build.get("error"), str):
-            query_parts.append(build["error"])
-        for command in build.get("commands", []):
-            if isinstance(command, dict) and isinstance(command.get("log_path"), str):
-                log = Path(command["log_path"])
-                if log.is_file() and not log.is_symlink():
-                    text = log.read_text(encoding="utf-8", errors="replace")
-                    query_parts.append(text[-32_000:])
-        index = active_repair_project_index(root, self.policy)
+        for command in evidence.get("build", {}).get("commands", []):
+            if not isinstance(command, dict):
+                continue
+            output = command.get("output")
+            if isinstance(output, str):
+                query_parts.append(output)
+        from .production_tools import ProjectRAGIndex
+        rag_hits = []
+        try:
+            rag = ProjectRAGIndex(root / ".minecraft_ai" / "rag_index")
+            query = " ".join(query_parts) if query_parts else "Minecraft Fabric mod build repair"
+            manifest = active_repair_project_index(root, self.policy).manifest_receipt()
+            search = rag.search(
+                query,
+                limit=4,
+                router=self.router,
+                semantic=True,
+                rerank=True,
+                required_metadata=_repair_rag_metadata(root, manifest),
+            )
+            rag_hits = [
+                {
+                    "path": hit.source_path,
+                    "text": hit.text,
+                    "start_line": hit.start_line,
+                    "end_line": hit.end_line,
+                }
+                for hit in search.hits
+            ]
+        except Exception:
+            rag_hits = []
         return {
-            "manifest": index.manifest_receipt(),
-            "relevant": index.select(
-                query="\n".join(query_parts),
-                diagnostic_paths=diagnostic_paths,
-            ),
+            "diagnostics_files": tuple(sorted(set(diagnostic_paths))),
+            "rag": {"hits": rag_hits},
         }
 
     def _request_patch(
@@ -247,26 +272,10 @@ class RepairEngine:
         evidence: dict[str, Any],
         context: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        active = _ACTIVE_REPAIR_PROJECT_INDEX.get()
-        if active is None:
-            raise RepairEngineError("Repair model call has no active project index.")
-        root, project_index = active
-        self.router.bind_agent_workspace(root.parent, require_fresh_evidence=True)
-        from .production_tools import ProductionToolService
-
-        manifest = project_index.manifest_receipt()
-        ProductionToolService(
-            workspace_root=root.parent,
-            profile=self.router.profile,
-        ).index_project_rag(
-            [root.name],
-            metadata=_repair_rag_metadata(root, manifest),
-            semantic=False,
-        )
-
         prompt = {
-            "task": (
-                "Repair the approved Minecraft project target using exact minimal patches. "
+            "task": "repair_project",
+            "instructions": (
+                "Emit minimal source patch operations to resolve build/diagnostic errors. "
                 "Derive the exact Minecraft version, loader, mappings and Java target from "
                 "the project context; never substitute a different target."
             ),
@@ -278,8 +287,6 @@ class RepairEngine:
                 "Do not change platform versions merely to make the build pass.",
                 "Do not emit shell commands, scripts or markdown.",
                 "Use project-index paths; do not assume that omitted content means a file does not exist.",
-                "Use live code/project RAG and reviewed MCP evidence for unresolved APIs, symbols, dependency and version facts; inspect retrieval quality and reformulate weak searches.",
-                "Treat JDT/Gradle/GameTest failures as new observations and retrieve again when they introduce new uncertainty.",
             ],
             "evidence": evidence,
             "project_context": context,
@@ -303,18 +310,16 @@ class RepairEngine:
         value = _extract_json(text)
         operations = None
         if isinstance(value, dict):
-            operations = value.get("operations") or value.get("patch") or value.get("edits")
-            if not operations and "path" in value and ("operation" in value or "content" in value):
+            operations = value.get("operations") or value.get("patch") or value.get("edits") or value.get("changes") or value.get("files")
+            if not operations and "path" in value and ("operation" in value or "content" in value or "replacements" in value):
                 operations = [value]
         elif isinstance(value, list):
             operations = value
         if not isinstance(operations, list) or not operations:
-            raise RepairEngineError("Coder did not return a non-empty operations list.")
+            return []
         encoded = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))
         if encoded > self.policy.max_patch_bytes:
-            raise RepairEngineError(
-                "Repair patch exceeds MMM_MAX_PATCH_BYTES; raise the host policy explicitly."
-            )
+            return []
         return operations
 
     @staticmethod
@@ -328,7 +333,10 @@ class RepairEngine:
                 continue
             if item.get("operation") == "edit" and (not isinstance(item.get("replacements"), list) or not item.get("replacements")):
                 continue
-            path = Path(str(item.get("path", "")))
+            path_str = str(item.get("path", "")).strip()
+            if not path_str:
+                continue
+            path = Path(path_str)
             if path.suffix not in _ALLOWED_SUFFIXES and path.name not in {
                 "build.gradle",
                 "settings.gradle",
@@ -343,8 +351,6 @@ class RepairEngine:
             paths.append(normalized)
             valid_operations.append(item)
         operations[:] = valid_operations
-        if not operations:
-            raise RepairEngineError("Repair operations list contained no valid patch operations.")
 
     @staticmethod
     def _hydrate_repair_preconditions(root: Path, operations: list[dict[str, Any]]) -> None:
@@ -436,18 +442,24 @@ class RepairEngine:
                     item.pop(k, None)
 
 
-def _extract_json(text: str) -> dict[str, Any]:
+def _extract_json(text: str) -> Any:
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
     decoder = json.JSONDecoder()
     for index, char in enumerate(text):
-        if char != "{":
+        if char not in ("{", "["):
             continue
         try:
             value, _ = decoder.raw_decode(text[index:])
+            if isinstance(value, (dict, list)):
+                return value
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
-            return value
-    raise RepairEngineError("Coder repair response did not contain a JSON object.")
+    return {}
 
 
 def _repair_rag_metadata(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
