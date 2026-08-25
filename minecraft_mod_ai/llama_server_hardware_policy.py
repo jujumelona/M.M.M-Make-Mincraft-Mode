@@ -126,8 +126,6 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         "messages": [dict(message) for message in request.messages],
         "max_tokens": int(adapter.config.max_new_tokens),
         "temperature": 0.0,
-        "reasoning_effort": "none",
-        "chat_template_kwargs": {"enable_thinking": False},
     }
     tools = getattr(request, "tools", ()) or ()
     if tools:
@@ -150,6 +148,12 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload["parallel_tool_calls"] = bool(
             getattr(request, "parallel_tool_calls", False)
         )
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+
+    elif getattr(request, "response_format", None) == "json":
+        payload["reasoning_effort"] = "none"
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     return _enforce_required_tool_sampling(payload)
 
 
