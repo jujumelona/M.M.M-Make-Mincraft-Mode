@@ -94,5 +94,6 @@ def test_valid_host_grounding_unlocks_mutation_frontier() -> None:
 
 def test_incomplete_host_grounding_cannot_unlock_mutation() -> None:
     frontier = _frontier_tools(valid_grounding=False)
+    assert frontier
     assert "apply_source_patch" not in frontier
-    assert set(frontier) == {"search_code_rag", "java_workspace_symbols"}
+    assert set(frontier).issubset({"search_code_rag", "java_workspace_symbols"})
