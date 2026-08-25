@@ -435,10 +435,12 @@ def _decode_parameter_value(
             if expected == "array" and not isinstance(value, list):
                 raise ValueError("not an array")
         else:
+            value = raw
             if compact.startswith(("{", "[", '"')) or compact in {"true", "false", "null"}:
-                value = json.loads(compact)
-            else:
-                value = raw
+                try:
+                    value = json.loads(compact)
+                except json.JSONDecodeError:
+                    pass
     except (ValueError, json.JSONDecodeError) as exc:
         raise ToolCallValidationError(
             f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "

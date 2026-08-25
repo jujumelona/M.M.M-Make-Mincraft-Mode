@@ -73,14 +73,37 @@ class _ProjectLockPool:
 _RECEIPT_LOCKS = _ProjectLockPool()
 
 
+_DEPENDENCY_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:+/-]{1,127}|[가-힣]{2,}")
 _CAMEL_PART = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+|[0-9]+")
 
 
-def _dependency_tokens(research_module: Any, value: Any) -> set[str]:
-    tokens = set(research_module._tokens(value))
-    text = value if isinstance(value, str) else " ".join(str(item) for item in value)
+def _canonical_sha(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _dependency_tokens(_research_module: Any, value: Any) -> set[str]:
+    """Tokenize dependency hints without reaching into another module's private API."""
+
+    text = value if isinstance(value, str) else json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    tokens = {token.casefold() for token in _DEPENDENCY_TOKEN.findall(text)}
     for token in re.findall(r"[A-Za-z][A-Za-z0-9_]*", text):
-        tokens.update(part.casefold() for part in _CAMEL_PART.findall(token) if len(part) >= 2)
+        tokens.update(
+            part.casefold()
+            for part in _CAMEL_PART.findall(token)
+            if len(part) >= 2
+        )
     return tokens
 
 
@@ -334,7 +357,7 @@ def _install_research_context_hardening(research_module: Any) -> None:
                     },
                     "query_history_tail": list(self.query_history[-8:]),
                     "reusable_evidence": reusable,
-                    "reusable_evidence_sha256": research_module._sha(reusable),
+                    "reusable_evidence_sha256": _canonical_sha(reusable),
                     "dependency_directed_retrieval": True,
                 }
             )

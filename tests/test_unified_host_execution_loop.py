@@ -32,6 +32,24 @@ def _tool_schema(name: str) -> dict[str, object]:
     }
 
 
+def _applied_patch_payload(path: str = "src/ModBlock.java") -> dict[str, object]:
+    return {
+        "ok": True,
+        "result": {
+            "schema_version": "mmm/source-patch-receipt-v1",
+            "status": "APPLIED",
+            "operations": [
+                {
+                    "operation": "replace",
+                    "path": path,
+                    "before_sha256": "sha256:" + "a" * 64,
+                    "after_sha256": "sha256:" + "b" * 64,
+                }
+            ],
+        },
+    }
+
+
 def test_host_run_state_query_deduplication() -> None:
     state = HostRunState()
     assert state.record_query("search_code_rag", {"query": "BlockRegistry"}) is True
@@ -50,13 +68,7 @@ def test_host_run_state_evidence_fingerprinting() -> None:
 
 def test_host_run_state_mutation_tracking() -> None:
     state = HostRunState()
-    applied_payload = {
-        "ok": True,
-        "_mmm_source_mutation": {
-            "tool": "apply_source_patch",
-            "status": "APPLIED_BY_HOST_RUNTIME",
-        },
-    }
+    applied_payload = _applied_patch_payload()
     failed_payload = {"ok": False, "error": "Patch rejected"}
 
     assert state.record_mutation("apply_source_patch", failed_payload) is False
@@ -547,7 +559,7 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
                 ]
             }
         elif name == "apply_source_patch":
-            return {"ok": True, "applied": True, "patched_files": ["src/ModBlock.java"]}
+            return _applied_patch_payload()
         return {}
 
     runtime = MagicMock()

@@ -163,7 +163,9 @@ def preflight_source_patch_operations(
                 and after is not None
                 and before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n")
             ):
-                continue
+                raise SourcePatchError(
+                    f"Patch operation makes no change for {item['path']}"
+                )
     except SourcePatchError as exc:
         raise SourcePatchPreconditionError(str(exc)) from exc
 

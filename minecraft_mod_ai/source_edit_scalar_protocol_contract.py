@@ -375,6 +375,10 @@ def _create_java_type(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     _validate_java_path(runtime_module, normalized)
+    if target.exists():
+        raise runtime_module.AgentToolRuntimeError(
+            f"create_java_type target already exists: {normalized}"
+        )
     package_name = _required_text(runtime_module, payload, "package_name").strip()
     if not _JAVA_PACKAGE.fullmatch(package_name):
         package_match = re.search(r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*", package_name)
@@ -392,15 +396,6 @@ def _create_java_type(
         declaration = f"public class {declaration}"
 
     content = f"package {package_name};\n\n{declaration} {{\n}}\n"
-    if target.exists():
-        raw_bytes, text, expected_sha256 = _read_utf8(runtime_module, target, normalized)
-        del raw_bytes, text
-        return {
-            "operation": "replace",
-            "path": normalized,
-            "expected_sha256": expected_sha256,
-            "content": content,
-        }
     return {
         "operation": "create",
         "path": normalized,
@@ -461,8 +456,8 @@ def _mask_java_noncode(text: str) -> str:
                 state == "char" and char == "'"
             ):
                 state = "code"
-            index += 1
-        return "".join(chars)
+        index += 1
+    return "".join(chars)
 
 
 def _outer_type_close(runtime_module: Any, text: str, normalized: str) -> int:
