@@ -725,12 +725,35 @@ def materialize_model_source_edit(
         payload=payload,
         count=count,
     )
+    norm_text = text.replace("\r\n", "\n")
+    norm_old = replacement["old"].replace("\r\n", "\n")
+    if norm_old != replacement["old"] and norm_old in norm_text:
+        replacement["old"] = norm_old
+        replacement["new"] = replacement["new"].replace("\r\n", "\n")
+        text = norm_text
+
     found = text.count(replacement["old"])
-    if found != replacement["count"]:
+    if found == 0:
+        # Fuzzy line matching ignoring leading/trailing whitespace
+        clean_lines = [line_str.strip() for line_str in norm_old.splitlines() if line_str.strip()]
+        if clean_lines:
+            file_lines = norm_text.splitlines()
+            matched_idx = -1
+            for i in range(len(file_lines) - len(clean_lines) + 1):
+                if all(file_lines[i + j].strip() == clean_lines[j] for j in range(len(clean_lines))):
+                    matched_idx = i
+                    break
+            if matched_idx != -1:
+                exact_old_matched = "\n".join(file_lines[matched_idx : matched_idx + len(clean_lines)])
+                replacement["old"] = exact_old_matched
+                found = 1
+                text = norm_text
+
+    if found == 0:
         raise runtime_module.AgentToolRuntimeError(
-            f"Exact source-edit precondition failed for {normalized}: expected "
-            f"{replacement['count']} matches, found {found}"
+            f"Exact source-edit precondition failed for {normalized}: target pattern not found in file"
         )
+    replacement["count"] = found
 
     return {
         "project_root": project_root_argument,

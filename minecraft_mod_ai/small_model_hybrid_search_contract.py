@@ -365,7 +365,21 @@ def install(production_tools_module: Any) -> None:
             if errors:
                 best["fallback_errors"] = errors
             return best
-        raise RuntimeError("Code RAG failed all routed modes: " + " | ".join(errors))
+        return {
+            "schema_version": "mmm/code-rag-result-v1",
+            "query": query,
+            "hits": [],
+            "task_route": route,
+            "retrieval_mode": "empty_fallback",
+            "retrieval_retry": False,
+            "fallback_errors": errors,
+            "receipt": {
+                "query": query,
+                "total_candidates": 0,
+                "status": "NOT_FOUND",
+                "warnings": errors,
+            },
+        }
 
     @wraps(searched)
     def cached_search(
