@@ -578,5 +578,61 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
     assert result == "Successfully updated drop logic."
 
 
+def test_execution_step_trace_records_immutable_trajectory_and_summary() -> None:
+    """Every turn records an immutable ExecutionStepTrace capturing model call, results, and state deltas."""
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        ExecutionStepTrace,
+        format_trajectory_summary,
+    )
+
+    trace1 = ExecutionStepTrace(
+        step_index=1,
+        phase_before="OBSERVE",
+        localization_stage_before="NEED_FILE",
+        mutation_context_before=None,
+        exposed_tools=["search_code_rag"],
+        tool_choice=None,
+        input_messages_count=2,
+        model_response_content=None,
+        model_tool_calls=[{"name": "search_code_rag", "arguments": {"query": "ModItem"}}],
+        query_signatures=["search_code_rag:moditem"],
+        tool_results=[{"name": "search_code_rag", "ok": True, "error": None}],
+        mutation_context_after={"target_path": "src/ModItem.java", "localization_stage": "NEED_SYMBOL"},
+        localization_stage_after="NEED_SYMBOL",
+        phase_after="OBSERVE",
+        turn_made_progress=True,
+        no_progress_streak_after=0,
+        action_decision="tool_wave_executed",
+    )
+
+    trace2 = ExecutionStepTrace(
+        step_index=2,
+        phase_before="OBSERVE",
+        localization_stage_before="NEED_SYMBOL",
+        mutation_context_before={"target_path": "src/ModItem.java"},
+        exposed_tools=["java_workspace_symbols"],
+        tool_choice=None,
+        input_messages_count=4,
+        model_response_content=None,
+        model_tool_calls=[{"name": "java_workspace_symbols", "arguments": {"query": "use"}}],
+        query_signatures=["java_workspace_symbols:use"],
+        tool_results=[{"name": "java_workspace_symbols", "ok": True, "error": None}],
+        mutation_context_after={"target_path": "src/ModItem.java", "target_symbol": "use", "localization_stage": "NEED_BODY"},
+        localization_stage_after="NEED_BODY",
+        phase_after="OBSERVE",
+        turn_made_progress=True,
+        no_progress_streak_after=0,
+        action_decision="tool_wave_executed",
+    )
+
+    summary = format_trajectory_summary([trace1, trace2])
+    assert "Step 1 [OBSERVE:NEED_FILE -> OBSERVE:NEED_SYMBOL]" in summary
+    assert "search_code_rag" in summary
+    assert "Step 2 [OBSERVE:NEED_SYMBOL -> OBSERVE:NEED_BODY]" in summary
+    assert "java_workspace_symbols" in summary
+    assert "progress=True streak=0" in summary
+
+
+
 
 

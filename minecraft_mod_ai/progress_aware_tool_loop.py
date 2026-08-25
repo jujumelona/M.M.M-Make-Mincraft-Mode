@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Mapping, Sequence
@@ -38,14 +39,14 @@ class LoopPhase(str, Enum):
 
 
 class RetrievalDecision(str, Enum):
-    EXECUTE = "execute"
-    DUPLICATE_QUERY = "duplicate_query"
+    EXECUTE = "EXECUTE"
+    DUPLICATE_QUERY = "DUPLICATE_QUERY"
 
 
 class RetrievalObservation(str, Enum):
-    FRESH = "fresh"
-    WEAK = "weak"
-    DUPLICATE_EVIDENCE = "duplicate_evidence"
+    FRESH = "FRESH"
+    DUPLICATE_EVIDENCE = "DUPLICATE_EVIDENCE"
+    WEAK = "WEAK"
 
 
 _STOPWORDS = frozenset({
@@ -118,6 +119,12 @@ def retrieval_source_key(tool_name: str, arguments: Mapping[str, Any]) -> str:
     return name
 
 
+def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> str:
+    name = str(tool_name or "").strip()
+    norm_query = normalize_retrieval_query(arguments.get("query"))
+    return f"{name}:{norm_query}" if norm_query else name
+
+
 def _stable_value(value: Any, *, drop_volatile: bool) -> Any:
     if isinstance(value, Mapping):
         result: dict[str, Any] = {}
@@ -146,39 +153,21 @@ def _stable_value(value: Any, *, drop_volatile: bool) -> Any:
     return value
 
 
-def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> str:
-    source = retrieval_source_key(tool_name, arguments)
-    data = dict(arguments)
-    query = normalize_retrieval_query(data.pop("query", ""))
-    if tool_name == "external_mcp_call":
-        nested = data.get("arguments")
-        if isinstance(nested, Mapping):
-            nested_data = dict(nested)
-            nested_query = normalize_retrieval_query(nested_data.pop("query", ""))
-            if nested_query:
-                query = nested_query
-            data["arguments"] = nested_data
-    canonical = json.dumps(
-        {"source": source, "query": query, "scope": _stable_value(data, drop_volatile=False)},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def evidence_fingerprint(value: Any) -> str | None:
+    """Compute a canonical stable digest for novel evidence checking."""
     stable = _stable_value(value, drop_volatile=True)
     if stable in (None, "", [], {}):
         return None
-    canonical = json.dumps(
-        stable,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
+    try:
+        canonical = json.dumps(
+            stable,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        canonical = repr(stable)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -242,6 +231,89 @@ class TargetMutationContext:
         )
 
 
+@dataclass(frozen=True)
+class ExecutionStepTrace:
+    """Immutable per-turn trajectory record inspired by SWE-agent (.traj) and OpenHands."""
+
+    step_index: int
+    phase_before: str
+    localization_stage_before: str
+    mutation_context_before: dict[str, Any] | None
+    exposed_tools: list[str]
+    tool_choice: Any
+    input_messages_count: int
+    model_response_content: str | None
+    model_tool_calls: list[dict[str, Any]]
+    query_signatures: list[str]
+    tool_results: list[dict[str, Any]]
+    mutation_context_after: dict[str, Any] | None
+    localization_stage_after: str
+    phase_after: str
+    turn_made_progress: bool
+    no_progress_streak_after: int
+    action_decision: str
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step_index": self.step_index,
+            "phase_before": self.phase_before,
+            "localization_stage_before": self.localization_stage_before,
+            "mutation_context_before": self.mutation_context_before,
+            "exposed_tools": self.exposed_tools,
+            "tool_choice": self.tool_choice,
+            "input_messages_count": self.input_messages_count,
+            "model_response_content": self.model_response_content,
+            "model_tool_calls": self.model_tool_calls,
+            "query_signatures": self.query_signatures,
+            "tool_results": self.tool_results,
+            "mutation_context_after": self.mutation_context_after,
+            "localization_stage_after": self.localization_stage_after,
+            "phase_after": self.phase_after,
+            "turn_made_progress": self.turn_made_progress,
+            "no_progress_streak_after": self.no_progress_streak_after,
+            "action_decision": self.action_decision,
+            "timestamp": self.timestamp,
+        }
+
+
+def _mutation_context_dict(ctx: TargetMutationContext | None) -> dict[str, Any] | None:
+    if ctx is None:
+        return None
+    return {
+        "target_path": ctx.target_path,
+        "target_symbol": ctx.target_symbol,
+        "source_body_len": len(ctx.source_body) if ctx.source_body else 0,
+        "start_line": ctx.start_line,
+        "end_line": ctx.end_line,
+        "is_new_file": ctx.is_new_file,
+        "localization_stage": ctx.localization_stage.value,
+        "evidence_source": ctx.evidence_source,
+    }
+
+
+def format_trajectory_summary(trajectory: Sequence[ExecutionStepTrace]) -> str:
+    """Format recent trajectory steps into a compact, human-readable trace."""
+    lines = []
+    for t in trajectory[-6:]:
+        tool_call_desc = (
+            ", ".join(
+                f"{c.get('name')}({json.dumps(c.get('arguments', {}), ensure_ascii=False)[:60]})"
+                for c in t.model_tool_calls
+            )
+            or (t.model_response_content[:50] if t.model_response_content else "<empty>")
+        )
+        results_desc = ", ".join(
+            f"{r.get('name')}->{'OK' if r.get('ok') else str(r.get('error', 'FAIL'))[:40]}"
+            for r in t.tool_results
+        ) or "<none>"
+        lines.append(
+            f"  Step {t.step_index} [{t.phase_before}:{t.localization_stage_before} -> {t.phase_after}:{t.localization_stage_after}]: "
+            f"exposed={t.exposed_tools} | model={tool_call_desc} | res={results_desc} | progress={t.turn_made_progress} streak={t.no_progress_streak_after}"
+        )
+    return "\n".join(lines)
+
+
 @dataclass
 class HostRunState:
     """Unified single-owner state tracking execution, progress deltas, and bounds."""
@@ -260,6 +332,7 @@ class HostRunState:
     last_failure_reason: str | None = None
     last_result_digest: str | None = None
     termination_reason: str | None = None
+    trajectory: list[ExecutionStepTrace] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -501,7 +574,28 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                         evidence_source="java_workspace_symbols",
                     )
 
-    # 4. Files mapping (path -> code or list of {path, content})
+    # 4. Observation records / global_anchors / page_observations / records
+    for key in ("global_anchors", "page_observations", "records", "excerpts"):
+        records = payload.get(key)
+        if isinstance(records, (list, tuple)):
+            for rec in records:
+                if isinstance(rec, Mapping):
+                    path = str(rec.get("path") or rec.get("file") or "").strip()
+                    text = (
+                        rec.get("text")
+                        or rec.get("content")
+                        or rec.get("source")
+                        or rec.get("snippet")
+                        or rec.get("code")
+                    )
+                    if path and isinstance(text, str) and _is_code_bearing_text(text):
+                        return TargetMutationContext(
+                            target_path=path,
+                            source_body=text,
+                            evidence_source=f"observation_page_{key}",
+                        )
+
+    # 5. Files mapping (path -> code or list of {path, content})
     files = payload.get("files")
     if isinstance(files, Mapping):
         for path, content in files.items():
@@ -530,14 +624,14 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                     evidence_source="files_names_only",
                 )
 
-    # 5. Nested initial_exact_source_context
+    # 6. Nested initial_exact_source_context
     exact = payload.get("initial_exact_source_context")
     if exact is not None and exact is not payload:
         ctx = _extract_mutation_context_from_payload(exact)
         if ctx is not None:
             return ctx
 
-    # 6. Direct target_file / target_source
+    # 7. Direct target_file / target_source
     target_file = payload.get("target_file")
     if isinstance(target_file, str) and target_file.strip():
         source_val = payload.get("source") or payload.get("content") or payload.get("code")
@@ -592,6 +686,7 @@ def _filter_tools_for_phase(
     role: str,
     *,
     mutation_context: TargetMutationContext | None = None,
+    attempted_sources: Sequence[str] | set[str] | frozenset[str] = frozenset(),
 ) -> tuple[Mapping[str, Any], ...]:
     del role
     by_name = {_tool_name(schema): schema for schema in exposed_tools if _tool_name(schema)}
@@ -606,11 +701,12 @@ def _filter_tools_for_phase(
         )
         if stage == LocalizationStage.NEED_FILE:
             preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")
-            selected_names = [name for name in preferred if name in by_name]
+            untried = [name for name in preferred if name in by_name and name not in attempted_sources]
+            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]
             if not selected_names:
                 selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
         elif stage == LocalizationStage.NEED_SYMBOL:
-            preferred = ("java_workspace_symbols", "java_diagnostics")
+            preferred = ("java_workspace_symbols",)
             selected_names = [name for name in preferred if name in by_name]
             if not selected_names and "search_code_rag" in by_name:
                 selected_names = ["search_code_rag"]
@@ -618,7 +714,8 @@ def _filter_tools_for_phase(
                 selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
         elif stage == LocalizationStage.NEED_BODY:
             preferred = ("search_code_rag", "inspect_existing_mod")
-            selected_names = [name for name in preferred if name in by_name]
+            untried = [name for name in preferred if name in by_name and name not in attempted_sources]
+            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]
             if not selected_names:
                 selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
         else:
@@ -791,17 +888,20 @@ def generate_with_tools(
             )
 
         if forced_rag_tool is None and state.no_progress_streak >= 2:
+            traj_summary = format_trajectory_summary(state.trajectory)
             reason_suffix = f": {state.last_failure_reason}" if state.last_failure_reason else ""
             if require_rag and not state.has_fresh_evidence:
                 raise ModelConfigurationError(
                     "Required production evidence is unavailable: every host-forceable "
                     "RAG source was already attempted without novel usable evidence, and "
-                    f"the model selected no other reviewed retrieval route.{reason_suffix}"
+                    f"the model selected no other reviewed retrieval route.{reason_suffix}\n"
+                    f"Execution trajectory:\n{traj_summary}"
                 )
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 raise ModelConfigurationError(
                     "Writable coder reached a no-progress boundary before a reviewed source "
-                    f"mutation was applied; refusing a prose-only implementation.{reason_suffix}"
+                    f"mutation was applied; refusing a prose-only implementation.{reason_suffix}\n"
+                    f"Execution trajectory:\n{traj_summary}"
                 )
             return _finalize_without_tools(
                 router,
@@ -816,11 +916,20 @@ def generate_with_tools(
                 empty_error="Agent returned an empty final response after no-progress convergence.",
             )
 
+        phase_before = state.phase.value
+        loc_stage_before = (
+            state.mutation_context.localization_stage.value
+            if state.mutation_context is not None
+            else LocalizationStage.NEED_FILE.value
+        )
+        ctx_before = _mutation_context_dict(state.mutation_context)
+
         phase_tools = _filter_tools_for_phase(
             all_exposed_tools,
             state.phase,
             role,
             mutation_context=state.mutation_context,
+            attempted_sources=state.attempted_sources,
         )
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
 
@@ -872,6 +981,26 @@ def generate_with_tools(
                         "content": f"Call the required function {forced_rag_tool} exactly once now. Do not answer in prose.",
                     },
                 ])
+                trace_entry = ExecutionStepTrace(
+                    step_index=state.step_index,
+                    phase_before=phase_before,
+                    localization_stage_before=loc_stage_before,
+                    mutation_context_before=ctx_before,
+                    exposed_tools=sorted(phase_tool_names),
+                    tool_choice=tool_choice,
+                    input_messages_count=len(messages),
+                    model_response_content=content,
+                    model_tool_calls=[],
+                    query_signatures=[],
+                    tool_results=[],
+                    mutation_context_after=ctx_before,
+                    localization_stage_after=loc_stage_before,
+                    phase_after=state.phase.value,
+                    turn_made_progress=False,
+                    no_progress_streak_after=state.no_progress_streak,
+                    action_decision=f"host_guided_to_{forced_rag_tool}",
+                )
+                state.trajectory.append(trace_entry)
                 continue
             if require_rag and not state.has_fresh_evidence:
                 forced_rag_tool = state.next_untried_internal_tool(
@@ -897,6 +1026,26 @@ def generate_with_tools(
                         ),
                     },
                 ])
+                trace_entry = ExecutionStepTrace(
+                    step_index=state.step_index,
+                    phase_before=phase_before,
+                    localization_stage_before=loc_stage_before,
+                    mutation_context_before=ctx_before,
+                    exposed_tools=sorted(phase_tool_names),
+                    tool_choice=tool_choice,
+                    input_messages_count=len(messages),
+                    model_response_content=content,
+                    model_tool_calls=[],
+                    query_signatures=[],
+                    tool_results=[],
+                    mutation_context_after=ctx_before,
+                    localization_stage_after=loc_stage_before,
+                    phase_after=state.phase.value,
+                    turn_made_progress=False,
+                    no_progress_streak_after=state.no_progress_streak,
+                    action_decision=f"host_required_rag_{forced_rag_tool}",
+                )
+                state.trajectory.append(trace_entry)
                 continue
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 if state.phase == LoopPhase.OBSERVE and is_mutation_ready(messages, state):
@@ -912,6 +1061,26 @@ def generate_with_tools(
                         },
                     ])
                     state.no_progress_streak = 0
+                    trace_entry = ExecutionStepTrace(
+                        step_index=state.step_index,
+                        phase_before=phase_before,
+                        localization_stage_before=loc_stage_before,
+                        mutation_context_before=ctx_before,
+                        exposed_tools=sorted(phase_tool_names),
+                        tool_choice=tool_choice,
+                        input_messages_count=len(messages),
+                        model_response_content=content,
+                        model_tool_calls=[],
+                        query_signatures=[],
+                        tool_results=[],
+                        mutation_context_after=ctx_before,
+                        localization_stage_after=loc_stage_before,
+                        phase_after=LoopPhase.ACT.value,
+                        turn_made_progress=True,
+                        no_progress_streak_after=0,
+                        action_decision="transition_to_act",
+                    )
+                    state.trajectory.append(trace_entry)
                     continue
                 elif state.phase == LoopPhase.OBSERVE:
                     loc_stage = (
@@ -923,7 +1092,7 @@ def generate_with_tools(
                         preferred = ("search_code_rag", "search_project_rag")
                         prompt_msg = "Locate the target file path using {tool} before modifying source."
                     elif loc_stage == LocalizationStage.NEED_SYMBOL:
-                        preferred = ("java_workspace_symbols", "java_diagnostics", "search_code_rag")
+                        preferred = ("java_workspace_symbols",)
                         target_p = state.mutation_context.target_path or "the target file"
                         prompt_msg = f"Target file '{target_p}' identified. Call {{tool}} to inspect symbol declarations."
                     elif loc_stage == LocalizationStage.NEED_BODY:
@@ -952,6 +1121,26 @@ def generate_with_tools(
                                 "content": prompt_msg.format(tool=forced_rag_tool),
                             },
                         ])
+                        trace_entry = ExecutionStepTrace(
+                            step_index=state.step_index,
+                            phase_before=phase_before,
+                            localization_stage_before=loc_stage_before,
+                            mutation_context_before=ctx_before,
+                            exposed_tools=sorted(phase_tool_names),
+                            tool_choice=tool_choice,
+                            input_messages_count=len(messages),
+                            model_response_content=content,
+                            model_tool_calls=[],
+                            query_signatures=[],
+                            tool_results=[],
+                            mutation_context_after=ctx_before,
+                            localization_stage_after=loc_stage_before,
+                            phase_after=state.phase.value,
+                            turn_made_progress=False,
+                            no_progress_streak_after=state.no_progress_streak,
+                            action_decision=f"host_guided_to_{forced_rag_tool}",
+                        )
+                        state.trajectory.append(trace_entry)
                         continue
                 raise ModelConfigurationError(
                     "Writable coder returned a final prose answer before a reviewed source mutation "
@@ -1151,6 +1340,51 @@ def generate_with_tools(
         else:
             state.no_progress_streak += 1
 
+        phase_after = state.phase.value
+        loc_stage_after = (
+            state.mutation_context.localization_stage.value
+            if state.mutation_context is not None
+            else LocalizationStage.NEED_FILE.value
+        )
+        ctx_after = _mutation_context_dict(state.mutation_context)
+        model_calls_info = [{"name": c.name, "arguments": dict(c.arguments)} for c in turn.tool_calls]
+        query_sigs = [retrieval_query_signature(c.name, c.arguments) for c in turn.tool_calls]
+        results_info = [
+            {"name": call.name, "ok": payload.get("ok"), "error": payload.get("error")}
+            for call, payload in executed
+        ]
+
+        trace_entry = ExecutionStepTrace(
+            step_index=state.step_index,
+            phase_before=phase_before,
+            localization_stage_before=loc_stage_before,
+            mutation_context_before=ctx_before,
+            exposed_tools=sorted(phase_tool_names),
+            tool_choice=tool_choice,
+            input_messages_count=len(messages),
+            model_response_content=turn.content or None,
+            model_tool_calls=model_calls_info,
+            query_signatures=query_sigs,
+            tool_results=results_info,
+            mutation_context_after=ctx_after,
+            localization_stage_after=loc_stage_after,
+            phase_after=phase_after,
+            turn_made_progress=turn_made_progress,
+            no_progress_streak_after=state.no_progress_streak,
+            action_decision="tool_wave_executed",
+        )
+        state.trajectory.append(trace_entry)
+        print(
+            f"host trajectory: step={state.step_index} "
+            f"phase={phase_before}->{phase_after} "
+            f"stage={loc_stage_before}->{loc_stage_after} "
+            f"exposed={sorted(phase_tool_names)} "
+            f"calls={[c.name for c in turn.tool_calls]} "
+            f"progress={turn_made_progress} "
+            f"streak={state.no_progress_streak}",
+            flush=True,
+        )
+
 
 def _finalize_without_tools(
     router: Any,
@@ -1191,6 +1425,7 @@ def _finalize_without_tools(
 
 
 __all__ = [
+    "ExecutionStepTrace",
     "HostRunState",
     "LocalizationStage",
     "LoopPhase",
@@ -1204,6 +1439,7 @@ __all__ = [
     "_READ_OBSERVE_TOOLS",
     "_VERIFY_TOOLS",
     "evidence_fingerprint",
+    "format_trajectory_summary",
     "generate_with_tools",
     "is_mutation_ready",
     "normalize_retrieval_query",
