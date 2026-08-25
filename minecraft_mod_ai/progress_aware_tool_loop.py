@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import sys
 import threading
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
-from .agent_intent import implementation_requested, structured_user_intent
+from .agent_intent import implementation_requested
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     completion_boundary_kind,
@@ -312,6 +310,7 @@ def _filter_tools_for_phase(
     phase: LoopPhase,
     role: str,
 ) -> tuple[Mapping[str, Any], ...]:
+    del role
     by_name = {_tool_name(schema): schema for schema in exposed_tools if _tool_name(schema)}
     if not by_name:
         return ()
@@ -323,20 +322,14 @@ def _filter_tools_for_phase(
         ]
     elif phase == LoopPhase.ACT:
         selected_names = [name for name in by_name if name in _MUTATION_ACT_TOOLS]
-        if not selected_names:
-            selected_names = list(by_name.keys())
     elif phase in (LoopPhase.VERIFY, LoopPhase.RECOVER):
         selected_names = [
             name for name in by_name
             if name in _VERIFY_TOOLS or name in _READ_OBSERVE_TOOLS
         ]
-        if not selected_names:
-            selected_names = list(by_name.keys())
     else:
-        selected_names = list(by_name.keys())
+        selected_names = []
 
-    if not selected_names:
-        return tuple(exposed_tools)
     return tuple(by_name[name] for name in selected_names if name in by_name)
 
 
@@ -665,13 +658,16 @@ def generate_with_tools(
                 if capability:
                     route_metadata["external_mcp_capability"] = capability
 
-            # Check phase legality
-            if call.name not in all_exposed_names:
+            # Check phase legality (fail-closed to phase_tool_names)
+            if call.name not in phase_tool_names:
                 return call, {
                     "ok": False,
                     "tool": call.name,
                     **route_metadata,
-                    "error": f"Agent attempted hidden tool {call.name!r} outside its reviewed role routes for {role!r}/{stage!r}.",
+                    "error": (
+                        f"Agent attempted tool {call.name!r} outside its allowed phase {state.phase.value!r} "
+                        f"(allowed tools: {sorted(phase_tool_names)})."
+                    ),
                 }
 
             if is_retrieval(call):

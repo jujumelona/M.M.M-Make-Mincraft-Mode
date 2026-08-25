@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from contextlib import nullcontext
 from unittest.mock import MagicMock
 
@@ -14,9 +13,6 @@ from minecraft_mod_ai.model_adapters.base import (
 )
 from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
-    LoopPhase,
-    RetrievalDecision,
-    RetrievalObservation,
     generate_with_tools,
 )
 
@@ -120,3 +116,88 @@ def test_no_progress_cutoff_at_two_streaks() -> None:
             stage="generation",
             role="coder",
         )
+
+
+def test_filter_tools_for_phase_is_strictly_fail_closed() -> None:
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        LoopPhase,
+        _filter_tools_for_phase,
+    )
+
+    read_tool = _tool_schema("search_code_rag")
+    mutate_tool = _tool_schema("apply_source_patch")
+    verify_tool = _tool_schema("java_diagnostics")
+
+    # In ACT phase with only read tools available, must return empty tuple fail-closed, NOT all tools
+    act_tools = _filter_tools_for_phase((read_tool,), LoopPhase.ACT, role="coder")
+    assert act_tools == ()
+
+    # In OBSERVE phase with only mutation tools available, must return empty tuple fail-closed
+    obs_tools = _filter_tools_for_phase((mutate_tool,), LoopPhase.OBSERVE, role="coder")
+    assert obs_tools == ()
+
+    # In VERIFY phase with only mutation tools available, must return empty tuple fail-closed
+    ver_tools = _filter_tools_for_phase((mutate_tool,), LoopPhase.VERIFY, role="coder")
+    assert ver_tools == ()
+
+    # When matching tools exist, returns only those matching tools preserving exposure order
+    mixed = (read_tool, mutate_tool, verify_tool)
+    assert _filter_tools_for_phase(mixed, LoopPhase.OBSERVE, role="coder") == (read_tool,)
+    assert _filter_tools_for_phase(mixed, LoopPhase.ACT, role="coder") == (mutate_tool,)
+    assert _filter_tools_for_phase(mixed, LoopPhase.VERIFY, role="coder") == (read_tool, verify_tool)
+
+
+def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
+    """When a model emits an out-of-phase tool (e.g. search_code_rag in ACT phase), host rejects execution."""
+    router = MagicMock()
+    router._generation_scope.return_value = nullcontext()
+    router._agent_require_fresh_evidence = False
+
+    config = MagicMock()
+    config.adapter = "llama_cpp"
+    config.max_context = 16384
+    config.max_new_tokens = 4096
+    config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+    # We start directly in ACT phase by requesting implementation on a grounded message
+    # Model emits out-of-phase tool: search_code_rag instead of apply_source_patch
+    adapter = MagicMock()
+    adapter.generate_turn.return_value = GenerationResponse(
+        tool_calls=(
+            ToolCall(
+                id="call_1",
+                name="search_code_rag",
+                arguments={"query": "test"},
+                raw_arguments='{"query":"test"}',
+            ),
+        )
+    )
+
+    runtime = MagicMock()
+
+    request = GenerationRequest(
+        messages=(
+            {"role": "system", "content": "grounded context"},
+            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": "class A {}"}'},
+        ),
+        tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    # The tool loop should reject search_code_rag because ACT phase only allows apply_source_patch
+    # Since search_code_rag was rejected and no progress was made across 2 streaks, it raises no-progress boundary
+    with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
+        generate_with_tools(
+            router,
+            config=config,
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+
+    # Runtime call was never executed for the out-of-phase tool!
+    runtime.call.assert_not_called()
+

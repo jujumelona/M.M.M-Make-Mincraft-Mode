@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock
 
-import pytest
 
 from minecraft_mod_ai.model_context_budget import (
     bounded_tool_message,

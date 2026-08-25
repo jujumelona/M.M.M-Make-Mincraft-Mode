@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
 
 from minecraft_mod_ai.model_context_budget import (
-    effective_context_tokens,
     fit_messages_to_context,
     request_message_budget,
 )

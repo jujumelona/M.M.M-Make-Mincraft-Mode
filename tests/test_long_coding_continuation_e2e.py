@@ -4,13 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerator,
     _output_exhaustion_continuation_messages,
 )
-from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai.complete_spec import ProductionModule
 
 
