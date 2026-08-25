@@ -185,6 +185,8 @@ def _parse_qwen_function(
         if _is_host_owned_argument(emitted_key, properties):
             continue
         key = _canonical_key(name, emitted_key, properties)
+        if key not in properties and additional is False:
+            raise _unknown_parameter_error(name, emitted_key, properties, required)
         value_schema = properties.get(key, {})
         if not isinstance(value_schema, Mapping):
             value_schema = {}
@@ -195,6 +197,13 @@ def _parse_qwen_function(
         env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
         if env_ver:
             arguments["minecraft_version"] = env_ver
+    missing = sorted(required - arguments.keys())
+    if missing:
+        allowed = ", ".join(sorted(str(key) for key in properties)) or "<none>"
+        raise RuntimeError(
+            f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}; "
+            f"allowed parameters: {allowed}"
+        )
 
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(
