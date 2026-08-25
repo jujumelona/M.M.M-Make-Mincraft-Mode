@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from contextlib import nullcontext
 from unittest.mock import MagicMock
 
@@ -14,9 +13,6 @@ from minecraft_mod_ai.model_adapters.base import (
 )
 from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
-    LoopPhase,
-    RetrievalDecision,
-    RetrievalObservation,
     generate_with_tools,
 )
 
@@ -45,10 +41,10 @@ def test_host_run_state_query_deduplication() -> None:
 def test_host_run_state_evidence_fingerprinting() -> None:
     state = HostRunState()
     ev1 = {"hits": [{"path": "Block.java", "score": 0.9}], "coverage_score": 0.9}
-    ev2 = {"hits": [{"path": "Block.java", "score": 0.9}], "coverage_score": 0.5}  # volatile key ignored
+    ev2 = {"hits": [{"path": "Block.java", "score": 0.9}], "coverage_score": 0.5}
 
     assert state.record_evidence(ev1, usable=True) is True
-    assert state.record_evidence(ev2, usable=True) is False  # same canonical fingerprint
+    assert state.record_evidence(ev2, usable=True) is False
 
 
 def test_host_run_state_mutation_tracking() -> None:
@@ -82,7 +78,6 @@ def test_no_progress_cutoff_at_two_streaks() -> None:
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
     adapter = MagicMock()
-    # Adapter keeps returning repeated query
     adapter.generate_turn.return_value = GenerationResponse(
         tool_calls=(
             ToolCall(
@@ -107,9 +102,6 @@ def test_no_progress_cutoff_at_two_streaks() -> None:
         parallel_tool_calls=False,
     )
 
-    # First turn: fresh evidence -> progress
-    # Second turn: duplicate query -> no progress streak = 1
-    # Third turn: duplicate query -> no progress streak = 2 -> cutoff
     with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
         generate_with_tools(
             router,
