@@ -138,8 +138,8 @@ class RepairEngine:
 
                 context = self._context(root, evidence)
                 patch = self._request_patch(evidence, context)
-                self._validate_patch_scope(patch)
                 self._hydrate_repair_preconditions(root, patch)
+                self._validate_patch_scope(patch)
                 try:
                     receipt = TransactionalSourcePatcher(root).apply(patch)
                 except SourcePatchError as exc:
@@ -338,11 +338,27 @@ class RepairEngine:
         for item in operations:
             if not isinstance(item, dict):
                 continue
-            rel_str = str(item.get("path", "")).strip()
-            if not rel_str or rel_str.startswith("/") or ".." in rel_str:
+            rel_str = str(item.get("path", "")).strip().replace("\\", "/")
+            while rel_str.startswith("./"):
+                rel_str = rel_str[2:]
+            if not rel_str or rel_str.startswith("/") or ".." in rel_str.split("/"):
                 continue
             target = root / rel_str
+            if not target.exists() and rel_str.startswith(f"{root.name}/"):
+                sub = rel_str[len(root.name) + 1 :]
+                if (root / sub).exists():
+                    rel_str = sub
+                    target = root / rel_str
+            item["path"] = rel_str
+
             op = str(item.get("operation", "")).strip().lower()
+            if op in {"modify", "patch", "update", "write_file", "replace_exact"}:
+                op = "replace"
+                item["operation"] = op
+            elif op in {"write", "add", "create_file"}:
+                op = "create"
+                item["operation"] = op
+
             if op in {"replace", "edit", "delete"}:
                 expected = str(item.get("expected_sha256", "")).strip()
                 if not expected and target.is_file() and not target.is_symlink():
