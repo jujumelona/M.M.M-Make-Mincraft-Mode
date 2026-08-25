@@ -73,9 +73,35 @@ class _ProjectLockPool:
 _RECEIPT_LOCKS = _ProjectLockPool()
 
 
+_CAMEL_PART = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+|[0-9]+")
+
+
+def _dependency_tokens(research_module: Any, value: Any) -> set[str]:
+    tokens = set(research_module._tokens(value))
+    text = value if isinstance(value, str) else " ".join(str(item) for item in value)
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_]*", text):
+        tokens.update(part.casefold() for part in _CAMEL_PART.findall(token) if len(part) >= 2)
+    return tokens
+
+
+def _bounded_paths(prefix: str, paths: Sequence[str], byte_budget: int) -> str:
+    budget = max(512, int(byte_budget))
+    selected: list[str] = []
+    size = len(prefix.encode("utf-8"))
+    for path in paths:
+        encoded = len(path.encode("utf-8")) + 1
+        if selected and size + encoded > budget:
+            break
+        if not selected and size + encoded > budget:
+            return prefix
+        selected.append(path)
+        size += encoded
+    return " ".join([prefix, *selected]).strip()
+
+
 def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
     cached = getattr(context, _DEPENDENCY_INDEX_ATTR, None)
-    if isinstance(cached, dict):
+    if isinstance(cached, dict) and cached.get("tokenization") == "camel-v2":
         return cached
 
     by_fqcn: dict[str, str] = {}
@@ -89,9 +115,9 @@ def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
     for path, unit in context.units.items():
         by_package.setdefault(unit.package, []).append(path)
         tokens = (
-            research_module._tokens(path)
-            | research_module._tokens(unit.package)
-            | research_module._tokens(unit.types)
+            _dependency_tokens(research_module, path)
+            | _dependency_tokens(research_module, unit.package)
+            | _dependency_tokens(research_module, unit.types)
         )
         for token in tokens:
             token_to_paths.setdefault(token, set()).add(path)
@@ -99,8 +125,8 @@ def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
             fqcn = f"{unit.package}.{type_name}" if unit.package else type_name
             by_fqcn[fqcn] = path
             by_type.setdefault(type_name, []).append(path)
-        if any(term in path.casefold() for term in ("contract", "interface", "api")):
-            for token in tokens:
+        if any(term in path.casefold() for term in ("contract", "interface", "/api/", "\\api\\")):
+            for token in tokens | {"contract", "interface", "api"}:
                 contract_token_to_paths.setdefault(token, set()).add(path)
 
     for path, unit in context.units.items():
@@ -111,6 +137,7 @@ def _dependency_index(research_module: Any, context: Any) -> dict[str, Any]:
                 reverse_exact.setdefault(imported, set()).add(path)
 
     index = {
+        "tokenization": "camel-v2",
         "by_fqcn": by_fqcn,
         "by_type": {key: tuple(sorted(value)) for key, value in by_type.items()},
         "by_package": {key: tuple(sorted(value)) for key, value in by_package.items()},
@@ -142,10 +169,14 @@ def _dependency_neighborhood_query(
 ) -> str:
     """Return one compact direct/reverse dependency query, not a second retriever."""
 
-    query_tokens = set(research_module._tokens(query))
+    query_tokens = _dependency_tokens(research_module, query)
     if plan_step is not None:
-        query_tokens |= research_module._tokens(getattr(plan_step, "required_symbols", ()))
-        query_tokens |= research_module._tokens(getattr(plan_step, "capability", ""))
+        query_tokens |= _dependency_tokens(
+            research_module, getattr(plan_step, "required_symbols", ())
+        )
+        query_tokens |= _dependency_tokens(
+            research_module, getattr(plan_step, "capability", "")
+        )
     if not query_tokens:
         return ""
 
@@ -154,12 +185,19 @@ def _dependency_neighborhood_query(
     for token in query_tokens:
         for path in index["token_to_paths"].get(token, ()):
             match_counts[path] = match_counts.get(path, 0) + 1
-    seeds = [
+    ranked_seeds = [
         path
         for path, _count in sorted(
             match_counts.items(), key=lambda item: (-item[1], item[0])
-        )[:4]
+        )
     ]
+    if not ranked_seeds:
+        return ""
+
+    total_budget = max(1024, int(getattr(context, "byte_budget", 8192)) // 2)
+    seed_budget = max(256, total_budget // 4)
+    seed_text = _bounded_paths("", ranked_seeds, seed_budget)
+    seeds = [value for value in seed_text.split() if value]
     if not seeds:
         return ""
 
@@ -181,8 +219,8 @@ def _dependency_neighborhood_query(
             target = index["by_fqcn"].get(imported)
             if target:
                 direct.add(target)
-                continue
-            direct.update(index["by_type"].get(imported.rsplit(".", 1)[-1], ()))
+            else:
+                direct.update(index["by_type"].get(imported.rsplit(".", 1)[-1], ()))
 
     for fqcn in seed_fqcns:
         reverse.update(index["reverse_exact"].get(fqcn, ()))
@@ -221,13 +259,11 @@ def _dependency_neighborhood_query(
                 *(index["build_paths"] if wants_build else ()),
             ]
         )
-    )[:14]
+    )
     if len(ordered) <= len(seeds):
         return ""
-    return research_module._join_query(
-        "repository dependency neighborhood direct reverse shared contracts",
-        *ordered,
-    )
+    prefix = "repository dependency neighborhood direct reverse shared contracts"
+    return _bounded_paths(prefix, ordered, total_budget)
 
 
 def _reusable_evidence(context: Any, *, limit: int = 8) -> list[dict[str, Any]]:

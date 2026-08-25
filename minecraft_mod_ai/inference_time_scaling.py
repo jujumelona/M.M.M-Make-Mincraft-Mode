@@ -383,7 +383,16 @@ def _verifier_tier(verifier: Mapping[str, Any]) -> int:
 
 def _scaling_mode() -> str:
     value = os.environ.get("MMM_TEST_TIME_SCALING", "auto").strip().lower()
-    return value if value in {"auto", "on", "off"} else "auto"
+    mode = value if value in {"auto", "on", "off"} else "auto"
+    if mode != "auto":
+        return mode
+    try:
+        from .llama_parallel_runtime_contract import _active_parallelism
+
+        slots = int(_active_parallelism())
+    except Exception:
+        slots = 1
+    return "auto" if slots > 1 else "off"
 
 
 def _env_width(name: str, default: int) -> int:

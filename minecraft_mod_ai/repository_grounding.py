@@ -198,13 +198,16 @@ def build_repository_observation_ledger(
             "generic_similar_code_not_authoritative": True,
         },
     }
-    return {
+    ledger = {
         "schema_version": "mmm/source-observation-ledger-v2",
         "receipt": receipt,
         "exploration": exploration.to_dict(),
         "procedural_retrieval": procedural_receipt,
         "records": records,
     }
+    while records and _json_size(ledger) > byte_budget:
+        records.pop()
+    return ledger
 
 
 def build_repair_repository_context(

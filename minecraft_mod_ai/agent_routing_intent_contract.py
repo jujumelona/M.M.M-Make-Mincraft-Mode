@@ -28,11 +28,11 @@ def install(*, small_model_module: Any) -> None:
         _INSTALLED = True
         return
 
-    from .causal_frontier_adapter import _query as causal_query
+    from .agent_intent import structured_user_intent
 
     @wraps(current)
     def request_query(messages: Sequence[Mapping[str, Any]]) -> str:
-        return causal_query(messages)
+        return structured_user_intent(messages)
 
     request_query._mmm_structured_terminal_intent = True  # type: ignore[attr-defined]
     request_query.__wrapped__ = current  # type: ignore[attr-defined]

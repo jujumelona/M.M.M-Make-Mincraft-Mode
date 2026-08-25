@@ -377,7 +377,7 @@ class ModelRouter:
             role=role,
         )
 
-    _generate_with_tools._mmm_dynamic_causal_frontier = True
+    _generate_with_tools._mmm_progress_aware_tool_loop_owner = True
 
     def _tool_runtime(self) -> Any:
         runtime = self._agent_tool_runtime

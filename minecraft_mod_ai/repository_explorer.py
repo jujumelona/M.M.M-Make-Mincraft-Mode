@@ -231,17 +231,20 @@ class RepositoryExplorer:
         candidates = list(candidate_map.values())
         candidates.sort(key=lambda item: (-item.score, item.line_count, item.path, item.start_line))
 
+        has_embed = callable(getattr(self.router, "embed", None))
+        has_rerank = callable(getattr(self.router, "rerank", None))
+
         use_semantic = (
-            self.router is not None and route in {"api", "procedural", "global"}
-            if semantic is None else bool(semantic and self.router is not None)
+            has_embed and route in {"api", "procedural", "global"}
+            if semantic is None else bool(semantic and has_embed)
         )
         if use_semantic and candidates:
             candidates = self._semantic_score(query, candidates[:64]) + candidates[64:]
             candidates.sort(key=lambda item: (-item.score, item.line_count, item.path, item.start_line))
 
         use_rerank = (
-            self.router is not None and route in {"api", "trace", "procedural", "global"}
-            if rerank is None else bool(rerank and self.router is not None)
+            has_rerank and route in {"api", "trace", "procedural", "global"}
+            if rerank is None else bool(rerank and has_rerank)
         )
         if use_rerank and candidates:
             candidates = self._rerank(query, candidates[:32]) + candidates[32:]

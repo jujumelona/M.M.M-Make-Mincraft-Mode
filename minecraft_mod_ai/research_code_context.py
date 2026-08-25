@@ -802,6 +802,14 @@ class ResearchCodeContext:
 
     def _query_paths(self, query: str, plan_step: PlanStep | None) -> tuple[str, ...]:
         paths = [query]
+        from . import research_coder_repair_reuse as reuse
+        import sys
+
+        dependency = reuse._dependency_neighborhood_query(
+            sys.modules[self.__class__.__module__], self, query, plan_step
+        )
+        if dependency:
+            paths.append(dependency)
         if plan_step is not None:
             paths.extend(
                 [
@@ -974,22 +982,59 @@ class ResearchCodeContext:
         if not symbols:
             return []
         candidates = list(symbols)
-        texts = [
-            _join_query(symbol.signature, symbol.path, self._symbol_text(symbol)[:3000])
-            for symbol in candidates
-        ]
-        try:
-            raw_scores = self.router.rerank(query, texts)
-            if len(raw_scores) == len(candidates):
-                scored = [
-                    (float(score), symbol)
-                    for score, symbol in zip(raw_scores, candidates, strict=True)
-                ]
-                scored.sort(key=lambda item: (-item[0], item[1].path, item[1].start_line))
-                return [symbol for _score, symbol in scored[:limit]]
-        except Exception:
-            pass
+        rerank = getattr(getattr(self, "router", None), "rerank", None)
+        if callable(rerank):
+            texts = [
+                _join_query(symbol.signature, symbol.path, self._symbol_text(symbol)[:3000])
+                for symbol in candidates
+            ]
+            try:
+                raw_scores = rerank(query, texts)
+                if len(raw_scores) == len(candidates):
+                    scored = [
+                        (float(score), symbol)
+                        for score, symbol in zip(raw_scores, candidates, strict=True)
+                    ]
+                    positive = [item for item in scored if item[0] > 0.0]
+                    if positive:
+                        positive.sort(
+                            key=lambda item: (-item[0], item[1].path, item[1].start_line)
+                        )
+                        return [symbol for _score, symbol in positive[:limit]]
+                    query_tokens = _tokens(query)
+                    exact = [
+                        symbol
+                        for symbol in candidates
+                        if query_tokens
+                        & _tokens(
+                            _join_query(symbol.name, symbol.signature, symbol.path)
+                        )
+                    ]
+                    if exact:
+                        return exact[:limit]
+                    return candidates[:limit]
+            except Exception:
+                pass
         return candidates[:limit]
+
+    def _source_lines(self, path: str) -> tuple[str, ...]:
+        cache = getattr(self, "_mmm_source_lines_by_path", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._mmm_source_lines_by_path = cache
+        cached = cache.get(path)
+        if isinstance(cached, tuple):
+            return cached
+        file_path = Path(self.root) / path
+        lines = tuple(file_path.read_text(encoding="utf-8", errors="replace").splitlines())
+        cache[path] = lines
+        return lines
+
+    def _symbol_text(self, symbol: SourceSymbol) -> str:
+        lines = self._source_lines(symbol.path)
+        start = max(0, int(symbol.start_line) - 1)
+        end = min(len(lines), max(int(symbol.end_line), int(symbol.start_line)))
+        return "\n".join(lines[start:end])
 
     def _expand_partial_graph(
         self,

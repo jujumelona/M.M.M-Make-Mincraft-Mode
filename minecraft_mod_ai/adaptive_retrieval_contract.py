@@ -11,18 +11,14 @@ _GROUNDING_MARKER = "__mmm_repository_grounding_live_context__"
 def install(model_router_module: Any) -> None:
     """Install repository grounding and adaptive execution hardening."""
 
-    if not bool(
-        getattr(
-            model_router_module.ModelRouter._generate_with_tools,
-            "_mmm_dynamic_causal_frontier",
-            False,
-        )
+    if not (
+        bool(getattr(model_router_module.ModelRouter._generate_with_tools, "_mmm_progress_aware_tool_loop_owner", False))
+        or bool(getattr(model_router_module.ModelRouter._generate_with_tools, "_mmm_dynamic_causal_frontier", False))
     ):
         raise RuntimeError(
-            "ModelRouter must directly own the canonical causal production tool loop."
+            "ModelRouter must directly own the canonical production tool loop."
         )
 
-    from .adaptive_execution_hardening import harden_adaptive_execution
     from .agent_tool_allowlist_hardening import harden_agent_tool_allowlist
     from .hybrid_route_hardening import harden_code_search_routes
     from .inference_time_scaling import harden_runtime
@@ -31,7 +27,6 @@ def install(model_router_module: Any) -> None:
 
     _install_repository_grounding()
     harden_runtime()
-    harden_adaptive_execution()
     harden_code_search_routes()
     harden_runtime_composer_identity()
     harden_agent_tool_allowlist()

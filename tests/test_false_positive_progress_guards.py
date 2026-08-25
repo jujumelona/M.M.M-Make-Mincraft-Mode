@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.retrieval_progress import (
+from minecraft_mod_ai.progress_aware_tool_loop import (
     RetrievalDecision,
     RetrievalNoProgressError,
     RetrievalObservation,

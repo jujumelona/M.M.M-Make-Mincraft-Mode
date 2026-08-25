@@ -439,7 +439,7 @@ def _compact_old_exchanges(
         if len(assistants) <= keep:
             continue
         start = assistants[-keep]
-        if mutation_start is not None and first <= mutation_start < start:
+        if mutation_start is not None and first < mutation_start < start:
             start = mutation_start
         dropped = original[first:start]
         if not dropped:
