@@ -486,9 +486,9 @@ class CustomModuleGenerator:
                     self._validate_operations(progress_operations)
                     self._validate_total_patch_bytes(progress_operations)
                 state_sha256 = _mutable_stage_state_sha256(staged_root)
-                if state_sha256 in seen_output_states:
+                if continuation_count >= 5:
                     raise CustomModuleGenerationError(
-                        "Output continuation reached a no-source-progress fixed point."
+                        f"Output continuation reached maximum allowed attempts ({continuation_count})."
                     ) from exc
                 seen_output_states.add(state_sha256)
                 continuation_count += 1

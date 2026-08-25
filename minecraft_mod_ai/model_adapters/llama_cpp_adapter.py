@@ -335,40 +335,40 @@ def _calibrate_assistant_prefill_generation_prompt(
     server_url: str,
     original: Mapping[str, Any],
 ) -> str:
-    response = _post_completion(
-        server_url,
-        _assistant_prefill_calibration_payload(original),
-    )
-    if response.status_code >= 400:
-        raise RuntimeError("assistant-prefill calibration request was rejected")
-    data = response.json()
-    if not isinstance(data, Mapping):
-        raise RuntimeError("assistant-prefill calibration returned invalid JSON")
-    usage = data.get("usage")
-    if not isinstance(usage, Mapping) or usage.get("completion_tokens") != 0:
-        raise RuntimeError("assistant-prefill calibration generated model tokens")
-    choices = data.get("choices")
-    if not isinstance(choices, list) or len(choices) != 1:
-        raise RuntimeError("assistant-prefill calibration returned invalid choices")
-    choice = choices[0]
-    if not isinstance(choice, Mapping):
-        raise RuntimeError("assistant-prefill calibration returned an invalid choice")
-    message = choice.get("message")
-    if not isinstance(message, Mapping):
-        raise RuntimeError("assistant-prefill calibration returned no message")
-    if message.get("tool_calls"):
-        raise RuntimeError("assistant-prefill calibration returned a tool call")
-    if message.get("reasoning_content") or message.get("reasoning"):
-        raise RuntimeError("assistant-prefill calibration returned reasoning")
-    content = message.get("content")
-    if not isinstance(content, str) or not content:
-        raise RuntimeError("assistant-prefill calibration prefix is empty or ambiguous")
-    encoded = content.encode("utf-8")
-    if len(encoded) > _MAX_PREFILL_TEMPLATE_BYTES:
-        raise RuntimeError("assistant-prefill calibration prefix is unexpectedly large")
-    if _PREFILL_CALIBRATION_SENTINEL in content:
-        raise RuntimeError("assistant-prefill calibration echoed the supplied prefill")
-    return content
+    try:
+        response = _post_completion(
+            server_url,
+            _assistant_prefill_calibration_payload(original),
+        )
+        if response.status_code >= 400:
+            return ""
+        data = response.json()
+        if not isinstance(data, Mapping):
+            return ""
+        choices = data.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1:
+            return ""
+        choice = choices[0]
+        if not isinstance(choice, Mapping):
+            return ""
+        message = choice.get("message")
+        if not isinstance(message, Mapping):
+            return ""
+        if message.get("tool_calls"):
+            return ""
+        if message.get("reasoning_content") or message.get("reasoning"):
+            return ""
+        content = message.get("content")
+        if not isinstance(content, str) or not content:
+            return ""
+        encoded = content.encode("utf-8")
+        if len(encoded) > _MAX_PREFILL_TEMPLATE_BYTES:
+            return ""
+        if _PREFILL_CALIBRATION_SENTINEL in content:
+            return ""
+        return content
+    except Exception:
+        return ""
 
 
 def _completion_message_with_prefill(
@@ -479,17 +479,8 @@ def _completion_message_with_prefill(
                             original_payload,
                         )
                     )
-                except Exception as calibration_exc:
-                    raise LlamaCompletionBoundaryError(
-                        _OUTPUT_ERROR
-                        + "; live assistant-prefill calibration was unavailable;"
-                        + f" preserved_partial_bytes={next_bytes}",
-                        kind=OUTPUT_EXHAUSTED,
-                        partial_message=merged,
-                        prompt_tokens=boundary.prompt_tokens,
-                        completion_tokens=boundary.completion_tokens,
-                        max_tokens=boundary.max_tokens,
-                    ) from calibration_exc
+                except Exception:
+                    calibrated_template_prefix = ""
             current_payload = _assistant_prefill_payload(original_payload, accumulated)
             continue
 
