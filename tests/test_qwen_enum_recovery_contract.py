@@ -81,11 +81,12 @@ def test_canonical_permission_name_is_rewritten_to_exposed_alias_before_parse() 
     assert call.arguments == {"operation": "delete_file"}
 
 
-def test_unrelated_unexposed_tool_is_still_rejected() -> None:
-    with pytest.raises(RuntimeError, match="unexposed tool 'other_tool'"):
-        _parse_qwen_function(
-            "<function=other_tool></function>",
-            0,
-            _schema(),
-            call_index=0,
-        )
+def test_unrelated_unexposed_tool_is_preserved_for_host_phase_validation() -> None:
+    call, _end = _parse_qwen_function(
+        "<function=other_tool></function>",
+        0,
+        _schema(),
+        call_index=0,
+    )
+    assert call.name == "other_tool"
+    assert call.arguments == {}
