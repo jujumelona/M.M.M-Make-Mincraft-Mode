@@ -302,9 +302,12 @@ def test_e2e_source_edit_alias_payload_project_is_workspace_root(tmp_path: Path)
     assert "// placeholder" not in new_text
 
 
-def test_qwen_tool_parser_tolerates_non_enum_operations_and_aliases() -> None:
-    """Qwen parser parses markup with uncanonical enum/operation strings without crashing."""
-    from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
+def test_qwen_tool_parser_rejects_non_enum_operation_aliases() -> None:
+    """Model-facing source edits remain bounded by the exposed operation enum."""
+    from minecraft_mod_ai.model_adapters.qwen_tool_parser import (
+        ToolCallValidationError,
+        parse_qwen_tool_markup,
+    )
     from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
     schemas = {"apply_source_edit": SOURCE_EDIT_SCHEMA}
@@ -318,11 +321,12 @@ def test_qwen_tool_parser_tolerates_non_enum_operations_and_aliases() -> None:
         "</function>\n"
         "</tool_call>"
     )
-    _visible, calls = parse_qwen_tool_markup(markup, schemas)
-    assert len(calls) == 1
-    assert calls[0].name == "apply_source_edit"
-    assert calls[0].arguments["operation"] == "create_class"
-    assert calls[0].arguments["path"] == "src/main/java/ai/test/NewClass.java"
+    try:
+        parse_qwen_tool_markup(markup, schemas)
+    except ToolCallValidationError as exc:
+        assert "outside enum" in str(exc)
+    else:
+        raise AssertionError("create_class must not bypass the exposed operation enum")
 
 
 def test_repair_engine_hydrates_missing_expected_sha256(tmp_path: Path) -> None:

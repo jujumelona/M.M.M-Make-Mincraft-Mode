@@ -254,12 +254,16 @@ def _canonical_key(
     emitted_key: str,
     properties: Mapping[str, Any],
 ) -> str:
-    if emitted_key in properties:
-        return emitted_key
+    # Source-edit aliases are schema-declared for transport compatibility, but the
+    # host contract still requires canonical path/operation/etc.  Canonicalize them
+    # before the generic exact-property fast path so aliases satisfy canonical
+    # required fields without widening the schema.
     if tool_name == "apply_source_edit":
         canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)
         if canonical and canonical in properties:
             return canonical
+    if emitted_key in properties:
+        return emitted_key
     return emitted_key
 
 

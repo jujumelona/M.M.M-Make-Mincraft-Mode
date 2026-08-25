@@ -67,7 +67,7 @@ def test_v3_json_schema_accepts_local_and_sanitized_remote_records() -> None:
     row = _strong_row(minecraft_version="future-a")
     validator.validate(row)
     assert row["execution_context"] == {
-        "java_version": "21",
+        "java_version": 21,
         "loader": "fabric",
         "minecraft_version": "future-a",
     }
