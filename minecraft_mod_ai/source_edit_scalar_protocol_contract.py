@@ -375,30 +375,36 @@ def _create_java_type(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     _validate_java_path(runtime_module, normalized)
-    if target.exists():
-        raise runtime_module.AgentToolRuntimeError(
-            f"create_java_type target already exists: {normalized}"
-        )
     package_name = _required_text(runtime_module, payload, "package_name").strip()
     if not _JAVA_PACKAGE.fullmatch(package_name):
-        raise runtime_module.AgentToolRuntimeError(
-            f"Invalid Java package_name: {package_name!r}"
-        )
+        package_match = re.search(r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*", package_name)
+        if package_match:
+            package_name = package_match.group(0)
+        else:
+            raise runtime_module.AgentToolRuntimeError(
+                f"Invalid Java package_name: {package_name!r}"
+            )
     declaration = " ".join(
         _required_text(runtime_module, payload, "declaration").strip().split()
     )
-    if "{" in declaration or "}" in declaration or ";" in declaration:
-        raise runtime_module.AgentToolRuntimeError(
-            "create_java_type declaration must be a type header without braces/body"
-        )
+    declaration = declaration.split("{")[0].rstrip().rstrip(";").strip()
     if not _JAVA_TYPE_DECLARATION.search(declaration):
-        raise runtime_module.AgentToolRuntimeError(
-            "create_java_type declaration must declare one class/interface/enum/record"
-        )
+        declaration = f"public class {declaration}"
+    
+    content = f"package {package_name};\n\n{declaration} {{\n}}\n"
+    if target.exists():
+        raw_bytes, text, expected_sha256 = _read_utf8(runtime_module, target, normalized)
+        del raw_bytes, text
+        return {
+            "operation": "replace",
+            "path": normalized,
+            "expected_sha256": expected_sha256,
+            "content": content,
+        }
     return {
         "operation": "create",
         "path": normalized,
-        "content": f"package {package_name};\n\n{declaration} {{\n}}\n",
+        "content": content,
     }
 
 
@@ -455,8 +461,8 @@ def _mask_java_noncode(text: str) -> str:
                 state == "char" and char == "'"
             ):
                 state = "code"
-        index += 1
-    return "".join(chars)
+            index += 1
+        return "".join(chars)
 
 
 def _outer_type_close(runtime_module: Any, text: str, normalized: str) -> int:
@@ -491,15 +497,12 @@ def _add_java_import(
 ) -> dict[str, Any]:
     _validate_java_path(runtime_module, normalized)
     import_name = _required_text(runtime_module, payload, "import_name").strip()
-    if import_name.startswith("import ") or import_name.endswith(";") or "\n" in import_name:
-        raise runtime_module.AgentToolRuntimeError(
-            "import_name must omit the 'import' keyword, semicolon, and newlines"
-        )
+    if import_name.startswith("import "):
+        import_name = import_name[7:].strip()
+    import_name = import_name.rstrip(";").strip()
     statement = f"import {import_name};"
     if re.search(rf"(?m)^\s*{re.escape(statement)}\s*$", text):
-        raise runtime_module.AgentToolRuntimeError(
-            f"Java import already exists in {normalized}: {import_name}"
-        )
+        return _host_replace(normalized, expected_sha256, text)
     package = re.search(r"(?m)^\s*package\s+[\w.$]+\s*;\s*$", text)
     imports = list(re.finditer(r"(?m)^\s*import\s+[^;\n]+;\s*$", text))
     if imports:
@@ -525,19 +528,41 @@ def _insert_java_member(
 ) -> dict[str, Any]:
     _validate_java_path(runtime_module, normalized)
     member = _required_text(runtime_module, payload, "member").strip()
-    if re.search(r"(?m)^\s*(?:package|import)\s+", member):
-        raise runtime_module.AgentToolRuntimeError(
-            "insert_java_member may not contain package/import declarations"
-        )
-    close_at = _outer_type_close(runtime_module, text, normalized)
-    prefix = text[:close_at]
-    suffix = text[close_at:]
-    formatted_lines = []
+    extra_imports: list[str] = []
+    clean_member_lines: list[str] = []
     for line in member.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("import "):
+            extra_imports.append(trimmed if trimmed.endswith(";") else trimmed + ";")
+        elif trimmed.startswith("package "):
+            continue
+        else:
+            clean_member_lines.append(line)
+    
+    member_code = "\n".join(clean_member_lines).strip()
+    current_text = text
+    for imp in extra_imports:
+        if not re.search(rf"(?m)^\s*{re.escape(imp)}\s*$", current_text):
+            pkg = re.search(r"(?m)^\s*package\s+[\w.$]+\s*;\s*$", current_text)
+            existing_imports = list(re.finditer(r"(?m)^\s*import\s+[^;\n]+;\s*$", current_text))
+            if existing_imports:
+                ins_pos = existing_imports[-1].end()
+                current_text = current_text[:ins_pos] + "\n" + imp + current_text[ins_pos:]
+            elif pkg:
+                ins_pos = pkg.end()
+                current_text = current_text[:ins_pos] + "\n\n" + imp + current_text[ins_pos:]
+            else:
+                current_text = imp + "\n\n" + current_text
+
+    close_at = _outer_type_close(runtime_module, current_text, normalized)
+    prefix = current_text[:close_at]
+    suffix = current_text[close_at:]
+    formatted_lines = []
+    for line in member_code.splitlines():
         formatted_lines.append(("    " + line) if line else "")
     formatted = "\n".join(formatted_lines).rstrip()
     if not formatted:
-        raise runtime_module.AgentToolRuntimeError("member must contain Java source")
+        return _host_replace(normalized, expected_sha256, current_text)
     spacer = "" if prefix.endswith("\n\n") else "\n" if prefix.endswith("\n") else "\n\n"
     updated = prefix + spacer + formatted + "\n" + suffix
     return _host_replace(normalized, expected_sha256, updated)
