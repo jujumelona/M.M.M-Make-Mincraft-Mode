@@ -201,14 +201,9 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
         def payload_with_prompt_cache(adapter: Any, request: Any) -> dict[str, Any]:
             payload = dict(current_payload(adapter, request))
             if getattr(request, "tools", ()):
-                try:
-                    current_max = int(payload.get("max_tokens", 0) or 0)
-                except (TypeError, ValueError):
-                    current_max = 0
-                if current_max <= 0:
-                    payload["max_tokens"] = _tool_action_token_budget(
-                        getattr(adapter, "config", None)
-                    )
+                payload["max_tokens"] = _tool_action_token_budget(
+                    getattr(adapter, "config", None)
+                )
             payload["cache_prompt"] = True
             return payload
 

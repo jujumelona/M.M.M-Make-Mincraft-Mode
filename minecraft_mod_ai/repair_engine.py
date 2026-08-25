@@ -377,7 +377,11 @@ class RepairEngine:
 
             if op in {"replace", "edit", "delete"}:
                 expected = str(item.get("expected_sha256", "")).strip()
-                if not expected and target.is_file() and not target.is_symlink():
+                if (not expected.startswith("sha256:") or len(expected) != 71) and target.is_file() and not target.is_symlink():
+                    item["expected_sha256"] = sha256_bytes(target.read_bytes())
+            elif op == "create" and target.is_file() and not target.is_symlink():
+                if isinstance(item.get("content"), str):
+                    item["operation"] = "replace"
                     item["expected_sha256"] = sha256_bytes(target.read_bytes())
 
             # Strip disallowed metadata fields so TransactionalSourcePatcher strictly validates
