@@ -4,17 +4,18 @@ import json
 
 import pytest
 
-from minecraft_mod_ai.causal_action_state import (
-    CausalAction,
-    classify_action,
-    select_action_frontier,
-)
 from minecraft_mod_ai.forced_tool_execution_contract import _install_adapter_class
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
     GenerationResponse,
     ModelConfigurationError,
     ToolCall,
+)
+from minecraft_mod_ai.progress_aware_tool_loop import (
+    LoopPhase,
+    _MUTATION_ACT_TOOLS,
+    _READ_OBSERVE_TOOLS,
+    _VERIFY_TOOLS,
 )
 
 
@@ -285,25 +286,33 @@ def test_successful_native_required_probe_uses_native_action_once() -> None:
     assert result.tool_calls[0].id == "native"
 
 
-def test_causal_action_class_is_host_derived() -> None:
-    assert classify_action(()) is CausalAction.FINISH
-    assert classify_action(("search_code_rag",)) is CausalAction.RETRIEVE
-    assert classify_action(("java_workspace_symbols",)) is CausalAction.INSPECT
-    assert classify_action(("apply_source_edit",)) is CausalAction.MUTATE
-    assert classify_action(("run_gradle_build",)) is CausalAction.VERIFY
+def test_host_tool_phase_classification_is_canonical() -> None:
+    """Tool → phase mapping is host-owned via the canonical tool sets."""
+    assert "search_code_rag" in _READ_OBSERVE_TOOLS
+    assert "search_project_rag" in _READ_OBSERVE_TOOLS
+    assert "external_mcp_call" in _READ_OBSERVE_TOOLS
+    assert "java_workspace_symbols" in _READ_OBSERVE_TOOLS
+
+    assert "apply_source_edit" in _MUTATION_ACT_TOOLS
+    assert "apply_source_patch" in _MUTATION_ACT_TOOLS
+    assert "apply_java_operations" in _MUTATION_ACT_TOOLS
+
+    assert "java_diagnostics" in _VERIFY_TOOLS
+    assert "run_gradle_build" in _VERIFY_TOOLS
+    assert "run_gametest" in _VERIFY_TOOLS
 
 
-def test_ranked_frontier_selects_action_class_before_tool_surface() -> None:
-    action, names = select_action_frontier(
-        ("search_code_rag", "java_workspace_symbols", "search_project_rag")
-    )
-    assert action is CausalAction.RETRIEVE
-    assert names == ("search_code_rag", "search_project_rag")
+def test_mutation_tool_set_is_disjoint_from_observe_and_verify() -> None:
+    """Mutation tools must not overlap with observe or verify sets."""
+    assert _MUTATION_ACT_TOOLS.isdisjoint(_READ_OBSERVE_TOOLS)
+    assert _MUTATION_ACT_TOOLS.isdisjoint(_VERIFY_TOOLS)
 
 
-def test_mutation_frontier_collapses_to_one_host_tool() -> None:
-    action, names = select_action_frontier(
-        ("apply_source_edit", "apply_source_patch", "java_workspace_symbols")
-    )
-    assert action is CausalAction.MUTATE
-    assert names == ("apply_source_edit",)
+def test_loop_phase_values_cover_all_execution_phases() -> None:
+    """LoopPhase enum must cover the four canonical execution phases."""
+    phases = {p.value for p in LoopPhase}
+    assert "OBSERVE" in phases
+    assert "ACT" in phases
+    assert "VERIFY" in phases
+    assert "RECOVER" in phases
+

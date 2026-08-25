@@ -94,8 +94,6 @@ _VERIFY_TOOLS = frozenset({
     "run_gradle_build",
     "gradle_build",
     "run_gametest",
-    "quality_status",
-    "work_status",
 })
 
 
@@ -709,11 +707,11 @@ def generate_with_tools(
                     **route_metadata,
                     "result": result,
                 }
-                if call.name == "apply_source_patch":
+                if call.name in SOURCE_MUTATION_NAMES:
                     payload = {
                         **payload,
                         "_mmm_source_mutation": {
-                            "tool": "apply_source_patch",
+                            "tool": call.name,
                             "status": "APPLIED_BY_HOST_RUNTIME",
                         },
                     }
@@ -831,10 +829,12 @@ __all__ = [
     "RetrievalNoProgressError",
     "RetrievalObservation",
     "RetrievalProgress",
+    "_MUTATION_ACT_TOOLS",
+    "_READ_OBSERVE_TOOLS",
+    "_VERIFY_TOOLS",
     "evidence_fingerprint",
     "generate_with_tools",
     "normalize_retrieval_query",
     "retrieval_query_signature",
     "retrieval_source_key",
 ]
-
