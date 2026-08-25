@@ -176,6 +176,20 @@ def _normalize_context_value(value: Any) -> str | int | float | bool | None:
     return value
 
 
+def _normalize_execution_context_value(
+    key: str,
+    value: Any,
+) -> str | int | float | bool | None:
+    normalized = _normalize_context_value(value)
+    if key != "java_version" or normalized is None or isinstance(normalized, bool):
+        return normalized
+    if isinstance(normalized, str) and normalized.isdecimal():
+        return int(normalized)
+    if isinstance(normalized, float) and normalized.is_integer():
+        return int(normalized)
+    return normalized
+
+
 def _collect_execution_context(
     value: Any,
     output: dict[str, Any],
@@ -188,7 +202,7 @@ def _collect_execution_context(
         for raw_key, raw_value in value.items():
             key = _EXECUTION_CONTEXT_ALIASES.get(str(raw_key).casefold())
             if key is not None:
-                normalized = _normalize_context_value(raw_value)
+                normalized = _normalize_execution_context_value(key, raw_value)
                 if normalized is not None:
                     prior = output.get(key)
                     if prior is None:

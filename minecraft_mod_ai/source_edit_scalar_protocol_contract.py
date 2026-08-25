@@ -61,7 +61,18 @@ _OPERATION_ALIASES = {
     "add_method": "insert_java_member",
     "add_field": "insert_java_member",
 }
-_ACCEPTED_OPERATIONS = tuple(sorted(set(_CANONICAL_OPERATIONS) | set(_OPERATION_ALIASES.keys())))
+_MODEL_OPERATION_ENUM = (*_CANONICAL_OPERATIONS, "replace", "create", "delete")
+SOURCE_EDIT_PARAMETER_ALIASES = {
+    "file": "path",
+    "target_path": "path",
+    "target_file": "path",
+    "new_text": "new",
+    "new_content": "new",
+    "replacement": "new",
+    "old_text": "old",
+    "code": "content",
+    "body": "content",
+}
 _JAVA_PATH_SUFFIX = ".java"
 _JAVA_PACKAGE = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
 _JAVA_TYPE_DECLARATION = re.compile(
@@ -78,7 +89,7 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
     "properties": {
         "operation": {
             "type": "string",
-            "enum": list(_ACCEPTED_OPERATIONS),
+            "enum": list(_MODEL_OPERATION_ENUM),
             "description": (
                 "Perform exactly one semantic source action. For Java: create_java_type "
                 "creates only the empty type shell, add_java_import adds one import, and "
@@ -189,24 +200,9 @@ def _required_text(
 
 def _canonicalize_payload_aliases(payload: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(payload)
-    if "file" in normalized and "path" not in normalized:
-        normalized["path"] = normalized.pop("file")
-    if "target_path" in normalized and "path" not in normalized:
-        normalized["path"] = normalized.pop("target_path")
-    if "target_file" in normalized and "path" not in normalized:
-        normalized["path"] = normalized.pop("target_file")
-    if "new_text" in normalized and "new" not in normalized:
-        normalized["new"] = normalized.pop("new_text")
-    if "new_content" in normalized and "new" not in normalized:
-        normalized["new"] = normalized.pop("new_content")
-    if "replacement" in normalized and "new" not in normalized:
-        normalized["new"] = normalized.pop("replacement")
-    if "old_text" in normalized and "old" not in normalized:
-        normalized["old"] = normalized.pop("old_text")
-    if "code" in normalized and "content" not in normalized:
-        normalized["content"] = normalized.pop("code")
-    if "body" in normalized and "content" not in normalized:
-        normalized["content"] = normalized.pop("body")
+    for alias, canonical in SOURCE_EDIT_PARAMETER_ALIASES.items():
+        if alias in normalized and canonical not in normalized:
+            normalized[canonical] = normalized.pop(alias)
     return normalized
 
 
@@ -764,4 +760,4 @@ def materialize_model_source_edit(
     }
 
 
-__all__ = ["SOURCE_EDIT_SCHEMA", "materialize_model_source_edit"]
+__all__ = ["SOURCE_EDIT_PARAMETER_ALIASES", "SOURCE_EDIT_SCHEMA", "materialize_model_source_edit"]

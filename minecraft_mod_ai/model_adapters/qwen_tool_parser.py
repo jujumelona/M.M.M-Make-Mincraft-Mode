@@ -14,6 +14,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ..model_tool_aliases import resolve_exposed_model_tool
+from ..source_edit_scalar_protocol_contract import SOURCE_EDIT_PARAMETER_ALIASES
 from .base import ToolCall
 
 _TOOL_CALL_OPEN = "<tool_call>"
@@ -42,6 +43,10 @@ _APPLY_SOURCE_EDIT_TRANSPORT_ALIASES = {
     "op": "operation",
     "mode": "operation",
     "source": "content",
+}
+_APPLY_SOURCE_EDIT_ALIASES = {
+    **SOURCE_EDIT_PARAMETER_ALIASES,
+    **_APPLY_SOURCE_EDIT_TRANSPORT_ALIASES,
 }
 _MAX_CONTAINER_DEPTH = 3
 
@@ -252,7 +257,7 @@ def _canonical_key(
     if emitted_key in properties:
         return emitted_key
     if tool_name == "apply_source_edit":
-        canonical = _APPLY_SOURCE_EDIT_TRANSPORT_ALIASES.get(emitted_key)
+        canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)
         if canonical and canonical in properties:
             return canonical
     return emitted_key
@@ -355,7 +360,7 @@ def _unknown_parameter_error(
     if tool_name == "apply_source_edit":
         aliases = sorted(
             alias
-            for alias, canonical in _APPLY_SOURCE_EDIT_TRANSPORT_ALIASES.items()
+            for alias, canonical in _APPLY_SOURCE_EDIT_ALIASES.items()
             if canonical in properties and alias not in properties
         )
     return ToolCallValidationError(

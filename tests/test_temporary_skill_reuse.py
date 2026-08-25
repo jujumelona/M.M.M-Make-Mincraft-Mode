@@ -87,6 +87,7 @@ def test_temporary_skill_cache_reuses_only_unchanged_corpus_and_context(tmp_path
 def test_host_context_merges_environment_and_reviewed_system_json(monkeypatch):
     monkeypatch.setenv("MMM_MINECRAFT_VERSION", "future-a")
     monkeypatch.setenv("MMM_LOADER", "fabric")
+    monkeypatch.setenv("MMM_JAVA_VERSION", "21")
     messages = [
         {
             "role": "system",

@@ -4,7 +4,10 @@ import inspect
 
 import minecraft_mod_ai.model_adapters.qwen_tool_parser as qwen_tool_parser
 from minecraft_mod_ai import research_code_context
-from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
+    SOURCE_EDIT_PARAMETER_ALIASES,
+    SOURCE_EDIT_SCHEMA,
+)
 
 
 def test_dependency_query_has_one_runtime_owner() -> None:
@@ -19,17 +22,11 @@ def test_dependency_query_has_one_runtime_owner() -> None:
 def test_transport_aliases_do_not_duplicate_scalar_protocol_aliases() -> None:
     properties = set(SOURCE_EDIT_SCHEMA["properties"])
     transport = set(qwen_tool_parser._APPLY_SOURCE_EDIT_TRANSPORT_ALIASES)
-    scalar_aliases = {
-        "file",
-        "target_path",
-        "target_file",
-        "new_text",
-        "new_content",
-        "replacement",
-        "old_text",
-        "code",
-        "body",
-    }
+    scalar_aliases = set(SOURCE_EDIT_PARAMETER_ALIASES)
     assert transport.isdisjoint(properties)
     assert scalar_aliases <= properties
     assert scalar_aliases.isdisjoint(transport)
+    assert all(
+        qwen_tool_parser._APPLY_SOURCE_EDIT_ALIASES[alias] == canonical
+        for alias, canonical in SOURCE_EDIT_PARAMETER_ALIASES.items()
+    )
