@@ -28,7 +28,6 @@ from . import platform_optimizer as _platform
 from .source_transplant import (
     DonorSlice,
     inspect_repository_slice,
-    repository_from_candidate,
 )
 
 REUSE_MODES = (
