@@ -802,14 +802,6 @@ class ResearchCodeContext:
 
     def _query_paths(self, query: str, plan_step: PlanStep | None) -> tuple[str, ...]:
         paths = [query]
-        from . import research_coder_repair_reuse as reuse
-        import sys
-
-        dependency = reuse._dependency_neighborhood_query(
-            sys.modules[self.__class__.__module__], self, query, plan_step
-        )
-        if dependency:
-            paths.append(dependency)
         if plan_step is not None:
             paths.extend(
                 [

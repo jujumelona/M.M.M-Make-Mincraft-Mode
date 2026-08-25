@@ -34,23 +34,14 @@ _ARGUMENT_CONTAINER_KEYS = frozenset(
     {"apply", "arguments", "args", "parameters", "params", "input"}
 )
 _HOST_OWNED_ARGUMENT_KEYS = frozenset({"workspace_root"})
-_APPLY_SOURCE_EDIT_ALIASES = {
-    "file": "path",
+_APPLY_SOURCE_EDIT_TRANSPORT_ALIASES = {
     "file_path": "path",
     "target": "path",
-    "target_path": "path",
-    "target_file": "path",
     "action": "operation",
     "apply": "operation",
     "op": "operation",
     "mode": "operation",
-    "new_text": "new",
-    "new_content": "new",
-    "replacement": "new",
-    "old_text": "old",
-    "code": "content",
     "source": "content",
-    "body": "content",
 }
 _MAX_CONTAINER_DEPTH = 3
 
@@ -261,7 +252,7 @@ def _canonical_key(
     if emitted_key in properties:
         return emitted_key
     if tool_name == "apply_source_edit":
-        canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)
+        canonical = _APPLY_SOURCE_EDIT_TRANSPORT_ALIASES.get(emitted_key)
         if canonical and canonical in properties:
             return canonical
     return emitted_key
@@ -364,7 +355,7 @@ def _unknown_parameter_error(
     if tool_name == "apply_source_edit":
         aliases = sorted(
             alias
-            for alias, canonical in _APPLY_SOURCE_EDIT_ALIASES.items()
+            for alias, canonical in _APPLY_SOURCE_EDIT_TRANSPORT_ALIASES.items()
             if canonical in properties and alias not in properties
         )
     return ToolCallValidationError(

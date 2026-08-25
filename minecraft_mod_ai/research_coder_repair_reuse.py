@@ -331,10 +331,9 @@ def _install_research_context_hardening(research_module: Any) -> None:
                     ),
                     None,
                 )
-                if broad_index is None:
-                    paths.insert(1 if paths else 0, dependency_query)
-                else:
-                    paths[broad_index] = dependency_query
+                if broad_index is not None:
+                    paths.pop(broad_index)
+                paths.insert(1 if paths else 0, dependency_query)
             return tuple(dict.fromkeys(paths))
 
         setattr(query_paths, _MARKER, True)
