@@ -24,7 +24,7 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Apply exact ownership cleanup
+      - name: Apply exact source ownership cleanup
         shell: bash
         run: |
           python - <<'PY'
@@ -112,44 +112,6 @@ jobs:
               encoding="utf-8",
           )
 
-          smoke = Path(".github/workflows/fast-model-smoke.yml")
-          smoke_text = smoke.read_text(encoding="utf-8")
-          checkpoint_lines = [
-              line
-              for line in smoke_text.splitlines(keepends=True)
-              if line.startswith("      MMM_CHECKPOINT_DIR:")
-              and "mmm-fast-model-smoke" in line
-          ]
-          if len(checkpoint_lines) != 1:
-              raise SystemExit(
-                  f"{smoke}: expected exactly one job-level checkpoint env line, "
-                  f"found {len(checkpoint_lines)}"
-              )
-          smoke.write_text(
-              smoke_text.replace(checkpoint_lines[0], "", 1),
-              encoding="utf-8",
-          )
-          setup_anchor = (
-              "      - uses: actions/setup-python@v6\n"
-              "        with:\n"
-              "          python-version: '3.11'\n"
-              "          cache: pip\n"
-              "\n"
-              "      - name: Install native-model runtime only\n"
-          )
-          setup_replacement = (
-              "      - uses: actions/setup-python@v6\n"
-              "        with:\n"
-              "          python-version: '3.11'\n"
-              "          cache: pip\n"
-              "\n"
-              "      - name: Configure runner-local checkpoint directory\n"
-              "        run: echo \"MMM_CHECKPOINT_DIR=$RUNNER_TEMP/mmm-fast-model-smoke\" >> \"$GITHUB_ENV\"\n"
-              "\n"
-              "      - name: Install native-model runtime only\n"
-          )
-          replace_once(smoke, setup_anchor, setup_replacement)
-
           ownership_test = Path("tests/test_source_edit_alias_ownership.py")
           if ownership_test.exists():
               raise SystemExit(f"unexpected existing file: {ownership_test}")
@@ -159,7 +121,6 @@ jobs:
                   from __future__ import annotations
 
                   import inspect
-                  from pathlib import Path
 
                   import minecraft_mod_ai.model_adapters.qwen_tool_parser as qwen_tool_parser
                   from minecraft_mod_ai import research_code_context
@@ -192,12 +153,6 @@ jobs:
                       assert transport.isdisjoint(properties)
                       assert scalar_aliases <= properties
                       assert scalar_aliases.isdisjoint(transport)
-
-
-                  def test_fast_model_smoke_binds_runner_temp_at_runtime() -> None:
-                      workflow = Path(".github/workflows/fast-model-smoke.yml").read_text(encoding="utf-8")
-                      assert "runner.temp" not in workflow
-                      assert "MMM_CHECKPOINT_DIR=$RUNNER_TEMP/mmm-fast-model-smoke" in workflow
                   '''
               ),
               encoding="utf-8",
@@ -210,17 +165,15 @@ jobs:
           tests/test_source_edit_alias_ownership.py
           tests/test_llama_cpp_adapter_request_contract.py
           tests/test_source_edit_text_alias.py
-      - name: Commit cleanup to main
+      - name: Commit source cleanup to main
         shell: bash
         run: |
           git config user.name "jujumelona"
           git config user.email "qasdaa025@gmail.com"
-          git rm .github/workflows/one-shot-main-cleanup.yml
           git add minecraft_mod_ai/research_code_context.py
           git add minecraft_mod_ai/research_coder_repair_reuse.py
           git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py
-          git add .github/workflows/fast-model-smoke.yml
           git add tests/test_source_edit_alias_ownership.py
           git diff --cached --check
-          git commit -m "refactor(clean): single-own runtime contracts and fix smoke workflow"
+          git commit -m "refactor(clean): single-own dependency and source-edit aliases"
           git push origin HEAD:main
