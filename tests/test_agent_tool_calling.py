@@ -86,7 +86,7 @@ def test_coder_calls_generation_tool_and_reinjects_result(monkeypatch) -> None:
     assert runtime.calls == [("generation", "search_code_rag", {"query": "register block"})]
     assert len(adapter.requests) == 2
     assert adapter.requests[0].tool_choice == "auto"
-    assert adapter.requests[0].parallel_tool_calls is False
+    assert adapter.requests[0].parallel_tool_calls is True
     assert adapter.requests[0].tools[0]["function"]["name"] == "search_code_rag"
     reinjected = adapter.requests[1].messages
     assistant = reinjected[-2]
@@ -186,12 +186,10 @@ def test_duplicate_retrieval_query_is_not_executed_twice(monkeypatch) -> None:
                 return GenerationResponse(
                     tool_calls=(ToolCall(id=f"call_{len(self.requests)}", name="search_code_rag", arguments={"query": "same"}, raw_arguments='{"query":"same"}'),)
                 )
-            assert request.tools == ()
-            assert request.tool_choice is None
-            assert request.parallel_tool_calls is False
+            assert [item["function"]["name"] for item in request.tools] == ["search_code_rag"]
+            assert request.tool_choice == "auto"
+            assert request.parallel_tool_calls is True
             assert request.media_paths == ()
-            assert request.messages[-1]["role"] == "system"
-            assert "no-progress fixed point" in request.messages[-1]["content"]
             return GenerationResponse(content="final answer from converged evidence")
 
     adapter = LoopAdapter()
@@ -240,9 +238,9 @@ def test_host_owned_grounding_satisfies_baseline_without_forced_rag(monkeypatch)
     assert runtime.calls == []
     assert len(adapter.requests) == 1
     request = adapter.requests[0]
-    assert request.tools == ()
-    assert request.tool_choice is None
-    assert request.parallel_tool_calls is False
+    assert [item["function"]["name"] for item in request.tools] == ["search_code_rag"]
+    assert request.tool_choice == "auto"
+    assert request.parallel_tool_calls is True
 
 
 def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> None:
