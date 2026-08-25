@@ -2,11 +2,11 @@ from __future__ import annotations
 
 """Execute host-selected actions without re-asking the model for an action name.
 
-The causal frontier owns action selection. Source mutations always use an argument-only
-JSON-schema page and are synthesized into ToolCall objects by the host. Local llama.cpp
-may use native ``required`` tool decoding for other exact actions only after a live
-behavioral probe succeeds for the active server/model. A failed probe falls back to the
-same schema-constrained argument-page protocol rather than repeating tool-name choice.
+The causal frontier owns action selection. Remote adapters keep the argument-only
+fallback for source mutations. Local llama.cpp/Qwen uses one host-narrowed ``required``
+tool decode for mutations so the already-validated native Qwen tool parser owns its
+wire format; protocol failures still fail over to host-validated argument generation.
+Other exact local actions use native ``required`` decoding after a live capability probe.
 """
 
 import hashlib
@@ -373,7 +373,10 @@ def _focused_argument_messages(
             " The previous argument object was invalid. Repair the arguments only; do not repeat the "
             f"same invalid object. Validation: {repair_error[:_MAX_ARGUMENT_ERROR_CHARS]}"
         )
-    messages.append({"role": "system", "content": instruction})
+    # Qwen3.5 permits a system message only at the beginning of a chat template. This
+    # is a current-turn instruction, so append it as user input rather than creating an
+    # illegal trailing system role after the accumulated tool conversation.
+    messages.append({"role": "user", "content": instruction})
     return tuple(messages)
 
 
@@ -610,8 +613,12 @@ def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool
     return supported
 
 
+def _native_probe_cache_key(adapter: Any, request: Any) -> tuple[str, str] | None:
+    return _native_probe_key(adapter, request)
+
+
 def _mark_native_unsupported(adapter: Any, request: Any) -> None:
-    key = _native_probe_key(adapter, request)
+    key = _native_probe_cache_key(adapter, request)
     if key is not None:
         with _NATIVE_PROBE_LOCK:
             _NATIVE_PROBE_CACHE[key] = False
@@ -651,7 +658,8 @@ def _install_adapter_class(
         if not name:
             return current(self, request)
 
-        if name in _SOURCE_MUTATION_TOOLS:
+        local_native_mutation = probe_native_required and name in _SOURCE_MUTATION_TOOLS
+        if name in _SOURCE_MUTATION_TOOLS and not local_native_mutation:
             return host_selected_mutation_turn(current, self, request, name)
 
         if deterministic_stale_read:
@@ -659,20 +667,26 @@ def _install_adapter_class(
             if deterministic is not None:
                 return deterministic
 
-        if probe_native_required and not _native_required_supported(current, self, request):
+        if (
+            probe_native_required
+            and not local_native_mutation
+            and not _native_required_supported(current, self, request)
+        ):
             return host_selected_argument_turn(current, self, request, name)
 
         try:
             turn = current(self, _single_tool_request(request, name))
         except BaseException as exc:
             if probe_native_required and _native_protocol_failure(exc):
-                _mark_native_unsupported(self, request)
+                if not local_native_mutation:
+                    _mark_native_unsupported(self, request)
                 return host_selected_argument_turn(current, self, request, name)
             raise
         if _contains_exact_call(turn, name):
             return turn
         if probe_native_required:
-            _mark_native_unsupported(self, request)
+            if not local_native_mutation:
+                _mark_native_unsupported(self, request)
             return host_selected_argument_turn(current, self, request, name)
         raise ModelConfigurationError(
             f"{transport_name} failed the host-selected action {name!r}; received "
@@ -680,10 +694,12 @@ def _install_adapter_class(
         )
 
     setattr(generate_turn, _MARKER, True)
+    generate_turn._mmm_forced_tool_execution_v2 = True
     generate_turn._mmm_forced_tool_single_surface = True
     generate_turn._mmm_forced_tool_single_context = True
     generate_turn._mmm_forced_tool_required_transport = True
     generate_turn._mmm_host_selected_mutation_arguments = True
+    generate_turn._mmm_local_native_mutation_transport = probe_native_required
     generate_turn._mmm_native_forced_tool_preflight = probe_native_required
     cls.generate_turn = generate_turn
 
