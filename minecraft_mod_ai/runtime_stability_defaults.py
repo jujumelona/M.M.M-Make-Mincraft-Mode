@@ -11,7 +11,7 @@ MTP is intentionally opt-in until its production tool-transport path is proven s
 import os
 
 _DEFAULT_AGENT_TOOL_ROUNDS = "12"
-_DEFAULT_SMALL_AGENT_CONTEXT_BYTES = str(24 * 1024)
+_DEFAULT_SMALL_AGENT_CONTEXT_BYTES = str(32 * 1024)
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
