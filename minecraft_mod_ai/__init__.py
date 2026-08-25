@@ -12,6 +12,11 @@ initialize_runtime()
 finalize_runtime()
 install_evidence_request_guard()
 
+from . import model_router as _model_router
+from .rag_fallback_evidence_contract import install as _install_rag_fallback_evidence
+
+_install_rag_fallback_evidence(_model_router)
+
 from .api import (
     ChatReply,
     CompleteChatReply,
