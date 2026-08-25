@@ -276,3 +276,78 @@ def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> 
         router.generate_text("coder", [{"role": "user", "content": "implement unknown API"}])
     assert len(runtime.calls) == 1
     assert len(adapter.requests) == 3
+
+
+def test_main_only_policy_is_injected_even_when_tools_are_disabled(monkeypatch) -> None:
+    class CapturingAdapter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):
+            self.requests.append(request)
+            return "done"
+
+    adapter = CapturingAdapter()
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry())
+
+    assert router.generate_text(
+        "coder",
+        [{"role": "user", "content": "make the requested repository change"}],
+        enable_tools=False,
+    ) == "done"
+
+    assert len(adapter.requests) == 1
+    system_messages = [
+        str(message.get("content", ""))
+        for message in adapter.requests[0].messages
+        if message.get("role") == "system"
+    ]
+    assert any("The only permitted Git branch/ref" in content for content in system_messages)
+    assert any("Never call any branch-creation action" in content for content in system_messages)
+    assert any("`main`" in content for content in system_messages)
+
+
+def test_main_only_policy_is_injected_into_native_tool_decisions(monkeypatch) -> None:
+    class DecisionAdapter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate_turn(self, request):
+            self.requests.append(request)
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="decision_1",
+                        name="choose_action",
+                        arguments={"choice": "safe"},
+                        raw_arguments='{"choice":"safe"}',
+                    ),
+                )
+            )
+
+    adapter = DecisionAdapter()
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry())
+
+    assert router.generate_tool_decision(
+        "coder",
+        [{"role": "user", "content": "choose the next action"}],
+        tool_name="choose_action",
+        parameters={
+            "type": "object",
+            "properties": {"choice": {"type": "string"}},
+            "required": ["choice"],
+            "additionalProperties": False,
+        },
+    ) == {"choice": "safe"}
+
+    assert len(adapter.requests) == 1
+    system_messages = [
+        str(message.get("content", ""))
+        for message in adapter.requests[0].messages
+        if message.get("role") == "system"
+    ]
+    assert any("The only permitted Git branch/ref" in content for content in system_messages)
+    assert any("Never call any branch-creation action" in content for content in system_messages)
+    assert any("`main`" in content for content in system_messages)
