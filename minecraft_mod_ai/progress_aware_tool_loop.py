@@ -300,6 +300,38 @@ class RetrievalProgress:
         return self._state.next_untried_internal_tool(exposed_tools, preferred=preferred)
 
 
+def _has_concrete_target_source(messages: Sequence[Mapping[str, Any]]) -> bool:
+    """Return whether the message history already carries concrete target source context."""
+    for message in messages:
+        content = message.get("content")
+        payload: Any = None
+        if isinstance(content, Mapping):
+            payload = content
+        elif isinstance(content, str) and content.lstrip().startswith("{"):
+            try:
+                payload = json.loads(content)
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if isinstance(payload, Mapping):
+            exact = payload.get("initial_exact_source_context")
+            if isinstance(exact, Mapping) and (exact.get("files") or exact.get("source") or exact.get("snippets")):
+                return True
+            if isinstance(exact, str) and len(exact.strip()) > 30:
+                return True
+            target = payload.get("target_file") or payload.get("target_source")
+            if target:
+                return True
+    return False
+
+
+def is_mutation_ready(
+    messages: Sequence[Mapping[str, Any]],
+    state: HostRunState,
+) -> bool:
+    """Return true only when the host has grounded target source context for mutation."""
+    return state.has_fresh_evidence or _has_concrete_target_source(messages)
+
+
 def _tool_name(schema: Mapping[str, Any]) -> str:
     fn = schema.get("function")
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
@@ -451,9 +483,11 @@ def generate_with_tools(
     )
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
 
+    mutation_ready = is_mutation_ready(request.messages, state)
+
     if require_rag and not state.has_fresh_evidence:
         state.phase = LoopPhase.OBSERVE
-    elif implementation_requires_mutation and not mutation_history_applied(messages):
+    elif implementation_requires_mutation and not mutation_history_applied(messages) and mutation_ready:
         state.phase = LoopPhase.ACT
     else:
         state.phase = LoopPhase.OBSERVE
@@ -590,20 +624,40 @@ def generate_with_tools(
                 state.no_progress_streak += 1
                 continue
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
-                if state.phase == LoopPhase.OBSERVE and (state.has_fresh_evidence or host_grounded):
+                if state.phase == LoopPhase.OBSERVE and is_mutation_ready(messages, state):
                     state.phase = LoopPhase.ACT
                     messages.extend([
                         {"role": "assistant", "content": content},
                         {
                             "role": "system",
                             "content": (
-                                "Usable evidence is already gathered. Do not finalize in prose: "
+                                "Target source context is grounded. Do not finalize in prose: "
                                 "proceed to the source-mutation action for the implementation now."
                             ),
                         },
                     ])
                     state.no_progress_streak = 0
                     continue
+                elif state.phase == LoopPhase.OBSERVE:
+                    forced_tool = state.next_untried_internal_tool(
+                        all_exposed_names,
+                        preferred=("search_code_rag", "java_workspace_symbols", "search_project_rag"),
+                    )
+                    if forced_tool is not None:
+                        forced_rag_tool = forced_tool
+                        forced_rag_attempts = 0
+                        messages.extend([
+                            {"role": "assistant", "content": content},
+                            {
+                                "role": "system",
+                                "content": (
+                                    f"Target source context is not yet grounded for mutation. "
+                                    f"Call {forced_rag_tool} to inspect the target file or symbol before modifying source."
+                                ),
+                            },
+                        ])
+                        state.no_progress_streak += 1
+                        continue
                 raise ModelConfigurationError(
                     "Writable coder returned a final prose answer before a reviewed source mutation "
                     "was applied; implementation completion requires a real source diff."
@@ -739,6 +793,8 @@ def generate_with_tools(
                     if all_exposed_names & _VERIFY_TOOLS:
                         state.phase = LoopPhase.VERIFY
                 elif not bool(payload.get("ok")):
+                    if all_exposed_names & _READ_OBSERVE_TOOLS:
+                        state.phase = LoopPhase.OBSERVE
                     error_digest = hashlib.sha256(str(payload.get("error", "")).encode("utf-8")).hexdigest()[:16]
                     if error_digest != state.last_failure_digest:
                         state.last_failure_digest = error_digest
@@ -750,6 +806,8 @@ def generate_with_tools(
                 if status != state.validation_status:
                     state.validation_status = status
                     turn_made_progress = True
+                if status == "FAIL" and implementation_requires_mutation:
+                    state.phase = LoopPhase.ACT
                 continue
 
             if is_retrieval(call):
@@ -760,7 +818,8 @@ def generate_with_tools(
                 if recorded:
                     turn_made_progress = True
                     if state.phase == LoopPhase.OBSERVE and implementation_requires_mutation:
-                        state.phase = LoopPhase.ACT
+                        if is_mutation_ready(messages, state):
+                            state.phase = LoopPhase.ACT
 
         if turn_made_progress:
             state.no_progress_streak = 0
@@ -818,6 +877,7 @@ __all__ = [
     "_VERIFY_TOOLS",
     "evidence_fingerprint",
     "generate_with_tools",
+    "is_mutation_ready",
     "normalize_retrieval_query",
     "retrieval_query_signature",
     "retrieval_source_key",

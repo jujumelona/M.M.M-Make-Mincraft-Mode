@@ -174,7 +174,7 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
     request = GenerationRequest(
         messages=(
             {"role": "system", "content": "grounded context"},
-            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": "class A {}"}'},
+            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": ["src/A.java"]}}'},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -196,4 +196,111 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
 
     # Runtime call was never executed for the out-of-phase tool!
     runtime.call.assert_not_called()
+
+
+def test_mutation_ready_requires_concrete_source_or_fresh_evidence() -> None:
+    from minecraft_mod_ai.progress_aware_tool_loop import is_mutation_ready
+
+    state = HostRunState()
+    # High level hash receipt only without concrete files/source: NOT mutation ready
+    abstract_messages = [
+        {"role": "user", "content": '{"project_sha256": "abc", "observations_sha256": "def"}'}
+    ]
+    assert is_mutation_ready(abstract_messages, state) is False
+
+    # Concrete source context in messages: mutation ready
+    concrete_messages = [
+        {
+            "role": "user",
+            "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": ["Main.java"]}}',
+        }
+    ]
+    assert is_mutation_ready(concrete_messages, state) is True
+
+    # Fresh evidence recorded dynamically: mutation ready
+    state.record_evidence({"files": ["Main.java"]}, usable=True)
+    assert is_mutation_ready(abstract_messages, state) is True
+
+
+def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
+    """When a mutation fails, loop transitions to OBSERVE so agent can inspect diagnostics instead of repeating blindly."""
+    router = MagicMock()
+    router._generation_scope.return_value = nullcontext()
+    router._agent_require_fresh_evidence = False
+
+    config = MagicMock()
+    config.adapter = "llama_cpp"
+    config.max_context = 16384
+    config.max_new_tokens = 4096
+    config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+    seen_phases: list[list[str]] = []
+
+    def mock_generate_turn(req: GenerationRequest) -> GenerationResponse:
+        tool_names = [t["function"]["name"] for t in req.tools]
+        seen_phases.append(tool_names)
+        if "apply_source_patch" in tool_names:
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="call_patch",
+                        name="apply_source_patch",
+                        arguments={"patch": "invalid"},
+                        raw_arguments='{"patch":"invalid"}',
+                    ),
+                )
+            )
+        else:
+            # In OBSERVE phase, model queries workspace
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="call_rag",
+                        name="search_code_rag",
+                        arguments={"query": "Fix"},
+                        raw_arguments='{"query":"Fix"}',
+                    ),
+                )
+            )
+
+    adapter = MagicMock()
+    adapter.generate_turn.side_effect = mock_generate_turn
+
+    def mock_runtime_call(stage: str, name: str, args: dict) -> dict:
+        if name == "apply_source_patch":
+            raise ValueError("Patch rejected: target file not found")
+        return {"hits": [{"path": "Fix.java"}]}
+
+    runtime = MagicMock()
+    runtime.call.side_effect = mock_runtime_call
+
+    request = GenerationRequest(
+        messages=(
+            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": ["src/A.java"]}}'},
+        ),
+        tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    # Initial turn: concrete context -> ACT phase (tools=[apply_source_patch])
+    # Patch fails -> transitions to OBSERVE phase (tools=[search_code_rag])
+    # Turn 2: OBSERVE phase -> search_code_rag succeeds -> fresh evidence -> ACT phase
+    # Turn 3: ACT phase -> patch fails again -> no progress limit reached
+    with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
+        generate_with_tools(
+            router,
+            config=config,
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+
+    # Verify that after the first failed mutation, tools were opened to OBSERVE (search_code_rag)
+    assert len(seen_phases) >= 2
+    assert "apply_source_patch" in seen_phases[0]
+    assert "search_code_rag" in seen_phases[1]
+
 
