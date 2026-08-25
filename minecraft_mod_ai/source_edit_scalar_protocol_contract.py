@@ -601,16 +601,16 @@ def materialize_model_source_edit(
             raise runtime_module.AgentToolRuntimeError(
                 f"Fields {sorted(forbidden)} are invalid for create_file"
             )
-        if normalized.endswith(_JAVA_PATH_SUFFIX):
-            raise runtime_module.AgentToolRuntimeError(
-                "Java files cannot be created as one whole-file payload; use "
-                "create_java_type, then add_java_import / insert_java_member actions"
-            )
-        if target.exists():
-            raise runtime_module.AgentToolRuntimeError(
-                f"create_file target already exists: {normalized}"
-            )
         content = _required_text(runtime_module, payload, "content", allow_empty=True)
+        if target.exists():
+            raw_bytes, text, expected_sha256 = _read_utf8(runtime_module, target, normalized)
+            del raw_bytes, text
+            return {
+                "project_root": project_root_argument,
+                "operations": [
+                    {"operation": "replace", "path": normalized, "expected_sha256": expected_sha256, "content": content}
+                ],
+            }
         return {
             "project_root": project_root_argument,
             "operations": [

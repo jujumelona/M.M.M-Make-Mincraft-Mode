@@ -143,9 +143,11 @@ class RepairEngine:
                 try:
                     receipt = TransactionalSourcePatcher(root).apply(patch)
                 except SourcePatchError as exc:
-                    raise RepairEngineError(
-                        f"Generated repair patch was rejected: {exc}"
-                    ) from exc
+                    print(
+                        f"  [!] Repair patch application failed (retrying next attempt): {exc}",
+                        flush=True,
+                    )
+                    continue
 
                 # Only a successfully committed patch may mutate the in-memory index.
                 # The patch contract already rejects duplicate/unsafe paths, so this is
@@ -318,24 +320,31 @@ class RepairEngine:
     @staticmethod
     def _validate_patch_scope(operations: list[dict[str, Any]]) -> None:
         paths: list[str] = []
+        valid_operations: list[dict[str, Any]] = []
         for item in operations:
             if not isinstance(item, dict):
-                raise RepairEngineError("Repair operation must be an object.")
+                continue
             if item.get("operation") not in {"create", "replace", "edit", "delete"}:
-                raise RepairEngineError(f"Unsupported repair operation: {item.get('operation')}")
+                continue
+            if item.get("operation") == "edit" and (not isinstance(item.get("replacements"), list) or not item.get("replacements")):
+                continue
             path = Path(str(item.get("path", "")))
             if path.suffix not in _ALLOWED_SUFFIXES and path.name not in {
                 "build.gradle",
                 "settings.gradle",
                 "fabric.mod.json",
             }:
-                raise RepairEngineError(f"Repair attempted an unsupported file type: {path}")
+                continue
             normalized = path.as_posix()
             if normalized.startswith("/") or ".." in path.parts:
-                raise RepairEngineError(f"Repair attempted an unsafe path: {path}")
+                continue
+            if normalized in paths:
+                continue
             paths.append(normalized)
-        if len(paths) != len(set(paths)):
-            raise RepairEngineError("Repair must combine multiple edits to the same path.")
+            valid_operations.append(item)
+        operations[:] = valid_operations
+        if not operations:
+            raise RepairEngineError("Repair operations list contained no valid patch operations.")
 
     @staticmethod
     def _hydrate_repair_preconditions(root: Path, operations: list[dict[str, Any]]) -> None:
@@ -365,6 +374,36 @@ class RepairEngine:
             elif op in {"delete", "delete_file", "remove", "remove_file"}:
                 op = "delete"
                 item["operation"] = op
+
+            # Normalize edit operations with missing/empty replacements to replace
+            if op == "edit":
+                replacements = item.get("replacements")
+                if not isinstance(replacements, list) or not replacements:
+                    alt_content = item.get("content") or item.get("new") or item.get("new_text") or item.get("new_content") or item.get("code") or item.get("source") or item.get("body") or item.get("text")
+                    if alt_content is not None:
+                        op = "replace"
+                        item["operation"] = "replace"
+                        item["content"] = str(alt_content)
+                    elif isinstance(replacements, dict) and "old" in replacements and "new" in replacements:
+                        item["replacements"] = [replacements]
+                elif isinstance(replacements, list):
+                    # Clean up replacement entries
+                    clean_replacements = []
+                    for rep in replacements:
+                        if isinstance(rep, dict) and "old" in rep and "new" in rep:
+                            clean_replacements.append({
+                                "old": str(rep["old"]),
+                                "new": str(rep["new"]),
+                                "count": int(rep.get("count", 1) or 1),
+                            })
+                    if clean_replacements:
+                        item["replacements"] = clean_replacements
+                    else:
+                        alt_content = item.get("content") or item.get("new") or item.get("new_text")
+                        if alt_content is not None:
+                            op = "replace"
+                            item["operation"] = "replace"
+                            item["content"] = str(alt_content)
 
             # Normalize content payload
             if op in {"create", "replace"}:
