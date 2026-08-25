@@ -390,7 +390,7 @@ def _create_java_type(
     declaration = declaration.split("{")[0].rstrip().rstrip(";").strip()
     if not _JAVA_TYPE_DECLARATION.search(declaration):
         declaration = f"public class {declaration}"
-    
+
     content = f"package {package_name};\n\n{declaration} {{\n}}\n"
     if target.exists():
         raw_bytes, text, expected_sha256 = _read_utf8(runtime_module, target, normalized)
@@ -538,7 +538,7 @@ def _insert_java_member(
             continue
         else:
             clean_member_lines.append(line)
-    
+
     member_code = "\n".join(clean_member_lines).strip()
     current_text = text
     for imp in extra_imports:
@@ -734,26 +734,27 @@ def materialize_model_source_edit(
 
     found = text.count(replacement["old"])
     if found == 0:
-        # Fuzzy line matching ignoring leading/trailing whitespace
         clean_lines = [line_str.strip() for line_str in norm_old.splitlines() if line_str.strip()]
         if clean_lines:
             file_lines = norm_text.splitlines()
-            matched_idx = -1
-            for i in range(len(file_lines) - len(clean_lines) + 1):
-                if all(file_lines[i + j].strip() == clean_lines[j] for j in range(len(clean_lines))):
-                    matched_idx = i
-                    break
-            if matched_idx != -1:
-                exact_old_matched = "\n".join(file_lines[matched_idx : matched_idx + len(clean_lines)])
-                replacement["old"] = exact_old_matched
-                found = 1
+            fuzzy_matches = [
+                "\n".join(file_lines[i : i + len(clean_lines)])
+                for i in range(len(file_lines) - len(clean_lines) + 1)
+                if all(
+                    file_lines[i + j].strip() == clean_lines[j]
+                    for j in range(len(clean_lines))
+                )
+            ]
+            found = len(fuzzy_matches)
+            if found == 1:
+                replacement["old"] = fuzzy_matches[0]
                 text = norm_text
 
-    if found == 0:
+    if found != replacement["count"]:
         raise runtime_module.AgentToolRuntimeError(
-            f"Exact source-edit precondition failed for {normalized}: target pattern not found in file"
+            f"Exact source-edit precondition failed for {normalized}: expected "
+            f"{replacement['count']} matches, found {found}"
         )
-    replacement["count"] = found
 
     return {
         "project_root": project_root_argument,
