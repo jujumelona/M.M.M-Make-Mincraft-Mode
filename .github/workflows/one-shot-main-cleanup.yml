@@ -51,6 +51,20 @@ jobs:
           )
           replace_once(research, research_owner_block, "")
 
+          reuse = Path("minecraft_mod_ai/research_coder_repair_reuse.py")
+          old_priority_block = (
+              "                if broad_index is None:\n"
+              "                    paths.insert(1 if paths else 0, dependency_query)\n"
+              "                else:\n"
+              "                    paths[broad_index] = dependency_query\n"
+          )
+          new_priority_block = (
+              "                if broad_index is not None:\n"
+              "                    paths.pop(broad_index)\n"
+              "                paths.insert(1 if paths else 0, dependency_query)\n"
+          )
+          replace_once(reuse, old_priority_block, new_priority_block)
+
           parser = Path("minecraft_mod_ai/model_adapters/qwen_tool_parser.py")
           old_alias_block = (
               "_APPLY_SOURCE_EDIT_ALIASES = {\n"
@@ -98,6 +112,33 @@ jobs:
               encoding="utf-8",
           )
 
+          smoke = Path(".github/workflows/fast-model-smoke.yml")
+          replace_once(
+              smoke,
+              "      MMM_CHECKPOINT_DIR: ${{ runner.temp }}/mmm-fast-model-smoke\n",
+              "",
+          )
+          setup_anchor = (
+              "      - uses: actions/setup-python@v6\n"
+              "        with:\n"
+              "          python-version: '3.11'\n"
+              "          cache: pip\n"
+              "\n"
+              "      - name: Install native-model runtime only\n"
+          )
+          setup_replacement = (
+              "      - uses: actions/setup-python@v6\n"
+              "        with:\n"
+              "          python-version: '3.11'\n"
+              "          cache: pip\n"
+              "\n"
+              "      - name: Configure runner-local checkpoint directory\n"
+              "        run: echo \"MMM_CHECKPOINT_DIR=$RUNNER_TEMP/mmm-fast-model-smoke\" >> \"$GITHUB_ENV\"\n"
+              "\n"
+              "      - name: Install native-model runtime only\n"
+          )
+          replace_once(smoke, setup_anchor, setup_replacement)
+
           ownership_test = Path("tests/test_source_edit_alias_ownership.py")
           if ownership_test.exists():
               raise SystemExit(f"unexpected existing file: {ownership_test}")
@@ -107,6 +148,7 @@ jobs:
                   from __future__ import annotations
 
                   import inspect
+                  from pathlib import Path
 
                   import minecraft_mod_ai.model_adapters.qwen_tool_parser as qwen_tool_parser
                   from minecraft_mod_ai import research_code_context
@@ -139,6 +181,12 @@ jobs:
                       assert transport.isdisjoint(properties)
                       assert scalar_aliases <= properties
                       assert scalar_aliases.isdisjoint(transport)
+
+
+                  def test_fast_model_smoke_binds_runner_temp_at_runtime() -> None:
+                      workflow = Path(".github/workflows/fast-model-smoke.yml").read_text(encoding="utf-8")
+                      assert "${{ runner.temp }}" not in workflow
+                      assert "MMM_CHECKPOINT_DIR=$RUNNER_TEMP/mmm-fast-model-smoke" in workflow
                   '''
               ),
               encoding="utf-8",
@@ -158,8 +206,10 @@ jobs:
           git config user.email "qasdaa025@gmail.com"
           git rm .github/workflows/one-shot-main-cleanup.yml
           git add minecraft_mod_ai/research_code_context.py
+          git add minecraft_mod_ai/research_coder_repair_reuse.py
           git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py
+          git add .github/workflows/fast-model-smoke.yml
           git add tests/test_source_edit_alias_ownership.py
           git diff --cached --check
-          git commit -m "refactor(clean): single-own dependency and source-edit aliases"
+          git commit -m "refactor(clean): single-own runtime contracts and fix smoke workflow"
           git push origin HEAD:main
